@@ -12,3 +12,12 @@ ext.c
 # compiled stuff
 __pycache__
 IMLCV.egg-info
+
+#plumed stuff
+
+*.HILLS
+*.COLVAR
+*.plumed.log
+COLVAR
+HILLS
+plumed.log
