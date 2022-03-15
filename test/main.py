@@ -1,0 +1,85 @@
+from __future__ import division
+from __future__ import print_function
+
+import numpy as np
+
+from IMLCV.base.MdEngine import YaffEngine
+
+# from .. d IMLCV.base.MdEngine import YaffEngine
+
+np.random.seed(3)
+
+from yaff.pes import CVInternalCoordinate, DihedAngle
+from yaff.test.common import get_alaninedipeptide_amber99ff
+from yaff.log import log
+
+import numpy as np
+import h5py as h5
+import matplotlib.pyplot as plt
+
+from yaff.analysis.biased_sampling import SumHills
+from molmod.units import kjmol
+from molmod.constants import boltzmann
+
+log.set_level(log.medium)
+from molmod.units import *
+
+
+def get_fes():
+    npoints = 51
+    # Construct a regular 2D grid, spanning from -pi to +pi in both dimensions
+    grid0 = np.linspace(-np.pi, np.pi, npoints, endpoint=False)
+    grid1 = np.linspace(-np.pi, np.pi, npoints, endpoint=False)
+    grid = np.zeros((grid0.shape[0] * grid1.shape[0], 2))
+    grid[:, 0] = np.repeat(grid0, grid1.shape[0])
+    grid[:, 1] = np.tile(grid1, grid0.shape[0])
+    mtd = SumHills(grid)
+    mtd.load_hdf5('traj.h5')
+    fes = mtd.compute_fes()
+    # Reshape to rectangular grids
+    grid = grid.reshape((grid0.shape[0], grid1.shape[0], 2))
+    fes = fes.reshape((grid0.shape[0], grid1.shape[0]))
+    return grid, fes
+
+
+def make_plot(grid, fes, T):
+    # Free energy as a function of DihedAngle(4,6,8,14), by integrating over
+    # other collective variable
+    beta = 1.0 / boltzmann / T
+    fes_phi = -1. / beta * np.log(np.sum(np.exp(-beta * fes), axis=1))
+    fes_phi -= np.amin(fes_phi)
+    plt.clf()
+    plt.plot(grid[:, 0, 0], fes_phi / kjmol)
+    plt.xlabel("$\phi\,[\mathrm{rad}]$")
+    plt.ylabel("$F\,[\mathrm{kJ}\,\mathrm{mol}^{-1}]$")
+    plt.savefig('fes_phi.png')
+
+
+T = 300 * kelvin
+
+ff = get_alaninedipeptide_amber99ff()
+cv0 = CVInternalCoordinate(ff.system, DihedAngle(4, 6, 8, 14))
+cv1 = CVInternalCoordinate(ff.system, DihedAngle(6, 8, 14, 16))
+
+sigmas = np.array([0.35, 0.35])
+periodicities = np.array([2.0 * np.pi, 2.0 * np.pi])
+K = 1.2 * kjmol
+
+#metadynamics hook
+
+yaffmd = YaffEngine(
+    ff=ff,
+    ES="MTD_plumed",
+    sigmas=sigmas,
+    periodicities=periodicities,
+    K=K,
+    cvs=[cv0, cv1],
+    T=300,
+    P=None,
+    timestep=2.0 * femtosecond,
+    timecon_thermo=100.0 * femtosecond,
+)
+yaffmd.run(1e6)
+
+grid, fes = get_fes()
+make_plot(grid, fes, T)

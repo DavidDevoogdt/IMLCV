@@ -1,1 +1,14 @@
 .vscode*
+
+# Binary files
+*.pyc
+*.so
+*.h5
+ext.c
+*.gz
+*.bz2
+
+
+# compiled stuff
+__pycache__
+IMLCV.egg-info
