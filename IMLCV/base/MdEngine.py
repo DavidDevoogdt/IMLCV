@@ -1,17 +1,5 @@
-from tkinter.messagebox import NO
-
-import yaff.external
-import yaff.pes
-import yaff.system
-
 import numpy as np
-
 import IMLCV.base.CV
-
-from yaff import log
-from yaff.sampling import MTKBarostat, NHCThermostat, TBCombination, VerletIntegrator, HDF5Writer, VerletScreenLog
-from molmod.units import femtosecond
-import h5py as h5
 
 
 class MDEngine:
@@ -57,6 +45,15 @@ class MDEngine:
 
     def write_output():
         raise NotImplementedError
+
+
+import yaff.external
+import yaff.pes
+import yaff.system
+
+from yaff import log
+from yaff.sampling import MTKBarostat, NHCThermostat, TBCombination, VerletIntegrator, HDF5Writer, VerletScreenLog
+import h5py as h5
 
 
 class YaffEngine(MDEngine):
@@ -117,10 +114,8 @@ class YaffEngine(MDEngine):
 
         self.hooks = hooks
 
-        if self.ES != "None":
-            self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
-
         if self.ES == "MTD":
+            self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
             if not ({"K", "sigmas", "periodicities", "step"} <= kwargs.keys()):
                 raise ValueError(
                     "provide argumetns K, sigmas and periodicities")
@@ -176,5 +171,48 @@ class YaffEngine(MDEngine):
         self.verlet.run(steps)
 
 
+from openmm import *
+from openmm.app import PDBFile, ForceField, PME, Simulation
+from openmm.openmm import System
+
+
 class OpenMMEngine(MDEngine):
-    pass
+    def __init__(
+        self,
+        system: System,
+        cv: IMLCV.base.CV.CV,
+        T,
+        P,
+        ES="None",
+        timestep=None,
+        timecon_thermo=None,
+        timecon_baro=None,
+    ) -> None:
+        super().__init__(cv, T, P, ES, timestep, timecon_thermo, timecon_baro)
+
+        if self.thermostat:
+            self.integrator = LangevinMiddleIntegrator(temperature=T,
+                                                       frictionCoeff=1 /
+                                                       picosecond,
+                                                       stepSize=timestep)
+        if self.barostat:
+            system.addForce(MonteCarloBarostat(P, T))
+
+        if self.ES == "MTD":
+            self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
+            raise NotImplementedError
+
+        elif self.ES == "MTD_plumed":
+            raise NotImplementedError
+
+    def _mtd(self, K, sigmas, periodicities, step):
+        raise NotImplementedError
+
+    def _convert_cv(self, cv, ff):
+        """
+        convert generic CV class to an OpenMM CV
+        """
+        raise NotImplementedError
+
+    def run(self, steps):
+        self.integrator.step(steps)

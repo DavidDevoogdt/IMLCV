@@ -28,12 +28,10 @@ class CV:
             if not None, is set to the to gradient of CV wrt cell params
         """
 
-        if (grad is not None) and (vir is not None):
-            grad, vir = self.grad(coordinates, cell)
-        elif (grad is not None) and (vir is None):
-            grad, _ = self.grad(coordinates, cell)
-        elif (grad is None) and (vir is not None):
-            _, vir = self.grad(coordinates, cell)
+        if (grad is not None):
+            grad = self.grad(coordinates, cell)
+        if (vir is not None):
+            vir = self.vir(coordinates, cell)
 
         return self.cv(coordinates, cell)
 
@@ -42,7 +40,8 @@ class CV:
         update the CV functions
         """
         self.cv = jit(partial(self.f, **kwargs))
-        self.grad = jit(grad(self.cv, argnums=(0, 1)))
+        self.grad = jit(grad(self.cv, argnums=(0)))
+        self.vir = jit(grad(self.cv, argnums=(1)))
 
 
 def dihedral(coordinates, cell, numbers):
