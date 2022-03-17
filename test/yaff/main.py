@@ -3,6 +3,7 @@ from __future__ import print_function
 
 import numpy as np
 import os, sys
+from IMLCV.base.CV import CV, dihedral
 
 from IMLCV.base.MdEngine import YaffEngine
 
@@ -60,15 +61,28 @@ def make_plot(grid, fes, T):
     plt.savefig('fes_phi.png')
 
 
-T = 300 * kelvin
+def make_plot_2D(grid, fes):
+    fes -= np.amin(fes)
+    plt.clf()
+    plt.contourf(grid[:, :, 0], grid[:, :, 1], fes / kjmol)
+    plt.xlabel("$\phi\,[\mathrm{rad}]$")
+    plt.ylabel("$\psi\,[\mathrm{rad}]$")
+    plt.title("$F\,[\mathrm{kJ}\,\mathrm{mol}^{-1}]$")
+    plt.savefig('ala_dipep.png')
+
+
+T = 1000 * kelvin
 
 ff = get_alaninedipeptide_amber99ff()
-cv0 = CVInternalCoordinate(ff.system, DihedAngle(4, 6, 8, 14))
-cv1 = CVInternalCoordinate(ff.system, DihedAngle(6, 8, 14, 16))
+# cv0 = CVInternalCoordinate(ff.system, DihedAngle(4, 6, 8, 14))
+# cv1 = CVInternalCoordinate(ff.system, DihedAngle(6, 8, 14, 16))
+
+cv0 = CV(dihedral, numbers=[4, 6, 8, 14])
+cv1 = CV(dihedral, numbers=[6, 8, 14, 16])
 
 sigmas = np.array([0.35, 0.35])
 periodicities = np.array([2.0 * np.pi, 2.0 * np.pi])
-K = 1.2 * kjmol
+K = 5 * kjmol
 
 #metadynamics hook
 
@@ -78,8 +92,9 @@ yaffmd = YaffEngine(
     sigmas=sigmas,
     periodicities=periodicities,
     K=K,
-    cvs=[cv0, cv1],
-    T=300,
+    step=25,
+    cv=[cv0, cv1],
+    T=T,
     P=None,
     timestep=2.0 * femtosecond,
     timecon_thermo=100.0 * femtosecond,
@@ -87,4 +102,4 @@ yaffmd = YaffEngine(
 yaffmd.run(int(1e5))
 
 grid, fes = get_fes()
-make_plot(grid, fes, T)
+make_plot_2D(grid, fes)

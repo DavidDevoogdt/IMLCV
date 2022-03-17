@@ -6,6 +6,8 @@ import yaff.system
 
 import numpy as np
 
+import IMLCV.base.CV
+
 from yaff import log
 from yaff.sampling import MTKBarostat, NHCThermostat, TBCombination, VerletIntegrator, HDF5Writer, VerletScreenLog
 from molmod.units import femtosecond
@@ -15,7 +17,7 @@ import h5py as h5
 class MDEngine:
     def __init__(
         self,
-        cvs: yaff.pes.CollectiveVariable,
+        cv: IMLCV.base.CV.CV,
         T,
         P,
         ES="None",
@@ -39,7 +41,7 @@ class MDEngine:
             timecon_baro: baroostat time constant
         
         """
-        self.cvs = cvs
+        self.cv = cv
         self.ES = ES
 
         self.timestep = timestep
@@ -60,7 +62,7 @@ class MDEngine:
 class YaffEngine(MDEngine):
     def __init__(self,
                  ff: yaff.pes.ForceField,
-                 cvs: yaff.pes.CollectiveVariable,
+                 cv: IMLCV.base.CV.CV,
                  ES="None",
                  T=None,
                  P=None,
@@ -73,7 +75,7 @@ class YaffEngine(MDEngine):
             "MTD" kwargs= K, sigmas and periodicities
         """
 
-        super().__init__(cvs=cvs,
+        super().__init__(cv=cv,
                          T=T,
                          P=P,
                          timestep=timestep,
@@ -114,13 +116,18 @@ class YaffEngine(MDEngine):
             raise NotImplementedError
 
         self.hooks = hooks
+
+        if self.ES != "None":
+            self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
+
         if self.ES == "MTD":
-            if not ({"K", "sigmas", "periodicities"} <= kwargs.keys()):
+            if not ({"K", "sigmas", "periodicities", "step"} <= kwargs.keys()):
                 raise ValueError(
                     "provide argumetns K, sigmas and periodicities")
             self._mtd(K=kwargs["K"],
                       sigmas=kwargs["sigmas"],
-                      periodicities=kwargs["periodicities"])
+                      periodicities=kwargs["periodicities"],
+                      step=kwargs["step"])
         elif self.ES == "MTD_plumed":
             plumed = yaff.external.ForcePartPlumed(ff.system, fn='plumed.dat')
             ff.add_part(plumed)
@@ -131,7 +138,7 @@ class YaffEngine(MDEngine):
                                        temp0=self.T,
                                        hooks=self.hooks)
 
-    def _mtd(self, K, sigmas, periodicities):
+    def _mtd(self, K, sigmas, periodicities, step):
         self.hooks.append(
             yaff.sampling.MTDHook(self.ff,
                                   self.cvs,
@@ -140,7 +147,30 @@ class YaffEngine(MDEngine):
                                   periodicities=periodicities,
                                   f=self.fh5,
                                   start=500,
-                                  step=500))
+                                  step=step))
+
+    def _convert_cv(self, cv, ff):
+        """
+        convert generic CV class to a yaff CollectiveVariable
+        """
+        class YaffCv(yaff.pes.CollectiveVariable):
+            def __init__(self, system):
+                super().__init__("YaffCV", system)
+                self.cv = cv
+
+            def compute(self, gpos=None, vtens=None):
+
+                coordinates = self.system.pos
+                cell = self.system.cell.rvecs
+
+                self.value = self.cv.compute(coordinates,
+                                             cell,
+                                             grad=gpos,
+                                             vir=vtens)
+
+                return self.value
+
+        return YaffCv(ff.system)
 
     def run(self, steps):
         self.verlet.run(steps)
