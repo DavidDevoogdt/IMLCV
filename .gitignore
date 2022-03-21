@@ -12,6 +12,7 @@ ext.c
 # compiled stuff
 __pycache__
 IMLCV.egg-info
+.ipynb_checkpoints
 
 #plumed stuff
 
@@ -21,3 +22,8 @@ IMLCV.egg-info
 COLVAR
 HILLS
 plumed.log
+
+#sphinx
+
+docs/build*
+docs/source/rg_*
