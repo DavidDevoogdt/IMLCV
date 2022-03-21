@@ -1,5 +1,18 @@
+from msilib.schema import Error
+from openmm.openmm import System
+from openmm.app import PDBFile, ForceField, PME, Simulation
+from openmm import *
+import h5py
+from yaff.sampling import MTKBarostat, NHCThermostat, TBCombination, VerletIntegrator, HDF5Writer, VerletScreenLog
+from yaff import log
+import yaff.system
+import yaff.pes
+import yaff.external
 import numpy as np
 import IMLCV.base.CV
+import molmod
+from molmod import units
+import ase
 
 
 class MDEngine:
@@ -8,10 +21,14 @@ class MDEngine:
         cv: IMLCV.base.CV.CV,
         T,
         P,
+        step,
+        start,
         ES="None",
         timestep=None,
         timecon_thermo=None,
         timecon_baro=None,
+
+        filename="traj.h5"
     ) -> None:
         """
             cvs: list of cvs
@@ -26,11 +43,14 @@ class MDEngine:
 
             timecon_thermo: thermostat time constant
 
-            timecon_baro: baroostat time constant
-        
+            timecon_baro: barostat time constant
+
         """
         self.cv = cv
         self.ES = ES
+        self.filename = filename
+        self.step = step
+        self.start = start
 
         self.timestep = timestep
         self.thermostat = T is not None and timecon_thermo is not None
@@ -43,17 +63,8 @@ class MDEngine:
     def run(self, steps):
         raise NotImplementedError
 
-    def write_output():
+    def to_ASE_traj(self):
         raise NotImplementedError
-
-
-import yaff.external
-import yaff.pes
-import yaff.system
-
-from yaff import log
-from yaff.sampling import MTKBarostat, NHCThermostat, TBCombination, VerletIntegrator, HDF5Writer, VerletScreenLog
-import h5py as h5
 
 
 class YaffEngine(MDEngine):
@@ -66,6 +77,8 @@ class YaffEngine(MDEngine):
                  timestep=None,
                  timecon_thermo=None,
                  timecon_baro=None,
+                 step=50,
+                 start=50,
                  **kwargs) -> None:
         """
         ES: "None:,
@@ -78,15 +91,26 @@ class YaffEngine(MDEngine):
                          timestep=timestep,
                          timecon_thermo=timecon_thermo,
                          timecon_baro=timecon_baro,
-                         ES=ES)
+                         ES=ES,
+                         step=step,
+                         start=start,
+                         filename="traj.xyz")
 
         self.ff = ff
 
         # Setup the integrator
         vsl = VerletScreenLog(step=100)
-        self.fh5 = h5.File('traj.h5', 'w')
-        h5writer = HDF5Writer(self.fh5, step=50)
-        hooks = [vsl, h5writer]
+        hooks = [vsl]
+
+        if self.filename.endswith(".xyz"):
+            self.fh5 = h5py.File(self.filename, 'w')
+            h5writer = HDF5Writer(self.fh5, step=step)
+            hooks.append(h5writer)
+        elif self.filename.endswith(".h5"):
+            xyzhook = yaff.XYZWriter(self.filename, step=step, start=start)
+            hooks.append(xyzhook)
+        else:
+            raise NotImplemented("only h5 and xyz are supported as filename")
 
         if self.thermostat:
             nhc = NHCThermostat(self.T,
@@ -119,21 +143,95 @@ class YaffEngine(MDEngine):
             if not ({"K", "sigmas", "periodicities", "step"} <= kwargs.keys()):
                 raise ValueError(
                     "provide argumetns K, sigmas and periodicities")
-            self._mtd(K=kwargs["K"],
-                      sigmas=kwargs["sigmas"],
-                      periodicities=kwargs["periodicities"],
-                      step=kwargs["step"])
+            self._mtd_Yaff(K=kwargs["K"],
+                           sigmas=kwargs["sigmas"],
+                           periodicities=kwargs["periodicities"],
+                           step=kwargs["step"])
         elif self.ES == "MTD_plumed":
             plumed = yaff.external.ForcePartPlumed(ff.system, fn='plumed.dat')
             ff.add_part(plumed)
             self.hooks.append(plumed)
 
+        class GposContribStateItem(yaff.sampling.iterative.StateItem):
+            """Keeps track of all the contributions to the forces."""
+
+            def __init__(self):
+                yaff.sampling.iterative.StateItem.__init__(
+                    self, 'gpos_contribs')
+
+            def get_value(self, iterative):
+                n = len(iterative.ff.parts)
+                natom, _ = iterative.gpos.shape
+                gpos_contribs = np.zeros((n, natom, 3))
+                for i in range(n):
+                    gpos_contribs[i, :, :] = iterative.ff.parts[i].gpos
+                return gpos_contribs
+
+            def iter_attrs(self, iterative):
+                yield 'gpos_contrib_names', np.array(
+                    [part.name for part in iterative.ff.parts], dtype='S')
+
         self.verlet = VerletIntegrator(self.ff,
                                        self.timestep,
                                        temp0=self.T,
-                                       hooks=self.hooks)
+                                       hooks=self.hooks,
+                                       # add forces as state item
+                                       state=[GposContribStateItem()]
+                                       )
 
-    def _mtd(self, K, sigmas, periodicities, step):
+    @staticmethod
+    def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
+        """Creates force field from ASE atoms instance"""
+
+        class ForcePartASE(yaff.pes.ForcePart):
+            """YAFF Wrapper around an ASE calculator"""
+
+            def __init__(self, system, atoms, calculator):
+                """Constructor
+
+                Parameters
+                ----------
+
+                system : yaff.System
+                    system object
+
+                atoms : ase.Atoms
+                    atoms object with calculator included.
+
+                """
+                yaff.pes.ForcePart.__init__(self, 'ase', system)
+                self.system = system  # store system to obtain current pos and box
+                self.atoms = atoms
+                self.calculator = calculator
+
+            def _internal_compute(self, gpos=None, vtens=None):
+                self.atoms.set_positions(
+                    self.system.pos / molmod.units.angstrom)
+                self.atoms.set_cell(
+                    Cell(self.system.cell._get_rvecs() / molmod.units.angstrom))
+                energy = self.atoms.get_potential_energy() * molmod.units.electronvolt
+                if gpos is not None:
+                    forces = self.atoms.get_forces()
+                    gpos[:] = -forces * molmod.units.electronvolt / \
+                        molmod.units.angstrom
+                if vtens is not None:
+                    volume = np.linalg.det(self.atoms.get_cell())
+                    stress = voigt_6_to_full_3x3_stress(
+                        self.atoms.get_stress())
+                    vtens[:] = volume * stress * molmod.units.electronvolt
+                return energy
+
+        system = yaff.System(
+            numbers=atoms.get_atomic_numbers(),
+            pos=atoms.get_positions() * molmod.units.angstrom,
+            rvecs=atoms.get_cell() * molmod.units.angstrom,
+        )
+        system.set_standard_masses()
+        part_ase = ForcePartASE(system, atoms, calculator)
+
+        return yaff.pes.ForceField(system, [part_ase])
+
+    def _mtd_Yaff(self, K, sigmas, periodicities, step):
         self.hooks.append(
             yaff.sampling.MTDHook(self.ff,
                                   self.cvs,
@@ -141,8 +239,19 @@ class YaffEngine(MDEngine):
                                   K=K,
                                   periodicities=periodicities,
                                   f=self.fh5,
-                                  start=500,
+                                  start=self.start,
                                   step=step))
+
+    def _mtd_Plumed(self, K, sigmas, periodicities, step):
+        Warning(
+            "sigmas and peridocities ignorde in plumed, todo write custom .dat file"
+        )
+
+        plumed = yaff.external.ForcePartPlumed(self.ff.system,
+                                               fn='plumed.dat',
+                                               timestep=self.timestep)
+        self.ff.add_part(plumed)
+        self.hooks.append(plumed)
 
     def _convert_cv(self, cv, ff):
         """
@@ -167,13 +276,40 @@ class YaffEngine(MDEngine):
 
         return YaffCv(ff.system)
 
+    def to_ASE_traj(self):
+        with h5py.File(self.filename, 'r') as f:
+            at_numb = f['system']['numbers']
+            traj = []
+            for frame, energy_au in enumerate(f['trajectory']['epot']):
+                pos_A = f['trajectory']['pos'][frame, :, :] / \
+                    molmod.units.angstrom
+                cell_A = f['trajectory']['cell'][
+                    frame, :, :] / molmod.units.angstrom
+                #vel_x = f['trajectory']['vel'][frame,:,:] / x
+                energy_eV = energy_au / molmod.units.electronvolt
+                forces_eVA = -f['trajectory']['gpos_contribs'][
+                    frame,
+                    0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
+                vol_A3 = f['trajectory']['volume'][frame] / \
+                    molmod.units.angstrom**3
+                vtens_eV = f['trajectory']['vtens'][
+                    frame, :, :] / molmod.units.electronvolt
+                stresses_eVA3 = vtens_eV / vol_A3
+                atoms = ase.Atoms(
+                    numbers=at_numb,
+                    positions=pos_A,
+                    pbc=True,
+                    cell=cell_A,
+                )
+                # atoms.set_velocities(vel_x)
+                atoms.arrays['forces'] = forces_eVA
+                atoms.info['stress'] = stresses_eVA3
+                atoms.info['energy'] = energy_eV
+                traj.append(atoms)
+        return traj
+
     def run(self, steps):
         self.verlet.run(steps)
-
-
-from openmm import *
-from openmm.app import PDBFile, ForceField, PME, Simulation
-from openmm.openmm import System
 
 
 class OpenMMEngine(MDEngine):
