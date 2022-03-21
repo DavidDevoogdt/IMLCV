@@ -4,9 +4,9 @@ from IMLCV.base.MdEngine import MDEngine
 
 
 class Observable:
-    '''
-    class to convert data and CVs to different thermodynamic/ kinetic observables
-    '''
+    """class to convert data and CVs to different thermodynamic/ kinetic
+    observables."""
+
     def __init__(self, mde: MDEngine) -> None:
         pass
 

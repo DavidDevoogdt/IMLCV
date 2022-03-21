@@ -71,35 +71,40 @@ def make_plot_2D(grid, fes):
     plt.savefig('ala_dipep.png')
 
 
-T = 1000 * kelvin
+if __name__ == '__main__':
 
-ff = get_alaninedipeptide_amber99ff()
-# cv0 = CVInternalCoordinate(ff.system, DihedAngle(4, 6, 8, 14))
-# cv1 = CVInternalCoordinate(ff.system, DihedAngle(6, 8, 14, 16))
+    T = 1000 * kelvin
 
-cv0 = CV(dihedral, numbers=[4, 6, 8, 14])
-cv1 = CV(dihedral, numbers=[6, 8, 14, 16])
+    ff = get_alaninedipeptide_amber99ff()
+    # cv0 = CVInternalCoordinate(ff.system, DihedAngle(4, 6, 8, 14))
+    # cv1 = CVInternalCoordinate(ff.system, DihedAngle(6, 8, 14, 16))
 
-sigmas = np.array([0.35, 0.35])
-periodicities = np.array([2.0 * np.pi, 2.0 * np.pi])
-K = 5 * kjmol
+    cv0 = CV(dihedral, numbers=[4, 6, 8, 14])
+    cv1 = CV(dihedral, numbers=[6, 8, 14, 16])
 
-#metadynamics hook
+    sigmas = np.array([0.35, 0.35])
+    periodicities = np.array([2.0 * np.pi, 2.0 * np.pi])
+    K = 5 * kjmol
 
-yaffmd = YaffEngine(
-    ff=ff,
-    ES="MTD",
-    sigmas=sigmas,
-    periodicities=periodicities,
-    K=K,
-    step=25,
-    cv=[cv0, cv1],
-    T=T,
-    P=None,
-    timestep=2.0 * femtosecond,
-    timecon_thermo=100.0 * femtosecond,
-)
-yaffmd.run(int(1e5))
+    #metadynamics hook
 
-grid, fes = get_fes()
-make_plot_2D(grid, fes)
+    yaffmd = YaffEngine(
+        ff=ff,
+        ES="MTD",
+        sigmas=sigmas,
+        periodicities=periodicities,
+        K=K,
+        step_hills=25,
+        cv=[cv0, cv1],
+        T=T,
+        P=None,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+    )
+
+    yaffmd.run(int(1e3))
+
+    aseSys = yaffmd.to_ASE_traj()
+
+    grid, fes = get_fes()
+    make_plot_2D(grid, fes)

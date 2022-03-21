@@ -30,7 +30,6 @@ def discover():
     # for fn in glob('../../IMLCV/*/__init__.py'):
 
     for fn in glob('../IMLCV/*/__init__.py'):
-        print(fn)
         subpackage = fn.split('/')[2]
         if subpackage == 'test':
             continue
@@ -44,9 +43,6 @@ def discover():
             if module == '__init__':
                 continue
             modules.append(module)
-
-    print(packages)
-
     return packages
 
 
@@ -71,10 +67,6 @@ def main():
     # Write new/updated rst files if needed
     fns_rst = []
     for package, modules in sorted(packages.items()):
-
-        print(package)
-        print(modules)
-
         # write the new file to a StringIO
         f = StringIO()
         f.write(u'..\n')
