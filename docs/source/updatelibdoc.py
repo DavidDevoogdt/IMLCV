@@ -74,16 +74,14 @@ def main():
         f.write(u'    changes as these will be overwritten. Rather edit\n')
         f.write(u'    the docstrings in the source code.\n')
         f.write(u'\n')
-        underline('``%s`` -- %s' % (package, get_first_docline(package)), '#',
-                  f)
+        underline('``%s`` -- %s' % (package, get_first_docline(package)), '#', f)
         f.write(u'\n')
 
         for module in sorted(modules):
             f.write(u'\n')
             f.write(u'\n')
             full = package + '.' + module
-            underline(u'``%s`` -- %s' % (full, get_first_docline(full)), '=',
-                      f)
+            underline(u'``%s`` -- %s' % (full, get_first_docline(full)), '=', f)
             f.write(u'.. automodule:: ' + full + '\n')
             f.write(u'    :members:\n')
 

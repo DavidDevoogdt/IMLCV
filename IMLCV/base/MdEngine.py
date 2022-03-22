@@ -17,6 +17,10 @@ import molmod
 import ase
 from abc import ABC, abstractmethod
 
+from ase.io import read, write
+import ase.geometry
+import ase.stress
+
 
 class MDEngine(ABC):
     """Base class for MD engine.
@@ -70,10 +74,15 @@ class MDEngine(ABC):
         """convert the MD run to ASE trajectory."""
         raise NotImplementedError
 
+    @abstractmethod
+    def update_CV(self, new_cv):
+        """function to update CVs while keeping other properties constant."""
+        raise NotImplementedError
 
-from ase.io import read, write
-import ase.geometry
-import ase.stress
+    @abstractmethod
+    def get_bias(self, cv):
+        """function to update CVs while keeping other properties constant."""
+        raise NotImplementedError
 
 
 class YaffEngine(MDEngine):
@@ -143,7 +152,8 @@ class YaffEngine(MDEngine):
 
         # setup metadynamics
         if self.ES == "MTD":
-            self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
+            # self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
+            self.cvs = self._convert_cv(cv, ff=self.ff)
             if not ({"K", "sigmas", "periodicities", 'step_hills'} <= kwargs.keys()):
                 raise ValueError("provide argumetns K, sigmas and periodicities")
             self._mtd_Yaff(K=kwargs["K"],
@@ -239,12 +249,17 @@ class YaffEngine(MDEngine):
         self.ff.add_part(plumed)
         self.hooks.append(plumed)
 
-    def _convert_cv(self, cv, ff):
+    def _convert_cv(self, cvs: CV, ff):
         """convert generic CV class to a yaff CollectiveVariable."""
+
+        if not isinstance(cvs, list):
+            cvs = [cvs]
+
+        cv2 = []
 
         class YaffCv(yaff.pes.CollectiveVariable):
 
-            def __init__(self, system):
+            def __init__(self, system, cv):
                 super().__init__("YaffCV", system)
                 self.cv = cv
 
@@ -253,11 +268,22 @@ class YaffEngine(MDEngine):
                 coordinates = self.system.pos
                 cell = self.system.cell.rvecs
 
-                self.value = self.cv.compute(coordinates, cell, grad=gpos, vir=vtens)
+                self.value, gpos, vtens = self.cv.compute(coordinates,
+                                                          cell,
+                                                          grad=(gpos is not None),
+                                                          vir=(gpos is not None))
 
                 return self.value
 
-        return YaffCv(ff.system)
+        for cv in cvs:
+            if cv.n == 1:
+                cv2.append(YaffCv(ff.system, cv))
+            else:
+                cvs_split = cv.split_cv()
+                for cv_split in cvs_split:
+                    cv2.append(YaffCv(ff.system, cv_split))
+
+        return cv2
 
     def to_ASE_traj(self):
         if self.filename.endswith(".h5"):
@@ -300,6 +326,14 @@ class YaffEngine(MDEngine):
 
     def run(self, steps):
         self.verlet.run(steps)
+
+    def update_CV(self, new_cv):
+        """function to update CVs while keeping other properties constant."""
+        raise NotImplementedError
+
+    def get_bias(self, cv):
+        """function to update CVs while keeping other properties constant."""
+        raise NotImplementedError
 
 
 class OpenMMEngine(MDEngine):

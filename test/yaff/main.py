@@ -1,34 +1,24 @@
 from __future__ import division
-from __future__ import print_function
 
-import numpy as np
 import os, sys
-from IMLCV.base.CV import CV, dihedral
-
+from IMLCV.base.CV import CV, CVUtils, CombineCV
 from IMLCV.base.MdEngine import YaffEngine
+from yaff.pes import CVInternalCoordinate, DihedAngle
+from yaff.test.common import get_alaninedipeptide_amber99ff
+from yaff.log import log
+from yaff.analysis.biased_sampling import SumHills
+import numpy as np
+import h5py as h5
+import matplotlib.pyplot as plt
+from molmod import units, constants
+import ase.io
 
-import os
-
+log.set_level(log.medium)
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 os.chdir(dname)
 
-np.random.seed(3)
-
-from yaff.pes import CVInternalCoordinate, DihedAngle
-from yaff.test.common import get_alaninedipeptide_amber99ff
-from yaff.log import log
-
-import numpy as np
-import h5py as h5
-import matplotlib.pyplot as plt
-
-from yaff.analysis.biased_sampling import SumHills
-from molmod.units import kjmol
-from molmod.constants import boltzmann
-
-log.set_level(log.medium)
-from molmod.units import *
+# np.random.seed(3)
 
 
 def get_fes():
@@ -51,11 +41,11 @@ def get_fes():
 def make_plot(grid, fes, T):
     # Free energy as a function of DihedAngle(4,6,8,14), by integrating over
     # other collective variable
-    beta = 1.0 / boltzmann / T
+    beta = 1.0 / constants.boltzmann / T
     fes_phi = -1. / beta * np.log(np.sum(np.exp(-beta * fes), axis=1))
     fes_phi -= np.amin(fes_phi)
     plt.clf()
-    plt.plot(grid[:, 0, 0], fes_phi / kjmol)
+    plt.plot(grid[:, 0, 0], fes_phi / units.kjmol)
     plt.xlabel("$\phi\,[\mathrm{rad}]$")
     plt.ylabel("$F\,[\mathrm{kJ}\,\mathrm{mol}^{-1}]$")
     plt.savefig('fes_phi.png')
@@ -64,29 +54,25 @@ def make_plot(grid, fes, T):
 def make_plot_2D(grid, fes):
     fes -= np.amin(fes)
     plt.clf()
-    plt.contourf(grid[:, :, 0], grid[:, :, 1], fes / kjmol)
+    plt.contourf(grid[:, :, 0], grid[:, :, 1], fes / units.kjmol)
     plt.xlabel("$\phi\,[\mathrm{rad}]$")
     plt.ylabel("$\psi\,[\mathrm{rad}]$")
     plt.title("$F\,[\mathrm{kJ}\,\mathrm{mol}^{-1}]$")
     plt.savefig('ala_dipep.png')
 
 
-if __name__ == '__main__':
-
-    T = 1000 * kelvin
-
+def test_yaff_md():
+    T = 1000 * units.kelvin
     ff = get_alaninedipeptide_amber99ff()
-    # cv0 = CVInternalCoordinate(ff.system, DihedAngle(4, 6, 8, 14))
-    # cv1 = CVInternalCoordinate(ff.system, DihedAngle(6, 8, 14, 16))
 
-    cv0 = CV(dihedral, numbers=[4, 6, 8, 14])
-    cv1 = CV(dihedral, numbers=[6, 8, 14, 16])
+    cvs = CombineCV([
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14]),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16]),
+    ])
 
     sigmas = np.array([0.35, 0.35])
     periodicities = np.array([2.0 * np.pi, 2.0 * np.pi])
-    K = 5 * kjmol
-
-    #metadynamics hook
+    K = 5 * units.kjmol
 
     yaffmd = YaffEngine(
         ff=ff,
@@ -95,16 +81,21 @@ if __name__ == '__main__':
         periodicities=periodicities,
         K=K,
         step_hills=25,
-        cv=[cv0, cv1],
+        cv=cvs,
         T=T,
         P=None,
-        timestep=2.0 * femtosecond,
-        timecon_thermo=100.0 * femtosecond,
+        timestep=2.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
     )
 
-    yaffmd.run(int(1e3))
+    yaffmd.run(int(1e2))
 
-    aseSys = yaffmd.to_ASE_traj()
+    # aseSys = yaffmd.to_ASE_traj()
+    # ase.io.write('md_ext.xyz', aseSys, format='extxyz', append=False)
 
-    grid, fes = get_fes()
-    make_plot_2D(grid, fes)
+    # grid, fes = get_fes()
+    # make_plot_2D(grid, fes)
+
+
+if __name__ == '__main__':
+    test_yaff_md()

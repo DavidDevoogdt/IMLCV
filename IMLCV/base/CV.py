@@ -7,15 +7,16 @@ class CV:
     """base class for CVs.
 
     args:
-        f: function f(coordinates, cell, **kwargs) that returns the CV
+        f: function f(coordinates, cell, **kwargs) that returns a single CV
         **kwargs: arguments of custom function f
     """
 
-    def __init__(self, f, **kwargs) -> None:
+    def __init__(self, f, n=1, **kwargs) -> None:
 
         self.f = f
         self.kwargs = kwargs
-        self.update_params(**kwargs)
+        self._update_params(**kwargs)
+        self.n = n
 
     def compute(self, coordinates, cell, grad=None, vir=None):
         """
@@ -31,13 +32,60 @@ class CV:
         if (vir is not None):
             vir = self.vir(coordinates, cell)
 
-        return self.cv(coordinates, cell)
+        return self.cv(coordinates, cell), grad, vir
 
-    def update_params(self, **kwargs):
+    def _update_params(self, **kwargs):
         """update the CV functions."""
         self.cv = jit(partial(self.f, **kwargs))
         self.grad = jit(grad(self.cv, argnums=(0)))
-        self.vir = jit(grad(self.cv, argnums=(1)))
+
+        def vir(coord, cell, cv):
+            """calculates viral as tau*dcv(coor,cell)/dtau."""
+            if cell is not None:
+                return np.matmul(np.transpose(cell), grad(cv, argnums=(1))(coord, cell))
+            else:
+                return None
+
+        self.vir = jit(partial(vir, cv=self.cv))
+
+    def split_cv(self):
+        """Split the given CV in list of n=1 CVs."""
+        if self.n == 1:
+            return [self]
+
+        class splitCV(CV):
+
+            def __init__(self, cvs, index) -> None:
+
+                def f2(x, y, f, index):
+                    return f(x, y)[index]
+
+                self.f = jit(partial(f2, f=cvs, index=index))
+                self.n = 1
+                self._update_params()
+
+        return [splitCV(self.cv, i) for i in range(self.n)]
+
+
+class CombineCV(CV):
+    """combine multiple CVs into one CV."""
+
+    def __init__(self, cvs) -> None:
+        self.n = 0
+        self.cvs = cvs
+        for cv in cvs:
+            self.n += cv.n
+        self._update_params()
+
+    def _update_params(self):
+        """function selects on ouput according to index"""
+
+        def f(x, y, cvs):
+            return np.array([cv.cv(x, y) for cv in cvs])
+
+        self.f = partial(f, cvs=self.cvs)
+
+        super()._update_params()
 
 
 class CVUtils:
@@ -74,6 +122,6 @@ class CVUtils:
         y = np.dot(np.cross(b1, v), w)
         return np.arctan2(y, x)
 
-
-def Volume(coordinates, cell):
-    return np.abs(np.dot(cell[0], np.cross(cell[1], cell[2])))
+    @staticmethod
+    def Volume(coordinates, cell):
+        return np.abs(np.dot(cell[0], np.cross(cell[1], cell[2])))

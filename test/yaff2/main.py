@@ -38,15 +38,14 @@ class GposContribStateItem(yaff.sampling.iterative.StateItem):
         return gpos_contribs
 
     def iter_attrs(self, iterative):
-        yield 'gpos_contrib_names', np.array(
-            [part.name for part in iterative.ff.parts], dtype='S')
+        yield 'gpos_contrib_names', np.array([part.name for part in iterative.ff.parts], dtype='S')
 
 
 class ForcePartASE(yaff.pes.ForcePart):
-    """YAFF Wrapper around an ASE calculator"""
+    """YAFF Wrapper around an ASE calculator."""
 
     def __init__(self, system, atoms, calculator):
-        """Constructor
+        """Constructor.
 
         Parameters
         ----------
@@ -56,7 +55,6 @@ class ForcePartASE(yaff.pes.ForcePart):
 
         atoms : ase.Atoms
             atoms object with calculator included.
-
         """
         yaff.pes.ForcePart.__init__(self, 'ase', system)
         self.system = system  # store system to obtain current pos and box
@@ -65,8 +63,7 @@ class ForcePartASE(yaff.pes.ForcePart):
 
     def _internal_compute(self, gpos=None, vtens=None):
         self.atoms.set_positions(self.system.pos / molmod.units.angstrom)
-        self.atoms.set_cell(
-            Cell(self.system.cell._get_rvecs() / molmod.units.angstrom))
+        self.atoms.set_cell(Cell(self.system.cell._get_rvecs() / molmod.units.angstrom))
         energy = self.atoms.get_potential_energy() * molmod.units.electronvolt
         if gpos is not None:
             forces = self.atoms.get_forces()
@@ -80,7 +77,7 @@ class ForcePartASE(yaff.pes.ForcePart):
 
 
 def create_forcefield(atoms, calculator):
-    """Creates force field from ASE atoms instance"""
+    """Creates force field from ASE atoms instance."""
     system = yaff.System(
         numbers=atoms.get_atomic_numbers(),
         pos=atoms.get_positions() * molmod.units.angstrom,
@@ -91,14 +88,8 @@ def create_forcefield(atoms, calculator):
     return yaff.pes.ForceField(system, [part_ase])
 
 
-def simulate(steps,
-             step,
-             start,
-             atoms,
-             calculator,
-             temperature,
-             pressure=None):
-    """Samples the phase space using Langevin dynamics"""
+def simulate(steps, step, start, atoms, calculator, temperature, pressure=None):
+    """Samples the phase space using Langevin dynamics."""
     # set default output paths
     path_h5 = Path.cwd() / 'md.h5'
     path_xyz = Path.cwd() / 'md.xyz'
@@ -121,8 +112,7 @@ def simulate(steps,
         hooks.append(xyzhook)
 
     # temperature / pressure control
-    thermo = yaff.LangevinThermostat(temperature,
-                                     timecon=100 * molmod.units.femtosecond)
+    thermo = yaff.LangevinThermostat(temperature, timecon=100 * molmod.units.femtosecond)
     if pressure is None:
         print('CONSTANT TEMPERATURE, CONSTANT VOLUME')
         #vol_constraint = True
@@ -161,17 +151,14 @@ def convert_h5_to_asetraj(file_path_h5):
         traj = []
         for frame, energy_au in enumerate(f['trajectory']['epot']):
             pos_A = f['trajectory']['pos'][frame, :, :] / molmod.units.angstrom
-            cell_A = f['trajectory']['cell'][
-                frame, :, :] / molmod.units.angstrom
+            cell_A = f['trajectory']['cell'][frame, :, :] / molmod.units.angstrom
             #vel_x = f['trajectory']['vel'][frame,:,:] / x
             energy_eV = energy_au / molmod.units.electronvolt
             forces_eVA = -f['trajectory']['gpos_contribs'][
-                frame,
-                0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
+                frame, 0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
             vol_A3 = f['trajectory']['volume'][frame] / \
                 molmod.units.angstrom**3
-            vtens_eV = f['trajectory']['vtens'][
-                frame, :, :] / molmod.units.electronvolt
+            vtens_eV = f['trajectory']['vtens'][frame, :, :] / molmod.units.electronvolt
             stresses_eVA3 = vtens_eV / vol_A3
             atoms = ase.Atoms(
                 numbers=at_numb,
@@ -207,8 +194,7 @@ if __name__ == '__main__':
     path_dispersion = path_source / 'dftd3.dat'
 
     with open("CP2K_para.inp", "r") as f:
-        additional_input = f.read().format(path_basis, path_potentials,
-                                           path_dispersion)
+        additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
 
     calc_cp2k = CP2K(
         atoms=atoms,

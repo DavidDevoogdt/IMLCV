@@ -4,10 +4,7 @@ from openmm.unit import *
 
 pdb = PDBFile('villin.pdb')
 forcefield = ForceField('amber14-all.xml', 'amber14/tip3pfb.xml')
-system = forcefield.createSystem(pdb.topology,
-                                 nonbondedMethod=PME,
-                                 nonbondedCutoff=1 * nanometer,
-                                 constraints=HBonds)
+system = forcefield.createSystem(pdb.topology, nonbondedMethod=PME, nonbondedCutoff=1 * nanometer, constraints=HBonds)
 
 simulation = Simulation(pdb.topology, system, integrator)
 simulation.context.setPositions(pdb.positions)
