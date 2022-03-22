@@ -15,9 +15,10 @@ import numpy as np
 from .CV import CV
 import molmod
 import ase
+from abc import ABC, abstractmethod
 
 
-class MDEngine:
+class MDEngine(ABC):
     """Base class for MD engine.
 
     Args:
@@ -55,6 +56,7 @@ class MDEngine:
         self.P = P
         self.timecon_baro = timecon_baro
 
+    @abstractmethod
     def run(self, steps):
         """run the integrator for a given number of steps.
 
@@ -63,6 +65,7 @@ class MDEngine:
         """
         raise NotImplementedError
 
+    @abstractmethod
     def to_ASE_traj(self):
         """convert the MD run to ASE trajectory."""
         raise NotImplementedError
@@ -78,8 +81,8 @@ class YaffEngine(MDEngine):
 
     Args:
         ff (yaff.pes.ForceField)
-        cv (IMLCV.base.CV.CV): _description_
-        ES (str, optional): mtd
+        cv (IMLCV.base.CV.CV):
+        ES (str, optional):
     """
 
     def __init__(self,
@@ -123,18 +126,10 @@ class YaffEngine(MDEngine):
 
         # setup barp/thermostat
         if self.thermostat:
-            nhc = yaff.sampling.NHCThermostat(self.T,
-                                              start=0,
-                                              timecon=self.timecon_thermo,
-                                              chainlength=3)
+            nhc = yaff.sampling.NHCThermostat(self.T, start=0, timecon=self.timecon_thermo, chainlength=3)
 
         if self.barostat:
-            mtk = yaff.sampling.MTKBarostat(ff,
-                                            self.T,
-                                            self.P,
-                                            start=0,
-                                            timecon=self.timecon_baro,
-                                            anisotropic=False)
+            mtk = yaff.sampling.MTKBarostat(ff, self.T, self.P, start=0, timecon=self.timecon_baro, anisotropic=False)
 
         if self.thermostat and self.barostat:
             tbc = yaff.sampling.TBCombination(nhc, mtk)
@@ -149,10 +144,8 @@ class YaffEngine(MDEngine):
         # setup metadynamics
         if self.ES == "MTD":
             self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
-            if not ({"K", "sigmas", "periodicities", 'step_hills'} <=
-                    kwargs.keys()):
-                raise ValueError(
-                    "provide argumetns K, sigmas and periodicities")
+            if not ({"K", "sigmas", "periodicities", 'step_hills'} <= kwargs.keys()):
+                raise ValueError("provide argumetns K, sigmas and periodicities")
             self._mtd_Yaff(K=kwargs["K"],
                            sigmas=kwargs["sigmas"],
                            periodicities=kwargs["periodicities"],
@@ -166,8 +159,7 @@ class YaffEngine(MDEngine):
             """Keeps track of all the contributions to the forces."""
 
             def __init__(self):
-                yaff.sampling.iterative.StateItem.__init__(
-                    self, 'gpos_contribs')
+                yaff.sampling.iterative.StateItem.__init__(self, 'gpos_contribs')
 
             def get_value(self, iterative):
                 n = len(iterative.ff.parts)
@@ -178,8 +170,7 @@ class YaffEngine(MDEngine):
                 return gpos_contribs
 
             def iter_attrs(self, iterative):
-                yield 'gpos_contrib_names', np.array(
-                    [part.name for part in iterative.ff.parts], dtype='S')
+                yield 'gpos_contrib_names', np.array([part.name for part in iterative.ff.parts], dtype='S')
 
         self.verlet = yaff.sampling.VerletIntegrator(
             self.ff,
@@ -194,41 +185,29 @@ class YaffEngine(MDEngine):
         """Creates force field from ASE atoms instance."""
 
         class ForcePartASE(yaff.pes.ForcePart):
-            """YAFF Wrapper around an ASE calculator."""
+            """YAFF Wrapper around an ASE calculator.
+
+            args:
+                   system (yaff.System): system object
+                   atoms (ase.Atoms): atoms object with calculator included.
+            """
 
             def __init__(self, system, atoms, calculator):
-                """Constructor.
-
-                Parameters
-                ----------
-
-                system : yaff.System
-                    system object
-
-                atoms : ase.Atoms
-                    atoms object with calculator included.
-                """
                 yaff.pes.ForcePart.__init__(self, 'ase', system)
                 self.system = system  # store system to obtain current pos and box
                 self.atoms = atoms
                 self.calculator = calculator
 
             def _internal_compute(self, gpos=None, vtens=None):
-                self.atoms.set_positions(self.system.pos /
-                                         molmod.units.angstrom)
-                self.atoms.set_cell(
-                    ase.geometry.Cell(self.system.cell._get_rvecs() /
-                                      molmod.units.angstrom))
-                energy = self.atoms.get_potential_energy(
-                ) * molmod.units.electronvolt
+                self.atoms.set_positions(self.system.pos / molmod.units.angstrom)
+                self.atoms.set_cell(ase.geometry.Cell(self.system.cell._get_rvecs() / molmod.units.angstrom))
+                energy = self.atoms.get_potential_energy() * molmod.units.electronvolt
                 if gpos is not None:
                     forces = self.atoms.get_forces()
-                    gpos[:] = -forces * molmod.units.electronvolt / \
-                        molmod.units.angstrom
+                    gpos[:] = -forces * molmod.units.electronvolt / molmod.units.angstrom
                 if vtens is not None:
                     volume = np.linalg.det(self.atoms.get_cell())
-                    stress = ase.stress.voigt_6_to_full_3x3_stress(
-                        self.atoms.get_stress())
+                    stress = ase.stress.voigt_6_to_full_3x3_stress(self.atoms.get_stress())
                     vtens[:] = volume * stress * molmod.units.electronvolt
                 return energy
 
@@ -254,13 +233,9 @@ class YaffEngine(MDEngine):
                                   step=step_hills))
 
     def _mtd_Plumed(self, K, sigmas, periodicities, step):
-        Warning(
-            "sigmas and peridocities ignorde in plumed, todo write custom .dat file"
-        )
+        Warning("sigmas and peridocities ignorde in plumed, todo write custom .dat file")
 
-        plumed = yaff.external.ForcePartPlumed(self.ff.system,
-                                               fn='plumed.dat',
-                                               timestep=self.timestep)
+        plumed = yaff.external.ForcePartPlumed(self.ff.system, fn='plumed.dat', timestep=self.timestep)
         self.ff.add_part(plumed)
         self.hooks.append(plumed)
 
@@ -278,10 +253,7 @@ class YaffEngine(MDEngine):
                 coordinates = self.system.pos
                 cell = self.system.cell.rvecs
 
-                self.value = self.cv.compute(coordinates,
-                                             cell,
-                                             grad=gpos,
-                                             vir=vtens)
+                self.value = self.cv.compute(coordinates, cell, grad=gpos, vir=vtens)
 
                 return self.value
 
@@ -293,23 +265,18 @@ class YaffEngine(MDEngine):
                 at_numb = f['system']['numbers']
                 traj = []
                 for frame, energy_au in enumerate(f['trajectory']['epot']):
-                    pos_A = f['trajectory']['pos'][
-                        frame, :, :] / molmod.units.angstrom
+                    pos_A = f['trajectory']['pos'][frame, :, :] / molmod.units.angstrom
                     #vel_x = f['trajectory']['vel'][frame,:,:] / x
                     energy_eV = energy_au / molmod.units.electronvolt
                     forces_eVA = -f['trajectory']['gpos_contribs'][
-                        frame,
-                        0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
+                        frame, 0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
 
                     pbc = 'cell' in f['trajectory']
                     if pbc:
-                        cell_A = f['trajectory']['cell'][
-                            frame, :, :] / molmod.units.angstrom
+                        cell_A = f['trajectory']['cell'][frame, :, :] / molmod.units.angstrom
 
-                        vol_A3 = f['trajectory']['volume'][
-                            frame] / molmod.units.angstrom**3
-                        vtens_eV = f['trajectory']['vtens'][
-                            frame, :, :] / molmod.units.electronvolt
+                        vol_A3 = f['trajectory']['volume'][frame] / molmod.units.angstrom**3
+                        vtens_eV = f['trajectory']['vtens'][frame, :, :] / molmod.units.electronvolt
                         stresses_eVA3 = vtens_eV / vol_A3
 
                         atoms = ase.Atoms(
@@ -351,8 +318,9 @@ class OpenMMEngine(MDEngine):
         super().__init__(cv, T, P, ES, timestep, timecon_thermo, timecon_baro)
 
         if self.thermostat:
-            self.integrator = openmm.openmm.LangevinMiddleIntegrator(
-                temperature=T, frictionCoeff=1 / picosecond, stepSize=timestep)
+            self.integrator = openmm.openmm.LangevinMiddleIntegrator(temperature=T,
+                                                                     frictionCoeff=1 / picosecond,
+                                                                     stepSize=timestep)
         if self.barostat:
             system.addForce(openmm.openmm.MonteCarloBarostat(P, T))
 

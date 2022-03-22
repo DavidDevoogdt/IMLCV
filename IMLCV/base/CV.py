@@ -41,8 +41,7 @@ class CV:
 
 
 class CVUtils:
-    """collection of predifined CVs. Intended to be used as argument to CV
-    class.
+    """collection of predifined CVs. Intended to be used as argument to CV class.
 
     args:
         coordinates (np.array(n_atoms,3)): cartesian coordinates
@@ -51,8 +50,8 @@ class CVUtils:
 
     @staticmethod
     def dihedral(coordinates, cell, numbers):
-        """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
-        angle-from-four-points-in-cartesian-coordinates-in-python.
+        """from https://stackoverflow.com/questions/20305272/dihedral-torsion-angle-from-four-points-in-cartesian-
+        coordinates-in-python.
 
         args:
             numbers: list with index of 4 atoms that form dihedral
