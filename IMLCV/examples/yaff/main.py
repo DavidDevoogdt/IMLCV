@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 from molmod import units, constants
 import ase.io
 
+import cProfile
+
 log.set_level(log.medium)
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
@@ -62,25 +64,25 @@ def make_plot_2D(grid, fes):
 
 
 def test_yaff_md():
-    T = 1000 * units.kelvin
+    T = 300 * units.kelvin
     ff = get_alaninedipeptide_amber99ff()
 
     cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14]),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16]),
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=2.0 * np.pi),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi),
     ])
 
     sigmas = np.array([0.35, 0.35])
-    periodicities = np.array([2.0 * np.pi, 2.0 * np.pi])
-    K = 5 * units.kjmol
+    K = 1.2 * units.kjmol
 
     yaffmd = YaffEngine(
         ff=ff,
         ES="MTD",
         sigmas=sigmas,
-        periodicities=periodicities,
         K=K,
-        step_hills=25,
+        step=100,
+        step_hills=500,
+        start=500,
         cv=cvs,
         T=T,
         P=None,
@@ -88,7 +90,7 @@ def test_yaff_md():
         timecon_thermo=100.0 * units.femtosecond,
     )
 
-    yaffmd.run(int(1e2))
+    yaffmd.run(int(1e5))
 
     # aseSys = yaffmd.to_ASE_traj()
     # ase.io.write('md_ext.xyz', aseSys, format='extxyz', append=False)
@@ -97,5 +99,10 @@ def test_yaff_md():
     # make_plot_2D(grid, fes)
 
 
+import pstats
+from pstats import SortKey
 if __name__ == '__main__':
+    # cProfile.run("test_yaff_md()", "stats")
+    # p = pstats.Stats('stats')
+    # p.strip_dirs().sort_stats("tottime").print_stats(100)
     test_yaff_md()
