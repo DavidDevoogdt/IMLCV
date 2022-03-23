@@ -1,5 +1,7 @@
 from functools import partial
-import jax.numpy as np
+import jax
+import numpy as np
+import jax.numpy as jnp
 from jax import jit, grad
 
 
@@ -11,14 +13,30 @@ class CV:
         **kwargs: arguments of custom function f
     """
 
-    def __init__(self, f, n=1, **kwargs) -> None:
+    def __init__(self, f, n=1, periodicity=None, **kwargs) -> None:
 
         self.f = f
         self.kwargs = kwargs
         self._update_params(**kwargs)
         self.n = n
 
-    def compute(self, coordinates, cell, grad=None, vir=None):
+        #figure out bounds for CV
+        if periodicity is not None:
+            if isinstance(periodicity, float):
+                assert n == 1
+                periodicity = np.array([[periodicity]])
+            if isinstance(periodicity, list):
+                periodicity = np.array(periodicity)
+
+            assert periodicity.shape[0] == n
+            if periodicity.shape[1] == 1:
+                periodicity = np.concatenate((periodicity * 0.0, periodicity), axis=1)
+
+            assert periodicity.shape[1] <= 2
+
+        self.periodicity = periodicity
+
+    def compute(self, coordinates, cell, gpos=None, vir=None):
         """
         args:
             coodinates: cartesian coordinates, as numpy array of form (number of atoms,3)
@@ -27,26 +45,38 @@ class CV:
             vir: if not None, is set to the to gradient of CV wrt cell params
         """
 
-        if (grad is not None):
-            grad = self.grad(coordinates, cell)
+        if (gpos is not None):
+            self.cv_grad(coordinates, cell, gpos)
         if (vir is not None):
-            vir = self.vir(coordinates, cell)
+            self.vir(coordinates, cell, vir)
 
-        return self.cv(coordinates, cell), grad, vir
+        return self.cv(coordinates, cell)
 
     def _update_params(self, **kwargs):
         """update the CV functions."""
-        self.cv = jit(partial(self.f, **kwargs))
-        self.grad = jit(grad(self.cv, argnums=(0)))
 
-        def vir(coord, cell, cv):
+        if kwargs is not None:
+            self.cv = jit(partial(self.f, **kwargs))
+        else:
+            self.cv = jit(self.f)
+
+        @jit
+        def cv_grad(coordinates, cell, gpos):
+            """calculates viral as tau*dcv(coor,cell)/dtau."""
+            gpos = gpos.at[:].set(grad(self.cv, argnums=(0))(coordinates, cell))
+
+        self.cv_grad = cv_grad
+
+        @jit
+        def vir(coord, cell, vir):
             """calculates viral as tau*dcv(coor,cell)/dtau."""
             if cell is not None:
-                return np.matmul(np.transpose(cell), grad(cv, argnums=(1))(coord, cell))
-            else:
-                return None
+                if cell.shape == (3, 3):
+                    vir = vir.at[:].set(jnp.matmul(jnp.transpose(cell), grad(self.cv, argnums=(1))(coord, cell)))
+                    return
+            vir = vir.at[:].set(0.0)
 
-        self.vir = jit(partial(vir, cv=self.cv))
+        self.vir = vir
 
     def split_cv(self):
         """Split the given CV in list of n=1 CVs."""
@@ -55,14 +85,16 @@ class CV:
 
         class splitCV(CV):
 
-            def __init__(self, cvs, index) -> None:
+            def __init__(self2, cvs, index) -> None:
 
-                def f2(x, y, f, index):
-                    return f(x, y)[index]
+                def f2(x, y):
+                    return self.cv(x, y)[index]
 
-                self.f = jit(partial(f2, f=cvs, index=index))
-                self.n = 1
-                self._update_params()
+                self2.f = f2
+                self2.n = 1
+                self2._update_params()
+
+                self2.periodicity = self.periodicity[index, :]
 
         return [splitCV(self.cv, i) for i in range(self.n)]
 
@@ -73,15 +105,18 @@ class CombineCV(CV):
     def __init__(self, cvs) -> None:
         self.n = 0
         self.cvs = cvs
+        periodicity = np.empty((0, 2))
         for cv in cvs:
             self.n += cv.n
+            periodicity = np.concatenate([periodicity, cv.periodicity], axis=0)
+        self.periodicity = periodicity
         self._update_params()
 
     def _update_params(self):
         """function selects on ouput according to index"""
 
         def f(x, y, cvs):
-            return np.array([cv.cv(x, y) for cv in cvs])
+            return jnp.array([cv.cv(x, y) for cv in cvs])
 
         self.f = partial(f, cvs=self.cvs)
 
@@ -113,15 +148,15 @@ class CVUtils:
         b1 = p2 - p1
         b2 = p3 - p2
 
-        b1 /= np.linalg.norm(b1)
+        b1 /= jnp.linalg.norm(b1)
 
-        v = b0 - np.dot(b0, b1) * b1
-        w = b2 - np.dot(b2, b1) * b1
+        v = b0 - jnp.dot(b0, b1) * b1
+        w = b2 - jnp.dot(b2, b1) * b1
 
-        x = np.dot(v, w)
-        y = np.dot(np.cross(b1, v), w)
-        return np.arctan2(y, x)
+        x = jnp.dot(v, w)
+        y = jnp.dot(jnp.cross(b1, v), w)
+        return jnp.arctan2(y, x)
 
     @staticmethod
     def Volume(coordinates, cell):
-        return np.abs(np.dot(cell[0], np.cross(cell[1], cell[2])))
+        return jnp.abs(jnp.dot(cell[0], jnp.cross(cell[1], cell[2])))

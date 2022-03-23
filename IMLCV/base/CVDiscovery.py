@@ -1,4 +1,4 @@
-from yaff.pes.colvar import CollectiveVariable
+from .CV import CV
 
 
 class CVDiscovery:
@@ -7,5 +7,5 @@ class CVDiscovery:
     def __init__(self) -> None:
         pass
 
-    def compute(self, data) -> CollectiveVariable:
+    def compute(self, data) -> CV:
         NotImplementedError

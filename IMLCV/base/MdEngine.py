@@ -103,7 +103,7 @@ class YaffEngine(MDEngine):
                  timestep=None,
                  timecon_thermo=None,
                  timecon_baro=None,
-                 step=1,
+                 step=500,
                  start=1,
                  filename="traj.h5",
                  **kwargs) -> None:
@@ -120,7 +120,7 @@ class YaffEngine(MDEngine):
         self.ff = ff
 
         # setup the the logging
-        vsl = yaff.sampling.VerletScreenLog(step=100)
+        vsl = yaff.sampling.VerletScreenLog(step=step)
         self.hooks = [vsl]
 
         if self.filename.endswith(".h5"):
@@ -154,12 +154,9 @@ class YaffEngine(MDEngine):
         if self.ES == "MTD":
             # self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
             self.cvs = self._convert_cv(cv, ff=self.ff)
-            if not ({"K", "sigmas", "periodicities", 'step_hills'} <= kwargs.keys()):
-                raise ValueError("provide argumetns K, sigmas and periodicities")
-            self._mtd_Yaff(K=kwargs["K"],
-                           sigmas=kwargs["sigmas"],
-                           periodicities=kwargs["periodicities"],
-                           step_hills=kwargs["step_hills"])
+            if not ({"K", "sigmas", 'step_hills'} <= kwargs.keys()):
+                raise ValueError("provide argumetns K, sigmas")
+            self._mtd_Yaff(K=kwargs["K"], sigmas=kwargs["sigmas"], step_hills=kwargs["step_hills"])
         elif self.ES == "MTD_plumed":
             plumed = yaff.external.ForcePartPlumed(ff.system, fn='plumed.dat')
             ff.add_part(plumed)
@@ -176,6 +173,7 @@ class YaffEngine(MDEngine):
                 natom, _ = iterative.gpos.shape
                 gpos_contribs = np.zeros((n, natom, 3))
                 for i in range(n):
+                    # gpos_contribs = gpos_contribs.at[i, :, :].set(iterative.ff.parts[i].gpos)
                     gpos_contribs[i, :, :] = iterative.ff.parts[i].gpos
                 return gpos_contribs
 
@@ -187,8 +185,9 @@ class YaffEngine(MDEngine):
             self.timestep,
             temp0=self.T,
             hooks=self.hooks,
-            # add forces as state item
-            state=[GposContribStateItem()])
+            # # add forces as state item
+            state=[GposContribStateItem()],
+        )
 
     @staticmethod
     def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
@@ -231,18 +230,18 @@ class YaffEngine(MDEngine):
 
         return yaff.pes.ForceField(system, [part_ase])
 
-    def _mtd_Yaff(self, K, sigmas, periodicities, step_hills):
+    def _mtd_Yaff(self, K, sigmas, step_hills):
         self.hooks.append(
             yaff.sampling.MTDHook(self.ff,
                                   self.cvs,
                                   sigma=sigmas,
                                   K=K,
-                                  periodicities=periodicities,
+                                  periodicities=self.cv.periodicity[:, 1] - self.cv.periodicity[:, 0],
                                   f=self.fh5,
                                   start=self.start,
                                   step=step_hills))
 
-    def _mtd_Plumed(self, K, sigmas, periodicities, step):
+    def _mtd_Plumed(self, K, sigmas, step):
         Warning("sigmas and peridocities ignorde in plumed, todo write custom .dat file")
 
         plumed = yaff.external.ForcePartPlumed(self.ff.system, fn='plumed.dat', timestep=self.timestep)
@@ -268,10 +267,7 @@ class YaffEngine(MDEngine):
                 coordinates = self.system.pos
                 cell = self.system.cell.rvecs
 
-                self.value, gpos, vtens = self.cv.compute(coordinates,
-                                                          cell,
-                                                          grad=(gpos is not None),
-                                                          vir=(gpos is not None))
+                self.value = self.cv.compute(coordinates, cell, gpos=gpos, vir=vtens)
 
                 return self.value
 

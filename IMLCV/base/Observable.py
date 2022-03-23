@@ -1,5 +1,3 @@
-import numpy as np
-
 from IMLCV.base.MdEngine import MDEngine
 
 import os
