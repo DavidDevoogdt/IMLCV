@@ -1,4 +1,4 @@
-from base import *
+from IMLCV.base import *
 
 
 class scheme:

@@ -11,6 +11,8 @@ from yaff import log
 import yaff.system
 import yaff.pes
 import yaff.external
+import yaff.analysis.biased_sampling
+from yaff.sampling.io import XYZWriter
 import numpy as np
 from .CV import CV
 import molmod
@@ -20,6 +22,21 @@ from abc import ABC, abstractmethod
 from ase.io import read, write
 import ase.geometry
 import ase.stress
+
+
+class MDEngineBias(ABC):
+    """base class for bias."""
+
+    def __init__(self, cvs: CV) -> None:
+        self.cvs = cvs
+
+    def add_engine(self, mdengine):
+        """function is called from MDEngine instance."""
+        self.mdengine = mdengine
+
+    @abstractmethod
+    def get_bias(self, cvs):
+        raise NotImplementedError
 
 
 class MDEngine(ABC):
@@ -36,29 +53,30 @@ class MDEngine(ABC):
     """
 
     def __init__(self,
-                 cv: CV,
+                 MDEngineBias: MDEngineBias,
                  T,
                  P,
-                 step,
-                 start,
-                 ES="None",
                  timestep=None,
                  timecon_thermo=None,
                  timecon_baro=None,
-                 filename="traj.h5") -> None:
-        self.cv = cv
-        self.ES = ES
+                 filename="traj.h5",
+                 write_step=100) -> None:
+        self.MDEngineBias = MDEngineBias
         self.filename = filename
-        self.step = step
-        self.start = start
+        self.write_step = write_step
 
         self.timestep = timestep
-        self.thermostat = T is not None and timecon_thermo is not None
         self.T = T
-        self.timecon_thermo = timecon_thermo
-        self.barostat = P is not None and timecon_baro is not None
+        if T is not None:
+            assert timecon_thermo is not None
+            self.timecon_thermo = timecon_thermo
+
         self.P = P
-        self.timecon_baro = timecon_baro
+        if P is not None:
+            assert timecon_baro is not None
+            self.timecon_baro = timecon_baro
+
+        MDEngineBias.add_engine(mdengine=self)
 
     @abstractmethod
     def run(self, steps):
@@ -74,14 +92,101 @@ class MDEngine(ABC):
         """convert the MD run to ASE trajectory."""
         raise NotImplementedError
 
-    @abstractmethod
-    def update_CV(self, new_cv):
-        """function to update CVs while keeping other properties constant."""
-        raise NotImplementedError
+
+class YaffBias(MDEngineBias, ABC):
+    """Definition of bias engines for Yaff MD Engine."""
+
+    def add_engine(self, mdengine):
+        """function is called from MDEngine instance."""
+        self.mdengine = mdengine
 
     @abstractmethod
-    def get_bias(self, cv):
-        """function to update CVs while keeping other properties constant."""
+    def append_hook(self):
+        """gets hook for given bias."""
+
+
+class YaffBiasNone(YaffBias):
+
+    def append_hook(self):
+        pass
+
+    def get_bias(self, cvs):
+        return 0.0
+
+
+class YaffBiasMTD(YaffBias):
+    """(Well-tempered) metadynamics for Yaff Engine."""
+
+    def __init__(self, cvs: CV, K, sigmas, step_hills=100, start=100) -> None:
+        super().__init__(cvs)
+        self.K = K
+        self.sigmas = sigmas
+        self.step_hills = step_hills
+        self.start = start
+
+    def append_hook(self):
+        self.yaff_cvs = self._convert_cv(self.cvs)
+        self.mdengine.hooks.append(
+            yaff.sampling.MTDHook(self.mdengine.ff,
+                                  self.yaff_cvs,
+                                  sigma=self.sigmas,
+                                  K=self.K,
+                                  periodicities=self.cvs.periodicity[:, 1] - self.cvs.periodicity[:, 0],
+                                  f=self.mdengine.fh5,
+                                  start=self.start,
+                                  step=self.step_hills))
+
+    def _convert_cv(self, cvs: CV):
+        """convert generic CV class to a yaff CollectiveVariable."""
+
+        if not isinstance(cvs, list):
+            cvs = [cvs]
+        cv2 = []
+
+        class YaffCv(yaff.pes.CollectiveVariable):
+
+            def __init__(self, system, cv):
+                super().__init__("YaffCV", system)
+                self.cv = cv
+
+            def compute(self, gpos=None, vtens=None):
+                self.value = self.cv.compute(coordinates=self.system.pos,
+                                             cell=self.system.cell.rvecs,
+                                             gpos=gpos,
+                                             vir=vtens)
+                return self.value
+
+        for cv in cvs:
+            if cv.n == 1:
+                cv2.append(YaffCv(self.mdengine.ff.system, cv))
+            else:
+                cvs_split = cv.split_cv()
+                for cv_split in cvs_split:
+                    cv2.append(YaffCv(self.mdengine.ff.system, cv_split))
+
+        return cv2
+
+    def get_bias(self, cvs):
+        raise NotImplementedError
+        mtd = yaff.analysis.biased_sampling.SumHills(grid)
+        mtd.load_hdf5('traj.h5')
+        fes = mtd.compute_fes()
+
+
+class YaffBiasPlumed(YaffBias):
+
+    def append_hook(self):
+        self.plumed_cvs = self._convert_cvs()
+
+        plumed = yaff.external.ForcePartPlumed(self.mdengine.ff.system, fn='plumed.dat')
+        self.mdengine.ff.add_part(plumed)
+        self.mdengine.hooks.append(plumed)
+
+    def _convert_cvs(self):
+        raise NotImplementedError(
+            "convert python CV to plumed script, see https://giorginolab.github.io/plumed2-pycv/ ")
+
+    def get_bias(self, cvs):
         raise NotImplementedError
 
 
@@ -90,56 +195,50 @@ class YaffEngine(MDEngine):
 
     Args:
         ff (yaff.pes.ForceField)
-        cv (IMLCV.base.CV.CV):
-        ES (str, optional):
     """
 
-    def __init__(self,
-                 ff: yaff.pes.ForceField,
-                 cv: CV,
-                 ES="None",
-                 T=None,
-                 P=None,
-                 timestep=None,
-                 timecon_thermo=None,
-                 timecon_baro=None,
-                 step=500,
-                 start=1,
-                 filename="traj.h5",
-                 **kwargs) -> None:
-        super().__init__(cv=cv,
-                         T=T,
+    def __init__(
+        self,
+        ff: yaff.pes.ForceField,
+        MDEngineBias: YaffBias,
+        T=None,
+        P=None,
+        timestep=None,
+        timecon_thermo=None,
+        timecon_baro=None,
+        filename="traj.h5",
+        write_step=100,
+    ) -> None:
+        super().__init__(T=T,
                          P=P,
+                         MDEngineBias=MDEngineBias,
                          timestep=timestep,
                          timecon_thermo=timecon_thermo,
                          timecon_baro=timecon_baro,
-                         ES=ES,
-                         step=step,
-                         start=start,
+                         write_step=write_step,
                          filename=filename)
         self.ff = ff
 
         # setup the the logging
-        vsl = yaff.sampling.VerletScreenLog(step=step)
+        vsl = yaff.sampling.VerletScreenLog(step=write_step)
         self.hooks = [vsl]
 
+        #setup writer to collect results
         if self.filename.endswith(".h5"):
             self.fh5 = h5py.File(self.filename, 'w')
-            h5writer = yaff.sampling.HDF5Writer(self.fh5, step=step)
+            h5writer = yaff.sampling.HDF5Writer(self.fh5, step=write_step)
             self.hooks.append(h5writer)
         elif self.filename.endswith(".xyz"):
-            xyzhook = yaff.XYZWriter(self.filename, step=step, start=start)
+            xyzhook = XYZWriter(self.filename, step=write_step)
             self.hooks.append(xyzhook)
         else:
             raise NotImplemented("only h5 and xyz are supported as filename")
 
-        # setup barp/thermostat
+        # setup baro/thermostat
         if self.thermostat:
             nhc = yaff.sampling.NHCThermostat(self.T, start=0, timecon=self.timecon_thermo, chainlength=3)
-
         if self.barostat:
             mtk = yaff.sampling.MTKBarostat(ff, self.T, self.P, start=0, timecon=self.timecon_baro, anisotropic=False)
-
         if self.thermostat and self.barostat:
             tbc = yaff.sampling.TBCombination(nhc, mtk)
             self.hooks.append(tbc)
@@ -150,43 +249,16 @@ class YaffEngine(MDEngine):
         else:
             raise NotImplementedError
 
-        # setup metadynamics
-        if self.ES == "MTD":
-            # self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
-            self.cvs = self._convert_cv(cv, ff=self.ff)
-            if not ({"K", "sigmas", 'step_hills'} <= kwargs.keys()):
-                raise ValueError("provide argumetns K, sigmas")
-            self._mtd_Yaff(K=kwargs["K"], sigmas=kwargs["sigmas"], step_hills=kwargs["step_hills"])
-        elif self.ES == "MTD_plumed":
-            plumed = yaff.external.ForcePartPlumed(ff.system, fn='plumed.dat')
-            ff.add_part(plumed)
-            self.hooks.append(plumed)
-
-        class GposContribStateItem(yaff.sampling.iterative.StateItem):
-            """Keeps track of all the contributions to the forces."""
-
-            def __init__(self):
-                yaff.sampling.iterative.StateItem.__init__(self, 'gpos_contribs')
-
-            def get_value(self, iterative):
-                n = len(iterative.ff.parts)
-                natom, _ = iterative.gpos.shape
-                gpos_contribs = np.zeros((n, natom, 3))
-                for i in range(n):
-                    # gpos_contribs = gpos_contribs.at[i, :, :].set(iterative.ff.parts[i].gpos)
-                    gpos_contribs[i, :, :] = iterative.ff.parts[i].gpos
-                return gpos_contribs
-
-            def iter_attrs(self, iterative):
-                yield 'gpos_contrib_names', np.array([part.name for part in iterative.ff.parts], dtype='S')
+        #add the enhanced dynamics hook
+        MDEngineBias.append_hook()
 
         self.verlet = yaff.sampling.VerletIntegrator(
             self.ff,
             self.timestep,
             temp0=self.T,
             hooks=self.hooks,
-            # # add forces as state item
-            state=[GposContribStateItem()],
+            # add forces as state item
+            state=[self._GposContribStateItem()],
         )
 
     @staticmethod
@@ -230,57 +302,6 @@ class YaffEngine(MDEngine):
 
         return yaff.pes.ForceField(system, [part_ase])
 
-    def _mtd_Yaff(self, K, sigmas, step_hills):
-        self.hooks.append(
-            yaff.sampling.MTDHook(self.ff,
-                                  self.cvs,
-                                  sigma=sigmas,
-                                  K=K,
-                                  periodicities=self.cv.periodicity[:, 1] - self.cv.periodicity[:, 0],
-                                  f=self.fh5,
-                                  start=self.start,
-                                  step=step_hills))
-
-    def _mtd_Plumed(self, K, sigmas, step):
-        Warning("sigmas and peridocities ignorde in plumed, todo write custom .dat file")
-
-        plumed = yaff.external.ForcePartPlumed(self.ff.system, fn='plumed.dat', timestep=self.timestep)
-        self.ff.add_part(plumed)
-        self.hooks.append(plumed)
-
-    def _convert_cv(self, cvs: CV, ff):
-        """convert generic CV class to a yaff CollectiveVariable."""
-
-        if not isinstance(cvs, list):
-            cvs = [cvs]
-
-        cv2 = []
-
-        class YaffCv(yaff.pes.CollectiveVariable):
-
-            def __init__(self, system, cv):
-                super().__init__("YaffCV", system)
-                self.cv = cv
-
-            def compute(self, gpos=None, vtens=None):
-
-                coordinates = self.system.pos
-                cell = self.system.cell.rvecs
-
-                self.value = self.cv.compute(coordinates, cell, gpos=gpos, vir=vtens)
-
-                return self.value
-
-        for cv in cvs:
-            if cv.n == 1:
-                cv2.append(YaffCv(ff.system, cv))
-            else:
-                cvs_split = cv.split_cv()
-                for cv_split in cvs_split:
-                    cv2.append(YaffCv(ff.system, cv_split))
-
-        return cv2
-
     def to_ASE_traj(self):
         if self.filename.endswith(".h5"):
             with h5py.File(self.filename, 'r') as f:
@@ -323,13 +344,23 @@ class YaffEngine(MDEngine):
     def run(self, steps):
         self.verlet.run(steps)
 
-    def update_CV(self, new_cv):
-        """function to update CVs while keeping other properties constant."""
-        raise NotImplementedError
+    class _GposContribStateItem(yaff.sampling.iterative.StateItem):
+        """Keeps track of all the contributions to the forces."""
 
-    def get_bias(self, cv):
-        """function to update CVs while keeping other properties constant."""
-        raise NotImplementedError
+        def __init__(self):
+            yaff.sampling.iterative.StateItem.__init__(self, 'gpos_contribs')
+
+        def get_value(self, iterative):
+            n = len(iterative.ff.parts)
+            natom, _ = iterative.gpos.shape
+            gpos_contribs = np.zeros((n, natom, 3))
+            for i in range(n):
+                # gpos_contribs = gpos_contribs.at[i, :, :].set(iterative.ff.parts[i].gpos)
+                gpos_contribs[i, :, :] = iterative.ff.parts[i].gpos
+            return gpos_contribs
+
+        def iter_attrs(self, iterative):
+            yield 'gpos_contrib_names', np.array([part.name for part in iterative.ff.parts], dtype='S')
 
 
 class OpenMMEngine(MDEngine):

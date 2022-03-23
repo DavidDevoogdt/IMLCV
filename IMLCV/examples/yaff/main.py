@@ -1,19 +1,16 @@
 from __future__ import division
 
 import os, sys
+
 from IMLCV.base.CV import CV, CVUtils, CombineCV
-from IMLCV.base.MdEngine import YaffEngine
-from yaff.pes import CVInternalCoordinate, DihedAngle
+from IMLCV.base.MdEngine import MDEngineBias, YaffEngine, YaffBiasMTD
 from yaff.test.common import get_alaninedipeptide_amber99ff
 from yaff.log import log
 from yaff.analysis.biased_sampling import SumHills
 import numpy as np
-import h5py as h5
 import matplotlib.pyplot as plt
 from molmod import units, constants
 import ase.io
-
-import cProfile
 
 log.set_level(log.medium)
 abspath = os.path.abspath(__file__)
@@ -64,7 +61,7 @@ def make_plot_2D(grid, fes):
 
 
 def test_yaff_md():
-    T = 300 * units.kelvin
+    T = 600 * units.kelvin
     ff = get_alaninedipeptide_amber99ff()
 
     cvs = CombineCV([
@@ -72,18 +69,12 @@ def test_yaff_md():
         CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi),
     ])
 
-    sigmas = np.array([0.35, 0.35])
-    K = 1.2 * units.kjmol
+    bias = YaffBiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), step_hills=50)
 
     yaffmd = YaffEngine(
         ff=ff,
-        ES="MTD",
-        sigmas=sigmas,
-        K=K,
-        step=100,
-        step_hills=500,
-        start=500,
-        cv=cvs,
+        MDEngineBias=bias,
+        write_step=1000,
         T=T,
         P=None,
         timestep=2.0 * units.femtosecond,
@@ -92,17 +83,12 @@ def test_yaff_md():
 
     yaffmd.run(int(1e5))
 
-    # aseSys = yaffmd.to_ASE_traj()
-    # ase.io.write('md_ext.xyz', aseSys, format='extxyz', append=False)
+    aseSys = yaffmd.to_ASE_traj()
+    ase.io.write('md_ext.xyz', aseSys, format='extxyz', append=False)
 
-    # grid, fes = get_fes()
-    # make_plot_2D(grid, fes)
+    grid, fes = get_fes()
+    make_plot_2D(grid, fes)
 
 
-import pstats
-from pstats import SortKey
 if __name__ == '__main__':
-    # cProfile.run("test_yaff_md()", "stats")
-    # p = pstats.Stats('stats')
-    # p.strip_dirs().sort_stats("tottime").print_stats(100)
     test_yaff_md()
