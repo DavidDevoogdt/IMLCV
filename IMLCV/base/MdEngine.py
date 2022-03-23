@@ -66,13 +66,16 @@ class MDEngine(ABC):
         self.write_step = write_step
 
         self.timestep = timestep
+
         self.T = T
-        if T is not None:
+        self.thermostat = (T is not None)
+        if self.thermostat:
             assert timecon_thermo is not None
             self.timecon_thermo = timecon_thermo
 
         self.P = P
-        if P is not None:
+        self.barostat = (P is not None)
+        if self.barostat:
             assert timecon_baro is not None
             self.timecon_baro = timecon_baro
 
@@ -167,8 +170,8 @@ class YaffBiasMTD(YaffBias):
         return cv2
 
     def get_bias(self, cvs):
-        raise NotImplementedError
-        mtd = yaff.analysis.biased_sampling.SumHills(grid)
+
+        mtd = yaff.analysis.biased_sampling.SumHills(cvs)
         mtd.load_hdf5('traj.h5')
         fes = mtd.compute_fes()
 

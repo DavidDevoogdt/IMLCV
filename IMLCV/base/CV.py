@@ -24,15 +24,16 @@ class CV:
         if periodicity is not None:
             if isinstance(periodicity, float):
                 assert n == 1
-                periodicity = np.array([[periodicity]])
+                periodicity = [[0.0, periodicity]]
             if isinstance(periodicity, list):
                 periodicity = np.array(periodicity)
-
             assert periodicity.shape[0] == n
             if periodicity.shape[1] == 1:
-                periodicity = np.concatenate((periodicity * 0.0, periodicity), axis=1)
+                periodicity = np.concatenate((0.0 * periodicity, periodicity), axis=1)
 
-            assert periodicity.shape[1] <= 2
+            assert periodicity.shape == (n, 2)
+        else:
+            periodicity = np.array([[np.NaN, np.NaN] * n])
 
         self.periodicity = periodicity
 
