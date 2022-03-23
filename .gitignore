@@ -27,3 +27,8 @@ plumed.log
 
 docs/build*
 docs/source/rg_*
+
+#files from examples
+IMLCV/examples/yaff/ala_dipep.png
+IMLCV/examples/yaff/md_ext.xyz
+IMLCV/examples/yaff/plumed.dat

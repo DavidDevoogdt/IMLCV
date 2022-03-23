@@ -26,6 +26,7 @@ def test_split_combine():
 
 
 def test_virial():
+    #virial for volume based CV is V*I(3)
     cv0 = CV(CVUtils.Volume)
     cell = np.random.random((3, 3))
     vir = np.zeros((3, 3))

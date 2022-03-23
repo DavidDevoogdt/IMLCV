@@ -113,7 +113,7 @@ class CombineCV(CV):
         self._update_params()
 
     def _update_params(self):
-        """function selects on ouput according to index"""
+        """function selects on ouput according to index."""
 
         def f(x, y, cvs):
             return jnp.array([cv.cv(x, y) for cv in cvs])
