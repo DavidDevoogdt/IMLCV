@@ -36,7 +36,7 @@ def test_yaff_md_ala_dipep():
 
     yaffmd = YaffEngine(
         ff=ff,
-        MDEngineBias=bias,
+        bias=bias,
         write_step=1000,
         T=T,
         P=None,
@@ -61,7 +61,7 @@ def test_yaff_md_mil53():
 
     yaffmd = YaffEngine(
         ff=ff,
-        MDEngineBias=bias,
+        bias=bias,
         write_step=100,
         T=T,
         P=P,
@@ -114,7 +114,7 @@ def test_yaff_ase():
     bias = YaffBiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), step_hills=50)
     yaffmd = YaffEngine(
         ff=ff,
-        MDEngineBias=bias,
+        bias=bias,
         write_step=100,
         T=600 * units.kelvin,
         timestep=1.0 * units.femtosecond,
@@ -128,5 +128,5 @@ def test_yaff_ase():
 
 if __name__ == '__main__':
     test_yaff_md_ala_dipep()
-    test_yaff_md_mil53()
+    #test_yaff_md_mil53()
     # test_yaff_ase()

@@ -37,6 +37,16 @@ class CV:
 
         self.periodicity = periodicity
 
+    def compute(self, coordinates, deriv=True):
+        """used as a thermolib collective variable."""
+
+        if deriv == True:
+            gpos = np.zeros(coordinates.shape)
+            ener = self.compute(coordinates, cell=None, gpos=gpos)
+            return ener, gpos
+        else:
+            return self.compute(coordinates, cell=None)
+
     def compute(self, coordinates, cell, gpos=None, vir=None):
         """
         args:

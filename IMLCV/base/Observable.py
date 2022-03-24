@@ -1,4 +1,5 @@
-from IMLCV.base.MdEngine import MDEngine
+import imp
+from IMLCV.base.MdEngine import MDEngine, MdBias
 
 import os
 from yaff.log import log
@@ -7,34 +8,44 @@ import numpy as np
 import matplotlib.pyplot as plt
 from molmod import units
 
+from functools import partial
+from jax import vmap
+import jax.numpy as jnp
+
+from thermolib.thermodynamics.fep import SimpleFreeEnergyProfile, FreeEnergySurface2D, plot_feps
+from thermolib.thermodynamics.histogram import Histogram2D
+import numpy as np, os
+from molmod.units import *
+
 
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic observables."""
 
-    def __init__(self, mde: MDEngine) -> None:
-        pass
+    def __init__(self, bias: MdBias, traj) -> None:
+        self.mdb = bias
 
-    def get_fes():
-        npoints = 51
-        # Construct a regular 2D grid, spanning from -pi to +pi in both dimensions
-        grid0 = np.linspace(-np.pi, np.pi, npoints, endpoint=False)
-        grid1 = np.linspace(-np.pi, np.pi, npoints, endpoint=False)
-        grid = np.zeros((grid0.shape[0] * grid1.shape[0], 2))
-        grid[:, 0] = np.repeat(grid0, grid1.shape[0])
-        grid[:, 1] = np.tile(grid1, grid0.shape[0])
-        mtd = yaff.analysis.biased_sampling.SumHills(grid)
-        mtd.load_hdf5('traj.h5')
-        fes = mtd.compute_fes()
-        # Reshape to rectangular grids
-        grid = grid.reshape((grid0.shape[0], grid1.shape[0], 2))
-        fes = fes.reshape((grid0.shape[0], grid1.shape[0]))
-        return grid, fes
+    def fes(self):
+        # fes = FreeEnergySurface2D.from_txt
+        Histogram2D.from_single_trajectory()
 
-    def make_plot_2D(grid, fes):
-        fes -= np.amin(fes)
+    def plot_bias(self):
+        n = 51
+        if np.isnan(self.mdb.cvs.periodicity).any():
+            raise NotImplementedError("add argument for range")
+
+        x = [np.linspace(p[0][0], p[0][1], n, endpoint=False) for p in np.split(self.mdb.cvs.periodicity, 2, axis=0)]
+        mg = np.array(np.meshgrid(*x))  #(ncv,n,n) matrix
+        biases = np.array(np.apply_along_axis(self.mdb.compute, axis=0, arr=mg, gpos=None, vir=None))
+
+        if mg.shape[0] != 2:
+            raise NotImplementedError("todo sum over extra dims to visualise")
+
+        fes = biases - np.amin(biases)
+
         plt.clf()
-        plt.contourf(grid[:, :, 0], grid[:, :, 1], fes / units.kjmol)
-        plt.xlabel("$\phi\,[\mathrm{rad}]$")
-        plt.ylabel("$\psi\,[\mathrm{rad}]$")
+        plt.contourf(mg[0, :, :], mg[1, :, :], fes / units.kjmol)
+        plt.xlabel("CV1")
+        plt.ylabel("CV2")
         plt.title("$F\,[\mathrm{kJ}\,\mathrm{mol}^{-1}]$")
-        plt.savefig('ala_dipep.png')
+        plt.colorbar()
+        plt.savefig('output/ala_dipep.png')

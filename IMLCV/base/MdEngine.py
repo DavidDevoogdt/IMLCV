@@ -2,6 +2,8 @@
 
 Currently, the MD is done with YAFF/OpenMM
 """
+from audioop import bias
+from copyreg import pickle
 import openmm
 import openmm.openmm
 import openmm.unit
@@ -10,9 +12,11 @@ import yaff.sampling
 from yaff import log
 import yaff.system
 import yaff.pes
+import yaff.pes.bias
 import yaff.external
 import yaff.analysis.biased_sampling
 from yaff.sampling.io import XYZWriter
+
 import numpy as np
 from .CV import CV
 import molmod
@@ -23,20 +27,90 @@ from ase.io import read, write
 import ase.geometry
 import ase.stress
 
+import pickle
 
-class MDEngineBias(ABC):
-    """base class for bias."""
+
+class Bias(ABC):
+    """base class for biased MD runs."""
 
     def __init__(self, cvs: CV) -> None:
         self.cvs = cvs
 
-    def add_engine(self, mdengine):
-        """function is called from MDEngine instance."""
-        self.mdengine = mdengine
+    @abstractmethod
+    def save_bias(self, filename):
+        """save parameters of bias such that bias can be computed for arbitrary cvs."""
+
+    @staticmethod
+    def load_bias(filename):
+        """load save bias."""
+        with open(filename, "rb") as f:
+            [name, data] = pickle.load(f)
+
+        if name == "YaffBiasMTD":
+
+            hills = yaff.pes.bias.GaussianHills.__new__(yaff.pes.bias.GaussianHills)
+            [hills.q0s, hills.Ks, hills.sigmas_isq, hills.periodicities, hills.ncv] = data
+
+            bias = YaffBiasMTD.__new__(YaffBiasMTD)
+            bias.hills = hills
+            return bias
+        else:
+            raise NotImplementedError
+
+    def compute(self, coordinates, cell, gpos=None, vir=None):
+        """Computes the bias for arbitrary coordinates+cell."""
+        cvs = self.cv.compute(coordinates, cell, gpos=None, vir=None)
+        return self.compute(self, cvs, gpos=gpos, vir=vir)
 
     @abstractmethod
-    def get_bias(self, cvs):
+    def compute(self, cvs, gpos=None, vir=None):
+        """Computes the bias for arbitrary cvs."""
         raise NotImplementedError
+
+
+class BiasNone(Bias):
+    """Unbiased simulation."""
+
+    def append_hook(self):
+        pass
+
+    def compute(self, coordinates, cell, gpos=None, vir=None):
+        """Computes the bias for arbitrary coordinates."""
+        if gpos is not None:
+            gpos[:] = 0.0
+        if vir is not None:
+            vir[:] = 0.0
+
+        return 0.0
+
+    def save_bias(self, filename):
+        """save parameters of bias such that bias can be computed for arbitrary cvs."""
+        pass
+
+    def load_bias(self, filename):
+        """load save bias."""
+        pass
+
+
+class MdBias(Bias, ABC):
+    """base class for biased MD runs."""
+
+    def add_engine(self, mdengine, otf=False):
+        """function is called from MDEngine instance.
+
+        This implements the bias. If otf is True, a hook is appended to update the bias on the fly
+        """
+        self.mdengine = mdengine
+        self.otf = otf
+
+    def remove_hook(self):
+        """remove hook to generate on-the-fly bias."""
+        pass
+
+
+class BiasThermolib(ABC):
+    """use FES from thermolib as bias potential."""
+    pass
 
 
 class MDEngine(ABC):
@@ -53,7 +127,7 @@ class MDEngine(ABC):
     """
 
     def __init__(self,
-                 MDEngineBias: MDEngineBias,
+                 bias: MdBias,
                  T,
                  P,
                  timestep=None,
@@ -61,7 +135,11 @@ class MDEngine(ABC):
                  timecon_baro=None,
                  filename="traj.h5",
                  write_step=100) -> None:
-        self.MDEngineBias = MDEngineBias
+        if isinstance(bias, list):
+            raise NotImplementedError("only single bias atm")
+
+        self.bias = bias
+        self.init_bias = False
         self.filename = filename
         self.write_step = write_step
 
@@ -79,7 +157,9 @@ class MDEngine(ABC):
             assert timecon_baro is not None
             self.timecon_baro = timecon_baro
 
-        MDEngineBias.add_engine(mdengine=self)
+    def add_bias(self):
+        self.bias.add_engine(mdengine=self)
+        self.init_bias = True
 
     @abstractmethod
     def run(self, steps):
@@ -88,7 +168,7 @@ class MDEngine(ABC):
         Args:
             steps: number of MD steps
         """
-        raise NotImplementedError
+        assert self.init_bias
 
     @abstractmethod
     def to_ASE_traj(self):
@@ -96,25 +176,8 @@ class MDEngine(ABC):
         raise NotImplementedError
 
 
-class YaffBias(MDEngineBias, ABC):
-    """Definition of bias engines for Yaff MD Engine."""
-
-    def add_engine(self, mdengine):
-        """function is called from MDEngine instance."""
-        self.mdengine = mdengine
-
-    @abstractmethod
-    def append_hook(self):
-        """gets hook for given bias."""
-
-
-class YaffBiasNone(YaffBias):
-
-    def append_hook(self):
-        pass
-
-    def get_bias(self, cvs):
-        return 0.0
+class YaffBias(MdBias):
+    pass
 
 
 class YaffBiasMTD(YaffBias):
@@ -127,17 +190,26 @@ class YaffBiasMTD(YaffBias):
         self.step_hills = step_hills
         self.start = start
 
-    def append_hook(self):
+    def add_engine(self, mdengine, otf=True):
+        self.mdengine = mdengine
         self.yaff_cvs = self._convert_cv(self.cvs)
-        self.mdengine.hooks.append(
-            yaff.sampling.MTDHook(self.mdengine.ff,
-                                  self.yaff_cvs,
-                                  sigma=self.sigmas,
-                                  K=self.K,
-                                  periodicities=self.cvs.periodicity[:, 1] - self.cvs.periodicity[:, 0],
-                                  f=self.mdengine.fh5,
-                                  start=self.start,
-                                  step=self.step_hills))
+
+        self.hook = yaff.sampling.MTDHook(self.mdengine.ff,
+                                          self.yaff_cvs,
+                                          sigma=self.sigmas,
+                                          K=self.K,
+                                          periodicities=self.cvs.periodicity[:, 1] - self.cvs.periodicity[:, 0],
+                                          f=self.mdengine.fh5,
+                                          start=self.start,
+                                          step=self.step_hills)
+
+        self.hills = self.hook.hills
+        self.mdengine.hooks.append(self.hook)
+
+        self.mdengine.hooks.append(self.hook)
+
+    def remove_hook(self):
+        self.mdengine.hooks.remove(self.hook)
 
     def _convert_cv(self, cvs: CV):
         """convert generic CV class to a yaff CollectiveVariable."""
@@ -169,28 +241,36 @@ class YaffBiasMTD(YaffBias):
 
         return cv2
 
-    def get_bias(self, cvs):
+    def compute(self, cvs, gpos=None, vir=None):
+        return self.hills.compute(gpos=gpos, vtens=vir, qs=cvs)
 
-        mtd = yaff.analysis.biased_sampling.SumHills(cvs)
-        mtd.load_hdf5('traj.h5')
-        fes = mtd.compute_fes()
+    def save_bias(self, filename):
+        """save parameters of bias such that bias can be computed for arbitrary cvs."""
+        with open(filename, "wb") as f:
+            pickle.dump([
+                self.__class__.__name__,
+                [self.hills.q0s, self.hills.Ks, self.hills.sigmas_isq, self.hills.periodicities, self.hills.ncv]
+            ], f)
 
 
-class YaffBiasPlumed(YaffBias):
+# class YaffBiasPlumed(YaffBias):
 
-    def append_hook(self):
-        self.plumed_cvs = self._convert_cvs()
+#     def append_hook(self):
+#         self.plumed_cvs = self._convert_cvs()
 
-        plumed = yaff.external.ForcePartPlumed(self.mdengine.ff.system, fn='plumed.dat')
-        self.mdengine.ff.add_part(plumed)
-        self.mdengine.hooks.append(plumed)
+#         plumed = yaff.external.ForcePartPlumed(self.mdengine.ff.system, fn='plumed.dat')
+#         self.mdengine.ff.add_part(plumed)
+#         self.mdengine.hooks.append(plumed)
 
-    def _convert_cvs(self):
-        raise NotImplementedError(
-            "convert python CV to plumed script, see https://giorginolab.github.io/plumed2-pycv/ ")
+#     def _convert_cvs(self):
+#         raise NotImplementedError(
+#             "convert python CV to plumed script, see https://giorginolab.github.io/plumed2-pycv/ ")
 
-    def get_bias(self, cvs):
-        raise NotImplementedError
+#     def compute(self, coordinates, cell, gpos=None, vir=None):
+#         raise NotImplementedError
+
+#     def compute(self, cvs, gpos=None, vir=None):
+#         raise NotImplementedError
 
 
 class YaffEngine(MDEngine):
@@ -203,7 +283,7 @@ class YaffEngine(MDEngine):
     def __init__(
         self,
         ff: yaff.pes.ForceField,
-        MDEngineBias: YaffBias,
+        bias: YaffBias,
         T=None,
         P=None,
         timestep=None,
@@ -211,10 +291,11 @@ class YaffEngine(MDEngine):
         timecon_baro=None,
         filename="traj.h5",
         write_step=100,
+        screenlog=500,
     ) -> None:
         super().__init__(T=T,
                          P=P,
-                         MDEngineBias=MDEngineBias,
+                         bias=bias,
                          timestep=timestep,
                          timecon_thermo=timecon_thermo,
                          timecon_baro=timecon_baro,
@@ -223,7 +304,7 @@ class YaffEngine(MDEngine):
         self.ff = ff
 
         # setup the the logging
-        vsl = yaff.sampling.VerletScreenLog(step=write_step)
+        vsl = yaff.sampling.VerletScreenLog(step=screenlog)
         self.hooks = [vsl]
 
         #setup writer to collect results
@@ -253,7 +334,7 @@ class YaffEngine(MDEngine):
             raise NotImplementedError
 
         #add the enhanced dynamics hook
-        MDEngineBias.append_hook()
+        self.add_bias()
 
         self.verlet = yaff.sampling.VerletIntegrator(
             self.ff,
@@ -345,6 +426,7 @@ class YaffEngine(MDEngine):
             raise NotImplementedError("only for h5, impl this")
 
     def run(self, steps):
+        super().run(steps)
         self.verlet.run(steps)
 
     class _GposContribStateItem(yaff.sampling.iterative.StateItem):
@@ -366,41 +448,41 @@ class YaffEngine(MDEngine):
             yield 'gpos_contrib_names', np.array([part.name for part in iterative.ff.parts], dtype='S')
 
 
-class OpenMMEngine(MDEngine):
+# class OpenMMEngine(MDEngine):
 
-    def __init__(
-        self,
-        system: openmm.openmm.System,
-        cv: CV,
-        T,
-        P,
-        ES="None",
-        timestep=None,
-        timecon_thermo=None,
-        timecon_baro=None,
-    ) -> None:
-        super().__init__(cv, T, P, ES, timestep, timecon_thermo, timecon_baro)
+#     def __init__(
+#         self,
+#         system: openmm.openmm.System,
+#         cv: CV,
+#         T,
+#         P,
+#         ES="None",
+#         timestep=None,
+#         timecon_thermo=None,
+#         timecon_baro=None,
+#     ) -> None:
+#         super().__init__(cv, T, P, ES, timestep, timecon_thermo, timecon_baro)
 
-        if self.thermostat:
-            self.integrator = openmm.openmm.LangevinMiddleIntegrator(temperature=T,
-                                                                     frictionCoeff=1 / picosecond,
-                                                                     stepSize=timestep)
-        if self.barostat:
-            system.addForce(openmm.openmm.MonteCarloBarostat(P, T))
+#         if self.thermostat:
+#             self.integrator = openmm.openmm.LangevinMiddleIntegrator(temperature=T,
+#                                                                      frictionCoeff=1 / picosecond,
+#                                                                      stepSize=timestep)
+#         if self.barostat:
+#             system.addForce(openmm.openmm.MonteCarloBarostat(P, T))
 
-        if self.ES == "MTD":
-            self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
-            raise NotImplementedError
+#         if self.ES == "MTD":
+#             self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
+#             raise NotImplementedError
 
-        elif self.ES == "MTD_plumed":
-            raise NotImplementedError
+#         elif self.ES == "MTD_plumed":
+#             raise NotImplementedError
 
-    def _mtd(self, K, sigmas, periodicities, step):
-        raise NotImplementedError
+#     def _mtd(self, K, sigmas, periodicities, step):
+#         raise NotImplementedError
 
-    def _convert_cv(self, cv, ff):
-        """convert generic CV class to an OpenMM CV."""
-        raise NotImplementedError
+#     def _convert_cv(self, cv, ff):
+#         """convert generic CV class to an OpenMM CV."""
+#         raise NotImplementedError
 
-    def run(self, steps):
-        self.integrator.step(steps)
+#     def run(self, steps):
+#         self.integrator.step(steps)
