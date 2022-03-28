@@ -37,15 +37,15 @@ class Scheme:
         sampling_steps = int(sampling_steps)
 
         self.md.run(bias_steps)
-        self.md.bias.remove_hook()
+
         self.md.run(sampling_steps)
 
         sys = self.md.to_ASE_traj()
 
         n1 = int(bias_steps / self.md.write_step)
 
-        ase.io.write('output/md_otf_{}.xyz'.format(self.md_rounds), sys[:n1], format=self.format, append=False)
-        ase.io.write('output/md_{}.xyz'.format(self.md_rounds), sys[n1 + 1:], format=self.format, append=False)
+        # ase.io.write('output/md_otf_{}.xyz'.format(self.md_rounds), sys[:n1], format=self.format, append=False)
+        # ase.io.write('output/md_{}.xyz'.format(self.md_rounds), sys[n1 + 1:], format=self.format, append=False)
         self.md.bias.save_bias('output/bias_{}.xyz'.format(self.md_rounds))
 
         bias = MdEngine.MdBias.load_bias('output/bias_{}.xyz'.format(self.md_rounds))

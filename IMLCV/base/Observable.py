@@ -1,5 +1,5 @@
 import imp
-from IMLCV.base.MdEngine import MDEngine, MdBias
+from IMLCV.base.MdEngine import MDEngine, Bias
 
 import os
 from yaff.log import log
@@ -21,7 +21,7 @@ from molmod.units import *
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic observables."""
 
-    def __init__(self, bias: MdBias, traj) -> None:
+    def __init__(self, bias: Bias, traj) -> None:
         self.mdb = bias
 
     def fes(self):
@@ -35,7 +35,7 @@ class Observable:
 
         x = [np.linspace(p[0][0], p[0][1], n, endpoint=False) for p in np.split(self.mdb.cvs.periodicity, 2, axis=0)]
         mg = np.array(np.meshgrid(*x))  #(ncv,n,n) matrix
-        biases = np.array(np.apply_along_axis(self.mdb.compute, axis=0, arr=mg, gpos=None, vir=None))
+        biases = np.array(np.apply_along_axis(self.mdb.compute_coor, axis=0, arr=mg, gpos=None, vir=None))
 
         if mg.shape[0] != 2:
             raise NotImplementedError("todo sum over extra dims to visualise")

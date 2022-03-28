@@ -3,7 +3,7 @@ from __future__ import division
 import os
 
 from IMLCV.base.CV import CV, CVUtils, CombineCV
-from IMLCV.base.MdEngine import YaffEngine, YaffBiasMTD
+from IMLCV.base.MdEngine import YaffEngine, BiasMTD
 from yaff.test.common import get_alaninedipeptide_amber99ff
 from yaff.log import log
 import numpy as np
@@ -31,13 +31,14 @@ def test_yaff_md_ala_dipep():
         CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi),
     ])
 
-    bias = YaffBiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), step_hills=50)
+    bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=50, step=50)
+
     # bias = YaffBiasNone(cvs=None)
 
     yaffmd = YaffEngine(
         ff=ff,
         bias=bias,
-        write_step=1000,
+        write_step=100,
         T=T,
         P=None,
         timestep=2.0 * units.femtosecond,
@@ -45,7 +46,7 @@ def test_yaff_md_ala_dipep():
         filename="output/aladipep.h5",
     )
 
-    yaffmd.run(int(1e2))
+    yaffmd.run(int(1e3))
 
 
 def test_yaff_md_mil53():

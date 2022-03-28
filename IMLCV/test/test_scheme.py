@@ -1,6 +1,6 @@
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.CV import CV, CVUtils, CombineCV
-from IMLCV.base.MdEngine import YaffEngine, YaffBiasMTD
+from IMLCV.base.MdEngine import YaffEngine, BiasMTD
 from IMLCV.scheme import Scheme
 
 from yaff.test.common import get_alaninedipeptide_amber99ff
@@ -26,7 +26,7 @@ def test_ala_dipep():
         CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi),
     ])
 
-    bias = YaffBiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), step_hills=50)
+    bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=50, step=50)
     # bias = YaffBiasNone(cvs=None)
 
     yaffmd = YaffEngine(

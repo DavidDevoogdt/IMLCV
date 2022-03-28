@@ -3,6 +3,7 @@ import jax
 import numpy as np
 import jax.numpy as jnp
 from jax import jit, grad
+import yaff.pes
 
 
 class CV:
@@ -37,17 +38,7 @@ class CV:
 
         self.periodicity = periodicity
 
-    def compute(self, coordinates, deriv=True):
-        """used as a thermolib collective variable."""
-
-        if deriv == True:
-            gpos = np.zeros(coordinates.shape)
-            ener = self.compute(coordinates, cell=None, gpos=gpos)
-            return ener, gpos
-        else:
-            return self.compute(coordinates, cell=None)
-
-    def compute(self, coordinates, cell, gpos=None, vir=None):
+    def compute(self, coordinates, cell, jac_p=False, jac_c=False):
         """
         args:
             coodinates: cartesian coordinates, as numpy array of form (number of atoms,3)
@@ -55,39 +46,21 @@ class CV:
             grad: if not None, is set to the to gradient of CV wrt coordinates
             vir: if not None, is set to the to gradient of CV wrt cell params
         """
+        val = self.cv(coordinates, cell)
+        jac_p_val = self.jac_p(coordinates, cell) if jac_p else None
+        jac_c_val = self.jac_c(coordinates, cell) if jac_c else None
 
-        if (gpos is not None):
-            self.cv_grad(coordinates, cell, gpos)
-        if (vir is not None):
-            self.vir(coordinates, cell, vir)
-
-        return self.cv(coordinates, cell)
+        return [val, jac_p_val, jac_c_val]
 
     def _update_params(self, **kwargs):
         """update the CV functions."""
 
-        if kwargs is not None:
-            self.cv = jit(partial(self.f, **kwargs))
-        else:
-            self.cv = jit(self.f)
+        #self.cv = jit(lambda x, y: (partial(self.f, **kwargs)(x, y)))
+        self.cv = jit(lambda x, y: (jnp.ravel(partial(self.f, **kwargs)(x, y))))
+        self.jac_p = jit(jax.jacfwd(self.cv, argnums=(0)))
+        self.jac_c = jit(jax.jacfwd(self.cv, argnums=(1)))
 
-        @jit
-        def cv_grad(coordinates, cell, gpos):
-            """calculates viral as tau*dcv(coor,cell)/dtau."""
-            gpos = gpos.at[:].set(grad(self.cv, argnums=(0))(coordinates, cell))
-
-        self.cv_grad = cv_grad
-
-        @jit
-        def vir(coord, cell, vir):
-            """calculates viral as tau*dcv(coor,cell)/dtau."""
-            if cell is not None:
-                if cell.shape == (3, 3):
-                    vir = vir.at[:].set(jnp.matmul(jnp.transpose(cell), grad(self.cv, argnums=(1))(coord, cell)))
-                    return
-            vir = vir.at[:].set(0.0)
-
-        self.vir = vir
+        # self.compute = jit(self._compute, static_argnames=("jac_p", "jac_c"))
 
     def split_cv(self):
         """Split the given CV in list of n=1 CVs."""
