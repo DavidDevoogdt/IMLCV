@@ -12,14 +12,17 @@ class Scheme:
         CVs: list of CV instances.
     """
 
-    def __init__(self, md: MDEngine, cvs: CV, cvd: CVDiscovery, format="extxyz") -> None:
+    def __init__(self, md: MDEngine, cvd: CVDiscovery, format="extxyz") -> None:
         self.md = md
         self.cvd = cvd
-        self.cvs = cvs
+        self.cvs = md.bias.cvs
 
         self.md_rounds = 0
         self.cv_rounds = 0
         self.steps = 0
+
+        self.bias_names = []
+        self.md_names = []
 
         if format != "extxyz":
             raise NotImplementedError("file type not known")
@@ -38,31 +41,31 @@ class Scheme:
 
         self.md.run(bias_steps)
 
+        self._save_bias()
+
+        self.md.bias.finalize_bias()
         self.md.run(sampling_steps)
 
-        sys = self.md.to_ASE_traj()
-
-        n1 = int(bias_steps / self.md.write_step)
-
-        # ase.io.write('output/md_otf_{}.xyz'.format(self.md_rounds), sys[:n1], format=self.format, append=False)
-        # ase.io.write('output/md_{}.xyz'.format(self.md_rounds), sys[n1 + 1:], format=self.format, append=False)
-        self.md.bias.save_bias('output/bias_{}.xyz'.format(self.md_rounds))
-
-        bias = MdEngine.MdBias.load_bias('output/bias_{}.xyz'.format(self.md_rounds))
-
-        cvs = np.array([0.0, 0.0])
-
-        self.md.bias.compute(cvs=cvs)
-        bias.compute(cvs=cvs)
+        self._save_traj(start=bias_steps)
 
         self.md_rounds += 1
         self.steps += bias_steps + sampling_steps
 
     def calc_obs(self):
-        obs = Observable(self.md.bias)
+        obs = Observable(self.md.bias, self.bias_names[-1])
         obs.plot_bias()
 
     def update_CV(self):
         raise NotImplementedError
 
-        self.cv_rounds += 1
+    def _save_bias(self):
+        name = 'output/bias_{}'.format(self.md_rounds)
+
+        self.md.bias.save_bias(name)
+        self.bias_names.append(name)
+
+    def _save_traj(self, start=1, stop=-1):
+        traj = self.md.to_ASE_traj()
+
+        name = 'output/md_{}.{}'.format(self.md_rounds, self.format)
+        ase.io.write(name, traj[start:stop], format=self.format, append=False)

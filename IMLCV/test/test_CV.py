@@ -1,6 +1,6 @@
 import numpy as np
 from IMLCV.base.CV import *
-from IMLCV.base.MdEngine import BiasF
+from IMLCV.base.bias import BiasF
 import pytest
 
 

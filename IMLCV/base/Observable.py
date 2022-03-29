@@ -23,6 +23,7 @@ class Observable:
 
     def __init__(self, bias: Bias, traj) -> None:
         self.mdb = bias
+        self.traj = traj
 
     def fes(self):
         # fes = FreeEnergySurface2D.from_txt
