@@ -13,7 +13,7 @@ import ase.units
 from pathlib import Path
 
 
-def ala_yaff():
+def ala_yaff(write=1000):
 
     T = 600 * units.kelvin
     ff = get_alaninedipeptide_amber99ff()
@@ -22,12 +22,12 @@ def ala_yaff():
         CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
         CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
     ])
-    bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500)
+    bias = BiasMTD(cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500)
 
     yaffmd = YaffEngine(
         ff=ff,
         bias=bias,
-        write_step=1000,
+        write_step=write,
         T=T,
         P=None,
         timestep=2.0 * units.femtosecond,

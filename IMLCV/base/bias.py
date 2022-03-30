@@ -44,8 +44,8 @@ class Bias(ABC):
             self.val = val
 
         def __hash__(self):
-            # return hash(self.val.tobytes())
-            return self.val.shape[0]
+            return hash(self.val.tobytes())
+            # return self.val.shape[0]
 
         def __eq__(self, other):
             eq = isinstance(other, BiasMTD._HashableArrayWrapper) and (self.__hash__() == other.__hash__())

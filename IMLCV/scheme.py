@@ -1,5 +1,6 @@
 from IMLCV.base import *
 import pickle
+from ase.io import write, read
 
 from IMLCV.base import MdEngine
 
@@ -12,7 +13,7 @@ class Scheme:
         CVs: list of CV instances.
     """
 
-    def __init__(self, md: MDEngine, cvd: CVDiscovery, format="extxyz") -> None:
+    def __init__(self, md: MDEngine, cvd: CVDiscovery, extension="extxyz") -> None:
         self.md = md
         self.cvd = cvd
         self.cvs = md.bias.cvs
@@ -22,12 +23,15 @@ class Scheme:
         self.steps = 0
 
         self.bias_names = []
-        self.md_names = []
+        self.traj_names = []
 
-        if format != "extxyz":
+        self.trajs = []
+        self.biases = []
+
+        if extension != "extxyz":
             raise NotImplementedError("file type not known")
 
-        self.format = format
+        self.extension = extension
 
     def run(self, rounds, bias_steps, sampling_steps):
         for _ in range(rounds):
@@ -52,8 +56,9 @@ class Scheme:
         self.steps += bias_steps + sampling_steps
 
     def calc_obs(self):
-        obs = Observable(self.md.bias, self.bias_names[-1])
+        obs = Observable(self.biases[-1], self.trajs[-1])
         obs.plot_bias()
+        obs.fes()
 
     def update_CV(self):
         raise NotImplementedError
@@ -64,8 +69,27 @@ class Scheme:
         self.md.bias.save_bias(name)
         self.bias_names.append(name)
 
+        self.biases.append(self.md.bias)
+
     def _save_traj(self, start=1, stop=-1):
         traj = self.md.to_ASE_traj()
 
-        name = 'output/md_{}.{}'.format(self.md_rounds, self.format)
-        ase.io.write(name, traj[start:stop], format=self.format, append=False)
+        if stop != -1:
+            raise NotImplementedError
+
+        cropped_traj = traj[int(start / self.md.write_step):stop]
+
+        name = 'output/traj_{}.{}'.format(self.md_rounds, self.extension)
+        write(name, cropped_traj, format=self.extension, append=False)
+
+        self.trajs.append(cropped_traj)
+
+    def load_round(self, round=0):
+        bias_name = 'output/bias_{}'.format(round)
+        traj_name = 'output/traj_{}.{}'.format(round, self.extension)
+
+        self.biases.append(self.md.bias.load_bias(bias_name))
+        self.bias_names.append(bias_name)
+
+        self.trajs.append(read(traj_name, format=self.extension))
+        self.traj_names.append(traj_name)

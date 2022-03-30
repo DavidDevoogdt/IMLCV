@@ -2,6 +2,7 @@
 
 Currently, the MD is done with YAFF/OpenMM
 """
+from copyreg import pickle
 import openmm
 import openmm.openmm
 import openmm.unit
@@ -31,6 +32,8 @@ from IMLCV.base.bias import Bias
 
 import jax.numpy as jnp
 
+import dill
+
 from yaff.log import log, timer
 
 
@@ -55,12 +58,12 @@ class MDEngine(ABC):
                  timecon_thermo=None,
                  timecon_baro=None,
                  filename="traj.h5",
-                 write_step=100) -> None:
+                 write_step=100,
+                 screenlog=1000) -> None:
         if isinstance(bias, list):
             raise NotImplementedError("only single bias atm")
 
         self.bias = bias
-        self.init_bias = False
         self.filename = filename
         self.write_step = write_step
 
@@ -68,15 +71,38 @@ class MDEngine(ABC):
 
         self.T = T
         self.thermostat = (T is not None)
+        self.timecon_thermo = timecon_thermo
         if self.thermostat:
             assert timecon_thermo is not None
-            self.timecon_thermo = timecon_thermo
 
         self.P = P
         self.barostat = (P is not None)
+        self.timecon_baro = timecon_baro
         if self.barostat:
             assert timecon_baro is not None
-            self.timecon_baro = timecon_baro
+
+        self.screenlog = screenlog
+
+    def save(self, filename):
+
+        md_dict = {
+            'T': self.T,
+            'P': self.P,
+            'timestep': self.timestep,
+            'timecon_thermo': self.timecon_thermo,
+            'timecon_baro': self.timecon_baro,
+            'filename': self.filename,
+            'write_step': self.write_step,
+            'screenlog': self.screenlog,
+        }
+
+        with open(filename, 'wb') as f:
+            dill.dump(md_dict, f)
+            dill.dump(self.bias, f)
+
+    @abstractmethod
+    def load(filename):
+        pass
 
     @abstractmethod
     def run(self, steps):
@@ -119,7 +145,8 @@ class YaffEngine(MDEngine):
                          timecon_thermo=timecon_thermo,
                          timecon_baro=timecon_baro,
                          write_step=write_step,
-                         filename=filename)
+                         filename=filename,
+                         screenlog=screenlog)
         self.ff = ff
 
         # setup the the logging
@@ -152,41 +179,7 @@ class YaffEngine(MDEngine):
         else:
             raise NotImplementedError
 
-        #add the enhanced dynamics hook
-
-        class YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
-            """placeholder for all classes which work with yaff."""
-
-            def __init__(
-                self,
-                ff: yaff.pes.ForceField,
-                bias: Bias,
-            ) -> None:
-
-                self.ff = ff
-                self.bias = bias
-
-                self.hook = (self.bias.start is not None) and (self.bias.step is not None)
-                if self.hook:
-                    super().__init__(start=self.bias.start, step=self.bias.step)
-
-            def compute(self, gpos=None, vtens=None):
-
-                ener = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                              cell=self.ff.system.cell.rvecs,
-                                              gpos=gpos,
-                                              vir=vtens)
-
-                return ener
-
-            def __call__(self, iterative):
-                coordinates = self.ff.system.pos
-                cell = self.ff.system.cell.rvecs
-
-                bias.update_bias(coordinates, cell)
-
-        yb = YaffBias(self.ff, bias)
-
+        yb = YaffEngine._YaffBias(self.ff, bias)
         part = yaff.pes.ForcePartBias(ff.system)
         part.add_term(yb)
         ff.add_part(part)
@@ -203,9 +196,9 @@ class YaffEngine(MDEngine):
             state=[self._GposContribStateItem()],
         )
 
-        #remove jit from timing
-        self.run(1)
-        timer.reset()
+        # #remove jit from timing
+        # self.run(1)
+        # timer.reset()
 
     @staticmethod
     def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
@@ -289,6 +282,46 @@ class YaffEngine(MDEngine):
 
     def run(self, steps):
         self.verlet.run(steps)
+
+    @staticmethod
+    def load(
+        filename,
+        ff: yaff.pes.ForceField,
+    ):
+        with open(filename, 'rb') as f:
+            md_dict = dill.load(f)
+            bias = dill.load(f)
+
+        return YaffEngine(ff, bias=bias, **md_dict)
+
+    class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
+        """placeholder for all classes which work with yaff."""
+
+        def __init__(
+            self,
+            ff: yaff.pes.ForceField,
+            bias: Bias,
+        ) -> None:
+
+            self.ff = ff
+            self.bias = bias
+
+            #not all biases have a hook
+            self.hook = (self.bias.start is not None) and (self.bias.step is not None)
+            if self.hook:
+                super().__init__(start=self.bias.start, step=self.bias.step)
+
+        def compute(self, gpos=None, vtens=None):
+            return self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                          cell=self.ff.system.cell.rvecs,
+                                          gpos=gpos,
+                                          vir=vtens)
+
+        def __call__(self, iterative):
+            coordinates = self.ff.system.pos
+            cell = self.ff.system.cell.rvecs
+
+            self.bias.update_bias(coordinates, cell)
 
     class _GposContribStateItem(yaff.sampling.iterative.StateItem):
         """Keeps track of all the contributions to the forces."""
