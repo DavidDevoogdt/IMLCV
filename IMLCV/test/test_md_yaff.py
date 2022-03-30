@@ -2,47 +2,51 @@ from __future__ import division
 
 import os
 
-from IMLCV.base.CV import CV, CVUtils, CombineCV
-from IMLCV.base.MdEngine import YaffEngine, Bias
+from IMLCV.base.MdEngine import Bias
 from yaff.test.common import get_alaninedipeptide_amber99ff
 from yaff.log import log
 import numpy as np
-from molmod import units
-from yaff.system import System
-from yaff import ForceField
-from ase.calculators.cp2k import CP2K
-import ase.io
 import ase.units
-from pathlib import Path
 import pytest
 from IMLCV.test.common import ala_yaff, mil53_yaff, todo_ASE_yaff
 import jax.numpy as jnp
 
-log.set_level(log.medium)
-abspath = os.path.abspath(__file__)
-dname = os.path.dirname(abspath)
-os.chdir(dname)
+import cProfile
+import pstats
+from pstats import SortKey
+
+
+def change_fold():
+    log.set_level(log.medium)
+    abspath = os.path.abspath(__file__)
+    dname = os.path.dirname(abspath)
+    os.chdir(dname)
 
 
 def test_yaff_md_ala_dipep():
+    change_fold()
+
     yaffmd = ala_yaff()
-    yaffmd.run(int(1e3))
+    yaffmd.run(int(1e5))
 
 
 def test_yaff_md_mil53():
+    change_fold()
+
     yaffmd = mil53_yaff()
     yaffmd.run(int(1e2))
 
 
-def test_bias_save():
+def bias_save():
     """save and load bias to disk."""
+
+    change_fold()
 
     yaffmd = ala_yaff()
     yaffmd.run(int(1e3))
 
-    yaffmd.bias.save_bias('output/bias_test.xyz')
-
-    bias = Bias.load_bias('output/bias_test.xyz')
+    yaffmd.bias.save_bias('output/bias_test_2.xyz')
+    bias = Bias.load_bias('output/bias_test_2.xyz')
 
     cvs = np.array([0.0, 0.0])
 
@@ -60,7 +64,14 @@ def test_yaff_ase():
 
 
 if __name__ == '__main__':
-    # test_yaff_md_ala_dipep()
-    # test_yaff_md_mil53()
-    test_bias_save()
+
+    test_yaff_md_ala_dipep()
+    # cProfile.run('test_yaff_md_ala_dipep()', 'output/profile_stat')
+
+    # change_fold()
+    # p = pstats.Stats('output/profile_stat')
+    # p.strip_dirs().sort_stats("tottime").print_stats(100)
+
+    #test_yaff_md_mil53()
+    #bias_save()
     # test_yaff_ase()

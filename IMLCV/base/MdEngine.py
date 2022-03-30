@@ -29,6 +29,10 @@ import ase.stress
 
 from IMLCV.base.bias import Bias
 
+import jax.numpy as jnp
+
+from yaff.log import log, timer
+
 
 class MDEngine(ABC):
     """Base class for MD engine.
@@ -106,7 +110,7 @@ class YaffEngine(MDEngine):
         timecon_baro=None,
         filename="traj.h5",
         write_step=100,
-        screenlog=500,
+        screenlog=1000,
     ) -> None:
         super().__init__(T=T,
                          P=P,
@@ -135,9 +139,9 @@ class YaffEngine(MDEngine):
 
         # setup baro/thermostat
         if self.thermostat:
-            nhc = yaff.sampling.NHCThermostat(self.T, start=0, timecon=self.timecon_thermo, chainlength=3)
+            nhc = yaff.sampling.NHCThermostat(self.T, timecon=self.timecon_thermo)
         if self.barostat:
-            mtk = yaff.sampling.MTKBarostat(ff, self.T, self.P, start=0, timecon=self.timecon_baro, anisotropic=False)
+            mtk = yaff.sampling.MTKBarostat(ff, self.T, self.P, timecon=self.timecon_baro, anisotropic=False)
         if self.thermostat and self.barostat:
             tbc = yaff.sampling.TBCombination(nhc, mtk)
             self.hooks.append(tbc)
@@ -167,10 +171,13 @@ class YaffEngine(MDEngine):
                     super().__init__(start=self.bias.start, step=self.bias.step)
 
             def compute(self, gpos=None, vtens=None):
-                coordinates = self.ff.system.pos
-                cell = self.ff.system.cell.rvecs
 
-                return self.bias.compute_coor(coordinates=coordinates, cell=cell, gpos=gpos, vir=vtens)
+                ener = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                              cell=self.ff.system.cell.rvecs,
+                                              gpos=gpos,
+                                              vir=vtens)
+
+                return ener
 
             def __call__(self, iterative):
                 coordinates = self.ff.system.pos
@@ -195,6 +202,10 @@ class YaffEngine(MDEngine):
             # add forces as state item
             state=[self._GposContribStateItem()],
         )
+
+        #remove jit from timing
+        self.run(1)
+        timer.reset()
 
     @staticmethod
     def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
@@ -277,7 +288,6 @@ class YaffEngine(MDEngine):
             raise NotImplementedError("only for h5, impl this")
 
     def run(self, steps):
-        super().run(steps)
         self.verlet.run(steps)
 
     class _GposContribStateItem(yaff.sampling.iterative.StateItem):

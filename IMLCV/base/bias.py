@@ -9,7 +9,7 @@ from jax import jit, grad, jacfwd
 # from .CV import CV, YaffCv
 from IMLCV.base.CV import CV
 import molmod
-from abc import ABC
+from abc import ABC, abstractmethod
 
 import dill
 
@@ -27,8 +27,52 @@ class Bias(ABC):
         self.start = start
         self.step = step
 
+        args = self._get_args()
+        static_array_argnums = tuple(i + 1 for i in range(len(args)))
+
+        self.e = BiasMTD._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
+        self.de = BiasMTD._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
+
+    def update_bias(self, coordinates, cell):
+        """update the bias. Can only change the properties from _get_args"""
+        pass
+
+    class _HashableArrayWrapper:
+        """#see https://github.com/google/jax/issues/4572"""
+
+        def __init__(self, val):
+            self.val = val
+
+        def __hash__(self):
+            # return hash(self.val.tobytes())
+            return self.val.shape[0]
+
+        def __eq__(self, other):
+            eq = isinstance(other, BiasMTD._HashableArrayWrapper) and (self.__hash__() == other.__hash__())
+            return eq
+
+    @staticmethod
+    def _gnool_jit(fun, static_array_argnums=(), static_argnums=()):
+        """#see https://github.com/google/jax/issues/4572"""
+
+        @partial(jit, static_argnums=static_array_argnums + static_argnums)
+        def callee(*args):
+            args = list(args)
+            for i in static_array_argnums:
+                args[i] = args[i].val
+            return fun(*args)
+
+        def caller(*args):
+            args = list(args)
+            for i in static_array_argnums:
+                args[i] = BiasMTD._HashableArrayWrapper(args[i])
+            return callee(*args)
+
+        return caller
+
+    @partial(jit, static_argnums=(0,))
     def compute_coor(self, coordinates, cell, gpos=None, vir=None):
-        """Computes the bias for arbitrary coordinates+cell."""
+        """Computes the bias, the gradient of the bias wrt the coordinates and the virial"""
 
         if not (cell.shape == (0, 3) or cell.shape == (3, 3)):
             raise NotImplementedError("other cell shapes not yet supported")
@@ -40,32 +84,37 @@ class Bias(ABC):
         [ener, de] = self.compute(cvs, diff=(bv or bg))
 
         if bg:
-            gpos = np.einsum('ij,jkl->kl', de, jac_p_val)
-            #gpos = gpos.at[:].set(jnp.einsum('ij,jkl->kl', de, jac_p_val))
+            gpos = gpos.at[:].set(jnp.einsum('j,jkl->kl', de, jac_p_val))
 
         if bv:
-            vir[:] = np.einsum('ji,kz,kjl->il', cell, de, jac_c_val)
-            #vir = vir.at[:].set(jnp.einsum('ji,kz,kjl->il', cell, de, jac_c_val))
+            vir = vir.at[:].set(jnp.einsum('ji,k,kjl->il', cell, de, jac_c_val))
 
         return ener
 
+    @partial(jit, static_argnums=(0, 2))
     def compute(self, cvs, diff=False):
+        E = self.e(cvs, *self._get_args())
+        if diff:
+            diffE = self.de(cvs, *self._get_args())[0]
+        else:
+            diffE = None
+
+        return E, diffE
+
+    @abstractmethod
+    def _compute(self, cvs, *args):
         """function that calculates the bias potential."""
         raise NotImplementedError
 
-    def update_bias(self, coordinates, cell):
-        """update the bias.
-
-        Used in metadyanmics to deposit hills.
-        """
-        raise NotImplementedError
+    def _get_args(self):
+        """function that return dictionary with kwargs of _compute"""
+        return []
 
     def finalize_bias(self):
         """Should be called at end of metadynamics simulation.
 
         Optimises compute
         """
-        self.compute = jit(self.compute, static_argnames="diff")
 
         def update_bias(coordinates, cell):
             """update the bias.
@@ -96,16 +145,11 @@ class BiasF(Bias):
 
     def __init__(self, cvs: CV, f=None):
 
-        self.fcomp = f if (f is not None) else lambda x: 0.0
-        self.dfcomp = jacfwd(self.fcomp)
-
-        def compute(cvs, diff=False):
-            de = self.dfcomp(cvs) if diff else None
-            return self.fcomp(cvs), de
-
-        self.compute = jit(compute, static_argnums=(1,))
-
+        self.f = f if (f is not None) else lambda _: 0.0
         super().__init__(cvs, start=None, step=None)
+
+    def _compute(self, cvs):
+        return self.f(cvs)[0]
 
 
 class BiasMTD(Bias):
@@ -118,30 +162,37 @@ class BiasMTD(Bias):
     """
 
     def __init__(self, cvs: CV, K, sigmas, start=None, step=None, tempering=0.0, f=None):
-        '''
-           args:
-                sigmas:  The width of the Gaussian or a NumPy array [Ncv] specifying thewidths of the Gaussians
-                periodicity: todo
-        '''
+        """_summary_
+
+        Args:
+            cvs: _description_
+            K: _description_
+            sigmas: _description_
+            start: _description_. Defaults to None.
+            step: _description_. Defaults to None.
+            tempering: _description_. Defaults to 0.0.
+            f: _description_. Defaults to None.
+        """
 
         if isinstance(sigmas, float):
-            sigmas = np.array([sigmas])
+            sigmas = jnp.array([sigmas])
+        if isinstance(sigmas, np.ndarray):
+            sigmas = jnp.array(sigmas)
 
         periodicities = cvs.periodicity
 
         self.ncv = cvs.n
         assert sigmas.ndim == 1
         assert sigmas.shape[0] == self.ncv
-        assert np.all(sigmas > 0)
+        assert jnp.all(sigmas > 0)
         self.sigmas = sigmas
         self.sigmas_isq = 1.0 / (2.0 * sigmas**2.0)
 
         self.Ks = jnp.zeros((0,))
         self.q0s = jnp.zeros((0, self.ncv))
-        if periodicities is not None:
-            assert periodicities.shape[0] == self.ncv
 
-        self.q_filt = ~np.isnan(periodicities).any(axis=1)
+        #reorganise periodicity
+        self.q_filt = ~jnp.isnan(periodicities).any(axis=1)
         self.d_q = periodicities[self.q_filt, 1] - periodicities[self.q_filt, 0]
         self.q_min = periodicities[self.q_filt, 0]
 
@@ -150,58 +201,14 @@ class BiasMTD(Bias):
 
         self.f = f
 
-        self.fcomp = BiasMTD._gnool_jit(partial(BiasMTD._compute,
-                                                q_filt=self.q_filt,
-                                                d_q=self.d_q,
-                                                sigmas_isq=self.sigmas_isq),
-                                        static_array_argnums=(1, 2))
-        self.dfcomp = BiasMTD._gnool_jit(jacfwd(self.fcomp, argnums=(0,)), static_array_argnums=(1, 2))
-
         super().__init__(cvs, start, step)
-
-    class _HashableArrayWrapper:
-        """#see https://github.com/google/jax/issues/4572"""
-
-        def __init__(self, val):
-            self.val = val
-
-        def __hash__(self):
-            t = self.val.shape
-            return t[0]  # number of hills
-
-        def __eq__(self, other):
-            return isinstance(other, BiasMTD._HashableArrayWrapper) and (self.val.shape == other.val.shape)
-
-    @staticmethod
-    def _gnool_jit(fun, static_array_argnums=(), static_argnums=()):
-        """#see https://github.com/google/jax/issues/4572"""
-
-        @partial(jit, static_argnums=static_array_argnums + static_argnums)
-        def callee(*args):
-            args = list(args)
-            for i in static_array_argnums:
-                args[i] = args[i].val
-            return fun(*args)
-
-        def caller(*args):
-            args = list(args)
-            for i in static_array_argnums:
-                args[i] = BiasMTD._HashableArrayWrapper(args[i])
-            return callee(*args)
-
-        return caller
 
     def _add_hill_cv(self, q0, K):
         """Deposit a single hill.
 
-        args:
-            q0:
-            A NumPy array [Ncv] specifying the Gaussian center for each
-            collective variable, or a single float if there is only one
-            collective variable
-
-            K:
-            The force constant of this hill
+        Args:
+            q0: A NumPy array [Ncv] specifying the Gaussian center for each collective variable, or a single float if there is only one collective variable
+            K: the force constant of this hill
         """
         if isinstance(q0, float):
             assert self.ncv == 1
@@ -214,15 +221,9 @@ class BiasMTD(Bias):
     def _add_hills_cv(self, q0s, Ks):
         """Deposit multiple hills.
 
-        **Arguments:**
-
-        q0s
-            A NumPy array [Nhills,Ncv]. Each row represents a hill,
-            specifying the Gaussian center for each collective variable
-
-        K
-            A NumPy array [Nhills] providing the force constant of each
-            hill.
+        Args:
+        q0s: A NumPy array [Nhills,Ncv]. Each row represents a hill, specifying the Gaussian center for each collective variable
+        K: A NumPy array [Nhills] providing the force constant of each hill.
         """
         assert q0s.ndim == 2
         assert q0s.shape[1] == self.ncv
@@ -232,36 +233,50 @@ class BiasMTD(Bias):
         self.Ks = jnp.concatenate((self.Ks, Ks), axis=0)
 
     def update_bias(self, coordinates, cell):
-        """hook to update the bias.
+        """_summary_
 
-        Used in metadyanmics to deposit hills
+        Args:
+            coordinates: _description_
+            cell: _description_
+
+        Raises:
+            NotImplementedError: _description_
         """
         # Compute current CV values
         q0s, _, _ = self.cvs.compute(coordinates, cell)
         # Compute force constant
         K = self.K
         if self.tempering != 0.0:
-            K *= np.exp(-self.compute() / molmod.constants.boltzmann / self.tempering)
+            raise NotImplementedError("untested")
+            K *= jnp.exp(-self.compute() / molmod.constants.boltzmann / self.tempering)
         # Add a hill
         self._add_hill_cv(q0s, K)
 
-    def compute(self, cvs, diff=False):
-        de = self.dfcomp(cvs, self.q0s, self.Ks) if diff else None
-        return self.fcomp(cvs, self.q0s, self.Ks), de
+    def _compute(self, cvs, q0s, Ks):
+        """_summary_
 
-    def _compute(cvs, q0s, Ks, q_filt, d_q, sigmas_isq):
+        Args:
+            cvs: _description_
+            q0s: _description_
+            Ks: _description_
+
+        Returns:
+            _description_
+        """
+
         deltas = cvs - q0s
-        diff = jnp.floor(0.5 + deltas[:, q_filt] / d_q) * d_q
-        deltas = deltas.at[:, q_filt].set(deltas[:, q_filt] - diff)
 
-        exparg = deltas * deltas
-        exparg = jnp.multiply(exparg, sigmas_isq)
-        exparg = jnp.sum(exparg, axis=1)
-        # Compute the bias energy
-        exponents = jnp.exp(-exparg)
-        energy = jnp.sum(Ks * exponents)
+        #find smalles diff by shifting over cell vector
+        diff = jnp.floor(0.5 + deltas[:, self.q_filt] / self.d_q) * self.d_q
+        deltas = deltas.at[:, self.q_filt].set(deltas[:, self.q_filt] - diff)
+
+        exparg = jnp.einsum('ji,ji,i -> j', deltas, deltas, self.sigmas_isq)
+        energy = jnp.sum(Ks * jnp.exp(-exparg))
 
         return energy
+
+    def _get_args(self):
+        return [self.q0s, self.Ks]
 
 
 class BiasPlumed(Bias):

@@ -36,7 +36,8 @@ class Observable:
 
         x = [np.linspace(p[0][0], p[0][1], n, endpoint=False) for p in np.split(self.mdb.cvs.periodicity, 2, axis=0)]
         mg = np.array(np.meshgrid(*x))  #(ncv,n,n) matrix
-        biases = np.array(np.apply_along_axis(self.mdb.compute_coor, axis=0, arr=mg, gpos=None, vir=None))
+        biases, _ = jnp.apply_along_axis(self.mdb.compute, axis=0, arr=mg, diff=False)
+        biases = -np.array(biases)
 
         if mg.shape[0] != 2:
             raise NotImplementedError("todo sum over extra dims to visualise")

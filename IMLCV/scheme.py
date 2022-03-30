@@ -43,7 +43,7 @@ class Scheme:
 
         self._save_bias()
 
-        self.md.bias.finalize_bias()
+        # self.md.bias.finalize_bias()
         self.md.run(sampling_steps)
 
         self._save_traj(start=bias_steps)

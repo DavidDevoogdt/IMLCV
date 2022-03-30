@@ -19,15 +19,15 @@ def ala_yaff():
     ff = get_alaninedipeptide_amber99ff()
 
     cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=2.0 * np.pi),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi),
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
     ])
-    bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=50, step=100)
+    bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500)
 
     yaffmd = YaffEngine(
         ff=ff,
         bias=bias,
-        write_step=100,
+        write_step=1000,
         T=T,
         P=None,
         timestep=2.0 * units.femtosecond,

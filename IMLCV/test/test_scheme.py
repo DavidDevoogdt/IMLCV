@@ -19,7 +19,7 @@ def test_ala_dipep():
     cvd = CVDiscovery()
 
     scheme = Scheme(md=yaffmd, cvd=cvd)
-    scheme.run(2, 1e3, 3e4)
+    scheme.run(2, 1e5, 0)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 from functools import partial
 import jax
-import numpy as np
+# import numpy as np
 import jax.numpy as jnp
 from jax import jit, grad
 import yaff.pes
@@ -27,14 +27,17 @@ class CV:
                 assert n == 1
                 periodicity = [[0.0, periodicity]]
             if isinstance(periodicity, list):
-                periodicity = np.array(periodicity)
+                periodicity = jnp.array(periodicity)
+            if periodicity.ndim == 1:
+                assert n == 1
+                periodicity = jnp.array([periodicity])
             assert periodicity.shape[0] == n
             if periodicity.shape[1] == 1:
-                periodicity = np.concatenate((0.0 * periodicity, periodicity), axis=1)
+                periodicity = jnp.concatenate((0.0 * periodicity, periodicity), axis=1)
 
             assert periodicity.shape == (n, 2)
         else:
-            periodicity = np.array([[np.NaN, np.NaN] * n])
+            periodicity = jnp.array([[jnp.NaN, jnp.NaN] * n])
 
         self.periodicity = periodicity
 
@@ -89,10 +92,10 @@ class CombineCV(CV):
     def __init__(self, cvs) -> None:
         self.n = 0
         self.cvs = cvs
-        periodicity = np.empty((0, 2))
+        periodicity = jnp.empty((0, 2))
         for cv in cvs:
             self.n += cv.n
-            periodicity = np.concatenate([periodicity, cv.periodicity], axis=0)
+            periodicity = jnp.concatenate([periodicity, cv.periodicity], axis=0)
         self.periodicity = periodicity
         self._update_params()
 
