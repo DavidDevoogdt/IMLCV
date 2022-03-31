@@ -36,7 +36,7 @@ class Scheme:
     def run(self, rounds, bias_steps, sampling_steps):
         for _ in range(rounds):
             self.do_MD(bias_steps, sampling_steps)
-            self.calc_obs()
+            fes, fesBias = self.calc_obs()
             self.update_CV()
 
     def do_MD(self, bias_steps, sampling_steps):
@@ -56,12 +56,15 @@ class Scheme:
         self.steps += bias_steps + sampling_steps
 
     def calc_obs(self):
-        obs = Observable(self.biases[-1], self.trajs[-1])
-        obs.plot_bias()
-        obs.fes()
+        obs = Observable(self.biases, self.trajs, self.md.T)
+
+        fes = obs.fes_2D(plot=True, round=self.md_rounds)
+        fesBias = obs.fes_Bias()
+
+        return fesBias
 
     def update_CV(self):
-        raise NotImplementedError
+        pass
 
     def _save_bias(self):
         name = 'output/bias_{}'.format(self.md_rounds)
@@ -91,5 +94,5 @@ class Scheme:
         self.biases.append(self.md.bias.load_bias(bias_name))
         self.bias_names.append(bias_name)
 
-        self.trajs.append(read(traj_name, format=self.extension))
+        self.trajs.append(read(traj_name, index=':', format=self.extension))
         self.traj_names.append(traj_name)

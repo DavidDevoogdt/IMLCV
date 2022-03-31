@@ -4,7 +4,9 @@ import molmod.constants
 
 import numpy as np
 import jax.numpy as jnp
+import jax.scipy as jsp
 from jax import jit, grad, jacfwd
+import jaxinterp2d
 
 # from .CV import CV, YaffCv
 from IMLCV.base.CV import CV
@@ -34,7 +36,10 @@ class Bias(ABC):
         self.de = BiasMTD._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
 
     def update_bias(self, coordinates, cell):
-        """update the bias. Can only change the properties from _get_args"""
+        """update the bias.
+
+        Can only change the properties from _get_args
+        """
         pass
 
     class _HashableArrayWrapper:
@@ -72,7 +77,7 @@ class Bias(ABC):
 
     @partial(jit, static_argnums=(0,))
     def compute_coor(self, coordinates, cell, gpos=None, vir=None):
-        """Computes the bias, the gradient of the bias wrt the coordinates and the virial"""
+        """Computes the bias, the gradient of the bias wrt the coordinates and the virial."""
 
         if not (cell.shape == (0, 3) or cell.shape == (3, 3)):
             raise NotImplementedError("other cell shapes not yet supported")
@@ -107,7 +112,7 @@ class Bias(ABC):
         raise NotImplementedError
 
     def _get_args(self):
-        """function that return dictionary with kwargs of _compute"""
+        """function that return dictionary with kwargs of _compute."""
         return []
 
     def finalize_bias(self):
@@ -277,6 +282,22 @@ class BiasMTD(Bias):
 
     def _get_args(self):
         return [self.q0s, self.Ks]
+
+
+class GridBias(Bias):
+    """Bias interpolated from lookup table on uniform grid."""
+
+    def __init__(self, cvs: CV, vals, start=None, step=None) -> None:
+        super().__init__(cvs, start, step)
+
+        self.per = np.array(self.cvs.periodicity)
+        assert ~jnp.isnan(self.cvs.periodicity).any()
+        self.vals = vals
+
+    def _compute(self, cvs):
+        #inspiration taken from https://github.com/adam-coogan/jaxinterp2d
+        coords = jnp.array((cvs + self.per[:, 0]) / (self.per[:, 1] - self.per[:, 0]) * (np.array(self.vals.shape) - 1))
+        return jsp.ndimage.map_coordinates(self.vals, coords, mode='wrap', order=1)
 
 
 class BiasPlumed(Bias):

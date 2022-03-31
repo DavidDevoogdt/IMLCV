@@ -196,10 +196,6 @@ class YaffEngine(MDEngine):
             state=[self._GposContribStateItem()],
         )
 
-        # #remove jit from timing
-        # self.run(1)
-        # timer.reset()
-
     @staticmethod
     def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
         """Creates force field from ASE atoms instance."""
