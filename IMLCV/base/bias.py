@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Iterable
 
 import molmod.constants
 
@@ -32,8 +33,8 @@ class Bias(ABC):
         args = self._get_args()
         static_array_argnums = tuple(i + 1 for i in range(len(args)))
 
-        self.e = BiasMTD._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
-        self.de = BiasMTD._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
+        self.e = Bias._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
+        self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
 
     def update_bias(self, coordinates, cell):
         """update the bias.
@@ -140,9 +141,73 @@ class Bias(ABC):
             self = dill.load(f)
         return self
 
+    @partial(jit, static_argnums=(0, 2))
+    def _periodic_wrap(self, cvs, min=False):
+        """Translate cvs such over periodic vector
+
+        Args:
+            cvs: array of cvs
+            min (bool): if False, translate to cv range. I true, minimises norm of vector
+        """
+
+        x = 0.5 if min else 0.0
+
+        per = self.cvs.periodicity
+
+        coor = (cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) - x
+        coor = jnp.modf(coor)[0]  # fractional part
+        coor = (coor + x) * (per[:, 1] - per[:, 0]) + per[:, 0]
+
+        return jnp.where(jnp.isnan(per).any(axis=1), cvs, coor)
+
 
 class CompositeBias(Bias):
-    pass
+    """Class that combines several biases in one single bias
+    """
+
+    def __init__(self, biases: Iterable[Bias]) -> None:
+        self.biases = biases
+
+        cvlist = []
+        start_list = []
+        step_list = []
+
+        for b in self.biases:
+            cvlist.append(b.cvs)
+            start_list.append(b.start)
+            step_list.append(b.step)
+
+        cvs = cvlist[0]
+        for cvsi in cvlist[1:]:
+            assert cvsi is cvs, "CV should be same instance"
+
+        self.start_list = np.array(start_list)
+        self.step_list = np.array(step_list)
+
+        self.args_shape = np.array([0, *np.cumsum([len(b._get_args()) for b in self.biases])])
+
+        super().__init__(cvs=cvs, start=0, step=1)
+
+    def _compute(self, cvs, *args):
+        e = 0.0
+
+        for i in range(len(self.biases)):
+            e += self.biases[i]._compute(cvs, *args[self.args_shape[i]:self.args_shape[i + 1]])
+
+        return e
+
+    def update_bias(self, coordinates, cell):
+
+        mask = self.start_list == 0
+
+        self.start_list[mask] += self.step_list[mask]
+        self.start_list[~mask] -= 1
+
+        for i in np.argwhere(mask):
+            self.biases[int(i)].update_bias(coordinates=coordinates, cell=cell)
+
+    def _get_args(self):
+        return [a for b in self.biases for a in b._get_args()]
 
 
 class BiasF(Bias):
@@ -166,7 +231,7 @@ class BiasMTD(Bias):
     variables.
     """
 
-    def __init__(self, cvs: CV, K, sigmas, start=None, step=None, tempering=0.0, f=None):
+    def __init__(self, cvs: CV, K, sigmas, tempering=0.0, start=None, step=None):
         """_summary_
 
         Args:
@@ -176,15 +241,12 @@ class BiasMTD(Bias):
             start: _description_. Defaults to None.
             step: _description_. Defaults to None.
             tempering: _description_. Defaults to 0.0.
-            f: _description_. Defaults to None.
         """
 
         if isinstance(sigmas, float):
             sigmas = jnp.array([sigmas])
         if isinstance(sigmas, np.ndarray):
             sigmas = jnp.array(sigmas)
-
-        periodicities = cvs.periodicity
 
         self.ncv = cvs.n
         assert sigmas.ndim == 1
@@ -196,15 +258,8 @@ class BiasMTD(Bias):
         self.Ks = jnp.zeros((0,))
         self.q0s = jnp.zeros((0, self.ncv))
 
-        #reorganise periodicity
-        self.q_filt = ~jnp.isnan(periodicities).any(axis=1)
-        self.d_q = periodicities[self.q_filt, 1] - periodicities[self.q_filt, 0]
-        self.q_min = periodicities[self.q_filt, 0]
-
         self.tempering = tempering
         self.K = K
-
-        self.f = f
 
         super().__init__(cvs, start, step)
 
@@ -258,22 +313,10 @@ class BiasMTD(Bias):
         self._add_hill_cv(q0s, K)
 
     def _compute(self, cvs, q0s, Ks):
-        """_summary_
-
-        Args:
-            cvs: _description_
-            q0s: _description_
-            Ks: _description_
-
-        Returns:
-            _description_
-        """
+        """Computes sum of hills"""
 
         deltas = cvs - q0s
-
-        #find smalles diff by shifting over cell vector
-        diff = jnp.floor(0.5 + deltas[:, self.q_filt] / self.d_q) * self.d_q
-        deltas = deltas.at[:, self.q_filt].set(deltas[:, self.q_filt] - diff)
+        deltas = jnp.apply_along_axis(self._periodic_wrap, axis=1, arr=deltas, min=True)
 
         exparg = jnp.einsum('ji,ji,i -> j', deltas, deltas, self.sigmas_isq)
         energy = jnp.sum(Ks * jnp.exp(-exparg))
@@ -301,9 +344,4 @@ class GridBias(Bias):
 
 
 class BiasPlumed(Bias):
-    pass
-
-
-class BiasThermolib(Bias):
-    """use FES from thermolib as bias potential."""
     pass

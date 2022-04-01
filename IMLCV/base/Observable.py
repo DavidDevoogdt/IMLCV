@@ -23,14 +23,15 @@ from molmod.units import *
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic observables."""
 
-    def __init__(self, bias: Bias, traj, temp) -> None:
+    def __init__(self, bias: Bias, traj, temp, round) -> None:
         self.mdb = bias
         self.traj = traj
         self.temp = temp
+        self.round
 
         self.fes = None
 
-    def fes_2D(self, round, plot=True):
+    def fes_2D(self, plot=True):
         # fes = FreeEnergySurface2D.from_txt
         if self.fes is not None:
             return self.fes
@@ -56,7 +57,7 @@ class Observable:
         fes.set_ref()
 
         if plot:
-            fes.plot('output/ala_fes_thermolib_{}.png'.format(round))
+            fes.plot('output/ala_fes_thermolib_{}.png'.format(self.round))
 
         self.fes = fes
 
@@ -115,6 +116,4 @@ class Observable:
         if np.isnan(b.cvs.periodicity).any():
             raise NotImplementedError("add argument for range")
 
-        x = [np.linspace(p[0][0], p[0][1], n, endpoint=False) for p in np.split(b.cvs.periodicity, 2, axis=0)]
-
-        return x
+        return [np.linspace(p[0][0], p[0][1], n, endpoint=False) for p in np.split(b.cvs.periodicity, 2, axis=0)]

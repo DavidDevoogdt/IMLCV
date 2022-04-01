@@ -36,7 +36,8 @@ class Scheme:
     def run(self, rounds, bias_steps, sampling_steps):
         for _ in range(rounds):
             self.do_MD(bias_steps, sampling_steps)
-            fes, fesBias = self.calc_obs()
+            fesBias = self.calc_obs()
+
             self.update_CV()
 
     def do_MD(self, bias_steps, sampling_steps):

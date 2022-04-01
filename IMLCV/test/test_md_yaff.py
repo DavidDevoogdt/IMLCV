@@ -2,7 +2,6 @@ from __future__ import division
 
 import os
 
-from IMLCV.base.MdEngine import Bias
 from yaff.test.common import get_alaninedipeptide_amber99ff
 from yaff.log import log
 import numpy as np
@@ -14,6 +13,14 @@ import jax.numpy as jnp
 import cProfile
 import pstats
 from pstats import SortKey
+
+from IMLCV.base.CV import CV, CVUtils, CombineCV
+from IMLCV.base.MdEngine import YaffEngine
+from IMLCV.base.bias import BiasMTD, CompositeBias, Bias
+
+import numpy as np
+from molmod import units
+import ase.io
 
 
 def change_fold():
@@ -27,6 +34,35 @@ def test_yaff_md_ala_dipep():
     change_fold()
 
     yaffmd = ala_yaff()
+    yaffmd.run(int(1e5))
+
+
+def test_combine_bias():
+    change_fold()
+
+    T = 600 * units.kelvin
+    ff = get_alaninedipeptide_amber99ff()
+
+    cvs = CombineCV([
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
+    ])
+    bias1 = BiasMTD(cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=25, step=500)
+    bias2 = BiasMTD(cvs=cvs, K=0.5 * units.kjmol, sigmas=np.array([0.1, 0.1]), start=50, step=250)
+
+    bias = CompositeBias(biases=[bias1, bias2])
+
+    yaffmd = YaffEngine(
+        ff=ff,
+        bias=bias,
+        write_step=200,
+        T=T,
+        P=None,
+        timestep=2.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+        filename="output/aladipep.h5",
+    )
+
     yaffmd.run(int(1e5))
 
 
@@ -65,7 +101,8 @@ def test_yaff_ase():
 
 if __name__ == '__main__':
 
-    test_yaff_md_ala_dipep()
+    #test_yaff_md_ala_dipep()
+    test_combine_bias()
     # cProfile.run('test_yaff_md_ala_dipep()', 'output/profile_stat')
 
     # change_fold()
