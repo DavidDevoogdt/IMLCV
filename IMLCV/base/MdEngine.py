@@ -2,39 +2,43 @@
 
 Currently, the MD is done with YAFF/OpenMM
 """
-from copyreg import pickle
+
+from abc import ABC, abstractmethod
+from cmath import isinf
+import dill
+
 import openmm
 import openmm.openmm
 import openmm.unit
+
 import h5py
+from torch import set_anomaly_enabled
+
 import yaff.sampling
 import yaff.system
 import yaff.pes
 import yaff.pes.bias
+import yaff.pes.ext
 import yaff.external
 import yaff.analysis.biased_sampling
-from yaff.sampling.io import XYZWriter
 import yaff.sampling.iterative
+from yaff.sampling.io import XYZWriter
+from yaff.log import log, timer
 
+import molmod
 import molmod.constants
 import molmod.units
 
 import numpy as np
+import jax.numpy as jnps
 
-import molmod
 import ase
-from abc import ABC, abstractmethod
-
 import ase.geometry
 import ase.stress
 
-from IMLCV.base.bias import Bias
+from typing import Callable, Union
 
-import jax.numpy as jnp
-
-import dill
-
-from yaff.log import log, timer
+from IMLCV.base.bias import Bias, CompositeBias, Energy
 
 
 class MDEngine(ABC):
@@ -52,6 +56,7 @@ class MDEngine(ABC):
 
     def __init__(self,
                  bias: Bias,
+                 ener: Energy,
                  T,
                  P,
                  timestep=None,
@@ -60,8 +65,6 @@ class MDEngine(ABC):
                  filename="traj.h5",
                  write_step=100,
                  screenlog=1000) -> None:
-        if isinstance(bias, list):
-            raise NotImplementedError("only single bias atm")
 
         self.bias = bias
         self.filename = filename
@@ -83,26 +86,45 @@ class MDEngine(ABC):
 
         self.screenlog = screenlog
 
-    def save(self, filename):
+        self.ener = ener
 
-        md_dict = {
-            'T': self.T,
-            'P': self.P,
-            'timestep': self.timestep,
-            'timecon_thermo': self.timecon_thermo,
-            'timecon_baro': self.timecon_baro,
-            'filename': self.filename,
-            'write_step': self.write_step,
-            'screenlog': self.screenlog,
-        }
-
-        with open(filename, 'wb') as f:
-            dill.dump(md_dict, f)
-            dill.dump(self.bias, f)
+        self._init_post()
 
     @abstractmethod
-    def load(filename):
+    def _init_post(self):
         pass
+
+    def save(self, file):
+        keys = [
+            "bias",
+            "ener",
+            "T",
+            "P",
+            "timestep",
+            "timecon_thermo",
+            "timecon_baro",
+            "filename",
+            "write_step",
+            "screenlog",
+        ]
+
+        d = {}
+        for key in keys:
+            d[key] = self.__dict__[key]
+
+        with open(file, 'wb') as f:
+            dill.dump([self.__class__, d], f)
+
+    @staticmethod
+    def load(file, **kwargs):
+        with open(file, 'rb') as f:
+            [cls, d] = dill.load(f)
+
+        #replace and add kwargs
+        for key in kwargs.keys():
+            d[key] = kwargs[key]
+
+        return cls(**d)
 
     @abstractmethod
     def run(self, steps):
@@ -117,6 +139,11 @@ class MDEngine(ABC):
         """convert the MD run to ASE trajectory."""
         raise NotImplementedError
 
+    @abstractmethod
+    def get_state(self):
+        """returns the coordinates and cell at current md step"""
+        raise NotImplementedError
+
 
 class YaffEngine(MDEngine):
     """MD engine with YAFF as backend.
@@ -125,73 +152,70 @@ class YaffEngine(MDEngine):
         ff (yaff.pes.ForceField)
     """
 
-    def __init__(
-        self,
-        ff: yaff.pes.ForceField,
-        bias: Bias,
-        T=None,
-        P=None,
-        timestep=None,
-        timecon_thermo=None,
-        timecon_baro=None,
-        filename="traj.h5",
-        write_step=100,
-        screenlog=1000,
-    ) -> None:
-        super().__init__(T=T,
-                         P=P,
-                         bias=bias,
-                         timestep=timestep,
-                         timecon_thermo=timecon_thermo,
-                         timecon_baro=timecon_baro,
-                         write_step=write_step,
-                         filename=filename,
-                         screenlog=screenlog)
-        self.ff = ff
+    def __init__(self, ener=Union[yaff.pes.ForceField, Energy, Callable], **kwargs) -> None:
 
-        # setup the the logging
-        vsl = yaff.sampling.VerletScreenLog(step=screenlog)
-        self.hooks = [vsl]
+        if not isinstance(ener, self._YaffFF):
+            ener = self._YaffFF(ener)
 
+        super().__init__(ener=ener, **kwargs)
+
+    def _init_post(self):
+
+        vhook = yaff.sampling.VerletScreenLog(step=self.screenlog)
+        whook = self._whook()
+        thook = self._thook()
+        bhook = self._add_bias()
+        self._verlet([vhook, whook, thook, bhook])
+
+    def _add_bias(self):
+        #make bias composite in order to be changeable later on
+        if not isinstance(self.bias, CompositeBias):
+            self.bias = CompositeBias([self.bias])
+
+        bhook = YaffEngine._YaffBias(self.ener, self.bias)
+        part = yaff.pes.ForcePartBias(self.ener.system)
+        part.add_term(bhook)
+        self.ener.add_part(part)
+
+        return bhook
+
+    def _whook(self):
         #setup writer to collect results
         if self.filename.endswith(".h5"):
-            self.fh5 = h5py.File(self.filename, 'w')
-            h5writer = yaff.sampling.HDF5Writer(self.fh5, step=write_step)
-            self.hooks.append(h5writer)
+            fh5 = h5py.File(self.filename, 'w')
+            h5writer = yaff.sampling.HDF5Writer(fh5, step=self.write_step)
+            whook = h5writer
         elif self.filename.endswith(".xyz"):
-            xyzhook = XYZWriter(self.filename, step=write_step)
-            self.hooks.append(xyzhook)
+            xyzhook = XYZWriter(self.filename, step=self.write_step)
+            whook = xyzhook
         else:
             raise NotImplemented("only h5 and xyz are supported as filename")
 
-        # setup baro/thermostat
+        return whook
+
+    def _thook(self):
+        """setup baro/thermostat"""
         if self.thermostat:
             nhc = yaff.sampling.NHCThermostat(self.T, timecon=self.timecon_thermo)
         if self.barostat:
-            mtk = yaff.sampling.MTKBarostat(ff, self.T, self.P, timecon=self.timecon_baro, anisotropic=False)
+            mtk = yaff.sampling.MTKBarostat(self.ener, self.T, self.P, timecon=self.timecon_baro, anisotropic=False)
         if self.thermostat and self.barostat:
-            tbc = yaff.sampling.TBCombination(nhc, mtk)
-            self.hooks.append(tbc)
+            thook = yaff.sampling.TBCombination(nhc, mtk)
         elif self.thermostat and not self.barostat:
-            self.hooks.append(nhc)
+            thook = nhc
         elif not self.thermostat and self.barostat:
-            self.hooks.append(mtk)
+            thook = mtk
         else:
             raise NotImplementedError
 
-        yb = YaffEngine._YaffBias(self.ff, bias)
-        part = yaff.pes.ForcePartBias(ff.system)
-        part.add_term(yb)
-        ff.add_part(part)
+        return thook
 
-        if yb.hook:
-            self.hooks.append(yb)
-
+    def _verlet(self, hooks):
         self.verlet = yaff.sampling.VerletIntegrator(
-            self.ff,
+            self.ener,
             self.timestep,
             temp0=self.T,
-            hooks=self.hooks,
+            hooks=hooks,
             # add forces as state item
             state=[self._GposContribStateItem()],
         )
@@ -279,16 +303,9 @@ class YaffEngine(MDEngine):
     def run(self, steps):
         self.verlet.run(steps)
 
-    @staticmethod
-    def load(
-        filename,
-        ff: yaff.pes.ForceField,
-    ):
-        with open(filename, 'rb') as f:
-            md_dict = dill.load(f)
-            bias = dill.load(f)
-
-        return YaffEngine(ff, bias=bias, **md_dict)
+    def get_state(self):
+        """returns the coordinates and cell at current md step"""
+        return [self.ener.system.pos[:], self.ener.system.cell.rvecs[:]]
 
     class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
         """placeholder for all classes which work with yaff."""
@@ -305,6 +322,7 @@ class YaffEngine(MDEngine):
             #not all biases have a hook
             self.hook = (self.bias.start is not None) and (self.bias.step is not None)
             if self.hook:
+                self.init = True
                 super().__init__(start=self.bias.start, step=self.bias.step)
 
         def compute(self, gpos=None, vtens=None):
@@ -314,10 +332,148 @@ class YaffEngine(MDEngine):
                                           vir=vtens)
 
         def __call__(self, iterative):
+            # skip initial hook called by verlet integrator
+            if self.init:
+                self.init = False
+                return
+
             coordinates = self.ff.system.pos
             cell = self.ff.system.cell.rvecs
 
             self.bias.update_bias(coordinates, cell)
+
+    class _YaffFF(Energy, yaff.pes.ForceField):
+
+        def __init__(self, ff: Union[yaff.pes.ForceField, Callable]):
+            from_func = isinstance(ff, Callable)
+            f = ff
+
+            if from_func:
+                ff = ff()
+                assert isinstance(ff, yaff.pes.ForceField)
+
+            self.__dict__ = ff.__dict__
+            self.from_func = from_func
+            if self.from_func:
+                self.f = f
+
+        def compute_coor(self, coordinates, cell, gpos=None, vir=None):
+
+            p_old = self.system.pos[:]
+            c_old = self.system.cell.rvecs[:]
+
+            self.system.pos[:] = coordinates
+            self.system.cell.update_rvecs(cell)
+
+            ener = self.compute(gpos=gpos, vtens=vir)
+
+            self.system.pos[:] = p_old
+            self.system.cell.update_rvecs(c_old)
+
+            return ener
+
+        def __getstate__(self):
+            state_dict = {}
+
+            state_dict["system"] = {
+                'numbers': self.system.numbers,
+                'pos': self.system.pos,
+                'ffatypes': self.system.ffatypes,
+                'ffatype_ids': self.system.ffatype_ids,
+                'scopes': self.system.scopes,
+                'scope_ids': self.system.scope_ids,
+                'bonds': self.system.bonds,
+                'rvecs': self.system.cell.rvecs,
+                'charges': self.system.charges,
+                'radii': self.system.radii,
+                'valence_charges': self.system.valence_charges,
+                'dipoles': self.system.dipoles,
+                'radii2': self.system.radii2,
+                'masses': self.system.masses,
+            }
+
+            state_dict['from_func'] = self.from_func
+
+            state_dict['ff_dict'] = {
+                'energy': self.energy,
+                'gpos': self.gpos,
+                'vtens': self.vtens,
+            }
+
+            if self.from_func:
+                state_dict['func'] = self.f
+                return state_dict
+
+            raise NotImplementedError(
+                "see https://github.com/cython/cython/issues/4713, generate from function instead")
+
+            import inspect
+
+            # fails:
+            # nlist <class 'yaff.pes.nlist.NeighborList'>
+            # pair_pot <class 'yaff.pes.ext.PairPotLJ'>
+            # dlist <class 'yaff.pes.dlist.DeltaList'>
+            # iclist <class 'yaff.pes.iclist.InternalCoordinateList'>
+            # vlist <class 'yaff.pes.vlist.ValenceList'>
+
+            def clean(k, d, p):
+                if k == "system":
+                    d[k] = None
+                elif k == "nlist":
+                    d[k] = None
+                else:
+                    if k in p.__dict__.keys():
+                        d[k] = p.__dict__[k]
+
+                return d
+
+            t = []
+            for p in self.parts:
+                d = {}
+
+                for k in inspect.signature(p.__init__).parameters.keys():
+                    d = clean(k, d, p)
+                t.append([p.__class__, d])
+
+            nl = {}
+            for k in self.nlist.__dict__:
+                nl = clean(k, nl, self.nlist)
+            nl = [p.__class__, nl]
+
+            return [sysdict, nl, t]
+
+        def __setstate__(self, state_dict):
+
+            # system = yaff.system.System(**state_dict["system"])
+
+            if state_dict['from_func']:
+                self.__init__(state_dict['func'])
+                self.system.__init__(**state_dict["system"])
+                self.__dict__.update(state_dict['ff_dict'])
+
+                self.needs_nlist_update = True
+
+                return self
+
+            raise NotImplementedError(
+                "see https://github.com/cython/cython/issues/4713, generate from function instead")
+
+            [sysdict, nl, pp] = state_dict
+
+            nlist = yaff.pes.NeighborList.__new__()
+
+            ts = []
+            for state_dict in pp:
+                [cls, kwargs] = state_dict
+                if 'system' in kwargs.keys():
+                    kwargs['system'] = system
+                if 'nlist' in kwargs.keys():
+                    kwargs['nlist'] = nlist()
+                ts.append(cls(**kwargs))
+
+            ff = yaff.pes.ForceField(system, ts[1:], ts[0])
+
+            return self
 
     class _GposContribStateItem(yaff.sampling.iterative.StateItem):
         """Keeps track of all the contributions to the forces."""
@@ -339,7 +495,6 @@ class YaffEngine(MDEngine):
 
 
 # class OpenMMEngine(MDEngine):
-
 #     def __init__(
 #         self,
 #         system: openmm.openmm.System,

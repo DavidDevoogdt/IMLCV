@@ -1,6 +1,6 @@
 from IMLCV.base.CV import CV, CVUtils, CombineCV
 from IMLCV.base.MdEngine import YaffEngine
-from IMLCV.base.bias import BiasMTD
+from IMLCV.base.bias import BiasMTD, Energy
 
 from yaff.test.common import get_alaninedipeptide_amber99ff
 import numpy as np
@@ -16,7 +16,9 @@ from pathlib import Path
 def ala_yaff(write=1000):
 
     T = 600 * units.kelvin
-    ff = get_alaninedipeptide_amber99ff()
+    # ff = get_alaninedipeptide_amber99ff()
+
+    # ff = get_alaninedipeptide_amber99ff()
 
     cvs = CombineCV([
         CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
@@ -25,7 +27,7 @@ def ala_yaff(write=1000):
     bias = BiasMTD(cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500)
 
     yaffmd = YaffEngine(
-        ff=ff,
+        ener=get_alaninedipeptide_amber99ff,
         bias=bias,
         write_step=write,
         T=T,
@@ -48,7 +50,7 @@ def mil53_yaff():
     bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50)
 
     yaffmd = YaffEngine(
-        ff=ff,
+        ener=ff,
         bias=bias,
         write_step=100,
         T=T,
@@ -101,7 +103,7 @@ def todo_ASE_yaff():
     cvs = CV(CVUtils.Volume)
     bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50)
     yaffmd = YaffEngine(
-        ff=ff,
+        ener=ff,
         bias=bias,
         write_step=100,
         T=600 * units.kelvin,

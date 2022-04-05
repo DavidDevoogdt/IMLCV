@@ -15,7 +15,7 @@ import pstats
 from pstats import SortKey
 
 from IMLCV.base.CV import CV, CVUtils, CombineCV
-from IMLCV.base.MdEngine import YaffEngine
+from IMLCV.base.MdEngine import MDEngine, YaffEngine
 from IMLCV.base.bias import BiasMTD, CompositeBias, Bias
 
 import numpy as np
@@ -30,11 +30,22 @@ def change_fold():
     os.chdir(dname)
 
 
-def test_yaff_md_ala_dipep():
+def test_yaff_save_load_func():
     change_fold()
 
     yaffmd = ala_yaff()
-    yaffmd.run(int(1e5))
+
+    yaffmd.run(int(761))
+
+    yaffmd.save('output/yaff_save.d')
+    yeet = MDEngine.load('output/yaff_save.d', filename='output/output2.h5')
+
+    [coor1, cell1] = yaffmd.get_state()
+    [coor2, cell2] = yeet.get_state()
+
+    assert pytest.approx(coor1) == coor2
+    assert cell1.shape == cell2.shape
+    assert pytest.approx(yaffmd.ener.compute_coor(coor1, cell1)) == yeet.ener.compute_coor(coor2, cell2)
 
 
 def test_combine_bias():
@@ -53,7 +64,7 @@ def test_combine_bias():
     bias = CompositeBias(biases=[bias1, bias2])
 
     yaffmd = YaffEngine(
-        ff=ff,
+        ener=ff,
         bias=bias,
         write_step=200,
         T=T,
@@ -81,16 +92,16 @@ def bias_save():
     yaffmd = ala_yaff()
     yaffmd.run(int(1e3))
 
-    yaffmd.bias.save_bias('output/bias_test_2.xyz')
-    bias = Bias.load_bias('output/bias_test_2.xyz')
+    yaffmd.bias.save('output/bias_test_2.xyz')
+    bias = Bias.load('output/bias_test_2.xyz')
 
     cvs = np.array([0.0, 0.0])
 
     [b, db] = yaffmd.bias.compute(cvs=cvs, diff=True)
     [b2, db2] = bias.compute(cvs=cvs, diff=True)
 
-    assert pytest.approx(jnp.sum((b - b2)**2)**(1 / 2))
-    assert pytest.approx(jnp.sum((db[0] - db2[0])**2)**(1 / 2))
+    assert pytest.approx(b) == b2
+    assert pytest.approx(db[0]) == db2[0]
 
 
 @pytest.mark.skip(reason="path+files not ready")
@@ -101,8 +112,8 @@ def test_yaff_ase():
 
 if __name__ == '__main__':
 
-    #test_yaff_md_ala_dipep()
-    test_combine_bias()
+    test_yaff_save_load_func()
+    # test_combine_bias()
     # cProfile.run('test_yaff_md_ala_dipep()', 'output/profile_stat')
 
     # change_fold()

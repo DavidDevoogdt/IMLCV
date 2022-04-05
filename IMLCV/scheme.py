@@ -36,9 +36,8 @@ class Scheme:
     def run(self, rounds, bias_steps, sampling_steps):
         for _ in range(rounds):
             self.do_MD(bias_steps, sampling_steps)
-            fesBias = self.calc_obs()
-
             self.update_CV()
+            fesBias = self.calc_obs()
 
     def do_MD(self, bias_steps, sampling_steps):
         bias_steps = int(bias_steps)
@@ -70,7 +69,7 @@ class Scheme:
     def _save_bias(self):
         name = 'output/bias_{}'.format(self.md_rounds)
 
-        self.md.bias.save_bias(name)
+        self.md.bias.save(name)
         self.bias_names.append(name)
 
         self.biases.append(self.md.bias)
@@ -92,7 +91,7 @@ class Scheme:
         bias_name = 'output/bias_{}'.format(round)
         traj_name = 'output/traj_{}.{}'.format(round, self.extension)
 
-        self.biases.append(self.md.bias.load_bias(bias_name))
+        self.biases.append(self.md.bias.load(bias_name))
         self.bias_names.append(bias_name)
 
         self.trajs.append(read(traj_name, index=':', format=self.extension))

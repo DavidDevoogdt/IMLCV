@@ -7,17 +7,44 @@ import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
 from jax import jit, grad, jacfwd
-import jaxinterp2d
 
-# from .CV import CV, YaffCv
 from IMLCV.base.CV import CV
+# from IMLCV.base.MdEngine import YaffEngine
+
 import molmod
 from abc import ABC, abstractmethod
+
+from yaff.pes import ForceField
 
 import dill
 
 
-class Bias(ABC):
+class Energy(ABC):
+    """base class for biased Energy of MD simulation."""
+
+    def __init__(self) -> None:
+        """"args:
+                cvs: collective variables
+                start: number of md steps before update is called
+                step: steps between update is called"""
+        pass
+
+    def compute_coor(self, coordinates, cell, gpos=None, vir=None):
+        """Computes the bias, the gradient of the bias wrt the coordinates and the virial."""
+        raise NotImplementedError
+
+    def save(self, filename):
+        with open(filename, 'wb') as f:
+            dill.dump(self, f)
+
+    @staticmethod
+    def load(filename):
+        with open(filename, 'rb') as f:
+            self = dill.load(f)
+        return self
+
+
+class Bias(Energy, ABC):
     """base class for biased MD runs."""
 
     def __init__(self, cvs: CV, start=None, step=None) -> None:
@@ -29,12 +56,6 @@ class Bias(ABC):
         self.cvs = cvs
         self.start = start
         self.step = step
-
-        args = self._get_args()
-        static_array_argnums = tuple(i + 1 for i in range(len(args)))
-
-        self.e = Bias._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
-        self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
 
     def update_bias(self, coordinates, cell):
         """update the bias.
@@ -51,7 +72,6 @@ class Bias(ABC):
 
         def __hash__(self):
             return hash(self.val.tobytes())
-            # return self.val.shape[0]
 
         def __eq__(self, other):
             eq = isinstance(other, BiasMTD._HashableArrayWrapper) and (self.__hash__() == other.__hash__())
@@ -99,6 +119,12 @@ class Bias(ABC):
 
     @partial(jit, static_argnums=(0, 2))
     def compute(self, cvs, diff=False):
+        args = self._get_args()
+        static_array_argnums = tuple(i + 1 for i in range(len(args)))
+
+        self.e = Bias._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
+        self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
+
         E = self.e(cvs, *self._get_args())
         if diff:
             diffE = self.de(cvs, *self._get_args())[0]
@@ -112,6 +138,7 @@ class Bias(ABC):
         """function that calculates the bias potential."""
         raise NotImplementedError
 
+    @abstractmethod
     def _get_args(self):
         """function that return dictionary with kwargs of _compute."""
         return []
@@ -130,16 +157,6 @@ class Bias(ABC):
             pass
 
         self.update_bias = update_bias
-
-    def save_bias(self, filename):
-        with open(filename, 'wb') as f:
-            dill.dump(self, f)
-
-    @staticmethod
-    def load_bias(filename):
-        with open(filename, 'rb') as f:
-            self = dill.load(f)
-        return self
 
     @partial(jit, static_argnums=(0, 2))
     def _periodic_wrap(self, cvs, min=False):
@@ -166,11 +183,20 @@ class CompositeBias(Bias):
     """
 
     def __init__(self, biases: Iterable[Bias]) -> None:
-        self.biases = biases
 
+        f_biases = []
         cvlist = []
         start_list = []
         step_list = []
+
+        #flatten composite biases
+        for b in biases:
+            if isinstance(b, CompositeBias):
+                f_biases = [*f_biases, *b.biases]
+            else:
+                f_biases.append(b)
+
+        self.biases = f_biases
 
         for b in self.biases:
             cvlist.append(b.cvs)
@@ -183,7 +209,6 @@ class CompositeBias(Bias):
 
         self.start_list = np.array(start_list)
         self.step_list = np.array(step_list)
-
         self.args_shape = np.array([0, *np.cumsum([len(b._get_args()) for b in self.biases])])
 
         super().__init__(cvs=cvs, start=0, step=1)
@@ -220,6 +245,9 @@ class BiasF(Bias):
 
     def _compute(self, cvs):
         return self.f(cvs)[0]
+
+    def _get_args(self):
+        return []
 
 
 class BiasMTD(Bias):
@@ -341,6 +369,23 @@ class GridBias(Bias):
         #inspiration taken from https://github.com/adam-coogan/jaxinterp2d
         coords = jnp.array((cvs + self.per[:, 0]) / (self.per[:, 1] - self.per[:, 0]) * (np.array(self.vals.shape) - 1))
         return jsp.ndimage.map_coordinates(self.vals, coords, mode='wrap', order=1)
+
+    def _get_args(self):
+        return []
+
+
+class HarmonicBias(BiasF):
+    """Harmonic bias potential centered arround q0 with force constant k"""
+
+    def __init__(self, cvs: CV, q0, k):
+        """generate harmonic potentia;
+
+        Args:
+            cvs: CV
+            q0: rest pos spring
+            k: force constant spring
+        """
+        super().__init__(cvs, lambda q: k * (q - q0)**2 / 2.0)
 
 
 class BiasPlumed(Bias):
