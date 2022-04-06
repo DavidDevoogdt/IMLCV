@@ -37,7 +37,7 @@ class CV:
 
             assert periodicity.shape == (n, 2)
         else:
-            periodicity = jnp.array([[jnp.NaN, jnp.NaN] * n])
+            periodicity = jnp.array([[jnp.nan, jnp.nan] * n])
 
         self.periodicity = periodicity
 

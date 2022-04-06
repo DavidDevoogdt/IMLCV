@@ -22,9 +22,11 @@ import numpy as np
 from molmod import units
 import ase.io
 
+log.set_level(log.medium)
+
 
 def change_fold():
-    log.set_level(log.medium)
+
     abspath = os.path.abspath(__file__)
     dname = os.path.dirname(abspath)
     os.chdir(dname)
@@ -74,7 +76,7 @@ def test_combine_bias():
         filename="output/aladipep.h5",
     )
 
-    yaffmd.run(int(1e5))
+    yaffmd.run(int(1e2))
 
 
 def test_yaff_md_mil53():
@@ -106,6 +108,7 @@ def bias_save():
 
 @pytest.mark.skip(reason="path+files not ready")
 def test_yaff_ase():
+    change_fold()
     yaffmd = todo_ASE_yaff()
     yaffmd.run(1000)
 
@@ -113,13 +116,6 @@ def test_yaff_ase():
 if __name__ == '__main__':
 
     test_yaff_save_load_func()
-    # test_combine_bias()
-    # cProfile.run('test_yaff_md_ala_dipep()', 'output/profile_stat')
-
-    # change_fold()
-    # p = pstats.Stats('output/profile_stat')
-    # p.strip_dirs().sort_stats("tottime").print_stats(100)
-
-    #test_yaff_md_mil53()
-    #bias_save()
-    # test_yaff_ase()
+    test_combine_bias()
+    test_yaff_md_mil53()
+    bias_save()

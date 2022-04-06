@@ -2,10 +2,13 @@
 
 Currently, the MD is done with YAFF/OpenMM
 """
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from cmath import isinf
+from fileinput import filename
 import dill
+
+import os
 
 import openmm
 import openmm.openmm
@@ -62,7 +65,7 @@ class MDEngine(ABC):
                  timestep=None,
                  timecon_thermo=None,
                  timecon_baro=None,
-                 filename="traj.h5",
+                 filename=None,
                  write_step=100,
                  screenlog=1000) -> None:
 
@@ -116,7 +119,7 @@ class MDEngine(ABC):
             dill.dump([self.__class__, d], f)
 
     @staticmethod
-    def load(file, **kwargs):
+    def load(file, **kwargs) -> MDEngine:
         with open(file, 'rb') as f:
             [cls, d] = dill.load(f)
 
@@ -125,6 +128,12 @@ class MDEngine(ABC):
             d[key] = kwargs[key]
 
         return cls(**d)
+
+    def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
+        self.save('temp.p')
+        mde = MDEngine.load('temp.p', **{'bias': bias, **kwargs})
+        os.remove("temp.p")
+        return mde
 
     @abstractmethod
     def run(self, steps):
@@ -165,12 +174,16 @@ class YaffEngine(MDEngine):
         whook = self._whook()
         thook = self._thook()
         bhook = self._add_bias()
-        self._verlet([vhook, whook, thook, bhook])
+
+        hooks = [vhook, thook]
+        if whook is not None:
+            hooks.append(whook),
+        if bhook.hook:
+            hooks.append(bhook)
+
+        self._verlet(hooks)
 
     def _add_bias(self):
-        #make bias composite in order to be changeable later on
-        if not isinstance(self.bias, CompositeBias):
-            self.bias = CompositeBias([self.bias])
 
         bhook = YaffEngine._YaffBias(self.ener, self.bias)
         part = yaff.pes.ForcePartBias(self.ener.system)
@@ -181,7 +194,9 @@ class YaffEngine(MDEngine):
 
     def _whook(self):
         #setup writer to collect results
-        if self.filename.endswith(".h5"):
+        if filename is None:
+            return None
+        elif self.filename.endswith(".h5"):
             fh5 = h5py.File(self.filename, 'w')
             h5writer = yaff.sampling.HDF5Writer(fh5, step=self.write_step)
             whook = h5writer
@@ -301,7 +316,7 @@ class YaffEngine(MDEngine):
             raise NotImplementedError("only for h5, impl this")
 
     def run(self, steps):
-        self.verlet.run(steps)
+        self.verlet.run(int(steps))
 
     def get_state(self):
         """returns the coordinates and cell at current md step"""
@@ -326,10 +341,12 @@ class YaffEngine(MDEngine):
                 super().__init__(start=self.bias.start, step=self.bias.step)
 
         def compute(self, gpos=None, vtens=None):
-            return self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                          cell=self.ff.system.cell.rvecs,
-                                          gpos=gpos,
-                                          vir=vtens)
+            [ener, gpos, vtens] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                                         cell=self.ff.system.cell.rvecs,
+                                                         gpos=gpos,
+                                                         vir=vtens)
+
+            return ener
 
         def __call__(self, iterative):
             # skip initial hook called by verlet integrator

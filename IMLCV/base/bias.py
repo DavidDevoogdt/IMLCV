@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import partial
 from typing import Iterable
 
@@ -38,7 +40,7 @@ class Energy(ABC):
             dill.dump(self, f)
 
     @staticmethod
-    def load(filename):
+    def load(filename) -> Energy:
         with open(filename, 'rb') as f:
             self = dill.load(f)
         return self
@@ -115,7 +117,7 @@ class Bias(Energy, ABC):
         if bv:
             vir = vir.at[:].set(jnp.einsum('ji,k,kjl->il', cell, de, jac_c_val))
 
-        return ener
+        return ener, gpos, vir
 
     @partial(jit, static_argnums=(0, 2))
     def compute(self, cvs, diff=False):
@@ -143,7 +145,7 @@ class Bias(Energy, ABC):
         """function that return dictionary with kwargs of _compute."""
         return []
 
-    def finalize_bias(self):
+    def finalize(self):
         """Should be called at end of metadynamics simulation.
 
         Optimises compute
@@ -166,16 +168,25 @@ class Bias(Energy, ABC):
             cvs: array of cvs
             min (bool): if False, translate to cv range. I true, minimises norm of vector
         """
-
-        x = 0.5 if min else 0.0
-
         per = self.cvs.periodicity
 
-        coor = (cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) - x
-        coor = jnp.modf(coor)[0]  # fractional part
-        coor = (coor + x) * (per[:, 1] - per[:, 0]) + per[:, 0]
+        if min:
+            o = 0.0
+        else:
+            o = per[:, 0]
 
+        coor = (cvs - o) / (per[:, 1] - per[:, 0])
+        coor = jnp.modf(coor)[0]  # fractional part
+        coor = jnp.where(coor < 0.0, coor + 1, coor)
+        if min:
+            coor = jnp.where(coor > 0.5, coor - 1, coor)
+
+        coor = (coor) * (per[:, 1] - per[:, 0]) + o
         return jnp.where(jnp.isnan(per).any(axis=1), cvs, coor)
+
+    @staticmethod
+    def load(filename) -> Bias:
+        return Energy.load(filename)
 
 
 class CompositeBias(Bias):
@@ -193,6 +204,8 @@ class CompositeBias(Bias):
         for b in biases:
             if isinstance(b, CompositeBias):
                 f_biases = [*f_biases, *b.biases]
+            elif isinstance(b, NoneBias):
+                pass
             else:
                 f_biases.append(b)
 
@@ -200,15 +213,16 @@ class CompositeBias(Bias):
 
         for b in self.biases:
             cvlist.append(b.cvs)
-            start_list.append(b.start)
-            step_list.append(b.step)
+
+            start_list.append(b.start if (b.start is not None) else -1)
+            step_list.append(b.step if (b.step is not None) else -1)
 
         cvs = cvlist[0]
         for cvsi in cvlist[1:]:
             assert cvsi is cvs, "CV should be same instance"
 
-        self.start_list = np.array(start_list)
-        self.step_list = np.array(step_list)
+        self.start_list = np.array(start_list, dtype=np.int16)
+        self.step_list = np.array(step_list, dtype=np.int16)
         self.args_shape = np.array([0, *np.cumsum([len(b._get_args()) for b in self.biases])])
 
         super().__init__(cvs=cvs, start=0, step=1)
@@ -221,12 +235,16 @@ class CompositeBias(Bias):
 
         return e
 
+    def finalize(self):
+        for b in self.biases:
+            b.finalize()
+
     def update_bias(self, coordinates, cell):
 
-        mask = self.start_list == 0
+        mask = (self.start_list == 0)
 
         self.start_list[mask] += self.step_list[mask]
-        self.start_list[~mask] -= 1
+        self.start_list -= 1
 
         for i in np.argwhere(mask):
             self.biases[int(i)].update_bias(coordinates=coordinates, cell=cell)
@@ -240,11 +258,50 @@ class BiasF(Bias):
 
     def __init__(self, cvs: CV, f=None):
 
-        self.f = f if (f is not None) else lambda _: 0.0
+        self.f = f if (f is not None) else lambda _: jnp.zeros((1,))
+        self.f = jit(self.f)
         super().__init__(cvs, start=None, step=None)
 
     def _compute(self, cvs):
-        return self.f(cvs)[0]
+        cvs0 = self._periodic_wrap(cvs)
+        return self.f(cvs0)[0]
+
+    def _get_args(self):
+        return []
+
+
+class NoneBias(BiasF):
+    """dummy bias"""
+
+    def __init__(self, cvs: CV):
+        super().__init__(cvs)
+
+
+class HarmonicBias(Bias):
+    """Harmonic bias potential centered arround q0 with force constant k"""
+
+    def __init__(self, cvs: CV, q0, k):
+        """generate harmonic potentia;
+
+        Args:
+            cvs: CV
+            q0: rest pos spring
+            k: force constant spring
+        """
+
+        if isinstance(k, float):
+            k = q0 * 0 + k
+        else:
+            assert k.shape == q0.shape
+        assert np.all(k > 0)
+        self.k = jnp.array(k)
+        self.q0 = jnp.array(q0)
+
+        super().__init__(cvs)
+
+    def _compute(self, cvs):
+        r = self._periodic_wrap(cvs - self.q0, min=True)
+        return jnp.einsum('i,i,i', self.k, r, r)
 
     def _get_args(self):
         return []
@@ -372,20 +429,6 @@ class GridBias(Bias):
 
     def _get_args(self):
         return []
-
-
-class HarmonicBias(BiasF):
-    """Harmonic bias potential centered arround q0 with force constant k"""
-
-    def __init__(self, cvs: CV, q0, k):
-        """generate harmonic potentia;
-
-        Args:
-            cvs: CV
-            q0: rest pos spring
-            k: force constant spring
-        """
-        super().__init__(cvs, lambda q: k * (q - q0)**2 / 2.0)
 
 
 class BiasPlumed(Bias):

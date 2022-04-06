@@ -1,7 +1,31 @@
 import numpy as np
 from IMLCV.base.CV import *
-from IMLCV.base.bias import BiasF
+from IMLCV.base.bias import BiasF, HarmonicBias
 import pytest
+
+
+def test_harmonic():
+    cv0 = CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=2.0 * np.pi)
+    cv1 = CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi)
+
+    cvs = CombineCV([cv0, cv1])  #combine
+
+    bias = HarmonicBias(cvs, q0=np.array([np.pi, -np.pi]), k=1.0)
+
+    x = np.random.rand(2)
+
+    a1 = bias._compute(np.array([np.pi, np.pi]) + x)
+    a2 = bias._compute(np.array([-np.pi, -np.pi] + x))
+    a3 = bias._compute(np.array([np.pi, -np.pi]) + x)
+    a4 = bias._compute(np.array([-np.pi, np.pi] + x))
+    a5 = bias._compute(np.array([np.pi, np.pi]) + x.T)
+    a6 = bias._compute(np.array([np.pi, np.pi]) - x)
+
+    assert pytest.approx(a1, abs=1e-5) == a2
+    assert pytest.approx(a1, abs=1e-5) == a3
+    assert pytest.approx(a1, abs=1e-5) == a4
+    assert pytest.approx(a1, abs=1e-5) == a5
+    assert pytest.approx(a1, abs=1e-5) == a6
 
 
 def test_split_combine():
@@ -17,10 +41,10 @@ def test_split_combine():
     [cv0b_cv, cv0b_grad, _] = cv0b.compute(coordinates=coordinates, cell=None, jac_p=True)
 
     #check whether combine and split are each others inverses
-    assert pytest.approx(cv0_cv, cv0b_cv)
-    assert pytest.approx(np.sum((cv0_grad - cv0b_grad)**2)**(1 / 2), 0)
+    assert pytest.approx(cv0_cv) == cv0b_cv
+    assert pytest.approx(cv0_grad) == cv0b_grad
     #check whether CV is same as inputed function f
-    assert pytest.approx(CVUtils.dihedral(coordinates, cell=None, numbers=[4, 6, 8, 14]), cv0_cv)
+    assert pytest.approx(CVUtils.dihedral(coordinates, cell=None, numbers=[4, 6, 8, 14])) == cv0_cv[0]
 
 
 def test_virial():
@@ -30,10 +54,11 @@ def test_virial():
     vir = np.zeros((3, 3))
 
     bias = BiasF(cvs=cv0, f=(lambda x: x))  #simply take volume as lambda
-    vol = bias.compute_coor(coordinates=None, cell=cell, vir=vir)
-    assert pytest.approx(np.linalg.norm(vir - vol * np.eye(3), 2), 0)
+    vol, _, vir = bias.compute_coor(coordinates=None, cell=cell, vir=vir)
+    assert pytest.approx(vir, abs=1e-5) == vol * np.eye(3)
 
 
 if __name__ == "__main__":
+    test_harmonic()
     test_split_combine()
     test_virial()

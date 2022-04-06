@@ -1,11 +1,11 @@
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.scheme import Scheme
+from IMLCV.base.CV import CV, CVUtils, CombineCV
+from IMLCV.base.bias import BiasF, BiasMTD, NoneBias
 
 from yaff.log import log
 import os
-
-from IMLCV.test.common import ala_yaff
 
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
@@ -14,22 +14,29 @@ abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 os.chdir(dname)
 
+import numpy as np
+from molmod import units
+
 
 def test_ala_dipep():
+    T = 300 * units.kelvin
 
-    yaffmd = ala_yaff(write=20)
+    cvs = CombineCV([
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
+    ])
 
-    cvd = CVDiscovery()
+    scheme = Scheme(
+        cvd=CVDiscovery(),
+        cvs=cvs,
+        Engine=YaffEngine,
+        ener=get_alaninedipeptide_amber99ff,
+        T=T,
+        timestep=2.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+    )
 
-    scheme = Scheme(md=yaffmd, cvd=cvd)
-
-    load = True
-
-    if load:
-        scheme.load_round(round=0)
-        scheme.calc_obs()
-    else:
-        scheme.run(2, 1e5, 1e5)
+    scheme.get_fes(1e5, 1e5)
 
 
 if __name__ == "__main__":
