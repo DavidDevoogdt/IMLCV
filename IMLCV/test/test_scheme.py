@@ -19,24 +19,33 @@ from molmod import units
 
 
 def test_ala_dipep():
-    T = 300 * units.kelvin
+    T = 600 * units.kelvin
 
     cvs = CombineCV([
         CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
         CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
     ])
 
-    scheme = Scheme(
-        cvd=CVDiscovery(),
-        cvs=cvs,
-        Engine=YaffEngine,
-        ener=get_alaninedipeptide_amber99ff,
-        T=T,
-        timestep=2.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
-    )
+    load = False
 
-    scheme.get_fes(1e5, 1e5)
+    if load:
+        scheme = Scheme.from_rounds(cvd=CVDiscovery(), filename='output/rounds.p')
+    else:
+        scheme = Scheme(
+            cvd=CVDiscovery(),
+            cvs=cvs,
+            Engine=YaffEngine,
+            ener=get_alaninedipeptide_amber99ff,
+            T=T,
+            timestep=2.0 * units.femtosecond,
+            timecon_thermo=100.0 * units.femtosecond,
+        )
+
+        scheme._MTDBias(steps=1e2)
+        scheme._grid_umbrella(steps=1e5)
+        scheme.rounds.save('rounds.p')
+
+    bias = scheme.get_fes()
 
 
 if __name__ == "__main__":

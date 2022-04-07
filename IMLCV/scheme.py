@@ -1,10 +1,8 @@
-from unicodedata import name
+from __future__ import annotations
 
 import dill
 
 from ase.io import write, read
-
-from dataclasses import dataclass
 
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, HarmonicBias, NoneBias, GridBias
@@ -23,6 +21,11 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 import itertools
+from collections import Iterable
+import builtins
+
+import threading
+import concurrent.futures
 
 from typing import Type
 
@@ -48,39 +51,17 @@ class Rounds:
         if extension != "extxyz":
             raise NotImplementedError("file type not known")
 
-        self.round = 0
+        self.round = -1
         self.data = []
         self.extension = extension
         self.i = 0
 
         self.folder = folder
 
-    def __getattr__(self, name: str):
-        if name == 'T':
-            return self.data[-1]['engine_kwargs']['T']
-        elif name == 'P':
-            return self.data[-1]['engine_kwargs']['P']
-        elif name == 'timestep':
-            return self.data[-1]['engine_kwargs']['timestep']
-
     def add(self, md):
         """adds all the saveble info of the md simulation. The resulting """
 
-        if self.i == 0:
-            #save whold md engine
-            name_md = '{}/engine_{}'.format(self.folder, self.round)
-            md.save(name_md)
-
-            self.data.append({
-                'engine': name_md,
-                'biases': [],
-                'trajectories': [],
-                'engine_kwargs': {key: md.__dict__[key] for key in self.engine_keys},
-                'trajectory_kwargs': [],
-                'num': 0,
-            })
-        else:
-            self._validate(md)
+        self._validate(md)
 
         #save trajectory
         name_t = '{}/traj_{}-{}.{}'.format(self.folder, self.round, self.i, self.extension)
@@ -102,13 +83,20 @@ class Rounds:
         self.i += 1
 
     def save(self, filename):
-        with open(f'{self.folder}/rounds.p', 'wb') as f:
+        with open(f'{self.folder}/{filename}', 'wb') as f:
             dill.dump(self, f)
 
     @staticmethod
-    def load(filename):
-        with open(f'{self.prefix}/rounds.p', 'rb') as f:
+    def load(filename) -> Rounds:
+        with open(filename, 'rb') as f:
             self = dill.load(f)
+        return self
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
         return self
 
     def _validate(self, md):
@@ -128,9 +116,21 @@ class Rounds:
         #check equivalency of energy source
         pass
 
-    def new_round(self):
-        self.data.append([])
+    def new_round(self, md):
         self.round += 1
+
+        name_md = '{}/engine_{}'.format(self.folder, self.round)
+        md.save(name_md)
+
+        self.data.append({
+            'engine': name_md,
+            'biases': [],
+            'trajectories': [],
+            'engine_kwargs': {key: md.__dict__[key] for key in self.engine_keys},
+            'trajectory_kwargs': [],
+            'num': 0,
+        })
+
         self.i = 0
 
     def _get_prop(self, round, i, prop):
@@ -145,9 +145,12 @@ class Rounds:
         elif prop == "trajectory":
             return read(dict['trajectories'][i], index=':', format=self.extension)
         elif prop == "engine":
-            return MDEngine.load(dict['engine'])
+            return MDEngine.load(dict['engine'], filename=None)
         else:
             raise ValueError("unknown property")
+
+    def commom_bias(self, round=-1):
+        return self._get_prop(round, 0, 'engine').bias
 
     def get_trajectories_and_biases(self, round=-1):
 
@@ -160,6 +163,15 @@ class Rounds:
             data = self.data[round]
             for i in range(data['num']):
                 yield [self._get_prop(round, i, 'trajectory'), self._get_prop(round, i, 'bias')]
+
+    def __dir__(self):
+        return dir(Rounds) + self.engine_keys + ['engine']
+
+    def __getattr__(self, name: str):
+        if name in self.engine_keys:
+            return self.data[-1]['engine_kwargs'][name]
+        if name == 'engine':
+            return self._get_prop(-1, 0, 'engine')
 
 
 class Scheme:
@@ -202,20 +214,39 @@ class Scheme:
         self.rounds = Rounds(extension=extension)
         self.steps = 0
 
-    def _MTDBias(self, steps, K=None, sigmas=None, start=25, step=25) -> Bias:
+    def from_rounds(
+        cvd: CVDiscovery,
+        filename,
+        steps=0,
+    ) -> Scheme:
+
+        self = Scheme.__new__(Scheme)
+
+        rounds = Rounds.load(filename=filename)
+        self.md = rounds.engine
+
+        self.rounds = rounds
+        self.cvd = cvd
+        self.steps = 0
+
+        return self
+
+    def _MTDBias(self, steps, K=None, sigmas=None, start=50, step=50) -> Bias:
         """generate a metadynamics bias"""
 
         if sigmas is None:
             sigmas = (self.md.bias.cvs.periodicity[:, 1] - self.md.bias.cvs.periodicity[:, 0]) / 20
 
         if K is None:
-            K = 0.5 * self.md.T * boltzmann
+            K = 5.0 * self.md.T * boltzmann
 
         biasmtd = BiasMTD(self.md.bias.cvs, K, sigmas, start=start, step=step)
         bias = CompositeBias([self.md.bias, biasmtd])
-        self.md = self.md.new_bias(bias, filename="mtdbias.h5")
+        self.md = self.md.new_bias(bias, filename="mtdbias2.h5")
         self.md.run(steps)
         self.md.bias.finalize()
+
+        self.rounds.new_round(self.md)
 
     def _grid_umbrella(self, steps=1e4, US_grid=None, K=None):
 
@@ -223,26 +254,43 @@ class Scheme:
         if np.isnan(cvs.periodicity).any():
             raise NotImplementedError("impl non periodic")
 
-        n = 2
+        n = 3
         if K == None:
-            K = self.md.T * boltzmann * (cvs.periodicity[:, 1] - cvs.periodicity[:, 0]) / n
+            K = 200.0 * self.md.T * boltzmann * (n * 2 / (cvs.periodicity[:, 1] - cvs.periodicity[:, 0]))**2
 
         if US_grid is None:
             grid = [np.linspace(row[0], row[1], n, endpoint=False) for row in self.md.bias.cvs.periodicity]
 
+        threads = []
+
+        mdes = [] * len(grid)
+
+        self.md.bias.save('temp_bias.p')
+        self.md.save('md_temp.p')
+
         for i, x in enumerate(itertools.product(*grid)):
-            bias = CompositeBias([
-                HarmonicBias(cvs, np.array(x), K),
-                self.md.bias,
-            ])
-            mde = self.md.new_bias(bias, filename=f'temp_{i}.h5')
-            mde.run(steps)
+
+            def f(i):
+                b = Bias.load('temp_bias.p')
+                bias = CompositeBias([
+                    HarmonicBias(b.cvs, np.array(x), K),
+                    b,
+                ])
+                mde = MDEngine.load('md_temp.p', bias=bias, filename=f'temp_{i}.h5')
+                mde.run(steps)
+                mdes[i] = mde
+
+            y = threading.Thread(target=f, args=(i,))
+            threads.append(y)
+            y.start()
+
+        for index, thread in enumerate(threads):
+            thread.join()
+
+        for mde in mdes:
             self.rounds.add(mde)
 
-    def get_fes(self, steps_mtd=1e5, steps_US=1e4, US_grid=None):
-        self._MTDBias(steps=steps_mtd)
-        self._grid_umbrella(steps=steps_US)
-
+    def get_fes(self):
         obs = Observable(self.rounds)
         fes = obs.fes_2D(plot=True)
         fesBias = obs.fes_Bias()
@@ -253,11 +301,11 @@ class Scheme:
         pass
 
     def save(self, filename):
-        pass
+        raise NotImplementedError
 
     @classmethod
     def load(cls, filename):
-        pass
+        raise NotImplementedError
 
 
 class Observable:
@@ -273,24 +321,18 @@ class Observable:
         if self.fes is not None:
             return self.fes
 
-        cv = []
-        bss = []
+        temp = self.rounds.T
 
-        for (traj, bias) in self.rounds.get_trajectories_and_biases():
-            arr = np.array([bias.cvs.compute(t.positions, cell=t.cell.array)[0] for t in traj])
-            cv.append(arr)
-            bss.append(Observable._thermo_bias2D(bias))
+        trajs, bss, bins = self._get_biasses()
 
-        grid = self._grid(n=50)
-
-        histo = Histogram2D.from_wham(bins=grid,
-                                      trajectories=cv,
+        histo = Histogram2D.from_wham(bins=bins,
+                                      trajectories=trajs,
                                       biasses=bss,
-                                      temp=self.rounds.T,
+                                      temp=temp,
                                       error_estimate='mle_f',
-                                      plot_biases=True)
+                                      plot_biases=False)
 
-        fes = FreeEnergySurface2D.from_histogram(histo, self.rounds.T)
+        fes = FreeEnergySurface2D.from_histogram(histo, temp)
         fes.set_ref()
 
         if plot:
@@ -299,6 +341,58 @@ class Observable:
         self.fes = fes
 
         return fes
+
+    def _get_biasses(self, plot=True):
+        trajs = []
+        tbss = []
+        bss = []
+
+        for (traj, bias) in self.rounds.get_trajectories_and_biases():
+            arr = np.array([bias.cvs.compute(t.positions, cell=t.cell.array)[0] for t in traj])
+            trajs.append(arr)
+            bss.append(bias)
+            tbss.append(Observable._thermo_bias2D(bias))
+
+        temp = self.rounds.T
+
+        bins = self._grid(n=51, endpoint=True)
+        bin_centers = [0.5 * (row[:-1] + row[1:]) for row in bins]
+        beta = 1 / (boltzmann * temp)
+        cb = self.rounds.commom_bias()
+        mg = np.meshgrid(*bin_centers)
+
+        biases, _ = jnp.apply_along_axis(cb.compute, axis=0, arr=np.array(mg), diff=False)
+
+        # pinit = np.exp(-biases * beta)
+
+        def pl(b, name, trajs):
+            plt.clf()
+            contourf = plt.contourf(mg[0], mg[1], b, cmap=plt.get_cmap('rainbow'))
+            contour = plt.contour(mg[0], mg[1], b)
+
+            plt.xlabel('cv1', fontsize=16)
+            plt.ylabel('cv2', fontsize=16)
+            cbar = plt.colorbar(contourf, extend='both')
+            cbar.set_label('Bias boltzmann factor [-]', fontsize=16)
+            plt.clabel(contour, inline=1, fontsize=10)
+
+            for traj in trajs:
+                plt.scatter(traj[:, 0], traj[:, 1])
+
+            plt.title(name)
+
+            fig = plt.gcf()
+            fig.set_size_inches([12, 8])
+            plt.savefig(name)
+
+        if plot:
+            pl(biases, 'mtd', trajs)
+
+            for i, b in enumerate(bss):
+                bias, _ = jnp.apply_along_axis(b.compute, axis=0, arr=np.array(mg), diff=False)
+                pl(bias, f'umbrella {i}', [trajs[i]])
+
+        return trajs, tbss, bins
 
     class _thermo_bias2D(BiasPotential2D):
 
@@ -323,14 +417,14 @@ class Observable:
         bias -= bias[~np.isnan(bias)].min()
         bias[np.isnan(bias)] = 0.0
 
-        return GridBias(cvs=self.mdb[-1].cvs, vals=bias)
+        return GridBias(cvs=self.rounds.commom_bias().cvs, vals=bias)
 
     def _plot_bias(self):
         """manual bias plot, convert to _thermo_bias2D and plot instead."""
 
         b = self.mdb[-1]
 
-        x = self._grid(n=51)
+        x = self._grid(n=51, endpoint=False)
         mg = np.array(np.meshgrid(*x))  #(ncv,n,n) matrix
         biases, _ = jnp.apply_along_axis(b.compute, axis=0, arr=mg, diff=False)
         biases = -np.array(biases)
@@ -348,9 +442,9 @@ class Observable:
         plt.colorbar()
         plt.savefig('output/ala_dipep.png')
 
-    def _grid(self, n=51):
+    def _grid(self, n=51, endpoint=True):
         cvs = self.rounds._get_prop(0, 0, 'cv')
         if np.isnan(cvs.periodicity).any():
             raise NotImplementedError("add argument for range")
 
-        return [np.linspace(p[0][0], p[0][1], n, endpoint=False) for p in np.split(cvs.periodicity, 2, axis=0)]
+        return [np.linspace(p[0][0], p[0][1], n, endpoint=True) for p in np.split(cvs.periodicity, 2, axis=0)]

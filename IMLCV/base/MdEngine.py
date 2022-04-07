@@ -127,6 +127,10 @@ class MDEngine(ABC):
         for key in kwargs.keys():
             d[key] = kwargs[key]
 
+        if cls == YaffEngine:
+            import importlib
+            importlib.reload(yaff)
+
         return cls(**d)
 
     def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
@@ -194,7 +198,7 @@ class YaffEngine(MDEngine):
 
     def _whook(self):
         #setup writer to collect results
-        if filename is None:
+        if self.filename is None:
             return None
         elif self.filename.endswith(".h5"):
             fh5 = h5py.File(self.filename, 'w')
@@ -234,6 +238,11 @@ class YaffEngine(MDEngine):
             # add forces as state item
             state=[self._GposContribStateItem()],
         )
+
+    # @staticmethod
+    # def load(file, **kwargs) -> MDEngine:
+
+    #     return super().load(file, **kwargs)
 
     @staticmethod
     def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
