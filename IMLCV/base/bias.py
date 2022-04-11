@@ -112,10 +112,10 @@ class Bias(Energy, ABC):
         [ener, de] = self.compute(cvs, diff=(bv or bg))
 
         if bg:
-            gpos = gpos.at[:].set(jnp.einsum('j,jkl->kl', de, jac_p_val))
+            gpos += jnp.einsum('j,jkl->kl', de, jac_p_val)
 
         if bv:
-            vir = vir.at[:].set(jnp.einsum('ji,k,kjl->il', cell, de, jac_c_val))
+            vir += jnp.einsum('ji,k,kjl->il', cell, de, jac_c_val)
 
         return ener, gpos, vir
 
@@ -219,7 +219,9 @@ class CompositeBias(Bias):
 
         cvs = cvlist[0]
         for cvsi in cvlist[1:]:
-            assert cvsi is cvs, "CV should be same instance"
+            pass
+            #todo
+            # assert cvsi is cvs, "CV should be same instance"
 
         self.start_list = np.array(start_list, dtype=np.int16)
         self.step_list = np.array(step_list, dtype=np.int16)

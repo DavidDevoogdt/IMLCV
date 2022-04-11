@@ -97,7 +97,7 @@ class MDEngine(ABC):
     def _init_post(self):
         pass
 
-    def save(self, file):
+    def __getstate__(self):
         keys = [
             "bias",
             "ener",
@@ -115,28 +115,34 @@ class MDEngine(ABC):
         for key in keys:
             d[key] = self.__dict__[key]
 
+        return [self.__class__, d]
+
+    def __setstate__(self, arr):
+        [cls, d] = arr
+        d['filename'] = None
+
+        return cls(**d)
+
+    def save(self, file):
         with open(file, 'wb') as f:
-            dill.dump([self.__class__, d], f)
+            dill.dump(self.__getstate__(), f)
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
         with open(file, 'rb') as f:
             [cls, d] = dill.load(f)
+        d['filename'] = None
 
         #replace and add kwargs
         for key in kwargs.keys():
             d[key] = kwargs[key]
 
-        if cls == YaffEngine:
-            import importlib
-            importlib.reload(yaff)
-
         return cls(**d)
 
-    def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
-        self.save('temp.p')
-        mde = MDEngine.load('temp.p', **{'bias': bias, **kwargs})
-        os.remove("temp.p")
+    def new_bias(self, bias: Bias, filename, **kwargs) -> MDEngine:
+        self.save(f'{filename}_temp')
+        mde = MDEngine.load(f'{filename}_temp', **{'bias': bias, 'filename': filename, **kwargs})
+        os.remove(f'{filename}_temp')
         return mde
 
     @abstractmethod
@@ -179,7 +185,9 @@ class YaffEngine(MDEngine):
         thook = self._thook()
         bhook = self._add_bias()
 
-        hooks = [vhook, thook]
+        hooks = [thook]
+        if vhook is not None:
+            hooks.append(vhook)
         if whook is not None:
             hooks.append(whook),
         if bhook.hook:
@@ -239,10 +247,9 @@ class YaffEngine(MDEngine):
             state=[self._GposContribStateItem()],
         )
 
-    # @staticmethod
-    # def load(file, **kwargs) -> MDEngine:
-
-    #     return super().load(file, **kwargs)
+    @staticmethod
+    def load(file, **kwargs) -> MDEngine:
+        return super().load(file, **kwargs)
 
     @staticmethod
     def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
@@ -350,10 +357,15 @@ class YaffEngine(MDEngine):
                 super().__init__(start=self.bias.start, step=self.bias.step)
 
         def compute(self, gpos=None, vtens=None):
-            [ener, gpos, vtens] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                                         cell=self.ff.system.cell.rvecs,
-                                                         gpos=gpos,
-                                                         vir=vtens)
+            [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                                                 cell=self.ff.system.cell.rvecs,
+                                                                 gpos=gpos,
+                                                                 vir=vtens)
+
+            if gpos is not None:
+                gpos[:] = np.array(gpos_jax)
+            if vtens is not None:
+                vtens[:] = np.array(vtens_jax)
 
             return ener
 
@@ -518,6 +530,83 @@ class YaffEngine(MDEngine):
 
         def iter_attrs(self, iterative):
             yield 'gpos_contrib_names', np.array([part.name for part in iterative.ff.parts], dtype='S')
+
+    #monkey patch molmod timer package for multithreading logs
+
+    def _mutithreading_timers_and_logging():
+
+        from molmod.log import TimerGroup, ScreenLog, SubTimer
+        from contextlib import contextmanager
+        from threading import current_thread
+
+        def _get_name(a=None):
+            if a is None:
+                return f"{current_thread().name}"
+            else:
+                return f"{current_thread().name} {a}"
+
+        @contextmanager
+        def _section_multi_timergroup(self, label):
+            label = _get_name(label)
+            self._start(label)
+            try:
+                yield
+            finally:
+                self._stop(label)
+
+        @contextmanager
+        def _section_multi_screenlog(self, prefix):
+            prefix = _get_name(prefix)
+            self._enter(prefix)
+            try:
+                yield
+            finally:
+                self._exit(prefix)
+
+        def _getstack(self):
+            thread = _get_name()
+            stack = []
+            for t in self._stack:
+                if t.label.startswith(thread):
+                    stack.append(t)
+            return stack
+
+        def _stop(self, label):
+            stack = _getstack(self)
+            timer = stack.pop(-1)
+            self._stack.remove(timer)
+            assert timer.label == label
+            timer.stop()
+            if len(stack) > 0:
+                stack[-1].stop_sub()
+
+        def _start(self, label):
+
+            timer = self.parts.get(label)
+            if timer is None:
+                timer = SubTimer(label)
+                self.parts[label] = timer
+
+            timer.start()
+            stack = _getstack(self)
+            if len(stack) > 0:
+                stack[-1].start_sub()
+
+            self._stack.append(timer)
+
+        def _exit(self, prefix):
+            m = prefix
+            self.stack.remove(m)
+
+            if self._active:
+                self.add_newline = True
+
+        ScreenLog.section = _section_multi_screenlog
+        ScreenLog._exit = _exit
+        TimerGroup.section = _section_multi_timergroup
+        TimerGroup._stop = _stop
+        TimerGroup._start = _start
+        ScreenLog.margin = 18
 
 
 # class OpenMMEngine(MDEngine):

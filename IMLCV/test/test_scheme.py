@@ -26,7 +26,7 @@ def test_ala_dipep():
         CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
     ])
 
-    load = False
+    load = True
 
     if load:
         scheme = Scheme.from_rounds(cvd=CVDiscovery(), filename='output/rounds.p')
@@ -41,7 +41,9 @@ def test_ala_dipep():
             timecon_thermo=100.0 * units.femtosecond,
         )
 
-        scheme._MTDBias(steps=1e2)
+        scheme._MTDBias(steps=1e5)
+        scheme.rounds.new_round(scheme.md)
+
         scheme._grid_umbrella(steps=1e5)
         scheme.rounds.save('rounds.p')
 
