@@ -10,6 +10,8 @@ from ase.io import write, read
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.bias import Bias, CompositeBias
 from collections import Iterable
+import os
+import pathos
 
 
 class Rounds:
@@ -38,6 +40,9 @@ class Rounds:
         self.extension = extension
         self.i = 0
 
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+
         self.folder = folder
 
     def add(self, md, i=None):
@@ -60,7 +65,7 @@ class Rounds:
 
     @staticmethod
     def _save_traj(md, i, folder, round, extension):
-        name_t = '{}/traj_{}-{}.{}'.format(folder, round, i, extension)
+        name_t = f'{folder}/round_{round}/traj_{i}.{extension}'
         traj = md.to_ASE_traj()
         write(name_t, traj, format=extension, append=False),
         return name_t
@@ -71,7 +76,7 @@ class Rounds:
 
     @staticmethod
     def _save_bias(md, i, folder, round):
-        name_bias = '{}/bias_{}-{}'.format(folder, round, i)
+        name_bias = f'{folder}/round_{round}/bias_{i}'
         md.bias.save(name_bias)
         return name_bias
 
@@ -82,13 +87,13 @@ class Rounds:
                     self.data[-1][key].append(val)
             self.data[-1]['num'] += 1
 
-    def save(self, filename):
-        with open(f'{self.folder}/{filename}', 'wb') as f:
+    def save(self):
+        with open(f'{self.folder}/rounds', 'wb') as f:
             dill.dump(self, f)
 
     @staticmethod
-    def load(filename) -> Rounds:
-        with open(filename, 'rb') as f:
+    def load(folder) -> Rounds:
+        with open(f"{folder}/rounds", 'rb') as f:
             self = dill.load(f)
         return self
 
@@ -117,7 +122,11 @@ class Rounds:
     def new_round(self, md):
         self.round += 1
 
-        name_md = '{}/engine_{}'.format(self.folder, self.round)
+        dir = f'{self.folder}/round_{self.round}'
+        if not os.path.isdir(dir):
+            os.mkdir(dir)
+
+        name_md = f'{self.folder}/round_{self.round}/engine'
         md.save(name_md)
 
         self.data.append({
@@ -150,12 +159,15 @@ class Rounds:
     def commom_bias(self, round=-1):
         return self._get_prop(round, 0, 'engine').bias
 
-    def get_trajectories_and_biases(self, round=-1):
+    def get_trajectories_and_biases(self, round=-1, num=3):
 
         if round == -1:
             rounds = range(len(self.data))
         else:
             rounds = [round]
+
+        if len(rounds) >= num:
+            rounds = rounds[-num:]
 
         for round in rounds:
             data = self.data[round]
@@ -172,8 +184,8 @@ class Rounds:
             return self._get_prop(-1, 0, 'engine')
 
     def run_par(self, biases: Iterable[Bias], steps):
-        common_bias_name = f"{self.folder}/common_bias.t"
-        common_md_name = f"{self.folder}/common_md.t"
+        common_bias_name = f"{self.folder}/round_{self.round}/common_bias.t"
+        common_md_name = f"{self.folder}/round_{self.round}/common_md.t"
         md = self._get_prop(self.round, 0, 'engine')
 
         md.save(common_md_name)
@@ -185,10 +197,8 @@ class Rounds:
                 'bias': b,
                 'common_bias_name': common_bias_name,
                 'engine_name': common_md_name,
-                'new_name': f'{self.folder}/temp_{i}.h5',
+                'new_name': f'{self.folder}/round_{self.round}/temp_{i}.h5',
                 'steps': steps,
-                'save_traj': partial(Rounds._save_traj, folder=self.folder, round=self.round, extension=self.extension),
-                'save_bias': partial(Rounds._save_bias, folder=self.folder, round=self.round),
                 'i': i
             })
 
@@ -198,8 +208,6 @@ class Rounds:
             engine_name = args['engine_name']
             new_name = args['new_name']
             steps = args['steps']
-            save_traj = args['save_traj']
-            save_bias = args['save_bias']
             i = args['i']
 
             b = CompositeBias([Bias.load(common_bias_name), bias])
@@ -207,13 +215,12 @@ class Rounds:
 
             md.run(steps=steps)
 
-            name_t = save_traj(md, i)
-            name_bias = save_bias(md, i)
+            name_t = Rounds._save_traj(md, i, folder=self.folder, round=self.round, extension=self.extension)
+            name_bias = Rounds._save_bias(md, i, folder=self.folder, round=self.round)
             name_kwargs = Rounds._save_traj_kwargs(md)
 
             return name_t, name_bias, name_kwargs
 
-        import pathos
         with pathos.pools.ProcessPool() as pool:
             for [name_t, name_bias, traj_kwargs] in pool.map(_run_par, kwargs):
                 self.data[self.round]['trajectories'].append(name_t)
@@ -221,3 +228,6 @@ class Rounds:
                 self.data[self.round]['trajectory_kwargs'].append(traj_kwargs)
 
                 self.data[self.round]['num'] += 1
+
+        for kw in kwargs:
+            os.remove(kw['new_name'])

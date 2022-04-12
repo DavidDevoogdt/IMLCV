@@ -1,7 +1,11 @@
 from __future__ import annotations
+from ast import arg
 from pickle import BINSTRING
 
+import os
+
 from IMLCV.base.bias import Bias, GridBias
+from IMLCV.base.rounds import Rounds
 
 from thermolib.thermodynamics.fep import SimpleFreeEnergyProfile, FreeEnergySurface2D, plot_feps
 from thermolib.thermodynamics.histogram import Histogram2D, plot_histograms
@@ -17,15 +21,18 @@ from scipy.interpolate import griddata
 
 import matplotlib.pyplot as plt
 
+import pathos
+
 # from IMLCV.scheme import Rounds
 
 
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic observables."""
 
-    def __init__(self, rounds) -> None:
+    def __init__(self, rounds: Rounds) -> None:
         self.rounds = rounds
 
+        self.folder = rounds.folder
         self.fes = None
 
     def fes_2D(self, plot=True):
@@ -35,21 +42,42 @@ class Observable:
 
         temp = self.rounds.T
 
-        trajs, bss, bins = self._get_biasses(plot=plot)
+        trajs, bss, bins, pinit = self._get_biasses(plot=plot)
 
         histo = Histogram2D.from_wham_c(
             bins=bins,
+            pinit=pinit,
             traj_input=trajs,
             error_estimate='mle_f',
             biasses=bss,
             temp=temp,
         )
 
+        # histo = Histogram2D.from_wham(
+        #     bins=bins,
+        #     pinit=pinit,
+        #     trajectories=trajs,
+        #     error_estimate='mle_f',
+        #     biasses=bss,
+        #     temp=temp,
+        # )
+
         fes = FreeEnergySurface2D.from_histogram(histo, temp)
         fes.set_ref()
 
         if plot:
-            fes.plot('output/ala_fes_thermolib_{}.png'.format(self.rounds.round))
+            Observable._plot({
+                'bias': fes.fs,
+                'name': f'{self.folder}/FES_thermolib_{self.rounds.round}',
+            })
+
+            #interp:
+            fs2 = Observable._interp(fes.fs)
+
+            Observable._plot({
+                'bias': fs2,
+                'name': f'{self.folder}/FES_thermolib_interp_{self.rounds.round}',
+            })
 
         self.fes = fes
 
@@ -78,36 +106,71 @@ class Observable:
 
         self.mg = mg
 
-        # pinit = np.exp(-biases * beta)
-
-        def pl(b, name, trajs):
-            plt.clf()
-            contourf = plt.contourf(mg[0], mg[1], b, cmap=plt.get_cmap('rainbow'))
-            contour = plt.contour(mg[0], mg[1], b)
-
-            plt.xlabel('cv1', fontsize=16)
-            plt.ylabel('cv2', fontsize=16)
-            cbar = plt.colorbar(contourf, extend='both')
-            cbar.set_label('Bias boltzmann factor [-]', fontsize=16)
-            plt.clabel(contour, inline=1, fontsize=10)
-
-            for traj in trajs:
-                plt.scatter(traj[:, 0], traj[:, 1])
-
-            plt.title(name)
-
-            fig = plt.gcf()
-            fig.set_size_inches([12, 8])
-            plt.savefig(name)
+        pinit = np.exp(-biases * beta)
+        pinit = np.array(pinit, dtype=np.double)
 
         if plot:
-            pl(biases, f'output/mtd_{self.rounds.round}', trajs)
+            dir = f'{self.folder}/round_{self.rounds.round}'
 
-            for i, b in enumerate(bss):
+            n = self.rounds.data[-1]['num']
+
+            xlim = [mg[0].min(), mg[0].max()]
+            ylim = [mg[1].min(), mg[1].max()]
+
+            args = [{
+                'bias': biases,
+                'name': f'{dir}/combined',
+                'trajs': trajs,
+                'xlim': xlim,
+                'ylim': ylim,
+            }]
+
+            for i, b in enumerate(bss[-n:]):
                 bias, _ = jnp.apply_along_axis(b.compute, axis=0, arr=np.array(mg), diff=False)
-                pl(bias, f'output/umbrella {i}', [trajs[i]])
+                args.append({
+                    'bias': bias,
+                    'name': f'{dir}/umbrella_{i}',
+                    'trajs': [trajs[i]],
+                    'xlim': xlim,
+                    'ylim': ylim,
+                })
 
-        return trajs, tbss, bins
+            #async plot and continue
+            with pathos.pools.ProcessPool() as pool:
+                pool.amap(Observable._plot, args)
+
+        return trajs, tbss, bins, pinit
+
+    @staticmethod
+    def _plot(args):
+        b = args.get('bias')
+        trajs = args.get('trajs')
+        name = args.get('name')
+        xlim = args.get('xlim')
+        ylim = args.get('ylim')
+
+        if xlim is None or ylim is None:
+            extent = None
+        else:
+            extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
+
+        plt.clf()
+        p = plt.imshow(b / (kjmol), cmap=plt.get_cmap('rainbow'), origin='lower', extent=extent, vmin=0.0, vmax=100.0)
+
+        plt.xlabel('cv1', fontsize=16)
+        plt.ylabel('cv2', fontsize=16)
+        cbar = plt.colorbar(p)
+        cbar.set_label('Bias [kJ/mol]', fontsize=16)
+
+        if trajs is not None:
+            for traj in trajs:
+                plt.scatter(traj[:, 0], traj[:, 1], s=3)
+
+        plt.title(name)
+
+        fig = plt.gcf()
+        fig.set_size_inches([12, 8])
+        plt.savefig(name)
 
     class _thermo_bias2D(BiasPotential2D):
 
@@ -126,41 +189,9 @@ class Observable:
 
     def fes_Bias(self):
         fes = self.fes_2D(plot=False)
-
-        #adapt bias, apparently tranpose is needed here
-        bias = -np.transpose(fes.fs)
-
-        # bias2 = griddata(   bias.shape  , bias, self.mg, method='linear')
-
-        # Observable._thermo_bias2D(fesBias).plot('file', *Observable._grid(51, cvs= self.md.bias.cvs )  )
-
-        bias -= bias[~np.isnan(bias)].min()
-        bias[np.isnan(bias)] = 0.0
-
+        fes_interp = Observable._interp(fes.fs)
+        bias = -np.transpose(fes_interp)
         return GridBias(cvs=self.rounds.commom_bias().cvs, vals=bias)
-
-    def _plot_bias(self):
-        """manual bias plot, convert to _thermo_bias2D and plot instead."""
-
-        b = self.mdb[-1]
-
-        x = self._grid(n=51, endpoint=False)
-        mg = np.array(np.meshgrid(*x))  #(ncv,n,n) matrix
-        biases, _ = jnp.apply_along_axis(b.compute, axis=0, arr=mg, diff=False)
-        biases = -np.array(biases)
-
-        if mg.shape[0] != 2:
-            raise NotImplementedError("todo sum over extra dims to visualise")
-
-        fes = biases - np.amin(biases)
-
-        plt.clf()
-        plt.contourf(mg[0, :, :], mg[1, :, :], fes / units.kjmol)
-        plt.xlabel("CV1")
-        plt.ylabel("CV2")
-        plt.title("$F\,[\mathrm{kJ}\,\mathrm{mol}^{-1}]$")
-        plt.colorbar()
-        plt.savefig('output/ala_dipep.png')
 
     def _grid(self, n=51, cvs=None, endpoint=True):
         if cvs is None:
@@ -169,3 +200,19 @@ class Observable:
             raise NotImplementedError("add argument for range")
 
         return [np.linspace(p[0][0], p[0][1], n, endpoint=True) for p in np.split(cvs.periodicity, 2, axis=0)]
+
+    @staticmethod
+    def _interp(bias):
+        #extend periodically
+        dims = bias.shape
+
+        interp = np.tile(bias, (3, 3))
+
+        x, y = np.indices(interp.shape)
+        interp[np.isnan(interp)] = griddata(
+            (x[~np.isnan(interp)], y[~np.isnan(interp)]),
+            interp[~np.isnan(interp)],
+            (x[np.isnan(interp)], y[np.isnan(interp)]),
+            method='cubic',
+        )
+        return interp[dims[0]:2 * dims[0], dims[1]:2 * dims[1]]

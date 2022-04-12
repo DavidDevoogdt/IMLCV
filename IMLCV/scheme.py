@@ -34,9 +34,10 @@ class Scheme:
                  timestep=None,
                  timecon_thermo=None,
                  timecon_baro=None,
-                 extension="extxyz") -> None:
+                 extension="extxyz",
+                 folder='output') -> None:
 
-        filename = "output/init.h5"
+        # filename = f"{folder}/init.h5"
         write_step = 100
         screenlog = 1000
 
@@ -47,23 +48,25 @@ class Scheme:
                          timestep=timestep,
                          timecon_thermo=timecon_thermo,
                          timecon_baro=timecon_baro,
-                         filename=filename,
+                         filename=None,
                          write_step=write_step,
                          screenlog=screenlog)
 
         self.cvd = cvd
 
-        self.rounds = Rounds(extension=extension)
+        self.rounds = Rounds(extension=extension, folder=folder)
         self.steps = 0
 
     def from_rounds(
         cvd: CVDiscovery,
-        filename,
+        folder,
+        round,
     ) -> Scheme:
 
         self = Scheme.__new__(Scheme)
 
-        rounds = Rounds.load(filename=filename)
+        rounds = Rounds.load(folder)
+        self.folder = folder
         self.md = rounds.engine
 
         self.rounds = rounds

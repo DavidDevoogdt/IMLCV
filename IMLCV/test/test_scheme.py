@@ -21,8 +21,8 @@ from molmod import units
 
 def test_ala_dipep():
 
-    startround = 2
-    rnds = 3
+    startround = 0
+    rnds = 10
 
     if startround == 0:
 
@@ -33,30 +33,29 @@ def test_ala_dipep():
             CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
         ])
 
-        scheme = Scheme(
-            cvd=CVDiscovery(),
-            cvs=cvs,
-            Engine=YaffEngine,
-            ener=get_alaninedipeptide_amber99ff,
-            T=T,
-            timestep=2.0 * units.femtosecond,
-            timecon_thermo=100.0 * units.femtosecond,
-        )
+        scheme = Scheme(cvd=CVDiscovery(),
+                        cvs=cvs,
+                        Engine=YaffEngine,
+                        ener=get_alaninedipeptide_amber99ff,
+                        T=T,
+                        timestep=2.0 * units.femtosecond,
+                        timecon_thermo=100.0 * units.femtosecond,
+                        folder='output/ala_B')
     else:
-        scheme = Scheme.from_rounds(cvd=CVDiscovery(), filename=f'output/rounds_{startround}.p')
+        scheme = Scheme.from_rounds(cvd=CVDiscovery(), folder=f'output/ala_B', round=startround)
 
     for i in range(startround, rnds + startround):
         #create common bias
         if i != startround:
             scheme._FESBias()
-        scheme._MTDBias(steps=5e4)
+        scheme._MTDBias(steps=1e4)
         scheme.rounds.new_round(scheme.md)
 
-        scheme._grid_umbrella(steps=5e4)
-        scheme.rounds.save(f'rounds_{i}.p')
+        scheme._grid_umbrella(steps=1e4)
+        scheme.rounds.save()
 
     scheme._FESBias()
-    scheme.rounds.save(f'rounds_{i+1}.p')
+    scheme.rounds.save()
 
 
 if __name__ == "__main__":
