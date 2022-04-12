@@ -25,10 +25,7 @@ class Energy(ABC):
     """base class for biased Energy of MD simulation."""
 
     def __init__(self) -> None:
-        """"args:
-                cvs: collective variables
-                start: number of md steps before update is called
-                step: steps between update is called"""
+
         pass
 
     def compute_coor(self, coordinates, cell, gpos=None, vir=None):
@@ -219,9 +216,7 @@ class CompositeBias(Bias):
 
         cvs = cvlist[0]
         for cvsi in cvlist[1:]:
-            pass
-            #todo
-            # assert cvsi is cvs, "CV should be same instance"
+            assert cvsi == cvs, "CV should be the same"
 
         self.start_list = np.array(start_list, dtype=np.int16)
         self.step_list = np.array(step_list, dtype=np.int16)

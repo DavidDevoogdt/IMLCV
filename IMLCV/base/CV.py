@@ -3,7 +3,7 @@ import jax
 # import numpy as np
 import jax.numpy as jnp
 from jax import jit, grad
-import yaff.pes
+import dill
 
 
 class CV:
@@ -63,8 +63,6 @@ class CV:
         self.jac_p = jit(jax.jacfwd(self.cv, argnums=(0)))
         self.jac_c = jit(jax.jacfwd(self.cv, argnums=(1)))
 
-        # self.compute = jit(self._compute, static_argnames=("jac_p", "jac_c"))
-
     def split_cv(self):
         """Split the given CV in list of n=1 CVs."""
         if self.n == 1:
@@ -84,6 +82,11 @@ class CV:
                 self2.periodicity = self.periodicity[index, :]
 
         return [splitCV(self.cv, i) for i in range(self.n)]
+
+    def __eq__(self, other):
+        if not isinstance(other, CV):
+            return NotImplemented
+        return dill.dumps(self.cv) == dill.dumps(other.cv)
 
 
 class CombineCV(CV):

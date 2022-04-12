@@ -1,5 +1,6 @@
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
+from IMLCV.base.rounds import Rounds
 from IMLCV.scheme import Scheme
 from IMLCV.base.CV import CV, CVUtils, CombineCV
 from IMLCV.base.bias import BiasF, BiasMTD, NoneBias
@@ -19,18 +20,19 @@ from molmod import units
 
 
 def test_ala_dipep():
-    T = 600 * units.kelvin
 
-    cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
-    ])
+    startround = 2
+    rnds = 3
 
-    load = True
+    if startround == 0:
 
-    if load:
-        scheme = Scheme.from_rounds(cvd=CVDiscovery(), filename='output/rounds.p')
-    else:
+        T = 600 * units.kelvin
+
+        cvs = CombineCV([
+            CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
+            CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
+        ])
+
         scheme = Scheme(
             cvd=CVDiscovery(),
             cvs=cvs,
@@ -40,14 +42,21 @@ def test_ala_dipep():
             timestep=2.0 * units.femtosecond,
             timecon_thermo=100.0 * units.femtosecond,
         )
+    else:
+        scheme = Scheme.from_rounds(cvd=CVDiscovery(), filename=f'output/rounds_{startround}.p')
 
-        scheme._MTDBias(steps=1e5)
+    for i in range(startround, rnds + startround):
+        #create common bias
+        if i != startround:
+            scheme._FESBias()
+        scheme._MTDBias(steps=5e4)
         scheme.rounds.new_round(scheme.md)
 
-        scheme._grid_umbrella(steps=1e5)
-        scheme.rounds.save('rounds.p')
+        scheme._grid_umbrella(steps=5e4)
+        scheme.rounds.save(f'rounds_{i}.p')
 
-    bias = scheme.get_fes()
+    scheme._FESBias()
+    scheme.rounds.save(f'rounds_{i+1}.p')
 
 
 if __name__ == "__main__":
