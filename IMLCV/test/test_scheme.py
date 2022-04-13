@@ -19,44 +19,36 @@ import numpy as np
 from molmod import units
 
 
-def test_ala_dipep():
+def test_ala_dipep_FES():
 
-    startround = 0
-    rnds = 10
+    T = 600 * units.kelvin
 
-    if startround == 0:
+    cvs = CombineCV([
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
+    ])
 
-        T = 600 * units.kelvin
+    scheme = Scheme(cvd=CVDiscovery(),
+                    cvs=cvs,
+                    Engine=YaffEngine,
+                    ener=get_alaninedipeptide_amber99ff,
+                    T=T,
+                    timestep=2.0 * units.femtosecond,
+                    timecon_thermo=100.0 * units.femtosecond,
+                    folder='output/ala2')
 
-        cvs = CombineCV([
-            CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
-            CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
-        ])
+    scheme.calc_fes()
 
-        scheme = Scheme(cvd=CVDiscovery(),
-                        cvs=cvs,
-                        Engine=YaffEngine,
-                        ener=get_alaninedipeptide_amber99ff,
-                        T=T,
-                        timestep=2.0 * units.femtosecond,
-                        timecon_thermo=100.0 * units.femtosecond,
-                        folder='output/ala_B')
-    else:
-        scheme = Scheme.from_rounds(cvd=CVDiscovery(), folder=f'output/ala_B', round=startround)
 
-    for i in range(startround, rnds + startround):
-        #create common bias
-        if i != startround:
-            scheme._FESBias()
-        scheme._MTDBias(steps=1e4)
-        scheme.rounds.new_round(scheme.md)
+def test_cv_discovery():
 
-        scheme._grid_umbrella(steps=1e4)
-        scheme.rounds.save()
+    assert os.path.isfile('output/ala/rounds')
+    rounds = Rounds.load('output/ala')
 
-    scheme._FESBias()
-    scheme.rounds.save()
+    cvd = CVDiscovery()
+    rounds2 = cvd._unbias_rounds(rounds)
 
 
 if __name__ == "__main__":
-    test_ala_dipep()
+    test_ala_dipep_FES()
+    # test_cv_discovery()

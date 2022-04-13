@@ -60,7 +60,6 @@ class Scheme:
     def from_rounds(
         cvd: CVDiscovery,
         folder,
-        round,
     ) -> Scheme:
 
         self = Scheme.__new__(Scheme)
@@ -75,7 +74,7 @@ class Scheme:
 
         return self
 
-    def _MTDBias(self, steps, K=None, sigmas=None, start=50, step=250) -> Bias:
+    def _MTDBias(self, steps, K=None, sigmas=None, start=500, step=250) -> Bias:
         """generate a metadynamics bias"""
 
         if sigmas is None:
@@ -90,13 +89,13 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self):
+    def _FESBias(self, plot=True):
         """replace the current md bias with the computed FES from current round"""
         obs = Observable(self.rounds)
-        fes = obs.fes_2D(plot=True)
+        fes = obs.fes_2D(plot=plot)
         fesBias = obs.fes_Bias()
 
-        self.md.new_bias(fesBias, filename=None)
+        self.md = self.md.new_bias(fesBias, filename=None)
 
     def _grid_umbrella(self, steps=1e4, US_grid=None, K=None, n=4):
 

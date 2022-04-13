@@ -410,7 +410,7 @@ class BiasMTD(Bias):
 
 
 class GridBias(Bias):
-    """Bias interpolated from lookup table on uniform grid."""
+    """Bias interpolated from lookup table on uniform grid. values are caluclated in bin centers  """
 
     def __init__(self, cvs: CV, vals, start=None, step=None) -> None:
         super().__init__(cvs, start, step)
@@ -421,7 +421,8 @@ class GridBias(Bias):
 
     def _compute(self, cvs):
         #inspiration taken from https://github.com/adam-coogan/jaxinterp2d
-        coords = jnp.array((cvs + self.per[:, 0]) / (self.per[:, 1] - self.per[:, 0]) * (np.array(self.vals.shape) - 1))
+        coords = jnp.array(
+            (cvs + self.per[:, 0]) / (self.per[:, 1] - self.per[:, 0]) * (np.array(self.vals.shape) - 1)) - 1.5
         return jsp.ndimage.map_coordinates(self.vals, coords, mode='wrap', order=1)
 
     def _get_args(self):
