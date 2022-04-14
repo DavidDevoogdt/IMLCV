@@ -1,5 +1,19 @@
-from IMLCV.base.rounds import Rounds
-from .CV import CV
+from functools import partial
+from math import floor
+from IMLCV.base.MdEngine import MDEngine
+from IMLCV.base.bias import NoneBias
+from IMLCV.base.rounds import RoundsMd
+from IMLCV.base.CV import CV
+
+from molmod.constants import boltzmann
+from molmod.units import nanosecond, kjmol
+
+import os
+import numpy as np
+import scipy as sp
+import scipy.interpolate
+
+from thermolib import Histogram2D
 
 
 class CVDiscovery:
@@ -8,11 +22,10 @@ class CVDiscovery:
     def __init__(self) -> None:
         pass
 
-    def _unbias_rounds(self, rounds: Rounds) -> Rounds:
-        ts = rounds.timestep
-
-        for traj, bias in rounds.get_trajectories_and_biases():
-            pass
-
     def compute(self, data) -> CV:
         NotImplementedError
+
+
+if __name__ == '__main__':
+    from IMLCV.test.test_scheme import test_cv_discovery
+    test_cv_discovery()

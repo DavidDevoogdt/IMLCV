@@ -153,10 +153,18 @@ class MDEngine(ABC):
             steps: number of MD steps
         """
 
-    @abstractmethod
-    def to_ASE_traj(self):
-        """convert the MD run to ASE trajectory."""
+    def get_trajectory(self):
+        """ returns numpy arrays with
+            posititons, times, forces, energies, 
+            
+            returns bias 
+        """
         raise NotImplementedError
+
+    # @abstractmethod
+    # def to_ASE_traj(self):
+    #     """convert the MD run to ASE trajectory."""
+    #     raise NotImplementedError
 
     @abstractmethod
     def get_state(self):
@@ -291,6 +299,20 @@ class YaffEngine(MDEngine):
         part_ase = ForcePartASE(system, atoms, calculator)
 
         return yaff.pes.ForceField(system, [part_ase])
+
+    def get_trajectory(self):
+        assert self.filename.endswith(".h5")
+        with h5py.File(self.filename, 'r') as f:
+            energy = f['trajectory']['epot'][:]
+            positions = f['trajectory']['pos'][:]
+            forces = -f['trajectory']['gpos_contribs'][:]
+            if 'cell' in f['trajectory']:
+                cell = f['trajectory']['cell'][:]
+            else:
+                cell = None
+            t = f['trajectory']['time'][:]
+
+        return {'energy': energy, 'positions': positions, 'forces': forces, 'cell': cell, 't': t}
 
     def to_ASE_traj(self):
         if self.filename.endswith(".h5"):

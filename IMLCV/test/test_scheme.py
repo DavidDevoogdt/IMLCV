@@ -1,6 +1,6 @@
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
-from IMLCV.base.rounds import Rounds
+from IMLCV.base.rounds import RoundsMd
 from IMLCV.scheme import Scheme
 from IMLCV.base.CV import CV, CVUtils, CombineCV
 from IMLCV.base.bias import BiasF, BiasMTD, NoneBias
@@ -35,15 +35,15 @@ def test_ala_dipep_FES():
                     T=T,
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
-                    folder='output/ala2')
+                    folder='output/ala3')
 
-    scheme.calc_fes()
+    scheme.calc_fes(steps=1e4)
 
 
 def test_cv_discovery():
 
     assert os.path.isfile('output/ala/rounds')
-    rounds = Rounds.load('output/ala')
+    rounds = RoundsMd.load('output/ala')
 
     cvd = CVDiscovery()
     rounds2 = cvd._unbias_rounds(rounds)

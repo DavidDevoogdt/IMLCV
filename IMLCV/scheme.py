@@ -5,7 +5,7 @@ from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, HarmonicBias, NoneBias
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.CV import CV
 from IMLCV.base.Observable import Observable
-from IMLCV.base.rounds import Rounds
+from IMLCV.base.rounds import RoundsMd
 
 from molmod.constants import boltzmann
 
@@ -54,7 +54,7 @@ class Scheme:
 
         self.cvd = cvd
 
-        self.rounds = Rounds(extension=extension, folder=folder)
+        self.rounds = RoundsMd(extension=extension, folder=folder)
         self.steps = 0
 
     def from_rounds(
@@ -64,7 +64,7 @@ class Scheme:
 
         self = Scheme.__new__(Scheme)
 
-        rounds = Rounds.load(folder)
+        rounds = RoundsMd.load(folder)
         self.folder = folder
         self.md = rounds.engine
 
@@ -111,6 +111,23 @@ class Scheme:
 
         self.rounds.run_par(
             [HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)) for x in itertools.product(*grid)], steps=steps)
+
+    def calc_fes(self, rnds=10, steps=5e4):
+        startround = 0
+
+        for i in range(rnds):
+            #create common bias
+            if i != startround:
+                self._FESBias()
+            self.rounds.new_round(self.md)
+
+            # self._MTDBias(steps=5e4)
+
+            self._grid_umbrella(steps=steps)
+            self.rounds.save()
+
+        self._FESBias()
+        self.rounds.save()
 
     def update_CV(self):
         pass
