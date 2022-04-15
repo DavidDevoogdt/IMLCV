@@ -74,7 +74,7 @@ class Scheme:
 
         return self
 
-    def _MTDBias(self, steps, K=None, sigmas=None, start=500, step=250) -> Bias:
+    def _MTDBias(self, steps, K=None, sigmas=None, start=500, step=250):
         """generate a metadynamics bias"""
 
         if sigmas is None:
@@ -85,15 +85,15 @@ class Scheme:
 
         biasmtd = BiasMTD(self.md.bias.cvs, K, sigmas, start=start, step=step)
         bias = CompositeBias([self.md.bias, biasmtd])
+
         self.md = self.md.new_bias(bias, filename=None)
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self, plot=True):
+    def _FESBias(self, plot=True, kind='normal'):
         """replace the current md bias with the computed FES from current round"""
         obs = Observable(self.rounds)
-        fes = obs.fes_2D(plot=plot)
-        fesBias = obs.fes_Bias()
+        fesBias = obs.fes_Bias(kind=kind, plot=True)
 
         self.md = self.md.new_bias(fesBias, filename=None)
 
@@ -112,13 +112,13 @@ class Scheme:
         self.rounds.run_par(
             [HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)) for x in itertools.product(*grid)], steps=steps)
 
-    def calc_fes(self, rnds=10, steps=5e4):
+    def round(self, rnds=10, steps=5e4):
         startround = 0
 
         for i in range(rnds):
             #create common bias
             if i != startround:
-                self._FESBias()
+                self._FESBias(kind='fupper')
             self.rounds.new_round(self.md)
 
             # self._MTDBias(steps=5e4)
@@ -127,6 +127,7 @@ class Scheme:
             self.rounds.save()
 
         self._FESBias()
+        self.rounds.new_round(self.md)
         self.rounds.save()
 
     def update_CV(self):

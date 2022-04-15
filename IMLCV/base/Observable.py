@@ -3,9 +3,10 @@ from ast import arg
 from pickle import BINSTRING
 
 import os
+from IMLCV.base.CV import CV
 
 from IMLCV.base.bias import Bias, GridBias
-from IMLCV.base.rounds import RoundsMd
+from IMLCV.base.rounds import RoundsMd, Rounds, RoundsCV
 
 from thermolib.thermodynamics.fep import SimpleFreeEnergyProfile, FreeEnergySurface2D, plot_feps
 from thermolib.thermodynamics.histogram import Histogram2D, plot_histograms
@@ -23,40 +24,106 @@ import matplotlib.pyplot as plt
 
 import pathos
 
-# from IMLCV.scheme import Rounds
-
 
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic observables."""
 
     samples_per_bin = 10
 
-    def __init__(self, rounds: RoundsMd) -> None:
+    def __init__(self, rounds: Rounds, cvs: CV = None) -> None:
         self.rounds = rounds
+
+        if isinstance(rounds, RoundsMd):
+            assert cvs is None
+            self.cvs = self.rounds.get_bias().cvs
+        elif isinstance(rounds, RoundsCV):
+            assert cvs is not None
+            self.cvs = cvs
+        else:
+            raise NotImplementedError
 
         self.folder = rounds.folder
         self.fes = None
 
-    def fes_2D(self, plot=True):
+        #plot meshgrid
+        bins = self._grid(n=50, endpoint=True)
+        self.plot_mg = np.meshgrid(*bins)
+
+    def _fes_2D(self, plot=True):
         # fes = FreeEnergySurface2D.from_txt
         if self.fes is not None:
             return self.fes
 
         temp = self.rounds.T
+        beta = 1 / (boltzmann * temp)
 
-        if plot == True:
-            self.plot()
+        if isinstance(self.rounds, RoundsMd):
+            if plot == True:
+                self._plot_biases()
 
-        trajs, bss, bins, pinit = self._get_biasses(plot=plot)
+            trajs = []
+            biases = []
 
-        histo = Histogram2D.from_wham_c(
-            bins=bins,
-            pinit=pinit,
-            traj_input=trajs,
-            error_estimate='mle_f',
-            biasses=bss,
-            temp=temp,
-        )
+            for dict in self.rounds.iter_md_runs():
+                pos = dict["positions"][:]
+                bias = Bias.load(dict.attrs["name_bias"])
+                if 'cell' in dict:
+                    cell = dict["cell"][:]
+                    arr = np.array([bias.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
+                                   dtype=np.double)
+                else:
+                    arr = np.array([bias.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
+
+                trajs.append(arr)
+                biases.append(Observable._thermo_bias2D(bias))
+
+            mg, bins = self._FES_mg(trajs=trajs)
+
+            pinit = Observable._sample_bias(self.rounds.get_bias(), mg)
+            pinit = np.exp(-pinit * beta)
+            pinit = np.array(pinit, dtype=np.double)
+
+            histo = Histogram2D.from_wham_c(
+                bins=bins,
+                pinit=pinit,
+                traj_input=trajs,
+                error_estimate='mle_f',
+                biasses=biases,
+                temp=temp,
+            )
+        elif isinstance(self.rounds, RoundsCV):
+
+            trajs = []
+            for dict in self.rounds.iter_md_runs():
+                pos = dict["positions"][:]
+
+                if 'cell' in dict:
+                    cell = dict["cell"][:]
+                    arr = np.array([self.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
+                                   dtype=np.double)
+                else:
+                    arr = np.array([self.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
+
+                trajs.append(arr)
+
+            if plot == True:
+                dir = f'{self.folder}/round_{self.rounds.round}'
+                self._plot({
+                    'bias': self.plot_mg[0] * 0,
+                    'name': f'{dir}/combined',
+                    'trajs': trajs,
+                    'mg': self.plot_mg,
+                })
+
+            mg, bins = self._FES_mg(trajs=trajs)
+            data = np.vstack(trajs)
+            histo = Histogram2D.from_single_trajectory(
+                data,
+                bins,
+                error_estimate='mle_f',
+            )
+        else:
+            raise NotImplementedError
 
         fes = FreeEnergySurface2D.from_histogram(histo, temp)
         fes.set_ref()
@@ -77,25 +144,7 @@ class Observable:
 
         return fes
 
-    def _get_biasses(self, plot=False):
-        trajs = []
-        tbss = []
-
-        for dict in self.rounds.iter_md_runs():
-            pos = dict["positions"][:]
-            bias = Bias.load(dict.attrs["name_bias"])
-            if 'cell' in dict:
-                cell = dict["cell"][:]
-                arr = np.array([bias.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
-                               dtype=np.double)
-            else:
-                arr = np.array([bias.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
-
-            trajs.append(arr)
-            tbss.append(Observable._thermo_bias2D(bias))
-
-        temp = self.rounds.T
-
+    def _FES_mg(self, trajs):
         n = 0
         for t in trajs:
             n += t.size
@@ -107,20 +156,12 @@ class Observable:
 
         bins = self._grid(n=n, endpoint=True)
         bin_centers = [0.5 * (row[:-1] + row[1:]) for row in bins]
-        beta = 1 / (boltzmann * temp)
-        cb = self.rounds.get_bias()
+
         mg = np.meshgrid(*bin_centers)
 
-        biases = Observable._sample_bias(cb, mg)
+        return mg, bins
 
-        self.mg = mg
-
-        pinit = np.exp(-biases * beta)
-        pinit = np.array(pinit, dtype=np.double)
-
-        return trajs, tbss, bins, pinit
-
-    def plot(self):
+    def _plot_biases(self):
         trajs = []
         bss = []
 
@@ -137,14 +178,11 @@ class Observable:
             trajs.append(arr)
             bss.append(bias)
 
-        bins = self._grid(n=50, endpoint=True)
         # bin_centers = [0.5 * (row[:-1] + row[1:]) for row in bins]
         # beta = 1 / (boltzmann * temp)
         cb = self.rounds.get_bias()
-        plot_mg = np.meshgrid(*bins)
-        self.plot_mg = plot_mg
 
-        biases = Observable._sample_bias(cb, plot_mg)
+        biases = Observable._sample_bias(cb, self.plot_mg)
 
         dir = f'{self.folder}/round_{self.rounds.round}'
 
@@ -154,17 +192,17 @@ class Observable:
             'bias': biases,
             'name': f'{dir}/combined',
             'trajs': trajs,
-            'mg': plot_mg,
+            'mg': self.plot_mg,
         }]
 
         for i, b in enumerate(bss[-n:]):
-            bias = Observable._sample_bias(b, plot_mg)
+            bias = Observable._sample_bias(b, self.plot_mg)
 
             args.append({
                 'bias': bias,
                 'name': f'{dir}/umbrella_{i}',
                 'trajs': [trajs[i]],
-                'mg': plot_mg,
+                'mg': self.plot_mg,
             })
 
         #async plot and continue
@@ -224,26 +262,26 @@ class Observable:
         def print_pars(self, *pars_units):
             pass
 
-    def fes_Bias(self, internal=False):
-        fes = self.fes_2D(plot=False)
-        fes_interp = Observable._interp(fes.fs)
+    def fes_Bias(self, kind='normal', plot=False, internal=False):
+        fes = self._fes_2D(plot=plot)
+
+        if kind == 'normal':
+            fs = fes.fs
+        elif kind == 'fupper':
+            fs = fes.fupper
+
+        fes_interp = Observable._interp(fs)
         bias = np.transpose(fes_interp)
 
         if internal == False:
             bias = -bias
             bias[:] -= bias.min()
 
-        #append row cyclcally
-        bias2 = np.zeros(np.array(bias.shape) + 1)
-        bias2[:-1, :-1] = bias[:, :]
-        bias2[-1, :] = bias2[0, :]
-        bias2[:, -1] = bias2[:, 0]
-
-        return GridBias(cvs=self.rounds.get_bias().cvs, vals=bias2)
+        return GridBias(cvs=self.cvs, vals=bias)
 
     def _grid(self, n=51, cvs=None, endpoint=True):
         if cvs is None:
-            cvs = self.rounds.get_bias().cvs
+            cvs = self.cvs
         if np.isnan(cvs.periodicity).any():
             raise NotImplementedError("add argument for range")
 

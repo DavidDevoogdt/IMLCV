@@ -1,6 +1,7 @@
 from __future__ import annotations
 from abc import ABC
 from functools import partial
+from turtle import pos
 from typing import Dict, Tuple
 from ase import Atoms
 from attr import attr
@@ -13,6 +14,7 @@ from ase.io import write, read
 
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.bias import Bias, CompositeBias, NoneBias
+
 from collections import Iterable
 import os
 import pathos
@@ -20,8 +22,11 @@ import pathos
 from math import floor
 
 from molmod.constants import boltzmann
-from molmod.units import nanosecond, kjmol
+from molmod.units import nanosecond, kjmol, picosecond
 import numpy as np
+from numpy import linalg
+import scipy as sp
+from scipy import interpolate
 
 import h5py
 
@@ -60,7 +65,7 @@ class Rounds(ABC):
 
     def add(self, i, dict, attrs=None):
 
-        assert all(key in dict for key in ['energy', 'positions', 'forces', 'cell'])
+        assert all(key in dict for key in ['energy', 'positions', 'forces', 'cell', 't'])
 
         with h5py.File(self.h5file, 'r+') as f:
             f.create_group(f'{self.round}/{i}')
@@ -76,9 +81,15 @@ class Rounds(ABC):
 
             f[f'{self.round}'].attrs['num'] += 1
 
+        self.save()
+
     def new_round(self, attr):
         self.round += 1
         self.i = 0
+
+        dir = f'{self.folder}/round_{self.round}'
+        if not os.path.isdir(dir):
+            os.mkdir(dir)
 
         with h5py.File(self.h5file, 'r+') as f:
             f.create_group(f"{self.round}")
@@ -89,7 +100,10 @@ class Rounds(ABC):
 
             f[f'{self.round}'].attrs['num'] = 0
 
+        self.save()
+
     def iter_md_runs(self, round=None, num=3):
+        num = num - 1
         if round == None:
             round = self.round
         with h5py.File(self.h5file, 'r') as f:
@@ -111,16 +125,21 @@ class Rounds(ABC):
 
     @property
     def T(self):
-        return self._get_prop('T')
+        return self._get_prop('T', round=self.round)
 
     @property
     def P(self):
-        return self._get_prop('P')
+        return self._get_prop('P', round=self.round)
 
     def n(self, round=None):
         if round is None:
             round = self.round
         return self._get_prop('num', round=round)
+
+
+class RoundsCV(Rounds):
+    """class for unbiased rounds"""
+    pass
 
 
 class RoundsMd(Rounds):
@@ -195,14 +214,7 @@ class RoundsMd(Rounds):
 
         super().new_round(attr=attr)
 
-        if r == 0:
-            with h5py.File(self.h5file, 'r+') as f:
-                for key in self.engine_keys:
-                    item = getattr(md, key)
-                    if item is not None:
-                        f.attrs[key] = item
-
-    def get_bias(self, round=None, i=None):
+    def get_bias(self, round=None, i=None) -> Bias:
         if round == None:
             round = self.round
 
@@ -213,23 +225,28 @@ class RoundsMd(Rounds):
                 bn = f[f'{round}'][i].attrs['name_bias']
             return Bias.load(bn)
 
-    def get_engine(self, round):
+    def get_engine(self, round=None) -> MDEngine:
+        if round == None:
+            round = self.round
         with h5py.File(self.h5file, 'r') as f:
-            MDEngine.load(f[f'{round}'].attrs['name_md'], filename=None)
+            return MDEngine.load(f[f'{round}'].attrs['name_md'], filename=None)
+
+    def run(self, bias, steps):
+        self.run_par([bias], steps)
 
     def run_par(self, biases: Iterable[Bias], steps):
-
         with h5py.File(self.h5file, 'r') as f:
             common_bias_name = f[f'{self.round}'].attrs['name_bias']
             common_md_name = f[f'{self.round}'].attrs['name_md']
 
         kwargs = []
+
         for i, b in enumerate(biases):
             kwargs.append({
                 'bias': b,
                 'new_name': f'{self.folder}/round_{self.round}/temp_{i}.h5',
                 'steps': steps,
-                'i': i
+                'i': i + self.i
             })
 
         def _run_par(args):
@@ -238,7 +255,10 @@ class RoundsMd(Rounds):
             steps = args['steps']
             i = args['i']
 
-            b = CompositeBias([Bias.load(common_bias_name), bias])
+            if bias is None:
+                b = Bias.load(common_bias_name)
+            else:
+                b = CompositeBias([Bias.load(common_bias_name), bias])
             md = MDEngine.load(common_md_name, filename=temp_name, bias=b)
 
             md.run(steps=steps)
@@ -247,98 +267,94 @@ class RoundsMd(Rounds):
 
             return [d, attr, i]
 
-        with pathos.pools.ProcessPool() as pool:
-            for [d, attr, i] in pool.map(_run_par, kwargs):
-                super().add(dict=d, attrs=attr, i=i)
+        if len(biases) != 1:
+            with pathos.pools.ProcessPool() as pool:
+                for [d, attr, i] in pool.map(_run_par, kwargs):
+                    super().add(dict=d, attrs=attr, i=i)
+        else:
+            [d, attr, i] = _run_par(kwargs[0])
+            super().add(dict=d, attrs=attr, i=i)
+
+        self.i += len(kwargs)
 
         for kw in kwargs:
             os.remove(kw['new_name'])
 
-    def unbias_rounds(self, cutoff=50 * kjmol, plot=False) -> Rounds:
-        raise NotImplementedError
+    def unbias_rounds(self, steps=1e5, cutoff=50 * kjmol, plot=False) -> RoundsCV:
 
-        ts = self.timestep
+        md = self.get_engine()
+
+        if self.n() != 1:
+            if self.n() >= 2:
+                from IMLCV.base.Observable import Observable
+                obs = Observable(self)
+                fesBias = obs.fes_Bias(plot=True)
+
+                md = md.new_bias(fesBias, filename=None)
+                self.new_round(md)
+
+            #n  = 0
+            self.run(None, steps)
+
+        bias = self.get_bias()
+
         beta = 1 / (self.T * boltzmann)
 
-        positions = []
-        cells = []
-        energies = []
-        forces = []
-        biases = []
-        kwargs = []
+        with h5py.File(self.h5file, 'r') as f:
+            d = f[f"{self.round}/{0}"]
+            dict = {key: d[key][:] for key in d}
 
-        for trajs, bias, t_kwargs in self.iter_md_runs(num=1):
+        for i in range(3):
+            if i == 0:
+                p = dict["positions"][:]
+                t = dict["t"][:]
 
-            kwargs.append(t_kwargs)
-            t_positions = []
-            t_cells = []
-            t_energies = []
-            t_forces = []
-            t_biases = []
+                dt = t[1:] - t[:-1]
+                ts = dt[0]
 
-            for atoms in trajs:
-                t_positions.append(atoms.positions)
-                t_cells.append(atoms.cell.array)
+                if 'cell' in dict:
+                    c = dict['cell']
+                else:
+                    c = None
 
-                forces = atoms.arrays['forces']
-                gpos = np.zeros(forces.shape)
-                b, gpos_jax, _ = bias.compute_coor(atoms.positions, atoms.cell.array, gpos=gpos)
+            #iterative solve
 
-                #compensate for bias
-                t_energies.append(atoms.info['energy'] - b)
-                t_forces.append(forces + np.array(gpos_jax))  #F=-gpos
+            if c is not None:
+                b = np.array([bias.compute_coor(coordinates=x, cell=y)[0] for (x, y) in zip(p, c)], dtype=np.double)
+            else:
+                b = np.array([bias.compute_coor(coordinates=p, cell=None)[0] for p in p], dtype=np.double)
 
-                t_biases.append(b)
+            db = (np.exp(-beta * b[1:]) + np.exp(-beta * b[:-1])) / 2
+            t_scaled = np.array([0, *np.cumsum(dt * db)])
+            # t_new = np.arange(start=0.0, stop=t_scaled.max(), step=ts * np.exp(-beta * cutoff))
+            t_new = np.linspace(0.0, t_scaled.max(), num=10 * len(t_scaled))
 
-            positions.append(np.array(t_positions))
-            cells.append(np.array(t_cells))
-            energies.append(np.array(t_energies))
-            forces.append(np.array(t_forces))
-            biases.append(np.array(t_biases))
+            f = lambda x: np.apply_along_axis(
+                lambda y: interpolate.interp1d(t_scaled, y, kind='cubic')(t_new), arr=x, axis=0)
+            p = f(p)
+            if c is not None:
+                c = f(c)
+            else:
+                c = None
 
-        n_positions = []
-        n_cells = []
+            #revert times back
+            if c is not None:
+                b = np.array([bias.compute_coor(coordinates=x, cell=y)[0] for (x, y) in zip(p, c)], dtype=np.double)
+            else:
+                b = np.array([bias.compute_coor(coordinates=p, cell=None)[0] for p in p], dtype=np.double)
 
-        rts = np.exp(-beta * cutoff)
-        new_ts = rts * ts
+            dt_n = t_new[1:] - t_new[:-1]
+            db = (np.exp(beta * b[1:]) + np.exp(beta * b[:-1])) / 2
+            dt = np.cumsum(dt_n * db)
 
-        for (
-                t_positions,
-                t_cells,
-                t_biases,
-                # t_kwargs,
-        ) in zip(
-                positions,
-                cells,
-                biases,
-                # kwargs,
-        ):
-            dts = np.zeros(t_biases.shape)
-            dts[1:] = (np.exp(-beta * t_biases[1:]) + np.exp(-beta * t_biases[:-1])) / 2
-            nts = np.cumsum(dts)  # * ts * t_kwargs['write_step']
+        #construct rounds object
+        roundscv = RoundsCV(self.extension, f'{self.folder}_unbiased')
+        roundscv.new_round({key: self._get_prop(key, round=self.round) for key in self.engine_keys})
+        roundscv.add(0, {'energy': None, 'positions': p, 'forces': None, 'cell': c, 't': t_new})
 
-            num = floor((nts.max() - nts.min()) / rts)
-            nt = np.linspace(nts.min(), num * rts, num=num + 1)
+        return roundscv
 
-            interp = lambda y: np.apply_along_axis(lambda x: np.interp(x=nt, xp=nts, fp=x), axis=0, arr=y)
 
-            n_positions.append(interp(t_positions))
-            n_cells.append(interp(t_cells))
-
-        #reconstruct new self object
-        md: MDEngine = self.engine
-        cv = md.bias.cvs
-        md = MDEngine.new_bias(md, bias=NoneBias(cvs=cv), filename=None, kwargs={'timestep': new_ts})
-
-        new_rounds = RoundsMd(self.extension, f"{self.folder}_unbiased")
-        new_rounds.new_round(md)
-
-        for (t_positions, t_cells, t_biases) in zip(
-                n_positions,
-                n_cells,
-                energies,
-                forces,
-        ):
-            pass
-
-        return n_positions, n_cells
+if __name__ == '__main__':
+    from IMLCV.test.test_scheme import test_cv_discovery
+    test_cv_discovery()

@@ -99,8 +99,9 @@ class Bias(Energy, ABC):
     def compute_coor(self, coordinates, cell, gpos=None, vir=None):
         """Computes the bias, the gradient of the bias wrt the coordinates and the virial."""
 
-        if not (cell.shape == (0, 3) or cell.shape == (3, 3)):
-            raise NotImplementedError("other cell shapes not yet supported")
+        if cell is not None:
+            if not (cell.shape == (0, 3) or cell.shape == (3, 3)):
+                raise NotImplementedError("other cell shapes not yet supported")
 
         bv = (vir is not None)
         bg = (gpos is not None)
@@ -173,8 +174,9 @@ class Bias(Energy, ABC):
             o = per[:, 0]
 
         coor = (cvs - o) / (per[:, 1] - per[:, 0])
-        coor = jnp.modf(coor)[0]  # fractional part
-        coor = jnp.where(coor < 0.0, coor + 1, coor)
+        # coor = jnp.modf(coor)[0]  # fractional part
+        # coor = jnp.where(coor < 0.0, coor + 1, coor)
+        coor = jnp.mod(coor, 1)
         if min:
             coor = jnp.where(coor > 0.5, coor - 1, coor)
 
@@ -412,12 +414,22 @@ class BiasMTD(Bias):
 class GridBias(Bias):
     """Bias interpolated from lookup table on uniform grid. values are caluclated in bin centers  """
 
-    def __init__(self, cvs: CV, vals, start=None, step=None) -> None:
+    def __init__(self, cvs: CV, vals, start=None, step=None, centers=True) -> None:
         super().__init__(cvs, start, step)
 
         self.per = np.array(self.cvs.periodicity)
         assert ~jnp.isnan(self.cvs.periodicity).any()
-        self.vals = vals
+
+        if centers == False:
+            raise NotImplementedError
+
+        #append row cyclcally
+        bias2 = np.zeros(np.array(vals.shape) + 1)
+        bias2[:-1, :-1] = vals[:, :]
+        bias2[-1, :] = bias2[0, :]
+        bias2[:, -1] = bias2[:, 0]
+
+        self.vals = bias2
 
     def _compute(self, cvs):
         #inspiration taken from https://github.com/adam-coogan/jaxinterp2d
