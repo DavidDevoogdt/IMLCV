@@ -115,7 +115,7 @@ class Observable:
                     'mg': self.plot_mg,
                 })
 
-            mg, bins = self._FES_mg(trajs=trajs)
+            mg, bins = self._FES_mg(trajs=trajs, n=10)
             data = np.vstack(trajs)
             histo = Histogram2D.from_single_trajectory(
                 data,
@@ -144,15 +144,16 @@ class Observable:
 
         return fes
 
-    def _FES_mg(self, trajs):
-        n = 0
-        for t in trajs:
-            n += t.size
+    def _FES_mg(self, trajs, n=None):
+        if n is None:
+            n = 0
+            for t in trajs:
+                n += t.size
 
-        #20 points per bin on average
-        n = int(n**(1 / trajs[0].ndim) / self.samples_per_bin)
+            #20 points per bin on average
+            n = int(n**(1 / trajs[0].ndim) / self.samples_per_bin)
 
-        assert n > 4, "sample more points"
+            assert n > 4, "sample more points"
 
         bins = self._grid(n=n, endpoint=True)
         bin_centers = [0.5 * (row[:-1] + row[1:]) for row in bins]

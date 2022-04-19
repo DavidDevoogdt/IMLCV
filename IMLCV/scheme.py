@@ -35,11 +35,11 @@ class Scheme:
                  timecon_thermo=None,
                  timecon_baro=None,
                  extension="extxyz",
-                 folder='output') -> None:
+                 folder='output',
+                 write_step=100,
+                 screenlog=1000) -> None:
 
         # filename = f"{folder}/init.h5"
-        write_step = 100
-        screenlog = 1000
 
         self.md = Engine(bias=NoneBias(cvs),
                          ener=ener,

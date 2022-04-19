@@ -24,7 +24,7 @@ from math import floor
 from molmod.constants import boltzmann
 from molmod.units import nanosecond, kjmol, picosecond
 import numpy as np
-from numpy import linalg
+from numpy import average, linalg, linspace
 import scipy as sp
 from scipy import interpolate
 
@@ -60,7 +60,7 @@ class Rounds(ABC):
     @staticmethod
     def load(folder) -> Rounds:
         with open(f"{folder}/rounds", 'rb') as f:
-            self = dill.load(f)
+            self: Rounds = dill.load(f)
         return self
 
     def add(self, i, dict, attrs=None):
@@ -280,77 +280,63 @@ class RoundsMd(Rounds):
         for kw in kwargs:
             os.remove(kw['new_name'])
 
-    def unbias_rounds(self, steps=1e5, cutoff=50 * kjmol, plot=False) -> RoundsCV:
+    def unbias_rounds(self, steps=1e5, calc=False) -> RoundsCV:
+
+        import jax.numpy as jnp
 
         md = self.get_engine()
 
-        if self.n() != 1:
-            if self.n() >= 2:
-                from IMLCV.base.Observable import Observable
-                obs = Observable(self)
-                fesBias = obs.fes_Bias(plot=True)
+        if self.n() > 1 or isinstance(self.get_bias(), NoneBias) or calc == True:
+            from IMLCV.base.Observable import Observable
+            obs = Observable(self)
+            fesBias = obs.fes_Bias(plot=True)
 
-                md = md.new_bias(fesBias, filename=None)
-                self.new_round(md)
+            md = md.new_bias(fesBias, filename=None, write_step=5)
+            self.new_round(md)
 
-            #n  = 0
+        if self.n() == 0:
             self.run(None, steps)
 
         bias = self.get_bias()
-
         beta = 1 / (self.T * boltzmann)
 
         with h5py.File(self.h5file, 'r') as f:
             d = f[f"{self.round}/{0}"]
             dict = {key: d[key][:] for key in d}
 
-        for i in range(3):
-            if i == 0:
-                p = dict["positions"][:]
-                t = dict["t"][:]
+        p = dict["positions"][:]
+        c = dict.get('cell')
+        t_orig = dict["t"][:]
 
-                dt = t[1:] - t[:-1]
-                ts = dt[0]
+        def _interp(x_new, x, y):
+            if y is not None:
+                return jnp.apply_along_axis(lambda yy: jnp.interp(x_new, x, yy), arr=y, axis=0)
+            return None
 
-                if 'cell' in dict:
-                    c = dict['cell']
-                else:
-                    c = None
+        @jnp.vectorize
+        def bt(t):
+            pt = partial(_interp, x=t_orig, y=p)
+            ct = partial(_interp, x=t_orig, y=c)
+            return bias.compute_coor(coordinates=pt(t), cell=ct(t))[0]
 
-            #iterative solve
+        t = t_orig[:]
 
-            if c is not None:
-                b = np.array([bias.compute_coor(coordinates=x, cell=y)[0] for (x, y) in zip(p, c)], dtype=np.double)
-            else:
-                b = np.array([bias.compute_coor(coordinates=p, cell=None)[0] for p in p], dtype=np.double)
+        dt = t[1:] - t[:-1]
+        eb = np.exp(beta * bt(t))
+        deb = (eb[1:] + eb[:-1]) / 2
+        dtau = dt * deb
 
-            db = (np.exp(-beta * b[1:]) + np.exp(-beta * b[:-1])) / 2
-            t_scaled = np.array([0, *np.cumsum(dt * db)])
-            # t_new = np.arange(start=0.0, stop=t_scaled.max(), step=ts * np.exp(-beta * cutoff))
-            t_new = np.linspace(0.0, t_scaled.max(), num=10 * len(t_scaled))
+        num = int(1e6)
+        dtau_new = np.ones(num) * (np.sum(dtau) / num)
 
-            f = lambda x: np.apply_along_axis(
-                lambda y: interpolate.interp1d(t_scaled, y, kind='cubic')(t_new), arr=x, axis=0)
-            p = f(p)
-            if c is not None:
-                c = f(c)
-            else:
-                c = None
-
-            #revert times back
-            if c is not None:
-                b = np.array([bias.compute_coor(coordinates=x, cell=y)[0] for (x, y) in zip(p, c)], dtype=np.double)
-            else:
-                b = np.array([bias.compute_coor(coordinates=p, cell=None)[0] for p in p], dtype=np.double)
-
-            dt_n = t_new[1:] - t_new[:-1]
-            db = (np.exp(beta * b[1:]) + np.exp(beta * b[:-1])) / 2
-            dt = np.cumsum(dt_n * db)
+        f = lambda x: np.array([0, *np.cumsum(x)])
+        p_new = _interp(f(dtau_new), f(dtau), p)
+        c_new = _interp(f(dtau_new), f(dtau), c)
 
         #construct rounds object
         roundscv = RoundsCV(self.extension, f'{self.folder}_unbiased')
         roundscv.new_round({key: self._get_prop(key, round=self.round) for key in self.engine_keys})
-        roundscv.add(0, {'energy': None, 'positions': p, 'forces': None, 'cell': c, 't': t_new})
+        roundscv.add(0, {'energy': None, 'positions': p_new, 'forces': None, 'cell': c_new, 't': f(dtau_new)})
 
         return roundscv
 
