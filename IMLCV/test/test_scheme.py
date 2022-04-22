@@ -46,7 +46,7 @@ def test_ala_dipep_FES():
                     folder='output/ala',
                     write_step=20)
 
-    scheme.round(steps=5e3, rnds=4)
+    scheme.round(steps=1e4, rnds=4)
 
 
 def test_cv_discovery():
@@ -54,9 +54,6 @@ def test_cv_discovery():
     assert os.path.isfile('output/ala/rounds')
 
     rounds = RoundsMd.load('output/ala')
-
-    # rounds.i += 1
-    # rounds.run(None, 1000)
 
     rounds2 = rounds.unbias_rounds(calc=False)
     obs = Observable(rounds2, rounds.get_bias().cvs)

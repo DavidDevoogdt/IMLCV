@@ -64,9 +64,9 @@ class Observable:
             trajs = []
             biases = []
 
-            for dict in self.rounds.iter_md_runs():
+            for dict in self.rounds.iter():
                 pos = dict["positions"][:]
-                bias = Bias.load(dict.attrs["name_bias"])
+                bias = Bias.load(dict['attr']["name_bias"])
                 if 'cell' in dict:
                     cell = dict["cell"][:]
                     arr = np.array([bias.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
@@ -94,7 +94,7 @@ class Observable:
         elif isinstance(self.rounds, RoundsCV):
 
             trajs = []
-            for dict in self.rounds.iter_md_runs():
+            for dict in self.rounds.iter(num=np.Inf):
                 pos = dict["positions"][:]
 
                 if 'cell' in dict:
@@ -166,9 +166,9 @@ class Observable:
         trajs = []
         bss = []
 
-        for dict in self.rounds.iter_md_runs():
+        for dict in self.rounds.iter():
             pos = dict["positions"][:]
-            bias = Bias.load(dict.attrs["name_bias"])
+            bias = Bias.load(dict['attr']["name_bias"])
             if 'cell' in dict:
                 cell = dict["cell"][:]
                 arr = np.array([bias.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],

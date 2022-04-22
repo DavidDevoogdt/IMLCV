@@ -1,6 +1,7 @@
 from __future__ import annotations
 from abc import ABC
 from functools import partial
+from pickletools import optimize
 from turtle import pos
 from typing import Dict, Tuple
 from ase import Atoms
@@ -24,16 +25,16 @@ from math import floor
 from molmod.constants import boltzmann
 from molmod.units import nanosecond, kjmol, picosecond
 import numpy as np
-from numpy import average, linalg, linspace
+from numpy import average, interp, linalg, linspace
 import scipy as sp
-from scipy import interpolate
+from scipy import interpolate, optimize
 
 import h5py
 
 
 class Rounds(ABC):
 
-    engine_keys = ["T", "P", "timecon_thermo", "timecon_baro"]
+    ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
 
     def __init__(self, extension, folder="output") -> None:
         if extension != "extxyz":
@@ -102,14 +103,33 @@ class Rounds(ABC):
 
         self.save()
 
-    def iter_md_runs(self, round=None, num=3):
+    def iter(self, round=None, num=3):
         num = num - 1
         if round == None:
             round = self.round
+
+        for round in range(max(self.round - num, 0), self.round + 1):
+            round = self._get_round(round)
+            for i in round['names']:
+                i_dict = self._get_i(round['round'], i)
+                yield {**i_dict, 'round': round}
+
+    def _get_round(self, round):
         with h5py.File(self.h5file, 'r') as f:
-            for round in range(max(self.round - num, 0), self.round + 1):
-                for i in f[f'{round}']:
-                    yield f[f"{round}/{i}"]
+            rounds = [k for k in f[f'{round}'].keys()]
+
+            d = f[f"{round}"].attrs
+            r_attr = {key: d[key] for key in d}
+            r_attr['round'] = round
+            r_attr['names'] = rounds
+        return r_attr
+
+    def _get_i(self, round, i):
+        with h5py.File(self.h5file, 'r') as f:
+            d = f[f"{round}/{i}"]
+            y = {key: d[key][:] for key in d}
+            attr = {key: d.attrs[key] for key in d.attrs}
+        return {**y, 'attr': attr, 'i': i}
 
     def _get_prop(self, name, round=None):
         with h5py.File(self.h5file, 'r') as f:
@@ -145,12 +165,14 @@ class RoundsCV(Rounds):
 class RoundsMd(Rounds):
     """helper class to save/load all data in a consistent way. Gets passed between modules"""
 
-    trajectory_keys = [
+    TRAJ_KEYS = [
         "filename",
         "write_step",
         "screenlog",
         "timestep",
     ]
+
+    ENGINE_KEYS = ['timestep', *Rounds.ENGINE_KEYS]
 
     def __init__(self, extension, folder="output") -> None:
         super().__init__(extension=extension, folder=folder)
@@ -173,7 +195,7 @@ class RoundsMd(Rounds):
         d = md.get_trajectory()
         md.bias.save(name_bias)
 
-        attr = {k: md.__dict__[k] for k in RoundsMd.trajectory_keys}
+        attr = {k: md.__dict__[k] for k in RoundsMd.TRAJ_KEYS}
         attr['name_bias'] = name_bias
 
         return [d, attr]
@@ -189,7 +211,7 @@ class RoundsMd(Rounds):
 
         #check equivalency of md engine params
 
-        for k in self.engine_keys:
+        for k in self.ENGINE_KEYS:
             assert md0.__dict__[k] == md.__dict__[k]
 
         #check equivalency of energy source
@@ -208,7 +230,7 @@ class RoundsMd(Rounds):
         md.save(name_md)
         md.bias.save(name_bias)
 
-        attr = {key: md.__dict__[key] for key in self.engine_keys}
+        attr = {key: md.__dict__[key] for key in self.ENGINE_KEYS}
         attr['name_md'] = name_md
         attr['name_bias'] = name_bias
 
@@ -280,12 +302,10 @@ class RoundsMd(Rounds):
         for kw in kwargs:
             os.remove(kw['new_name'])
 
-    def unbias_rounds(self, steps=1e5, calc=False) -> RoundsCV:
-
+    def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
         import jax.numpy as jnp
 
         md = self.get_engine()
-
         if self.n() > 1 or isinstance(self.get_bias(), NoneBias) or calc == True:
             from IMLCV.base.Observable import Observable
             obs = Observable(self)
@@ -297,12 +317,11 @@ class RoundsMd(Rounds):
         if self.n() == 0:
             self.run(None, steps)
 
-        bias = self.get_bias()
-        beta = 1 / (self.T * boltzmann)
-
-        with h5py.File(self.h5file, 'r') as f:
-            d = f[f"{self.round}/{0}"]
-            dict = {key: d[key][:] for key in d}
+        #construct rounds object
+        dict = self._get_i(self.round, 0)
+        props = self._get_round(self.round)
+        beta = 1 / (props['T'] * boltzmann)
+        bias = Bias.load(dict['attr']['name_bias'])
 
         p = dict["positions"][:]
         c = dict.get('cell')
@@ -313,30 +332,27 @@ class RoundsMd(Rounds):
                 return jnp.apply_along_axis(lambda yy: jnp.interp(x_new, x, yy), arr=y, axis=0)
             return None
 
-        @jnp.vectorize
-        def bt(t):
-            pt = partial(_interp, x=t_orig, y=p)
-            ct = partial(_interp, x=t_orig, y=c)
-            return bias.compute_coor(coordinates=pt(t), cell=ct(t))[0]
+        def bt(x, x_orig):
+            pt = partial(_interp, x=x_orig, y=p)
+            ct = partial(_interp, x=x_orig, y=c)
+            return bias.compute_coor(coordinates=pt(x), cell=ct(x))[0]
+
+        bt = jnp.vectorize(bt, excluded=[1])
+
+        def integr(fx, x):
+            return np.array([0, *np.cumsum((fx[1:] + fx[:-1]) * (x[1:] - x[:-1]) / 2)])
 
         t = t_orig[:]
+        eb = np.exp(-beta * bt(t, t_orig))
+        tau = integr(1 / eb, t)
+        tau_new = np.linspace(start=0.0, stop=tau.max(), num=int(num))
 
-        dt = t[1:] - t[:-1]
-        eb = np.exp(beta * bt(t))
-        deb = (eb[1:] + eb[:-1]) / 2
-        dtau = dt * deb
+        p_new = _interp(tau_new, tau, dict["positions"])
+        c_new = _interp(tau_new, tau, dict.get("cell"))
 
-        num = int(1e6)
-        dtau_new = np.ones(num) * (np.sum(dtau) / num)
-
-        f = lambda x: np.array([0, *np.cumsum(x)])
-        p_new = _interp(f(dtau_new), f(dtau), p)
-        c_new = _interp(f(dtau_new), f(dtau), c)
-
-        #construct rounds object
         roundscv = RoundsCV(self.extension, f'{self.folder}_unbiased')
-        roundscv.new_round({key: self._get_prop(key, round=self.round) for key in self.engine_keys})
-        roundscv.add(0, {'energy': None, 'positions': p_new, 'forces': None, 'cell': c_new, 't': f(dtau_new)})
+        roundscv.new_round(props)
+        roundscv.add(0, {'energy': None, 'positions': p_new, 'forces': None, 'cell': c_new, 't': tau_new})
 
         return roundscv
 
