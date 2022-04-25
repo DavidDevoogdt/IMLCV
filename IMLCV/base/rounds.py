@@ -291,6 +291,7 @@ class RoundsMd(Rounds):
 
         if len(biases) != 1:
             with pathos.pools.ProcessPool() as pool:
+                # with pathos.pools.SerialPool() as pool:
                 for [d, attr, i] in pool.map(_run_par, kwargs):
                     super().add(dict=d, attrs=attr, i=i)
         else:

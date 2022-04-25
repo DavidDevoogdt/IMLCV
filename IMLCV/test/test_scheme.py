@@ -2,7 +2,7 @@ from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.scheme import Scheme
-from IMLCV.base.CV import CV, CVUtils, CombineCV
+from IMLCV.base.CV import CV, CVUtils, CombineCV, hyperTorus
 from IMLCV.base.bias import BiasF, BiasMTD, NoneBias
 from IMLCV.base.Observable import Observable
 
@@ -32,8 +32,8 @@ def test_ala_dipep_FES():
     T = 600 * units.kelvin
 
     cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=hyperTorus(1)),
     ])
 
     scheme = Scheme(cvd=CVDiscovery(),
@@ -61,5 +61,12 @@ def test_cv_discovery():
 
 
 if __name__ == "__main__":
+
+    # s = Scheme.from_rounds(
+    #     cvd=CVDiscovery(),
+    #     folder='output/ala/',
+    # )
+    # s._FESBias(plot=False)
+
     test_ala_dipep_FES()
-    test_cv_discovery()
+    # test_cv_discovery()

@@ -1,4 +1,4 @@
-from IMLCV.base.CV import CV, CVUtils, CombineCV
+from IMLCV.base.CV import CV, CVUtils, CombineCV, hyperTorus
 from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.bias import BiasMTD, Energy
 
@@ -21,8 +21,8 @@ def ala_yaff(write=1000):
     # ff = get_alaninedipeptide_amber99ff()
 
     cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=hyperTorus(1)),
     ])
     bias = BiasMTD(cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500)
 

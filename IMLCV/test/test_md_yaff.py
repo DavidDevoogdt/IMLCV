@@ -57,8 +57,8 @@ def test_combine_bias():
     ff = get_alaninedipeptide_amber99ff()
 
     cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=[-np.pi, np.pi]),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=[-np.pi, np.pi]),
+        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=[-np.pi, np.pi]),
     ])
     bias1 = BiasMTD(cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=25, step=500)
     bias2 = BiasMTD(cvs=cvs, K=0.5 * units.kjmol, sigmas=np.array([0.1, 0.1]), start=50, step=250)

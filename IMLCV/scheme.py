@@ -66,7 +66,7 @@ class Scheme:
 
         rounds = RoundsMd.load(folder)
         self.folder = folder
-        self.md = rounds.engine
+        self.md = rounds.get_engine()
 
         self.rounds = rounds
         self.cvd = cvd
@@ -78,7 +78,7 @@ class Scheme:
         """generate a metadynamics bias"""
 
         if sigmas is None:
-            sigmas = (self.md.bias.cvs.periodicity[:, 1] - self.md.bias.cvs.periodicity[:, 0]) / 20
+            sigmas = (self.md.bias.cvs.metric[:, 1] - self.md.bias.cvs.metric[:, 0]) / 20
 
         if K is None:
             K = 0.1 * self.md.T * boltzmann
@@ -93,21 +93,21 @@ class Scheme:
     def _FESBias(self, plot=True, kind='normal'):
         """replace the current md bias with the computed FES from current round"""
         obs = Observable(self.rounds)
-        fesBias = obs.fes_Bias(kind=kind, plot=True)
+        fesBias = obs.fes_Bias(kind=kind, plot=plot)
 
         self.md = self.md.new_bias(fesBias, filename=None)
 
     def _grid_umbrella(self, steps=1e4, US_grid=None, K=None, n=4):
 
         cvs = self.md.bias.cvs
-        if np.isnan(cvs.periodicity).any():
-            raise NotImplementedError("impl non periodic")
+        if ((cvs.metric.boundaries[:, 1] - cvs.metric.boundaries[:, 0]) <= 1e-6).any():
+            raise NotImplementedError("Metric provide boundaries or force constant K")
 
         if K == None:
-            K = 1.0 * self.md.T * boltzmann * (n * 2 / (cvs.periodicity[:, 1] - cvs.periodicity[:, 0]))**2
+            K = 1.0 * self.md.T * boltzmann * (n * 2 / (cvs.metric.boundaries[:, 1] - cvs.metric.boundaries[:, 0]))**2
 
         if US_grid is None:
-            grid = [np.linspace(row[0], row[1], n, endpoint=False) for row in self.md.bias.cvs.periodicity]
+            grid = self.md.bias.cvs.metric.grid(n)
 
         self.rounds.run_par(
             [HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)) for x in itertools.product(*grid)], steps=steps)

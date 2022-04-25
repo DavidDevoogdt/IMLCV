@@ -283,10 +283,7 @@ class Observable:
     def _grid(self, n=51, cvs=None, endpoint=True):
         if cvs is None:
             cvs = self.cvs
-        if np.isnan(cvs.periodicity).any():
-            raise NotImplementedError("add argument for range")
-
-        return [np.linspace(p[0][0], p[0][1], n, endpoint=True) for p in np.split(cvs.periodicity, 2, axis=0)]
+        return [np.array(gp, dtype=np.double) for gp in cvs.metric.grid(n)]
 
     @staticmethod
     def _interp(bias):

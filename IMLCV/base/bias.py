@@ -158,7 +158,7 @@ class Bias(Energy, ABC):
 
         self.update_bias = update_bias
 
-    @partial(jit, static_argnums=(0, 2))
+    # @partial(jit, static_argnums=(0, 2))
     def _periodic_wrap(self, cvs, min=False):
         """Translate cvs such over periodic vector
 
@@ -166,22 +166,23 @@ class Bias(Energy, ABC):
             cvs: array of cvs
             min (bool): if False, translate to cv range. I true, minimises norm of vector
         """
-        per = self.cvs.periodicity
 
-        if min:
-            o = 0.0
-        else:
-            o = per[:, 0]
+        return self.cvs.metric.wrap(cvs)
 
-        coor = (cvs - o) / (per[:, 1] - per[:, 0])
-        # coor = jnp.modf(coor)[0]  # fractional part
-        # coor = jnp.where(coor < 0.0, coor + 1, coor)
-        coor = jnp.mod(coor, 1)
-        if min:
-            coor = jnp.where(coor > 0.5, coor - 1, coor)
+        # if min:
+        #     o = 0.0
+        # else:
+        #     o = per[:, 0]
 
-        coor = (coor) * (per[:, 1] - per[:, 0]) + o
-        return jnp.where(jnp.isnan(per).any(axis=1), cvs, coor)
+        # coor = (cvs - o) / (per[:, 1] - per[:, 0])
+        # # coor = jnp.modf(coor)[0]  # fractional part
+        # # coor = jnp.where(coor < 0.0, coor + 1, coor)
+        # coor = jnp.mod(coor, 1)
+        # if min:
+        #     coor = jnp.where(coor > 0.5, coor - 1, coor)
+
+        # coor = (coor) * (per[:, 1] - per[:, 0]) + o
+        # return jnp.where(jnp.isnan(per).any(axis=1), cvs, coor)
 
     @staticmethod
     def load(filename) -> Bias:
@@ -227,6 +228,9 @@ class CompositeBias(Bias):
         super().__init__(cvs=cvs, start=0, step=1)
 
     def _compute(self, cvs, *args):
+
+        cvs = self.cvs.metric.wrap(cvs)
+
         e = 0.0
 
         for i in range(len(self.biases)):
@@ -262,8 +266,8 @@ class BiasF(Bias):
         super().__init__(cvs, start=None, step=None)
 
     def _compute(self, cvs):
-        cvs0 = self._periodic_wrap(cvs)
-        return self.f(cvs0)[0]
+        cvs = self.cvs.metric.wrap(cvs)
+        return self.f(cvs)[0]
 
     def _get_args(self):
         return []
@@ -299,7 +303,7 @@ class HarmonicBias(Bias):
         super().__init__(cvs)
 
     def _compute(self, cvs):
-        r = self._periodic_wrap(cvs - self.q0, min=True)
+        r = self.cvs.metric.distance(cvs, self.q0)
         return jnp.einsum('i,i,i', self.k, r, r)
 
     def _get_args(self):
@@ -399,8 +403,7 @@ class BiasMTD(Bias):
     def _compute(self, cvs, q0s, Ks):
         """Computes sum of hills"""
 
-        deltas = cvs - q0s
-        deltas = jnp.apply_along_axis(self._periodic_wrap, axis=1, arr=deltas, min=True)
+        deltas = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=cvs, x2=q0s)
 
         exparg = jnp.einsum('ji,ji,i -> j', deltas, deltas, self.sigmas_isq)
         energy = jnp.sum(Ks * jnp.exp(-exparg))
@@ -417,25 +420,40 @@ class GridBias(Bias):
     def __init__(self, cvs: CV, vals, start=None, step=None, centers=True) -> None:
         super().__init__(cvs, start, step)
 
-        self.per = np.array(self.cvs.periodicity)
-        assert ~jnp.isnan(self.cvs.periodicity).any()
-
         if centers == False:
             raise NotImplementedError
+        assert cvs.n == 2
 
-        #append row cyclcally
-        bias2 = np.zeros(np.array(vals.shape) + 1)
-        bias2[:-1, :-1] = vals[:, :]
-        bias2[-1, :] = bias2[0, :]
-        bias2[:, -1] = bias2[:, 0]
+        #extand grid
+        bias2 = np.zeros(np.array(vals.shape) + 2)
+        bias2[1:-1, 1:-1] = vals
+
+        if self.cvs.metric.periodicities[0]:
+            bias2[0, :] = bias2[-2, :]
+            bias2[-1, :] = bias2[1, :]
+        else:
+            bias2[0, :] = bias2[1, :]
+            bias2[-1, :] = bias2[-2, :]
+
+        if self.cvs.metric.periodicities[1]:
+            bias2[:, 0] = bias2[:, -2]
+            bias2[:, -1] = bias2[:, 1]
+        else:
+            bias2[:, 0] = bias2[:, 1]
+            bias2[:, -1] = bias2[:, -2]
 
         self.vals = bias2
+        self.cvs = cvs
 
     def _compute(self, cvs):
         #inspiration taken from https://github.com/adam-coogan/jaxinterp2d
-        coords = jnp.array(
-            (cvs + self.per[:, 0]) / (self.per[:, 1] - self.per[:, 0]) * (np.array(self.vals.shape) - 1)) - 1.5
-        return jsp.ndimage.map_coordinates(self.vals, coords, mode='wrap', order=1)
+
+        cvs = self.cvs.metric.wrap(cvs)  #inside boundaries
+        per = self.cvs.metric.boundaries
+
+        coords = jnp.array((cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) * (np.array(self.vals.shape) - 2)) + 0.5
+
+        return jsp.ndimage.map_coordinates(self.vals, coords, mode='constant', order=1, cval=jnp.nan)
 
     def _get_args(self):
         return []

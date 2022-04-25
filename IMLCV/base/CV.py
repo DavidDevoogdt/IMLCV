@@ -1,9 +1,102 @@
+from __future__ import annotations
+
+from abc import ABC
 from functools import partial
 import jax
 # import numpy as np
 import jax.numpy as jnp
 from jax import jit, grad
 import dill
+
+
+class Metric:
+
+    def __init__(self, periodicities, boundaries=None) -> None:
+        if boundaries is None:
+            boundaries = jnp.zeros(len(periodicities))
+
+        if isinstance(periodicities, list):
+            periodicities = jnp.array(periodicities)
+
+        self.boundaries = boundaries
+        self.periodicities = periodicities
+        self.type = periodicities
+
+    # @partial(jnp.vectorize)
+    def distance(self, x1, x2):
+        return self._periodic_wrap(x1 - x2, min=True)
+
+    # @partial(jnp.vectorize)
+    def wrap(self, x1):
+        return self._periodic_wrap(x1, min=False)
+
+    def _update_boundaries(self, x1):
+        self.boundaries[:, 1] = jnp.where(
+            jnp.logical_and(self.perodicities == 0, x1 < self.boundaries[:, 0]),
+            x1,
+            self.boundaries,
+        )
+
+        self.boundaries[:, 1] = jnp.where(
+            jnp.logical_and(self.perodicities == 0, x1 > self.boundaries[:, 1]),
+            x1,
+            self.boundaries,
+        )
+
+    @partial(jit, static_argnums=(0, 2))
+    def _periodic_wrap(self, xs, min=False):
+        """Translate cvs such over periodic vector
+
+        Args:
+            cvs: array of cvs
+            min (bool): if False, translate to cv range. I true, minimises norm of vector
+        """
+        per = self.boundaries
+
+        if min:
+            o = 0.0
+        else:
+            o = per[:, 0]
+
+        coor = (xs - o) / (per[:, 1] - per[:, 0])
+        coor = jnp.mod(coor, 1)
+        if min:
+            coor = jnp.where(coor > 0.5, coor - 1, coor)
+
+        coor = (coor) * (per[:, 1] - per[:, 0]) + o
+        return jnp.where(self.periodicities, coor, xs)
+
+    def __add__(self, other):
+        assert isinstance(self, Metric)
+        if other is None:
+            return self
+
+        assert isinstance(other, Metric)
+
+        periodicities = jnp.hstack((self.periodicities, other.periodicities))
+        boundaries = jnp.vstack((self.boundaries, other.boundaries))
+
+        return Metric(periodicities=periodicities, boundaries=boundaries)
+
+    def grid(self, n, endpoints=True):
+
+        assert not (jnp.abs(self.boundaries) < 1e-12).any(), 'give proper boundaries'
+        grid = [
+            jnp.linspace(row[0], row[1], n, endpoint=endpoints) for per, row in zip(self.periodicities, self.boundaries)
+        ]
+
+        return grid
+
+
+class hyperTorus(Metric):
+
+    def __init__(self, n) -> None:
+        periodicities = [True for _ in range(n)]
+        boundaries = jnp.zeros((n, 2))
+        boundaries = boundaries.at[:, 0].set(-jnp.pi)
+        boundaries = boundaries.at[:, 1].set(jnp.pi)
+
+        super().__init__(periodicities, boundaries)
 
 
 class CV:
@@ -14,32 +107,14 @@ class CV:
         **kwargs: arguments of custom function f
     """
 
-    def __init__(self, f, n=1, periodicity=None, **kwargs) -> None:
+    def __init__(self, f, metric: Metric, n=1, **kwargs) -> None:
 
         self.f = f
         self.kwargs = kwargs
         self._update_params(**kwargs)
         self.n = n
 
-        #figure out bounds for CV
-        if periodicity is not None:
-            if isinstance(periodicity, float):
-                assert n == 1
-                periodicity = [[0.0, periodicity]]
-            if isinstance(periodicity, list):
-                periodicity = jnp.array(periodicity)
-            if periodicity.ndim == 1:
-                assert n == 1
-                periodicity = jnp.array([periodicity])
-            assert periodicity.shape[0] == n
-            if periodicity.shape[1] == 1:
-                periodicity = jnp.concatenate((0.0 * periodicity, periodicity), axis=1)
-
-            assert periodicity.shape == (n, 2)
-        else:
-            periodicity = jnp.array([[jnp.nan, jnp.nan] * n])
-
-        self.periodicity = periodicity
+        self.metric = metric
 
     def compute(self, coordinates, cell, jac_p=False, jac_c=False):
         """
@@ -58,30 +133,9 @@ class CV:
     def _update_params(self, **kwargs):
         """update the CV functions."""
 
-        #self.cv = jit(lambda x, y: (partial(self.f, **kwargs)(x, y)))
         self.cv = jit(lambda x, y: (jnp.ravel(partial(self.f, **kwargs)(x, y))))
         self.jac_p = jit(jax.jacfwd(self.cv, argnums=(0)))
         self.jac_c = jit(jax.jacfwd(self.cv, argnums=(1)))
-
-    def split_cv(self):
-        """Split the given CV in list of n=1 CVs."""
-        if self.n == 1:
-            return [self]
-
-        class splitCV(CV):
-
-            def __init__(self2, cvs, index) -> None:
-
-                def f2(x, y):
-                    return self.cv(x, y)[index]
-
-                self2.f = f2
-                self2.n = 1
-                self2._update_params()
-
-                self2.periodicity = self.periodicity[index, :]
-
-        return [splitCV(self.cv, i) for i in range(self.n)]
 
     def __eq__(self, other):
         if not isinstance(other, CV):
@@ -95,11 +149,16 @@ class CombineCV(CV):
     def __init__(self, cvs) -> None:
         self.n = 0
         self.cvs = cvs
-        periodicity = jnp.empty((0, 2))
+        metric = None
+
         for cv in cvs:
             self.n += cv.n
-            periodicity = jnp.concatenate([periodicity, cv.periodicity], axis=0)
-        self.periodicity = periodicity
+            if metric is None:
+                metric = cv.metric
+            else:
+                metric += cv.metric
+
+        self.metric = metric
         self._update_params()
 
     def _update_params(self):

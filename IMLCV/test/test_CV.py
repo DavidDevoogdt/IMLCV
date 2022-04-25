@@ -5,8 +5,8 @@ import pytest
 
 
 def test_harmonic():
-    cv0 = CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=2.0 * np.pi)
-    cv1 = CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi)
+    cv0 = CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=Metric([True], jnp.array([0, 2 * np.pi])))
+    cv1 = CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=Metric([True], jnp.array([0, 2 * np.pi])))
 
     cvs = CombineCV([cv0, cv1])  #combine
 
@@ -29,8 +29,8 @@ def test_harmonic():
 
 
 def test_split_combine():
-    cv0 = CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], periodicity=2.0 * np.pi)
-    cv1 = CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], periodicity=2.0 * np.pi)
+    cv0 = CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=Metric([True], jnp.array([0, 2 * np.pi])))
+    cv1 = CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=Metric([True], jnp.array([0, 2 * np.pi])))
 
     cvs = CombineCV([cv0, cv1])  #combine
     [cv0b, cv1b] = cvs.split_cv()  #split again in components
