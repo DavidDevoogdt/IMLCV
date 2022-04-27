@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from functools import partial
 from typing import Iterable
+import jax
 
-import molmod.constants
+from molmod.constants import boltzmann
+from molmod.units import kjmol, kelvin
 
 import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
 from jax import jit, grad, jacfwd
+from scipy.interpolate import griddata
+
+import matplotlib.pyplot as plt
 
 from IMLCV.base.CV import CV
 # from IMLCV.base.MdEngine import YaffEngine
@@ -55,6 +60,8 @@ class Bias(Energy, ABC):
         self.cvs = cvs
         self.start = start
         self.step = step
+
+        self.__comp()
 
     def update_bias(self, coordinates, cell):
         """update the bias.
@@ -117,13 +124,15 @@ class Bias(Energy, ABC):
 
         return ener, gpos, vir
 
-    @partial(jit, static_argnums=(0, 2))
-    def compute(self, cvs, diff=False):
+    def __comp(self):
         args = self._get_args()
         static_array_argnums = tuple(i + 1 for i in range(len(args)))
 
         self.e = Bias._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
         self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
+
+    @partial(jit, static_argnums=(0, 2))
+    def compute(self, cvs, diff=False):
 
         E = self.e(cvs, *self._get_args())
         if diff:
@@ -169,74 +178,101 @@ class Bias(Energy, ABC):
 
         return self.cvs.metric.wrap(cvs)
 
-        # if min:
-        #     o = 0.0
-        # else:
-        #     o = per[:, 0]
-
-        # coor = (cvs - o) / (per[:, 1] - per[:, 0])
-        # # coor = jnp.modf(coor)[0]  # fractional part
-        # # coor = jnp.where(coor < 0.0, coor + 1, coor)
-        # coor = jnp.mod(coor, 1)
-        # if min:
-        #     coor = jnp.where(coor > 0.5, coor - 1, coor)
-
-        # coor = (coor) * (per[:, 1] - per[:, 0]) + o
-        # return jnp.where(jnp.isnan(per).any(axis=1), cvs, coor)
-
     @staticmethod
     def load(filename) -> Bias:
         return Energy.load(filename)
+
+    def plot(self, name, n=50, traj=None):
+        """plot bias"""
+        assert self.cvs.n == 2
+
+        bins = self.cvs.metric.grid(n=n, endpoints=True)
+        mg = np.meshgrid(*bins)
+
+        xlim = [mg[0].min(), mg[0].max()]
+        ylim = [mg[1].min(), mg[1].max()]
+
+        bias, _ = jnp.apply_along_axis(self.compute, axis=0, arr=np.array(mg), diff=False)
+
+        extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
+
+        plt.clf()
+        p = plt.imshow(bias / (kjmol),
+                       cmap=plt.get_cmap('rainbow'),
+                       origin='lower',
+                       extent=extent,
+                       vmin=0.0,
+                       vmax=100.0)
+
+        plt.xlabel('cv1', fontsize=16)
+        plt.ylabel('cv2', fontsize=16)
+
+        cbar = plt.colorbar(p)
+        cbar.set_label('Bias [kJ/mol]', fontsize=16)
+
+        if traj is not None:
+            if not isinstance(traj, Iterable):
+                traj = [traj]
+            for tr in traj:
+                plt.scatter(tr[:, 0], tr[:, 1], s=3)
+
+        plt.title(name)
+
+        fig = plt.gcf()
+        fig.set_size_inches([12, 8])
+        plt.savefig(name)
 
 
 class CompositeBias(Bias):
     """Class that combines several biases in one single bias
     """
 
-    def __init__(self, biases: Iterable[Bias]) -> None:
+    def __init__(self, biases: Iterable[Bias], fun=jnp.sum) -> None:
 
-        f_biases = []
-        cvlist = []
-        start_list = []
-        step_list = []
+        self.init = True
 
-        #flatten composite biases
-        for b in biases:
-            if isinstance(b, CompositeBias):
-                f_biases = [*f_biases, *b.biases]
-            elif isinstance(b, NoneBias):
-                pass
-            else:
-                f_biases.append(b)
+        self.biases = []
 
-        self.biases = f_biases
+        self.start_list = np.array([], dtype=np.int16)
+        self.step_list = np.array([], dtype=np.int16)
+        self.args_shape = np.array([0])
+        self.cvs = None
 
-        for b in self.biases:
-            cvlist.append(b.cvs)
+        for bias in biases:
+            self._append_bias(bias)
 
-            start_list.append(b.start if (b.start is not None) else -1)
-            step_list.append(b.step if (b.step is not None) else -1)
+        self.fun = fun
 
-        cvs = cvlist[0]
-        for cvsi in cvlist[1:]:
-            assert cvsi == cvs, "CV should be the same"
+        super().__init__(cvs=self.cvs, start=0, step=1)
+        self.init = True
 
-        self.start_list = np.array(start_list, dtype=np.int16)
-        self.step_list = np.array(step_list, dtype=np.int16)
-        self.args_shape = np.array([0, *np.cumsum([len(b._get_args()) for b in self.biases])])
+    def _append_bias(self, b):
 
-        super().__init__(cvs=cvs, start=0, step=1)
+        if isinstance(b, NoneBias):
+            return
+
+        self.biases.append(b)
+
+        self.start_list = np.append(self.start_list, b.start if (b.start is not None) else -1)
+        self.step_list = np.append(self.step_list, b.step if (b.step is not None) else -1)
+        self.args_shape = np.append(self.args_shape, len(b._get_args()) + self.args_shape[-1])
+
+        if self.cvs is None:
+            self.cvs = b.cvs
+        else:
+            pass
+            # assert self.cvs == b.cvs, "CV should be the same"
 
     def _compute(self, cvs, *args):
 
         cvs = self.cvs.metric.wrap(cvs)
 
-        e = 0.0
+        e = jnp.array([
+            self.biases[i]._compute(cvs, *args[self.args_shape[i]:self.args_shape[i + 1]])
+            for i in range(len(self.biases))
+        ])
 
-        for i in range(len(self.biases)):
-            e += self.biases[i]._compute(cvs, *args[self.args_shape[i]:self.args_shape[i + 1]])
-
-        return e
+        return self.fun(e)
 
     def finalize(self):
         for b in self.biases:
@@ -254,6 +290,12 @@ class CompositeBias(Bias):
 
     def _get_args(self):
         return [a for b in self.biases for a in b._get_args()]
+
+
+class MinBias(CompositeBias):
+
+    def __init__(self, biases: Iterable[Bias]) -> None:
+        super().__init__(biases, fun=jnp.min)
 
 
 class BiasF(Bias):
@@ -308,6 +350,59 @@ class HarmonicBias(Bias):
 
     def _get_args(self):
         return []
+
+
+class ContinuousHarmonicBias(Bias):
+
+    def __init__(self, HarmonicBias: HarmonicBias):
+
+        cvs = HarmonicBias.cvs
+
+        self.Ks = jnp.array([HarmonicBias.k])
+        self.q0s = jnp.array([HarmonicBias.q0])
+
+        super().__init__(cvs, 0, 1)
+
+        self.last_bias = jnp.nan
+        self.last_cvs = None
+
+    def update_bias(self, coordinates, cell):
+        cvs, _, _ = self.cvs.compute(coordinates, cell, jac_p=None, jac_c=None)
+        bias = self.e(cvs, *self._get_args())
+        # bias, _ = self.compute(cvs)
+
+        if abs(bias - self.last_bias) / kjmol > 20:
+
+            if bias > self.last_bias:
+                a = cvs
+                b = self.last_cvs
+            else:
+                b = self.last_cvs
+                a = cvs
+
+            r = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=self.q0s, x2=b)
+            biases = jnp.einsum('ji,ji,ji -> j', r, r, self.Ks)
+            i = np.argmin(biases)
+            Ks = self.Ks[i, :]
+            q0 = self.q0s[i, :] - (b - a)
+
+            self.q0s = jnp.append(self.q0s, jnp.array([q0]), axis=0)
+            self.Ks = jnp.append(self.Ks, jnp.array([Ks]), axis=0)
+
+            bias = self.e(cvs, *self._get_args())
+            # bias, _ = self.compute(cvs)
+
+        self.last_cvs = cvs
+        self.last_bias = bias
+
+    def _compute(self, cvs, q0s, Ks):
+        """Computes sum of hills"""
+        r = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=q0s, x2=cvs)
+        bias = jnp.einsum('ji,ji,ji -> j', r, r, Ks)
+        return jnp.min(bias)
+
+    def _get_args(self):
+        return [self.q0s, self.Ks]
 
 
 class BiasMTD(Bias):
@@ -417,7 +512,7 @@ class BiasMTD(Bias):
 class GridBias(Bias):
     """Bias interpolated from lookup table on uniform grid. values are caluclated in bin centers  """
 
-    def __init__(self, cvs: CV, vals, start=None, step=None, centers=True) -> None:
+    def __init__(self, cvs: CV, vals, start=None, fill='max', step=None, centers=True) -> None:
         super().__init__(cvs, start, step)
 
         if centers == False:
@@ -425,24 +520,40 @@ class GridBias(Bias):
         assert cvs.n == 2
 
         #extand grid
-        bias2 = np.zeros(np.array(vals.shape) + 2)
-        bias2[1:-1, 1:-1] = vals
+        bias = np.zeros(np.array(vals.shape) + 2)
+        bias[1:-1, 1:-1] = vals
 
         if self.cvs.metric.periodicities[0]:
-            bias2[0, :] = bias2[-2, :]
-            bias2[-1, :] = bias2[1, :]
+            bias[0, :] = bias[-2, :]
+            bias[-1, :] = bias[1, :]
         else:
-            bias2[0, :] = bias2[1, :]
-            bias2[-1, :] = bias2[-2, :]
+            bias[0, :] = bias[1, :]
+            bias[-1, :] = bias[-2, :]
 
         if self.cvs.metric.periodicities[1]:
-            bias2[:, 0] = bias2[:, -2]
-            bias2[:, -1] = bias2[:, 1]
+            bias[:, 0] = bias[:, -2]
+            bias[:, -1] = bias[:, 1]
         else:
-            bias2[:, 0] = bias2[:, 1]
-            bias2[:, -1] = bias2[:, -2]
+            bias[:, 0] = bias[:, 1]
+            bias[:, -1] = bias[:, -2]
 
-        self.vals = bias2
+        #convex interpolation
+        x, y = np.indices(bias.shape)
+        bias[np.isnan(bias)] = griddata(
+            (x[~np.isnan(bias)], y[~np.isnan(bias)]),
+            bias[~np.isnan(bias)],
+            (x[np.isnan(bias)], y[np.isnan(bias)]),
+            method='cubic',
+        )
+
+        if fill == 'min':
+            bias[np.isnan(bias)] = bias[~np.isnan(bias)].min()
+        elif fill == 'max':
+            bias[np.isnan(bias)] = bias[~np.isnan(bias)].max()
+        else:
+            raise NotImplementedError
+
+        self.vals = bias
         self.cvs = cvs
 
     def _compute(self, cvs):

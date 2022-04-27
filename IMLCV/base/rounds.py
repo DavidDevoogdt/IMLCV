@@ -104,15 +104,14 @@ class Rounds(ABC):
         self.save()
 
     def iter(self, round=None, num=3):
-        num = num - 1
         if round == None:
             round = self.round
 
-        for round in range(max(self.round - num, 0), self.round + 1):
-            round = self._get_round(round)
-            for i in round['names']:
-                i_dict = self._get_i(round['round'], i)
-                yield {**i_dict, 'round': round}
+        for r in range(max(round - num, 0), round + 1):
+            r = self._get_round(r)
+            for i in r['names']:
+                i_dict = self._get_i(r['round'], i)
+                yield {**i_dict, 'round': r}
 
     def _get_round(self, round):
         with h5py.File(self.h5file, 'r') as f:

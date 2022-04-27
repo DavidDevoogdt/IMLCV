@@ -392,13 +392,13 @@ class YaffEngine(MDEngine):
             return ener
 
         def __call__(self, iterative):
-            # skip initial hook called by verlet integrator
+            #skip initial hook called by verlet integrator
             if self.init:
                 self.init = False
                 return
 
-            coordinates = self.ff.system.pos
-            cell = self.ff.system.cell.rvecs
+            coordinates = self.ff.system.pos[:]
+            cell = self.ff.system.cell.rvecs[:]
 
             self.bias.update_bias(coordinates, cell)
 

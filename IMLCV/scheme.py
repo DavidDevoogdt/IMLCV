@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, HarmonicBias, NoneBias
+from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, HarmonicBias, NoneBias, ContinuousHarmonicBias
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.CV import CV
 from IMLCV.base.Observable import Observable
@@ -56,6 +56,7 @@ class Scheme:
 
         self.rounds = RoundsMd(extension=extension, folder=folder)
         self.steps = 0
+        self.cont_biases = None
 
     def from_rounds(
         cvd: CVDiscovery,
@@ -71,6 +72,8 @@ class Scheme:
         self.rounds = rounds
         self.cvd = cvd
         self.steps = 0
+
+        self.cont_biases = None
 
         return self
 
@@ -109,24 +112,30 @@ class Scheme:
         if US_grid is None:
             grid = self.md.bias.cvs.metric.grid(n)
 
-        self.rounds.run_par(
-            [HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)) for x in itertools.product(*grid)], steps=steps)
+        self.cont_biases = [
+            ContinuousHarmonicBias(HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)))
+            for x in itertools.product(*grid)
+        ]
+
+        self.rounds.run_par(self.cont_biases, steps=steps)
 
     def round(self, rnds=10, steps=5e4):
         startround = 0
 
+        #update biases untill there are no discontinues jumps left
         for i in range(rnds):
             #create common bias
             if i != startround:
-                self._FESBias(kind='fupper')
+                self._FESBias(kind='fupper', plot=True)
             self.rounds.new_round(self.md)
 
             # self._MTDBias(steps=5e4)
 
             self._grid_umbrella(steps=steps)
+
             self.rounds.save()
 
-        self._FESBias()
+        self._FESBias(plot=True)
         self.rounds.new_round(self.md)
         self.rounds.save()
 
