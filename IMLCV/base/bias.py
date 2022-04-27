@@ -10,7 +10,7 @@ from molmod.units import kjmol, kelvin
 import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
-from jax import jit, grad, jacfwd
+from jax import disable_jit, jit, grad, jacfwd
 from scipy.interpolate import griddata
 
 import matplotlib.pyplot as plt
@@ -68,7 +68,6 @@ class Bias(Energy, ABC):
 
         Can only change the properties from _get_args
         """
-        pass
 
     class _HashableArrayWrapper:
         """#see https://github.com/google/jax/issues/4572"""
@@ -498,7 +497,7 @@ class BiasMTD(Bias):
     def _compute(self, cvs, q0s, Ks):
         """Computes sum of hills"""
 
-        deltas = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=cvs, x2=q0s)
+        deltas = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=q0s, x2=cvs)
 
         exparg = jnp.einsum('ji,ji,i -> j', deltas, deltas, self.sigmas_isq)
         energy = jnp.sum(Ks * jnp.exp(-exparg))
@@ -568,6 +567,25 @@ class GridBias(Bias):
 
     def _get_args(self):
         return []
+
+
+class CvMonitor(BiasF):
+
+    def __init__(self, cvs: CV, start=0, step=1):
+        super().__init__(cvs, f=None)
+        self.start = start
+        self.step = step
+
+        self.last_cv = np.nan
+        self.transitions = np.zeros((0, self.cvs.n, 2))
+
+    def update_bias(self, coordinates, cell):
+
+        new_cv, _, _ = self.cvs.compute(coordinates=coordinates, cell=cell)
+
+        if jnp.linalg.norm(new_cv - self.last_cv) > 1:
+            self.transitions = np.vstack((self.transitions, np.array([[new_cv, self.last_cv]])))
+        self.last_cv = new_cv
 
 
 class BiasPlumed(Bias):

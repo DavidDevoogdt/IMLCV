@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, HarmonicBias, NoneBias, ContinuousHarmonicBias
+from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, CvMonitor, HarmonicBias, NoneBias, ContinuousHarmonicBias
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.CV import CV
 from IMLCV.base.Observable import Observable
@@ -112,9 +112,12 @@ class Scheme:
         if US_grid is None:
             grid = self.md.bias.cvs.metric.grid(n)
 
+        # self.cont_biases = [ContinuousHarmonicBias(
         self.cont_biases = [
-            ContinuousHarmonicBias(HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)))
-            for x in itertools.product(*grid)
+            CompositeBias([
+                HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)),
+                CvMonitor(self.md.bias.cvs),
+            ]) for x in itertools.product(*grid)
         ]
 
         self.rounds.run_par(self.cont_biases, steps=steps)

@@ -85,12 +85,22 @@ def test_cv_discovery():
 
 if __name__ == "__main__":
 
-    # s = Scheme.from_rounds(
-    #     cvd=CVDiscovery(),
-    #     folder='output/ala/',
-    # )
+    # cvs = CombineCV([
+    #     CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=Metric(periodicities=[False], boundaries=[-4, 4])),
+    #     CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=Metric(periodicities=[False], boundaries=[-4, 4])),
+    # ])
+
+    # cvs.find_periodicity(np.zeros((23, 3)), None)
+
+    s = Scheme.from_rounds(
+        cvd=CVDiscovery(),
+        folder='output/ala_np',
+    )
+
+    o = Observable(s.rounds)
+    o.update_metric(0)
     # s._FESBias(plot=False)
 
     # test_ala_dipep_FES()
-    test_ala_dipep_FES_non_per()
+    # test_ala_dipep_FES_non_per()
     # test_cv_discovery()

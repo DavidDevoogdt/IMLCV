@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from abc import ABC
 from functools import partial
+
 import jax
 # import numpy as np
 import jax.numpy as jnp
 from jax import jit, grad
 import dill
+import alphashape
+from matplotlib import pyplot as plt
+import numpy as np
+from descartes import PolygonPatch
+from shapely.geometry import Point
 
 
 class Metric:
@@ -87,6 +93,43 @@ class Metric:
 
         return grid
 
+    def update_metric(self, trajs, plot=True):
+        if plot:
+            plt.clf
+
+            for x in trajs:
+                plt.plot(x[:, 0], x[:, 1])
+
+            plt.xlim(*self.boundaries[0])
+            plt.ylim(*self.boundaries[1])
+
+            plt.show()
+        trajs = np.array(trajs)
+
+        if len(trajs) > 30:
+            np.random.shuffle(trajs)
+            trajsl = trajs[1:30]
+
+        a = alphashape.alphashape(np.vstack([trajsl[:, 0, :], trajsl[:, 1, :]]))
+
+        if plot == True:
+            fig, ax = plt.subplots()
+
+            [ax.scatter(t[0, 0], t[0, 1]) for t in trajs]
+            [ax.scatter(t[1, 0], t[1, 1]) for t in trajs]
+            ax.add_patch(PolygonPatch(a, alpha=0.2))
+            plt.show()
+
+        bound = a.boundary
+
+        proj = np.array([[bound.project(Point(tr[0, :])), bound.project(Point(tr[1, :]))] for tr in trajs])
+
+        if plot == True:
+            plt.scatter(proj[:, 0], proj[:, 1])
+            plt.show()
+
+        print(a)
+
 
 class hyperTorus(Metric):
 
@@ -141,6 +184,55 @@ class CV:
         if not isinstance(other, CV):
             return NotImplemented
         return dill.dumps(self.cv) == dill.dumps(other.cv)
+
+    # def find_periodicity(self, coordinates, cell):
+    #     # object.interpolate
+    #     from IMLCV.base.bias import BiasMTD
+
+    #     x = coordinates[:] + np.random.rand(*coordinates.shape) * 1e-6
+    #     # c = cell[:]
+    #     px = jnp.zeros(x.shape)
+
+    #     # pc = jnp.zeros(c.shape)
+
+    #     sigmas = jnp.zeros((self.n)) + 1
+    #     bias = BiasMTD(self, K=0.1, sigmas=sigmas)
+    #     dt = 1e-2
+
+    #     cv1 = jnp.zeros(self.n) * jnp.nan
+    #     cv2 = jnp.zeros(self.n) * jnp.nan
+
+    #     bias.update_bias(x + np.random.rand(*x.shape) * 1e-6, None)
+    #     pairs = jnp.zeros((0, self.n, 2))
+
+    #     for i in range(int(1e5)):
+
+    #         ener, gpos, vir = bias.compute_coor(x, None, gpos=jnp.zeros(x.shape))
+
+    #         px = dt * gpos
+    #         # px /= jnp.linalg.norm(px)
+
+    #         x += px * dt
+
+    #         if i % 100 == 0:
+    #             print(f"\n{i}", end="")
+
+    #         if i % 100 == 0:
+    #             bias.update_bias(x, None)
+
+    #         if i % 2 == 0:
+    #             cv1, _, _ = self.compute(x, None)
+    #         else:
+    #             cv2, _, _ = self.compute(x, None)
+
+    #         n = jnp.linalg.norm(cv1 - cv2)
+
+    #         if n > 1:
+    #             pairs = jnp.vstack((pairs, jnp.array([[cv1, cv2]])))
+    #             print('.', end="")
+    #     print()
+
+    #     alphashape.alphashape(pairs)
 
 
 class CombineCV(CV):
