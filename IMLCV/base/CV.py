@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC
+from dbm import ndbm
 from functools import partial
+import itertools
 
 import jax
 # import numpy as np
@@ -10,9 +12,11 @@ from jax import jit, grad
 import dill
 import alphashape
 from matplotlib import pyplot as plt
+from matplotlib.colors import Colormap
 import numpy as np
 from descartes import PolygonPatch
-from shapely.geometry import Point
+from shapely.geometry import Point, MultiPoint
+from sklearn.cluster import DBSCAN
 
 
 class Metric:
@@ -93,42 +97,120 @@ class Metric:
 
         return grid
 
-    def update_metric(self, trajs, plot=True):
-        if plot:
-            plt.clf
+    @property
+    def ndim(self):
+        return len(self.periodicities)
 
-            for x in trajs:
-                plt.plot(x[:, 0], x[:, 1])
-
-            plt.xlim(*self.boundaries[0])
-            plt.ylim(*self.boundaries[1])
-
-            plt.show()
+    def update_metric(self, trajs, convex=True, plot=True, acc=10):
         trajs = np.array(trajs)
 
-        if len(trajs) > 30:
-            np.random.shuffle(trajs)
-            trajsl = trajs[1:30]
+        points = np.vstack([trajs[:, 0, :], trajs[:, 1, :]])
+        mpoints = MultiPoint(points)
 
-        a = alphashape.alphashape(np.vstack([trajsl[:, 0, :], trajsl[:, 1, :]]))
+        if convex:
+            a = mpoints.convex_hull
 
-        if plot == True:
-            fig, ax = plt.subplots()
+        else:
+            if len(points) > 30:
+                np.random.shuffle(points)
+                points = points[1:30]
 
-            [ax.scatter(t[0, 0], t[0, 1]) for t in trajs]
-            [ax.scatter(t[1, 0], t[1, 1]) for t in trajs]
-            ax.add_patch(PolygonPatch(a, alpha=0.2))
-            plt.show()
+            a = alphashape.alphashape(points)
+            raise NotImplementedError
 
         bound = a.boundary
+        dist_avg = bound.length / len(trajs)
+
+        if convex == True:
+            assert np.array([p.distance(bound) for p in mpoints
+                            ]).max() < acc * dist_avg, "metrix boundaries are not convex"
 
         proj = np.array([[bound.project(Point(tr[0, :])), bound.project(Point(tr[1, :]))] for tr in trajs])
 
+        #sort pair
+        as1 = proj.argsort(axis=1)
+        proj = np.take_along_axis(proj, as1, axis=1)
+        trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
+
+        clustering = DBSCAN(eps=20 * dist_avg, min_samples=10).fit(proj).labels_
+
+        #cylically join begin and end clusters
+        centers = [np.average(proj[clustering == i, 0]) for i in range(0, clustering.max() + 1)]
+        proj[clustering == np.argmin(centers), 0] += bound.length
+        proj[clustering == np.argmin(centers), :] = proj[clustering == np.argmin(centers), ::-1]
+        trajs[clustering == np.argmin(centers), :, :] = trajs[clustering == np.argmin(centers), ::-1, :]
+
+        offset = proj[clustering != -1].min()
+        proj -= offset
+
+        clustering = DBSCAN(eps=acc * dist_avg, min_samples=10).fit(proj).labels_
+
         if plot == True:
-            plt.scatter(proj[:, 0], proj[:, 1])
+            for i in range(-1, clustering.max() + 1):
+                plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
             plt.show()
 
-        print(a)
+        assert clustering.max() + 1 >= self.ndim, "number of new periodicities do not correspond wiht original number"
+
+        if plot == True:
+            for i in range(0, clustering.max() + 1):
+                vmax = proj[:, 0].max()
+
+                plt.scatter(
+                    trajs[clustering == i, 0, 0],
+                    trajs[clustering == i, 0, 1],
+                    c=proj[clustering == i, 0],
+                    vmin=0,
+                    vmax=vmax,
+                )
+                plt.scatter(
+                    trajs[clustering == i, 1, 0],
+                    trajs[clustering == i, 1, 1],
+                    c=proj[clustering == i, 0],
+                    vmin=0,
+                    vmax=vmax,
+                )
+            plt.show()
+
+        #make 2 meshgrids to make interpolation
+        n = 10
+
+        lrange = []
+        xrange = []
+        for i in range(0, clustering.max() + 1):
+            pi = proj[clustering == i, :]
+            a1 = pi[:, 0].argmin()
+            a2 = pi[:, 1].argmin()
+            l1 = [pi[a1, 0], pi[a2, 0]]
+            l2 = [pi[a1, 1], pi[a2, 1]]
+
+            def f(x):
+                x += offset
+                if x >= bound.length:
+                    x -= bound.length
+
+                p = bound.interpolate(x)
+                return [p.x, p.y]
+
+            xr1 = np.array([f(l) for l in np.linspace(l1[0], l1[1], num=n)])
+            xr2 = np.array([f(l) for l in np.linspace(l2[0], l2[1], num=n)])
+
+            lrange.append([l1, l2])
+            xrange.append([xr1, xr2])
+
+        mgrid = [np.zeros([n for _ in range(self.ndim)])] * self.ndim
+        mgrid2 = [a[:] for a in mgrid]
+        #make meshgrid to map to
+        # for tup in itertools.product(range(0, n), repeat=self.ndim):
+        #     for nd in range(self.ndim):
+
+        #         up =  xrange[nd][  tup[n]  ] [0]
+        #         down = xrange[nd][  tup[n]  ] [1]
+
+        #         mgrid[nd][tup] = xrange[nd][  tup[n]  ]
+
+        #         mgrid[i][tup] = xrange[]
+        #     print(tup)
 
 
 class hyperTorus(Metric):
