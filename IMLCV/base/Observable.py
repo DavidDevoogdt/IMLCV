@@ -154,7 +154,7 @@ class Observable:
 
         return fes
 
-    def update_metric(self, round):
+    def new_metric(self, round):
         assert isinstance(self.rounds, RoundsMd)
 
         trans = []
@@ -168,7 +168,7 @@ class Observable:
             trans.append(bias.biases[-1].biases[1].transitions)
 
         transitions = jnp.vstack(trans)
-        cvs.metric.update_metric(transitions)
+        return cvs.metric.update_metric(transitions)
 
     def _FES_mg(self, trajs, n=None):
         if n is None:

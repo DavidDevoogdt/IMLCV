@@ -12,55 +12,55 @@ from jax import jit, grad
 import dill
 import alphashape
 from matplotlib import pyplot as plt
+from matplotlib.cbook import ls_mapper
 from matplotlib.colors import Colormap
 import numpy as np
 from descartes import PolygonPatch
-from shapely.geometry import Point, MultiPoint
+from scipy.interpolate import griddata, LinearNDInterpolator
+
+from shapely.geometry import Point, MultiPoint, LineString
 from sklearn.cluster import DBSCAN
 
 
 class Metric:
 
-    def __init__(self, periodicities, boundaries=None) -> None:
+    def __init__(self, periodicities, boundaries=None, wrap_meshgrids=None) -> None:
         if boundaries is None:
             boundaries = jnp.zeros(len(periodicities))
 
         if isinstance(periodicities, list):
             periodicities = jnp.array(periodicities)
 
+        self.gridded = wrap_meshgrids is not None
+
+        if self.gridded:
+            self.grid_from = jnp.array(wrap_meshgrids[0])
+            self.grid_to = wrap_meshgrids[1]
+
         self.boundaries = boundaries
         self.periodicities = periodicities
         self.type = periodicities
 
-    # @partial(jnp.vectorize)
     def distance(self, x1, x2):
         return self._periodic_wrap(x1 - x2, min=True)
 
-    # @partial(jnp.vectorize)
     def wrap(self, x1):
         return self._periodic_wrap(x1, min=False)
 
-    def _update_boundaries(self, x1):
-        self.boundaries[:, 1] = jnp.where(
-            jnp.logical_and(self.perodicities == 0, x1 < self.boundaries[:, 0]),
-            x1,
-            self.boundaries,
-        )
-
-        self.boundaries[:, 1] = jnp.where(
-            jnp.logical_and(self.perodicities == 0, x1 > self.boundaries[:, 1]),
-            x1,
-            self.boundaries,
-        )
-
-    @partial(jit, static_argnums=(0, 2))
-    def _periodic_wrap(self, xs, min=False):
+    @partial(jit, static_argnums=(0, 2, 3))
+    def _periodic_wrap(self, x1, x2=None, min=False):
         """Translate cvs such over periodic vector
 
         Args:
             cvs: array of cvs
             min (bool): if False, translate to cv range. I true, minimises norm of vector
         """
+
+        if x2 is None:
+            xs = self.grid_wrap(x1)
+        else:
+            xs = self.grid_wrap(x1) - self.grid_wrap(x2)
+
         per = self.boundaries
 
         if min:
@@ -75,6 +75,13 @@ class Metric:
 
         coor = (coor) * (per[:, 1] - per[:, 0]) + o
         return jnp.where(self.periodicities, coor, xs)
+
+    def grid_wrap(self, x):
+        if self.gridded == False:
+            return x
+
+        closest = jnp.argsort(((self.grid_from - x)**2).sum(axis=0))
+        print()
 
     def __add__(self, other):
         assert isinstance(self, Metric)
@@ -101,7 +108,9 @@ class Metric:
     def ndim(self):
         return len(self.periodicities)
 
-    def update_metric(self, trajs, convex=True, plot=True, acc=10):
+    def update_metric(self, trajs, convex=True, plot=True, acc=20) -> Metric:
+        """find best fitting bounding box and get affine tranformation+ new boundaries"""
+
         trajs = np.array(trajs)
 
         points = np.vstack([trajs[:, 0, :], trajs[:, 1, :]])
@@ -109,6 +118,7 @@ class Metric:
 
         if convex:
             a = mpoints.convex_hull
+            # a = mpoints.minimum_rotated_rectangle
 
         else:
             if len(points) > 30:
@@ -119,6 +129,8 @@ class Metric:
             raise NotImplementedError
 
         bound = a.boundary
+        bound_type = type(bound)
+
         dist_avg = bound.length / len(trajs)
 
         if convex == True:
@@ -150,34 +162,23 @@ class Metric:
                 plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
             plt.show()
 
-        assert clustering.max() + 1 >= self.ndim, "number of new periodicities do not correspond wiht original number"
+        ndim = clustering.max() + 1
+        assert ndim <= self.ndim, "number of new periodicities do not correspond wiht original number"
 
-        if plot == True:
-            for i in range(0, clustering.max() + 1):
-                vmax = proj[:, 0].max()
-
-                plt.scatter(
-                    trajs[clustering == i, 0, 0],
-                    trajs[clustering == i, 0, 1],
-                    c=proj[clustering == i, 0],
-                    vmin=0,
-                    vmax=vmax,
-                )
-                plt.scatter(
-                    trajs[clustering == i, 1, 0],
-                    trajs[clustering == i, 1, 1],
-                    c=proj[clustering == i, 0],
-                    vmin=0,
-                    vmax=vmax,
-                )
-            plt.show()
+        if self.ndim != 2:
+            raise NotImplementedError("only tested for n == 2")
 
         #make 2 meshgrids to make interpolation
-        n = 10
+
+        boundaries = []
+        periodicities = []
+
+        n = 30
 
         lrange = []
         xrange = []
         for i in range(0, clustering.max() + 1):
+
             pi = proj[clustering == i, :]
             a1 = pi[:, 0].argmin()
             a2 = pi[:, 1].argmin()
@@ -190,27 +191,75 @@ class Metric:
                     x -= bound.length
 
                 p = bound.interpolate(x)
-                return [p.x, p.y]
+                return p
 
-            xr1 = np.array([f(l) for l in np.linspace(l1[0], l1[1], num=n)])
-            xr2 = np.array([f(l) for l in np.linspace(l2[0], l2[1], num=n)])
+            xr1 = [
+                bound_type([f(l1), f(l2)])
+                for l1, l2 in zip(np.linspace(l1[0], l1[1], num=n), np.linspace(l2[0], l2[1], num=n))
+            ]
 
             lrange.append([l1, l2])
-            xrange.append([xr1, xr2])
+            xrange.append(xr1)
 
-        mgrid = [np.zeros([n for _ in range(self.ndim)])] * self.ndim
-        mgrid2 = [a[:] for a in mgrid]
+            avg_len = (abs(l1[1] - l1[0]) + abs(l2[1] - l2[0])) / 2
+
+            boundaries.append([0, avg_len])
+            periodicities.append(True)
+
+        if ndim < self.ndim:
+            raise NotImplementedError("add non periodic boundary here (e.g. bounding coordinate hyperplane)")
+
+        mgrid = [np.zeros([n for _ in range(self.ndim)]) for _ in range(self.ndim)]
+        mgrid2 = [np.zeros([n for _ in range(self.ndim)]) for _ in range(self.ndim)]
         #make meshgrid to map to
-        # for tup in itertools.product(range(0, n), repeat=self.ndim):
-        #     for nd in range(self.ndim):
+        for tup in itertools.product(range(0, n), repeat=self.ndim):
 
-        #         up =  xrange[nd][  tup[n]  ] [0]
-        #         down = xrange[nd][  tup[n]  ] [1]
+            bounds = []
 
-        #         mgrid[nd][tup] = xrange[nd][  tup[n]  ]
+            for i, m in enumerate(tup):
+                bounds.append(xrange[i][m])
 
-        #         mgrid[i][tup] = xrange[]
-        #     print(tup)
+            intersect = np.array(bounds[0].intersection(*bounds[1:]))
+
+            for i, m in enumerate(tup):
+                bounds.append(xrange[i][m])
+
+                mgrid[i][tup] = m / (n - 1) * boundaries[i][1]
+                mgrid2[i][tup] = intersect[i]
+
+        if plot == True:
+            for i in range(0, clustering.max() + 1):
+                vmax = proj[:, 0].max()
+
+                plt.scatter(
+                    trajs[clustering == i, 0, 0],
+                    trajs[clustering == i, 0, 1],
+                    c=proj[clustering == i, 0],
+                    vmin=0,
+                    vmax=vmax,
+                    s=2,
+                )
+                plt.scatter(
+                    trajs[clustering == i, 1, 0],
+                    trajs[clustering == i, 1, 1],
+                    c=proj[clustering == i, 0],
+                    vmin=0,
+                    vmax=vmax,
+                    s=2,
+                )
+            plt.scatter(mgrid2[0], mgrid2[1], c=(mgrid[0]**2 + mgrid[1]**2)**(0.5))
+            plt.show()
+
+        num = 50
+
+        interp = LinearNDInterpolator(list(zip(mgrid2[0], mgrid2[1])), mgrid[0])
+
+        #create meshgrid to go to new coordinates
+        interp_meshgrid = np.meshgrid(np.linspace(mgrid2[0].min(), mgrid2[0].max()),
+                                      np.linspace(mgrid2[1].min(), mgrid2[1].max()))
+        griddata(mgrid2, mgrid, interp_meshgrid)
+
+        return Metric(periodicities=periodicities, boundaries=boundaries, wrap_meshgrids=[mgrid2, mgrid])
 
 
 class hyperTorus(Metric):
@@ -383,3 +432,7 @@ class CVUtils:
     @staticmethod
     def Volume(coordinates, cell):
         return jnp.abs(jnp.dot(cell[0], jnp.cross(cell[1], cell[2])))
+
+    @staticmethod
+    def linear_combination(cv1, cv2, a=1, b=1):
+        return lambda x, y: a * cv1(x, y) + b * cv2(x, y)

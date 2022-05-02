@@ -10,6 +10,6 @@ import jax
 
 jax.config.update('jax_platform_name', 'cpu')
 
-# from jax.config import config
+from jax.config import config
 
-# config.update('jax_disable_jit', True)
+config.update('jax_disable_jit', True)
