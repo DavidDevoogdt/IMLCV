@@ -8,6 +8,7 @@ import itertools
 import jax
 # import numpy as np
 import jax.numpy as jnp
+import jax.scipy as jsp
 from jax import jit, grad
 import dill
 import alphashape
@@ -16,7 +17,7 @@ from matplotlib.cbook import ls_mapper
 from matplotlib.colors import Colormap
 import numpy as np
 from descartes import PolygonPatch
-from scipy.interpolate import griddata, LinearNDInterpolator
+from scipy.interpolate import griddata, LinearNDInterpolator, Rbf
 
 from shapely.geometry import Point, MultiPoint, LineString
 from sklearn.cluster import DBSCAN
@@ -24,31 +25,53 @@ from sklearn.cluster import DBSCAN
 
 class Metric:
 
-    def __init__(self, periodicities, boundaries=None, wrap_meshgrids=None) -> None:
+    def __init__(
+        self,
+        periodicities,
+        boundaries=None,
+        wrap_meshgrids=None,
+        wrap_boundaries=None,
+    ) -> None:
         if boundaries is None:
             boundaries = jnp.zeros(len(periodicities))
+
+        if isinstance(boundaries, list):
+            boundaries = jnp.array(boundaries)
 
         if isinstance(periodicities, list):
             periodicities = jnp.array(periodicities)
 
-        self.gridded = wrap_meshgrids is not None
-
-        if self.gridded:
-            self.grid_from = jnp.array(wrap_meshgrids[0])
-            self.grid_to = wrap_meshgrids[1]
+        self.wrap_meshgrids = wrap_meshgrids
 
         self.boundaries = boundaries
         self.periodicities = periodicities
         self.type = periodicities
 
-    def distance(self, x1, x2):
-        return self._periodic_wrap(x1 - x2, min=True)
+        if wrap_boundaries is None:
+            self.wrap_boundaries = self.boundaries
+        else:
+            if isinstance(wrap_boundaries, list):
+                wrap_boundaries = jnp.array(wrap_boundaries)
+
+            self.wrap_boundaries = wrap_boundaries
+
+    @partial(jit, static_argnums=(0, 3))
+    def distance(self, x1, x2, wrap_x2=True):
+
+        xs = self.grid_wrap(x1)
+        if wrap_x2 == False:
+            xs -= x2
+        else:
+            xs -= self.grid_wrap(x2)
+
+        return self._periodic_wrap(xs, min=True)
 
     def wrap(self, x1):
-        return self._periodic_wrap(x1, min=False)
+        xs = self.grid_wrap(x1)
+        return self._periodic_wrap(xs, min=False)
 
-    @partial(jit, static_argnums=(0, 2, 3))
-    def _periodic_wrap(self, x1, x2=None, min=False):
+    @partial(jit, static_argnums=(0, 2))
+    def _periodic_wrap(self, xs, min=False):
         """Translate cvs such over periodic vector
 
         Args:
@@ -56,12 +79,7 @@ class Metric:
             min (bool): if False, translate to cv range. I true, minimises norm of vector
         """
 
-        if x2 is None:
-            xs = self.grid_wrap(x1)
-        else:
-            xs = self.grid_wrap(x1) - self.grid_wrap(x2)
-
-        per = self.boundaries
+        per = self.wrap_boundaries
 
         if min:
             o = 0.0
@@ -76,12 +94,15 @@ class Metric:
         coor = (coor) * (per[:, 1] - per[:, 0]) + o
         return jnp.where(self.periodicities, coor, xs)
 
+    @partial(jit, static_argnums=(0))
     def grid_wrap(self, x):
-        if self.gridded == False:
+        if self.wrap_meshgrids is None:
             return x
 
-        closest = jnp.argsort(((self.grid_from - x)**2).sum(axis=0))
-        print()
+        x = (x - self.boundaries[:, 0]) / (self.boundaries[:, 1] -
+                                           self.boundaries[:, 0]) * (jnp.array(self.wrap_meshgrids[0].shape) - 1)
+        wrapped = jnp.array([jsp.ndimage.map_coordinates(wp, x, order=1) for wp in self.wrap_meshgrids])
+        return wrapped
 
     def __add__(self, other):
         assert isinstance(self, Metric)
@@ -92,15 +113,31 @@ class Metric:
 
         periodicities = jnp.hstack((self.periodicities, other.periodicities))
         boundaries = jnp.vstack((self.boundaries, other.boundaries))
+        wrap_boundaries = jnp.vstack((self.wrap_boundaries, other.wrap_boundaries))
 
-        return Metric(periodicities=periodicities, boundaries=boundaries)
+        if self.wrap_meshgrids is None and other.wrap_meshgrids is None:
+            wrap_meshgrids = None
+        elif self.wrap_meshgrids is not None and other.wrap_meshgrids is not None:
+            wrap_meshgrids = [*self.wrap_meshgrids, *other.wrap_meshgrids]
+        else:
+            raise NotImplementedError
 
-    def grid(self, n, endpoints=True):
+        return Metric(
+            periodicities=periodicities,
+            boundaries=boundaries,
+            wrap_boundaries=wrap_boundaries,
+            wrap_meshgrids=wrap_meshgrids,
+        )
 
-        assert not (jnp.abs(self.boundaries) < 1e-12).any(), 'give proper boundaries'
-        grid = [
-            jnp.linspace(row[0], row[1], n, endpoint=endpoints) for per, row in zip(self.periodicities, self.boundaries)
-        ]
+    def grid(self, n, endpoints=True, wrap=False):
+
+        if wrap == True:
+            b = self.wrap_boundaries
+        else:
+            b = self.boundaries
+
+        assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), 'give proper boundaries'
+        grid = [jnp.linspace(row[0], row[1], n, endpoint=endpoints) for per, row in zip(self.periodicities, b)]
 
         return grid
 
@@ -108,7 +145,7 @@ class Metric:
     def ndim(self):
         return len(self.periodicities)
 
-    def update_metric(self, trajs, convex=True, plot=True, acc=20) -> Metric:
+    def update_metric(self, trajs, convex=True, plot=True, acc=30) -> Metric:
         """find best fitting bounding box and get affine tranformation+ new boundaries"""
 
         trajs = np.array(trajs)
@@ -134,17 +171,33 @@ class Metric:
         dist_avg = bound.length / len(trajs)
 
         if convex == True:
-            assert np.array([p.distance(bound) for p in mpoints
-                            ]).max() < acc * dist_avg, "metrix boundaries are not convex"
+            assert np.array([p.distance(bound) for p in mpoints]).max() < acc * dist_avg, "boundaries are not convex"
 
         proj = np.array([[bound.project(Point(tr[0, :])), bound.project(Point(tr[1, :]))] for tr in trajs])
+
+        def get_gaps(proj):
+
+            projgaps = np.sort(np.hstack([proj[:, 0], proj[:, 1]]))
+
+            gaps = (projgaps[1:] - projgaps[:-1]) > 10 * dist_avg
+            gaps = [projgaps[0:-1][gaps], projgaps[1:][gaps]]
+            return gaps
+
+        gaps = get_gaps(proj)
+
+        def get_lengths(proj, gaps):
+            a = np.copy(proj[:])
+            for i, j in list(zip(*gaps))[::-1]:
+                a[a > i] -= j - i
+
+            return a
 
         #sort pair
         as1 = proj.argsort(axis=1)
         proj = np.take_along_axis(proj, as1, axis=1)
         trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
 
-        clustering = DBSCAN(eps=20 * dist_avg, min_samples=10).fit(proj).labels_
+        clustering = DBSCAN(eps=acc * dist_avg, min_samples=10).fit(get_lengths(proj, gaps)).labels_
 
         #cylically join begin and end clusters
         centers = [np.average(proj[clustering == i, 0]) for i in range(0, clustering.max() + 1)]
@@ -155,7 +208,8 @@ class Metric:
         offset = proj[clustering != -1].min()
         proj -= offset
 
-        clustering = DBSCAN(eps=acc * dist_avg, min_samples=10).fit(proj).labels_
+        gaps = get_gaps(proj)
+        clustering = DBSCAN(eps=acc * dist_avg, min_samples=10).fit(get_lengths(proj, gaps)).labels_
 
         if plot == True:
             for i in range(-1, clustering.max() + 1):
@@ -167,8 +221,6 @@ class Metric:
 
         if self.ndim != 2:
             raise NotImplementedError("only tested for n == 2")
-
-        #make 2 meshgrids to make interpolation
 
         boundaries = []
         periodicities = []
@@ -191,12 +243,12 @@ class Metric:
                     x -= bound.length
 
                 p = bound.interpolate(x)
-                return p
+                return np.array(p)
 
-            xr1 = [
-                bound_type([f(l1), f(l2)])
-                for l1, l2 in zip(np.linspace(l1[0], l1[1], num=n), np.linspace(l2[0], l2[1], num=n))
-            ]
+            lin1 = np.linspace(l1[0], l1[1], num=n)
+            lin2 = np.linspace(l2[0], l2[1], num=n)
+
+            xr1 = np.array([np.array([f(l1), f(l2)]) for l1, l2 in zip(lin1, lin2)])
 
             lrange.append([l1, l2])
             xrange.append(xr1)
@@ -206,60 +258,116 @@ class Metric:
             boundaries.append([0, avg_len])
             periodicities.append(True)
 
-        if ndim < self.ndim:
-            raise NotImplementedError("add non periodic boundary here (e.g. bounding coordinate hyperplane)")
+        interps = []
+        for i in range(self.ndim):
 
-        mgrid = [np.zeros([n for _ in range(self.ndim)]) for _ in range(self.ndim)]
-        mgrid2 = [np.zeros([n for _ in range(self.ndim)]) for _ in range(self.ndim)]
-        #make meshgrid to map to
-        for tup in itertools.product(range(0, n), repeat=self.ndim):
+            points = []
+            z = []
 
-            bounds = []
+            #add boundaries
+            lin = np.linspace(0, boundaries[i][1], num=n)
+            z.append(lin)
+            z.append(lin)
 
-            for i, m in enumerate(tup):
-                bounds.append(xrange[i][m])
+            range_high = np.array([lrange[i][0][1], lrange[i][1][1]])
+            range_low = np.array([lrange[i][0][0], lrange[i][1][0]])
 
-            intersect = np.array(bounds[0].intersection(*bounds[1:]))
+            points.append(xrange[i][:, 0, :])
+            points.append(xrange[i][:, 1, :])
 
-            for i, m in enumerate(tup):
-                bounds.append(xrange[i][m])
+            #append other boundaries
+            for j in range(self.ndim):
+                if i == j:
+                    continue
 
-                mgrid[i][tup] = m / (n - 1) * boundaries[i][1]
-                mgrid2[i][tup] = intersect[i]
+                z.append(np.zeros(n))
+                z.append(np.ones(n) * boundaries[i][1])
 
-        if plot == True:
-            for i in range(0, clustering.max() + 1):
-                vmax = proj[:, 0].max()
+                #potentially differently ordered
+                arr = np.array(lrange[j])
+                arr.sort(axis=1)
+                range_high.sort()
+                range_low.sort()
 
-                plt.scatter(
-                    trajs[clustering == i, 0, 0],
-                    trajs[clustering == i, 0, 1],
-                    c=proj[clustering == i, 0],
-                    vmin=0,
-                    vmax=vmax,
-                    s=2,
-                )
-                plt.scatter(
-                    trajs[clustering == i, 1, 0],
-                    trajs[clustering == i, 1, 1],
-                    c=proj[clustering == i, 0],
-                    vmin=0,
-                    vmax=vmax,
-                    s=2,
-                )
-            plt.scatter(mgrid2[0], mgrid2[1], c=(mgrid[0]**2 + mgrid[1]**2)**(0.5))
-            plt.show()
+                high = abs(arr - range_high).sum(axis=1)
+                high_amin = np.argmin(high)
+                err1 = high[high_amin]
 
+                low = abs(arr - range_low).sum(axis=1)
+                low_amin = np.argmin(low)
+                err2 = low[low_amin]
+
+                if err1 < err2:
+                    order = high_amin == 0
+                else:
+                    order = low_amin == 0
+
+                if order:
+                    points.append(xrange[j][:, 1, :])
+                    points.append(xrange[j][:, 0, :])
+                else:
+                    points.append(xrange[j][:, 0, :])
+                    points.append(xrange[j][:, 1, :])
+
+            # interps.append(LinearNDInterpolator(np.vstack(points), np.hstack(z)))
+            interps.append(Rbf(np.vstack(points)[:, 0], np.vstack(points)[:, 1], np.hstack(z)))
+
+        #get the boundaries from most distal points in traj + some margin
         num = 50
 
-        interp = LinearNDInterpolator(list(zip(mgrid2[0], mgrid2[1])), mgrid[0])
+        old_boundaries = []
+        lspaces = []
 
-        #create meshgrid to go to new coordinates
-        interp_meshgrid = np.meshgrid(np.linspace(mgrid2[0].min(), mgrid2[0].max()),
-                                      np.linspace(mgrid2[1].min(), mgrid2[1].max()))
-        griddata(mgrid2, mgrid, interp_meshgrid)
+        for i in range(ndim):
+            a = trajs[:, :, i].min()
+            b = trajs[:, :, i].max()
+            d = (b - a) * 0.01
+            a = a - d
+            b = b + d
+            old_boundaries.append([a, b])
 
-        return Metric(periodicities=periodicities, boundaries=boundaries, wrap_meshgrids=[mgrid2, mgrid])
+            lspaces.append(np.linspace(a, b, num=num))
+
+        interp_meshgrid = np.meshgrid(*lspaces)
+        interp_mg = []
+        for i in range(ndim):
+            interp_mg.append(interps[i](*interp_meshgrid))
+
+        if plot == True:
+
+            for j in [0, 1]:
+                # plt.contourf(interp_meshgrid[0], interp_meshgrid[1], c=interp_mg[i], cmap=plt.get_cmap('plasma'), s=2)
+                plt.pcolor(interp_meshgrid[0],
+                           interp_meshgrid[1],
+                           interp_mg[j],
+                           cmap=plt.get_cmap('Greys'),
+                           vmax=interp_mg[j][~np.isnan(interp_mg[i])].max() * 2)
+
+                for i in range(0, clustering.max() + 1):
+                    vmax = proj[clustering != -1, 0].max()
+                    vmin = proj[clustering != -1, 0].min()
+
+                    plt.scatter(trajs[clustering == i, 0, 0],
+                                trajs[clustering == i, 0, 1],
+                                c=proj[clustering == i, 0],
+                                vmax=vmax,
+                                vmin=vmin,
+                                s=5,
+                                cmap=plt.get_cmap('plasma'))
+                    plt.scatter(trajs[clustering == i, 1, 0],
+                                trajs[clustering == i, 1, 1],
+                                c=proj[clustering == i, 0],
+                                vmax=vmax,
+                                vmin=vmin,
+                                s=5,
+                                cmap=plt.get_cmap('plasma'))
+
+                plt.show()
+
+        return Metric(periodicities=periodicities,
+                      boundaries=old_boundaries,
+                      wrap_meshgrids=interp_mg,
+                      wrap_boundaries=boundaries)
 
 
 class hyperTorus(Metric):
@@ -315,55 +423,6 @@ class CV:
         if not isinstance(other, CV):
             return NotImplemented
         return dill.dumps(self.cv) == dill.dumps(other.cv)
-
-    # def find_periodicity(self, coordinates, cell):
-    #     # object.interpolate
-    #     from IMLCV.base.bias import BiasMTD
-
-    #     x = coordinates[:] + np.random.rand(*coordinates.shape) * 1e-6
-    #     # c = cell[:]
-    #     px = jnp.zeros(x.shape)
-
-    #     # pc = jnp.zeros(c.shape)
-
-    #     sigmas = jnp.zeros((self.n)) + 1
-    #     bias = BiasMTD(self, K=0.1, sigmas=sigmas)
-    #     dt = 1e-2
-
-    #     cv1 = jnp.zeros(self.n) * jnp.nan
-    #     cv2 = jnp.zeros(self.n) * jnp.nan
-
-    #     bias.update_bias(x + np.random.rand(*x.shape) * 1e-6, None)
-    #     pairs = jnp.zeros((0, self.n, 2))
-
-    #     for i in range(int(1e5)):
-
-    #         ener, gpos, vir = bias.compute_coor(x, None, gpos=jnp.zeros(x.shape))
-
-    #         px = dt * gpos
-    #         # px /= jnp.linalg.norm(px)
-
-    #         x += px * dt
-
-    #         if i % 100 == 0:
-    #             print(f"\n{i}", end="")
-
-    #         if i % 100 == 0:
-    #             bias.update_bias(x, None)
-
-    #         if i % 2 == 0:
-    #             cv1, _, _ = self.compute(x, None)
-    #         else:
-    #             cv2, _, _ = self.compute(x, None)
-
-    #         n = jnp.linalg.norm(cv1 - cv2)
-
-    #         if n > 1:
-    #             pairs = jnp.vstack((pairs, jnp.array([[cv1, cv2]])))
-    #             print('.', end="")
-    #     print()
-
-    #     alphashape.alphashape(pairs)
 
 
 class CombineCV(CV):

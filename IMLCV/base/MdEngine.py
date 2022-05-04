@@ -384,6 +384,16 @@ class YaffEngine(MDEngine):
                                                                  gpos=gpos,
                                                                  vir=vtens)
 
+            if np.isnan(ener):
+                import jax
+                with jax.disable_jit():
+                    [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                                                         cell=self.ff.system.cell.rvecs,
+                                                                         gpos=gpos,
+                                                                         vir=vtens)
+
+                raise ValueError
+
             if gpos is not None:
                 gpos[:] = np.array(gpos_jax)
             if vtens is not None:

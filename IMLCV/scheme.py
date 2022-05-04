@@ -8,6 +8,7 @@ from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import RoundsMd
 
 from molmod.constants import boltzmann
+from molmod.units import kjmol
 
 import numpy as np
 
@@ -37,7 +38,8 @@ class Scheme:
                  extension="extxyz",
                  folder='output',
                  write_step=100,
-                 screenlog=1000) -> None:
+                 screenlog=1000,
+                 max_energy=80 * kjmol) -> None:
 
         # filename = f"{folder}/init.h5"
 
@@ -54,7 +56,11 @@ class Scheme:
 
         self.cvd = cvd
 
-        self.rounds = RoundsMd(extension=extension, folder=folder)
+        self.rounds = RoundsMd(
+            extension=extension,
+            folder=folder,
+            max_energy=max_energy,
+        )
         self.steps = 0
         self.cont_biases = None
 
@@ -103,14 +109,14 @@ class Scheme:
     def _grid_umbrella(self, steps=1e4, US_grid=None, K=None, n=4):
 
         cvs = self.md.bias.cvs
-        if ((cvs.metric.boundaries[:, 1] - cvs.metric.boundaries[:, 0]) <= 1e-6).any():
+        if ((cvs.metric.wrap_boundaries[:, 1] - cvs.metric.wrap_boundaries[:, 0]) <= 1e-6).any():
             raise NotImplementedError("Metric provide boundaries or force constant K")
 
         if K == None:
-            K = 1.0 * self.md.T * boltzmann * (n * 2 / (cvs.metric.boundaries[:, 1] - cvs.metric.boundaries[:, 0]))**2
+            K = 1.0 * self.md.T * boltzmann * (n * 2 /
+                                               (cvs.metric.wrap_boundaries[:, 1] - cvs.metric.wrap_boundaries[:, 0]))**2
 
-        if US_grid is None:
-            grid = self.md.bias.cvs.metric.grid(n)
+        grid = self.md.bias.cvs.metric.grid(n, wrap=True)
 
         # self.cont_biases = [ContinuousHarmonicBias(
         self.cont_biases = [
@@ -122,23 +128,24 @@ class Scheme:
 
         self.rounds.run_par(self.cont_biases, steps=steps)
 
-    def round(self, rnds=10, steps=5e4):
+    def round(self, rnds=10, steps=5e4, update_metric=False):
         startround = 0
 
         #update biases untill there are no discontinues jumps left
         for i in range(rnds):
-            #create common bias
-            if i != startround:
-                self._FESBias(kind='fupper', plot=True)
             self.rounds.new_round(self.md)
-
-            # self._MTDBias(steps=5e4)
-
             self._grid_umbrella(steps=steps)
+
+            if update_metric:
+                o = Observable(self.rounds)
+                self.md.bias.cvs.metric = o.new_metric(plot=True)
+
+                update_metric = False
+            else:
+                self._FESBias(kind='fupper', plot=True)
 
             self.rounds.save()
 
-        self._FESBias(plot=True)
         self.rounds.new_round(self.md)
         self.rounds.save()
 

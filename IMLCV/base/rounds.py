@@ -13,8 +13,10 @@ import dill
 
 from ase.io import write, read
 
+import jax.numpy as jnp
+
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.bias import Bias, CompositeBias, NoneBias
+from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 
 from collections import Iterable
 import os
@@ -36,13 +38,15 @@ class Rounds(ABC):
 
     ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
 
-    def __init__(self, extension, folder="output") -> None:
+    def __init__(self, extension, folder="output", max_energy=None) -> None:
         if extension != "extxyz":
             raise NotImplementedError("file type not known")
 
         self.round = -1
         self.extension = extension
         self.i = 0
+
+        self.max_energy = max_energy
 
         if not os.path.isdir(folder):
             os.makedirs(folder)
@@ -173,8 +177,8 @@ class RoundsMd(Rounds):
 
     ENGINE_KEYS = ['timestep', *Rounds.ENGINE_KEYS]
 
-    def __init__(self, extension, folder="output") -> None:
-        super().__init__(extension=extension, folder=folder)
+    def __init__(self, extension, folder="output", max_energy=None) -> None:
+        super().__init__(extension=extension, folder=folder, max_energy=max_energy)
 
     def add(self, md: MDEngine, i=None):
         """adds all the saveble info of the md simulation. The resulting """
@@ -280,6 +284,10 @@ class RoundsMd(Rounds):
                 b = Bias.load(common_bias_name)
             else:
                 b = CompositeBias([Bias.load(common_bias_name), bias])
+
+            if self.max_energy is not None:
+                b = CompositeBias([b, BiasF(b.cvs, lambda _: jnp.ones(1,) * self.max_energy)], jnp.min)
+
             md = MDEngine.load(common_md_name, filename=temp_name, bias=b)
 
             md.run(steps=steps)
@@ -289,6 +297,7 @@ class RoundsMd(Rounds):
             return [d, attr, i]
 
         if len(biases) != 1:
+
             with pathos.pools.ProcessPool() as pool:
                 # with pathos.pools.SerialPool() as pool:
                 for [d, attr, i] in pool.map(_run_par, kwargs):

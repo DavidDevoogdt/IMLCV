@@ -264,8 +264,6 @@ class CompositeBias(Bias):
 
     def _compute(self, cvs, *args):
 
-        cvs = self.cvs.metric.wrap(cvs)
-
         e = jnp.array([
             self.biases[i]._compute(cvs, *args[self.args_shape[i]:self.args_shape[i + 1]])
             for i in range(len(self.biases))
@@ -307,7 +305,7 @@ class BiasF(Bias):
         super().__init__(cvs, start=None, step=None)
 
     def _compute(self, cvs):
-        cvs = self.cvs.metric.wrap(cvs)
+        # cvs = self.cvs.metric.wrap(cvs)
         return self.f(cvs)[0]
 
     def _get_args(self):
@@ -344,7 +342,7 @@ class HarmonicBias(Bias):
         super().__init__(cvs)
 
     def _compute(self, cvs):
-        r = self.cvs.metric.distance(cvs, self.q0)
+        r = self.cvs.metric.distance(cvs, self.q0, wrap_x2=False)
         return jnp.einsum('i,i,i', self.k, r, r)
 
     def _get_args(self):
@@ -497,7 +495,12 @@ class BiasMTD(Bias):
     def _compute(self, cvs, q0s, Ks):
         """Computes sum of hills"""
 
-        deltas = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=q0s, x2=cvs)
+        deltas = jnp.apply_along_axis(
+            self.cvs.metric.distance,
+            axis=1,
+            arr=q0s,
+            x2=cvs,
+        )
 
         exparg = jnp.einsum('ji,ji,i -> j', deltas, deltas, self.sigmas_isq)
         energy = jnp.sum(Ks * jnp.exp(-exparg))
@@ -555,11 +558,13 @@ class GridBias(Bias):
         self.vals = bias
         self.cvs = cvs
 
+        self.per = self.cvs.metric.boundaries
+
     def _compute(self, cvs):
         #inspiration taken from https://github.com/adam-coogan/jaxinterp2d
 
-        cvs = self.cvs.metric.wrap(cvs)  #inside boundaries
-        per = self.cvs.metric.boundaries
+        # cvs = self.cvs.metric.wrap(cvs)  #inside boundaries
+        per = self.per
 
         coords = jnp.array((cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) * (np.array(self.vals.shape) - 2)) + 0.5
 

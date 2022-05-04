@@ -4,10 +4,10 @@ from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.scheme import Scheme
 from IMLCV.base.CV import CV, CVUtils, CombineCV, Metric, hyperTorus
-from IMLCV.base.bias import BiasF, BiasMTD, NoneBias
+from IMLCV.base.bias import BiasF, BiasMTD, HarmonicBias, NoneBias
 from IMLCV.base.Observable import Observable
 
-from molmod.units import kelvin
+from molmod.units import kelvin, kjmol
 
 from yaff.log import log
 import os
@@ -54,25 +54,49 @@ def test_ala_dipep_FES():
 
 def test_ala_dipep_FES_non_per():
 
-    T = 600 * units.kelvin
+    rerun = False
+    phi = partial(CVUtils.dihedral, numbers=[4, 6, 8, 14])
+    psi = partial(CVUtils.dihedral, numbers=[6, 8, 14, 16])
 
-    #approx boundaries
+    alpha = CVUtils.linear_combination(phi, psi, a=0.5, b=0.5)
+    beta = CVUtils.linear_combination(phi, psi, a=0.5, b=-0.5)
+
     cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=Metric(periodicities=[False], boundaries=[-4, 4])),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=Metric(periodicities=[False], boundaries=[-4, 4])),
+        CV(alpha, metric=Metric(periodicities=[False], boundaries=[-3.5, 3.5])),
+        CV(beta, metric=Metric(periodicities=[False], boundaries=[-3.5, 3.5])),
     ])
 
-    scheme = Scheme(cvd=CVDiscovery(),
-                    cvs=cvs,
-                    Engine=YaffEngine,
-                    ener=get_alaninedipeptide_amber99ff,
-                    T=T,
-                    timestep=2.0 * units.femtosecond,
-                    timecon_thermo=100.0 * units.femtosecond,
-                    folder='output/ala_np',
-                    write_step=20)
+    if rerun == True:
 
-    scheme.round(steps=1e4, rnds=4)
+        T = 600 * kelvin
+
+        s = Scheme(cvd=CVDiscovery(),
+                   cvs=cvs,
+                   Engine=YaffEngine,
+                   ener=get_alaninedipeptide_amber99ff,
+                   T=T,
+                   timestep=2.0 * units.femtosecond,
+                   timecon_thermo=100.0 * units.femtosecond,
+                   folder='output/ala_np',
+                   write_step=20,
+                   max_energy=100 * kjmol)
+
+        s.round(steps=1e4, rnds=1, update_metric=True)
+    else:
+        s = Scheme.from_rounds(
+            cvd=CVDiscovery(),
+            folder='output/ala_np',
+        )
+
+    s.round(steps=1e4, rnds=3)
+
+    # o = Observable(s.rounds)
+    # nm = o.new_metric(plot=True)
+
+    # cvs.metric = nm
+    # hb = HarmonicBias(cvs, np.array([np.pi, np.pi]), 10 * kjmol)
+
+    # hb.plot("test")
 
 
 def test_cv_discovery():
@@ -87,45 +111,12 @@ def test_cv_discovery():
 
 
 if __name__ == "__main__":
-    rerun = False
-    if rerun == True:
 
-        phi = partial(CVUtils.dihedral, numbers=[4, 6, 8, 14])
-        psi = partial(CVUtils.dihedral, numbers=[6, 8, 14, 16])
-
-        alpha = CVUtils.linear_combination(phi, psi, a=0.7, b=0.8)
-        beta = CVUtils.linear_combination(phi, psi, a=0.5, b=-0.9)
-
-        cvs = CombineCV([
-            CV(alpha, metric=Metric(periodicities=[False], boundaries=[-7, 7])),
-            CV(beta, metric=Metric(periodicities=[False], boundaries=[-7, 7])),
-        ])
-
-        T = 600 * kelvin
-
-        s = Scheme(cvd=CVDiscovery(),
-                   cvs=cvs,
-                   Engine=YaffEngine,
-                   ener=get_alaninedipeptide_amber99ff,
-                   T=T,
-                   timestep=2.0 * units.femtosecond,
-                   timecon_thermo=100.0 * units.femtosecond,
-                   folder='output/ala_np',
-                   write_step=20)
-
-        s.round(steps=1e4, rnds=1)
-    else:
-        s = Scheme.from_rounds(
-            cvd=CVDiscovery(),
-            folder='output/ala_np',
-        )
-
-    o = Observable(s.rounds)
-    nm = o.new_metric(0)
-
-    nm.distance(np.array([0, 0]), np.array([1, 2]))
+    # nm.distance(np.array([np.pi / 2, np.pi / 2]), np.array([-np.pi / 2, -np.pi / 2]))
 
     # s._FESBias(plot=False)
+
+    test_ala_dipep_FES_non_per()
 
     # test_ala_dipep_FES()
     # test_ala_dipep_FES_non_per()
