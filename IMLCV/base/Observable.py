@@ -1,8 +1,10 @@
 from __future__ import annotations
 from ast import arg
+from functools import partial
 from pickle import BINSTRING
 
 import os
+from textwrap import wrap
 from IMLCV.base.CV import CV
 
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, MinBias
@@ -44,14 +46,10 @@ class Observable:
         self.folder = rounds.folder
         self.fes = None
 
-        #plot meshgrid
-        bins = self._grid(n=50, endpoint=True)
-        self.plot_mg = np.meshgrid(*bins)
-
     def _fes_2D(self, plot=True):
         # fes = FreeEnergySurface2D.from_txt
         if self.fes is not None:
-            return self.fes
+            return self.fes, self.bounds
 
         temp = self.rounds.T
         beta = 1 / (boltzmann * temp)
@@ -62,59 +60,59 @@ class Observable:
         if isinstance(self.rounds, RoundsMd):
 
             trajs = []
+            trajs_wrapped = []
             biases = []
             plot_args = []
 
-            for dict in self.rounds.iter(num=3):
-                pos = dict["positions"][:]
-                bias = Bias.load(dict['attr']["name_bias"])
+        for dict in self.rounds.iter(num=1):
+            pos = dict["positions"][:]
+            bias = Bias.load(dict['attr']["name_bias"])
 
-                if 'cell' in dict:
-                    cell = dict["cell"][:]
-                    arr = np.array([bias.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
-                                   dtype=np.double)
-                else:
-                    arr = np.array([bias.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
+            if 'cell' in dict:
+                cell = dict["cell"][:]
+                arr = np.array([bias.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
+                               dtype=np.double)
+            else:
+                arr = np.array([bias.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
 
-                trajs.append(arr)
+            arr_wrap = np.array(np.apply_along_axis(bias.cvs.metric.wrap, arr=arr, axis=1), dtype=np.double)
 
-                if plot == True:
-                    if dict['round']['round'] == self.rounds.round:
-                        i = dict['i']
-
-                        plot_args.append({
-                            'self': bias,
-                            'name': f'{dir}/umbrella_{i}',
-                            'traj': [arr],
-                        })
-
-                biases.append(Observable._thermo_bias2D(bias))
+            trajs_wrapped.append(arr_wrap)
+            trajs.append(arr)
 
             if plot == True:
+                if dict['round']['round'] == self.rounds.round:
+                    i = dict['i']
 
-                plot_args.append({
-                    'self': common_bias,
-                    'name': f'{dir}/combined',
-                    'traj': trajs,
-                })
+                    plot_args.append({
+                        'self': bias,
+                        'name': f'{dir}/umbrella_{i}',
+                        'traj': [arr],
+                    })
 
-                def pl(args):
-                    Bias.plot(**args)
+            biases.append(Observable._thermo_bias2D(bias))
 
-                #async plot and continue
-                with pathos.pools.SerialPool() as pool:
-                    list(pool.map(pl, plot_args))
+        if plot == True:
 
-            mg, bins = self._FES_mg(trajs=trajs)
+            plot_args.append({
+                'self': common_bias,
+                'name': f'{dir}/combined',
+                'traj': trajs,
+            })
 
-            pinit, _ = jnp.apply_along_axis(common_bias.compute, axis=0, arr=np.array(mg), diff=False)
-            pinit = np.exp(-pinit * beta)
-            pinit = np.array(pinit, dtype=np.double)
+            def pl(args):
+                Bias.plot(**args)
+
+            #async plot and continue
+            with pathos.pools.SerialPool() as pool:
+                list(pool.map(pl, plot_args))
+
+            mg, bins = self._FES_mg(trajs=trajs_wrapped)
 
             histo = Histogram2D.from_wham_c(
                 bins=bins,
-                pinit=pinit,
-                traj_input=trajs,
+                # pinit=pinit,
+                traj_input=trajs_wrapped,
                 error_estimate='mle_f',
                 biasses=biases,
                 temp=temp,
@@ -148,12 +146,13 @@ class Observable:
         fes.set_ref()
 
         self.fes = fes
+        self.bounds = bins
 
         if plot:
             bias = self.fes_Bias(internal=True)
             bias.plot(name=f'{self.folder}/FES_thermolib_{self.rounds.round}')
 
-        return fes
+        return fes, bins
 
     def new_metric(self, plot=False):
         assert isinstance(self.rounds, RoundsMd)
@@ -198,7 +197,10 @@ class Observable:
 
             assert n >= 4, "sample more points"
 
-        bins = self._grid(n=n, endpoint=True)
+        trajs = np.vstack(trajs)
+
+        bounds = [[trajs[:, i].min(), trajs[:, i].max()] for i in range(trajs.shape[1])]
+        bins = [np.linspace(a, b, n, endpoint=True, dtype=np.double) for a, b in bounds]
         bin_centers = [0.5 * (row[:-1] + row[1:]) for row in bins]
 
         mg = np.meshgrid(*bin_centers)
@@ -214,15 +216,20 @@ class Observable:
 
         def __call__(self, cv1, cv2):
             cvs = jnp.array([cv1, cv2])
-            b, _ = jnp.apply_along_axis(self.bias.compute, axis=0, arr=cvs, diff=False)
-            return np.array(b, dtype=np.double)
+            #values are already wrapped
+            b, _ = jnp.apply_along_axis(partial(self.bias.compute, wrap=False), axis=0, arr=cvs, diff=False)
+
+            b = np.array(b, dtype=np.double)
+            b[np.isnan(b)] = 0
+
+            return b
 
         def print_pars(self, *pars_units):
             pass
 
     def fes_Bias(self, kind='normal', plot=False, fs=None, internal=False):
         if fs is None:
-            fes = self._fes_2D(plot=plot)
+            fes, bounds = self._fes_2D(plot=plot)
 
             if kind == 'normal':
                 fs = fes.fs
@@ -239,55 +246,4 @@ class Observable:
         else:
             fill = 'max'
 
-        return GridBias(cvs=self.cvs, fill=fill, vals=bias)
-
-    def _grid(self, n=51, cvs=None, endpoint=True):
-        if cvs is None:
-            cvs = self.cvs
-        return [np.array(gp, dtype=np.double) for gp in cvs.metric.grid(n)]
-
-    # def new_umbrellas(self, plot=True):
-
-    #     biases = []
-
-    #     assert isinstance(self.rounds, RoundsMd)
-    #     fb = Observable._thermo_bias2D(self.rounds.get_bias())
-    #     temp = self.rounds.T
-
-    #     for dict in self.rounds.iter(num=1, round=self.rounds.round - 1):
-
-    #         pos = dict["positions"][:]
-    #         bias_orig = Bias.load(dict['attr']["name_bias"])
-    #         if 'cell' in dict:
-    #             cell = dict["cell"][:]
-    #             arr = np.array([bias_orig.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
-    #                            dtype=np.double)
-    #         else:
-    #             arr = np.array([bias_orig.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
-
-    #         trajs = [arr]
-
-    #         mg, bins = self._FES_mg(trajs=trajs, n=5)
-
-    #         histo = Histogram2D.from_wham_c(
-    #             bins=bins,
-    #             traj_input=trajs,
-    #             error_estimate='mle_f',
-    #             biasses=[fb],
-    #             temp=temp,
-    #         )
-
-    #         fes = FreeEnergySurface2D.from_histogram(histo, temp)
-    #         new_bias = self.fes_Bias(fs=fes.fs, internal=True)
-
-    #         round = dict['round']['round']
-    #         i = dict['i']
-    #         dir = f'{self.folder}/round_{round}'
-
-    #         new_bias.plot(f'{dir}/new_umbrella_pure_{i}')
-    #         new_bias = MinBias([new_bias, bias_orig])
-    #         new_bias.plot(f'{dir}/new_umbrella_{i}')
-
-    #         biases.append(new_bias)
-
-    #     return biases
+        return GridBias(cvs=self.cvs, fill=fill, vals=bias, wrap=True)

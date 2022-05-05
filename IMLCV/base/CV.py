@@ -31,6 +31,7 @@ class Metric:
         boundaries=None,
         wrap_meshgrids=None,
         wrap_boundaries=None,
+        plot_mask=None,
     ) -> None:
         if boundaries is None:
             boundaries = jnp.zeros(len(periodicities))
@@ -54,29 +55,18 @@ class Metric:
                 wrap_boundaries = jnp.array(wrap_boundaries)
 
             self.wrap_boundaries = wrap_boundaries
+        self.plot_mask = plot_mask
 
     @partial(jit, static_argnums=(0, 3))
-    def distance(self, x1, x2, wrap_x2=True):
+    def distance(self, x1, x2):
+        """x1 and x2 should already be wrapped"""
 
-        xs = self.grid_wrap(x1)
-        if wrap_x2 == False:
-            xs -= x2
-        else:
-            xs -= self.grid_wrap(x2)
-
+        xs = x2 - x1
         return self._periodic_wrap(xs, min=True)
-
-    def wrap(self, x1):
-        xs = self.grid_wrap(x1)
-        return self._periodic_wrap(xs, min=False)
 
     @partial(jit, static_argnums=(0, 2))
     def _periodic_wrap(self, xs, min=False):
-        """Translate cvs such over periodic vector
-
-        Args:
-            cvs: array of cvs
-            min (bool): if False, translate to cv range. I true, minimises norm of vector
+        """Translate cvs such over unit cell. min=True calculates distances, False translates one vector inside box
         """
 
         per = self.wrap_boundaries
@@ -95,7 +85,9 @@ class Metric:
         return jnp.where(self.periodicities, coor, xs)
 
     @partial(jit, static_argnums=(0))
-    def grid_wrap(self, x):
+    def wrap(self, x):
+        """transform CVs to remapped metric value """
+
         if self.wrap_meshgrids is None:
             return x
 
@@ -309,8 +301,8 @@ class Metric:
                     points.append(xrange[j][:, 0, :])
                     points.append(xrange[j][:, 1, :])
 
-            # interps.append(LinearNDInterpolator(np.vstack(points), np.hstack(z)))
-            interps.append(Rbf(np.vstack(points)[:, 0], np.vstack(points)[:, 1], np.hstack(z)))
+            interps.append(LinearNDInterpolator(np.vstack(points), np.hstack(z)))
+            # interps.append(Rbf(np.vstack(points)[:, 0], np.vstack(points)[:, 1], np.hstack(z)))
 
         #get the boundaries from most distal points in traj + some margin
         num = 50
@@ -321,7 +313,7 @@ class Metric:
         for i in range(ndim):
             a = trajs[:, :, i].min()
             b = trajs[:, :, i].max()
-            d = (b - a) * 0.01
+            d = (b - a) * 0.05
             a = a - d
             b = b + d
             old_boundaries.append([a, b])
@@ -331,12 +323,31 @@ class Metric:
         interp_meshgrid = np.meshgrid(*lspaces)
         interp_mg = []
         for i in range(ndim):
-            interp_mg.append(interps[i](*interp_meshgrid))
+            arr = interps[i](*interp_meshgrid)
+            interp_mg.append(arr)
+
+        #add some space arround
+        for i in range(3):
+            # #find closest points
+            a = ~jnp.isnan(interp_mg[0])
+            b = jnp.zeros(a.shape)
+
+            for i in range(ndim):
+                b += jnp.diff(a, n=1, axis=i, prepend=False)
+                b += jnp.diff(a, n=1, axis=i, append=False)
+
+            b = jnp.logical_and(b, ~a)
+
+            #extrapolate
+            for i in range(ndim):
+                interp_mg[i][b] = Rbf(*[ip[a] for ip in interp_meshgrid],
+                                      interp_mg[i][a])(*[ip[b] for ip in interp_meshgrid])
 
         if plot == True:
 
             for j in [0, 1]:
                 # plt.contourf(interp_meshgrid[0], interp_meshgrid[1], c=interp_mg[i], cmap=plt.get_cmap('plasma'), s=2)
+
                 plt.pcolor(interp_meshgrid[0],
                            interp_meshgrid[1],
                            interp_mg[j],
@@ -367,7 +378,8 @@ class Metric:
         return Metric(periodicities=periodicities,
                       boundaries=old_boundaries,
                       wrap_meshgrids=interp_mg,
-                      wrap_boundaries=boundaries)
+                      wrap_boundaries=boundaries,
+                      plot_mask=a)
 
 
 class hyperTorus(Metric):

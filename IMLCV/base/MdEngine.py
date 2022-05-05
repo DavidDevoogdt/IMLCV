@@ -15,7 +15,6 @@ import openmm.openmm
 import openmm.unit
 
 import h5py
-from torch import set_anomaly_enabled
 
 import yaff.sampling
 import yaff.system

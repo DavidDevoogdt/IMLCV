@@ -52,9 +52,8 @@ def test_ala_dipep_FES():
     scheme.round(steps=1e4, rnds=4)
 
 
-def test_ala_dipep_FES_non_per():
+def test_ala_dipep_FES_non_per(rerun=True):
 
-    rerun = False
     phi = partial(CVUtils.dihedral, numbers=[4, 6, 8, 14])
     psi = partial(CVUtils.dihedral, numbers=[6, 8, 14, 16])
 
@@ -66,37 +65,25 @@ def test_ala_dipep_FES_non_per():
         CV(beta, metric=Metric(periodicities=[False], boundaries=[-3.5, 3.5])),
     ])
 
-    if rerun == True:
+    if os.path.isfile('output/ala_np/rounds'):
 
-        T = 600 * kelvin
+        import shutil
+        shutil.rmtree('output/ala_np')
 
-        s = Scheme(cvd=CVDiscovery(),
-                   cvs=cvs,
-                   Engine=YaffEngine,
-                   ener=get_alaninedipeptide_amber99ff,
-                   T=T,
-                   timestep=2.0 * units.femtosecond,
-                   timecon_thermo=100.0 * units.femtosecond,
-                   folder='output/ala_np',
-                   write_step=20,
-                   max_energy=100 * kjmol)
+    T = 600 * kelvin
 
-        s.round(steps=1e4, rnds=1, update_metric=True)
-    else:
-        s = Scheme.from_rounds(
-            cvd=CVDiscovery(),
-            folder='output/ala_np',
-        )
+    s = Scheme(cvd=CVDiscovery(),
+               cvs=cvs,
+               Engine=YaffEngine,
+               ener=get_alaninedipeptide_amber99ff,
+               T=T,
+               timestep=2.0 * units.femtosecond,
+               timecon_thermo=100.0 * units.femtosecond,
+               folder='output/ala_np',
+               write_step=20,
+               max_energy=100 * kjmol)
 
-    s.round(steps=1e4, rnds=3)
-
-    # o = Observable(s.rounds)
-    # nm = o.new_metric(plot=True)
-
-    # cvs.metric = nm
-    # hb = HarmonicBias(cvs, np.array([np.pi, np.pi]), 10 * kjmol)
-
-    # hb.plot("test")
+    s.round(steps=1e4, rnds=4, update_metric=True)
 
 
 def test_cv_discovery():
@@ -112,12 +99,4 @@ def test_cv_discovery():
 
 if __name__ == "__main__":
 
-    # nm.distance(np.array([np.pi / 2, np.pi / 2]), np.array([-np.pi / 2, -np.pi / 2]))
-
-    # s._FESBias(plot=False)
-
     test_ala_dipep_FES_non_per()
-
-    # test_ala_dipep_FES()
-    # test_ala_dipep_FES_non_per()
-    # test_cv_discovery()

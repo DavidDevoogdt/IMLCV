@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, CvMonitor, HarmonicBias, NoneBias, ContinuousHarmonicBias
+from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, CvMonitor, HarmonicBias, NoneBias
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.CV import CV
 from IMLCV.base.Observable import Observable
@@ -61,6 +61,9 @@ class Scheme:
             folder=folder,
             max_energy=max_energy,
         )
+
+        self.rounds.new_round(self.md)
+
         self.steps = 0
         self.cont_biases = None
 
@@ -76,6 +79,7 @@ class Scheme:
         self.md = rounds.get_engine()
 
         self.rounds = rounds
+
         self.cvd = cvd
         self.steps = 0
 
@@ -116,7 +120,7 @@ class Scheme:
             K = 1.0 * self.md.T * boltzmann * (n * 2 /
                                                (cvs.metric.wrap_boundaries[:, 1] - cvs.metric.wrap_boundaries[:, 0]))**2
 
-        grid = self.md.bias.cvs.metric.grid(n, wrap=True)
+        grid = self.md.bias.cvs.metric.grid(n, endpoints=False, wrap=True)
 
         # self.cont_biases = [ContinuousHarmonicBias(
         self.cont_biases = [
@@ -133,7 +137,7 @@ class Scheme:
 
         #update biases untill there are no discontinues jumps left
         for i in range(rnds):
-            self.rounds.new_round(self.md)
+
             self._grid_umbrella(steps=steps)
 
             if update_metric:
@@ -144,10 +148,8 @@ class Scheme:
             else:
                 self._FESBias(kind='fupper', plot=True)
 
+            self.rounds.new_round(self.md)
             self.rounds.save()
-
-        self.rounds.new_round(self.md)
-        self.rounds.save()
 
     def update_CV(self):
         pass

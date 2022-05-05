@@ -10,8 +10,8 @@ from molmod.units import kjmol, kelvin
 import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
-from jax import disable_jit, jit, grad, jacfwd
-from scipy.interpolate import griddata
+from jax import disable_jit, jit, grad, jacfwd, value_and_grad
+from scipy.interpolate import griddata, Rbf, RBFInterpolator, interpn, interp2d
 
 import matplotlib.pyplot as plt
 
@@ -130,12 +130,20 @@ class Bias(Energy, ABC):
         self.e = Bias._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
         self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
 
-    @partial(jit, static_argnums=(0, 2))
-    def compute(self, cvs, diff=False):
+    @partial(jit, static_argnums=(0, 2, 3))
+    def compute(self, cvs, diff=False, wrap=True):
+        """compute the energy and derivative. If wrap==False, the cvs are assumed to be already wrapped  """
+
+        if wrap:
+            if diff:
+                dcvs = jacfwd(self.cvs.metric.wrap)(cvs)
+            cvs = self.cvs.metric.wrap(cvs)
 
         E = self.e(cvs, *self._get_args())
         if diff:
             diffE = self.de(cvs, *self._get_args())[0]
+            if wrap:
+                diffE = jnp.einsum('i,ij->j', diffE, dcvs)
         else:
             diffE = None
 
@@ -165,17 +173,6 @@ class Bias(Energy, ABC):
             pass
 
         self.update_bias = update_bias
-
-    # @partial(jit, static_argnums=(0, 2))
-    def _periodic_wrap(self, cvs, min=False):
-        """Translate cvs such over periodic vector
-
-        Args:
-            cvs: array of cvs
-            min (bool): if False, translate to cv range. I true, minimises norm of vector
-        """
-
-        return self.cvs.metric.wrap(cvs)
 
     @staticmethod
     def load(filename) -> Bias:
@@ -305,7 +302,6 @@ class BiasF(Bias):
         super().__init__(cvs, start=None, step=None)
 
     def _compute(self, cvs):
-        # cvs = self.cvs.metric.wrap(cvs)
         return self.f(cvs)[0]
 
     def _get_args(self):
@@ -342,64 +338,11 @@ class HarmonicBias(Bias):
         super().__init__(cvs)
 
     def _compute(self, cvs):
-        r = self.cvs.metric.distance(cvs, self.q0, wrap_x2=False)
+        r = self.cvs.metric.distance(cvs, self.q0)
         return jnp.einsum('i,i,i', self.k, r, r)
 
     def _get_args(self):
         return []
-
-
-class ContinuousHarmonicBias(Bias):
-
-    def __init__(self, HarmonicBias: HarmonicBias):
-
-        cvs = HarmonicBias.cvs
-
-        self.Ks = jnp.array([HarmonicBias.k])
-        self.q0s = jnp.array([HarmonicBias.q0])
-
-        super().__init__(cvs, 0, 1)
-
-        self.last_bias = jnp.nan
-        self.last_cvs = None
-
-    def update_bias(self, coordinates, cell):
-        cvs, _, _ = self.cvs.compute(coordinates, cell, jac_p=None, jac_c=None)
-        bias = self.e(cvs, *self._get_args())
-        # bias, _ = self.compute(cvs)
-
-        if abs(bias - self.last_bias) / kjmol > 20:
-
-            if bias > self.last_bias:
-                a = cvs
-                b = self.last_cvs
-            else:
-                b = self.last_cvs
-                a = cvs
-
-            r = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=self.q0s, x2=b)
-            biases = jnp.einsum('ji,ji,ji -> j', r, r, self.Ks)
-            i = np.argmin(biases)
-            Ks = self.Ks[i, :]
-            q0 = self.q0s[i, :] - (b - a)
-
-            self.q0s = jnp.append(self.q0s, jnp.array([q0]), axis=0)
-            self.Ks = jnp.append(self.Ks, jnp.array([Ks]), axis=0)
-
-            bias = self.e(cvs, *self._get_args())
-            # bias, _ = self.compute(cvs)
-
-        self.last_cvs = cvs
-        self.last_bias = bias
-
-    def _compute(self, cvs, q0s, Ks):
-        """Computes sum of hills"""
-        r = jnp.apply_along_axis(self.cvs.metric.distance, axis=1, arr=q0s, x2=cvs)
-        bias = jnp.einsum('ji,ji,ji -> j', r, r, Ks)
-        return jnp.min(bias)
-
-    def _get_args(self):
-        return [self.q0s, self.Ks]
 
 
 class BiasMTD(Bias):
@@ -514,12 +457,16 @@ class BiasMTD(Bias):
 class GridBias(Bias):
     """Bias interpolated from lookup table on uniform grid. values are caluclated in bin centers  """
 
-    def __init__(self, cvs: CV, vals, start=None, fill='max', step=None, centers=True) -> None:
+    def __init__(self, cvs: CV, vals, start=None, fill='max', step=None, centers=True, wrap=True) -> None:
         super().__init__(cvs, start, step)
 
         if centers == False:
             raise NotImplementedError
         assert cvs.n == 2
+
+        assert wrap == True, 'lives in wrapped space'
+
+        self.wrap = wrap
 
         #extand grid
         bias = np.zeros(np.array(vals.shape) + 2)
@@ -558,12 +505,9 @@ class GridBias(Bias):
         self.vals = bias
         self.cvs = cvs
 
-        self.per = self.cvs.metric.boundaries
+        self.per = self.cvs.metric.wrap_boundaries
 
     def _compute(self, cvs):
-        #inspiration taken from https://github.com/adam-coogan/jaxinterp2d
-
-        # cvs = self.cvs.metric.wrap(cvs)  #inside boundaries
         per = self.per
 
         coords = jnp.array((cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) * (np.array(self.vals.shape) - 2)) + 0.5

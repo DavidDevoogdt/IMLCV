@@ -111,7 +111,7 @@ class Rounds(ABC):
         if round == None:
             round = self.round
 
-        for r in range(max(round - num, 0), round + 1):
+        for r in range(max(round - (num - 1), 0), round + 1):
             r = self._get_round(r)
             for i in r['names']:
                 i_dict = self._get_i(r['round'], i)
