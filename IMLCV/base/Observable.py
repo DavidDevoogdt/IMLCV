@@ -1,29 +1,21 @@
 from __future__ import annotations
 
-import os
-from ast import arg
 from functools import partial
-from pickle import BINSTRING
-from textwrap import wrap
 
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 import pathos
-import scipy
-from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, MinBias
+from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
-from molmod.constants import boltzmann
-from molmod.units import femtosecond, kjmol
 from thermolib.thermodynamics.bias import BiasPotential2D
-from thermolib.thermodynamics.fep import (FreeEnergySurface2D,
-                                          SimpleFreeEnergyProfile, plot_feps)
-from thermolib.thermodynamics.histogram import Histogram2D, plot_histograms
+from thermolib.thermodynamics.fep import FreeEnergySurface2D
+from thermolib.thermodynamics.histogram import Histogram2D
 
 
 class Observable:
-    """class to convert data and CVs to different thermodynamic/ kinetic observables."""
+    """class to convert data and CVs to different thermodynamic/ kinetic
+    observables."""
 
     samples_per_bin = 10
 
@@ -41,17 +33,17 @@ class Observable:
 
         self.folder = rounds.folder
         self.fes = None
+        self.bounds = None
 
-    def _fes_2D(self, plot=True):
+    def _fes_2d(self, plot=True):
         # fes = FreeEnergySurface2D.from_txt
         if self.fes is not None:
             return self.fes, self.bounds
 
         temp = self.rounds.T
-        beta = 1 / (boltzmann * temp)
 
         common_bias = self.rounds.get_bias()
-        dir = f'{self.folder}/round_{self.rounds.round}'
+        directory = f'{self.folder}/round_{self.rounds.round}'
 
         if isinstance(self.rounds, RoundsMd):
 
@@ -60,12 +52,12 @@ class Observable:
             biases = []
             plot_args = []
 
-        for dict in self.rounds.iter(num=1):
-            pos = dict["positions"][:]
-            bias = Bias.load(dict['attr']["name_bias"])
+        for dictionary in self.rounds.iter(num=1):
+            pos = dictionary["positions"][:]
+            bias = Bias.load(dictionary['attr']["name_bias"])
 
-            if 'cell' in dict:
-                cell = dict["cell"][:]
+            if 'cell' in dictionary:
+                cell = dictionary["cell"][:]
                 arr = np.array(
                     [
                         bias.cvs.compute(coordinates=x, cell=y)[0]
@@ -90,34 +82,34 @@ class Observable:
             trajs_wrapped.append(arr_wrap)
             trajs.append(arr)
 
-            if plot == True:
-                if dict['round']['round'] == self.rounds.round:
-                    i = dict['i']
+            if plot:
+                if dictionary['round']['round'] == self.rounds.round:
+                    i = dictionary['i']
 
                     plot_args.append({
                         'self': bias,
-                        'name': f'{dir}/umbrella_{i}',
+                        'name': f'{directory}/umbrella_{i}',
                         'traj': [arr],
                     })
 
-            biases.append(Observable._thermo_bias2D(bias))
+            biases.append(Observable._ThermoBias2D(bias))
 
-        if plot == True:
+        if plot:
 
             plot_args.append({
                 'self': common_bias,
-                'name': f'{dir}/combined',
+                'name': f'{directory}/combined',
                 'traj': trajs,
             })
 
             def pl(args):
                 Bias.plot(**args)
 
-            #async plot and continue
+            # async plot and continue
             with pathos.pools.SerialPool() as pool:
                 list(pool.map(pl, plot_args))
 
-            mg, bins = self._FES_mg(trajs=trajs_wrapped)
+            bounds, bins = self._FES_mg(trajs=trajs_wrapped)
 
             histo = Histogram2D.from_wham_c(
                 bins=bins,
@@ -130,11 +122,11 @@ class Observable:
         elif isinstance(self.rounds, RoundsCV):
 
             trajs = []
-            for dict in self.rounds.iter(num=np.Inf):
-                pos = dict["positions"][:]
+            for dictionary in self.rounds.iter(num=np.Inf):
+                pos = dictionary["positions"][:]
 
-                if 'cell' in dict:
-                    cell = dict["cell"][:]
+                if 'cell' in dictionary:
+                    cell = dictionary["cell"][:]
                     arr = np.array(
                         [
                             self.cvs.compute(coordinates=x, cell=y)[0]
@@ -153,7 +145,7 @@ class Observable:
 
                 trajs.append(arr)
 
-            mg, bins = self._FES_mg(trajs=trajs, n=10)
+            bounds, bins = self._FES_mg(trajs=trajs, n=10)
             data = np.vstack(trajs)
             histo = Histogram2D.from_single_trajectory(
                 data,
@@ -167,13 +159,13 @@ class Observable:
         fes.set_ref()
 
         self.fes = fes
-        self.bounds = bins
+        self.bounds = bounds
 
         if plot:
-            bias = self.fes_Bias(internal=True)
+            bias = self.fes_bias(internal=True)
             bias.plot(name=f'{self.folder}/FES_thermolib_{self.rounds.round}')
 
-        return fes, bins
+        return fes, bounds
 
     def new_metric(self, plot=False):
         assert isinstance(self.rounds, RoundsMd)
@@ -194,8 +186,8 @@ class Observable:
 
             return None
 
-        for dict in self.rounds.iter(num=1):
-            bias = Bias.load(dict['attr']["name_bias"])
+        for r in self.rounds.iter(num=1):
+            bias = Bias.load(r['attr']["name_bias"])
             if cvs is None:
                 cvs = bias.cvs
 
@@ -213,7 +205,7 @@ class Observable:
             for t in trajs:
                 n += t.size
 
-            #20 points per bin on average
+            # 20 points per bin on average
             n = int(n**(1 / trajs[0].ndim) / self.samples_per_bin)
 
             assert n >= 4, "sample more points"
@@ -226,13 +218,10 @@ class Observable:
             np.linspace(a, b, n, endpoint=True, dtype=np.double)
             for a, b in bounds
         ]
-        bin_centers = [0.5 * (row[:-1] + row[1:]) for row in bins]
 
-        mg = np.meshgrid(*bin_centers)
+        return bounds, bins
 
-        return mg, bins
-
-    class _thermo_bias2D(BiasPotential2D):
+    class _ThermoBias2D(BiasPotential2D):
 
         def __init__(self, bias: Bias) -> None:
             self.bias = bias
@@ -241,7 +230,7 @@ class Observable:
 
         def __call__(self, cv1, cv2):
             cvs = jnp.array([cv1, cv2])
-            #values are already wrapped
+            # values are already wrapped
             b, _ = jnp.apply_along_axis(partial(self.bias.compute, wrap=False),
                                         axis=0,
                                         arr=cvs,
@@ -255,9 +244,9 @@ class Observable:
         def print_pars(self, *pars_units):
             pass
 
-    def fes_Bias(self, kind='normal', plot=False, fs=None, internal=False):
+    def fes_bias(self, kind='normal', plot=False, fs=None, internal=False):
         if fs is None:
-            fes, bounds = self._fes_2D(plot=plot)
+            fes, bounds = self._fes_2d(plot=plot)
 
             if kind == 'normal':
                 fs = fes.fs
@@ -267,7 +256,7 @@ class Observable:
         # fes_interp = Observable._interp(fs)
         bias = np.transpose(fs)
 
-        if internal == False:
+        if not internal:
             bias = -bias
             bias[:] -= bias[~np.isnan(bias)].min()
             fill = 'min'

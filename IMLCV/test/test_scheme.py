@@ -1,13 +1,13 @@
 import os
 from functools import partial
 
-from IMLCV.base.bias import BiasF, BiasMTD, HarmonicBias, NoneBias
 from IMLCV.base.CV import CV, CombineCV, CVUtils, Metric, hyperTorus
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.scheme import Scheme
+from molmod import units
 from molmod.units import kelvin, kjmol
 from yaff.log import log
 from yaff.test.common import get_alaninedipeptide_amber99ff
@@ -16,9 +16,6 @@ log.set_level(log.medium)
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 os.chdir(dname)
-
-import numpy as np
-from molmod import units
 
 
 def test_ala_dipep_FES():
@@ -93,7 +90,8 @@ def test_cv_discovery():
 
     rounds2 = rounds.unbias_rounds(calc=False)
     obs = Observable(rounds2, rounds.get_bias().cvs)
-    bias = obs.fes_Bias(plot=True)
+    bias = obs.fes_bias(plot=True)
+    print(bias)
 
 
 if __name__ == "__main__":

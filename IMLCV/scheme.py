@@ -7,8 +7,8 @@ import numpy as np
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 
-from IMLCV.base.bias import (Bias, BiasMTD, CompositeBias, CvMonitor,
-                             HarmonicBias, NoneBias)
+from IMLCV.base.bias import (BiasMTD, CompositeBias, CvMonitor, HarmonicBias,
+                             NoneBias)
 from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
@@ -66,6 +66,7 @@ class Scheme:
         self.steps = 0
         self.cont_biases = None
 
+    @staticmethod
     def from_rounds(
         cvd: CVDiscovery,
         folder,
@@ -87,7 +88,7 @@ class Scheme:
         return self
 
     def _MTDBias(self, steps, K=None, sigmas=None, start=500, step=250):
-        """generate a metadynamics bias"""
+        """generate a metadynamics bias."""
 
         if sigmas is None:
             sigmas = (self.md.bias.cvs.metric[:, 1] -
@@ -104,9 +105,10 @@ class Scheme:
         self.md.bias.finalize()
 
     def _FESBias(self, plot=True, kind='normal'):
-        """replace the current md bias with the computed FES from current round"""
+        """replace the current md bias with the computed FES from current
+        round."""
         obs = Observable(self.rounds)
-        fesBias = obs.fes_Bias(kind=kind, plot=plot)
+        fesBias = obs.fes_bias(kind=kind, plot=plot)
 
         self.md = self.md.new_bias(fesBias, filename=None)
 
@@ -118,7 +120,7 @@ class Scheme:
             raise NotImplementedError(
                 "Metric provide boundaries or force constant K")
 
-        if K == None:
+        if K is None:
             K = 1.0 * self.md.T * boltzmann * (
                 n * 2 / (cvs.metric.wrap_boundaries[:, 1] -
                          cvs.metric.wrap_boundaries[:, 0]))**2
@@ -136,9 +138,9 @@ class Scheme:
         self.rounds.run_par(self.cont_biases, steps=steps)
 
     def round(self, rnds=10, steps=5e4, update_metric=False):
-        startround = 0
+        # startround = 0
 
-        #update biases untill there are no discontinues jumps left
+        # update biases untill there are no discontinues jumps left
         for i in range(rnds):
 
             self._grid_umbrella(steps=steps)

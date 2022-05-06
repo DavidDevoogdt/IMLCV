@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from fileinput import filename
 from typing import Callable, Union
 
 import ase
@@ -14,14 +13,10 @@ import ase.geometry
 import ase.stress
 import dill
 import h5py
-import jax.numpy as jnps
 import molmod
 import molmod.constants
 import molmod.units
 import numpy as np
-import openmm
-import openmm.openmm
-import openmm.unit
 import yaff.analysis.biased_sampling
 import yaff.external
 import yaff.pes
@@ -30,8 +25,7 @@ import yaff.pes.ext
 import yaff.sampling
 import yaff.sampling.iterative
 import yaff.system
-from IMLCV.base.bias import Bias, CompositeBias, Energy
-from yaff.log import log, timer
+from IMLCV.base.bias import Bias, Energy
 from yaff.sampling.io import XYZWriter
 
 
@@ -124,7 +118,7 @@ class MDEngine(ABC):
             [cls, d] = dill.load(f)
         d['filename'] = None
 
-        #replace and add kwargs
+        # replace and add kwargs
         for key in kwargs.keys():
             d[key] = kwargs[key]
 
@@ -149,10 +143,9 @@ class MDEngine(ABC):
         """
 
     def get_trajectory(self):
-        """ returns numpy arrays with
-            posititons, times, forces, energies, 
-            
-            returns bias 
+        """returns numpy arrays with posititons, times, forces, energies,
+
+        returns bias
         """
         raise NotImplementedError
 
@@ -163,7 +156,7 @@ class MDEngine(ABC):
 
     @abstractmethod
     def get_state(self):
-        """returns the coordinates and cell at current md step"""
+        """returns the coordinates and cell at current md step."""
         raise NotImplementedError
 
 
@@ -182,6 +175,7 @@ class YaffEngine(MDEngine):
             ener = self._YaffFF(ener)
 
         super().__init__(ener=ener, **kwargs)
+        self.verlet = None
 
     def _init_post(self):
 
@@ -194,7 +188,7 @@ class YaffEngine(MDEngine):
         if vhook is not None:
             hooks.append(vhook)
         if whook is not None:
-            hooks.append(whook),
+            hooks.append(whook)
         if bhook.hook:
             hooks.append(bhook)
 
@@ -210,7 +204,7 @@ class YaffEngine(MDEngine):
         return bhook
 
     def _whook(self):
-        #setup writer to collect results
+        # setup writer to collect results
         if self.filename is None:
             return None
         elif self.filename.endswith(".h5"):
@@ -221,12 +215,13 @@ class YaffEngine(MDEngine):
             xyzhook = XYZWriter(self.filename, step=self.write_step)
             whook = xyzhook
         else:
-            raise NotImplemented("only h5 and xyz are supported as filename")
+            raise NotImplementedError(
+                "only h5 and xyz are supported as filename")
 
         return whook
 
     def _thook(self):
-        """setup baro/thermostat"""
+        """setup baro/thermostat."""
         if self.thermostat:
             nhc = yaff.sampling.NHCThermostat(self.T,
                                               timecon=self.timecon_thermo)
@@ -275,7 +270,7 @@ class YaffEngine(MDEngine):
 
             def __init__(self, system: yaff.system.System, atoms, calculator):
                 yaff.pes.ForcePart.__init__(self, 'ase', system)
-                self.system = system  # store system to obtain current pos and box
+                self.system = system
                 self.atoms = atoms
                 self.calculator = calculator
 
@@ -289,7 +284,8 @@ class YaffEngine(MDEngine):
                 ) * molmod.units.electronvolt
                 if gpos is not None:
                     forces = self.atoms.get_forces()
-                    gpos[:] = -forces * molmod.units.electronvolt / molmod.units.angstrom
+                    gpos[:] = -forces * molmod.units.electronvolt / \
+                        molmod.units.angstrom
                 if vtens is not None:
                     volume = np.linalg.det(self.atoms.get_cell())
                     stress = ase.stress.voigt_6_to_full_3x3_stress(
@@ -335,11 +331,11 @@ class YaffEngine(MDEngine):
                 for frame, energy_au in enumerate(f['trajectory']['epot']):
                     pos_A = f['trajectory']['pos'][
                         frame, :, :] / molmod.units.angstrom
-                    #vel_x = f['trajectory']['vel'][frame,:,:] / x
+                    # vel_x = f['trajectory']['vel'][frame,:,:] / x
                     energy_eV = energy_au / molmod.units.electronvolt
                     forces_eVA = -f['trajectory']['gpos_contribs'][
-                        frame,
-                        0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
+                        frame, 0, :, :] * molmod.units.angstrom / \
+                        molmod.units.electronvolt  # forces = -gpos
 
                     pbc = 'cell' in f['trajectory']
                     if pbc:
@@ -375,7 +371,7 @@ class YaffEngine(MDEngine):
         self.verlet.run(int(steps))
 
     def get_state(self):
-        """returns the coordinates and cell at current md step"""
+        """returns the coordinates and cell at current md step."""
         return [self.ener.system.pos[:], self.ener.system.cell.rvecs[:]]
 
     class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
@@ -390,7 +386,7 @@ class YaffEngine(MDEngine):
             self.ff = ff
             self.bias = bias
 
-            #not all biases have a hook
+            # not all biases have a hook
             self.hook = (self.bias.start is not None) and (self.bias.step
                                                            is not None)
             if self.hook:
@@ -398,7 +394,10 @@ class YaffEngine(MDEngine):
                 super().__init__(start=self.bias.start, step=self.bias.step)
 
         def compute(self, gpos=None, vtens=None):
-            [ener, gpos_jax, vtens_jax
+            [
+                ener,
+                gpos_jax,
+                vtens_jax,
             ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
                                        cell=self.ff.system.cell.rvecs,
                                        gpos=gpos,
@@ -407,7 +406,10 @@ class YaffEngine(MDEngine):
             if np.isnan(ener):
                 import jax
                 with jax.disable_jit():
-                    [ener, gpos_jax, vtens_jax
+                    [
+                        ener,
+                        gpos_jax,
+                        vtens_jax,
                     ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
                                                cell=self.ff.system.cell.rvecs,
                                                gpos=gpos,
@@ -422,8 +424,11 @@ class YaffEngine(MDEngine):
 
             return ener
 
+        def get_log(self):
+            return super().get_log()
+
         def __call__(self, iterative):
-            #skip initial hook called by verlet integrator
+            # skip initial hook called by verlet integrator
             if self.init:
                 self.init = False
                 return
@@ -436,6 +441,8 @@ class YaffEngine(MDEngine):
     class _YaffFF(Energy, yaff.pes.ForceField):
 
         def __init__(self, ff: Union[yaff.pes.ForceField, Callable]):
+            super().__init__()
+
             from_func = isinstance(ff, Callable)
             f = ff
 
@@ -496,43 +503,43 @@ class YaffEngine(MDEngine):
                 return state_dict
 
             raise NotImplementedError(
-                "see https://github.com/cython/cython/issues/4713, generate from function instead"
-            )
+                """see https://github.com/cython/cython/issues/4713, generate
+                from function instead""")
 
-            import inspect
+            # import inspect
 
-            # fails:
-            # nlist <class 'yaff.pes.nlist.NeighborList'>
-            # pair_pot <class 'yaff.pes.ext.PairPotLJ'>
-            # dlist <class 'yaff.pes.dlist.DeltaList'>
-            # iclist <class 'yaff.pes.iclist.InternalCoordinateList'>
-            # vlist <class 'yaff.pes.vlist.ValenceList'>
+            # # fails:
+            # # nlist <class 'yaff.pes.nlist.NeighborList'>
+            # # pair_pot <class 'yaff.pes.ext.PairPotLJ'>
+            # # dlist <class 'yaff.pes.dlist.DeltaList'>
+            # # iclist <class 'yaff.pes.iclist.InternalCoordinateList'>
+            # # vlist <class 'yaff.pes.vlist.ValenceList'>
 
-            def clean(k, d, p):
-                if k == "system":
-                    d[k] = None
-                elif k == "nlist":
-                    d[k] = None
-                else:
-                    if k in p.__dict__.keys():
-                        d[k] = p.__dict__[k]
+            # def clean(k, d, p):
+            #     if k == "system":
+            #         d[k] = None
+            #     elif k == "nlist":
+            #         d[k] = None
+            #     else:
+            #         if k in p.__dict__.keys():
+            #             d[k] = p.__dict__[k]
 
-                return d
+            #     return d
 
-            t = []
-            for p in self.parts:
-                d = {}
+            # t = []
+            # for p in self.parts:
+            #     d = {}
 
-                for k in inspect.signature(p.__init__).parameters.keys():
-                    d = clean(k, d, p)
-                t.append([p.__class__, d])
+            #     for k in inspect.signature(p.__init__).parameters.keys():
+            #         d = clean(k, d, p)
+            #     t.append([p.__class__, d])
 
-            nl = {}
-            for k in self.nlist.__dict__:
-                nl = clean(k, nl, self.nlist)
-            nl = [p.__class__, nl]
+            # nl = {}
+            # for k in self.nlist.__dict__:
+            #     nl = clean(k, nl, self.nlist)
+            # nl = [p.__class__, nl]
 
-            return [sysdict, nl, t]
+            # return [sysdict, nl, t]
 
         def __setstate__(self, state_dict):
 
@@ -548,25 +555,24 @@ class YaffEngine(MDEngine):
                 return self
 
             raise NotImplementedError(
-                "see https://github.com/cython/cython/issues/4713, generate from function instead"
-            )
+                "see https://github.com/cython/cython/issues/4713")
 
-            [sysdict, nl, pp] = state_dict
+            # [sysdict, nl, pp] = state_dict
 
-            nlist = yaff.pes.NeighborList.__new__()
+            # nlist = yaff.pes.NeighborList.__new__()
 
-            ts = []
-            for state_dict in pp:
-                [cls, kwargs] = state_dict
-                if 'system' in kwargs.keys():
-                    kwargs['system'] = system
-                if 'nlist' in kwargs.keys():
-                    kwargs['nlist'] = nlist()
-                ts.append(cls(**kwargs))
+            # ts = []
+            # for state_dict in pp:
+            #     [cls, kwargs] = state_dict
+            #     if 'system' in kwargs.keys():
+            #         kwargs['system'] = system
+            #     if 'nlist' in kwargs.keys():
+            #         kwargs['nlist'] = nlist()
+            #     ts.append(cls(**kwargs))
 
-            ff = yaff.pes.ForceField(system, ts[1:], ts[0])
+            # ff = yaff.pes.ForceField(system, ts[1:], ts[0])
 
-            return self
+            # return self
 
     class _GposContribStateItem(yaff.sampling.iterative.StateItem):
         """Keeps track of all the contributions to the forces."""
@@ -579,7 +585,6 @@ class YaffEngine(MDEngine):
             natom, _ = iterative.gpos.shape
             gpos_contribs = np.zeros((n, natom, 3))
             for i in range(n):
-                # gpos_contribs = gpos_contribs.at[i, :, :].set(iterative.ff.parts[i].gpos)
                 gpos_contribs[i, :, :] = iterative.ff.parts[i].gpos
             return gpos_contribs
 

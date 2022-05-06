@@ -1,13 +1,7 @@
 from __future__ import division
 
-import cProfile
 import os
-import pstats
-from pstats import SortKey
 
-import ase.io
-import ase.units
-import jax.numpy as jnp
 import numpy as np
 import pytest
 from IMLCV.base.bias import Bias, BiasMTD, CompositeBias

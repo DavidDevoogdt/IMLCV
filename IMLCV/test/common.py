@@ -4,7 +4,7 @@ import ase.io
 import ase.units
 import numpy as np
 from ase.calculators.cp2k import CP2K
-from IMLCV.base.bias import BiasMTD, Energy
+from IMLCV.base.bias import BiasMTD
 from IMLCV.base.CV import CV, CombineCV, CVUtils, hyperTorus
 from IMLCV.base.MdEngine import YaffEngine
 from molmod import units
@@ -74,7 +74,7 @@ def mil53_yaff():
 
 def todo_ASE_yaff():
 
-    #make CP2K ase calculator
+    # make CP2K ase calculator
     path_atoms = Path.cwd() / 'atoms.xyz'
     with open(path_atoms, 'r') as f:
         atoms = ase.io.read(f)
@@ -107,7 +107,7 @@ def todo_ASE_yaff():
 
     atoms.calc = calc_cp2k
 
-    #do yaff MD
+    # do yaff MD
     ff = YaffEngine.create_forcefield_from_ASE(atoms, calc_cp2k)
     cvs = CV(CVUtils.Volume)
     bias = BiasMTD(cvs=cvs,
@@ -129,16 +129,16 @@ def todo_ASE_yaff():
     return yaffmd
 
 
-def villin_OpenMM():
+# def villin_OpenMM():
 
-    pdb = PDBFile('villin.pdb')
-    forcefield = ForceField('amber14-all.xml', 'amber14/tip3pfb.xml')
-    system = forcefield.createSystem(pdb.topology,
-                                     nonbondedMethod=PME,
-                                     nonbondedCutoff=1 * nanometer,
-                                     constraints=HBonds)
+#     pdb = PDBFile('villin.pdb')
+#     forcefield = ForceField('amber14-all.xml', 'amber14/tip3pfb.xml')
+#     system = forcefield.createSystem(pdb.topology,
+#                                      nonbondedMethod=PME,
+#                                      nonbondedCutoff=1 * nanometer,
+#                                      constraints=HBonds)
 
-    simulation = Simulation(pdb.topology, system, integrator)
-    simulation.context.setPositions(pdb.positions)
-    T = 300 * kelvin
-    timestep = 0.004 * picoseconds
+#     simulation = Simulation(pdb.topology, system, integrator)
+#     simulation.context.setPositions(pdb.positions)
+#     T = 300 * kelvin
+#     timestep = 0.004 * picoseconds

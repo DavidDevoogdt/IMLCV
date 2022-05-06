@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import itertools
-from abc import ABC
-from dbm import ndbm
 from functools import partial
 from typing import Iterable
 
@@ -13,13 +10,10 @@ import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
-from descartes import PolygonPatch
-from jax import grad, jit
+from jax import jit
 from matplotlib import pyplot as plt
-from matplotlib.cbook import ls_mapper
-from matplotlib.colors import Colormap
-from scipy.interpolate import LinearNDInterpolator, Rbf, griddata
-from shapely.geometry import LineString, MultiPoint, Point
+from scipy.interpolate import LinearNDInterpolator, Rbf
+from shapely.geometry import MultiPoint, Point
 from sklearn.cluster import DBSCAN
 
 
@@ -59,14 +53,16 @@ class Metric:
 
     @partial(jit, static_argnums=(0, 3))
     def distance(self, x1, x2):
-        """x1 and x2 should already be wrapped"""
+        """x1 and x2 should already be wrapped."""
 
         xs = x2 - x1
         return self._periodic_wrap(xs, min=True)
 
     @partial(jit, static_argnums=(0, 2))
     def _periodic_wrap(self, xs, min=False):
-        """Translate cvs such over unit cell. min=True calculates distances, False translates one vector inside box
+        """Translate cvs such over unit cell.
+
+        min=True calculates distances, False translates one vector inside box
         """
 
         per = self.wrap_boundaries
@@ -86,7 +82,7 @@ class Metric:
 
     @partial(jit, static_argnums=(0))
     def wrap(self, x):
-        """transform CVs to remapped metric value """
+        """transform CVs to remapped metric value."""
 
         if self.wrap_meshgrids is None:
             return x
@@ -114,7 +110,8 @@ class Metric:
 
         if self.wrap_meshgrids is None and other.wrap_meshgrids is None:
             wrap_meshgrids = None
-        elif self.wrap_meshgrids is not None and other.wrap_meshgrids is not None:
+        elif (self.wrap_meshgrids is not None) and (other.wrap_meshgrids
+                                                    is not None):
             wrap_meshgrids = [*self.wrap_meshgrids, *other.wrap_meshgrids]
         else:
             raise NotImplementedError
@@ -128,7 +125,7 @@ class Metric:
 
     def grid(self, n, endpoints=True, wrap=False):
 
-        if wrap == True:
+        if wrap:
             b = self.wrap_boundaries
         else:
             b = self.boundaries
@@ -147,7 +144,8 @@ class Metric:
         return len(self.periodicities)
 
     def update_metric(self, trajs, convex=True, plot=True, acc=30) -> Metric:
-        """find best fitting bounding box and get affine tranformation+ new boundaries"""
+        """find best fitting bounding box and get affine tranformation+ new
+        boundaries."""
 
         trajs = np.array(trajs)
 
@@ -167,11 +165,10 @@ class Metric:
             raise NotImplementedError
 
         bound = a.boundary
-        bound_type = type(bound)
 
         dist_avg = bound.length / len(trajs)
 
-        if convex == True:
+        if convex:
             assert np.array([
                 p.distance(bound) for p in mpoints
             ]).max() < acc * dist_avg, "boundaries are not convex"
@@ -197,7 +194,7 @@ class Metric:
 
             return a
 
-        #sort pair
+        # sort pair
         as1 = proj.argsort(axis=1)
         proj = np.take_along_axis(proj, as1, axis=1)
         trajs = np.array(
@@ -207,7 +204,7 @@ class Metric:
                             min_samples=10).fit(get_lengths(proj,
                                                             gaps)).labels_
 
-        #cylically join begin and end clusters
+        # cylically join begin and end clusters
         centers = [
             np.average(proj[clustering == i, 0])
             for i in range(0,
@@ -228,13 +225,14 @@ class Metric:
             min_samples=10,
         ).fit(get_lengths(proj, gaps)).labels_
 
-        if plot == True:
+        if plot:
             for i in range(-1, clustering.max() + 1):
                 plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
             plt.show()
 
         ndim = clustering.max() + 1
-        assert ndim <= self.ndim, "number of new periodicities do not correspond wiht original number"
+        assert ndim <= self.ndim, """number of new periodicities do not
+        correspond wiht original number"""
 
         if self.ndim != 2:
             raise NotImplementedError("only tested for n == 2")
@@ -282,7 +280,7 @@ class Metric:
             points = []
             z = []
 
-            #add boundaries
+            # add boundaries
             lin = np.linspace(0, boundaries[i][1], num=n)
             z.append(lin)
             z.append(lin)
@@ -293,7 +291,7 @@ class Metric:
             points.append(xrange[i][:, 0, :])
             points.append(xrange[i][:, 1, :])
 
-            #append other boundaries
+            # append other boundaries
             for j in range(self.ndim):
                 if i == j:
                     continue
@@ -301,7 +299,7 @@ class Metric:
                 z.append(np.zeros(n))
                 z.append(np.ones(n) * boundaries[i][1])
 
-                #potentially differently ordered
+                # potentially differently ordered
                 arr = np.array(lrange[j])
                 arr.sort(axis=1)
                 range_high.sort()
@@ -329,9 +327,10 @@ class Metric:
 
             interps.append(
                 LinearNDInterpolator(np.vstack(points), np.hstack(z)))
-            # interps.append(Rbf(np.vstack(points)[:, 0], np.vstack(points)[:, 1], np.hstack(z)))
+            # interps.append(Rbf(np.vstack(points)[:, 0],
+            # np.vstack(points)[:, 1], np.hstack(z)))
 
-        #get the boundaries from most distal points in traj + some margin
+        # get the boundaries from most distal points in traj + some margin
         num = 50
 
         old_boundaries = []
@@ -353,7 +352,7 @@ class Metric:
             arr = interps[i](*interp_meshgrid)
             interp_mg.append(arr)
 
-        #add some space arround
+        # add some space arround
         for i in range(3):
             # #find closest points
             a = ~jnp.isnan(interp_mg[0])
@@ -365,16 +364,17 @@ class Metric:
 
             b = jnp.logical_and(b, ~a)
 
-            #extrapolate
+            # extrapolate
             for i in range(ndim):
                 interp_mg[i][b] = Rbf(
                     *[ip[a] for ip in interp_meshgrid],
                     interp_mg[i][a])(*[ip[b] for ip in interp_meshgrid])
 
-        if plot == True:
+        if plot:
 
             for j in [0, 1]:
-                # plt.contourf(interp_meshgrid[0], interp_meshgrid[1], c=interp_mg[i], cmap=plt.get_cmap('plasma'), s=2)
+                # plt.contourf(interp_meshgrid[0], interp_meshgrid[1],
+                # c=interp_mg[i], cmap=plt.get_cmap('plasma'), s=2)
 
                 plt.pcolor(interp_meshgrid[0],
                            interp_meshgrid[1],
@@ -497,7 +497,8 @@ class CombineCV(CV):
 
 
 class CVUtils:
-    """collection of predifined CVs. Intended to be used as argument to CV class.
+    """collection of predifined CVs. Intended to be used as argument to CV
+    class.
 
     args:
         coordinates (np.array(n_atoms,3)): cartesian coordinates
@@ -506,8 +507,8 @@ class CVUtils:
 
     @staticmethod
     def dihedral(coordinates, cell, numbers):
-        """from https://stackoverflow.com/questions/20305272/dihedral-torsion-angle-from-four-points-in-cartesian-
-        coordinates-in-python.
+        """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
+        angle-from-four-points-in-cartesian- coordinates-in-python.
 
         args:
             numbers: list with index of 4 atoms that form dihedral

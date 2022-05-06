@@ -4,26 +4,15 @@ import os
 from abc import ABC
 from collections import Iterable
 from functools import partial
-from math import floor
-from pickletools import optimize
-from turtle import pos
-from typing import Dict, Tuple
 
 import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
 import pathos
-import scipy as sp
-from ase import Atoms
-from ase.io import read, write
-from attr import attr
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
 from molmod.constants import boltzmann
-from molmod.units import kjmol, nanosecond, picosecond
-from numpy import average, interp, linalg, linspace
-from scipy import interpolate, optimize
 
 # import multiprocessing_on_dill as multiprocessing
 
@@ -49,7 +38,7 @@ class Rounds(ABC):
 
         self.h5file = f"{folder}/rounds.h5"
 
-        #overwrite if already exists
+        # overwrite if already exists
         h5py.File(self.h5file, 'w')
 
     def save(self):
@@ -62,17 +51,17 @@ class Rounds(ABC):
             self: Rounds = dill.load(f)
         return self
 
-    def add(self, i, dict, attrs=None):
+    def add(self, i, d, attrs=None):
 
-        assert all(key in dict
-                   for key in ['energy', 'positions', 'forces', 'cell', 't'])
+        assert all(
+            key in d for key in ['energy', 'positions', 'forces', 'cell', 't'])
 
         with h5py.File(self.h5file, 'r+') as f:
             f.create_group(f'{self.round}/{i}')
 
-            for key in dict:
-                if dict[key] is not None:
-                    f[f'{self.round}/{i}'][key] = dict[key]
+            for key in d:
+                if d[key] is not None:
+                    f[f'{self.round}/{i}'][key] = d[key]
 
             if attrs is not None:
                 for key in attrs:
@@ -102,37 +91,37 @@ class Rounds(ABC):
 
         self.save()
 
-    def iter(self, round=None, num=3):
-        if round == None:
-            round = self.round
+    def iter(self, r=None, num=3):
+        if r is None:
+            r = self.round
 
-        for r in range(max(round - (num - 1), 0), round + 1):
+        for r in range(max(r - (num - 1), 0), r + 1):
             r = self._get_round(r)
             for i in r['names']:
                 i_dict = self._get_i(r['round'], i)
                 yield {**i_dict, 'round': r}
 
-    def _get_round(self, round):
+    def _get_round(self, r):
         with h5py.File(self.h5file, 'r') as f:
-            rounds = [k for k in f[f'{round}'].keys()]
+            rounds = [k for k in f[f'{r}'].keys()]
 
-            d = f[f"{round}"].attrs
+            d = f[f"{r}"].attrs
             r_attr = {key: d[key] for key in d}
-            r_attr['round'] = round
+            r_attr['round'] = r
             r_attr['names'] = rounds
         return r_attr
 
-    def _get_i(self, round, i):
+    def _get_i(self, r, i):
         with h5py.File(self.h5file, 'r') as f:
-            d = f[f"{round}/{i}"]
+            d = f[f"{r}/{i}"]
             y = {key: d[key][:] for key in d}
             attr = {key: d.attrs[key] for key in d.attrs}
         return {**y, 'attr': attr, 'i': i}
 
-    def _get_prop(self, name, round=None):
+    def _get_prop(self, name, r=None):
         with h5py.File(self.h5file, 'r') as f:
-            if round is not None:
-                f2 = f[f"{round}"]
+            if r is not None:
+                f2 = f[f"{r}"]
             else:
                 f2 = f
 
@@ -143,25 +132,28 @@ class Rounds(ABC):
 
     @property
     def T(self):
-        return self._get_prop('T', round=self.round)
+        return self._get_prop('T', r=self.round)
 
     @property
     def P(self):
-        return self._get_prop('P', round=self.round)
+        return self._get_prop('P', r=self.round)
 
-    def n(self, round=None):
-        if round is None:
-            round = self.round
-        return self._get_prop('num', round=round)
+    def n(self, r=None):
+        if r is None:
+            r = self.round
+        return self._get_prop('num', r=r)
 
 
 class RoundsCV(Rounds):
-    """class for unbiased rounds"""
+    """class for unbiased rounds."""
     pass
 
 
 class RoundsMd(Rounds):
-    """helper class to save/load all data in a consistent way. Gets passed between modules"""
+    """helper class to save/load all data in a consistent way.
+
+    Gets passed between modules
+    """
 
     TRAJ_KEYS = [
         "filename",
@@ -178,9 +170,12 @@ class RoundsMd(Rounds):
                          max_energy=max_energy)
 
     def add(self, md: MDEngine, i=None):
-        """adds all the saveble info of the md simulation. The resulting """
+        """adds all the saveble info of the md simulation.
 
-        if i == None:
+        The resulting
+        """
+
+        if i is None:
             i = self.i
             self.i += 1
 
@@ -189,7 +184,7 @@ class RoundsMd(Rounds):
         d, attr = RoundsMd._add(md, i,
                                 f'{self.folder}/round_{self.round}/bias_{i}')
 
-        super().add(d, attrs=attr, i=i)
+        super().add(d=d, attrs=attr, i=i)
 
     @staticmethod
     def _add(md: MDEngine, i, name_bias):
@@ -204,27 +199,26 @@ class RoundsMd(Rounds):
     def _validate(self, md: MDEngine):
 
         pass
+        # md0 = self._get_prop(self.round, 0, 'engine')
 
-        md0 = self._get_prop(self.round, 0, 'engine')
+        # #check equivalency of CVs
+        # md.bias.cvs == md0.bias.cvs
 
-        #check equivalency of CVs
-        md.bias.cvs == md0.bias.cvs
+        # #check equivalency of md engine params
 
-        #check equivalency of md engine params
+        # for k in self.ENGINE_KEYS:
+        #     assert md0.__dict__[k] == md.__dict__[k]
 
-        for k in self.ENGINE_KEYS:
-            assert md0.__dict__[k] == md.__dict__[k]
-
-        #check equivalency of energy source
-        dill.dumps(md.ener) == dill.dumps(md.ener)
+        # #check equivalency of energy source
+        # dill.dumps(md.ener) == dill.dumps(md.ener)
 
     def new_round(self, md: MDEngine):
 
         r = self.round + 1
 
-        dir = f'{self.folder}/round_{r}'
-        if not os.path.isdir(dir):
-            os.mkdir(dir)
+        directory = f'{self.folder}/round_{r}'
+        if not os.path.isdir(directory):
+            os.mkdir(directory)
 
         name_md = f'{self.folder}/round_{r}/engine'
         name_bias = f'{self.folder}/round_{r}/bias'
@@ -237,22 +231,22 @@ class RoundsMd(Rounds):
 
         super().new_round(attr=attr)
 
-    def get_bias(self, round=None, i=None) -> Bias:
-        if round == None:
-            round = self.round
+    def get_bias(self, r=None, i=None) -> Bias:
+        if r is None:
+            r = self.round
 
         with h5py.File(self.h5file, 'r') as f:
-            if i == None:
-                bn = f[f'{round}'].attrs['name_bias']
+            if i is None:
+                bn = f[f'{r}'].attrs['name_bias']
             else:
-                bn = f[f'{round}'][i].attrs['name_bias']
+                bn = f[f'{r}'][i].attrs['name_bias']
             return Bias.load(bn)
 
-    def get_engine(self, round=None) -> MDEngine:
-        if round == None:
-            round = self.round
+    def get_engine(self, r=None) -> MDEngine:
+        if r is None:
+            r = self.round
         with h5py.File(self.h5file, 'r') as f:
-            return MDEngine.load(f[f'{round}'].attrs['name_md'], filename=None)
+            return MDEngine.load(f[f'{r}'].attrs['name_md'], filename=None)
 
     def run(self, bias, steps):
         self.run_par([bias], steps)
@@ -303,10 +297,10 @@ class RoundsMd(Rounds):
             with pathos.pools.ProcessPool() as pool:
                 # with pathos.pools.SerialPool() as pool:
                 for [d, attr, i] in pool.map(_run_par, kwargs):
-                    super().add(dict=d, attrs=attr, i=i)
+                    super().add(d=d, attrs=attr, i=i)
         else:
             [d, attr, i] = _run_par(kwargs[0])
-            super().add(dict=d, attrs=attr, i=i)
+            super().add(d=d, attrs=attr, i=i)
 
         self.i += len(kwargs)
 
@@ -314,14 +308,12 @@ class RoundsMd(Rounds):
             os.remove(kw['new_name'])
 
     def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
-        import jax.numpy as jnp
 
         md = self.get_engine()
-        if self.n() > 1 or isinstance(self.get_bias(),
-                                      NoneBias) or calc == True:
+        if self.n() > 1 or isinstance(self.get_bias(), NoneBias) or calc:
             from IMLCV.base.Observable import Observable
             obs = Observable(self)
-            fesBias = obs.fes_Bias(plot=True)
+            fesBias = obs.fes_bias(plot=True)
 
             md = md.new_bias(fesBias, filename=None, write_step=5)
             self.new_round(md)
@@ -329,15 +321,15 @@ class RoundsMd(Rounds):
         if self.n() == 0:
             self.run(None, steps)
 
-        #construct rounds object
-        dict = self._get_i(self.round, 0)
+        # construct rounds object
+        r = self._get_i(self.round, 0)
         props = self._get_round(self.round)
         beta = 1 / (props['T'] * boltzmann)
-        bias = Bias.load(dict['attr']['name_bias'])
+        bias = Bias.load(r['attr']['name_bias'])
 
-        p = dict["positions"][:]
-        c = dict.get('cell')
-        t_orig = dict["t"][:]
+        p = r["positions"][:]
+        c = r.get('cell')
+        t_orig = r["t"][:]
 
         def _interp(x_new, x, y):
             if y is not None:
@@ -361,8 +353,8 @@ class RoundsMd(Rounds):
         tau = integr(1 / eb, t)
         tau_new = np.linspace(start=0.0, stop=tau.max(), num=int(num))
 
-        p_new = _interp(tau_new, tau, dict["positions"])
-        c_new = _interp(tau_new, tau, dict.get("cell"))
+        p_new = _interp(tau_new, tau, r["positions"])
+        c_new = _interp(tau_new, tau, r.get("cell"))
 
         roundscv = RoundsCV(self.extension, f'{self.folder}_unbiased')
         roundscv.new_round(props)

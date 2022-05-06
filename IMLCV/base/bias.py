@@ -5,20 +5,14 @@ from functools import partial
 from typing import Iterable
 
 import dill
-import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 import matplotlib.pyplot as plt
-import molmod
 import numpy as np
 from IMLCV.base.CV import CV
-from jax import disable_jit, grad, jacfwd, jit, value_and_grad
-from molmod.constants import boltzmann
-from molmod.units import kelvin, kjmol
-from scipy.interpolate import Rbf, RBFInterpolator, griddata, interp2d, interpn
-from yaff.pes import ForceField
-
-# from IMLCV.base.MdEngine import YaffEngine
+from jax import jacfwd, jit
+from molmod.units import kjmol
+from scipy.interpolate import griddata
 
 
 class Energy(ABC):
@@ -29,7 +23,8 @@ class Energy(ABC):
         pass
 
     def compute_coor(self, coordinates, cell, gpos=None, vir=None):
-        """Computes the bias, the gradient of the bias wrt the coordinates and the virial."""
+        """Computes the bias, the gradient of the bias wrt the coordinates and
+        the virial."""
         raise NotImplementedError
 
     def save(self, filename):
@@ -51,12 +46,15 @@ class Bias(Energy, ABC):
                 cvs: collective variables
                 start: number of md steps before update is called
                 step: steps between update is called"""
+        super().__init__()
 
         self.cvs = cvs
         self.start = start
         self.step = step
 
         self.__comp()
+
+        self.finalized = False
 
     def update_bias(self, coordinates, cell):
         """update the bias.
@@ -75,8 +73,8 @@ class Bias(Energy, ABC):
 
         def __eq__(self, other):
             eq = isinstance(
-                other, BiasMTD._HashableArrayWrapper) and (self.__hash__()
-                                                           == other.__hash__())
+                other, Bias._HashableArrayWrapper) and (self.__hash__()
+                                                        == other.__hash__())
             return eq
 
     @staticmethod
@@ -93,14 +91,15 @@ class Bias(Energy, ABC):
         def caller(*args):
             args = list(args)
             for i in static_array_argnums:
-                args[i] = BiasMTD._HashableArrayWrapper(args[i])
+                args[i] = Bias._HashableArrayWrapper(args[i])
             return callee(*args)
 
         return caller
 
     @partial(jit, static_argnums=(0,))
     def compute_coor(self, coordinates, cell, gpos=None, vir=None):
-        """Computes the bias, the gradient of the bias wrt the coordinates and the virial."""
+        """Computes the bias, the gradient of the bias wrt the coordinates and
+        the virial."""
 
         if cell is not None:
             if not (cell.shape == (0, 3) or cell.shape == (3, 3)):
@@ -125,7 +124,7 @@ class Bias(Energy, ABC):
         return ener, gpos, vir
 
     def __comp(self):
-        args = self._get_args()
+        args = self.get_args()
         static_array_argnums = tuple(i + 1 for i in range(len(args)))
 
         self.e = Bias._gnool_jit(partial(self._compute),
@@ -135,16 +134,19 @@ class Bias(Energy, ABC):
 
     @partial(jit, static_argnums=(0, 2, 3))
     def compute(self, cvs, diff=False, wrap=True):
-        """compute the energy and derivative. If wrap==False, the cvs are assumed to be already wrapped  """
+        """compute the energy and derivative.
+
+        If wrap==False, the cvs are assumed to be already wrapped
+        """
 
         if wrap:
             if diff:
                 dcvs = jacfwd(self.cvs.metric.wrap)(cvs)
             cvs = self.cvs.metric.wrap(cvs)
 
-        E = self.e(cvs, *self._get_args())
+        E = self.e(cvs, *self.get_args())
         if diff:
-            diffE = self.de(cvs, *self._get_args())[0]
+            diffE = self.de(cvs, *self.get_args())[0]
             if wrap:
                 diffE = jnp.einsum('i,ij->j', diffE, dcvs)
         else:
@@ -158,7 +160,7 @@ class Bias(Energy, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_args(self):
+    def get_args(self):
         """function that return dictionary with kwargs of _compute."""
         return []
 
@@ -168,21 +170,14 @@ class Bias(Energy, ABC):
         Optimises compute
         """
 
-        def update_bias(coordinates, cell):
-            """update the bias.
-
-            Used in metadyanmics to deposit hills.
-            """
-            pass
-
-        self.update_bias = update_bias
+        self.finalized = True
 
     @staticmethod
     def load(filename) -> Bias:
         return Energy.load(filename)
 
     def plot(self, name, n=50, traj=None):
-        """plot bias"""
+        """plot bias."""
         assert self.cvs.n == 2
 
         bins = self.cvs.metric.grid(n=n, endpoints=True)
@@ -226,8 +221,7 @@ class Bias(Energy, ABC):
 
 
 class CompositeBias(Bias):
-    """Class that combines several biases in one single bias
-    """
+    """Class that combines several biases in one single bias."""
 
     def __init__(self, biases: Iterable[Bias], fun=jnp.sum) -> None:
 
@@ -248,7 +242,7 @@ class CompositeBias(Bias):
         super().__init__(cvs=self.cvs, start=0, step=1)
         self.init = True
 
-    def _append_bias(self, b):
+    def _append_bias(self, b: Bias):
 
         if isinstance(b, NoneBias):
             return
@@ -260,7 +254,7 @@ class CompositeBias(Bias):
         self.step_list = np.append(self.step_list, b.step if
                                    (b.step is not None) else -1)
         self.args_shape = np.append(self.args_shape,
-                                    len(b._get_args()) + self.args_shape[-1])
+                                    len(b.get_args()) + self.args_shape[-1])
 
         if self.cvs is None:
             self.cvs = b.cvs
@@ -284,6 +278,9 @@ class CompositeBias(Bias):
 
     def update_bias(self, coordinates, cell):
 
+        if self.finalized:
+            return
+
         mask = (self.start_list == 0)
 
         self.start_list[mask] += self.step_list[mask]
@@ -292,8 +289,8 @@ class CompositeBias(Bias):
         for i in np.argwhere(mask):
             self.biases[int(i)].update_bias(coordinates=coordinates, cell=cell)
 
-    def _get_args(self):
-        return [a for b in self.biases for a in b._get_args()]
+    def get_args(self):
+        return [a for b in self.biases for a in b.get_args()]
 
 
 class MinBias(CompositeBias):
@@ -311,22 +308,22 @@ class BiasF(Bias):
         self.f = jit(self.f)
         super().__init__(cvs, start=None, step=None)
 
-    def _compute(self, cvs):
+    def _compute(self, cvs, *args):
         return self.f(cvs)[0]
 
-    def _get_args(self):
+    def get_args(self):
         return []
 
 
 class NoneBias(BiasF):
-    """dummy bias"""
+    """dummy bias."""
 
     def __init__(self, cvs: CV):
         super().__init__(cvs)
 
 
 class HarmonicBias(Bias):
-    """Harmonic bias potential centered arround q0 with force constant k"""
+    """Harmonic bias potential centered arround q0 with force constant k."""
 
     def __init__(self, cvs: CV, q0, k):
         """generate harmonic potentia;
@@ -347,18 +344,20 @@ class HarmonicBias(Bias):
 
         super().__init__(cvs)
 
-    def _compute(self, cvs):
+    def _compute(self, cvs, *args):
         r = self.cvs.metric.distance(cvs, self.q0)
         return jnp.einsum('i,i,i', self.k, r, r)
 
-    def _get_args(self):
+    def get_args(self):
         return []
 
 
 class BiasMTD(Bias):
-    """A sum of Gaussian hills, for instance used in metadynamics: Adapted from Yaff.
+    r"""A sum of Gaussian hills, for instance used in metadynamics:
+    Adapted from Yaff.
 
-    V = \sum_{\\alpha} K_{\\alpha}} \exp{-\sum_{i} \\frac{(q_i-q_{i,\\alpha}^0)^2}{2\sigma^2}}
+    V = \sum_{\\alpha} K_{\\alpha}} \exp{-\sum_{i}
+    \\frac{(q_i-q_{i,\\alpha}^0)^2}{2\sigma^2}}
 
     where \\alpha loops over deposited hills and i loops over collective
     variables.
@@ -406,7 +405,9 @@ class BiasMTD(Bias):
         """Deposit a single hill.
 
         Args:
-            q0: A NumPy array [Ncv] specifying the Gaussian center for each collective variable, or a single float if there is only one collective variable
+            q0: A NumPy array [Ncv] specifying the Gaussian center for each
+            collective variable, or a single float if there is only one
+            collective variable
             K: the force constant of this hill
         """
         if isinstance(q0, float):
@@ -421,7 +422,8 @@ class BiasMTD(Bias):
         """Deposit multiple hills.
 
         Args:
-        q0s: A NumPy array [Nhills,Ncv]. Each row represents a hill, specifying the Gaussian center for each collective variable
+        q0s: A NumPy array [Nhills,Ncv]. Each row represents a hill,
+        specifying the Gaussian center for each collective variable
         K: A NumPy array [Nhills] providing the force constant of each hill.
         """
         assert q0s.ndim == 2
@@ -441,19 +443,22 @@ class BiasMTD(Bias):
         Raises:
             NotImplementedError: _description_
         """
+        if self.finalized:
+            return
+
         # Compute current CV values
         q0s, _, _ = self.cvs.compute(coordinates, cell)
         # Compute force constant
         K = self.K
         if self.tempering != 0.0:
             raise NotImplementedError("untested")
-            K *= jnp.exp(-self.compute() / molmod.constants.boltzmann /
-                         self.tempering)
+            # K *= jnp.exp(-self.compute() / molmod.constants.boltzmann /
+            #              self.tempering)
         # Add a hill
         self._add_hill_cv(q0s, K)
 
     def _compute(self, cvs, q0s, Ks):
-        """Computes sum of hills"""
+        """Computes sum of hills."""
 
         deltas = jnp.apply_along_axis(
             self.cvs.metric.distance,
@@ -467,12 +472,15 @@ class BiasMTD(Bias):
 
         return energy
 
-    def _get_args(self):
+    def get_args(self):
         return [self.q0s, self.Ks]
 
 
 class GridBias(Bias):
-    """Bias interpolated from lookup table on uniform grid. values are caluclated in bin centers  """
+    """Bias interpolated from lookup table on uniform grid.
+
+    values are caluclated in bin centers
+    """
 
     def __init__(self,
                  cvs: CV,
@@ -484,15 +492,15 @@ class GridBias(Bias):
                  wrap=True) -> None:
         super().__init__(cvs, start, step)
 
-        if centers == False:
+        if centers:
             raise NotImplementedError
         assert cvs.n == 2
 
-        assert wrap == True, 'lives in wrapped space'
+        assert wrap, 'lives in wrapped space'
 
         self.wrap = wrap
 
-        #extand grid
+        # extend grid
         bias = np.zeros(np.array(vals.shape) + 2)
         bias[1:-1, 1:-1] = vals
 
@@ -510,7 +518,7 @@ class GridBias(Bias):
             bias[:, 0] = bias[:, 1]
             bias[:, -1] = bias[:, -2]
 
-        #convex interpolation
+        # convex interpolation
         x, y = np.indices(bias.shape)
         bias[np.isnan(bias)] = griddata(
             (x[~np.isnan(bias)], y[~np.isnan(bias)]),
@@ -543,7 +551,7 @@ class GridBias(Bias):
                                            order=1,
                                            cval=jnp.nan)
 
-    def _get_args(self):
+    def get_args(self):
         return []
 
 
@@ -558,6 +566,8 @@ class CvMonitor(BiasF):
         self.transitions = np.zeros((0, self.cvs.n, 2))
 
     def update_bias(self, coordinates, cell):
+        if self.finalized:
+            return
 
         new_cv, _, _ = self.cvs.compute(coordinates=coordinates, cell=cell)
 
