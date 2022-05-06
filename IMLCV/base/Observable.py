@@ -102,6 +102,13 @@ class Observable:
                 'traj': trajs,
             })
 
+            plot_args.append({
+                'self': common_bias,
+                'name': f'{directory}/combined_wrap',
+                'traj': trajs_wrapped,
+                'wrap': True
+            })
+
             def pl(args):
                 Bias.plot(**args)
 
@@ -164,6 +171,8 @@ class Observable:
         if plot:
             bias = self.fes_bias(internal=True)
             bias.plot(name=f'{self.folder}/FES_thermolib_{self.rounds.round}')
+            bias.plot(
+                name=f'{self.folder}/FES_thermolib_wrap_{self.rounds.round}', wrap=True)
 
         return fes, bounds
 
@@ -252,6 +261,10 @@ class Observable:
                 fs = fes.fs
             elif kind == 'fupper':
                 fs = fes.fupper
+            elif kind == 'flower':
+                fs = fes.flower
+            else:
+                raise ValueError
 
         # fes_interp = Observable._interp(fs)
         bias = np.transpose(fs)
@@ -259,8 +272,5 @@ class Observable:
         if not internal:
             bias = -bias
             bias[:] -= bias[~np.isnan(bias)].min()
-            fill = 'min'
-        else:
-            fill = 'max'
 
-        return GridBias(cvs=self.cvs, fill=fill, vals=bias, wrap=True)
+        return GridBias(cvs=self.cvs,  vals=bias, bounds=bounds)

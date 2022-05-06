@@ -75,7 +75,6 @@ class Scheme:
         self = Scheme.__new__(Scheme)
 
         rounds = RoundsMd.load(folder)
-        self.folder = folder
         self.md = rounds.get_engine()
 
         self.rounds = rounds
@@ -104,7 +103,7 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self, plot=True, kind='normal'):
+    def _FESBias(self, plot=True, kind='flower'):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)
@@ -127,15 +126,10 @@ class Scheme:
 
         grid = self.md.bias.cvs.metric.grid(n, endpoints=False, wrap=True)
 
-        # self.cont_biases = [ContinuousHarmonicBias(
-        self.cont_biases = [
-            CompositeBias([
-                HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)),
-                CvMonitor(self.md.bias.cvs),
-            ]) for x in itertools.product(*grid)
-        ]
-
-        self.rounds.run_par(self.cont_biases, steps=steps)
+        self.rounds.run_par([CompositeBias([
+            HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)),
+            CvMonitor(self.md.bias.cvs),
+        ]) for x in itertools.product(*grid)], steps=steps)
 
     def round(self, rnds=10, steps=5e4, update_metric=False):
         # startround = 0
@@ -143,15 +137,14 @@ class Scheme:
         # update biases untill there are no discontinues jumps left
         for i in range(rnds):
 
-            self._grid_umbrella(steps=steps)
-
             if update_metric:
+                self._grid_umbrella(steps=5e3)
                 o = Observable(self.rounds)
-                self.md.bias.cvs.metric = o.new_metric(plot=True)
-
+                self.md.bias.cvs.metric = o.new_metric(plot=False)
                 update_metric = False
             else:
-                self._FESBias(kind='fupper', plot=True)
+                self._grid_umbrella(steps=steps)
+                self._FESBias(plot=True)
 
             self.rounds.new_round(self.md)
             self.rounds.save()

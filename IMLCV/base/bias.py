@@ -176,11 +176,11 @@ class Bias(Energy, ABC):
     def load(filename) -> Bias:
         return Energy.load(filename)
 
-    def plot(self, name, n=50, traj=None):
+    def plot(self, name, n=50, traj=None, vmin=0, vmax=100, wrap=False):
         """plot bias."""
         assert self.cvs.n == 2
 
-        bins = self.cvs.metric.grid(n=n, endpoints=True)
+        bins = self.cvs.metric.grid(n=n, endpoints=True,  wrap=wrap)
         mg = np.meshgrid(*bins)
 
         xlim = [mg[0].min(), mg[0].max()]
@@ -189,7 +189,8 @@ class Bias(Energy, ABC):
         bias, _ = jnp.apply_along_axis(self.compute,
                                        axis=0,
                                        arr=np.array(mg),
-                                       diff=False)
+                                       diff=False,
+                                       wrap=not wrap)
 
         extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
@@ -198,8 +199,8 @@ class Bias(Energy, ABC):
                        cmap=plt.get_cmap('rainbow'),
                        origin='lower',
                        extent=extent,
-                       vmin=0.0,
-                       vmax=100.0)
+                       vmin=vmin,
+                       vmax=vmax)
 
         plt.xlabel('cv1', fontsize=16)
         plt.ylabel('cv2', fontsize=16)
@@ -485,22 +486,22 @@ class GridBias(Bias):
     def __init__(self,
                  cvs: CV,
                  vals,
+                 bounds=None,
                  start=None,
-                 fill='max',
                  step=None,
                  centers=True,
-                 wrap=True) -> None:
+                 ) -> None:
         super().__init__(cvs, start, step)
 
-        if centers:
+        if not centers:
             raise NotImplementedError
         assert cvs.n == 2
 
-        assert wrap, 'lives in wrapped space'
+        bias = vals
 
-        self.wrap = wrap
+        # extend periodically
+        self.n = np.array(vals.shape)
 
-        # extend grid
         bias = np.zeros(np.array(vals.shape) + 2)
         bias[1:-1, 1:-1] = vals
 
@@ -526,30 +527,25 @@ class GridBias(Bias):
             (x[np.isnan(bias)], y[np.isnan(bias)]),
             method='cubic',
         )
-
-        if fill == 'min':
-            bias[np.isnan(bias)] = bias[~np.isnan(bias)].min()
-        elif fill == 'max':
-            bias[np.isnan(bias)] = bias[~np.isnan(bias)].max()
-        else:
-            raise NotImplementedError
-
         self.vals = bias
-        self.cvs = cvs
 
-        self.per = self.cvs.metric.wrap_boundaries
+        if bounds is not None:
+            per = np.array(bounds)
+        else:
+            per = np.array(self.cvs.metric.wrap_boundaries)
+
+        self.per = jnp.array(per)
 
     def _compute(self, cvs):
         per = self.per
-
+        # map to halfway array and shift on for (for side rows)
         coords = jnp.array((cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) *
-                           (np.array(self.vals.shape) - 2)) + 0.5
+                           (self.n)) + 0.5
 
         return jsp.ndimage.map_coordinates(self.vals,
                                            coords,
-                                           mode='constant',
-                                           order=1,
-                                           cval=jnp.nan)
+                                           mode='nearest',
+                                           order=1)
 
     def get_args(self):
         return []

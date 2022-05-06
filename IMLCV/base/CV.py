@@ -31,7 +31,7 @@ class Metric:
             boundaries = jnp.zeros(len(periodicities))
 
         if isinstance(boundaries, list):
-            boundaries = jnp.array(boundaries)
+            boundaries = jnp.array(boundaries, dtype=jnp.float32)
 
         if isinstance(periodicities, list):
             periodicities = jnp.array(periodicities)
@@ -331,7 +331,7 @@ class Metric:
             # np.vstack(points)[:, 1], np.hstack(z)))
 
         # get the boundaries from most distal points in traj + some margin
-        num = 50
+        num = 100
 
         old_boundaries = []
         lspaces = []
@@ -353,7 +353,7 @@ class Metric:
             interp_mg.append(arr)
 
         # add some space arround
-        for i in range(3):
+        for _ in range(3):
             # #find closest points
             a = ~jnp.isnan(interp_mg[0])
             b = jnp.zeros(a.shape)
@@ -506,7 +506,7 @@ class CVUtils:
     """
 
     @staticmethod
-    def dihedral(coordinates, cell, numbers):
+    def dihedral(coordinates, _, numbers):
         """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
         angle-from-four-points-in-cartesian- coordinates-in-python.
 
@@ -532,7 +532,7 @@ class CVUtils:
         return jnp.arctan2(y, x)
 
     @staticmethod
-    def Volume(coordinates, cell):
+    def Volume(_, cell):
         return jnp.abs(jnp.dot(cell[0], jnp.cross(cell[1], cell[2])))
 
     @staticmethod

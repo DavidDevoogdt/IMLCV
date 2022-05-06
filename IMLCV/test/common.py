@@ -8,8 +8,6 @@ from IMLCV.base.bias import BiasMTD
 from IMLCV.base.CV import CV, CombineCV, CVUtils, hyperTorus
 from IMLCV.base.MdEngine import YaffEngine
 from molmod import units
-from yaff import ForceField
-from yaff.system import System
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 
@@ -44,32 +42,32 @@ def ala_yaff(write=1000):
     return yaffmd
 
 
-def mil53_yaff():
-    T = 300 * units.kelvin
-    P = 1 * units.atm
+# def mil53_yaff():
+#     T = 300 * units.kelvin
+#     P = 1 * units.atm
 
-    system = System.from_file("data/MIL53.chk")
-    ff = ForceField.generate(system, 'data/MIL53_pars.txt')
-    cvs = CV(CVUtils.Volume)
-    bias = BiasMTD(cvs=cvs,
-                   K=1.2 * units.kjmol,
-                   sigmas=np.array([0.35]),
-                   start=50,
-                   step=50)
+#     system = System.from_file("data/MIL53.chk")
+#     ff = ForceField.generate(system, 'data/MIL53_pars.txt')
+#     cvs = CV(CVUtils.Volume)
+#     bias = BiasMTD(cvs=cvs,
+#                    K=1.2 * units.kjmol,
+#                    sigmas=np.array([0.35]),
+#                    start=50,
+#                    step=50)
 
-    yaffmd = YaffEngine(
-        ener=ff,
-        bias=bias,
-        write_step=100,
-        T=T,
-        P=P,
-        timestep=1.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=100.0 * units.femtosecond,
-        filename="output/mil53.h5",
-    )
+#     yaffmd = YaffEngine(
+#         ener=ff,
+#         bias=bias,
+#         write_step=100,
+#         T=T,
+#         P=P,
+#         timestep=1.0 * units.femtosecond,
+#         timecon_thermo=100.0 * units.femtosecond,
+#         timecon_baro=100.0 * units.femtosecond,
+#         filename="output/mil53.h5",
+#     )
 
-    return yaffmd
+#     return yaffmd
 
 
 def todo_ASE_yaff():
@@ -109,7 +107,10 @@ def todo_ASE_yaff():
 
     # do yaff MD
     ff = YaffEngine.create_forcefield_from_ASE(atoms, calc_cp2k)
-    cvs = CV(CVUtils.Volume)
+
+    metric = None
+
+    cvs = CV(CVUtils.Volume, metric=metric)
     bias = BiasMTD(cvs=cvs,
                    K=1.2 * units.kjmol,
                    sigmas=np.array([0.35]),

@@ -175,7 +175,6 @@ class YaffEngine(MDEngine):
             ener = self._YaffFF(ener)
 
         super().__init__(ener=ener, **kwargs)
-        self.verlet = None
 
     def _init_post(self):
 
@@ -425,7 +424,7 @@ class YaffEngine(MDEngine):
             return ener
 
         def get_log(self):
-            return super().get_log()
+            raise NotImplementedError
 
         def __call__(self, iterative):
             # skip initial hook called by verlet integrator

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from abc import ABC
-from collections import Iterable
+from collections.abc import Iterable
 from functools import partial
 
 import dill
@@ -146,7 +146,6 @@ class Rounds(ABC):
 
 class RoundsCV(Rounds):
     """class for unbiased rounds."""
-    pass
 
 
 class RoundsMd(Rounds):
@@ -181,13 +180,13 @@ class RoundsMd(Rounds):
 
         self._validate(md)
 
-        d, attr = RoundsMd._add(md, i,
+        d, attr = RoundsMd._add(md,
                                 f'{self.folder}/round_{self.round}/bias_{i}')
 
         super().add(d=d, attrs=attr, i=i)
 
     @staticmethod
-    def _add(md: MDEngine, i, name_bias):
+    def _add(md: MDEngine, name_bias):
         d = md.get_trajectory()
         md.bias.save(name_bias)
 
@@ -288,7 +287,7 @@ class RoundsMd(Rounds):
             md.run(steps=steps)
 
             d, attr = RoundsMd._add(
-                md, i, f'{self.folder}/round_{self.round}/bias_{i}')
+                md, f'{self.folder}/round_{self.round}/bias_{i}')
 
             return [d, attr, i]
 

@@ -7,7 +7,7 @@ import pytest
 from IMLCV.base.bias import Bias, BiasMTD, CompositeBias
 from IMLCV.base.CV import CV, CombineCV, CVUtils
 from IMLCV.base.MdEngine import MDEngine, YaffEngine
-from IMLCV.test.common import ala_yaff, mil53_yaff, todo_ASE_yaff
+from IMLCV.test.common import ala_yaff, todo_ASE_yaff
 from molmod import units
 from yaff.log import log
 from yaff.test.common import get_alaninedipeptide_amber99ff
@@ -78,11 +78,11 @@ def test_combine_bias():
     yaffmd.run(int(1e2))
 
 
-def test_yaff_md_mil53():
-    change_fold()
+# def test_yaff_md_mil53():
+#     change_fold()
 
-    yaffmd = mil53_yaff()
-    yaffmd.run(int(1e2))
+#     yaffmd = mil53_yaff()
+#     yaffmd.run(int(1e2))
 
 
 def bias_save():
@@ -116,5 +116,5 @@ if __name__ == '__main__':
 
     test_yaff_save_load_func()
     test_combine_bias()
-    test_yaff_md_mil53()
+    # test_yaff_md_mil53()
     bias_save()
