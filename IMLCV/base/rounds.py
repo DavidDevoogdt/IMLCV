@@ -1,37 +1,31 @@
 from __future__ import annotations
+
+import os
 from abc import ABC
+from collections import Iterable
 from functools import partial
+from math import floor
 from pickletools import optimize
 from turtle import pos
 from typing import Dict, Tuple
-from ase import Atoms
-from attr import attr
-
-# import multiprocessing_on_dill as multiprocessing
 
 import dill
-
-from ase.io import write, read
-
+import h5py
 import jax.numpy as jnp
-
-from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
-
-from collections import Iterable
-import os
-import pathos
-
-from math import floor
-
-from molmod.constants import boltzmann
-from molmod.units import nanosecond, kjmol, picosecond
 import numpy as np
-from numpy import average, interp, linalg, linspace
+import pathos
 import scipy as sp
+from ase import Atoms
+from ase.io import read, write
+from attr import attr
+from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
+from IMLCV.base.MdEngine import MDEngine
+from molmod.constants import boltzmann
+from molmod.units import kjmol, nanosecond, picosecond
+from numpy import average, interp, linalg, linspace
 from scipy import interpolate, optimize
 
-import h5py
+# import multiprocessing_on_dill as multiprocessing
 
 
 class Rounds(ABC):
@@ -70,7 +64,8 @@ class Rounds(ABC):
 
     def add(self, i, dict, attrs=None):
 
-        assert all(key in dict for key in ['energy', 'positions', 'forces', 'cell', 't'])
+        assert all(key in dict
+                   for key in ['energy', 'positions', 'forces', 'cell', 't'])
 
         with h5py.File(self.h5file, 'r+') as f:
             f.create_group(f'{self.round}/{i}')
@@ -178,7 +173,9 @@ class RoundsMd(Rounds):
     ENGINE_KEYS = ['timestep', *Rounds.ENGINE_KEYS]
 
     def __init__(self, extension, folder="output", max_energy=None) -> None:
-        super().__init__(extension=extension, folder=folder, max_energy=max_energy)
+        super().__init__(extension=extension,
+                         folder=folder,
+                         max_energy=max_energy)
 
     def add(self, md: MDEngine, i=None):
         """adds all the saveble info of the md simulation. The resulting """
@@ -189,7 +186,8 @@ class RoundsMd(Rounds):
 
         self._validate(md)
 
-        d, attr = RoundsMd._add(md, i, f'{self.folder}/round_{self.round}/bias_{i}')
+        d, attr = RoundsMd._add(md, i,
+                                f'{self.folder}/round_{self.round}/bias_{i}')
 
         super().add(d, attrs=attr, i=i)
 
@@ -286,13 +284,17 @@ class RoundsMd(Rounds):
                 b = CompositeBias([Bias.load(common_bias_name), bias])
 
             if self.max_energy is not None:
-                b = CompositeBias([b, BiasF(b.cvs, lambda _: jnp.ones(1,) * self.max_energy)], jnp.min)
+                b = CompositeBias([
+                    b,
+                    BiasF(b.cvs, lambda _: jnp.ones(1,) * self.max_energy)
+                ], jnp.min)
 
             md = MDEngine.load(common_md_name, filename=temp_name, bias=b)
 
             md.run(steps=steps)
 
-            d, attr = RoundsMd._add(md, i, f'{self.folder}/round_{self.round}/bias_{i}')
+            d, attr = RoundsMd._add(
+                md, i, f'{self.folder}/round_{self.round}/bias_{i}')
 
             return [d, attr, i]
 
@@ -315,7 +317,8 @@ class RoundsMd(Rounds):
         import jax.numpy as jnp
 
         md = self.get_engine()
-        if self.n() > 1 or isinstance(self.get_bias(), NoneBias) or calc == True:
+        if self.n() > 1 or isinstance(self.get_bias(),
+                                      NoneBias) or calc == True:
             from IMLCV.base.Observable import Observable
             obs = Observable(self)
             fesBias = obs.fes_Bias(plot=True)
@@ -338,7 +341,8 @@ class RoundsMd(Rounds):
 
         def _interp(x_new, x, y):
             if y is not None:
-                return jnp.apply_along_axis(lambda yy: jnp.interp(x_new, x, yy), arr=y, axis=0)
+                return jnp.apply_along_axis(
+                    lambda yy: jnp.interp(x_new, x, yy), arr=y, axis=0)
             return None
 
         def bt(x, x_orig):
@@ -349,7 +353,8 @@ class RoundsMd(Rounds):
         bt = jnp.vectorize(bt, excluded=[1])
 
         def integr(fx, x):
-            return np.array([0, *np.cumsum((fx[1:] + fx[:-1]) * (x[1:] - x[:-1]) / 2)])
+            return np.array(
+                [0, *np.cumsum((fx[1:] + fx[:-1]) * (x[1:] - x[:-1]) / 2)])
 
         t = t_orig[:]
         eb = np.exp(-beta * bt(t, t_orig))
@@ -361,7 +366,14 @@ class RoundsMd(Rounds):
 
         roundscv = RoundsCV(self.extension, f'{self.folder}_unbiased')
         roundscv.new_round(props)
-        roundscv.add(0, {'energy': None, 'positions': p_new, 'forces': None, 'cell': c_new, 't': tau_new})
+        roundscv.add(
+            0, {
+                'energy': None,
+                'positions': p_new,
+                'forces': None,
+                'cell': c_new,
+                't': tau_new
+            })
 
         return roundscv
 

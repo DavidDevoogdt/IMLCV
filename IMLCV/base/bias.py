@@ -1,29 +1,24 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from functools import partial
 from typing import Iterable
-import jax
-
-from molmod.constants import boltzmann
-from molmod.units import kjmol, kelvin
-
-import numpy as np
-import jax.numpy as jnp
-import jax.scipy as jsp
-from jax import disable_jit, jit, grad, jacfwd, value_and_grad
-from scipy.interpolate import griddata, Rbf, RBFInterpolator, interpn, interp2d
-
-import matplotlib.pyplot as plt
-
-from IMLCV.base.CV import CV
-# from IMLCV.base.MdEngine import YaffEngine
-
-import molmod
-from abc import ABC, abstractmethod
-
-from yaff.pes import ForceField
 
 import dill
+import jax
+import jax.numpy as jnp
+import jax.scipy as jsp
+import matplotlib.pyplot as plt
+import molmod
+import numpy as np
+from IMLCV.base.CV import CV
+from jax import disable_jit, grad, jacfwd, jit, value_and_grad
+from molmod.constants import boltzmann
+from molmod.units import kelvin, kjmol
+from scipy.interpolate import Rbf, RBFInterpolator, griddata, interp2d, interpn
+from yaff.pes import ForceField
+
+# from IMLCV.base.MdEngine import YaffEngine
 
 
 class Energy(ABC):
@@ -79,7 +74,9 @@ class Bias(Energy, ABC):
             return hash(self.val.tobytes())
 
         def __eq__(self, other):
-            eq = isinstance(other, BiasMTD._HashableArrayWrapper) and (self.__hash__() == other.__hash__())
+            eq = isinstance(
+                other, BiasMTD._HashableArrayWrapper) and (self.__hash__()
+                                                           == other.__hash__())
             return eq
 
     @staticmethod
@@ -107,12 +104,16 @@ class Bias(Energy, ABC):
 
         if cell is not None:
             if not (cell.shape == (0, 3) or cell.shape == (3, 3)):
-                raise NotImplementedError("other cell shapes not yet supported")
+                raise NotImplementedError(
+                    "other cell shapes not yet supported")
 
         bv = (vir is not None)
         bg = (gpos is not None)
 
-        [cvs, jac_p_val, jac_c_val] = self.cvs.compute(coordinates, cell, jac_p=bg, jac_c=bv)
+        [cvs, jac_p_val, jac_c_val] = self.cvs.compute(coordinates,
+                                                       cell,
+                                                       jac_p=bg,
+                                                       jac_c=bv)
         [ener, de] = self.compute(cvs, diff=(bv or bg))
 
         if bg:
@@ -127,8 +128,10 @@ class Bias(Energy, ABC):
         args = self._get_args()
         static_array_argnums = tuple(i + 1 for i in range(len(args)))
 
-        self.e = Bias._gnool_jit(partial(self._compute), static_array_argnums=static_array_argnums)
-        self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)), static_array_argnums=static_array_argnums)
+        self.e = Bias._gnool_jit(partial(self._compute),
+                                 static_array_argnums=static_array_argnums)
+        self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)),
+                                  static_array_argnums=static_array_argnums)
 
     @partial(jit, static_argnums=(0, 2, 3))
     def compute(self, cvs, diff=False, wrap=True):
@@ -188,7 +191,10 @@ class Bias(Energy, ABC):
         xlim = [mg[0].min(), mg[0].max()]
         ylim = [mg[1].min(), mg[1].max()]
 
-        bias, _ = jnp.apply_along_axis(self.compute, axis=0, arr=np.array(mg), diff=False)
+        bias, _ = jnp.apply_along_axis(self.compute,
+                                       axis=0,
+                                       arr=np.array(mg),
+                                       diff=False)
 
         extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
@@ -249,9 +255,12 @@ class CompositeBias(Bias):
 
         self.biases.append(b)
 
-        self.start_list = np.append(self.start_list, b.start if (b.start is not None) else -1)
-        self.step_list = np.append(self.step_list, b.step if (b.step is not None) else -1)
-        self.args_shape = np.append(self.args_shape, len(b._get_args()) + self.args_shape[-1])
+        self.start_list = np.append(self.start_list, b.start if
+                                    (b.start is not None) else -1)
+        self.step_list = np.append(self.step_list, b.step if
+                                   (b.step is not None) else -1)
+        self.args_shape = np.append(self.args_shape,
+                                    len(b._get_args()) + self.args_shape[-1])
 
         if self.cvs is None:
             self.cvs = b.cvs
@@ -262,7 +271,8 @@ class CompositeBias(Bias):
     def _compute(self, cvs, *args):
 
         e = jnp.array([
-            self.biases[i]._compute(cvs, *args[self.args_shape[i]:self.args_shape[i + 1]])
+            self.biases[i]._compute(
+                cvs, *args[self.args_shape[i]:self.args_shape[i + 1]])
             for i in range(len(self.biases))
         ])
 
@@ -354,7 +364,13 @@ class BiasMTD(Bias):
     variables.
     """
 
-    def __init__(self, cvs: CV, K, sigmas, tempering=0.0, start=None, step=None):
+    def __init__(self,
+                 cvs: CV,
+                 K,
+                 sigmas,
+                 tempering=0.0,
+                 start=None,
+                 step=None):
         """_summary_
 
         Args:
@@ -431,7 +447,8 @@ class BiasMTD(Bias):
         K = self.K
         if self.tempering != 0.0:
             raise NotImplementedError("untested")
-            K *= jnp.exp(-self.compute() / molmod.constants.boltzmann / self.tempering)
+            K *= jnp.exp(-self.compute() / molmod.constants.boltzmann /
+                         self.tempering)
         # Add a hill
         self._add_hill_cv(q0s, K)
 
@@ -457,7 +474,14 @@ class BiasMTD(Bias):
 class GridBias(Bias):
     """Bias interpolated from lookup table on uniform grid. values are caluclated in bin centers  """
 
-    def __init__(self, cvs: CV, vals, start=None, fill='max', step=None, centers=True, wrap=True) -> None:
+    def __init__(self,
+                 cvs: CV,
+                 vals,
+                 start=None,
+                 fill='max',
+                 step=None,
+                 centers=True,
+                 wrap=True) -> None:
         super().__init__(cvs, start, step)
 
         if centers == False:
@@ -510,9 +534,14 @@ class GridBias(Bias):
     def _compute(self, cvs):
         per = self.per
 
-        coords = jnp.array((cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) * (np.array(self.vals.shape) - 2)) + 0.5
+        coords = jnp.array((cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) *
+                           (np.array(self.vals.shape) - 2)) + 0.5
 
-        return jsp.ndimage.map_coordinates(self.vals, coords, mode='constant', order=1, cval=jnp.nan)
+        return jsp.ndimage.map_coordinates(self.vals,
+                                           coords,
+                                           mode='constant',
+                                           order=1,
+                                           cval=jnp.nan)
 
     def _get_args(self):
         return []
@@ -533,7 +562,8 @@ class CvMonitor(BiasF):
         new_cv, _, _ = self.cvs.compute(coordinates=coordinates, cell=cell)
 
         if jnp.linalg.norm(new_cv - self.last_cv) > 1:
-            self.transitions = np.vstack((self.transitions, np.array([[new_cv, self.last_cv]])))
+            self.transitions = np.vstack(
+                (self.transitions, np.array([[new_cv, self.last_cv]])))
         self.last_cv = new_cv
 
 

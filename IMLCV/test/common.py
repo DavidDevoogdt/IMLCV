@@ -1,16 +1,16 @@
-from IMLCV.base.CV import CV, CVUtils, CombineCV, hyperTorus
-from IMLCV.base.MdEngine import YaffEngine
-from IMLCV.base.bias import BiasMTD, Energy
+from pathlib import Path
 
-from yaff.test.common import get_alaninedipeptide_amber99ff
-import numpy as np
-from molmod import units
-from yaff.system import System
-from yaff import ForceField
-from ase.calculators.cp2k import CP2K
 import ase.io
 import ase.units
-from pathlib import Path
+import numpy as np
+from ase.calculators.cp2k import CP2K
+from IMLCV.base.bias import BiasMTD, Energy
+from IMLCV.base.CV import CV, CombineCV, CVUtils, hyperTorus
+from IMLCV.base.MdEngine import YaffEngine
+from molmod import units
+from yaff import ForceField
+from yaff.system import System
+from yaff.test.common import get_alaninedipeptide_amber99ff
 
 
 def ala_yaff(write=1000):
@@ -24,7 +24,11 @@ def ala_yaff(write=1000):
         CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
         CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=hyperTorus(1)),
     ])
-    bias = BiasMTD(cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500)
+    bias = BiasMTD(cvs=cvs,
+                   K=2.0 * units.kjmol,
+                   sigmas=np.array([0.35, 0.35]),
+                   start=500,
+                   step=500)
 
     yaffmd = YaffEngine(
         ener=get_alaninedipeptide_amber99ff,
@@ -47,7 +51,11 @@ def mil53_yaff():
     system = System.from_file("data/MIL53.chk")
     ff = ForceField.generate(system, 'data/MIL53_pars.txt')
     cvs = CV(CVUtils.Volume)
-    bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50)
+    bias = BiasMTD(cvs=cvs,
+                   K=1.2 * units.kjmol,
+                   sigmas=np.array([0.35]),
+                   start=50,
+                   step=50)
 
     yaffmd = YaffEngine(
         ener=ff,
@@ -78,7 +86,8 @@ def todo_ASE_yaff():
     path_dispersion = path_source / 'dftd3.dat'
 
     with open("CP2K_para.inp", "r") as f:
-        additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
+        additional_input = f.read().format(path_basis, path_potentials,
+                                           path_dispersion)
 
     calc_cp2k = CP2K(atoms=atoms,
                      auto_write=True,
@@ -101,7 +110,11 @@ def todo_ASE_yaff():
     #do yaff MD
     ff = YaffEngine.create_forcefield_from_ASE(atoms, calc_cp2k)
     cvs = CV(CVUtils.Volume)
-    bias = BiasMTD(cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50)
+    bias = BiasMTD(cvs=cvs,
+                   K=1.2 * units.kjmol,
+                   sigmas=np.array([0.35]),
+                   start=50,
+                   step=50)
     yaffmd = YaffEngine(
         ener=ff,
         bias=bias,

@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.bias import BiasMTD, Bias, CompositeBias, CvMonitor, HarmonicBias, NoneBias
-from IMLCV.base.CVDiscovery import CVDiscovery
-from IMLCV.base.CV import CV
-from IMLCV.base.Observable import Observable
-from IMLCV.base.rounds import RoundsMd
+import itertools
+from typing import Type
 
+import numpy as np
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 
-import numpy as np
-
-import itertools
-
-from typing import Type
+from IMLCV.base.bias import (Bias, BiasMTD, CompositeBias, CvMonitor,
+                             HarmonicBias, NoneBias)
+from IMLCV.base.CV import CV
+from IMLCV.base.CVDiscovery import CVDiscovery
+from IMLCV.base.MdEngine import MDEngine
+from IMLCV.base.Observable import Observable
+from IMLCV.base.rounds import RoundsMd
 
 
 class Scheme:
@@ -91,7 +90,8 @@ class Scheme:
         """generate a metadynamics bias"""
 
         if sigmas is None:
-            sigmas = (self.md.bias.cvs.metric[:, 1] - self.md.bias.cvs.metric[:, 0]) / 20
+            sigmas = (self.md.bias.cvs.metric[:, 1] -
+                      self.md.bias.cvs.metric[:, 0]) / 20
 
         if K is None:
             K = 0.1 * self.md.T * boltzmann
@@ -113,12 +113,15 @@ class Scheme:
     def _grid_umbrella(self, steps=1e4, US_grid=None, K=None, n=4):
 
         cvs = self.md.bias.cvs
-        if ((cvs.metric.wrap_boundaries[:, 1] - cvs.metric.wrap_boundaries[:, 0]) <= 1e-6).any():
-            raise NotImplementedError("Metric provide boundaries or force constant K")
+        if ((cvs.metric.wrap_boundaries[:, 1] -
+             cvs.metric.wrap_boundaries[:, 0]) <= 1e-6).any():
+            raise NotImplementedError(
+                "Metric provide boundaries or force constant K")
 
         if K == None:
-            K = 1.0 * self.md.T * boltzmann * (n * 2 /
-                                               (cvs.metric.wrap_boundaries[:, 1] - cvs.metric.wrap_boundaries[:, 0]))**2
+            K = 1.0 * self.md.T * boltzmann * (
+                n * 2 / (cvs.metric.wrap_boundaries[:, 1] -
+                         cvs.metric.wrap_boundaries[:, 0]))**2
 
         grid = self.md.bias.cvs.metric.grid(n, endpoints=False, wrap=True)
 

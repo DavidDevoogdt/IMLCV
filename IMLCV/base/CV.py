@@ -1,25 +1,25 @@
 from __future__ import annotations
 
+import itertools
 from abc import ABC
 from dbm import ndbm
 from functools import partial
-import itertools
+from typing import Iterable
 
+import alphashape
+import dill
 import jax
 # import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
-from jax import jit, grad
-import dill
-import alphashape
+import numpy as np
+from descartes import PolygonPatch
+from jax import grad, jit
 from matplotlib import pyplot as plt
 from matplotlib.cbook import ls_mapper
 from matplotlib.colors import Colormap
-import numpy as np
-from descartes import PolygonPatch
-from scipy.interpolate import griddata, LinearNDInterpolator, Rbf
-
-from shapely.geometry import Point, MultiPoint, LineString
+from scipy.interpolate import LinearNDInterpolator, Rbf, griddata
+from shapely.geometry import LineString, MultiPoint, Point
 from sklearn.cluster import DBSCAN
 
 
@@ -91,9 +91,13 @@ class Metric:
         if self.wrap_meshgrids is None:
             return x
 
-        x = (x - self.boundaries[:, 0]) / (self.boundaries[:, 1] -
-                                           self.boundaries[:, 0]) * (jnp.array(self.wrap_meshgrids[0].shape) - 1)
-        wrapped = jnp.array([jsp.ndimage.map_coordinates(wp, x, order=1) for wp in self.wrap_meshgrids])
+        x = (x - self.boundaries[:, 0]) / (
+            self.boundaries[:, 1] - self.boundaries[:, 0]) * (
+                jnp.array(self.wrap_meshgrids[0].shape) - 1)
+        wrapped = jnp.array([
+            jsp.ndimage.map_coordinates(wp, x, order=1)
+            for wp in self.wrap_meshgrids
+        ])
         return wrapped
 
     def __add__(self, other):
@@ -105,7 +109,8 @@ class Metric:
 
         periodicities = jnp.hstack((self.periodicities, other.periodicities))
         boundaries = jnp.vstack((self.boundaries, other.boundaries))
-        wrap_boundaries = jnp.vstack((self.wrap_boundaries, other.wrap_boundaries))
+        wrap_boundaries = jnp.vstack(
+            (self.wrap_boundaries, other.wrap_boundaries))
 
         if self.wrap_meshgrids is None and other.wrap_meshgrids is None:
             wrap_meshgrids = None
@@ -128,8 +133,12 @@ class Metric:
         else:
             b = self.boundaries
 
-        assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), 'give proper boundaries'
-        grid = [jnp.linspace(row[0], row[1], n, endpoint=endpoints) for per, row in zip(self.periodicities, b)]
+        assert not (jnp.abs(b[:, 1] - b[:, 0]) <
+                    1e-12).any(), 'give proper boundaries'
+        grid = [
+            jnp.linspace(row[0], row[1], n, endpoint=endpoints)
+            for per, row in zip(self.periodicities, b)
+        ]
 
         return grid
 
@@ -163,9 +172,13 @@ class Metric:
         dist_avg = bound.length / len(trajs)
 
         if convex == True:
-            assert np.array([p.distance(bound) for p in mpoints]).max() < acc * dist_avg, "boundaries are not convex"
+            assert np.array([
+                p.distance(bound) for p in mpoints
+            ]).max() < acc * dist_avg, "boundaries are not convex"
 
-        proj = np.array([[bound.project(Point(tr[0, :])), bound.project(Point(tr[1, :]))] for tr in trajs])
+        proj = np.array(
+            [[bound.project(Point(tr[0, :])),
+              bound.project(Point(tr[1, :]))] for tr in trajs])
 
         def get_gaps(proj):
 
@@ -187,21 +200,33 @@ class Metric:
         #sort pair
         as1 = proj.argsort(axis=1)
         proj = np.take_along_axis(proj, as1, axis=1)
-        trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
+        trajs = np.array(
+            [pair[argsort, :] for argsort, pair in zip(as1, trajs)])
 
-        clustering = DBSCAN(eps=acc * dist_avg, min_samples=10).fit(get_lengths(proj, gaps)).labels_
+        clustering = DBSCAN(eps=acc * dist_avg,
+                            min_samples=10).fit(get_lengths(proj,
+                                                            gaps)).labels_
 
         #cylically join begin and end clusters
-        centers = [np.average(proj[clustering == i, 0]) for i in range(0, clustering.max() + 1)]
+        centers = [
+            np.average(proj[clustering == i, 0])
+            for i in range(0,
+                           clustering.max() + 1)
+        ]
         proj[clustering == np.argmin(centers), 0] += bound.length
-        proj[clustering == np.argmin(centers), :] = proj[clustering == np.argmin(centers), ::-1]
-        trajs[clustering == np.argmin(centers), :, :] = trajs[clustering == np.argmin(centers), ::-1, :]
+        proj[clustering == np.argmin(centers), :] = proj[
+            clustering == np.argmin(centers), ::-1]
+        trajs[clustering == np.argmin(centers), :, :] = trajs[
+            clustering == np.argmin(centers), ::-1, :]
 
         offset = proj[clustering != -1].min()
         proj -= offset
 
         gaps = get_gaps(proj)
-        clustering = DBSCAN(eps=acc * dist_avg, min_samples=10).fit(get_lengths(proj, gaps)).labels_
+        clustering = DBSCAN(
+            eps=acc * dist_avg,
+            min_samples=10,
+        ).fit(get_lengths(proj, gaps)).labels_
 
         if plot == True:
             for i in range(-1, clustering.max() + 1):
@@ -240,7 +265,8 @@ class Metric:
             lin1 = np.linspace(l1[0], l1[1], num=n)
             lin2 = np.linspace(l2[0], l2[1], num=n)
 
-            xr1 = np.array([np.array([f(l1), f(l2)]) for l1, l2 in zip(lin1, lin2)])
+            xr1 = np.array(
+                [np.array([f(l1), f(l2)]) for l1, l2 in zip(lin1, lin2)])
 
             lrange.append([l1, l2])
             xrange.append(xr1)
@@ -301,7 +327,8 @@ class Metric:
                     points.append(xrange[j][:, 0, :])
                     points.append(xrange[j][:, 1, :])
 
-            interps.append(LinearNDInterpolator(np.vstack(points), np.hstack(z)))
+            interps.append(
+                LinearNDInterpolator(np.vstack(points), np.hstack(z)))
             # interps.append(Rbf(np.vstack(points)[:, 0], np.vstack(points)[:, 1], np.hstack(z)))
 
         #get the boundaries from most distal points in traj + some margin
@@ -340,8 +367,9 @@ class Metric:
 
             #extrapolate
             for i in range(ndim):
-                interp_mg[i][b] = Rbf(*[ip[a] for ip in interp_meshgrid],
-                                      interp_mg[i][a])(*[ip[b] for ip in interp_meshgrid])
+                interp_mg[i][b] = Rbf(
+                    *[ip[a] for ip in interp_meshgrid],
+                    interp_mg[i][a])(*[ip[b] for ip in interp_meshgrid])
 
         if plot == True:
 
@@ -352,7 +380,8 @@ class Metric:
                            interp_meshgrid[1],
                            interp_mg[j],
                            cmap=plt.get_cmap('Greys'),
-                           vmax=interp_mg[j][~np.isnan(interp_mg[i])].max() * 2)
+                           vmax=interp_mg[j][~np.isnan(interp_mg[i])].max() *
+                           2)
 
                 for i in range(0, clustering.max() + 1):
                     vmax = proj[clustering != -1, 0].max()
@@ -427,7 +456,8 @@ class CV:
     def _update_params(self, **kwargs):
         """update the CV functions."""
 
-        self.cv = jit(lambda x, y: (jnp.ravel(partial(self.f, **kwargs)(x, y))))
+        self.cv = jit(lambda x, y: (jnp.ravel(partial(self.f, **kwargs)
+                                              (x, y))))
         self.jac_p = jit(jax.jacfwd(self.cv, argnums=(0)))
         self.jac_c = jit(jax.jacfwd(self.cv, argnums=(1)))
 
@@ -440,7 +470,7 @@ class CV:
 class CombineCV(CV):
     """combine multiple CVs into one CV."""
 
-    def __init__(self, cvs) -> None:
+    def __init__(self, cvs: Iterable[CV]) -> None:
         self.n = 0
         self.cvs = cvs
         metric = None

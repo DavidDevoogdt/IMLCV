@@ -4,43 +4,35 @@ Currently, the MD is done with YAFF/OpenMM
 """
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from fileinput import filename
-import dill
-
-import os
-
-import openmm
-import openmm.openmm
-import openmm.unit
-
-import h5py
-
-import yaff.sampling
-import yaff.system
-import yaff.pes
-import yaff.pes.bias
-import yaff.pes.ext
-import yaff.external
-import yaff.analysis.biased_sampling
-import yaff.sampling.iterative
-from yaff.sampling.io import XYZWriter
-from yaff.log import log, timer
-
-import molmod
-import molmod.constants
-import molmod.units
-
-import numpy as np
-import jax.numpy as jnps
+from typing import Callable, Union
 
 import ase
 import ase.geometry
 import ase.stress
-
-from typing import Callable, Union
-
+import dill
+import h5py
+import jax.numpy as jnps
+import molmod
+import molmod.constants
+import molmod.units
+import numpy as np
+import openmm
+import openmm.openmm
+import openmm.unit
+import yaff.analysis.biased_sampling
+import yaff.external
+import yaff.pes
+import yaff.pes.bias
+import yaff.pes.ext
+import yaff.sampling
+import yaff.sampling.iterative
+import yaff.system
 from IMLCV.base.bias import Bias, CompositeBias, Energy
+from yaff.log import log, timer
+from yaff.sampling.io import XYZWriter
 
 
 class MDEngine(ABC):
@@ -140,7 +132,11 @@ class MDEngine(ABC):
 
     def new_bias(self, bias: Bias, filename, **kwargs) -> MDEngine:
         self.save(f'{filename}_temp')
-        mde = MDEngine.load(f'{filename}_temp', **{'bias': bias, 'filename': filename, **kwargs})
+        mde = MDEngine.load(f'{filename}_temp', **{
+            'bias': bias,
+            'filename': filename,
+            **kwargs
+        })
         os.remove(f'{filename}_temp')
         return mde
 
@@ -178,7 +174,9 @@ class YaffEngine(MDEngine):
         ff (yaff.pes.ForceField)
     """
 
-    def __init__(self, ener=Union[yaff.pes.ForceField, Energy, Callable], **kwargs) -> None:
+    def __init__(self,
+                 ener=Union[yaff.pes.ForceField, Energy, Callable],
+                 **kwargs) -> None:
 
         if not isinstance(ener, self._YaffFF):
             ener = self._YaffFF(ener)
@@ -230,9 +228,14 @@ class YaffEngine(MDEngine):
     def _thook(self):
         """setup baro/thermostat"""
         if self.thermostat:
-            nhc = yaff.sampling.NHCThermostat(self.T, timecon=self.timecon_thermo)
+            nhc = yaff.sampling.NHCThermostat(self.T,
+                                              timecon=self.timecon_thermo)
         if self.barostat:
-            mtk = yaff.sampling.MTKBarostat(self.ener, self.T, self.P, timecon=self.timecon_baro, anisotropic=False)
+            mtk = yaff.sampling.MTKBarostat(self.ener,
+                                            self.T,
+                                            self.P,
+                                            timecon=self.timecon_baro,
+                                            anisotropic=False)
         if self.thermostat and self.barostat:
             thook = yaff.sampling.TBCombination(nhc, mtk)
         elif self.thermostat and not self.barostat:
@@ -277,15 +280,20 @@ class YaffEngine(MDEngine):
                 self.calculator = calculator
 
             def _internal_compute(self, gpos=None, vtens=None):
-                self.atoms.set_positions(self.system.pos / molmod.units.angstrom)
-                self.atoms.set_cell(ase.geometry.Cell(self.system.cell._get_rvecs() / molmod.units.angstrom))
-                energy = self.atoms.get_potential_energy() * molmod.units.electronvolt
+                self.atoms.set_positions(self.system.pos /
+                                         molmod.units.angstrom)
+                self.atoms.set_cell(
+                    ase.geometry.Cell(self.system.cell._get_rvecs() /
+                                      molmod.units.angstrom))
+                energy = self.atoms.get_potential_energy(
+                ) * molmod.units.electronvolt
                 if gpos is not None:
                     forces = self.atoms.get_forces()
                     gpos[:] = -forces * molmod.units.electronvolt / molmod.units.angstrom
                 if vtens is not None:
                     volume = np.linalg.det(self.atoms.get_cell())
-                    stress = ase.stress.voigt_6_to_full_3x3_stress(self.atoms.get_stress())
+                    stress = ase.stress.voigt_6_to_full_3x3_stress(
+                        self.atoms.get_stress())
                     vtens[:] = volume * stress * molmod.units.electronvolt
                 return energy
 
@@ -311,7 +319,13 @@ class YaffEngine(MDEngine):
                 cell = None
             t = f['trajectory']['time'][:]
 
-        return {'energy': energy, 'positions': positions, 'forces': forces, 'cell': cell, 't': t}
+        return {
+            'energy': energy,
+            'positions': positions,
+            'forces': forces,
+            'cell': cell,
+            't': t
+        }
 
     def to_ASE_traj(self):
         if self.filename.endswith(".h5"):
@@ -319,18 +333,23 @@ class YaffEngine(MDEngine):
                 at_numb = f['system']['numbers']
                 traj = []
                 for frame, energy_au in enumerate(f['trajectory']['epot']):
-                    pos_A = f['trajectory']['pos'][frame, :, :] / molmod.units.angstrom
+                    pos_A = f['trajectory']['pos'][
+                        frame, :, :] / molmod.units.angstrom
                     #vel_x = f['trajectory']['vel'][frame,:,:] / x
                     energy_eV = energy_au / molmod.units.electronvolt
                     forces_eVA = -f['trajectory']['gpos_contribs'][
-                        frame, 0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
+                        frame,
+                        0, :, :] * molmod.units.angstrom / molmod.units.electronvolt  # forces = -gpos
 
                     pbc = 'cell' in f['trajectory']
                     if pbc:
-                        cell_A = f['trajectory']['cell'][frame, :, :] / molmod.units.angstrom
+                        cell_A = f['trajectory']['cell'][
+                            frame, :, :] / molmod.units.angstrom
 
-                        vol_A3 = f['trajectory']['volume'][frame] / molmod.units.angstrom**3
-                        vtens_eV = f['trajectory']['vtens'][frame, :, :] / molmod.units.electronvolt
+                        vol_A3 = f['trajectory']['volume'][
+                            frame] / molmod.units.angstrom**3
+                        vtens_eV = f['trajectory']['vtens'][
+                            frame, :, :] / molmod.units.electronvolt
                         stresses_eVA3 = vtens_eV / vol_A3
 
                         atoms = ase.Atoms(
@@ -372,24 +391,27 @@ class YaffEngine(MDEngine):
             self.bias = bias
 
             #not all biases have a hook
-            self.hook = (self.bias.start is not None) and (self.bias.step is not None)
+            self.hook = (self.bias.start is not None) and (self.bias.step
+                                                           is not None)
             if self.hook:
                 self.init = True
                 super().__init__(start=self.bias.start, step=self.bias.step)
 
         def compute(self, gpos=None, vtens=None):
-            [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                                                 cell=self.ff.system.cell.rvecs,
-                                                                 gpos=gpos,
-                                                                 vir=vtens)
+            [ener, gpos_jax, vtens_jax
+            ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                       cell=self.ff.system.cell.rvecs,
+                                       gpos=gpos,
+                                       vir=vtens)
 
             if np.isnan(ener):
                 import jax
                 with jax.disable_jit():
-                    [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                                                         cell=self.ff.system.cell.rvecs,
-                                                                         gpos=gpos,
-                                                                         vir=vtens)
+                    [ener, gpos_jax, vtens_jax
+                    ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                               cell=self.ff.system.cell.rvecs,
+                                               gpos=gpos,
+                                               vir=vtens)
 
                 raise ValueError
 
@@ -474,7 +496,8 @@ class YaffEngine(MDEngine):
                 return state_dict
 
             raise NotImplementedError(
-                "see https://github.com/cython/cython/issues/4713, generate from function instead")
+                "see https://github.com/cython/cython/issues/4713, generate from function instead"
+            )
 
             import inspect
 
@@ -525,7 +548,8 @@ class YaffEngine(MDEngine):
                 return self
 
             raise NotImplementedError(
-                "see https://github.com/cython/cython/issues/4713, generate from function instead")
+                "see https://github.com/cython/cython/issues/4713, generate from function instead"
+            )
 
             [sysdict, nl, pp] = state_dict
 
@@ -560,43 +584,5 @@ class YaffEngine(MDEngine):
             return gpos_contribs
 
         def iter_attrs(self, iterative):
-            yield 'gpos_contrib_names', np.array([part.name for part in iterative.ff.parts], dtype='S')
-
-
-# class OpenMMEngine(MDEngine):
-#     def __init__(
-#         self,
-#         system: openmm.openmm.System,
-#         cv: CV,
-#         T,
-#         P,
-#         ES="None",
-#         timestep=None,
-#         timecon_thermo=None,
-#         timecon_baro=None,
-#     ) -> None:
-#         super().__init__(cv, T, P, ES, timestep, timecon_thermo, timecon_baro)
-
-#         if self.thermostat:
-#             self.integrator = openmm.openmm.LangevinMiddleIntegrator(temperature=T,
-#                                                                      frictionCoeff=1 / picosecond,
-#                                                                      stepSize=timestep)
-#         if self.barostat:
-#             system.addForce(openmm.openmm.MonteCarloBarostat(P, T))
-
-#         if self.ES == "MTD":
-#             self.cvs = [self._convert_cv(cvy, ff=self.ff) for cvy in cv]
-#             raise NotImplementedError
-
-#         elif self.ES == "MTD_plumed":
-#             raise NotImplementedError
-
-#     def _mtd(self, K, sigmas, periodicities, step):
-#         raise NotImplementedError
-
-#     def _convert_cv(self, cv, ff):
-#         """convert generic CV class to an OpenMM CV."""
-#         raise NotImplementedError
-
-#     def run(self, steps):
-#         self.integrator.step(steps)
+            yield 'gpos_contrib_names', np.array(
+                [part.name for part in iterative.ff.parts], dtype='S')

@@ -1,29 +1,25 @@
 from __future__ import annotations
+
+import os
 from ast import arg
 from functools import partial
 from pickle import BINSTRING
-
-import os
 from textwrap import wrap
-from IMLCV.base.CV import CV
 
-from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, MinBias
-from IMLCV.base.rounds import RoundsMd, Rounds, RoundsCV
-
-from thermolib.thermodynamics.fep import SimpleFreeEnergyProfile, FreeEnergySurface2D, plot_feps
-from thermolib.thermodynamics.histogram import Histogram2D, plot_histograms
-from thermolib.thermodynamics.bias import BiasPotential2D
-
-from molmod.units import kjmol, femtosecond
-from molmod.constants import boltzmann
-
-import numpy as np
 import jax.numpy as jnp
-import scipy
-
 import matplotlib.pyplot as plt
-
+import numpy as np
 import pathos
+import scipy
+from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, MinBias
+from IMLCV.base.CV import CV
+from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
+from molmod.constants import boltzmann
+from molmod.units import femtosecond, kjmol
+from thermolib.thermodynamics.bias import BiasPotential2D
+from thermolib.thermodynamics.fep import (FreeEnergySurface2D,
+                                          SimpleFreeEnergyProfile, plot_feps)
+from thermolib.thermodynamics.histogram import Histogram2D, plot_histograms
 
 
 class Observable:
@@ -70,12 +66,26 @@ class Observable:
 
             if 'cell' in dict:
                 cell = dict["cell"][:]
-                arr = np.array([bias.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
-                               dtype=np.double)
+                arr = np.array(
+                    [
+                        bias.cvs.compute(coordinates=x, cell=y)[0]
+                        for (x, y) in zip(pos, cell)
+                    ],
+                    dtype=np.double,
+                )
             else:
-                arr = np.array([bias.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
+                arr = np.array(
+                    [
+                        bias.cvs.compute(coordinates=p, cell=None)[0]
+                        for p in pos
+                    ],
+                    dtype=np.double,
+                )
 
-            arr_wrap = np.array(np.apply_along_axis(bias.cvs.metric.wrap, arr=arr, axis=1), dtype=np.double)
+            arr_wrap = np.array(np.apply_along_axis(bias.cvs.metric.wrap,
+                                                    arr=arr,
+                                                    axis=1),
+                                dtype=np.double)
 
             trajs_wrapped.append(arr_wrap)
             trajs.append(arr)
@@ -125,10 +135,21 @@ class Observable:
 
                 if 'cell' in dict:
                     cell = dict["cell"][:]
-                    arr = np.array([self.cvs.compute(coordinates=x, cell=y)[0] for (x, y) in zip(pos, cell)],
-                                   dtype=np.double)
+                    arr = np.array(
+                        [
+                            self.cvs.compute(coordinates=x, cell=y)[0]
+                            for (x, y) in zip(pos, cell)
+                        ],
+                        dtype=np.double,
+                    )
                 else:
-                    arr = np.array([self.cvs.compute(coordinates=p, cell=None)[0] for p in pos], dtype=np.double)
+                    arr = np.array(
+                        [
+                            self.cvs.compute(coordinates=p, cell=None)[0]
+                            for p in pos
+                        ],
+                        dtype=np.double,
+                    )
 
                 trajs.append(arr)
 
@@ -199,8 +220,12 @@ class Observable:
 
         trajs = np.vstack(trajs)
 
-        bounds = [[trajs[:, i].min(), trajs[:, i].max()] for i in range(trajs.shape[1])]
-        bins = [np.linspace(a, b, n, endpoint=True, dtype=np.double) for a, b in bounds]
+        bounds = [[trajs[:, i].min(), trajs[:, i].max()]
+                  for i in range(trajs.shape[1])]
+        bins = [
+            np.linspace(a, b, n, endpoint=True, dtype=np.double)
+            for a, b in bounds
+        ]
         bin_centers = [0.5 * (row[:-1] + row[1:]) for row in bins]
 
         mg = np.meshgrid(*bin_centers)
@@ -217,7 +242,10 @@ class Observable:
         def __call__(self, cv1, cv2):
             cvs = jnp.array([cv1, cv2])
             #values are already wrapped
-            b, _ = jnp.apply_along_axis(partial(self.bias.compute, wrap=False), axis=0, arr=cvs, diff=False)
+            b, _ = jnp.apply_along_axis(partial(self.bias.compute, wrap=False),
+                                        axis=0,
+                                        arr=cvs,
+                                        diff=False)
 
             b = np.array(b, dtype=np.double)
             b[np.isnan(b)] = 0

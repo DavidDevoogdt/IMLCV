@@ -1,17 +1,15 @@
+import os
 from functools import partial
+
+from IMLCV.base.bias import BiasF, BiasMTD, HarmonicBias, NoneBias
+from IMLCV.base.CV import CV, CombineCV, CVUtils, Metric, hyperTorus
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
+from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.scheme import Scheme
-from IMLCV.base.CV import CV, CVUtils, CombineCV, Metric, hyperTorus
-from IMLCV.base.bias import BiasF, BiasMTD, HarmonicBias, NoneBias
-from IMLCV.base.Observable import Observable
-
 from molmod.units import kelvin, kjmol
-
 from yaff.log import log
-import os
-
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 log.set_level(log.medium)
@@ -61,7 +59,8 @@ def test_ala_dipep_FES_non_per(rerun=True):
     beta = CVUtils.linear_combination(phi, psi, a=0.5, b=-0.5)
 
     cvs = CombineCV([
-        CV(alpha, metric=Metric(periodicities=[False], boundaries=[-3.5, 3.5])),
+        CV(alpha, metric=Metric(periodicities=[False], boundaries=[-3.5,
+                                                                   3.5])),
         CV(beta, metric=Metric(periodicities=[False], boundaries=[-3.5, 3.5])),
     ])
 
