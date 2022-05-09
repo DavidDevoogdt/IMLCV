@@ -12,7 +12,7 @@ import jax.scipy as jsp
 import numpy as np
 from jax import jit
 from matplotlib import pyplot as plt
-from scipy.interpolate import LinearNDInterpolator, Rbf
+from scipy.interpolate import LinearNDInterpolator, RBFInterpolator
 from shapely.geometry import MultiPoint, Point
 from sklearn.cluster import DBSCAN
 
@@ -25,7 +25,6 @@ class Metric:
         boundaries=None,
         wrap_meshgrids=None,
         wrap_boundaries=None,
-        plot_mask=None,
     ) -> None:
         if boundaries is None:
             boundaries = jnp.zeros(len(periodicities))
@@ -49,7 +48,6 @@ class Metric:
                 wrap_boundaries = jnp.array(wrap_boundaries)
 
             self.wrap_boundaries = wrap_boundaries
-        self.plot_mask = plot_mask
 
     @partial(jit, static_argnums=(0, 3))
     def distance(self, x1, x2):
@@ -143,7 +141,7 @@ class Metric:
     def ndim(self):
         return len(self.periodicities)
 
-    def update_metric(self, trajs, convex=True, plot=True, acc=30) -> Metric:
+    def update_metric(self, trajs, convex=True, fn=None, acc=30, trim=False, tol=0.1) -> Metric:
         """find best fitting bounding box and get affine tranformation+ new
         boundaries."""
 
@@ -170,65 +168,54 @@ class Metric:
 
         if convex:
             assert np.array([
-                p.distance(bound) for p in mpoints
+                bound.distance(p) for p in mpoints
             ]).max() < acc * dist_avg, "boundaries are not convex"
 
         proj = np.array(
             [[bound.project(Point(tr[0, :])),
               bound.project(Point(tr[1, :]))] for tr in trajs])
 
-        def get_gaps(proj):
+        def get_lengths(proj):
+            b = np.copy(proj[:])
+            projgaps = np.sort(np.hstack([b[:, 0], b[:, 1]]))
 
-            projgaps = np.sort(np.hstack([proj[:, 0], proj[:, 1]]))
-
-            gaps = (projgaps[1:] - projgaps[:-1]) > 10 * dist_avg
+            # remove the gapps along boundary
+            gaps = (projgaps[1:] - projgaps[:-1]) > 1 * dist_avg
             gaps = [projgaps[0:-1][gaps], projgaps[1:][gaps]]
-            return gaps
 
-        gaps = get_gaps(proj)
-
-        def get_lengths(proj, gaps):
             a = np.copy(proj[:])
             for i, j in list(zip(*gaps))[::-1]:
                 a[a > i] -= j - i
 
             return a
-
         # sort pair
         as1 = proj.argsort(axis=1)
         proj = np.take_along_axis(proj, as1, axis=1)
         trajs = np.array(
             [pair[argsort, :] for argsort, pair in zip(as1, trajs)])
 
-        clustering = DBSCAN(eps=acc * dist_avg,
-                            min_samples=10).fit(get_lengths(proj,
-                                                            gaps)).labels_
+        clustering = DBSCAN(eps=2*dist_avg).fit(get_lengths(proj)).labels_
 
-        # cylically join begin and end clusters
-        centers = [
-            np.average(proj[clustering == i, 0])
-            for i in range(0,
-                           clustering.max() + 1)
-        ]
-        proj[clustering == np.argmin(centers), 0] += bound.length
-        proj[clustering == np.argmin(centers), :] = proj[
-            clustering == np.argmin(centers), ::-1]
-        trajs[clustering == np.argmin(centers), :, :] = trajs[
-            clustering == np.argmin(centers), ::-1, :]
+        # look for largest cluster and take it as starting point of indexing, shift other points cyclically
+        index = np.argmax(np.bincount(clustering[clustering >= 0]))
 
-        offset = proj[clustering != -1].min()
+        offset = proj[clustering == index, 0].min()
+        proj[proj < offset] += bound.length
+
+        as1 = proj.argsort(axis=1)
+        proj = np.take_along_axis(proj, as1, axis=1)
+        trajs = np.array(
+            [pair[argsort, :] for argsort, pair in zip(as1, trajs)])
+
         proj -= offset
 
-        gaps = get_gaps(proj)
-        clustering = DBSCAN(
-            eps=acc * dist_avg,
-            min_samples=10,
-        ).fit(get_lengths(proj, gaps)).labels_
+        clustering = DBSCAN(eps=2*dist_avg).fit(get_lengths(proj)).labels_
 
-        if plot:
+        if fn is not None:
+            plt.clf()
             for i in range(-1, clustering.max() + 1):
                 plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
-            plt.show()
+            plt.savefig(f"{fn}/coord_cluster")
 
         ndim = clustering.max() + 1
         assert ndim <= self.ndim, """number of new periodicities do not
@@ -269,9 +256,9 @@ class Metric:
             lrange.append([l1, l2])
             xrange.append(xr1)
 
-            avg_len = (abs(l1[1] - l1[0]) + abs(l2[1] - l2[0])) / 2
+            # boundaries.append([0, avg_len])
+            boundaries.append([0, 1])
 
-            boundaries.append([0, avg_len])
             periodicities.append(True)
 
         interps = []
@@ -281,17 +268,17 @@ class Metric:
             z = []
 
             # add boundaries
-            lin = np.linspace(0, boundaries[i][1], num=n)
-            z.append(lin)
-            z.append(lin)
+            # lin = np.linspace(0, boundaries[i][1], num=n)
+            # z.append(lin)
+            # z.append(lin)
 
             range_high = np.array([lrange[i][0][1], lrange[i][1][1]])
             range_low = np.array([lrange[i][0][0], lrange[i][1][0]])
 
-            points.append(xrange[i][:, 0, :])
-            points.append(xrange[i][:, 1, :])
+            # points.append(xrange[i][:, 0, :])
+            # points.append(xrange[i][:, 1, :])
 
-            # append other boundaries
+            # # append other boundaries
             for j in range(self.ndim):
                 if i == j:
                     continue
@@ -325,10 +312,7 @@ class Metric:
                     points.append(xrange[j][:, 0, :])
                     points.append(xrange[j][:, 1, :])
 
-            interps.append(
-                LinearNDInterpolator(np.vstack(points), np.hstack(z)))
-            # interps.append(Rbf(np.vstack(points)[:, 0],
-            # np.vstack(points)[:, 1], np.hstack(z)))
+            interps.append(RBFInterpolator(np.vstack(points),  np.hstack(z)))
 
         # get the boundaries from most distal points in traj + some margin
         num = 100
@@ -337,51 +321,51 @@ class Metric:
         lspaces = []
 
         for i in range(ndim):
-            a = trajs[:, :, i].min()
-            b = trajs[:, :, i].max()
-            d = (b - a) * 0.05
-            a = a - d
-            b = b + d
-            old_boundaries.append([a, b])
+            if trim:
+                a = trajs[:, :, i].min()
+                b = trajs[:, :, i].max()
+                d = (b - a) * 0.05
+                a = a - d
+                b = b + d
 
+            else:
+                a = self.boundaries[i][0]
+                b = self.boundaries[i][1]
+
+            old_boundaries.append([a, b])
             lspaces.append(np.linspace(a, b, num=num))
 
-        interp_meshgrid = np.meshgrid(*lspaces)
+        dims = [len(l) for l in lspaces]
+        interp_meshgrid = np.array(np.meshgrid(*lspaces, indexing='ij'))
+        imflat = interp_meshgrid.reshape(ndim, -1).T
         interp_mg = []
         for i in range(ndim):
-            arr = interps[i](*interp_meshgrid)
+
+            arr_flat = interps[i](imflat)
+            arr = arr_flat.reshape(dims)
             interp_mg.append(arr)
 
-        # add some space arround
-        for _ in range(3):
-            # #find closest points
-            a = ~jnp.isnan(interp_mg[0])
-            b = jnp.zeros(a.shape)
+        m = np.logical_or(*[np.logical_or(ip < (-tol),  ip > (1+tol))
+                            for ip in interp_mg])
+        mask = np.ones(m.shape)
+        mask[m] = np.nan
 
-            for i in range(ndim):
-                b += jnp.diff(a, n=1, axis=i, prepend=False)
-                b += jnp.diff(a, n=1, axis=i, append=False)
+        print('remove points wich are too far from original')
 
-            b = jnp.logical_and(b, ~a)
+        interp_mg = [im*mask for im in interp_mg]
 
-            # extrapolate
-            for i in range(ndim):
-                interp_mg[i][b] = Rbf(
-                    *[ip[a] for ip in interp_meshgrid],
-                    interp_mg[i][a])(*[ip[b] for ip in interp_meshgrid])
-
-        if plot:
+        if fn is not None:
 
             for j in [0, 1]:
-                # plt.contourf(interp_meshgrid[0], interp_meshgrid[1],
-                # c=interp_mg[i], cmap=plt.get_cmap('plasma'), s=2)
 
-                plt.pcolor(interp_meshgrid[0],
-                           interp_meshgrid[1],
-                           interp_mg[j],
-                           cmap=plt.get_cmap('Greys'),
-                           vmax=interp_mg[j][~np.isnan(interp_mg[i])].max() *
-                           2)
+                plt.clf()
+                plt.pcolor(interp_meshgrid[0, :],
+                           interp_meshgrid[1, :],
+                           interp_mg[j] * mask,
+                           # cmap=plt.get_cmap('Greys')
+                           )
+
+                plt.colorbar()
 
                 for i in range(0, clustering.max() + 1):
                     vmax = proj[clustering != -1, 0].max()
@@ -402,13 +386,12 @@ class Metric:
                                 s=5,
                                 cmap=plt.get_cmap('plasma'))
 
-                plt.show()
+                plt.savefig(f"{fn}/coord{j}")
 
         return Metric(periodicities=periodicities,
                       boundaries=old_boundaries,
                       wrap_meshgrids=interp_mg,
-                      wrap_boundaries=boundaries,
-                      plot_mask=a)
+                      wrap_boundaries=boundaries,)
 
 
 class hyperTorus(Metric):
@@ -505,7 +488,7 @@ class CVUtils:
         cell (np.array((3,3)): cartesian coordinates of cell vectors
     """
 
-    @staticmethod
+    @ staticmethod
     def dihedral(coordinates, _, numbers):
         """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
         angle-from-four-points-in-cartesian- coordinates-in-python.
@@ -531,10 +514,19 @@ class CVUtils:
         y = jnp.dot(jnp.cross(b1, v), w)
         return jnp.arctan2(y, x)
 
-    @staticmethod
+    @ staticmethod
     def Volume(_, cell):
         return jnp.abs(jnp.dot(cell[0], jnp.cross(cell[1], cell[2])))
 
-    @staticmethod
+    @ staticmethod
     def linear_combination(cv1, cv2, a=1, b=1):
         return lambda x, y: a * cv1(x, y) + b * cv2(x, y)
+
+    @ staticmethod
+    def rotate(alpha, cv1: CV, cv2: CV):
+
+        def f(x, y):
+            a = cv1(x, y)
+            b = cv2(x, y)
+            return jnp.array([jnp.cos(alpha)*a + jnp.sin(alpha)*b, -jnp.sin(alpha)*a + jnp.cos(alpha)*b])
+        return f

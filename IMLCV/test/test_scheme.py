@@ -30,7 +30,7 @@ def test_ala_dipep_FES():
         import shutil
         shutil.rmtree('output/ala')
 
-    T = 600 * units.kelvin
+    T = 300 * units.kelvin
 
     cvs = CombineCV([
         CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
@@ -55,14 +55,9 @@ def test_ala_dipep_FES_non_per():
     phi = partial(CVUtils.dihedral, numbers=[4, 6, 8, 14])
     psi = partial(CVUtils.dihedral, numbers=[6, 8, 14, 16])
 
-    alpha = CVUtils.linear_combination(phi, psi, a=0.5, b=0.5)
-    beta = CVUtils.linear_combination(phi, psi, a=0.5, b=-0.5)
-
-    cvs = CombineCV([
-        CV(alpha, metric=Metric(periodicities=[
-           False], boundaries=[-3.5,  3.5])),
-        CV(beta, metric=Metric(periodicities=[False], boundaries=[-3.5, 3.5])),
-    ])
+    d = np.sqrt(2)*np.pi*1.05
+    cvs = CV(CVUtils.rotate(np.pi/4, phi, psi), n=2, metric=Metric(periodicities=[False, False], boundaries=[
+             [-d, d], [-d, d]]))
 
     a = True
     if a:
@@ -71,7 +66,7 @@ def test_ala_dipep_FES_non_per():
             import shutil
             shutil.rmtree('output/ala_np')
 
-        T = 600 * kelvin
+        T = 300 * kelvin
 
         s = Scheme(cvd=CVDiscovery(),
                    cvs=cvs,
@@ -81,14 +76,15 @@ def test_ala_dipep_FES_non_per():
                    timestep=2.0 * units.femtosecond,
                    timecon_thermo=100.0 * units.femtosecond,
                    folder='output/ala_np',
-                   write_step=20,
-                   max_energy=100 * kjmol)
+                   write_step=20)
     else:
         s = Scheme.from_rounds(cvd=CVDiscovery(), folder="output/ala_np")
 
+        s._new_metric(plot=True, r=0)
+
         s._FESBias(plot=True)
 
-    s.round(steps=1e4, rnds=4, update_metric=True)
+    s.round(steps=1e4, rnds=5, update_metric=True)
 
 
 def test_cv_discovery():

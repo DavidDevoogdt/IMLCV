@@ -12,7 +12,7 @@ import numpy as np
 from IMLCV.base.CV import CV
 from jax import jacfwd, jit
 from molmod.units import kjmol
-from scipy.interpolate import griddata
+from scipy.interpolate import RBFInterpolator, griddata
 
 
 class Energy(ABC):
@@ -181,7 +181,7 @@ class Bias(Energy, ABC):
         assert self.cvs.n == 2
 
         bins = self.cvs.metric.grid(n=n, endpoints=True,  wrap=wrap)
-        mg = np.meshgrid(*bins)
+        mg = np.meshgrid(*bins, indexing='xy')
 
         xlim = [mg[0].min(), mg[0].max()]
         ylim = [mg[1].min(), mg[1].max()]
@@ -209,10 +209,13 @@ class Bias(Energy, ABC):
         cbar.set_label('Bias [kJ/mol]', fontsize=16)
 
         if traj is not None:
+
             if not isinstance(traj, Iterable):
                 traj = [traj]
             for tr in traj:
+                # trajs are ij indexed
                 plt.scatter(tr[:, 0], tr[:, 1], s=3)
+                # plt.scatter(tr[:, 1], tr[:, 0], s=3)
 
         plt.title(name)
 
@@ -519,14 +522,21 @@ class GridBias(Bias):
             bias[:, 0] = bias[:, 1]
             bias[:, -1] = bias[:, -2]
 
-        # convex interpolation
+        # # convex interpolation
+        #
+        # bias[np.isnan(bias)] = griddata(
+        #     (x[~np.isnan(bias)], y[~np.isnan(bias)]),
+        #     bias[~np.isnan(bias)],
+        #     (x[np.isnan(bias)], y[np.isnan(bias)]),
+        #     method='cubic',
+        # )
+
+        # do general interpolation
         x, y = np.indices(bias.shape)
-        bias[np.isnan(bias)] = griddata(
-            (x[~np.isnan(bias)], y[~np.isnan(bias)]),
-            bias[~np.isnan(bias)],
-            (x[np.isnan(bias)], y[np.isnan(bias)]),
-            method='cubic',
-        )
+        mask = np.isnan(bias)
+        rbf = RBFInterpolator(np.array([x[~mask], y[~mask]]).T, bias[~mask])
+        bias[mask] = rbf(np.array([x[mask], y[mask]]).T)
+
         self.vals = bias
 
         if bounds is not None:

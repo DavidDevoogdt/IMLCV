@@ -38,7 +38,7 @@ class Scheme:
                  folder='output',
                  write_step=100,
                  screenlog=1000,
-                 max_energy=80 * kjmol) -> None:
+                 max_energy=None) -> None:
 
         # filename = f"{folder}/init.h5"
 
@@ -103,7 +103,7 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self, plot=True, kind='flower'):
+    def _FESBias(self, plot=True, kind='fupper'):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)
@@ -111,7 +111,7 @@ class Scheme:
 
         self.md = self.md.new_bias(fesBias, filename=None)
 
-    def _grid_umbrella(self, steps=1e4, US_grid=None, K=None, n=4):
+    def _grid_umbrella(self, steps=1e4,  K=None, n=4):
 
         cvs = self.md.bias.cvs
         if ((cvs.metric.wrap_boundaries[:, 1] -
@@ -131,19 +131,20 @@ class Scheme:
             CvMonitor(self.md.bias.cvs),
         ]) for x in itertools.product(*grid)], steps=steps)
 
+    def _new_metric(self, plot=False, r=None):
+        o = Observable(self.rounds)
+        self.md.bias.cvs.metric = o.new_metric(plot=plot, r=r)
+
     def round(self, rnds=10, steps=5e4, update_metric=False):
         # startround = 0
 
         # update biases untill there are no discontinues jumps left
-        for i in range(rnds):
-
+        for _ in range(rnds):
+            self._grid_umbrella(steps=steps)
             if update_metric:
-                self._grid_umbrella(steps=5e3)
-                o = Observable(self.rounds)
-                self.md.bias.cvs.metric = o.new_metric(plot=False)
+                self._new_metric(plot=True)
                 update_metric = False
             else:
-                self._grid_umbrella(steps=steps)
                 self._FESBias(plot=True)
 
             self.rounds.new_round(self.md)

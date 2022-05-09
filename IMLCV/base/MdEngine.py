@@ -208,10 +208,12 @@ class YaffEngine(MDEngine):
             return None
         elif self.filename.endswith(".h5"):
             fh5 = h5py.File(self.filename, 'w')
-            h5writer = yaff.sampling.HDF5Writer(fh5, step=self.write_step)
+            h5writer = yaff.sampling.HDF5Writer(
+                fh5, start=5*self.write_step, step=self.write_step)
             whook = h5writer
         elif self.filename.endswith(".xyz"):
-            xyzhook = XYZWriter(self.filename, step=self.write_step)
+            xyzhook = XYZWriter(self.filename, start=5 *
+                                self.write_step, step=self.write_step)
             whook = xyzhook
         else:
             raise NotImplementedError(

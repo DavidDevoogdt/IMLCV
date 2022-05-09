@@ -52,69 +52,69 @@ class Observable:
             biases = []
             plot_args = []
 
-        for dictionary in self.rounds.iter(num=1):
-            pos = dictionary["positions"][:]
-            bias = Bias.load(dictionary['attr']["name_bias"])
+            for dictionary in self.rounds.iter(num=1):
+                pos = dictionary["positions"][:]
+                bias = Bias.load(dictionary['attr']["name_bias"])
 
-            if 'cell' in dictionary:
-                cell = dictionary["cell"][:]
-                arr = np.array(
-                    [
-                        bias.cvs.compute(coordinates=x, cell=y)[0]
-                        for (x, y) in zip(pos, cell)
-                    ],
-                    dtype=np.double,
-                )
-            else:
-                arr = np.array(
-                    [
-                        bias.cvs.compute(coordinates=p, cell=None)[0]
-                        for p in pos
-                    ],
-                    dtype=np.double,
-                )
+                if 'cell' in dictionary:
+                    cell = dictionary["cell"][:]
+                    arr = np.array(
+                        [
+                            bias.cvs.compute(coordinates=x, cell=y)[0]
+                            for (x, y) in zip(pos, cell)
+                        ],
+                        dtype=np.double,
+                    )
+                else:
+                    arr = np.array(
+                        [
+                            bias.cvs.compute(coordinates=p, cell=None)[0]
+                            for p in pos
+                        ],
+                        dtype=np.double,
+                    )
 
-            arr_wrap = np.array(np.apply_along_axis(bias.cvs.metric.wrap,
-                                                    arr=arr,
-                                                    axis=1),
-                                dtype=np.double)
+                arr_wrap = np.array(np.apply_along_axis(bias.cvs.metric.wrap,
+                                                        arr=arr,
+                                                        axis=1),
+                                    dtype=np.double)
 
-            trajs_wrapped.append(arr_wrap)
-            trajs.append(arr)
+                trajs_wrapped.append(arr_wrap)
+                trajs.append(arr)
+
+                if plot:
+                    if dictionary['round']['round'] == self.rounds.round:
+                        i = dictionary['i']
+
+                        plot_args.append({
+                            'self': bias,
+                            'name': f'{directory}/umbrella_{i}',
+                            'traj': [arr],
+                        })
+
+                biases.append(Observable._ThermoBias2D(bias))
 
             if plot:
-                if dictionary['round']['round'] == self.rounds.round:
-                    i = dictionary['i']
 
-                    plot_args.append({
-                        'self': bias,
-                        'name': f'{directory}/umbrella_{i}',
-                        'traj': [arr],
-                    })
+                plot_args.append({
+                    'self': common_bias,
+                    'name': f'{directory}/combined',
+                    'traj': trajs,
+                })
 
-            biases.append(Observable._ThermoBias2D(bias))
+                plot_args.append({
+                    'self': common_bias,
+                    'name': f'{directory}/combined_wrap',
+                    'traj': trajs_wrapped,
+                    'wrap': True
+                })
 
-        if plot:
+                def pl(args):
+                    Bias.plot(**args)
 
-            plot_args.append({
-                'self': common_bias,
-                'name': f'{directory}/combined',
-                'traj': trajs,
-            })
-
-            plot_args.append({
-                'self': common_bias,
-                'name': f'{directory}/combined_wrap',
-                'traj': trajs_wrapped,
-                'wrap': True
-            })
-
-            def pl(args):
-                Bias.plot(**args)
-
-            # async plot and continue
-            with pathos.pools.SerialPool() as pool:
-                list(pool.map(pl, plot_args))
+                # async plot and continue
+                with pathos.pools.SerialPool() as pool:
+                    list(pool.map(pl, plot_args))
 
             bounds, bins = self._FES_mg(trajs=trajs_wrapped)
 
@@ -176,7 +176,7 @@ class Observable:
 
         return fes, bounds
 
-    def new_metric(self, plot=False):
+    def new_metric(self, plot=False, r=None):
         assert isinstance(self.rounds, RoundsMd)
 
         trans = []
@@ -195,7 +195,7 @@ class Observable:
 
             return None
 
-        for r in self.rounds.iter(num=1):
+        for r in self.rounds.iter(num=1, r=r):
             bias = Bias.load(r['attr']["name_bias"])
             if cvs is None:
                 cvs = bias.cvs
@@ -206,7 +206,12 @@ class Observable:
             trans.append(monitor.transitions)
 
         transitions = jnp.vstack(trans)
-        return cvs.metric.update_metric(transitions, plot=plot)
+        if plot:
+            fn = f'{self.folder}/round_{self.rounds.round}/'
+        else:
+            fn = None
+
+        return cvs.metric.update_metric(transitions, fn=fn)
 
     def _FES_mg(self, trajs, n=None):
         if n is None:
@@ -266,7 +271,7 @@ class Observable:
             else:
                 raise ValueError
 
-        # fes_interp = Observable._interp(fs)
+        # fes is in 'xy'- indexing convention, convert to ij
         bias = np.transpose(fs)
 
         if not internal:
