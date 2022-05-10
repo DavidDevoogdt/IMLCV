@@ -11,8 +11,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from IMLCV.base.CV import CV
 from jax import jacfwd, jit
+from molmod.constants import boltzmann
 from molmod.units import kjmol
-from scipy.interpolate import RBFInterpolator, griddata
+from scipy.interpolate import RBFInterpolator
 
 
 class Energy(ABC):
@@ -133,21 +134,21 @@ class Bias(Energy, ABC):
                                   static_array_argnums=static_array_argnums)
 
     @partial(jit, static_argnums=(0, 2, 3))
-    def compute(self, cvs, diff=False, wrap=True):
+    def compute(self, cvs, diff=False, map=True):
         """compute the energy and derivative.
 
-        If wrap==False, the cvs are assumed to be already wrapped
+        If map==False, the cvs are assumed to be already mapped
         """
 
-        if wrap:
+        if map:
             if diff:
-                dcvs = jacfwd(self.cvs.metric.wrap)(cvs)
-            cvs = self.cvs.metric.wrap(cvs)
+                dcvs = jacfwd(self.cvs.metric.map)(cvs)
+            cvs = self.cvs.metric.map(cvs)
 
         E = self.e(cvs, *self.get_args())
         if diff:
             diffE = self.de(cvs, *self.get_args())[0]
-            if wrap:
+            if map:
                 diffE = jnp.einsum('i,ij->j', diffE, dcvs)
         else:
             diffE = None
@@ -176,11 +177,11 @@ class Bias(Energy, ABC):
     def load(filename) -> Bias:
         return Energy.load(filename)
 
-    def plot(self, name, n=50, traj=None, vmin=0, vmax=100, wrap=False):
+    def plot(self, name, n=50, traj=None, vmin=0, vmax=100, map=True):
         """plot bias."""
         assert self.cvs.n == 2
 
-        bins = self.cvs.metric.grid(n=n, endpoints=True,  wrap=wrap)
+        bins = self.cvs.metric.grid(n=n, endpoints=True,  map=map)
         mg = np.meshgrid(*bins, indexing='xy')
 
         xlim = [mg[0].min(), mg[0].max()]
@@ -190,9 +191,15 @@ class Bias(Energy, ABC):
                                        axis=0,
                                        arr=np.array(mg),
                                        diff=False,
-                                       wrap=not wrap)
+                                       map=not map)
 
         extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
+
+        if map is False:
+            mask = self.cvs.metric._get_mask(tol=0.01, interp_mg=mg)
+            bias = bias*mask
+        # normalise lowest point of bias
+        bias -= bias[~np.isnan(bias)].min()
 
         plt.clf()
         p = plt.imshow(bias / (kjmol),
@@ -215,7 +222,6 @@ class Bias(Energy, ABC):
             for tr in traj:
                 # trajs are ij indexed
                 plt.scatter(tr[:, 0], tr[:, 1], s=3)
-                # plt.scatter(tr[:, 1], tr[:, 0], s=3)
 
         plt.title(name)
 
@@ -500,8 +506,6 @@ class GridBias(Bias):
             raise NotImplementedError
         assert cvs.n == 2
 
-        bias = vals
-
         # extend periodically
         self.n = np.array(vals.shape)
 
@@ -522,15 +526,6 @@ class GridBias(Bias):
             bias[:, 0] = bias[:, 1]
             bias[:, -1] = bias[:, -2]
 
-        # # convex interpolation
-        #
-        # bias[np.isnan(bias)] = griddata(
-        #     (x[~np.isnan(bias)], y[~np.isnan(bias)]),
-        #     bias[~np.isnan(bias)],
-        #     (x[np.isnan(bias)], y[np.isnan(bias)]),
-        #     method='cubic',
-        # )
-
         # do general interpolation
         x, y = np.indices(bias.shape)
         mask = np.isnan(bias)
@@ -542,7 +537,7 @@ class GridBias(Bias):
         if bounds is not None:
             per = np.array(bounds)
         else:
-            per = np.array(self.cvs.metric.wrap_boundaries)
+            per = np.array(self.cvs.metric.boundaries)
 
         self.per = jnp.array(per)
 
@@ -559,6 +554,44 @@ class GridBias(Bias):
 
     def get_args(self):
         return []
+
+
+class FesBias(Bias):
+    """FES bias wraps another (grid) Bias. The compute function properly accounts for the transformation formula F_{unmapped} = F_{mapped} + KT*ln( J(cvs))"""
+
+    def __init__(self, bias: Bias, T) -> None:
+
+        self.bias = bias
+        self.T = T
+
+        super().__init__(cvs=bias.cvs, start=bias.start, step=bias.step)
+
+    def compute(self, cvs, diff=False, map=True):
+        if map is True:
+            return self.bias.compute(cvs, diff=diff, map=True)
+
+        e, de = self.bias.compute(cvs, diff=diff, map=map)
+
+        r = jit(lambda x: self.T * boltzmann *
+                jnp.log(jnp.abs(jnp.linalg.det(jacfwd(self.bias.cvs.metric.map)(x)))))
+
+        e += r(cvs)
+
+        if diff:
+            de += jit(jacfwd(r))(cvs)
+
+        return e + r(cvs), de
+
+    def update_bias(self, coordinates, cell):
+        self.bias.update_bias(coordinates=coordinates, cell=cell)
+
+    def _compute(self, cvs, *args):
+        """function that calculates the bias potential."""
+        return self.bias._compute(cvs, *args)
+
+    def get_args(self):
+        """function that return dictionary with kwargs of _compute."""
+        return self.bias.get_args()
 
 
 class CvMonitor(BiasF):

@@ -4,9 +4,10 @@ from functools import partial
 
 import numpy as np
 from IMLCV.base.bias import GridBias
-from IMLCV.base.CV import CV, CombineCV, CVUtils, Metric, hyperTorus
+from IMLCV.base.CV import CV, CombineCV, CVUtils
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
+from IMLCV.base.metric import Metric, hyperTorus
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.scheme import Scheme
@@ -56,7 +57,7 @@ def test_ala_dipep_FES_non_per():
     psi = partial(CVUtils.dihedral, numbers=[6, 8, 14, 16])
 
     d = np.sqrt(2)*np.pi*1.05
-    cvs = CV(CVUtils.rotate(np.pi/4, phi, psi), n=2, metric=Metric(periodicities=[False, False], boundaries=[
+    cvs = CV(CVUtils.rotate(np.pi/4, phi, psi), n=2, metric=Metric(periodicities=[False, False], bounding_box=[
              [-d, d], [-d, d]]))
 
     a = True
@@ -84,7 +85,7 @@ def test_ala_dipep_FES_non_per():
 
         s._FESBias(plot=True)
 
-    s.round(steps=1e4, rnds=5, update_metric=True)
+    s.round(steps=2e4, rnds=6, update_metric=True)
 
 
 def test_cv_discovery():
@@ -102,7 +103,7 @@ def test_cv_discovery():
 def test_grid_bias():
 
     cvs = CV(f=lambda x: nan,  n=2, metric=Metric(
-        periodicities=[False, False], boundaries=[[0, 10], [-5, 5]]))
+        periodicities=[False, False], bounding_box=[[0, 10], [-5, 5]]))
 
     a = np.linspace(0, 10, endpoint=True)
     b = np.linspace(-5, 5, endpoint=True)

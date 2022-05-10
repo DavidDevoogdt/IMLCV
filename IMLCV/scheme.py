@@ -114,17 +114,17 @@ class Scheme:
     def _grid_umbrella(self, steps=1e4,  K=None, n=4):
 
         cvs = self.md.bias.cvs
-        if ((cvs.metric.wrap_boundaries[:, 1] -
-             cvs.metric.wrap_boundaries[:, 0]) <= 1e-6).any():
+        if ((cvs.metric.boundaries[:, 1] -
+             cvs.metric.boundaries[:, 0]) <= 1e-6).any():
             raise NotImplementedError(
                 "Metric provide boundaries or force constant K")
 
         if K is None:
             K = 1.0 * self.md.T * boltzmann * (
-                n * 2 / (cvs.metric.wrap_boundaries[:, 1] -
-                         cvs.metric.wrap_boundaries[:, 0]))**2
+                n * 2 / (cvs.metric.boundaries[:, 1] -
+                         cvs.metric.boundaries[:, 0]))**2
 
-        grid = self.md.bias.cvs.metric.grid(n, endpoints=False, wrap=True)
+        grid = self.md.bias.cvs.metric.grid(n, endpoints=False, map=True)
 
         self.rounds.run_par([CompositeBias([
             HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)),

@@ -5,7 +5,7 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 import pathos
-from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias
+from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, FesBias, GridBias
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
 from thermolib.thermodynamics.bias import BiasPotential2D
@@ -48,7 +48,7 @@ class Observable:
         if isinstance(self.rounds, RoundsMd):
 
             trajs = []
-            trajs_wrapped = []
+            trajs_mapped = []
             biases = []
             plot_args = []
 
@@ -74,12 +74,12 @@ class Observable:
                         dtype=np.double,
                     )
 
-                arr_wrap = np.array(np.apply_along_axis(bias.cvs.metric.wrap,
-                                                        arr=arr,
-                                                        axis=1),
-                                    dtype=np.double)
+                arr_mapped = np.array(np.apply_along_axis(bias.cvs.metric.map,
+                                                          arr=arr,
+                                                          axis=1),
+                                      dtype=np.double)
 
-                trajs_wrapped.append(arr_wrap)
+                trajs_mapped.append(arr_mapped)
                 trajs.append(arr)
 
                 if plot:
@@ -89,7 +89,7 @@ class Observable:
                         plot_args.append({
                             'self': bias,
                             'name': f'{directory}/umbrella_{i}',
-                            'traj': [arr],
+                            'traj': [arr_mapped],
                         })
 
                 biases.append(Observable._ThermoBias2D(bias))
@@ -98,15 +98,15 @@ class Observable:
 
                 plot_args.append({
                     'self': common_bias,
-                    'name': f'{directory}/combined',
+                    'name': f'{directory}/combined_unmapped',
                     'traj': trajs,
+                    'map': False
                 })
 
                 plot_args.append({
                     'self': common_bias,
-                    'name': f'{directory}/combined_wrap',
-                    'traj': trajs_wrapped,
-                    'wrap': True
+                    'name': f'{directory}/combined',
+                    'traj': trajs_mapped,
                 })
 
                 def pl(args):
@@ -116,12 +116,12 @@ class Observable:
                 with pathos.pools.SerialPool() as pool:
                     list(pool.map(pl, plot_args))
 
-            bounds, bins = self._FES_mg(trajs=trajs_wrapped)
+            bounds, bins = self._FES_mg(trajs=trajs_mapped)
 
             histo = Histogram2D.from_wham_c(
                 bins=bins,
                 # pinit=pinit,
-                traj_input=trajs_wrapped,
+                traj_input=trajs_mapped,
                 error_estimate='mle_f',
                 biasses=biases,
                 temp=temp,
@@ -170,9 +170,10 @@ class Observable:
 
         if plot:
             bias = self.fes_bias(internal=True)
-            bias.plot(name=f'{self.folder}/FES_thermolib_{self.rounds.round}')
             bias.plot(
-                name=f'{self.folder}/FES_thermolib_wrap_{self.rounds.round}', wrap=True)
+                name=f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}', map=False)
+            bias.plot(
+                name=f'{self.folder}/FES_thermolib_{self.rounds.round}')
 
         return fes, bounds
 
@@ -244,11 +245,12 @@ class Observable:
 
         def __call__(self, cv1, cv2):
             cvs = jnp.array([cv1, cv2])
-            # values are already wrapped
-            b, _ = jnp.apply_along_axis(partial(self.bias.compute, wrap=False),
+            # values are already mapped
+            b, _ = jnp.apply_along_axis(self.bias.compute,
                                         axis=0,
                                         arr=cvs,
-                                        diff=False)
+                                        diff=False,
+                                        map=False)
 
             b = np.array(b, dtype=np.double)
             b[np.isnan(b)] = 0
@@ -278,4 +280,4 @@ class Observable:
             bias = -bias
             bias[:] -= bias[~np.isnan(bias)].min()
 
-        return GridBias(cvs=self.cvs,  vals=bias, bounds=bounds)
+        return FesBias(GridBias(cvs=self.cvs,  vals=bias, bounds=bounds), T=self.rounds.T)
