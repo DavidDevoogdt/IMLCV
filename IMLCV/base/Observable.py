@@ -8,6 +8,7 @@ import pathos
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, FesBias, GridBias
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
+from molmod.units import picosecond
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
 from thermolib.thermodynamics.histogram import Histogram2D
@@ -18,6 +19,7 @@ class Observable:
     observables."""
 
     samples_per_bin = 10
+    time_per_bin = 1*picosecond
 
     def __init__(self, rounds: Rounds, cvs: CV = None) -> None:
         self.rounds = rounds
@@ -35,7 +37,7 @@ class Observable:
         self.fes = None
         self.bounds = None
 
-    def _fes_2d(self, plot=True):
+    def _fes_2d(self, plot=True, throw_away=0.5*picosecond):
         # fes = FreeEnergySurface2D.from_txt
         if self.fes is not None:
             return self.fes, self.bounds
@@ -52,12 +54,19 @@ class Observable:
             biases = []
             plot_args = []
 
-            for dictionary in self.rounds.iter(num=1):
-                pos = dictionary["positions"][:]
+            time = 0
+
+            for dictionary in self.rounds.iter(num=4):
+
                 bias = Bias.load(dictionary['attr']["name_bias"])
 
+                index = np.argmax(dictionary['t'] > throw_away)
+                time += dictionary['t'][-1]-dictionary['t'][index]
+
+                pos = dictionary["positions"][index:]
+
                 if 'cell' in dictionary:
-                    cell = dictionary["cell"][:]
+                    cell = dictionary["cell"][index:]
                     arr = np.array(
                         [
                             bias.cvs.compute(coordinates=x, cell=y)[0]
@@ -116,7 +125,7 @@ class Observable:
                 with pathos.pools.SerialPool() as pool:
                     list(pool.map(pl, plot_args))
 
-            bounds, bins = self._FES_mg(trajs=trajs_mapped)
+            bounds, bins = self._FES_mg(trajs=trajs_mapped, time=time)
 
             histo = Histogram2D.from_wham_c(
                 bins=bins,
@@ -214,7 +223,8 @@ class Observable:
 
         return cvs.metric.update_metric(transitions, fn=fn)
 
-    def _FES_mg(self, trajs, n=None):
+    def _FES_mg(self, trajs, time=None, n=None):
+
         if n is None:
             n = 0
             for t in trajs:
@@ -223,7 +233,12 @@ class Observable:
             # 20 points per bin on average
             n = int(n**(1 / trajs[0].ndim) / self.samples_per_bin)
 
-            assert n >= 4, "sample more points"
+        if time is not None:
+            bins_max = int((time/self.time_per_bin)**(1 / trajs[0].ndim))
+            if bins_max > n:
+                n = bins_max
+
+        assert n >= 4, "sample more points"
 
         trajs = np.vstack(trajs)
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from abc import ABC
 from collections.abc import Iterable
 from functools import partial
@@ -12,9 +14,8 @@ import numpy as np
 import pathos
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
+# from IMLCV.base.run_md import run_md
 from molmod.constants import boltzmann
-
-# import multiprocessing_on_dill as multiprocessing
 
 
 class Rounds(ABC):
@@ -257,21 +258,13 @@ class RoundsMd(Rounds):
 
         kwargs = []
 
-        for i, b in enumerate(biases):
-            kwargs.append({
-                'bias': b,
-                'new_name': f'{self.folder}/round_{self.round}/temp_{i}.h5',
-                'steps': steps,
-                'i': i + self.i
-            })
+        for i, bias in enumerate(biases):
 
-        def _run_par(args):
-            bias = args['bias']
-            temp_name = args['new_name']
-            steps = args['steps']
-            i = args['i']
+            temp_name = f'{self.folder}/round_{self.round}/temp_{i}'
+            os.mkdir(temp_name)
 
-            if bias is None:
+            # construct bias
+            if bias is NoneBias:
                 b = Bias.load(common_bias_name)
             else:
                 b = CompositeBias([Bias.load(common_bias_name), bias])
@@ -282,29 +275,119 @@ class RoundsMd(Rounds):
                     BiasF(b.cvs, lambda _: jnp.ones(1,) * self.max_energy)
                 ], jnp.min)
 
-            md = MDEngine.load(common_md_name, filename=temp_name, bias=b)
+            b.save(f'{temp_name}/bias')
 
-            md.run(steps=steps)
+            kwargs.append({
+                'bias': b,
+                'temp_name': temp_name,
+                'steps': steps,
+                'i': i + self.i,
+                'common_bias_name': common_bias_name,
+                'common_md_name': common_md_name,
+                'max_energy': self.max_energy,
+                'folder': self.folder,
+                'round': self.round,
+            })
 
-            d, attr = RoundsMd._add(
-                md, f'{self.folder}/round_{self.round}/bias_{i}')
+        # write all files
+        names = []
+        for kw in kwargs:
 
-            return [d, attr, i]
+            n = kw['temp_name']
+            os.mkdir(n)
 
-        if len(biases) != 1:
+            with open(f"{n}/inp", mode='wb') as f:
+                dill.dump(kw, f)
+            names.append(n)
 
+        # perform all simulations
+        direct = False
+
+        if direct:
             with pathos.pools.ProcessPool() as pool:
-                # with pathos.pools.SerialPool() as pool:
-                for [d, attr, i] in pool.map(_run_par, kwargs):
-                    super().add(d=d, attrs=attr, i=i)
+                pool.map(RoundsMd.run_md, names)
         else:
-            [d, attr, i] = _run_par(kwargs[0])
-            super().add(d=d, attrs=attr, i=i)
+            def qsub(name):
+
+                template = f"""
+pwd; 
+echo {name}
+"""
+                with open(f"{name}/job.sh", mode='w') as f:
+                    f.write(template)
+                os.chmod(f"{name}/job.sh",  0o775)
+
+                f = open(f"{name}/output", mode='w')
+                process = subprocess.Popen(
+                    f"{name}/job.sh", shell=True, stdout=f, stderr=subprocess.STDOUT)
+                process.wait()
+                f.close()
+                print(process.returncode)
+            with pathos.pools.ProcessPool() as pool:
+                pool.map(qsub, names)
+
+        # from multiprocessing import Pool
+
+        # process
+
+        # process = subprocess.Popen(
+        #     f"cd {self.folder}/round_{self.round};  snakmake ", shell=True, stdout=subprocess.PIPE)
+        # process.wait()
+        # print(process.returncode)
+
+        # if len(biases) != 1:
+        #     if snakemake:
+
+        #         process = subprocess.Popen(
+        #             f"cd {self.folder}/round_{self.round};  snakmake ", shell=True, stdout=subprocess.PIPE)
+        #         process.wait()
+        #         print(process.returncode)
+
+        #     else:
+        #         # with pathos.pools.ParallelPool() as pool:
+
+        # else:
+        #     RoundsMd.run_md(names[0])
 
         self.i += len(kwargs)
 
+        # retrieve results and clean temp files
         for kw in kwargs:
-            os.remove(kw['new_name'])
+            with open(f"{kw['temp_name']}/out", mode='rb') as f:
+                [d, attr, i] = dill.load(f)
+            super().add(d=d, attrs=attr, i=i)
+
+            os.remove(f"{kw['temp_name']}/traj.h5")
+            os.remove(f"{kw['temp_name']}/inp")
+            os.remove(f"{kw['temp_name']}/out")
+
+    @staticmethod
+    def run_md(folder_name):
+        """method used to perform md runs"""
+
+        with open(f"{folder_name}/inp", mode='rb') as f:
+            kwargs = dill.load(f)
+
+        common_bias_name = kwargs["common_bias_name"]
+        common_md_name = kwargs["common_md_name"]
+        bias = kwargs["bias"]
+        temp_name = kwargs["temp_name"]
+        steps = kwargs["steps"]
+        i = kwargs["i"]
+        folder = kwargs["folder"]
+        round = kwargs["round"]
+
+        b = Bias.load(bias)
+        md = MDEngine.load(
+            common_md_name, filename=f"{folder_name}/traj.h5", bias=b)
+
+        md.run(steps=steps)
+
+        d, attr = RoundsMd._add(
+            md, f'{folder}/round_{round}/bias_{i}')
+
+        with open(f"{folder_name}/out", mode='wb') as f:
+            dill.dump([d, attr, i], f)
 
     def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
 
@@ -370,5 +453,4 @@ class RoundsMd(Rounds):
 
 
 if __name__ == '__main__':
-    from IMLCV.test.test_scheme import test_cv_discovery
-    test_cv_discovery()
+    RoundsMd.run_md(folder_name=sys.argv[1])

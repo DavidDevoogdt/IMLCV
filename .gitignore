@@ -31,3 +31,11 @@ docs/source/rg_*
 #files from examples
 IMLCV/test/output/*
 IMLCV/test/cython/build/temp.linux-x86_64-3.8/cpickle.o
+
+#
+.mongodb/*
+.log/*
+my_fworker.yaml
+.gitignore
+my_qadapter.yaml
+my_launchpad.yaml

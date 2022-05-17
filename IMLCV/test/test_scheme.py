@@ -17,6 +17,7 @@ from yaff.log import log
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 log.set_level(log.medium)
+
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
 os.chdir(dname)
@@ -46,9 +47,9 @@ def test_ala_dipep_FES():
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
                     folder='output/ala',
-                    write_step=20)
+                    write_step=1)
 
-    scheme.round(steps=1e4, rnds=4)
+    scheme.round(steps=2e3, rnds=10)
 
 
 def test_ala_dipep_FES_non_per():
@@ -77,15 +78,11 @@ def test_ala_dipep_FES_non_per():
                    timestep=2.0 * units.femtosecond,
                    timecon_thermo=100.0 * units.femtosecond,
                    folder='output/ala_np',
-                   write_step=20)
+                   write_step=10)
     else:
         s = Scheme.from_rounds(cvd=CVDiscovery(), folder="output/ala_np")
 
-        s._new_metric(plot=True, r=0)
-
-        s._FESBias(plot=True)
-
-    s.round(steps=2e4, rnds=6, update_metric=True)
+    s.round(steps=1e3, rnds=10, update_metric=True)
 
 
 def test_cv_discovery():
@@ -121,6 +118,6 @@ def test_grid_bias():
 
 
 if __name__ == "__main__":
-    # test_ala_dipep_FES()
-    test_ala_dipep_FES_non_per()
+    test_ala_dipep_FES()
+    # test_ala_dipep_FES_non_per()
     # test_grid_bias()

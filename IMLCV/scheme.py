@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import sys
 from typing import Type
 
 import numpy as np
@@ -39,8 +40,6 @@ class Scheme:
                  write_step=100,
                  screenlog=1000,
                  max_energy=None) -> None:
-
-        # filename = f"{folder}/init.h5"
 
         self.md = Engine(bias=NoneBias(cvs),
                          ener=ener,
@@ -103,7 +102,7 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self, plot=True, kind='fupper'):
+    def _FESBias(self, plot=True, kind='normal'):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)

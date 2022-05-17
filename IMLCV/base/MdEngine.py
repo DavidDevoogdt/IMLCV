@@ -426,7 +426,7 @@ class YaffEngine(MDEngine):
             return ener
 
         def get_log(self):
-            raise NotImplementedError
+            return ""
 
         def __call__(self, iterative):
             # skip initial hook called by verlet integrator

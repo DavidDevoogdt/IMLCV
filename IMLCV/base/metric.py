@@ -22,7 +22,7 @@ class Metric:
         periodicities,
         bounding_box=None,
         map_meshgrids=None,
-        boundaries=None,
+
     ) -> None:
         if bounding_box is None:
             bounding_box = jnp.zeros(len(periodicities))
@@ -39,13 +39,8 @@ class Metric:
         self.periodicities = periodicities
         self.type = periodicities
 
-        if boundaries is None:
-            self.boundaries = self.bounding_box
-        else:
-            if isinstance(boundaries, list):
-                boundaries = jnp.array(boundaries)
-
-            self.boundaries = boundaries
+        self.boundaries = np.zeros(self.bounding_box.shape)
+        self.boundaries[:, 1] = 1
 
     @partial(jit, static_argnums=(0, 3))
     def distance(self, x1, x2):
@@ -101,7 +96,6 @@ class Metric:
 
         periodicities = jnp.hstack((self.periodicities, other.periodicities))
         bounding_box = jnp.vstack((self.bounding_box, other.bounding_box))
-        boundaries = jnp.vstack((self.boundaries, other.boundaries))
 
         if self.map_meshgrids is None and other.map_meshgrids is None:
             map_meshgrids = None
@@ -114,14 +108,14 @@ class Metric:
         return Metric(
             periodicities=periodicities,
             bounding_box=bounding_box,
-            boundaries=boundaries,
             map_meshgrids=map_meshgrids,
         )
 
     def grid(self, n, endpoints=True, map=False):
 
         if map:
-            b = self.boundaries
+            b = np.zeros(self.boundaries.shape)
+            b[:, 1] = 1
         else:
             b = self.bounding_box
 
@@ -352,7 +346,7 @@ class Metric:
         new_metric = Metric(periodicities=periodicities,
                             bounding_box=old_boundaries,
                             map_meshgrids=interp_mg,
-                            boundaries=boundaries,)
+                            )
 
         mask = new_metric._get_mask(tol=tol)
         interp_mg = [im*mask for im in interp_mg]
