@@ -13,10 +13,7 @@ from IMLCV.base.rounds import RoundsMd
 from IMLCV.scheme import Scheme
 from molmod import units
 from molmod.units import kelvin, kjmol
-from yaff.log import log
 from yaff.test.common import get_alaninedipeptide_amber99ff
-
-log.set_level(log.medium)
 
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
@@ -47,9 +44,9 @@ def test_ala_dipep_FES():
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
                     folder='output/ala',
-                    write_step=1)
+                    write_step=10)
 
-    scheme.round(steps=2e3, rnds=10)
+    scheme.round(steps=1e4, rnds=10)
 
 
 def test_ala_dipep_FES_non_per():

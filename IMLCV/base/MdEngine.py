@@ -26,6 +26,7 @@ import yaff.sampling
 import yaff.sampling.iterative
 import yaff.system
 from IMLCV.base.bias import Bias, Energy
+from yaff.log import log
 from yaff.sampling.io import XYZWriter
 
 
@@ -114,6 +115,7 @@ class MDEngine(ABC):
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
+
         with open(file, 'rb') as f:
             [cls, d] = dill.load(f)
         d['filename'] = None
@@ -169,16 +171,22 @@ class YaffEngine(MDEngine):
 
     def __init__(self,
                  ener=Union[yaff.pes.ForceField, Energy, Callable],
-                 **kwargs) -> None:
+                 log_level=log.medium,
+                 **kwargs,
+                 ) -> None:
 
         if not isinstance(ener, self._YaffFF):
             ener = self._YaffFF(ener)
+
+        self.log_level = log_level
 
         super().__init__(ener=ener, **kwargs)
 
     def _init_post(self):
 
         vhook = yaff.sampling.VerletScreenLog(step=self.screenlog)
+        log.set_level(self.log_level)
+
         whook = self._whook()
         thook = self._thook()
         bhook = self._add_bias()
@@ -394,6 +402,8 @@ class YaffEngine(MDEngine):
                 self.init = True
                 super().__init__(start=self.bias.start, step=self.bias.step)
 
+            self.cvs = []
+
         def compute(self, gpos=None, vtens=None):
             [
                 ener,
@@ -426,7 +436,7 @@ class YaffEngine(MDEngine):
             return ener
 
         def get_log(self):
-            return ""
+            return "Yaff bias from IMLCV"
 
         def __call__(self, iterative):
             # skip initial hook called by verlet integrator
@@ -450,6 +460,8 @@ class YaffEngine(MDEngine):
             if from_func:
                 ff = ff()
                 assert isinstance(ff, yaff.pes.ForceField)
+
+            # used for yaff logging
 
             self.__dict__ = ff.__dict__
             self.from_func = from_func

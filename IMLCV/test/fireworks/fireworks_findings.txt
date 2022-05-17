@@ -1,0 +1,35 @@
+overview fireworks:
+
+pro's
+
+* can submit jobs to pbs/slurm/ (remote) or local, potentially in parallel
+* fully written in python, has normal bindings from command line to perform tasks
+* defines full task through yaml files, and can combine them to full workflow
+* waits for tasks to fininsh before returning
+
+* different tasks are possible
+
+task :
+- _fw_name: ScriptTask
+- _fw_name: TemplateWriterTask
+- _fw_name: FileTransferTask
+
+other custom task defined in python
+
+con's
+* need to have a running mongoDB
+
+design:
+    tasks: stuff to do
+    firework: collection of task + command spec (params)
+    workflow: different fireworks + links between them (DAG)
+
+___________
+overview 
+
+Jobflow:
+    * only for python scripts, maps python functions (through simple wrapper) + input to rockets
+    * combination chained functions get mapped to workflows
+    * execute locally / through fireworks
+
+    * needs mongodb for fireworks, other stores can be used for local execution

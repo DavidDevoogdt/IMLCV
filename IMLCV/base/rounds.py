@@ -6,15 +6,18 @@ import sys
 from abc import ABC
 from collections.abc import Iterable
 from functools import partial
+from http import client
 
 import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
 import pathos
+from IMLCV import ROOT_DIR, RUN_TYPE
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
-# from IMLCV.base.run_md import run_md
+from IMLCV.base.run_md import run_md
+from jobflow import job
 from molmod.constants import boltzmann
 
 
@@ -257,7 +260,6 @@ class RoundsMd(Rounds):
             common_md_name = f[f'{self.round}'].attrs['name_md']
 
         kwargs = []
-
         for i, bias in enumerate(biases):
 
             temp_name = f'{self.folder}/round_{self.round}/temp_{i}'
@@ -294,60 +296,82 @@ class RoundsMd(Rounds):
         for kw in kwargs:
 
             n = kw['temp_name']
-            os.mkdir(n)
-
             with open(f"{n}/inp", mode='wb') as f:
                 dill.dump(kw, f)
             names.append(n)
 
         # perform all simulations
-        direct = False
 
-        if direct:
+        if RUN_TYPE == 'direct':
+            """run functions as parallel processes"""
             with pathos.pools.ProcessPool() as pool:
-                pool.map(RoundsMd.run_md, names)
-        else:
-            def qsub(name):
+                pool.map(run_md, names)
 
-                template = f"""
-pwd; 
-echo {name}
-"""
+        elif RUN_TYPE == 'sh':
+            """run as separate sh scripts and wait for results"""
+
+            def qsub(name):
+                template = f"""python {ROOT_DIR}/base/run_md.py {name}"""
                 with open(f"{name}/job.sh", mode='w') as f:
                     f.write(template)
+
                 os.chmod(f"{name}/job.sh",  0o775)
 
-                f = open(f"{name}/output", mode='w')
-                process = subprocess.Popen(
-                    f"{name}/job.sh", shell=True, stdout=f, stderr=subprocess.STDOUT)
-                process.wait()
-                f.close()
-                print(process.returncode)
+                if RUN_TYPE == 'sh':
+                    with open(f"{name}/output", mode='w') as f:
+                        process = subprocess.Popen(
+                            f"{name}/job.sh", shell=True, stdout=f, stderr=subprocess.STDOUT)
+                        process.wait()
+
+                        assert process.returncode == 0
+                elif RUN_TYPE == 'FireWorks':
+                    raise NotImplementedError
+
+                print(f'{name} finished')
+
             with pathos.pools.ProcessPool() as pool:
                 pool.map(qsub, names)
 
-        # from multiprocessing import Pool
+        elif RUN_TYPE == 'FireWorks':
 
-        # process
+            from fireworks import LaunchPad
+            from fireworks.core.rocket_launcher import launch_rocket
+            from fireworks.queue.queue_launcher import launch_rocket_to_queue
+            from jobflow import Flow, JobStore, job
+            from jobflow.managers.fireworks import flow_to_workflow
+            from maggma.stores import MongoStore
 
-        # process = subprocess.Popen(
-        #     f"cd {self.folder}/round_{self.round};  snakmake ", shell=True, stdout=subprocess.PIPE)
-        # process.wait()
-        # print(process.returncode)
+            fold = f'{self.folder}/round_{self.round}'
+            ml = f'{fold}/mongo_log'
+            mdb = f'{fold}/mongo_db'
+            os.mkdir(mdb)
 
-        # if len(biases) != 1:
-        #     if snakemake:
+            store = JobStore(MongoStore(database=f"mongostore",
+                                        collection_name='test'))
+            store.connect()
 
-        #         process = subprocess.Popen(
-        #             f"cd {self.folder}/round_{self.round};  snakmake ", shell=True, stdout=subprocess.PIPE)
-        #         process.wait()
-        #         print(process.returncode)
+            p = subprocess.Popen(
+                f"mongod -dbpath {mdb} --logpath {ml} ", stdout=subprocess.PIPE, shell=True)
 
-        #     else:
-        #         # with pathos.pools.ParallelPool() as pool:
+            lpad = LaunchPad()
+            lpad.reset("", require_password=False)
 
-        # else:
-        #     RoundsMd.run_md(names[0])
+            for fn in names:
+                lpad.add_wf(flow_to_workflow(
+                    flow=job(run_md)(fn), store=store))
+
+            def launch(name):
+                launch_rocket(lpad)
+                # launch_rocket_to_queue(lpad)
+                print(f'rocket landed {name}')
+
+            with pathos.pools.ProcessPool() as pool:
+                pool.map(launch, names)
+
+            p.kill()
+
+        else:
+            raise ValueError(f'RUN_TYPE {RUN_TYPE} unknown')
 
         self.i += len(kwargs)
 
@@ -360,34 +384,6 @@ echo {name}
             os.remove(f"{kw['temp_name']}/traj.h5")
             os.remove(f"{kw['temp_name']}/inp")
             os.remove(f"{kw['temp_name']}/out")
-
-    @staticmethod
-    def run_md(folder_name):
-        """method used to perform md runs"""
-
-        with open(f"{folder_name}/inp", mode='rb') as f:
-            kwargs = dill.load(f)
-
-        common_bias_name = kwargs["common_bias_name"]
-        common_md_name = kwargs["common_md_name"]
-        bias = kwargs["bias"]
-        temp_name = kwargs["temp_name"]
-        steps = kwargs["steps"]
-        i = kwargs["i"]
-        folder = kwargs["folder"]
-        round = kwargs["round"]
-
-        b = Bias.load(bias)
-        md = MDEngine.load(
-            common_md_name, filename=f"{folder_name}/traj.h5", bias=b)
-
-        md.run(steps=steps)
-
-        d, attr = RoundsMd._add(
-            md, f'{folder}/round_{round}/bias_{i}')
-
-        with open(f"{folder_name}/out", mode='wb') as f:
-            dill.dump([d, attr, i], f)
 
     def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
 
@@ -450,7 +446,3 @@ echo {name}
             })
 
         return roundscv
-
-
-if __name__ == '__main__':
-    RoundsMd.run_md(folder_name=sys.argv[1])
