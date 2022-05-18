@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from abc import ABC
 from collections.abc import Iterable
 from functools import partial
@@ -13,6 +14,9 @@ import h5py
 import jax.numpy as jnp
 import numpy as np
 import pathos
+from fireworks import FWorker
+from fireworks.queue.queue_adapter import QueueAdapterBase
+from fireworks.user_objects.queue_adapters.common_adapter import CommonAdapter
 from IMLCV import ROOT_DIR, RUN_TYPE
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
@@ -336,7 +340,10 @@ class RoundsMd(Rounds):
 
             from fireworks import LaunchPad
             from fireworks.core.rocket_launcher import launch_rocket
+            from fireworks.features.multi_launcher import rapidfire_process
             from fireworks.queue.queue_launcher import launch_rocket_to_queue
+            from fireworks.queue.queue_launcher import \
+                rapidfire as rapidfire_queue
             from jobflow import Flow, JobStore, job
             from jobflow.managers.fireworks import flow_to_workflow
             from maggma.stores import MongoStore
@@ -353,20 +360,31 @@ class RoundsMd(Rounds):
             p = subprocess.Popen(
                 f"mongod -dbpath {mdb} --logpath {ml} ", stdout=subprocess.PIPE, shell=True)
 
-            lpad = LaunchPad()
+            lpad = LaunchPad(logdir=fold)
             lpad.reset("", require_password=False)
 
             for fn in names:
-                lpad.add_wf(flow_to_workflow(
-                    flow=job(run_md)(fn), store=store))
+                j = job(run_md)(fn)
+                wf = flow_to_workflow(flow=j, store=store)
 
-            def launch(name):
-                launch_rocket(lpad)
-                # launch_rocket_to_queue(lpad)
-                print(f'rocket landed {name}')
+                lpad.add_wf(wf)
 
-            with pathos.pools.ProcessPool() as pool:
-                pool.map(launch, names)
+            debug = False
+
+            if not debug:
+                qadapter = CommonAdapter(
+                    q_type="PBS", rocket_launch='', pre_rocket="echo 'pre rocket!!'", post_rocket="echo 'post rocket!!'")
+
+                launch_rocket_to_queue(
+                    launchpad=lpad, fworker=FWorker(), qadapter=qadapter, launcher_dir=fold)
+            else:
+                # only for debugging, use RUN_TYPE = 'direct'
+
+                def launch(_):
+                    launch_rocket(lpad)
+
+                with pathos.pools.ProcessPool() as pool:
+                    pool.map(launch, names)
 
             p.kill()
 
