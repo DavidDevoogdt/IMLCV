@@ -11,6 +11,7 @@ from http import client
 
 import dill
 import h5py
+import IMLCV
 import jax.numpy as jnp
 import numpy as np
 import pathos
@@ -357,10 +358,12 @@ class RoundsMd(Rounds):
                                         collection_name='test'))
             store.connect()
 
-            p = subprocess.Popen(
-                f"mongod -dbpath {mdb} --logpath {ml} ", stdout=subprocess.PIPE, shell=True)
+            # p = subprocess.Popen(
+            #     f"mongod -dbpath {mdb} --logpath {ml} ", stdout=subprocess.PIPE, shell=True)
 
-            lpad = LaunchPad(logdir=fold)
+            # lpad = LaunchPad(logdir=fold)
+            lpad = LaunchPad(name='test', host=IMLCV.MONGO_HOST,
+                             uri_mode=True, logdir=fold)
             lpad.reset("", require_password=False)
 
             for fn in names:
@@ -369,24 +372,24 @@ class RoundsMd(Rounds):
 
                 lpad.add_wf(wf)
 
-            debug = False
+            # debug = False
 
-            if not debug:
-                qadapter = CommonAdapter(
-                    q_type="PBS", rocket_launch='', pre_rocket="echo 'pre rocket!!'", post_rocket="echo 'post rocket!!'")
+            # if not debug:
+            #     qadapter = CommonAdapter(
+            #         q_type="PBS", rocket_launch='', pre_rocket="echo 'pre rocket!!'", post_rocket="echo 'post rocket!!'")
 
-                launch_rocket_to_queue(
-                    launchpad=lpad, fworker=FWorker(), qadapter=qadapter, launcher_dir=fold)
-            else:
-                # only for debugging, use RUN_TYPE = 'direct'
+            #     launch_rocket_to_queue(
+            #         launchpad=lpad, fworker=FWorker(), qadapter=qadapter, launcher_dir=fold)
+            # else:
+            #     # only for debugging, use RUN_TYPE = 'direct'
 
-                def launch(_):
-                    launch_rocket(lpad)
+            def launch(_):
+                launch_rocket(lpad)
 
-                with pathos.pools.ProcessPool() as pool:
-                    pool.map(launch, names)
+            with pathos.pools.ProcessPool() as pool:
+                pool.map(launch, names)
 
-            p.kill()
+            # p.kill()
 
         else:
             raise ValueError(f'RUN_TYPE {RUN_TYPE} unknown')

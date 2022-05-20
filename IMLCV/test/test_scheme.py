@@ -23,8 +23,8 @@ os.chdir(dname)
 def test_ala_dipep_FES():
 
     if os.path.isfile('output/ala/rounds'):
-        if input("recalculate?").strip().lower() != 'true':
-            return
+        # if input("recalculate?").strip().lower() != 'true':
+        #     return
 
         import shutil
         shutil.rmtree('output/ala')
