@@ -1,0 +1,32 @@
+initial params for PbCsI_3
+
+
+npt simulation
+timestep: 2fs
+T: 300 K?
+
+
+DFT params:
+__________
+CP2K
+
+k-points 5-5-5
+cutoff: 400 Ry
+bais set: pople cc-p (T)vdz
+
+Umbrellas
+__________
+K = 5kjmol/Ang^2
+
+
+Cv selection
+__________
+
+abs( l1-l2 )
+
+
+phase 1) l1=l2= +- 6.3 ang
+phase 2) l1=5 ang l2=8 ang
+ 
+clusters
+__________

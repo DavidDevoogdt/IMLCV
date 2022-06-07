@@ -2,6 +2,7 @@ import logging
 import uuid
 from time import sleep
 
+import IMLCV
 import jobflow
 from jobflow import Flow, JobStore, job, run_locally
 from jobflow.managers.fireworks import JobFiretask, flow_to_workflow
@@ -41,7 +42,7 @@ fwjobs = [flow_to_workflow(
     flow=flow, store=store) for flow in flows]
 
 
-lpad = LaunchPad()
+lpad = LaunchPad().auto_load()
 lpad.reset("", require_password=False)
 
 for fwj in fwjobs:

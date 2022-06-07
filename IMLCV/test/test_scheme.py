@@ -46,7 +46,7 @@ def test_ala_dipep_FES():
                     folder='output/ala',
                     write_step=10)
 
-    scheme.round(steps=1e4, rnds=10)
+    scheme.round(steps=2e4, rnds=10)
 
 
 def test_ala_dipep_FES_non_per():

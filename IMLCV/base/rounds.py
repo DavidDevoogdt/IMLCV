@@ -15,7 +15,6 @@ import IMLCV
 import jax.numpy as jnp
 import numpy as np
 import pathos
-from fireworks import FWorker
 from fireworks.queue.queue_adapter import QueueAdapterBase
 from fireworks.user_objects.queue_adapters.common_adapter import CommonAdapter
 from IMLCV import ROOT_DIR, RUN_TYPE
@@ -24,6 +23,8 @@ from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.run_md import run_md
 from jobflow import job
 from molmod.constants import boltzmann
+
+# from fireworks import FWorker
 
 
 class Rounds(ABC):
@@ -358,12 +359,14 @@ class RoundsMd(Rounds):
                                         collection_name='test'))
             store.connect()
 
-            # p = subprocess.Popen(
-            #     f"mongod -dbpath {mdb} --logpath {ml} ", stdout=subprocess.PIPE, shell=True)
+            if IMLCV.LOCAL_MONGO:
+                p = subprocess.Popen(
+                    f"mongod -dbpath {mdb} --logpath {ml} ", stdout=subprocess.PIPE, shell=True)
 
-            # lpad = LaunchPad(logdir=fold)
-            lpad = LaunchPad(name='test', host=IMLCV.MONGO_HOST,
-                             uri_mode=True, logdir=fold)
+                lpad = LaunchPad(logdir=fold)
+            else:
+                lpad = LaunchPad(name='test2', host=IMLCV.MONGO_HOST,
+                                 uri_mode=True, logdir=fold)
             lpad.reset("", require_password=False)
 
             for fn in names:
@@ -389,7 +392,8 @@ class RoundsMd(Rounds):
             with pathos.pools.ProcessPool() as pool:
                 pool.map(launch, names)
 
-            # p.kill()
+            if IMLCV.LOCAL_MONGO:
+                p.kill()
 
         else:
             raise ValueError(f'RUN_TYPE {RUN_TYPE} unknown')
