@@ -11,18 +11,32 @@ from http import client
 
 import dill
 import h5py
+import IMLCV
 import jax.numpy as jnp
 import numpy as np
+import parsl
 import pathos
 from fireworks import FWorker
 from fireworks.queue.queue_adapter import QueueAdapterBase
 from fireworks.user_objects.queue_adapters.common_adapter import CommonAdapter
-from IMLCV import ROOT_DIR, RUN_TYPE
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.run_md import run_md
 from jobflow import job
 from molmod.constants import boltzmann
+from parsl import bash_app, python_app
+from parsl.addresses import (address_by_hostname, address_by_interface,
+                             address_by_query, address_by_route)
+from parsl.channels import LocalChannel, SSHChannel, SSHInteractiveLoginChannel
+from parsl.config import Config
+from parsl.data_provider import rsync
+from parsl.data_provider.data_manager import default_staging
+from parsl.data_provider.files import File
+from parsl.data_provider.ftp import FTPInTaskStaging
+from parsl.data_provider.http import HTTPInTaskStaging
+from parsl.executors import HighThroughputExecutor, ThreadPoolExecutor
+from parsl.launchers import MpiRunLauncher, SimpleLauncher, SrunLauncher
+from parsl.monitoring import MonitoringHub
+from parsl.providers import PBSProProvider, SlurmProvider
 
 
 class Rounds(ABC):
@@ -263,6 +277,35 @@ class RoundsMd(Rounds):
             common_bias_name = f[f'{self.round}'].attrs['name_bias']
             common_md_name = f[f'{self.round}'].attrs['name_md']
 
+        @python_app
+        def run_md(kwargs):
+            """method used to perform md runs. arguments are constructed in rounds.run_par and shouldn't be done manually"""
+
+            from IMLCV.base.MdEngine import MDEngine
+            from IMLCV.base.rounds import RoundsMd
+
+            common_md_name = kwargs["common_md_name"]
+            steps = kwargs["steps"]
+            i = kwargs["i"]
+            folder = kwargs["folder"]
+            temp_name = kwargs["temp_name"]
+            round = kwargs["round"]
+
+            # b = kwargs["bias"]
+            # md = MDEngine.load(
+            #     common_md_name, filename=f"{temp_name}/traj.h5", bias=b)
+
+            # md.run(steps=steps)
+
+            # d, attr = RoundsMd._add(
+            #     md, f'{folder}/round_{round}/bias_{i}')
+
+            print("aaaaaaaah")
+            d, attr, i = None, None, None
+
+            return [d, attr, i]
+
+        tasks = []
         kwargs = []
         for i, bias in enumerate(biases):
 
@@ -283,125 +326,26 @@ class RoundsMd(Rounds):
 
             b.save(f'{temp_name}/bias')
 
-            kwargs.append({
+            kw = {
                 'bias': b,
                 'temp_name': temp_name,
                 'steps': steps,
                 'i': i + self.i,
-                'common_bias_name': common_bias_name,
-                'common_md_name': common_md_name,
+                'common_bias_name': File(os.path.join(os.getcwd(), common_bias_name)),
+                'common_md_name': File(os.path.join(os.getcwd(), common_md_name)),
                 'max_energy': self.max_energy,
                 'folder': self.folder,
                 'round': self.round,
-            })
+            }
 
-        # write all files
-        names = []
-        for kw in kwargs:
+            tasks.append(run_md(kw))
 
-            n = kw['temp_name']
-            with open(f"{n}/inp", mode='wb') as f:
-                dill.dump(kw, f)
-            names.append(n)
-
-        # perform all simulations
-
-        if RUN_TYPE == 'direct':
-            """run functions as parallel processes"""
-            with pathos.pools.ProcessPool() as pool:
-                pool.map(run_md, names)
-
-        elif RUN_TYPE == 'sh':
-            """run as separate sh scripts and wait for results"""
-
-            def qsub(name):
-                template = f"""python {ROOT_DIR}/base/run_md.py {name}"""
-                with open(f"{name}/job.sh", mode='w') as f:
-                    f.write(template)
-
-                os.chmod(f"{name}/job.sh",  0o775)
-
-                if RUN_TYPE == 'sh':
-                    with open(f"{name}/output", mode='w') as f:
-                        process = subprocess.Popen(
-                            f"{name}/job.sh", shell=True, stdout=f, stderr=subprocess.STDOUT)
-                        process.wait()
-
-                        assert process.returncode == 0
-                elif RUN_TYPE == 'FireWorks':
-                    raise NotImplementedError
-
-                print(f'{name} finished')
-
-            with pathos.pools.ProcessPool() as pool:
-                pool.map(qsub, names)
-
-        elif RUN_TYPE == 'FireWorks':
-
-            from fireworks import LaunchPad
-            from fireworks.core.rocket_launcher import launch_rocket
-            from fireworks.features.multi_launcher import rapidfire_process
-            from fireworks.queue.queue_launcher import launch_rocket_to_queue
-            from fireworks.queue.queue_launcher import \
-                rapidfire as rapidfire_queue
-            from jobflow import Flow, JobStore, job
-            from jobflow.managers.fireworks import flow_to_workflow
-            from maggma.stores import MongoStore
-
-            fold = f'{self.folder}/round_{self.round}'
-            ml = f'{fold}/mongo_log'
-            mdb = f'{fold}/mongo_db'
-            os.mkdir(mdb)
-
-            store = JobStore(MongoStore(database=f"mongostore",
-                                        collection_name='test'))
-            store.connect()
-
-            p = subprocess.Popen(
-                f"mongod -dbpath {mdb} --logpath {ml} ", stdout=subprocess.PIPE, shell=True)
-
-            lpad = LaunchPad(logdir=fold)
-            lpad.reset("", require_password=False)
-
-            for fn in names:
-                j = job(run_md)(fn)
-                wf = flow_to_workflow(flow=j, store=store)
-
-                lpad.add_wf(wf)
-
-            debug = False
-
-            if not debug:
-                qadapter = CommonAdapter(
-                    q_type="PBS", rocket_launch='', pre_rocket="echo 'pre rocket!!'", post_rocket="echo 'post rocket!!'")
-
-                launch_rocket_to_queue(
-                    launchpad=lpad, fworker=FWorker(), qadapter=qadapter, launcher_dir=fold)
-            else:
-                # only for debugging, use RUN_TYPE = 'direct'
-
-                def launch(_):
-                    launch_rocket(lpad)
-
-                with pathos.pools.ProcessPool() as pool:
-                    pool.map(launch, names)
-
-            p.kill()
-
-        else:
-            raise ValueError(f'RUN_TYPE {RUN_TYPE} unknown')
-
-        self.i += len(kwargs)
-
-        # retrieve results and clean temp files
-        for kw in kwargs:
-            with open(f"{kw['temp_name']}/out", mode='rb') as f:
-                [d, attr, i] = dill.load(f)
+        # wait for tasks to finish
+        for task in tasks:
+            [d, attr, i] = task.result()
             super().add(d=d, attrs=attr, i=i)
 
-            os.remove(f"{kw['temp_name']}/traj.h5")
-            os.remove(f"{kw['temp_name']}/inp")
-            os.remove(f"{kw['temp_name']}/out")
+        self.i += len(kwargs)
 
     def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
 
