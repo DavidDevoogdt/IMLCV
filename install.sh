@@ -14,7 +14,10 @@ mamba install -y autopep8 pylint
 
 
 pip install -e git+https://github.com/molmod/molmod.git#egg=molmod
-pip install --upgrade "jax[cpu]" -f https://storage.googleapis.com/jax-releases/jax_releases.html
+pip install -e git+https://github.com/h5py/h5py.git#egg=h5py
+
+# pip install --upgrade "jax[cpu]" -f https://storage.googleapis.com/jax-releases/jax_releases.html
+
 
 pip install -e git+https://github.ugent.be/lvduyfhu/ThermoLIB.git@63d7d63c7cfa5bdfa712c198e00308cabf01c92f#egg=thermolib
 
@@ -22,6 +25,8 @@ pip install -e git+https://github.com/Parsl/parsl.git#egg=parsl
 
 pip install pandas sqlalchemy_utils flask_sqlalchemy plotly networkx
 
-
+pip install oauth-ssh
 #manual fixes
 
+# h5py base.py: find_item_type
+# if isinstance(data, (np.ndarray, jnp.ndarray)):

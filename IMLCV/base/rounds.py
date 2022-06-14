@@ -21,6 +21,7 @@ from fireworks.queue.queue_adapter import QueueAdapterBase
 from fireworks.user_objects.queue_adapters.common_adapter import CommonAdapter
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
+from IMLCV.launch.parsl_conf.config import EXEC_HPC
 from jobflow import job
 from molmod.constants import boltzmann
 from parsl import bash_app, python_app
@@ -278,30 +279,20 @@ class RoundsMd(Rounds):
             common_md_name = f[f'{self.round}'].attrs['name_md']
 
         @python_app
-        def run_md(kwargs):
+        def run_md(common_md_name, steps, i, folder, temp_file, round, b):
             """method used to perform md runs. arguments are constructed in rounds.run_par and shouldn't be done manually"""
-
             from IMLCV.base.MdEngine import MDEngine
             from IMLCV.base.rounds import RoundsMd
 
-            common_md_name = kwargs["common_md_name"]
-            steps = kwargs["steps"]
-            i = kwargs["i"]
-            folder = kwargs["folder"]
-            temp_name = kwargs["temp_name"]
-            round = kwargs["round"]
+            print(f"hello from umbrella simulation {i}")
 
-            # b = kwargs["bias"]
-            # md = MDEngine.load(
-            #     common_md_name, filename=f"{temp_name}/traj.h5", bias=b)
+            md = MDEngine.load(
+                common_md_name.path, filename=temp_file.path, bias=b)
+            md.run(steps=steps)
+            d, attr = RoundsMd._add(
+                md, f'{folder}/round_{round}/bias_{i}')
 
-            # md.run(steps=steps)
-
-            # d, attr = RoundsMd._add(
-            #     md, f'{folder}/round_{round}/bias_{i}')
-
-            print("aaaaaaaah")
-            d, attr, i = None, None, None
+            # d, attr = None, None
 
             return [d, attr, i]
 
@@ -310,7 +301,8 @@ class RoundsMd(Rounds):
         for i, bias in enumerate(biases):
 
             temp_name = f'{self.folder}/round_{self.round}/temp_{i}'
-            os.mkdir(temp_name)
+            if not os.path.exists(temp_name):
+                os.mkdir(temp_name)
 
             # construct bias
             if bias is NoneBias:
@@ -324,25 +316,26 @@ class RoundsMd(Rounds):
                     BiasF(b.cvs, lambda _: jnp.ones(1,) * self.max_energy)
                 ], jnp.min)
 
-            b.save(f'{temp_name}/bias')
+            # b.save(f'{temp_name}/bias')
+            # bias_file =
 
             kw = {
-                'bias': b,
-                'temp_name': temp_name,
+                'b': b,
+                'temp_file': File(os.path.join(os.getcwd(), temp_name, "traj.h5")),
                 'steps': steps,
                 'i': i + self.i,
-                'common_bias_name': File(os.path.join(os.getcwd(), common_bias_name)),
                 'common_md_name': File(os.path.join(os.getcwd(), common_md_name)),
-                'max_energy': self.max_energy,
+                # 'max_energy': self.max_energy,
                 'folder': self.folder,
                 'round': self.round,
             }
 
-            tasks.append(run_md(kw))
+            tasks.append(run_md(**kw))
 
         # wait for tasks to finish
         for task in tasks:
             [d, attr, i] = task.result()
+            # [d, attr, i] = task
             super().add(d=d, attrs=attr, i=i)
 
         self.i += len(kwargs)

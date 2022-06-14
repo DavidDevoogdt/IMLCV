@@ -9,3 +9,8 @@ ThermoLIB is available upon request, see https://molmod.ugent.be/software
 ```
 pip install -e .
 ```
+
+
+# other packages
+
+todo https://singroup.github.io/dscribe/1.0.x/index.html

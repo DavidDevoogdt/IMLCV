@@ -10,3 +10,9 @@ format:
 	yapf -i -r --style='{based_on_style:google, COLUMN_LIMIT:79,indent_width: 4}' .
 test:
 	pytest
+
+clean:
+	rm -rf .parsl
+	rm -rf runinfo
+	rm -rf hpc_log
+	

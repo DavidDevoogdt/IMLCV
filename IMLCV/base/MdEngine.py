@@ -115,6 +115,7 @@ class MDEngine(ABC):
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
+        
 
         with open(file, 'rb') as f:
             [cls, d] = dill.load(f)
@@ -433,7 +434,7 @@ class YaffEngine(MDEngine):
             if vtens is not None:
                 vtens[:] = np.array(vtens_jax)
 
-            return ener
+            return np.array(ener)
 
         def get_log(self):
             return "Yaff bias from IMLCV"
