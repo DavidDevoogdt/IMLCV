@@ -10,6 +10,7 @@ from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.metric import Metric, hyperTorus
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import RoundsMd
+from IMLCV.launch.parsl_conf.config import config
 from IMLCV.scheme import Scheme
 from molmod import units
 from molmod.units import kelvin, kjmol
@@ -44,7 +45,7 @@ def test_ala_dipep_FES():
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
                     folder='output/ala',
-                    write_step=10)
+                    write_step=20)
 
     scheme.round(steps=2e4, rnds=10)
 
@@ -115,6 +116,10 @@ def test_grid_bias():
 
 
 if __name__ == "__main__":
+    config()
+
+    # set the stream logger to print debug messages
+
     test_ala_dipep_FES()
     # test_ala_dipep_FES_non_per()
     # test_grid_bias()

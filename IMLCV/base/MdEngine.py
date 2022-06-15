@@ -124,7 +124,11 @@ class MDEngine(ABC):
         for key in kwargs.keys():
             d[key] = kwargs[key]
 
-        return cls(**d)
+        ret = cls(**d)
+
+        print('loaded!')
+
+        return ret
 
     def new_bias(self, bias: Bias, filename, **kwargs) -> MDEngine:
         self.save(f'{filename}_temp')
@@ -377,6 +381,7 @@ class YaffEngine(MDEngine):
             raise NotImplementedError("only for h5, impl this")
 
     def run(self, steps):
+        print(f'running for {steps} steps')
         self.verlet.run(int(steps))
 
     def get_state(self):
@@ -433,7 +438,7 @@ class YaffEngine(MDEngine):
             if vtens is not None:
                 vtens[:] = np.array(vtens_jax)
 
-            return ener
+            return np.array(ener)
 
         def get_log(self):
             return "Yaff bias from IMLCV"
