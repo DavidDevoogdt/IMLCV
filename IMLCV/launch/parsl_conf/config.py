@@ -342,32 +342,40 @@ source /user/gent/436/vsc43693/scratch_vo/projects/IMLCV/Miniconda3/bin/activate
             channel=ssh_chan,
             worker_init=worker_init,
             launcher=SingleNodeLauncher(),
+            #
             #MpiRunLauncher() if mpi else SimpleLauncher(),
             exclusive=False,
-            min_blocks=1,
+            min_blocks=0,
             max_blocks=6,
             init_blocks=1,
-            nodes_per_block=20,
-            cores_per_node=1,
+            nodes_per_block=3,
+            # cores_per_node=1,
             walltime="00:20:00",
             parallelism=1,
-            # mem_per_node=2,  # inn GB
+            mem_per_node=8,  # inn GB
         )
         return provider
 
     config = Config(
         executors=[
-            HighThroughputExecutor(
-                label="hpc_doduo",
-                max_workers=16,
-                address=address_by_hostname(),
-                cores_per_worker=1,
-                provider=provider_init(cluster="doduo", mpi=True),
-                worker_logdir_root=f"{exec_dir}/hpc_log",
-
-            ),
+            # HighThroughputExecutor(
+            #     label="hpc_doduo",
+            #     max_workers=16,
+            #     address=address_by_hostname(),
+            #     cores_per_worker=1,
+            #     provider=provider_init(cluster="doduo", mpi=False),
+            #     worker_logdir_root=f"{exec_dir}/hpc_log",
+            #     worker_debug=True,
+            # ),
+            ThreadPoolExecutor()
         ],
-        retries=3,
+        # monitoring=MonitoringHub(
+        #     hub_address=address_by_hostname(),
+        #     # hub_port=55055,
+        #     monitoring_debug=False,
+        #     resource_monitoring_interval=10,
+        # ),
+        retries=1,
 
     )
 

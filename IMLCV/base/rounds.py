@@ -281,6 +281,13 @@ class RoundsMd(Rounds):
         @python_app
         def run_md(common_md_name, steps, i, folder, temp_file, round, b):
             """method used to perform md runs. arguments are constructed in rounds.run_par and shouldn't be done manually"""
+
+            # from contextlib import redirect_stdout
+
+            # with open(f"output_{i}.out", 'w') as f:
+            #     with redirect_stdout(f):
+            print(f"hello from sim {i}")
+
             from IMLCV.base.MdEngine import MDEngine
             from IMLCV.base.rounds import RoundsMd
 
@@ -291,8 +298,6 @@ class RoundsMd(Rounds):
             md.run(steps=steps)
             d, attr = RoundsMd._add(
                 md, f'{folder}/round_{round}/bias_{i}')
-
-            # d, attr = None, None
 
             return [d, attr, i]
 

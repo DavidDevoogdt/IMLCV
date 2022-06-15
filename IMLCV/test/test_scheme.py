@@ -118,6 +118,8 @@ def test_grid_bias():
 if __name__ == "__main__":
     config()
 
+    # set the stream logger to print debug messages
+
     test_ala_dipep_FES()
     # test_ala_dipep_FES_non_per()
     # test_grid_bias()

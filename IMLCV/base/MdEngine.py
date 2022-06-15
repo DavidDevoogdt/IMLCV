@@ -115,7 +115,6 @@ class MDEngine(ABC):
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
-        
 
         with open(file, 'rb') as f:
             [cls, d] = dill.load(f)
@@ -125,7 +124,11 @@ class MDEngine(ABC):
         for key in kwargs.keys():
             d[key] = kwargs[key]
 
-        return cls(**d)
+        ret = cls(**d)
+
+        print('loaded!')
+
+        return ret
 
     def new_bias(self, bias: Bias, filename, **kwargs) -> MDEngine:
         self.save(f'{filename}_temp')
@@ -378,6 +381,7 @@ class YaffEngine(MDEngine):
             raise NotImplementedError("only for h5, impl this")
 
     def run(self, steps):
+        print(f'running for {steps} steps')
         self.verlet.run(int(steps))
 
     def get_state(self):

@@ -50,3 +50,5 @@ my_launchpad.yaml
 Miniconda3/*
 Miniconda3.sh
 
+IMLCV/test/cmd_parsl.slurm.*
+IMLCV/test/output_*.out
