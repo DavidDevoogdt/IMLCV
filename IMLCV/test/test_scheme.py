@@ -45,9 +45,9 @@ def test_ala_dipep_FES():
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
                     folder='output/ala',
-                    write_step=20)
+                    write_step=30)
 
-    scheme.round(steps=2e4, rnds=10)
+    scheme.round(steps=1e4, rnds=10)
 
 
 def test_ala_dipep_FES_non_per():

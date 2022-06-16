@@ -16,11 +16,10 @@ from molmod.units import kjmol
 from scipy.interpolate import RBFInterpolator
 
 
-class Energy(ABC):
+class Energy():
     """base class for biased Energy of MD simulation."""
 
     def __init__(self) -> None:
-
         pass
 
     def compute_coor(self, coordinates, cell, gpos=None, vir=None):

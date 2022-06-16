@@ -4,10 +4,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from abc import ABC
 from collections.abc import Iterable
 from functools import partial
 from http import client
+from logging import Logger
 
 import dill
 import h5py
@@ -278,20 +280,17 @@ class RoundsMd(Rounds):
             common_bias_name = f[f'{self.round}'].attrs['name_bias']
             common_md_name = f[f'{self.round}'].attrs['name_md']
 
+        # @bash_app
+        # def run_md(common_md_name, steps, i, folder, temp_file, round, b):
+
+        #     return ""
+
         @python_app
         def run_md(common_md_name, steps, i, folder, temp_file, round, b):
             """method used to perform md runs. arguments are constructed in rounds.run_par and shouldn't be done manually"""
 
-            # from contextlib import redirect_stdout
-
-            # with open(f"output_{i}.out", 'w') as f:
-            #     with redirect_stdout(f):
-            print(f"hello from sim {i}")
-
             from IMLCV.base.MdEngine import MDEngine
             from IMLCV.base.rounds import RoundsMd
-
-            print(f"hello from umbrella simulation {i}")
 
             md = MDEngine.load(
                 common_md_name.path, filename=temp_file.path, bias=b)
