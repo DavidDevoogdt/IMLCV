@@ -15,6 +15,7 @@ from IMLCV.scheme import Scheme
 from molmod import units
 from molmod.units import kelvin, kjmol
 from parsl import bash_app, python_app
+from sqlalchemy import func
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 abspath = os.path.abspath(__file__)
@@ -119,8 +120,14 @@ def test_grid_bias():
 if __name__ == "__main__":
     config()
 
-    # set the stream logger to print debug messages
-
+    # @python_app()
+    # def funcs(inputs=[], outputs=[], stdout='testout', stderr='testerr'):
+    #     config()
     test_ala_dipep_FES()
+
+    # fut = funcs()
+    # fut.ou
+    # outputs[].results()
+
     # test_ala_dipep_FES_non_per()
     # test_grid_bias()

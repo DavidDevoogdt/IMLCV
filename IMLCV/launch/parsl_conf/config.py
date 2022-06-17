@@ -178,15 +178,15 @@ cd {exec_dir}
 
     config = Config(
         executors=[
-            HighThroughputExecutor(
-                label="hpc_doduo",
-                max_workers=4,
-                address=address_by_hostname(),
-                # cores_per_worker=0.1,
-                provider=provider_init(cluster="doduo", mpi=False),
-                worker_logdir_root=f"{exec_dir}/hpc_log",
-                worker_debug=True,
-            ),
+            # HighThroughputExecutor(
+            #     label="hpc_doduo",
+            #     max_workers=4,
+            #     address=address_by_hostname(),
+            #     # cores_per_worker=0.1,
+            #     provider=provider_init(cluster="doduo", mpi=False),
+            #     worker_logdir_root=f"{exec_dir}/hpc_log",
+            #     # worker_debug=True,
+            # ),
             HighThroughputExecutor(
                 label="hpc_victini",
                 max_workers=4,
@@ -194,15 +194,15 @@ cd {exec_dir}
                 # cores_per_worker=0.1,
                 provider=provider_init(cluster="victini", mpi=False),
                 worker_logdir_root=f"{exec_dir}/hpc_log",
-                worker_debug=True,
+                # worker_debug=True,
             ),
             # ThreadPoolExecutor(
             #     label="local",
             #     max_threads=16,
             # ),
         ],
-        retries=0,
-        internal_tasks_max_threads=2,
+        retries=1,
+        internal_tasks_max_threads=10,
     )
 
     parsl.load(config=config)

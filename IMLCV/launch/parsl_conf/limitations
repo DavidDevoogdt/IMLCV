@@ -1,0 +1,5 @@
+its dificult to configure parsl to work over ssh. See https://github.com/Parsl/parsl/issues/477
+due to this, jobs need to be started on HPC. The login node cannot always provide enough threads, leading to random failures while executing. The slurm/pbs scripts are adapted to work for VSC clusters. The output is not reliable.
+
+Big con: python apps cannot capture the output from stdout. (actually documented here: ) Tried to fix this but its not enough to just pip stdout to file :( Works for the threadpoolexecutor though. The captured output from bash scripts is quite slow to update. PBS does not set nodes:ppn?? correctly, and stock template is outdate. A separate channel is needed to swap clusters before executing qstat/qsub and squeue/... because how the VSC infrastructure works 
+
