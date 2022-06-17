@@ -14,6 +14,7 @@ from IMLCV.launch.parsl_conf.config import config
 from IMLCV.scheme import Scheme
 from molmod import units
 from molmod.units import kelvin, kjmol
+from parsl import bash_app, python_app
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 abspath = os.path.abspath(__file__)

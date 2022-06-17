@@ -7,9 +7,7 @@ import jax
 # from yaff.log import log
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROVIDER = 'local'
 
-LOCAL_MONGO = True
 
 
 DEBUG = True

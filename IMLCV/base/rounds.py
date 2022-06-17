@@ -17,11 +17,13 @@ import IMLCV
 import jax.numpy as jnp
 import numpy as np
 import parsl
+from IMLCV import ROOT_DIR
 # import pathos
 # from fireworks.queue.queue_adapter import QueueAdapterBase
 # from fireworks.user_objects.queue_adapters.common_adapter import CommonAdapter
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
+from IMLCV.MD import do_MD
 # from jobflow import job
 from molmod.constants import boltzmann
 from parsl import bash_app, python_app
@@ -193,7 +195,7 @@ class RoundsMd(Rounds):
                          folder=folder,
                          max_energy=max_energy)
 
-    def add(self, md: MDEngine, i=None):
+    def add(self, traj, md: MDEngine, bias: str, i: int):
         """adds all the saveble info of the md simulation.
 
         The resulting
@@ -205,20 +207,10 @@ class RoundsMd(Rounds):
 
         self._validate(md)
 
-        d, attr = RoundsMd._add(md,
-                                f'{self.folder}/round_{self.round}/bias_{i}')
-
-        super().add(d=d, attrs=attr, i=i)
-
-    @staticmethod
-    def _add(md: MDEngine, name_bias):
-        d = md.get_trajectory()
-        md.bias.save(name_bias)
-
         attr = {k: md.__dict__[k] for k in RoundsMd.TRAJ_KEYS}
-        attr['name_bias'] = name_bias
+        attr['name_bias'] = bias
 
-        return [d, attr]
+        super().add(d=traj, attrs=attr, i=i)
 
     def _validate(self, md: MDEngine):
 
@@ -280,25 +272,10 @@ class RoundsMd(Rounds):
             common_bias_name = f[f'{self.round}'].attrs['name_bias']
             common_md_name = f[f'{self.round}'].attrs['name_md']
 
-        # @bash_app
-        # def run_md(common_md_name, steps, i, folder, temp_file, round, b):
-
-        #     return ""
-
-        @python_app
-        def run_md(common_md_name, steps, i, folder, temp_file, round, b):
-            """method used to perform md runs. arguments are constructed in rounds.run_par and shouldn't be done manually"""
-
-            from IMLCV.base.MdEngine import MDEngine
-            from IMLCV.base.rounds import RoundsMd
-
-            md = MDEngine.load(
-                common_md_name.path, filename=temp_file.path, bias=b)
-            md.run(steps=steps)
-            d, attr = RoundsMd._add(
-                md, f'{folder}/round_{round}/bias_{i}')
-
-            return [d, attr, i]
+        @bash_app
+        def run(steps: int, stdout: str, stderr: str, inputs=[], outputs=[]):
+            
+            return f"python {ROOT_DIR}/MD.py --MDEngine {inputs[0].filepath} --bias {inputs[1].filepath} --temp_traj {inputs[2].filepath} --steps {steps} --outfile {outputs[0].filepath} "
 
         tasks = []
         kwargs = []
@@ -320,27 +297,32 @@ class RoundsMd(Rounds):
                     BiasF(b.cvs, lambda _: jnp.ones(1,) * self.max_energy)
                 ], jnp.min)
 
-            # b.save(f'{temp_name}/bias')
-            # bias_file =
+            b_name = f"{temp_name}/bias"
+            b.save(b_name)
 
-            kw = {
-                'b': b,
-                'temp_file': File(os.path.join(os.getcwd(), temp_name, "traj.h5")),
-                'steps': steps,
-                'i': i + self.i,
-                'common_md_name': File(os.path.join(os.getcwd(), common_md_name)),
-                # 'max_energy': self.max_energy,
-                'folder': self.folder,
-                'round': self.round,
-            }
+            out_file = f"{temp_name}/traj.pickle"
+            traj_file = f"{temp_name}/traj.h5"
 
-            tasks.append(run_md(**kw))
+            future = run(
+                inputs=[File(common_md_name), File(b_name), File(traj_file)],
+                outputs=[File(out_file)],
+                steps=int(steps),
+                stdout=f'{temp_name}/md.stdout',
+                stderr=f'{temp_name}/md.stderr',
+            )
+
+            tasks.append((i, future))
+
+        md_engine = MDEngine.load(common_md_name)
 
         # wait for tasks to finish
-        for task in tasks:
-            [d, attr, i] = task.result()
-            # [d, attr, i] = task
-            super().add(d=d, attrs=attr, i=i)
+        for i, future in tasks:
+            file = future.outputs[0].result()
+            with open(file, 'rb') as f:
+                d = dill.load(f)
+
+            self.add(traj=d, md=md_engine,
+                     bias=future.task_def['kwargs']['inputs'][1].filepath, i=i)
 
         self.i += len(kwargs)
 

@@ -124,11 +124,7 @@ class MDEngine(ABC):
         for key in kwargs.keys():
             d[key] = kwargs[key]
 
-        ret = cls(**d)
-
-        print('loaded!')
-
-        return ret
+        return cls(**d)
 
     def new_bias(self, bias: Bias, filename, **kwargs) -> MDEngine:
         self.save(f'{filename}_temp')

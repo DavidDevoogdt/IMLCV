@@ -52,3 +52,4 @@ Miniconda3.sh
 
 IMLCV/test/cmd_parsl.slurm.*
 IMLCV/test/output_*.out
+IMLCV/hpc_log/hpc_doduo/*
