@@ -23,7 +23,7 @@ from IMLCV import ROOT_DIR
 # from fireworks.user_objects.queue_adapters.common_adapter import CommonAdapter
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.MD import do_MD
+from IMLCV.MD import do_MD, run
 # from jobflow import job
 from molmod.constants import boltzmann
 from parsl import bash_app, python_app
@@ -197,8 +197,6 @@ class RoundsMd(Rounds):
 
     def add(self, traj, md: MDEngine, bias: str, i: int):
         """adds all the saveble info of the md simulation.
-
-        The resulting
         """
 
         if i is None:
@@ -272,13 +270,8 @@ class RoundsMd(Rounds):
             common_bias_name = f[f'{self.round}'].attrs['name_bias']
             common_md_name = f[f'{self.round}'].attrs['name_md']
 
-        @bash_app
-        def run(steps: int, stdout: str, stderr: str, inputs=[], outputs=[]):
-            
-            return f"python {ROOT_DIR}/MD.py --MDEngine {inputs[0].filepath} --bias {inputs[1].filepath} --temp_traj {inputs[2].filepath} --steps {steps} --outfile {outputs[0].filepath} "
-
         tasks = []
-        kwargs = []
+
         for i, bias in enumerate(biases):
 
             temp_name = f'{self.folder}/round_{self.round}/temp_{i}'
@@ -303,6 +296,10 @@ class RoundsMd(Rounds):
             out_file = f"{temp_name}/traj.pickle"
             traj_file = f"{temp_name}/traj.h5"
 
+            # # creat file
+            with open(traj_file, 'wb') as f:
+                pass
+
             future = run(
                 inputs=[File(common_md_name), File(b_name), File(traj_file)],
                 outputs=[File(out_file)],
@@ -324,7 +321,7 @@ class RoundsMd(Rounds):
             self.add(traj=d, md=md_engine,
                      bias=future.task_def['kwargs']['inputs'][1].filepath, i=i)
 
-        self.i += len(kwargs)
+        self.i += len(tasks)
 
     def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
 

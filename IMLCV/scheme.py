@@ -110,7 +110,7 @@ class Scheme:
 
         self.md = self.md.new_bias(fesBias, filename=None)
 
-    def _grid_umbrella(self, steps=1e4,  K=None, n=4):
+    def _grid_umbrella(self, steps=1e4,  K=None, n=8):
 
         cvs = self.md.bias.cvs
         if ((cvs.metric.boundaries[:, 1] -
@@ -134,12 +134,12 @@ class Scheme:
         o = Observable(self.rounds)
         self.md.bias.cvs.metric = o.new_metric(plot=plot, r=r)
 
-    def round(self, rnds=10, steps=5e4, update_metric=False):
+    def round(self, rnds=10, steps=5e4, update_metric=False, n=4):
         # startround = 0
 
         # update biases untill there are no discontinues jumps left
         for _ in range(rnds):
-            self._grid_umbrella(steps=steps)
+            self._grid_umbrella(steps=steps, n=4)
             if update_metric:
                 self._new_metric(plot=True)
                 update_metric = False

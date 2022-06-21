@@ -14,8 +14,6 @@ from IMLCV.launch.parsl_conf.config import config
 from IMLCV.scheme import Scheme
 from molmod import units
 from molmod.units import kelvin, kjmol
-from parsl import bash_app, python_app
-from sqlalchemy import func
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 abspath = os.path.abspath(__file__)
@@ -49,7 +47,7 @@ def test_ala_dipep_FES():
                     folder='output/ala',
                     write_step=30)
 
-    scheme.round(steps=1e4, rnds=10)
+    scheme.round(steps=1e5, rnds=10, n=4)
 
 
 def test_ala_dipep_FES_non_per():
@@ -118,7 +116,7 @@ def test_grid_bias():
 
 
 if __name__ == "__main__":
-    config()
+    config(cluster='doduo', max_blocks=20)
 
     # @python_app()
     # def funcs(inputs=[], outputs=[], stdout='testout', stderr='testerr'):

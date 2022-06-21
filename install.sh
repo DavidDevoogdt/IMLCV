@@ -12,6 +12,8 @@ mamba install -y molmod  dill alphashape shapely scikit-learn pathos jobflow pyt
 mamba install -y pandas sqlalchemy_utils flask_sqlalchemy plotly networkx
 mamba install -y autopep8 pylint
 
+mamba install ndcctools #parsl extreme scale executor
+
 
 pip install -e git+https://github.com/molmod/molmod.git#egg=molmod
 pip install --upgrade "jax[cpu]" -f https://storage.googleapis.com/jax-releases/jax_releases.html

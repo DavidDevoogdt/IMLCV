@@ -8,9 +8,9 @@ import os
 from abc import ABC, abstractmethod
 from typing import Callable, Union
 
-import ase
-import ase.geometry
-import ase.stress
+# import ase
+# import ase.geometry
+# import ase.stress
 import dill
 import h5py
 import molmod
@@ -265,52 +265,52 @@ class YaffEngine(MDEngine):
     def load(file, **kwargs) -> MDEngine:
         return super().load(file, **kwargs)
 
-    @staticmethod
-    def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
-        """Creates force field from ASE atoms instance."""
+    # @staticmethod
+    # def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
+    #     """Creates force field from ASE atoms instance."""
 
-        class ForcePartASE(yaff.pes.ForcePart):
-            """YAFF Wrapper around an ASE calculator.
+    #     class ForcePartASE(yaff.pes.ForcePart):
+    #         """YAFF Wrapper around an ASE calculator.
 
-            args:
-                   system (yaff.System): system object
-                   atoms (ase.Atoms): atoms object with calculator included.
-            """
+    #         args:
+    #                system (yaff.System): system object
+    #                atoms (ase.Atoms): atoms object with calculator included.
+    #         """
 
-            def __init__(self, system: yaff.system.System, atoms, calculator):
-                yaff.pes.ForcePart.__init__(self, 'ase', system)
-                self.system = system
-                self.atoms = atoms
-                self.calculator = calculator
+    #         def __init__(self, system: yaff.system.System, atoms, calculator):
+    #             yaff.pes.ForcePart.__init__(self, 'ase', system)
+    #             self.system = system
+    #             self.atoms = atoms
+    #             self.calculator = calculator
 
-            def _internal_compute(self, gpos=None, vtens=None):
-                self.atoms.set_positions(self.system.pos /
-                                         molmod.units.angstrom)
-                self.atoms.set_cell(
-                    ase.geometry.Cell(self.system.cell._get_rvecs() /
-                                      molmod.units.angstrom))
-                energy = self.atoms.get_potential_energy(
-                ) * molmod.units.electronvolt
-                if gpos is not None:
-                    forces = self.atoms.get_forces()
-                    gpos[:] = -forces * molmod.units.electronvolt / \
-                        molmod.units.angstrom
-                if vtens is not None:
-                    volume = np.linalg.det(self.atoms.get_cell())
-                    stress = ase.stress.voigt_6_to_full_3x3_stress(
-                        self.atoms.get_stress())
-                    vtens[:] = volume * stress * molmod.units.electronvolt
-                return energy
+    #         def _internal_compute(self, gpos=None, vtens=None):
+    #             self.atoms.set_positions(self.system.pos /
+    #                                      molmod.units.angstrom)
+    #             self.atoms.set_cell(
+    #                 ase.geometry.Cell(self.system.cell._get_rvecs() /
+    #                                   molmod.units.angstrom))
+    #             energy = self.atoms.get_potential_energy(
+    #             ) * molmod.units.electronvolt
+    #             if gpos is not None:
+    #                 forces = self.atoms.get_forces()
+    #                 gpos[:] = -forces * molmod.units.electronvolt / \
+    #                     molmod.units.angstrom
+    #             if vtens is not None:
+    #                 volume = np.linalg.det(self.atoms.get_cell())
+    #                 stress = ase.stress.voigt_6_to_full_3x3_stress(
+    #                     self.atoms.get_stress())
+    #                 vtens[:] = volume * stress * molmod.units.electronvolt
+    #             return energy
 
-        system = yaff.System(
-            numbers=atoms.get_atomic_numbers(),
-            pos=atoms.get_positions() * molmod.units.angstrom,
-            rvecs=atoms.get_cell() * molmod.units.angstrom,
-        )
-        system.set_standard_masses()
-        part_ase = ForcePartASE(system, atoms, calculator)
+    #     system = yaff.System(
+    #         numbers=atoms.get_atomic_numbers(),
+    #         pos=atoms.get_positions() * molmod.units.angstrom,
+    #         rvecs=atoms.get_cell() * molmod.units.angstrom,
+    #     )
+    #     system.set_standard_masses()
+    #     part_ase = ForcePartASE(system, atoms, calculator)
 
-        return yaff.pes.ForceField(system, [part_ase])
+    #     return yaff.pes.ForceField(system, [part_ase])
 
     def get_trajectory(self):
         assert self.filename.endswith(".h5")
@@ -332,49 +332,49 @@ class YaffEngine(MDEngine):
             't': t
         }
 
-    def to_ASE_traj(self):
-        if self.filename.endswith(".h5"):
-            with h5py.File(self.filename, 'r') as f:
-                at_numb = f['system']['numbers']
-                traj = []
-                for frame, energy_au in enumerate(f['trajectory']['epot']):
-                    pos_A = f['trajectory']['pos'][
-                        frame, :, :] / molmod.units.angstrom
-                    # vel_x = f['trajectory']['vel'][frame,:,:] / x
-                    energy_eV = energy_au / molmod.units.electronvolt
-                    forces_eVA = -f['trajectory']['gpos_contribs'][
-                        frame, 0, :, :] * molmod.units.angstrom / \
-                        molmod.units.electronvolt  # forces = -gpos
+    # def to_ASE_traj(self):
+    #     if self.filename.endswith(".h5"):
+    #         with h5py.File(self.filename, 'r') as f:
+    #             at_numb = f['system']['numbers']
+    #             traj = []
+    #             for frame, energy_au in enumerate(f['trajectory']['epot']):
+    #                 pos_A = f['trajectory']['pos'][
+    #                     frame, :, :] / molmod.units.angstrom
+    #                 # vel_x = f['trajectory']['vel'][frame,:,:] / x
+    #                 energy_eV = energy_au / molmod.units.electronvolt
+    #                 forces_eVA = -f['trajectory']['gpos_contribs'][
+    #                     frame, 0, :, :] * molmod.units.angstrom / \
+    #                     molmod.units.electronvolt  # forces = -gpos
 
-                    pbc = 'cell' in f['trajectory']
-                    if pbc:
-                        cell_A = f['trajectory']['cell'][
-                            frame, :, :] / molmod.units.angstrom
+    #                 pbc = 'cell' in f['trajectory']
+    #                 if pbc:
+    #                     cell_A = f['trajectory']['cell'][
+    #                         frame, :, :] / molmod.units.angstrom
 
-                        vol_A3 = f['trajectory']['volume'][
-                            frame] / molmod.units.angstrom**3
-                        vtens_eV = f['trajectory']['vtens'][
-                            frame, :, :] / molmod.units.electronvolt
-                        stresses_eVA3 = vtens_eV / vol_A3
+    #                     vol_A3 = f['trajectory']['volume'][
+    #                         frame] / molmod.units.angstrom**3
+    #                     vtens_eV = f['trajectory']['vtens'][
+    #                         frame, :, :] / molmod.units.electronvolt
+    #                     stresses_eVA3 = vtens_eV / vol_A3
 
-                        atoms = ase.Atoms(
-                            numbers=at_numb,
-                            positions=pos_A,
-                            pbc=pbc,
-                            cell=cell_A,
-                        )
-                        atoms.info['stress'] = stresses_eVA3
-                    else:
-                        atoms = ase.Atoms(numbers=at_numb, positions=pos_A)
+    #                     atoms = ase.Atoms(
+    #                         numbers=at_numb,
+    #                         positions=pos_A,
+    #                         pbc=pbc,
+    #                         cell=cell_A,
+    #                     )
+    #                     atoms.info['stress'] = stresses_eVA3
+    #                 else:
+    #                     atoms = ase.Atoms(numbers=at_numb, positions=pos_A)
 
-                    # atoms.set_velocities(vel_x)
-                    atoms.arrays['forces'] = forces_eVA
+    #                 # atoms.set_velocities(vel_x)
+    #                 atoms.arrays['forces'] = forces_eVA
 
-                    atoms.info['energy'] = energy_eV
-                    traj.append(atoms)
-            return traj
-        else:
-            raise NotImplementedError("only for h5, impl this")
+    #                 atoms.info['energy'] = energy_eV
+    #                 traj.append(atoms)
+    #         return traj
+    #     else:
+    #         raise NotImplementedError("only for h5, impl this")
 
     def run(self, steps):
         print(f'running for {steps} steps')

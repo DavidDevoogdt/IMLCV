@@ -1,17 +1,31 @@
 from __future__ import annotations
 
-from functools import partial
+from dataclasses import dataclass
+from typing import List, Optional
 
 import jax.numpy as jnp
 import numpy as np
-import pathos
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, FesBias, GridBias
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
+from invoke import task
 from molmod.units import picosecond
+from parsl import File, python_app
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
 from thermolib.thermodynamics.histogram import Histogram2D
+
+
+@dataclass
+class plotArgs:
+    bias: Bias
+    name: File
+    n: int = 50
+    traj = None
+    vmin: float = 0
+    vmax: float = 100
+    map: bool = True
+    traj: Optional[List[np.ndarray]] = None
 
 
 class Observable:
@@ -47,12 +61,13 @@ class Observable:
         common_bias = self.rounds.get_bias()
         directory = f'{self.folder}/round_{self.rounds.round}'
 
+        plot_args: List[plotArgs] = []
+
         if isinstance(self.rounds, RoundsMd):
 
             trajs = []
             trajs_mapped = []
             biases = []
-            plot_args = []
 
             time = 0
 
@@ -95,35 +110,22 @@ class Observable:
                     if dictionary['round']['round'] == self.rounds.round:
                         i = dictionary['i']
 
-                        plot_args.append({
-                            'self': bias,
-                            'name': f'{directory}/umbrella_{i}',
-                            'traj': [arr_mapped],
-                        })
+                        plot_args.append(plotArgs(bias=bias, name=File(
+                            f'{directory}/umbrella_{i}.pdf'), traj=[arr_mapped]))
 
                 biases.append(Observable._ThermoBias2D(bias))
 
             if plot:
 
-                plot_args.append({
-                    'self': common_bias,
-                    'name': f'{directory}/combined_unmapped',
-                    'traj': trajs,
-                    'map': False
-                })
+                plot_args.append(
+                    plotArgs(bias=common_bias, name=File(
+                        f'{directory}/combined_unmapped.pdf'), map=False, traj=trajs)
+                )
 
-                plot_args.append({
-                    'self': common_bias,
-                    'name': f'{directory}/combined',
-                    'traj': trajs_mapped,
-                })
-
-                def pl(args):
-                    Bias.plot(**args)
-
-                # async plot and continue
-                with pathos.pools.SerialPool() as pool:
-                    list(pool.map(pl, plot_args))
+                plot_args.append(
+                    plotArgs(bias=common_bias, name=File(
+                        f'{directory}/combined.pdf'), traj=trajs_mapped)
+                )
 
             bounds, bins = self._FES_mg(trajs=trajs_mapped, time=time)
 
@@ -135,6 +137,7 @@ class Observable:
                 biasses=biases,
                 temp=temp,
             )
+
         elif isinstance(self.rounds, RoundsCV):
 
             trajs = []
@@ -179,10 +182,25 @@ class Observable:
 
         if plot:
             bias = self.fes_bias(internal=True)
-            bias.plot(
-                name=f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}', map=False)
-            bias.plot(
-                name=f'{self.folder}/FES_thermolib_{self.rounds.round}')
+
+            plot_args.append(plotArgs(bias=bias, name=File(
+                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf'), map=False))
+
+            plot_args.append(
+                plotArgs(bias=bias, name=File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')))
+
+            @python_app
+            def plot_bias(plotargs: plotArgs, outputs=[]):
+                plotargs.bias.plot(name=plotargs.name.filepath,
+                                   traj=plotargs.traj, map=plotargs.map)
+
+            tasks = []
+            # plot async
+            for pa in plot_args:
+                tasks.append(plot_bias(pa, outputs=[pa.name]))
+
+            for task in tasks:
+                task.outputs[0].result()
 
         return fes, bounds
 

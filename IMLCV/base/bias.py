@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import Iterable
@@ -13,6 +14,7 @@ from IMLCV.base.CV import CV
 from jax import jacfwd, jit
 from molmod.constants import boltzmann
 from molmod.units import kjmol
+from parsl import File, python_app
 from scipy.interpolate import RBFInterpolator
 
 
@@ -224,8 +226,12 @@ class Bias(Energy, ABC):
 
         plt.title(name)
 
+        import os
+        os.makedirs(os.path.dirname(name), exist_ok=True)
+
         fig = plt.gcf()
         fig.set_size_inches([12, 8])
+        
         plt.savefig(name)
 
 
