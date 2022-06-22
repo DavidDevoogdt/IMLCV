@@ -21,14 +21,14 @@ dname = os.path.dirname(abspath)
 os.chdir(dname)
 
 
-def test_ala_dipep_FES():
+def test_ala_dipep_FES(name='ala2'):
 
-    if os.path.isfile('output/ala/rounds'):
+    if os.path.isfile(f'output/{name}/rounds'):
         # if input("recalculate?").strip().lower() != 'true':
         #     return
 
         import shutil
-        shutil.rmtree('output/ala')
+        shutil.rmtree(f'output/{name}')
 
     T = 300 * units.kelvin
 
@@ -44,10 +44,10 @@ def test_ala_dipep_FES():
                     T=T,
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
-                    folder='output/ala',
+                    folder=f'output/{name}',
                     write_step=30)
 
-    scheme.round(steps=1e5, rnds=10, n=4)
+    scheme.round(steps=2e4, rnds=10, n=4)
 
 
 def test_ala_dipep_FES_non_per():
@@ -118,14 +118,4 @@ def test_grid_bias():
 if __name__ == "__main__":
     config(cluster='doduo', max_blocks=20)
 
-    # @python_app()
-    # def funcs(inputs=[], outputs=[], stdout='testout', stderr='testerr'):
-    #     config()
     test_ala_dipep_FES()
-
-    # fut = funcs()
-    # fut.ou
-    # outputs[].results()
-
-    # test_ala_dipep_FES_non_per()
-    # test_grid_bias()

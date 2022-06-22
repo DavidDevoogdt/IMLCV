@@ -12,7 +12,7 @@ test:
 	pytest
 
 clean:
-	rm -rf .parsl
-	rm -rf runinfo
-	rm -rf hpc_log
+	rm -rf IMLCV/.parsl_scripts
+	rm -rf IMLCV/.runinfo
+	rm -rf IMLCV/logs
 	

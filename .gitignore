@@ -33,12 +33,6 @@ IMLCV/test/output/*
 IMLCV/test/cython/build/temp.linux-x86_64-3.8/cpickle.o
 
 
-runinfo/*
-.parsl/*
-*hpc_log/*
-IMLCV/test/hpc_log/*
-IMLCV/test/runinfo/*
-#
 .mongodb/*
 .log/*
 my_fworker.yaml
@@ -50,12 +44,7 @@ my_launchpad.yaml
 Miniconda3/*
 Miniconda3.sh
 
-IMLCV/test/cmd_parsl.slurm.*
-IMLCV/test/output_*.out
-IMLCV/hpc_log/hpc_doduo/*
-extern/*
-IMLCV/test/cmd_parsl.parsl.torque.*
-cmd_parsl.parsl.torque.*
-test_scheme.out
-hpc.stdout
-hpc.stderr
+
+IMLCV/.parsl_scripts/*
+IMLCV/.runinfo/*
+IMLCV/logs/*

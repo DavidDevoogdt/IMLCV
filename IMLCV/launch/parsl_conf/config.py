@@ -31,11 +31,10 @@ from parsl.utils import RepresentationMixin, wtime_to_minutes
 def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_vo/projects/IMLCV/Miniconda3/bin/activate base", max_blocks=1, spawnjob=False):
 
     def provider_init(provider="PBS", mpi=True):
-        exec_dir = os.getcwd()
-        ssh_chan = LocalChannel(envs={"PYTHONPATH": exec_dir})
+        ssh_chan = LocalChannel(script_dir=f"{ROOT_DIR}/.parsl_scripts")
         mpi_string = "module load impi" if mpi else ""
         worker_init = f"""
-    cd {exec_dir}
+
     {mpi_string}
     module load texlive  #needed for matplotlib
 
@@ -50,7 +49,7 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
                 max_blocks=max_blocks,
                 init_blocks=0,
                 nodes_per_block=1,
-                walltime="00:20:00",
+                walltime="01:00:00",
                 parallelism=1,
                 cluster=cluster,
 
@@ -84,20 +83,23 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
             label=f"bootstrap_{cluster}",
             provider=provider_init(mpi=False),
             address=address_by_hostname(),
+            working_dir=f"{ROOT_DIR}/.workdir"
         )
 
     else:
         exec = parsl.WorkQueueExecutor(
             label=f"hpc_{cluster}",
-            provider=provider_init(mpi=True),
+            provider=provider_init(mpi=False),
             address=address_by_hostname(),
+            working_dir=f"{ROOT_DIR}/.workdir"
         )
     config = Config(
         executors=[exec],
-        retries=1,
+        retries=2,
         internal_tasks_max_threads=10,
+        run_dir=f"{ROOT_DIR}/.runinfo",
+        max_idletime=60*10, 
     )
-
     parsl.load(config=config)
 
 

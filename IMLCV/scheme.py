@@ -119,9 +119,9 @@ class Scheme:
                 "Metric provide boundaries or force constant K")
 
         if K is None:
-            K = 1.0 * self.md.T * boltzmann * (
-                n * 2 / (cvs.metric.boundaries[:, 1] -
-                         cvs.metric.boundaries[:, 0]))**2
+            K = 0.1 * self.md.T * boltzmann * (
+                n / (cvs.metric.boundaries[:, 1] -
+                     cvs.metric.boundaries[:, 0]))**2
 
         grid = self.md.bias.cvs.metric.grid(n, endpoints=False, map=True)
 
