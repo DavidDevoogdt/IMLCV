@@ -12,7 +12,7 @@ from typing import Optional
 
 import parsl
 import typeguard
-from IMLCV import ROOT_DIR
+from IMLCV import LOCAL, ROOT_DIR
 from parsl.addresses import address_by_hostname
 from parsl.channels import LocalChannel
 from parsl.channels.base import Channel
@@ -21,7 +21,9 @@ from parsl.executors import HighThroughputExecutor, ThreadPoolExecutor
 from parsl.launchers import AprunLauncher, MpiRunLauncher, SingleNodeLauncher
 from parsl.launchers.launchers import Launcher
 from parsl.providers.cluster_provider import ClusterProvider
-from parsl.providers.provider_base import JobState, JobStatus
+from parsl.providers.local.local import LocalProvider
+from parsl.providers.provider_base import (ExecutionProvider, JobState,
+                                           JobStatus)
 from parsl.providers.slurm.slurm import logger, translate_table
 from parsl.providers.slurm.template import template_string
 from parsl.providers.torque.torque import TorqueProvider
@@ -30,75 +32,91 @@ from parsl.utils import RepresentationMixin, wtime_to_minutes
 
 def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_vo/projects/IMLCV/Miniconda3/bin/activate base", max_blocks=1, spawnjob=False):
 
-    def provider_init(provider="PBS", mpi=True):
-        ssh_chan = LocalChannel(script_dir=f"{ROOT_DIR}/.parsl_scripts")
-        mpi_string = "module load impi" if mpi else ""
-        worker_init = f"""
+    channel = LocalChannel(script_dir=f"{ROOT_DIR}/.parsl_scripts")
 
-    {mpi_string}
-    module load texlive  #needed for matplotlib
+    print(channel.userhome)
 
-    {python_env}
-    """
-        if provider == "PBS":
-            provider = VSCTorqueProvider(
-                channel=ssh_chan,
-                worker_init=worker_init,
-                launcher=MpiRunLauncher() if mpi else SingleNodeLauncher(),
-                min_blocks=0,
-                max_blocks=max_blocks,
-                init_blocks=0,
-                nodes_per_block=1,
-                walltime="01:00:00",
-                parallelism=1,
-                cluster=cluster,
-
-            )
-
-        elif provider == "slurm":
-
-            provider = VSCProviderSlurm(
-                cluster=cluster,
-                channel=ssh_chan,
-                worker_init=worker_init,
-                launcher=MpiRunLauncher() if mpi else SingleNodeLauncher(),
-                exclusive=False,
-                min_blocks=0,
-                max_blocks=4,
-                init_blocks=0,
-                nodes_per_block=10,
-                cores_per_node=9,
-                walltime="00:20:00",
-                parallelism=1,
-                mem_per_node=2,  # in GB
-            )
-        else:
-            raise ValueError("unknonw provider")
-
-        return provider
-
-    if spawnjob == True:
-        max_blocks = 1
-        exec = HighThroughputExecutor(
-            label=f"bootstrap_{cluster}",
-            provider=provider_init(mpi=False),
-            address=address_by_hostname(),
-            working_dir=f"{ROOT_DIR}/.workdir"
-        )
-
-    else:
+    if LOCAL:
         exec = parsl.WorkQueueExecutor(
-            label=f"hpc_{cluster}",
-            provider=provider_init(mpi=False),
+            working_dir=f"{ROOT_DIR}/.workdir",
             address=address_by_hostname(),
-            working_dir=f"{ROOT_DIR}/.workdir"
+            provider=LocalProvider(
+                worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
+                channel=channel,
+            ),
         )
+    else:
+
+        def provider_init(provider="PBS", mpi=True):
+            ssh_chan = channel
+            mpi_string = "module load impi" if mpi else ""
+            worker_init = f"""
+
+        {mpi_string}
+        module load texlive  #needed for matplotlib
+
+        {python_env}
+        """
+            if provider == "PBS":
+                provider = VSCTorqueProvider(
+                    channel=ssh_chan,
+                    worker_init=worker_init,
+                    launcher=MpiRunLauncher() if mpi else SingleNodeLauncher(),
+                    min_blocks=0,
+                    max_blocks=max_blocks,
+                    init_blocks=0,
+                    nodes_per_block=1,
+                    walltime="01:00:00",
+                    parallelism=1,
+                    cluster=cluster,
+
+                )
+
+            elif provider == "slurm":
+
+                provider = VSCProviderSlurm(
+                    cluster=cluster,
+                    channel=ssh_chan,
+                    worker_init=worker_init,
+                    launcher=MpiRunLauncher() if mpi else SingleNodeLauncher(),
+                    exclusive=False,
+                    min_blocks=0,
+                    max_blocks=4,
+                    init_blocks=0,
+                    nodes_per_block=10,
+                    cores_per_node=9,
+                    walltime="00:20:00",
+                    parallelism=1,
+                    mem_per_node=2,  # in GB
+                )
+            else:
+                raise ValueError("unknonw provider")
+
+            return provider
+
+        if spawnjob == True:
+            max_blocks = 1
+            exec = HighThroughputExecutor(
+                label=f"bootstrap_{cluster}",
+                provider=provider_init(mpi=False),
+                address=address_by_hostname(),
+                working_dir=f"{ROOT_DIR}/.workdir"
+            )
+
+        else:
+            exec = parsl.WorkQueueExecutor(
+                label=f"hpc_{cluster}",
+                provider=provider_init(mpi=False),
+                address=address_by_hostname(),
+                working_dir=f"{ROOT_DIR}/.workdir"
+            )
+
     config = Config(
         executors=[exec],
         retries=2,
         internal_tasks_max_threads=10,
         run_dir=f"{ROOT_DIR}/.runinfo",
-        max_idletime=60*10, 
+        max_idletime=60*10,
     )
     parsl.load(config=config)
 

@@ -21,7 +21,7 @@ dname = os.path.dirname(abspath)
 os.chdir(dname)
 
 
-def test_ala_dipep_FES(name='ala2'):
+def test_ala_dipep_FES(name='ala3'):
 
     if os.path.isfile(f'output/{name}/rounds'):
         # if input("recalculate?").strip().lower() != 'true':

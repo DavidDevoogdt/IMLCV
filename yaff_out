@@ -1,0 +1,510 @@
+
+_____/\\\________/\\\___/\\\\\\\\\______/\\\\\\\\\\\\\\\__/\\\\\\\\\\\\\\\______
+_____\///\\\____/\\\/__/\\\\\\\\\\\\\___\ \\\///////////__\ \\\///////////______
+________\///\\\/\\\/___/\\\/////////\\\__\ \\\_____________\ \\\________________
+___________\///\\\/____\ \\\_______\ \\\__\ \\\\\\\\\\\_____\ \\\\\\\\\\\_______
+______________\ \\\_____\ \\\\\\\\\\\\\\\__\ \\\///////______\ \\\///////_______
+_______________\ \\\_____\ \\\/////////\\\__\ \\\_____________\ \\\_____________
+________________\ \\\_____\ \\\_______\ \\\__\ \\\_____________\ \\\____________
+_________________\ \\\_____\ \\\_______\ \\\__\ \\\_____________\ \\\___________
+__________________\///______\///________\///___\///______________\///___________
+
+                  Welcome to Yaff 1.6.0.post21 - Yet another force field
+
+                                   Written by
+      Toon Verstraelen(1)*, Louis Vanduyfhuys(1) and Steven Vandenbrande(1)
+
+(1) Center for Molecular Modeling, Ghent University Belgium.
+* mailto: Toon.Verstraelen@UGent.be
+
+In a not-too-distant future, this program will be renamed to NINJAFF, which
+stands for 'NINJAFF is not just another force field code'. Please, bear with us.
+
+
+140697663031104     ENV User:           david
+140697663031104     ENV Platform:       Linux-5.10.0-1057-oem-x86_64-with-glibc2.35
+140697663031104     ENV Time:           2022-06-24T16:51:33.791154
+140697663031104     ENV Python version: 3.9.13 | packaged by conda-forge | (main, May 27 2022,
+140697663031104     ENV                 16:56:21) [GCC 10.3.0]
+140697663031104     ENV YAFF version:   1.6.0.post21
+140697663031104     ENV Current Dir:    /home/david/Documents/Projects/IMLCV/IMLCV/test
+140697663031104     ENV Command line:   /home/david/Documents/Projects/IMLCV/IMLCV/test/test_sch
+140697663031104     ENV                 eme.py
+
+140697663031104   UNITS The following units will be used below:
+140697663031104   UNITS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104   UNITS Kind          Conversion               Format Notation
+140697663031104   UNITS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104   UNITS        energy 3.808799176039228e-04    %10.1f kJ/mol
+140697663031104   UNITS   temperature 1.000000000000000e+00    %10.1f K
+140697663031104   UNITS        length 1.889726133921252e+00    %10.4f A
+140697663031104   UNITS     invlength 5.291772082999999e-01    %10.5f A^-1
+140697663031104   UNITS          area 3.571064861224962e+00    %10.3f A^2
+140697663031104   UNITS        volume 6.748334594184680e+00    %10.3f A^3
+140697663031104   UNITS          time 4.134137333664683e+01    %10.1f fs
+140697663031104   UNITS          mass 1.822888627353289e+03    %10.5f amu
+140697663031104   UNITS        charge 1.000000000000000e+00    %10.5f e
+140697663031104   UNITS         force 2.015529714951779e-04    %10.1f kJ/mol/A
+140697663031104   UNITS    forceconst 1.066572387803877e-04    %10.1f kJ/mol/A**2
+140697663031104   UNITS      velocity 4.571028926719556e-02    %10.5f A/fs
+140697663031104   UNITS  acceleration 1.105679022682005e-03    %10.5f A/fs**2
+140697663031104   UNITS         angle 1.745329251994330e-02    %10.5f deg
+140697663031104   UNITS            c6 1.000000000000000e+00    %10.5f E_h*a_0**6
+140697663031104   UNITS            c8 1.000000000000000e+00    %10.5f E_h*a_0**6
+140697663031104   UNITS           c12 1.000000000000000e+00    %10.5f E_h*a_0**12
+140697663031104   UNITS     diffconst 8.637992821731958e-05    %10.5f A**2/ps
+140697663031104   UNITS       density 1.626726283270276e+02    %10.3f g/cm^3
+140697663031104   UNITS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104   UNITS The internal data is divided by the corresponding conversion factor
+140697663031104   UNITS before it gets printed on screen.
+
+140697663031104     SYS Unit cell
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Number of periodic dimensions: 0
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS The following atom types are present in the system:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS              Atom type   ID   Number of atoms
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS                     HC    0         6
+140697663031104     SYS                     CT    1         4
+140697663031104     SYS                      C    2         2
+140697663031104     SYS                      O    3         2
+140697663031104     SYS                      N    4         2
+140697663031104     SYS                      H    5         2
+140697663031104     SYS                     H1    6         4
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS Analysis of the bonds:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS  First   Second   Count
+140697663031104     SYS      1        6      10
+140697663031104     SYS      1        7       2
+140697663031104     SYS      6        6       3
+140697663031104     SYS      6        7       4
+140697663031104     SYS      6        8       2
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS Analysis of the neighbors:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Number of first neighbors:      21
+140697663031104     SYS Number of second neighbors:     36
+140697663031104     SYS Number of third neighbors:      41
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Element   Neighboring elements   Count
+140697663031104     SYS       1                      6      10
+140697663031104     SYS       1                      7       2
+140697663031104     SYS       6                1,1,1,6       2
+140697663031104     SYS       6                1,1,1,7       1
+140697663031104     SYS       6                1,6,6,7       1
+140697663031104     SYS       6                  6,7,8       2
+140697663031104     SYS       7                  1,6,6       2
+140697663031104     SYS       8                      6       2
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+140697663031104     GEN Generating force field from /tmp/tmpser5vewv
+
+140697663031104  FPINIT Force part: pair_lj
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT   scalings:          0.000 0.000 0.500
+140697663031104  FPINIT   real space cutoff:   100.0000
+140697663031104  FPINIT   truncation:     switch3     4.0000
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT    Atom      Sigma    Epsilon
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT       0     2.6495        0.1
+140697663031104  FPINIT       1     3.3997        0.5
+140697663031104  FPINIT       2     2.6495        0.1
+140697663031104  FPINIT       3     2.6495        0.1
+140697663031104  FPINIT       4     3.3997        0.4
+140697663031104  FPINIT       5     2.9599        0.9
+140697663031104  FPINIT       6     3.2500        0.7
+140697663031104  FPINIT       7     1.0691        0.1
+140697663031104  FPINIT       8     3.3997        0.5
+140697663031104  FPINIT       9     2.4714        0.1
+140697663031104  FPINIT      10     3.3997        0.5
+140697663031104  FPINIT      11     2.6495        0.1
+140697663031104  FPINIT      12     2.6495        0.1
+140697663031104  FPINIT      13     2.6495        0.1
+140697663031104  FPINIT      14     3.3997        0.4
+140697663031104  FPINIT      15     2.9599        0.9
+140697663031104  FPINIT      16     3.2500        0.7
+140697663031104  FPINIT      17     1.0691        0.1
+140697663031104  FPINIT      18     3.3997        0.5
+140697663031104  FPINIT      19     2.4714        0.1
+140697663031104  FPINIT      20     2.4714        0.1
+140697663031104  FPINIT      21     2.4714        0.1
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (1,0) with fftype
+140697663031104     GEN           (CT,HC).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (2,1) with fftype
+140697663031104     GEN           (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (3,1) with fftype
+140697663031104     GEN           (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (4,1) with fftype
+140697663031104     GEN           (C,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (5,4) with fftype
+140697663031104     GEN           (O,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (6,4) with fftype
+140697663031104     GEN           (N,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (7,6) with fftype
+140697663031104     GEN           (H,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (8,6) with fftype
+140697663031104     GEN           (CT,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (9,8) with fftype
+140697663031104     GEN           (H1,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (11,10) with
+140697663031104     GEN           fftype (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (12,10) with
+140697663031104     GEN           fftype (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (13,10) with
+140697663031104     GEN           fftype (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (14,8) with fftype
+140697663031104     GEN           (C,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (15,14) with
+140697663031104     GEN           fftype (O,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (16,14) with
+140697663031104     GEN           fftype (N,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (17,16) with
+140697663031104     GEN           fftype (H,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (18,16) with
+140697663031104     GEN           fftype (CT,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (19,18) with
+140697663031104     GEN           fftype (H1,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (20,18) with
+140697663031104     GEN           fftype (H1,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (21,18) with
+140697663031104     GEN           fftype (H1,CT).
+
+140697663031104  FPINIT Force part: pair_ei
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT   scalings:          0.000 0.000 0.833
+140697663031104  FPINIT   real space cutoff:   100.0000
+140697663031104  FPINIT   truncation:     none
+140697663031104  FPINIT   alpha:                    0.00000
+140697663031104  FPINIT   relative permittivity: 1.000
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT    Atom     Charge     Radius
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT       0    0.00000     0.0000
+140697663031104  FPINIT       1    0.00000     0.0000
+140697663031104  FPINIT       2    0.00000     0.0000
+140697663031104  FPINIT       3    0.00000     0.0000
+140697663031104  FPINIT       4    0.00000     0.0000
+140697663031104  FPINIT       5    0.00000     0.0000
+140697663031104  FPINIT       6    0.00000     0.0000
+140697663031104  FPINIT       7    0.00000     0.0000
+140697663031104  FPINIT       8    0.00000     0.0000
+140697663031104  FPINIT       9    0.00000     0.0000
+140697663031104  FPINIT      10    0.00000     0.0000
+140697663031104  FPINIT      11    0.00000     0.0000
+140697663031104  FPINIT      12    0.00000     0.0000
+140697663031104  FPINIT      13    0.00000     0.0000
+140697663031104  FPINIT      14    0.00000     0.0000
+140697663031104  FPINIT      15    0.00000     0.0000
+140697663031104  FPINIT      16    0.00000     0.0000
+140697663031104  FPINIT      17    0.00000     0.0000
+140697663031104  FPINIT      18    0.00000     0.0000
+140697663031104  FPINIT      19    0.00000     0.0000
+140697663031104  FPINIT      20    0.00000     0.0000
+140697663031104  FPINIT      21    0.00000     0.0000
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT Force part: valence
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104   VTERM       0 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(1-0)
+140697663031104   VTERM       1 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(2-1)
+140697663031104   VTERM       2 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(3-1)
+140697663031104   VTERM       3 Harmonic(FC=2.65266e+03,RV=1.52200e+00) Bond(4-1)
+140697663031104   VTERM       4 Harmonic(FC=4.76976e+03,RV=1.22900e+00) Bond(5-4)
+140697663031104   VTERM       5 Harmonic(FC=4.10032e+03,RV=1.33500e+00) Bond(6-4)
+140697663031104   VTERM       6 Harmonic(FC=3.63171e+03,RV=1.01000e+00) Bond(7-6)
+140697663031104   VTERM       7 Harmonic(FC=2.82002e+03,RV=1.44900e+00) Bond(8-6)
+140697663031104   VTERM       8 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(9-8)
+140697663031104   VTERM       9 Harmonic(FC=2.59408e+03,RV=1.52600e+00) Bond(10-8)
+140697663031104   VTERM      10 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(11-10)
+140697663031104   VTERM      11 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(12-10)
+140697663031104   VTERM      12 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(13-10)
+140697663031104   VTERM      13 Harmonic(FC=2.65266e+03,RV=1.52200e+00) Bond(14-8)
+140697663031104   VTERM      14 Harmonic(FC=4.76976e+03,RV=1.22900e+00) Bond(15-14)
+140697663031104   VTERM      15 Harmonic(FC=4.10032e+03,RV=1.33500e+00) Bond(16-14)
+140697663031104   VTERM      16 Harmonic(FC=3.63171e+03,RV=1.01000e+00) Bond(17-16)
+140697663031104   VTERM      17 Harmonic(FC=2.82002e+03,RV=1.44900e+00) Bond(18-16)
+140697663031104   VTERM      18 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(19-18)
+140697663031104   VTERM      19 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(20-18)
+140697663031104   VTERM      20 Harmonic(FC=2.84512e+03,RV=1.09000e+00) Bond(21-18)
+140697663031104   VTERM      21 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(1-2,1-0)
+140697663031104   VTERM      22 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(1-3,1-0)
+140697663031104   VTERM      23 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(1-3,1-2)
+140697663031104   VTERM      24 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(1-4,1-0)
+140697663031104   VTERM      25 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(1-4,1-2)
+140697663031104   VTERM      26 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(1-4,1-3)
+140697663031104   VTERM      27 Harmonic(FC=2.03923e-01,RV=1.20400e+02) BendAngle(4-5,4-1)
+140697663031104   VTERM      28 Harmonic(FC=1.78433e-01,RV=1.16600e+02) BendAngle(4-6,4-1)
+140697663031104   VTERM      29 Harmonic(FC=2.03923e-01,RV=1.22900e+02) BendAngle(4-6,4-5)
+140697663031104   VTERM      30 Harmonic(FC=1.27452e-01,RV=1.21900e+02) BendAngle(6-8,6-4)
+140697663031104   VTERM      31 Harmonic(FC=1.27452e-01,RV=1.18040e+02) BendAngle(6-8,6-7)
+140697663031104   VTERM      32 Harmonic(FC=1.27452e-01,RV=1.20000e+02) BendAngle(6-7,6-4)
+140697663031104   VTERM      33 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(8-9,8-6)
+140697663031104   VTERM      34 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(8-10,8-9)
+140697663031104   VTERM      35 Harmonic(FC=2.03923e-01,RV=1.09700e+02) BendAngle(8-10,8-6)
+140697663031104   VTERM      36 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(8-14,8-9)
+140697663031104   VTERM      37 Harmonic(FC=1.60589e-01,RV=1.11100e+02) BendAngle(8-14,8-10)
+140697663031104   VTERM      38 Harmonic(FC=1.60589e-01,RV=1.10100e+02) BendAngle(8-14,8-6)
+140697663031104   VTERM      39 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(10-11,10-8)
+140697663031104   VTERM      40 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(10-12,10-8)
+140697663031104   VTERM      41 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(10-12,10-11)
+140697663031104   VTERM      42 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(10-13,10-8)
+140697663031104   VTERM      43 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(10-13,10-11)
+140697663031104   VTERM      44 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(10-13,10-12)
+140697663031104   VTERM      45 Harmonic(FC=1.78433e-01,RV=1.16600e+02) BendAngle(14-16,14-8)
+140697663031104   VTERM      46 Harmonic(FC=2.03923e-01,RV=1.22900e+02) BendAngle(14-16,14-15)
+140697663031104   VTERM      47 Harmonic(FC=2.03923e-01,RV=1.20400e+02) BendAngle(14-15,14-8)
+140697663031104   VTERM      48 Harmonic(FC=1.27452e-01,RV=1.20000e+02) BendAngle(16-17,16-14)
+140697663031104   VTERM      49 Harmonic(FC=1.27452e-01,RV=1.18040e+02) BendAngle(16-18,16-17)
+140697663031104   VTERM      50 Harmonic(FC=1.27452e-01,RV=1.21900e+02) BendAngle(16-18,16-14)
+140697663031104   VTERM      51 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(18-19,18-16)
+140697663031104   VTERM      52 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(18-20,18-16)
+140697663031104   VTERM      53 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(18-20,18-19)
+140697663031104   VTERM      54 Harmonic(FC=1.27452e-01,RV=1.09500e+02) BendAngle(18-21,18-16)
+140697663031104   VTERM      55 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(18-21,18-19)
+140697663031104   VTERM      56 Harmonic(FC=8.92163e-02,RV=1.09500e+02) BendAngle(18-21,18-20)
+
+140697663031104  FFINIT Force field with 3 parts: pair_lj, pair_ei, valence.
+140697663031104  FFINIT Neighborlist present: True
+
+140697663031104   VTERM      57 Chebychev2(A=8.78640e+01,sign=-1) DihedCos(6-1,6-4,4-5)
+140697663031104   VTERM      58 Chebychev2(A=8.78640e+01,sign=-1) DihedCos(16-8,16-14,14-15)
+140697663031104   VTERM      59 Chebychev2(A=9.20400e+00,sign=-1) DihedCos(8-4,8-6,6-7)
+140697663031104   VTERM      60 Chebychev2(A=9.20400e+00,sign=-1) DihedCos(18-14,18-16,16-17)
+140697663031104   VTERM      61 Chebychev1(A=6.69400e+00,sign=+1) DihedCos(1-0,1-4,4-5)
+140697663031104   VTERM      62 Chebychev1(A=6.69400e+00,sign=+1) DihedCos(1-2,1-4,4-5)
+140697663031104   VTERM      63 Chebychev1(A=6.69400e+00,sign=+1) DihedCos(1-3,1-4,4-5)
+140697663031104   VTERM      64 Chebychev1(A=6.69400e+00,sign=+1) DihedCos(8-9,8-14,14-15)
+140697663031104   VTERM      65 Chebychev3(A=6.70000e-01,sign=-1) DihedCos(1-0,1-4,4-5)
+140697663031104   VTERM      66 Chebychev3(A=6.70000e-01,sign=-1) DihedCos(1-2,1-4,4-5)
+140697663031104   VTERM      67 Chebychev3(A=6.70000e-01,sign=-1) DihedCos(1-3,1-4,4-5)
+140697663031104   VTERM      68 Chebychev3(A=6.70000e-01,sign=-1) DihedCos(8-9,8-14,14-15)
+140697663031104   VTERM      69 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(4-1,4-6,6-7)
+140697663031104   VTERM      70 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(4-1,4-6,6-8)
+140697663031104   VTERM      71 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(4-5,4-6,6-7)
+140697663031104   VTERM      72 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(4-5,4-6,6-8)
+140697663031104   VTERM      73 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(14-8,14-16,16-17)
+140697663031104   VTERM      74 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(14-8,14-16,16-18)
+140697663031104   VTERM      75 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(14-15,14-16,16-17)
+140697663031104   VTERM      76 Chebychev2(A=2.09200e+01,sign=-1) DihedCos(14-15,14-16,16-18)
+140697663031104   VTERM      77 Chebychev1(A=1.67360e+01,sign=+1) DihedCos(4-5,4-6,6-7)
+140697663031104   VTERM      78 Chebychev1(A=1.67360e+01,sign=+1) DihedCos(6-4,6-8,8-10)
+140697663031104   VTERM      79 Chebychev1(A=1.67360e+01,sign=+1) DihedCos(14-15,14-16,16-17)
+140697663031104   VTERM      80 Chebychev2(A=1.67360e+01,sign=+1) DihedCos(6-4,6-8,8-10)
+140697663031104   VTERM      81 Chebychev3(A=3.34800e+00,sign=+1) DihedCos(6-4,6-8,8-10)
+140697663031104   VTERM      82 Chebychev3(A=3.34800e+00,sign=+1) DihedCos(8-10,8-14,14-16)
+140697663031104   VTERM      83 Chebychev2(A=2.26000e+00,sign=+1) DihedCos(6-4,6-8,8-14)
+140697663031104   VTERM      84 Chebychev3(A=3.51400e+00,sign=+1) DihedCos(6-4,6-8,8-14)
+140697663031104   VTERM      85 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-6,8-10,10-11)
+140697663031104   VTERM      86 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-6,8-10,10-12)
+140697663031104   VTERM      87 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-6,8-10,10-13)
+140697663031104   VTERM      88 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-9,8-10,10-11)
+140697663031104   VTERM      89 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-9,8-10,10-12)
+140697663031104   VTERM      90 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-9,8-10,10-13)
+140697663031104   VTERM      91 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-14,8-10,10-11)
+140697663031104   VTERM      92 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-14,8-10,10-12)
+140697663031104   VTERM      93 Chebychev3(A=1.30200e+00,sign=+1) DihedCos(8-14,8-10,10-13)
+140697663031104   VTERM      94 Chebychev1(A=3.76600e+00,sign=-1) DihedCos(8-6,8-14,14-16)
+140697663031104   VTERM      95 Chebychev2(A=1.32220e+01,sign=-1) DihedCos(8-6,8-14,14-16)
+140697663031104   VTERM      96 Chebychev3(A=4.60200e+00,sign=-1) DihedCos(8-6,8-14,14-16)
+140697663031104   VTERM      97 Chebychev1(A=1.67400e+00,sign=+1) DihedCos(8-10,8-14,14-16)
+140697663031104   VTERM      98 Chebychev2(A=1.67400e+00,sign=+1) DihedCos(8-10,8-14,14-16)
+
+140697663031104   NLIST Rebuilt, size = 231
+
+140697663031104  FPINIT Force part: valence
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT Force part: bias
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104   ENSEM Temperature coupling achieved through NHC thermostat
+
+140697663031104  VERLET ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  VERLET Cons.Err. = the root of the ratio of the variance on the conserved
+140697663031104  VERLET             quantity and the variance on the kinetic energy.
+140697663031104  VERLET d-rmsd    = the root-mean-square displacement of the atoms.
+140697663031104  VERLET g-rmsd    = the root-mean-square gradient of the energy.
+140697663031104  VERLET counter  Cons.Err.       Temp     d-RMSD     g-RMSD   Walltime
+140697663031104  VERLET ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  VERLET       0    0.00000      291.0     0.0000       45.9        0.0
+
+140697663031104     SYS Unit cell
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Number of periodic dimensions: 0
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS The following atom types are present in the system:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS              Atom type   ID   Number of atoms
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS                     HC    0         6
+140697663031104     SYS                     CT    1         4
+140697663031104     SYS                      C    2         2
+140697663031104     SYS                      O    3         2
+140697663031104     SYS                      N    4         2
+140697663031104     SYS                      H    5         2
+140697663031104     SYS                     H1    6         4
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS Analysis of the bonds:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS  First   Second   Count
+140697663031104     SYS      1        6      10
+140697663031104     SYS      1        7       2
+140697663031104     SYS      6        6       3
+140697663031104     SYS      6        7       4
+140697663031104     SYS      6        8       2
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS Analysis of the neighbors:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Number of first neighbors:      21
+140697663031104     SYS Number of second neighbors:     36
+140697663031104     SYS Number of third neighbors:      41
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Element   Neighboring elements   Count
+140697663031104     SYS       1                      6      10
+140697663031104     SYS       1                      7       2
+140697663031104     SYS       6                1,1,1,6       2
+140697663031104     SYS       6                1,1,1,7       1
+140697663031104     SYS       6                1,6,6,7       1
+140697663031104     SYS       6                  6,7,8       2
+140697663031104     SYS       7                  1,6,6       2
+140697663031104     SYS       8                      6       2
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+140697663031104     GEN Generating force field from /tmp/tmp0x4l22cn
+
+140697663031104  FPINIT Force part: pair_lj
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT   scalings:          0.000 0.000 0.500
+140697663031104  FPINIT   real space cutoff:   100.0000
+140697663031104  FPINIT   truncation:     switch3     4.0000
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (1,0) with fftype
+140697663031104     GEN           (CT,HC).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (2,1) with fftype
+140697663031104     GEN           (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (3,1) with fftype
+140697663031104     GEN           (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (4,1) with fftype
+140697663031104     GEN           (C,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (5,4) with fftype
+140697663031104     GEN           (O,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (6,4) with fftype
+140697663031104     GEN           (N,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (7,6) with fftype
+140697663031104     GEN           (H,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (8,6) with fftype
+140697663031104     GEN           (CT,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (9,8) with fftype
+140697663031104     GEN           (H1,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (11,10) with
+140697663031104     GEN           fftype (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (12,10) with
+140697663031104     GEN           fftype (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (13,10) with
+140697663031104     GEN           fftype (HC,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (14,8) with fftype
+140697663031104     GEN           (C,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (15,14) with
+140697663031104     GEN           fftype (O,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (16,14) with
+140697663031104     GEN           fftype (N,C).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (17,16) with
+140697663031104     GEN           fftype (H,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (18,16) with
+140697663031104     GEN           fftype (CT,N).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (19,18) with
+140697663031104     GEN           fftype (H1,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (20,18) with
+140697663031104     GEN           fftype (H1,CT).
+140697663031104     GEN WARNING!! No charge transfer parameter for atom pair (21,18) with
+140697663031104     GEN           fftype (H1,CT).
+
+140697663031104  FPINIT Force part: pair_ei
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT   scalings:          0.000 0.000 0.833
+140697663031104  FPINIT   real space cutoff:   100.0000
+140697663031104  FPINIT   truncation:     none
+140697663031104  FPINIT   alpha:                    0.00000
+140697663031104  FPINIT   relative permittivity: 1.000
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT Force part: valence
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104  FFINIT Force field with 3 parts: pair_lj, pair_ei, valence.
+140697663031104  FFINIT Neighborlist present: True
+
+140697663031104     SYS Unit cell
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Number of periodic dimensions: 0
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS Analysis of the bonds:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS  First   Second   Count
+140697663031104     SYS      1        6      10
+140697663031104     SYS      1        7       2
+140697663031104     SYS      6        6       3
+140697663031104     SYS      6        7       4
+140697663031104     SYS      6        8       2
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS Analysis of the neighbors:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Number of first neighbors:      21
+140697663031104     SYS Number of second neighbors:     36
+140697663031104     SYS Number of third neighbors:      41
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS Element   Neighboring elements   Count
+140697663031104     SYS       1                      6      10
+140697663031104     SYS       1                      7       2
+140697663031104     SYS       6                1,1,1,6       2
+140697663031104     SYS       6                1,1,1,7       1
+140697663031104     SYS       6                1,6,6,7       1
+140697663031104     SYS       6                  6,7,8       2
+140697663031104     SYS       7                  1,6,6       2
+140697663031104     SYS       8                      6       2
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104     SYS The following atom types are present in the system:
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS              Atom type   ID   Number of atoms
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104     SYS                     HC    0         6
+140697663031104     SYS                     CT    1         4
+140697663031104     SYS                      C    2         2
+140697663031104     SYS                      O    3         2
+140697663031104     SYS                      N    4         2
+140697663031104     SYS                      H    5         2
+140697663031104     SYS                     H1    6         4
+140697663031104     SYS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+140697663031104  FPINIT Force part: valence
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  FPINIT Force part: bias
+140697663031104  FPINIT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+140697663031104   ENSEM Temperature coupling achieved through NHC thermostat
+
+140697663031104  VERLET ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  VERLET Cons.Err. = the root of the ratio of the variance on the conserved
+140697663031104  VERLET             quantity and the variance on the kinetic energy.
+140697663031104  VERLET d-rmsd    = the root-mean-square displacement of the atoms.
+140697663031104  VERLET g-rmsd    = the root-mean-square gradient of the energy.
+140697663031104  VERLET counter  Cons.Err.       Temp     d-RMSD     g-RMSD   Walltime
+140697663031104  VERLET ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+140697663031104  VERLET       0    0.00000      267.2     0.0000       45.9        0.0

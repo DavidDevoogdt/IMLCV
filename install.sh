@@ -5,15 +5,14 @@ bash Miniconda3.sh -b -p ./Miniconda3
 source Miniconda3/bin/activate
 eval "$(conda shell.bash hook)"
 # conda update -n base -c defaults conda -y
-conda c reate -n IMLCV_env python=3.9 mamba -y
-conda activate IMLCV_env
+conda create  python=3.9 -y 
+conda install mamba  -c conda-forge
 
-mamba install -y molmod  dill alphashape shapely scikit-learn pathos jobflow pytest numpy ase
-pip install umap-learn
+mamba install -y umap-learn
 mamba install -y pandas sqlalchemy_utils flask_sqlalchemy plotly networkx
 mamba install -y autopep8 pylint
 
-mamba install ndcctools #parsl extreme scale executor
+mamba install -y ndcctools #parsl extreme scale executor
 
 
 pip install -e git+https://github.com/molmod/molmod.git#egg=molmod

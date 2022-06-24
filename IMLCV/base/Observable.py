@@ -8,7 +8,7 @@ import numpy as np
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, FesBias, GridBias
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
-from invoke import task
+
 from molmod.units import picosecond
 from parsl import File, python_app
 from thermolib.thermodynamics.bias import BiasPotential2D

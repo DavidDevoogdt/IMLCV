@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from functools import partial
 from http import client
 from logging import Logger
+from typing import Optional
 
 import dill
 import h5py
@@ -265,7 +266,7 @@ class RoundsMd(Rounds):
     def run(self, bias, steps):
         self.run_par([bias], steps)
 
-    def run_par(self, biases: Iterable[Bias], steps):
+    def run_par(self, biases: Iterable[Optional[Bias]], steps):
         with h5py.File(self.h5file, 'r') as f:
             common_bias_name = f[f'{self.round}'].attrs['name_bias']
             common_md_name = f[f'{self.round}'].attrs['name_md']
@@ -279,7 +280,7 @@ class RoundsMd(Rounds):
                 os.mkdir(temp_name)
 
             # construct bias
-            if bias is NoneBias:
+            if bias is None:
                 b = Bias.load(common_bias_name)
             else:
                 b = CompositeBias([Bias.load(common_bias_name), bias])

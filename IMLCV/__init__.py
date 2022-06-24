@@ -9,7 +9,7 @@ import jax
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-
+LOCAL = True
 DEBUG = True
 
 # SETUP Jax
