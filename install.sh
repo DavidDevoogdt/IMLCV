@@ -9,6 +9,7 @@ conda c reate -n IMLCV_env python=3.9 mamba -y
 conda activate IMLCV_env
 
 mamba install -y molmod  dill alphashape shapely scikit-learn pathos jobflow pytest numpy ase
+pip install umap-learn
 mamba install -y pandas sqlalchemy_utils flask_sqlalchemy plotly networkx
 mamba install -y autopep8 pylint
 
