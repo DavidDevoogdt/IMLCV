@@ -17,7 +17,7 @@ def run(steps: int, stdout: str, stderr: str, inputs=[], outputs=[]):
     This function is used to perform a standalone MD run as parsl bash app.
     """
 
-    return f"python -u {ROOT_DIR}/MD.py --MDEngine {inputs[0].filepath} --bias {inputs[1].filepath} --temp_traj {inputs[2].filepath} --steps {steps} --outfile {outputs[0].filepath} "
+    return f"python -u {ROOT_DIR}/bash_apps/MD.py --MDEngine {inputs[0].filepath} --bias {inputs[1].filepath} --temp_traj {inputs[2].filepath} --steps {steps} --outfile {outputs[0].filepath} "
 
 
 def do_MD(md: MDEngine, steps: int):

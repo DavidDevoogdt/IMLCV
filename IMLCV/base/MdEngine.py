@@ -175,8 +175,8 @@ class YaffEngine(MDEngine):
                  **kwargs,
                  ) -> None:
 
-        if not isinstance(ener, self._YaffFF):
-            ener = self._YaffFF(ener)
+        if not isinstance(ener, _YaffFF):
+            ener = _YaffFF(ener)
 
         self.log_level = log_level
 
@@ -203,7 +203,7 @@ class YaffEngine(MDEngine):
 
     def _add_bias(self):
 
-        bhook = YaffEngine._YaffBias(self.ener, self.bias)
+        bhook = _YaffBias(self.ener, self.bias)
         part = yaff.pes.ForcePartBias(self.ener.system)
         part.add_term(bhook)
         self.ener.add_part(part)
@@ -384,210 +384,6 @@ class YaffEngine(MDEngine):
         """returns the coordinates and cell at current md step."""
         return [self.ener.system.pos[:], self.ener.system.cell.rvecs[:]]
 
-    class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
-        """placeholder for all classes which work with yaff."""
-
-        def __init__(
-            self,
-            ff: yaff.pes.ForceField,
-            bias: Bias,
-        ) -> None:
-
-            self.ff = ff
-            self.bias = bias
-
-            # not all biases have a hook
-            self.hook = (self.bias.start is not None) and (self.bias.step
-                                                           is not None)
-            if self.hook:
-                self.init = True
-                super().__init__(start=self.bias.start, step=self.bias.step)
-
-            self.cvs = []
-
-        def compute(self, gpos=None, vtens=None):
-            [
-                ener,
-                gpos_jax,
-                vtens_jax,
-            ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                       cell=self.ff.system.cell.rvecs,
-                                       gpos=gpos,
-                                       vir=vtens)
-
-            if np.isnan(ener):
-                import jax
-                with jax.disable_jit():
-                    [
-                        ener,
-                        gpos_jax,
-                        vtens_jax,
-                    ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                               cell=self.ff.system.cell.rvecs,
-                                               gpos=gpos,
-                                               vir=vtens)
-
-                raise ValueError
-
-            if gpos is not None:
-                gpos[:] = np.array(gpos_jax)
-            if vtens is not None:
-                vtens[:] = np.array(vtens_jax)
-
-            return np.array(ener)
-
-        def get_log(self):
-            return "Yaff bias from IMLCV"
-
-        def __call__(self, iterative):
-            # skip initial hook called by verlet integrator
-            if self.init:
-                self.init = False
-                return
-
-            coordinates = self.ff.system.pos[:]
-            cell = self.ff.system.cell.rvecs[:]
-
-            self.bias.update_bias(coordinates, cell)
-
-    class _YaffFF(Energy, yaff.pes.ForceField):
-
-        def __init__(self, ff: Union[yaff.pes.ForceField, Callable]):
-            super().__init__()
-
-            from_func = isinstance(ff, Callable)
-            f = ff
-
-            if from_func:
-                ff = ff()
-                assert isinstance(ff, yaff.pes.ForceField)
-
-            # used for yaff logging
-
-            self.__dict__ = ff.__dict__
-            self.from_func = from_func
-            if self.from_func:
-                self.f = f
-
-        def compute_coor(self, coordinates, cell, gpos=None, vir=None):
-
-            p_old = self.system.pos[:]
-            c_old = self.system.cell.rvecs[:]
-
-            self.system.pos[:] = coordinates
-            self.system.cell.update_rvecs(cell)
-
-            ener = self.compute(gpos=gpos, vtens=vir)
-
-            self.system.pos[:] = p_old
-            self.system.cell.update_rvecs(c_old)
-
-            return ener
-
-        def __getstate__(self):
-            state_dict = {}
-
-            state_dict["system"] = {
-                'numbers': self.system.numbers,
-                'pos': self.system.pos,
-                'ffatypes': self.system.ffatypes,
-                'ffatype_ids': self.system.ffatype_ids,
-                'scopes': self.system.scopes,
-                'scope_ids': self.system.scope_ids,
-                'bonds': self.system.bonds,
-                'rvecs': self.system.cell.rvecs,
-                'charges': self.system.charges,
-                'radii': self.system.radii,
-                'valence_charges': self.system.valence_charges,
-                'dipoles': self.system.dipoles,
-                'radii2': self.system.radii2,
-                'masses': self.system.masses,
-            }
-
-            state_dict['from_func'] = self.from_func
-
-            state_dict['ff_dict'] = {
-                'energy': self.energy,
-                'gpos': self.gpos,
-                'vtens': self.vtens,
-            }
-
-            if self.from_func:
-                state_dict['func'] = self.f
-                return state_dict
-
-            raise NotImplementedError(
-                """see https://github.com/cython/cython/issues/4713, generate
-                from function instead""")
-
-            # import inspect
-
-            # # fails:
-            # # nlist <class 'yaff.pes.nlist.NeighborList'>
-            # # pair_pot <class 'yaff.pes.ext.PairPotLJ'>
-            # # dlist <class 'yaff.pes.dlist.DeltaList'>
-            # # iclist <class 'yaff.pes.iclist.InternalCoordinateList'>
-            # # vlist <class 'yaff.pes.vlist.ValenceList'>
-
-            # def clean(k, d, p):
-            #     if k == "system":
-            #         d[k] = None
-            #     elif k == "nlist":
-            #         d[k] = None
-            #     else:
-            #         if k in p.__dict__.keys():
-            #             d[k] = p.__dict__[k]
-
-            #     return d
-
-            # t = []
-            # for p in self.parts:
-            #     d = {}
-
-            #     for k in inspect.signature(p.__init__).parameters.keys():
-            #         d = clean(k, d, p)
-            #     t.append([p.__class__, d])
-
-            # nl = {}
-            # for k in self.nlist.__dict__:
-            #     nl = clean(k, nl, self.nlist)
-            # nl = [p.__class__, nl]
-
-            # return [sysdict, nl, t]
-
-        def __setstate__(self, state_dict):
-
-            # system = yaff.system.System(**state_dict["system"])
-
-            if state_dict['from_func']:
-                self.__init__(state_dict['func'])
-                self.system.__init__(**state_dict["system"])
-                self.__dict__.update(state_dict['ff_dict'])
-
-                self.needs_nlist_update = True
-
-                return self
-
-            raise NotImplementedError(
-                "see https://github.com/cython/cython/issues/4713")
-
-            # [sysdict, nl, pp] = state_dict
-
-            # nlist = yaff.pes.NeighborList.__new__()
-
-            # ts = []
-            # for state_dict in pp:
-            #     [cls, kwargs] = state_dict
-            #     if 'system' in kwargs.keys():
-            #         kwargs['system'] = system
-            #     if 'nlist' in kwargs.keys():
-            #         kwargs['nlist'] = nlist()
-            #     ts.append(cls(**kwargs))
-
-            # ff = yaff.pes.ForceField(system, ts[1:], ts[0])
-
-            # return self
-
     class _GposContribStateItem(yaff.sampling.iterative.StateItem):
         """Keeps track of all the contributions to the forces."""
 
@@ -605,3 +401,209 @@ class YaffEngine(MDEngine):
         def iter_attrs(self, iterative):
             yield 'gpos_contrib_names', np.array(
                 [part.name for part in iterative.ff.parts], dtype='S')
+
+
+class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
+    """placeholder for all classes which work with yaff."""
+
+    def __init__(
+        self,
+        ff: yaff.pes.ForceField,
+        bias: Bias,
+    ) -> None:
+
+        self.ff = ff
+        self.bias = bias
+
+        # not all biases have a hook
+        self.hook = (self.bias.start is not None) and (self.bias.step
+                                                       is not None)
+        if self.hook:
+            self.init = True
+            super().__init__(start=self.bias.start, step=self.bias.step)
+
+        self.cvs = []
+
+    def compute(self, gpos=None, vtens=None):
+        [
+            ener,
+            gpos_jax,
+            vtens_jax,
+        ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                   cell=self.ff.system.cell.rvecs,
+                                   gpos=gpos,
+                                   vir=vtens)
+
+        if np.isnan(ener):
+            import jax
+            with jax.disable_jit():
+                [
+                    ener,
+                    gpos_jax,
+                    vtens_jax,
+                ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                           cell=self.ff.system.cell.rvecs,
+                                           gpos=gpos,
+                                           vir=vtens)
+
+            raise ValueError
+
+        if gpos is not None:
+            gpos[:] = np.array(gpos_jax)
+        if vtens is not None:
+            vtens[:] = np.array(vtens_jax)
+
+        return np.array(ener)
+
+    def get_log(self):
+        return "Yaff bias from IMLCV"
+
+    def __call__(self, iterative):
+        # skip initial hook called by verlet integrator
+        if self.init:
+            self.init = False
+            return
+
+        coordinates = self.ff.system.pos[:]
+        cell = self.ff.system.cell.rvecs[:]
+
+        self.bias.update_bias(coordinates, cell)
+
+
+class _YaffFF(Energy, yaff.pes.ForceField):
+
+    def __init__(self, ff: Union[yaff.pes.ForceField, Callable]):
+        super().__init__()
+
+        from_func = isinstance(ff, Callable)
+        f = ff
+
+        if from_func:
+            ff = ff()
+            assert isinstance(ff, yaff.pes.ForceField)
+
+        # used for yaff logging
+
+        self.__dict__ = ff.__dict__
+        self.from_func = from_func
+        if self.from_func:
+            self.f = f
+
+    def compute_coor(self, coordinates, cell, gpos=None, vir=None):
+
+        p_old = self.system.pos[:]
+        c_old = self.system.cell.rvecs[:]
+
+        self.system.pos[:] = coordinates
+        self.system.cell.update_rvecs(cell)
+
+        ener = self.compute(gpos=gpos, vtens=vir)
+
+        self.system.pos[:] = p_old
+        self.system.cell.update_rvecs(c_old)
+
+        return ener
+
+    def __getstate__(self):
+        state_dict = {}
+
+        state_dict["system"] = {
+            'numbers': self.system.numbers,
+            'pos': self.system.pos,
+            'ffatypes': self.system.ffatypes,
+            'ffatype_ids': self.system.ffatype_ids,
+            'scopes': self.system.scopes,
+            'scope_ids': self.system.scope_ids,
+            'bonds': self.system.bonds,
+            'rvecs': self.system.cell.rvecs,
+            'charges': self.system.charges,
+            'radii': self.system.radii,
+            'valence_charges': self.system.valence_charges,
+            'dipoles': self.system.dipoles,
+            'radii2': self.system.radii2,
+            'masses': self.system.masses,
+        }
+
+        state_dict['from_func'] = self.from_func
+
+        state_dict['ff_dict'] = {
+            'energy': self.energy,
+            'gpos': self.gpos,
+            'vtens': self.vtens,
+        }
+
+        if self.from_func:
+            state_dict['func'] = self.f
+            return state_dict
+
+        raise NotImplementedError(
+            """see https://github.com/cython/cython/issues/4713, generate
+            from function instead""")
+
+        # import inspect
+
+        # # fails:
+        # # nlist <class 'yaff.pes.nlist.NeighborList'>
+        # # pair_pot <class 'yaff.pes.ext.PairPotLJ'>
+        # # dlist <class 'yaff.pes.dlist.DeltaList'>
+        # # iclist <class 'yaff.pes.iclist.InternalCoordinateList'>
+        # # vlist <class 'yaff.pes.vlist.ValenceList'>
+
+        # def clean(k, d, p):
+        #     if k == "system":
+        #         d[k] = None
+        #     elif k == "nlist":
+        #         d[k] = None
+        #     else:
+        #         if k in p.__dict__.keys():
+        #             d[k] = p.__dict__[k]
+
+        #     return d
+
+        # t = []
+        # for p in self.parts:
+        #     d = {}
+
+        #     for k in inspect.signature(p.__init__).parameters.keys():
+        #         d = clean(k, d, p)
+        #     t.append([p.__class__, d])
+
+        # nl = {}
+        # for k in self.nlist.__dict__:
+        #     nl = clean(k, nl, self.nlist)
+        # nl = [p.__class__, nl]
+
+        # return [sysdict, nl, t]
+
+    def __setstate__(self, state_dict):
+
+        # system = yaff.system.System(**state_dict["system"])
+
+        if state_dict['from_func']:
+            self.__init__(state_dict['func'])
+            self.system.__init__(**state_dict["system"])
+            self.__dict__.update(state_dict['ff_dict'])
+
+            self.needs_nlist_update = True
+
+            return self
+
+        raise NotImplementedError(
+            "see https://github.com/cython/cython/issues/4713")
+
+        # [sysdict, nl, pp] = state_dict
+
+        # nlist = yaff.pes.NeighborList.__new__()
+
+        # ts = []
+        # for state_dict in pp:
+        #     [cls, kwargs] = state_dict
+        #     if 'system' in kwargs.keys():
+        #         kwargs['system'] = system
+        #     if 'nlist' in kwargs.keys():
+        #         kwargs['nlist'] = nlist()
+        #     ts.append(cls(**kwargs))
+
+        # ff = yaff.pes.ForceField(system, ts[1:], ts[0])
+
+        # return self

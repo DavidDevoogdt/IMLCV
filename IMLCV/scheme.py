@@ -93,7 +93,7 @@ class Scheme:
                       self.md.bias.cvs.metric[:, 0]) / 20
 
         if K is None:
-            K = 0.1 * self.md.T * boltzmann
+            K = 2.0 * self.md.T * boltzmann
 
         biasmtd = BiasMTD(self.md.bias.cvs, K, sigmas, start=start, step=step)
         bias = CompositeBias([self.md.bias, biasmtd])
@@ -119,7 +119,7 @@ class Scheme:
                 "Metric provide boundaries or force constant K")
 
         if K is None:
-            K = 1.0 * self.md.T * boltzmann * (
+            K = 5.0 * self.md.T * boltzmann * (
                 n / (cvs.metric.boundaries[:, 1] -
                      cvs.metric.boundaries[:, 0]))**2
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from sys import stdout
 from typing import List, Optional
 
 import jax.numpy as jnp
@@ -8,7 +8,7 @@ import numpy as np
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, FesBias, GridBias
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
-
+from IMLCV.bash_apps.plot_bias import plot_bias, plotArgs
 from molmod.units import picosecond
 from parsl import File, python_app
 from thermolib.thermodynamics.bias import BiasPotential2D
@@ -16,24 +16,12 @@ from thermolib.thermodynamics.fep import FreeEnergySurface2D
 from thermolib.thermodynamics.histogram import Histogram2D
 
 
-@dataclass
-class plotArgs:
-    bias: Bias
-    name: File
-    n: int = 50
-    traj = None
-    vmin: float = 0
-    vmax: float = 100
-    map: bool = True
-    traj: Optional[List[np.ndarray]] = None
-
-
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
-    samples_per_bin = 10
-    time_per_bin = 1*picosecond
+    samples_per_bin = 20
+    time_per_bin = 2*picosecond
 
     def __init__(self, rounds: Rounds, cvs: CV = None) -> None:
         self.rounds = rounds
@@ -51,7 +39,7 @@ class Observable:
         self.fes = None
         self.bounds = None
 
-    def _fes_2d(self, plot=True, throw_away=0.5*picosecond):
+    def _fes_2d(self, plot=True, throw_away=2*picosecond):
         # fes = FreeEnergySurface2D.from_txt
         if self.fes is not None:
             return self.fes, self.bounds
@@ -71,7 +59,7 @@ class Observable:
 
             time = 0
 
-            for dictionary in self.rounds.iter(num=4):
+            for dictionary in self.rounds.iter(num=2):
 
                 bias = Bias.load(dictionary['attr']["name_bias"])
 
@@ -127,6 +115,9 @@ class Observable:
                         f'{directory}/combined.pdf'), traj=trajs_mapped)
                 )
 
+                for pa in plot_args:
+                    plot_bias(pa, outputs=[pa.name])
+
             bounds, bins = self._FES_mg(trajs=trajs_mapped, time=time)
 
             histo = Histogram2D.from_wham_c(
@@ -139,7 +130,7 @@ class Observable:
             )
 
         elif isinstance(self.rounds, RoundsCV):
-
+            raise NotImplementedError("check this")
             trajs = []
             for dictionary in self.rounds.iter(num=np.Inf):
                 pos = dictionary["positions"][:]
@@ -183,24 +174,15 @@ class Observable:
         if plot:
             bias = self.fes_bias(internal=True)
 
+            plot_args = []
             plot_args.append(plotArgs(bias=bias, name=File(
                 f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf'), map=False))
 
             plot_args.append(
                 plotArgs(bias=bias, name=File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')))
 
-            @python_app
-            def plot_bias(plotargs: plotArgs, outputs=[]):
-                plotargs.bias.plot(name=plotargs.name.filepath,
-                                   traj=plotargs.traj, map=plotargs.map)
-
-            tasks = []
-            # plot async
             for pa in plot_args:
-                tasks.append(plot_bias(pa, outputs=[pa.name]))
-
-            for task in tasks:
-                task.outputs[0].result()
+                plot_bias(pa, outputs=[pa.name])
 
         return fes, bounds
 

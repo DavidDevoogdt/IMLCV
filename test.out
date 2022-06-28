@@ -1,0 +1,8 @@
+cwd /home/david/Documents/Projects/IMLCV changing to /home/david/Documents/Projects/IMLCV, got file 4d3c9589-3b52-4df4-88b6-9e0e6decdbd7
+got <function func at 0x7f43586181f0>  () {'i': 7, 'str': 20} 
+got i=7 str=20
+cwd /home/david/Documents/Projects/IMLCV changing to /home/david/Documents/Projects/IMLCV, got file 936e3eb5-2494-4a2c-b54c-0a9c125e1f86
+got <function func at 0x7fd417d541f0>  () {'i': 7, 'str': 20} 
+got i=7 str=20
+got i=7 str=20
+got i=7 str=20

@@ -8,14 +8,20 @@ from typing import Iterable
 import dill
 import jax.numpy as jnp
 import jax.scipy as jsp
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from IMLCV.base.CV import CV
 from jax import jacfwd, jit
+from matplotlib.font_manager import findSystemFonts
 from molmod.constants import boltzmann
 from molmod.units import kjmol
-from parsl import File, python_app
 from scipy.interpolate import RBFInterpolator
+
+# matplotlib.rcParams['text.usetex'] = True
+# findSystemFonts(fontpaths=None, fontext='ttf')
+
+# matplotlib.use('PDF')
 
 
 class Energy():
@@ -202,18 +208,25 @@ class Bias(Energy, ABC):
         # normalise lowest point of bias
         bias -= bias[~np.isnan(bias)].min()
 
-        plt.clf()
-        p = plt.imshow(bias / (kjmol),
-                       cmap=plt.get_cmap('rainbow'),
-                       origin='lower',
-                       extent=extent,
-                       vmin=vmin,
-                       vmax=vmax)
+        # plt.clf()
+        plt.switch_backend('PDF')
+        # plt.rc('font', **{'family': 'sans-serif'})
 
-        plt.xlabel('cv1', fontsize=16)
-        plt.ylabel('cv2', fontsize=16)
+        fig, ax = plt.subplots()
 
-        cbar = plt.colorbar(p)
+        p = ax.imshow(bias / (kjmol),
+                      cmap=plt.get_cmap('rainbow'),
+                      origin='lower',
+                      extent=extent,
+                      vmin=vmin,
+                      vmax=vmax
+
+                      )
+
+        ax.set_xlabel('cv1', fontsize=16)
+        ax.set_ylabel('cv2', fontsize=16)
+
+        cbar = fig.colorbar(p)
         cbar.set_label('Bias [kJ/mol]', fontsize=16)
 
         if traj is not None:
@@ -222,17 +235,17 @@ class Bias(Energy, ABC):
                 traj = [traj]
             for tr in traj:
                 # trajs are ij indexed
-                plt.scatter(tr[:, 0], tr[:, 1], s=3)
+                ax.scatter(tr[:, 0], tr[:, 1], s=3)
 
-        plt.title(name)
+        ax.set_title(name)
 
-        import os
         os.makedirs(os.path.dirname(name), exist_ok=True)
 
-        fig = plt.gcf()
         fig.set_size_inches([12, 8])
-        
-        plt.savefig(name)
+
+        print(f"name figure = {name}")
+
+        fig.savefig(name)
 
 
 class CompositeBias(Bias):

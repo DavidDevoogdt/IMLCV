@@ -21,7 +21,7 @@ dname = os.path.dirname(abspath)
 os.chdir(dname)
 
 
-def test_ala_dipep_FES(name='ala3'):
+def test_ala_dipep_FES(name='ala4'):
 
     if os.path.isfile(f'output/{name}/rounds'):
         # if input("recalculate?").strip().lower() != 'true':
@@ -45,9 +45,9 @@ def test_ala_dipep_FES(name='ala3'):
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
                     folder=f'output/{name}',
-                    write_step=30)
+                    write_step=50)
 
-    scheme.round(steps=2e4, rnds=10, n=4)
+    scheme.round(steps=5e4, rnds=10, n=4)
 
 
 def test_ala_dipep_FES_non_per():

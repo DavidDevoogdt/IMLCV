@@ -5,7 +5,7 @@ echo "Bash version ${BASH_VERSION}..."
 
 mkdir -p output/$1/output
 
-module load ImageMagick
+# module load ImageMagick
 
 for VARIABLE in $(seq 0 $2)
 do
