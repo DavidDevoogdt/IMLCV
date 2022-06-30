@@ -48,3 +48,4 @@ Miniconda3.sh
 IMLCV/.parsl_scripts/*
 IMLCV/.runinfo/*
 IMLCV/logs/*
+IMLCV/test/.bash_python_app/*

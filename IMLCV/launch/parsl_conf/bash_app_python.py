@@ -2,38 +2,87 @@
 
 import argparse
 import os
+import sys
 import uuid
+from typing import List, Literal, Optional, Union
 
 import dill
+import typeguard
+from isort import file
 from parsl import bash_app
+from parsl.app.bash import BashApp
+from parsl.data_provider.files import File
+from parsl.dataflow.dflow import DataFlowKernel
 
 
-def bash_app_python(func):
-    def wrapper(bash_app_kwargs={}, *args, **kwargs):
+# @typeguard.typechecked
+def bash_app_python(
+        function=None,
+        data_flow_kernel: Optional[DataFlowKernel] = None,
+        cache: bool = False,
+        executors:   Union[List[str], Literal['all']] = 'all',
+        ignore_for_cache: Optional[List[str]] = None):
 
-        stdout = kwargs.pop('stdout', None)
-        stderr = kwargs.pop('stderr', None)
+    def decorator(func):
+        def wrapper(*args,  stdout=None, stderr=None, inputs=[], outputs=[], **kwargs):
+            fold = ".bash_python_app"
+            if not os.path.exists(fold):
+                os.mkdir(fold)
 
-        inputs = kwargs.pop('inputs', [])
-        outputs = kwargs.pop('outputs', [])
+            filename = f"{fold}/{str(uuid.uuid4())}"
 
-        @bash_app(**bash_app_kwargs)
-        def python_func(inputs, outputs, stdout, stderr, *args, **kwargs):
+            # merg in and outputs
+            inputs = [*inputs,  *kwargs.pop("inputs", [])]
+            outputs = [*outputs,  *kwargs.pop("outputs", [])]
 
-            filename = str(uuid.uuid4())
+            def fun(*args, inputs, outputs, stdout, stderr,  **kwargs):
 
-            with open(filename, 'wb+') as f:
-                dill.dump((func, args, kwargs), f)
+                if len(inputs) > 1:
+                    kwargs['inputs'] = inputs[1:]
+                if len(outputs) > 1:
+                    kwargs['outputs'] = outputs[1:]
 
-            return f'''python -u { os.path.realpath(  __file__ ) } --cwd {os.getcwd()} --file {filename}'''
+                with open(filename, 'wb+') as f:
+                    dill.dump((func, args, kwargs), f)
 
-        return f2(*args, **kwargs, inputs=inputs, outputs=outputs, stdout=stdout, stderr=stderr)
+                return f'''python -u { os.path.realpath( __file__ ) } --cwd {os.getcwd()} --file {filename}'''
+            fun.__name__ = func.__name__
 
-    return wrapper
+            bash_app_fun = bash_app(fun, data_flow_kernel=data_flow_kernel,
+                                    cache=cache, executors=executors, ignore_for_cache=ignore_for_cache)
+
+            future: BashApp = bash_app_fun(
+                inputs=[File(filename), *inputs], outputs=[File(filename), *outputs], stdout=stdout, stderr=stderr, *args, **kwargs)
+
+            # modify the future such that the output is recovered
+            _res = future.result
+
+            def result():
+                _res()  # wait for result to finish
+                with open(filename, 'rb') as f:
+                    ret = dill.load(f)
+
+                os.remove(filename)
+
+                return ret
+
+            future.result = result
+
+            # cleanup inputs and outputs
+            future._outputs = future._outputs[1:]
+
+            future.task_def['kwargs']['inputs'] = future.task_def['kwargs']['inputs'][1:]
+            future.task_def['kwargs']['outputs'] = future.task_def['kwargs']['outputs'][1:]
+
+            return future
+
+        return wrapper
+    if function is not None:
+        return decorator(function)
+    return decorator
 
 
 if __name__ == "__main__":
-    # this function is called by the wrapper
     parser = argparse.ArgumentParser(
         description='Perform an (enhanced) biased MD')
     parser.add_argument('--file', type=str,
@@ -41,11 +90,17 @@ if __name__ == "__main__":
     parser.add_argument('--cwd', type=str,
                         help='working directory')
 
+    print(f"got input {sys.argv}")
+
     args = parser.parse_args()
     os.chdir(args.cwd)
 
     with open(args.file, 'rb') as f:
         func, fargs, fkwargs = dill.load(f)
 
-    func(*fargs, **fkwargs)
-    os.remove(args.file)
+    print(f"calling {func} with {fargs} and {fkwargs}")
+
+    a = func(*fargs, **fkwargs)
+
+    with open(args.file, 'wb+') as f:
+        dill.dump(a, f)

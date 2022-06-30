@@ -22,7 +22,7 @@ import parsl
 from IMLCV import ROOT_DIR
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.bash_apps.MD import do_MD, run
+from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
@@ -271,6 +271,8 @@ class RoundsMd(Rounds):
 
         tasks = []
 
+        md_engine = MDEngine.load(common_md_name)
+
         for i, bias in enumerate(biases):
 
             temp_name = f'{self.folder}/round_{self.round}/temp_{i}'
@@ -292,16 +294,25 @@ class RoundsMd(Rounds):
             b_name = f"{temp_name}/bias"
             b.save(b_name)
 
-            out_file = f"{temp_name}/traj.pickle"
+            # out_file = f"{temp_name}/traj.pickle"
             traj_file = f"{temp_name}/traj.h5"
 
             # # creat file
             with open(traj_file, 'wb') as f:
                 pass
 
+            @bash_app_python()
+            def run(steps: int, inputs=[]):
+
+                bias = Bias.load(inputs[1].filepath)
+                md = MDEngine.load(
+                    inputs[0].filepath, bias=bias, filename=inputs[2].filepath)
+                md.run(steps)
+                d = md.get_trajectory()
+                return d
+
             future = run(
                 inputs=[File(common_md_name), File(b_name), File(traj_file)],
-                outputs=[File(out_file)],
                 steps=int(steps),
                 stdout=f'{temp_name}/md.stdout',
                 stderr=f'{temp_name}/md.stderr',
@@ -309,13 +320,13 @@ class RoundsMd(Rounds):
 
             tasks.append((i, future))
 
-        md_engine = MDEngine.load(common_md_name)
-
         # wait for tasks to finish
         for i, future in tasks:
-            file = future.outputs[0].result()
-            with open(file, 'rb') as f:
-                d = dill.load(f)
+            # file = future.outputs[0].result()
+            # with open(file, 'rb') as f:
+            #     d = dill.load(f)
+
+            d = future.result()
 
             self.add(traj=d, md=md_engine,
                      bias=future.task_def['kwargs']['inputs'][1].filepath, i=i)

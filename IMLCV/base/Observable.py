@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from sys import stdout
 from typing import List, Optional
 
@@ -8,12 +9,22 @@ import numpy as np
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, FesBias, GridBias
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
-from IMLCV.bash_apps.plot_bias import plot_bias, plotArgs
+from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from molmod.units import picosecond
 from parsl import File, python_app
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
 from thermolib.thermodynamics.histogram import Histogram2D
+
+# @dataclass
+# class plotArgs:
+#     bias: Bias
+#     name: File
+#     n: int = 50
+#     vmin: float = 0
+#     vmax: float = 100
+#     map: bool = True
+#     traj: Optional[List[np.ndarray]] = None
 
 
 class Observable:
@@ -49,7 +60,18 @@ class Observable:
         common_bias = self.rounds.get_bias()
         directory = f'{self.folder}/round_{self.rounds.round}'
 
-        plot_args: List[plotArgs] = []
+        # plot_args: List[plotArgs] = []
+
+        @bash_app_python
+        def plot_bias(bias: Bias,
+                      outputs: List[File],
+                      n: int = 50,
+                      vmin: float = 0,
+                      vmax: float = 100,
+                      map: bool = True,
+                      traj: Optional[List[np.ndarray]] = None):
+            bias.plot(name=outputs[0].filepath, n=n, traj=traj,
+                      vmin=vmin, vmax=vmax, map=map)
 
         if isinstance(self.rounds, RoundsMd):
 
@@ -98,25 +120,18 @@ class Observable:
                     if dictionary['round']['round'] == self.rounds.round:
                         i = dictionary['i']
 
-                        plot_args.append(plotArgs(bias=bias, name=File(
-                            f'{directory}/umbrella_{i}.pdf'), traj=[arr_mapped]))
+                        plot_bias(bias=bias, outputs=[File(
+                            f'{directory}/umbrella_{i}.pdf')], traj=[arr_mapped])
 
                 biases.append(Observable._ThermoBias2D(bias))
 
             if plot:
 
-                plot_args.append(
-                    plotArgs(bias=common_bias, name=File(
-                        f'{directory}/combined_unmapped.pdf'), map=False, traj=trajs)
-                )
+                plot_bias(bias=common_bias, outputs=[File(
+                    f'{directory}/combined_unmapped.pdf')], map=False, traj=trajs)
 
-                plot_args.append(
-                    plotArgs(bias=common_bias, name=File(
-                        f'{directory}/combined.pdf'), traj=trajs_mapped)
-                )
-
-                for pa in plot_args:
-                    plot_bias(pa, outputs=[pa.name])
+                plot_bias(bias=common_bias, outputs=[File(
+                    f'{directory}/combined.pdf')], traj=trajs_mapped)
 
             bounds, bins = self._FES_mg(trajs=trajs_mapped, time=time)
 
@@ -174,15 +189,11 @@ class Observable:
         if plot:
             bias = self.fes_bias(internal=True)
 
-            plot_args = []
-            plot_args.append(plotArgs(bias=bias, name=File(
-                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf'), map=False))
+            plot_bias(bias=bias, outputs=[File(
+                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf')], map=False)
 
-            plot_args.append(
-                plotArgs(bias=bias, name=File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')))
-
-            for pa in plot_args:
-                plot_bias(pa, outputs=[pa.name])
+            plot_bias(bias=bias, outputs=[
+                      File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')])
 
         return fes, bounds
 
