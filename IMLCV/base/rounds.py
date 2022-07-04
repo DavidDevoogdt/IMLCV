@@ -31,15 +31,13 @@ class Rounds(ABC):
 
     ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
 
-    def __init__(self, extension, folder="output", max_energy=None) -> None:
+    def __init__(self, extension, folder="output") -> None:
         if extension != "extxyz":
             raise NotImplementedError("file type not known")
 
         self.round = -1
         self.extension = extension
         self.i = 0
-
-        self.max_energy = max_energy
 
         if not os.path.isdir(folder):
             os.makedirs(folder)
@@ -184,10 +182,9 @@ class RoundsMd(Rounds):
 
     ENGINE_KEYS = ['timestep', *Rounds.ENGINE_KEYS]
 
-    def __init__(self, extension, folder="output", max_energy=None) -> None:
+    def __init__(self, extension, folder="output") -> None:
         super().__init__(extension=extension,
-                         folder=folder,
-                         max_energy=max_energy)
+                         folder=folder)
 
     def add(self, traj, md: MDEngine, bias: str, i: int):
         """adds all the saveble info of the md simulation.
@@ -285,16 +282,9 @@ class RoundsMd(Rounds):
             else:
                 b = CompositeBias([Bias.load(common_bias_name), bias])
 
-            if self.max_energy is not None:
-                b = CompositeBias([
-                    b,
-                    BiasF(b.cvs, lambda _: jnp.ones(1,) * self.max_energy)
-                ], jnp.min)
-
             b_name = f"{temp_name}/bias"
             b.save(b_name)
 
-            # out_file = f"{temp_name}/traj.pickle"
             traj_file = f"{temp_name}/traj.h5"
 
             # # creat file
@@ -322,10 +312,6 @@ class RoundsMd(Rounds):
 
         # wait for tasks to finish
         for i, future in tasks:
-            # file = future.outputs[0].result()
-            # with open(file, 'rb') as f:
-            #     d = dill.load(f)
-
             d = future.result()
 
             self.add(traj=d, md=md_engine,

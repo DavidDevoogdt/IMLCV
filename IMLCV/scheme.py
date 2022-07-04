@@ -4,12 +4,13 @@ import itertools
 import sys
 from typing import Type
 
+import jax
 import numpy as np
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 
-from IMLCV.base.bias import (BiasMTD, CompositeBias, CvMonitor, HarmonicBias,
-                             NoneBias)
+from IMLCV.base.bias import (BiasF, BiasMTD, CompositeBias, CvMonitor, FesBias,
+                             HarmonicBias, NoneBias)
 from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
@@ -57,10 +58,10 @@ class Scheme:
         self.rounds = RoundsMd(
             extension=extension,
             folder=folder,
-            max_energy=max_energy,
         )
 
         self.rounds.new_round(self.md)
+        self.max_energy = max_energy
 
         self.steps = 0
         self.cont_biases = None
@@ -69,6 +70,7 @@ class Scheme:
     def from_rounds(
         cvd: CVDiscovery,
         folder,
+        max_energy=None,
     ) -> Scheme:
 
         self = Scheme.__new__(Scheme)
@@ -76,6 +78,7 @@ class Scheme:
         rounds = RoundsMd.load(folder)
         self.md = rounds.get_engine()
 
+        self.max_energy = max_energy
         self.rounds = rounds
 
         self.cvd = cvd
@@ -102,12 +105,14 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self, plot=True, kind='normal'):
+    def _FESBias(self, plot=True, max_bias=None, kind='normal'):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)
-        fesBias = obs.fes_bias(kind=kind, plot=plot)
 
+        if max_bias is None:
+            max_bias = self.max_energy
+        fesBias = obs.fes_bias(kind=kind, plot=plot, max_bias=max_bias)
         self.md = self.md.new_bias(fesBias, filename=None)
 
     def _grid_umbrella(self, steps=1e4,  K=None, n=8):
@@ -119,7 +124,7 @@ class Scheme:
                 "Metric provide boundaries or force constant K")
 
         if K is None:
-            K = 5.0 * self.md.T * boltzmann * (
+            K = 10.0 * self.md.T * boltzmann * (
                 n / (cvs.metric.boundaries[:, 1] -
                      cvs.metric.boundaries[:, 0]))**2
 
@@ -155,6 +160,6 @@ class Scheme:
     def save(self, filename):
         raise NotImplementedError
 
-    @classmethod
+    @ classmethod
     def load(cls, filename):
         raise NotImplementedError

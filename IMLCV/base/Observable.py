@@ -4,12 +4,13 @@ from dataclasses import dataclass
 from sys import stdout
 from typing import List, Optional
 
+import jax
 import jax.numpy as jnp
 import numpy as np
-from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, FesBias, GridBias
+from IMLCV.base.bias import (Bias, BiasF, CompositeBias, CvMonitor, FesBias,
+                             GridBias, plot_app)
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
-from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from molmod.units import picosecond
 from parsl import File, python_app
 from thermolib.thermodynamics.bias import BiasPotential2D
@@ -47,31 +48,14 @@ class Observable:
             raise NotImplementedError
 
         self.folder = rounds.folder
-        self.fes = None
-        self.bounds = None
 
     def _fes_2d(self, plot=True, throw_away=2*picosecond):
         # fes = FreeEnergySurface2D.from_txt
-        if self.fes is not None:
-            return self.fes, self.bounds
 
         temp = self.rounds.T
 
         common_bias = self.rounds.get_bias()
         directory = f'{self.folder}/round_{self.rounds.round}'
-
-        # plot_args: List[plotArgs] = []
-
-        @bash_app_python
-        def plot_bias(bias: Bias,
-                      outputs: List[File],
-                      n: int = 50,
-                      vmin: float = 0,
-                      vmax: float = 100,
-                      map: bool = True,
-                      traj: Optional[List[np.ndarray]] = None):
-            bias.plot(name=outputs[0].filepath, n=n, traj=traj,
-                      vmin=vmin, vmax=vmax, map=map)
 
         if isinstance(self.rounds, RoundsMd):
 
@@ -120,17 +104,17 @@ class Observable:
                     if dictionary['round']['round'] == self.rounds.round:
                         i = dictionary['i']
 
-                        plot_bias(bias=bias, outputs=[File(
+                        plot_app(bias=bias, outputs=[File(
                             f'{directory}/umbrella_{i}.pdf')], traj=[arr_mapped])
 
                 biases.append(Observable._ThermoBias2D(bias))
 
             if plot:
 
-                plot_bias(bias=common_bias, outputs=[File(
+                plot_app(bias=common_bias, outputs=[File(
                     f'{directory}/combined_unmapped.pdf')], map=False, traj=trajs)
 
-                plot_bias(bias=common_bias, outputs=[File(
+                plot_app(bias=common_bias, outputs=[File(
                     f'{directory}/combined.pdf')], traj=trajs_mapped)
 
             bounds, bins = self._FES_mg(trajs=trajs_mapped, time=time)
@@ -182,18 +166,6 @@ class Observable:
 
         fes = FreeEnergySurface2D.from_histogram(histo, temp)
         fes.set_ref()
-
-        self.fes = fes
-        self.bounds = bounds
-
-        if plot:
-            bias = self.fes_bias(internal=True)
-
-            plot_bias(bias=bias, outputs=[File(
-                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf')], map=False)
-
-            plot_bias(bias=bias, outputs=[
-                      File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')])
 
         return fes, bounds
 
@@ -286,7 +258,7 @@ class Observable:
         def print_pars(self, *pars_units):
             pass
 
-    def fes_bias(self, kind='normal', plot=False, fs=None, internal=False):
+    def fes_bias(self, kind='normal', plot=False, fs=None, max_bias=np.inf):
         if fs is None:
             fes, bounds = self._fes_2d(plot=plot)
 
@@ -300,10 +272,21 @@ class Observable:
                 raise ValueError
 
         # fes is in 'xy'- indexing convention, convert to ij
-        bias = np.transpose(fs)
+        fs = np.transpose(fs)
 
-        if not internal:
-            bias = -bias
-            bias[:] -= bias[~np.isnan(bias)].min()
+        fs[:] = -fs[:] + np.min([max_bias, fs[~np.isnan(fs)].max()])
 
-        return FesBias(GridBias(cvs=self.cvs,  vals=bias, bounds=bounds), T=self.rounds.T)
+        fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
+                                   bounds=bounds), T=self.rounds.T)
+
+        fesBias = CompositeBias(biases=[fesBias,  BiasF(
+            cvs=fesBias.cvs)], fun=lambda e: jax.numpy.where(e[0] > e[1], e[0], e[1]))
+
+        if plot:
+            plot_app(bias=fesBias, outputs=[File(
+                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf')], map=False)
+
+            plot_app(bias=fesBias, outputs=[
+                File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')])
+
+        return fesBias

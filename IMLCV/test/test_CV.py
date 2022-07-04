@@ -70,7 +70,7 @@ def test_virial():
     vir = np.zeros((3, 3))
 
     bias = BiasF(cvs=cv0, f=(lambda x: x))  # simply take volume as lambda
-    vol, _, vir = bias.compute_coor(coordinates=None, cell=cell, vir=vir)
+    vol, _, vir = bias.compute_coor(coordinates=None, cell=cell, vir=True)
     assert pytest.approx(vir, abs=1e-5) == vol * np.eye(3)
 
 

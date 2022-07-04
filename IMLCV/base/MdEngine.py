@@ -13,6 +13,7 @@ from typing import Callable, Union
 # import ase.stress
 import dill
 import h5py
+import jax.numpy as jnp
 import molmod
 import molmod.constants
 import molmod.units
@@ -431,10 +432,17 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
             vtens_jax,
         ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
                                    cell=self.ff.system.cell.rvecs,
-                                   gpos=gpos,
-                                   vir=vtens)
+                                   gpos=gpos is not None,
+                                   vir=vtens is not None)
 
-        if np.isnan(ener):
+        err = np.isnan(ener)
+
+        if gpos is not None:
+            err = err or jnp.isnan(gpos_jax).any()
+        if vtens is not None:
+            err = err or jnp.isnan(vtens_jax).any()
+
+        if err:
             import jax
             with jax.disable_jit():
                 [
@@ -443,10 +451,11 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
                     vtens_jax,
                 ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
                                            cell=self.ff.system.cell.rvecs,
-                                           gpos=gpos,
-                                           vir=vtens)
+                                           gpos=gpos is not None,
+                                           vir=vtens is not None)
 
-            raise ValueError
+            raise ValueError(
+                f"Energy calculations contains nans\n ener {ener} gpos {gpos_jax}, vtens {vtens_jax}\n")
 
         if gpos is not None:
             gpos[:] = np.array(gpos_jax)

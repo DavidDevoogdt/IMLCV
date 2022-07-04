@@ -3,7 +3,7 @@ from cmath import nan
 from functools import partial
 
 import numpy as np
-from IMLCV.base.bias import GridBias
+from IMLCV.base.bias import BiasF, GridBias
 from IMLCV.base.CV import CV, CombineCV, CVUtils
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import YaffEngine
@@ -21,7 +21,7 @@ dname = os.path.dirname(abspath)
 os.chdir(dname)
 
 
-def test_ala_dipep_FES(name='ala4'):
+def test_ala_dipep_FES(name='ala6'):
 
     if os.path.isfile(f'output/{name}/rounds'):
         # if input("recalculate?").strip().lower() != 'true':
@@ -45,9 +45,10 @@ def test_ala_dipep_FES(name='ala4'):
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
                     folder=f'output/{name}',
-                    write_step=50)
+                    write_step=20,
+                    max_energy=70*kjmol)
 
-    scheme.round(steps=5e4, rnds=10, n=4)
+    scheme.round(steps=2e4, rnds=10, n=4)
 
 
 def test_ala_dipep_FES_non_per():
@@ -119,3 +120,5 @@ if __name__ == "__main__":
     config(cluster='doduo', max_blocks=20)
 
     test_ala_dipep_FES()
+
+  

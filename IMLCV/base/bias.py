@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Iterable
+from typing import Iterable, List, Optional
 
 import dill
 import jax.numpy as jnp
@@ -12,16 +12,12 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from IMLCV.base.CV import CV
+from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from jax import jacfwd, jit
-from matplotlib.font_manager import findSystemFonts
 from molmod.constants import boltzmann
 from molmod.units import kjmol
+from parsl.data_provider.files import File
 from scipy.interpolate import RBFInterpolator
-
-# matplotlib.rcParams['text.usetex'] = True
-# findSystemFonts(fontpaths=None, fontext='ttf')
-
-# matplotlib.use('PDF')
 
 
 class Energy():
@@ -30,7 +26,7 @@ class Energy():
     def __init__(self) -> None:
         pass
 
-    def compute_coor(self, coordinates, cell, gpos=None, vir=None):
+    def compute_coor(self, coordinates, cell, gpos=False, vir=False):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
         raise NotImplementedError
@@ -104,8 +100,8 @@ class Bias(Energy, ABC):
 
         return caller
 
-    @partial(jit, static_argnums=(0,))
-    def compute_coor(self, coordinates, cell, gpos=None, vir=None):
+    @partial(jit, static_argnums=(0, 3, 4))
+    def compute_coor(self, coordinates, cell, gpos=False, vir=False):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
@@ -114,22 +110,20 @@ class Bias(Energy, ABC):
                 raise NotImplementedError(
                     "other cell shapes not yet supported")
 
-        bv = (vir is not None)
-        bg = (gpos is not None)
+        # bv = (vir is not None)
+        # bg = (gpos is not None)
 
         [cvs, jac_p_val, jac_c_val] = self.cvs.compute(coordinates,
                                                        cell,
-                                                       jac_p=bg,
-                                                       jac_c=bv)
-        [ener, de] = self.compute(cvs, diff=(bv or bg))
+                                                       jac_p=gpos,
+                                                       jac_c=vir)
+        [ener, de] = self.compute(cvs, diff=(gpos or vir))
 
-        if bg:
-            gpos += jnp.einsum('j,jkl->kl', de, jac_p_val)
+        e_gpos = jnp.einsum('j,jkl->kl', de, jac_p_val) if gpos else None
+        e_vir = jnp.einsum('ji,k,kjl->il', cell, de,
+                           jac_c_val) if vir else None
 
-        if bv:
-            vir += jnp.einsum('ji,k,kjl->il', cell, de, jac_c_val)
-
-        return ener, gpos, vir
+        return ener, e_gpos, e_vir
 
     def __comp(self):
         args = self.get_args()
@@ -184,8 +178,9 @@ class Bias(Energy, ABC):
     def load(filename) -> Bias:
         return Energy.load(filename)
 
-    def plot(self, name, n=50, traj=None, vmin=0, vmax=100, map=True):
+    def plot(self, name, n=50, traj=None, vmin=0, vmax=100, map=True, ):
         """plot bias."""
+
         assert self.cvs.n == 2
 
         bins = self.cvs.metric.grid(n=n, endpoints=True,  map=map)
@@ -210,6 +205,7 @@ class Bias(Energy, ABC):
 
         # plt.clf()
         plt.switch_backend('PDF')
+
         # plt.rc('font', **{'family': 'sans-serif'})
 
         fig, ax = plt.subplots()
@@ -220,7 +216,6 @@ class Bias(Energy, ABC):
                       extent=extent,
                       vmin=vmin,
                       vmax=vmax
-
                       )
 
         ax.set_xlabel('cv1', fontsize=16)
@@ -246,6 +241,18 @@ class Bias(Energy, ABC):
         print(f"name figure = {name}")
 
         fig.savefig(name)
+
+
+@bash_app_python
+def plot_app(bias: Bias,
+             outputs: List[File],
+             n: int = 50,
+             vmin: float = 0,
+             vmax: float = 100,
+             map: bool = True,
+             traj:  Optional[List[np.ndarray]] = None):
+    bias.plot(name=outputs[0].filepath, n=n, traj=traj,
+              vmin=vmin, vmax=vmax, map=map)
 
 
 class CompositeBias(Bias):
@@ -336,7 +343,7 @@ class BiasF(Bias):
         self.f = jit(self.f)
         super().__init__(cvs, start=None, step=None)
 
-    def _compute(self, cvs, *args):
+    def _compute(self, cvs):
         return self.f(cvs)[0]
 
     def get_args(self):
