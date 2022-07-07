@@ -26,7 +26,7 @@ class Transformer:
         pass
 
 
-class UMAP(Transformer):
+class TranformerUMAP(Transformer):
     def __init__(self) -> None:
         super().__init__()
 
@@ -37,7 +37,14 @@ class UMAP(Transformer):
 
         # reducer = umap.ParametricUMAP(
         #     n_neighbors=50, min_dist=0.2, n_components=2)
-        reducer = umap.UMAP(densmap=True, n_neighbors=20, min_dist=0.9)
+        reducer = umap.UMAP(
+            # densmap=True,
+            n_neighbors=80,
+            spread=1.5,
+            min_dist=0.6,
+            output_metric='cosine',
+            n_components=2
+        )
 
         trans = reducer.fit(x)
 
@@ -47,11 +54,11 @@ class UMAP(Transformer):
 class CVDiscovery:
     """convert set of coordinates to good collective variables."""
 
-    def __init__(self, rounds: RoundsMd, transformer: Transformer = UMAP()) -> None:
-        self.rounds = rounds
+    def __init__(self, transformer: Transformer = TranformerUMAP()) -> None:
+        # self.rounds = rounds
         self.transformer = transformer
 
-    def _get_data(self, num=3, out=1e4):
+    def _get_data(self, rounds: RoundsMd, num=3, out=1e4):
 
         pos_arr = []
         cell_arr = []
@@ -80,7 +87,7 @@ class CVDiscovery:
 
         cv = None
 
-        for dictionary in self.rounds.iter(num=num):
+        for dictionary in rounds.iter(num=num):
             bias = Bias.load(dictionary['attr']["name_bias"])
 
             pos = dictionary["positions"]
@@ -154,9 +161,9 @@ class CVDiscovery:
 
         return [pos, cell, cvs]
 
-    def compute(self,  plot=True) -> CV:
+    def compute(self, rounds: RoundsMd, plot=True,) -> CV:
 
-        x, _, cv = self._get_data(num=6, out=1e4)
+        x, _, cv = self._get_data(num=6, out=1e4, rounds=rounds)
 
         fit = True
 
@@ -170,26 +177,46 @@ class CVDiscovery:
                 c = t(x)
                 c = (c[:]-c.min(axis=0))/(c.max(axis=0) - c.min(axis=0))
 
-                fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2)
+                # fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6),
+                #       (ax7, ax8)) = plt.subplots(2, 2)
+                fig, ((ax1, ax3), (ax5, ax7)) = plt.subplots(2, 2)
 
                 # plot setting
                 kwargs = {'s': 2,
                           'cmap': 'jet', }
 
-                ax1.scatter(c[:, 0], c[:, 1], c=cv[:, 0],
+                ax1.scatter(c[:, 0], c[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in cv],
                             label='phi', **kwargs)
-                ax2.scatter(c[:, 0], c[:, 1], c=cv[:, 1],
-                            label='psi', **kwargs)
-                for ax in [ax1, ax2]:
+                # ax2.scatter(c[:, 0], c[:, 1], c=cv[:, 1],
+                #             label='psi', **kwargs)
+                for ax in [ax1]:
                     ax.set_xlabel('umap cv1')
                     ax.set_ylabel('umap cv2')
 
-                ax3.scatter(cv[:, 0], cv[:, 1], c=cv[:, 0],
+                ax3.scatter(cv[:, 0], cv[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in cv],
                             label='umap CV1', **kwargs)
-                ax4.scatter(cv[:, 0], cv[:, 1], c=cv[:, 1],
-                            label='umap CV2', **kwargs)
+                # ax4.scatter(cv[:, 0], cv[:, 1], c=cv[:, 1],
+                #             label='umap CV2', **kwargs)
 
-                for ax in [ax3, ax4]:
+                for ax in [ax3]:
+                    ax.set_xlabel(r' $\Psi$')
+                    ax.set_ylabel(r' $\Phi$')
+
+                # plot the other way arround
+                ax5.scatter(c[:, 0], c[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in c],
+                            label='phi', **kwargs)
+                # ax6.scatter(c[:, 0], c[:, 1], c=c[:, 1],
+                #             label='psi', **kwargs)
+                for ax in [ax5]:
+                    ax.set_xlabel('umap cv1')
+                    ax.set_ylabel('umap cv2')
+
+                ax7.scatter(cv[:, 0], cv[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in c],
+                            label='umap CV1', **kwargs)
+                # ax8.scatter(cv[:, 0], cv[:, 1], c=c[:, 1],
+                #             label='umap CV2', **kwargs)
+
+                for ax in [ax7]:
                     ax.set_xlabel(r' $\Psi$')
                     ax.set_ylabel(r' $\Phi$')
 
@@ -198,7 +225,5 @@ class CVDiscovery:
             else:
                 fig, ax = plt.subplots(2, 2)
                 ax.scatter(cv[:, 0], cv[:, 1])
-
-            plt.show()
 
         raise NotImplementedError

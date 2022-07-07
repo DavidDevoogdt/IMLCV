@@ -120,7 +120,7 @@ class Scheme:
         grid = self.md.bias.cvs.metric.grid(n)
 
         if K is None:
-            K = 2.0 * self.md.T * boltzmann
+            K = 1.0 * self.md.T * boltzmann
         K /= (np.array([a[1]-a[0] for a in grid])/2) ** 2
 
         self.rounds.run_par([CompositeBias([
@@ -137,7 +137,7 @@ class Scheme:
 
         # update biases untill there are no discontinues jumps left
         for _ in range(rnds):
-            self._grid_umbrella(steps=steps, n=4, K=K)
+            self._grid_umbrella(steps=steps, n=n, K=K)
             if update_metric:
                 self._new_metric(plot=True)
                 update_metric = False
