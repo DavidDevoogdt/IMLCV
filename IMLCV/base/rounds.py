@@ -63,6 +63,11 @@ class Rounds(ABC):
     def load(folder) -> Rounds:
         with open(f"{folder}/rounds", 'rb') as f:
             self: Rounds = dill.load(f)
+
+        # replace locks as this can be another thread
+        self.rlock = RLock()
+        self.lock = Lock()
+
         return self
 
     def add(self, i, d, attrs=None):
@@ -71,19 +76,20 @@ class Rounds(ABC):
             key in d for key in ['energy', 'positions', 'forces', 'cell', 't'])
 
         with self.lock:
-            with h5py.File(self.h5file, 'r+') as f:
-                f.create_group(f'{self.round}/{i}')
+            with self.rlock:
+                with h5py.File(self.h5file, 'r+') as f:
+                    f.create_group(f'{self.round}/{i}')
 
-                for key in d:
-                    if d[key] is not None:
-                        f[f'{self.round}/{i}'][key] = d[key]
+                    for key in d:
+                        if d[key] is not None:
+                            f[f'{self.round}/{i}'][key] = d[key]
 
-                if attrs is not None:
-                    for key in attrs:
-                        if attrs[key] is not None:
-                            f[f'{self.round}/{i}'].attrs[key] = attrs[key]
+                    if attrs is not None:
+                        for key in attrs:
+                            if attrs[key] is not None:
+                                f[f'{self.round}/{i}'].attrs[key] = attrs[key]
 
-                f[f'{self.round}'].attrs['num'] += 1
+                    f[f'{self.round}'].attrs['num'] += 1
 
         self.save()
 
@@ -96,14 +102,15 @@ class Rounds(ABC):
             os.mkdir(dir)
 
         with self.lock:
-            with h5py.File(self.h5file, 'r+') as f:
-                f.create_group(f"{self.round}")
+            with self.rlock:
+                with h5py.File(self.h5file, 'r+') as f:
+                    f.create_group(f"{self.round}")
 
-                for key in attr:
-                    if attr[key] is not None:
-                        f[f'{self.round}'].attrs[key] = attr[key]
+                    for key in attr:
+                        if attr[key] is not None:
+                            f[f'{self.round}'].attrs[key] = attr[key]
 
-                f[f'{self.round}'].attrs['num'] = 0
+                    f[f'{self.round}'].attrs['num'] = 0
 
         self.save()
 
@@ -185,6 +192,10 @@ class RoundsMd(Rounds):
     def __init__(self, extension, folder="output") -> None:
         super().__init__(extension=extension,
                          folder=folder)
+
+    @staticmethod
+    def load(folder) -> RoundsMd:
+        return Rounds.load(folder=folder)
 
     def add(self, traj, md: MDEngine, bias: str, i: int):
         """adds all the saveble info of the md simulation.

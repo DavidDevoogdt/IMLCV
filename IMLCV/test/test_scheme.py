@@ -30,7 +30,7 @@ def test_ala_dipep_FES(name='ala6'):
         import shutil
         shutil.rmtree(f'output/{name}')
 
-    T = 300 * units.kelvin
+    T = 600 * units.kelvin
 
     cvs = CombineCV([
         CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
@@ -45,10 +45,11 @@ def test_ala_dipep_FES(name='ala6'):
                     timestep=2.0 * units.femtosecond,
                     timecon_thermo=100.0 * units.femtosecond,
                     folder=f'output/{name}',
-                    write_step=20,
-                    max_energy=70*kjmol)
+                    write_step=30,
+                    # max_energy=70*kjmol,
+                    )
 
-    scheme.round(steps=2e4, rnds=10, n=4)
+    scheme.round(steps=2e4, rnds=10, n=5)
 
 
 def test_ala_dipep_FES_non_per():
@@ -86,9 +87,9 @@ def test_ala_dipep_FES_non_per():
 
 def test_cv_discovery():
 
-    assert os.path.isfile('output/ala/rounds')
+    assert os.path.isfile('output/ala6/rounds')
 
-    rounds = RoundsMd.load('output/ala')
+    rounds = RoundsMd.load('output/ala6')
 
     rounds2 = rounds.unbias_rounds(calc=False)
     obs = Observable(rounds2, rounds.get_bias().cvs)
@@ -113,12 +114,12 @@ def test_grid_bias():
     gb = GridBias(cvs=cvs,  vals=y)
     gb.plot('test', vmin=None, vmax=None)
 
-    print('a')
 
 
 if __name__ == "__main__":
     config(cluster='doduo', max_blocks=20)
 
-    test_ala_dipep_FES()
+    # test_ala_dipep_FES()
 
+    test_cv_discovery()
   

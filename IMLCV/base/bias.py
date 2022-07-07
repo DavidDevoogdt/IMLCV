@@ -142,15 +142,15 @@ class Bias(Energy, ABC):
         """
 
         if map:
-            if diff:
-                dcvs = jacfwd(self.cvs.metric.map)(cvs)
             cvs = self.cvs.metric.map(cvs)
+
+        if diff:
+            dcvs = jacfwd(self.cvs.metric.map)(cvs)
 
         E = self.e(cvs, *self.get_args())
         if diff:
             diffE = self.de(cvs, *self.get_args())[0]
-            if map:
-                diffE = jnp.einsum('i,ij->j', diffE, dcvs)
+            diffE = jnp.einsum('i,ij->j', diffE, dcvs)  # apply chain rule
         else:
             diffE = None
 
@@ -183,7 +183,7 @@ class Bias(Energy, ABC):
 
         assert self.cvs.n == 2
 
-        bins = self.cvs.metric.grid(n=n, endpoints=True,  map=map)
+        bins = self.cvs.metric.grid(n=n, map=map, endpoints=True)
         mg = np.meshgrid(*bins, indexing='xy')
 
         xlim = [mg[0].min(), mg[0].max()]
@@ -562,7 +562,7 @@ class GridBias(Bias):
         if bounds is not None:
             per = np.array(bounds)
         else:
-            per = np.array(self.cvs.metric.boundaries)
+            per = np.array(self.cvs.metric._boundaries)
 
         self.per = jnp.array(per)
 

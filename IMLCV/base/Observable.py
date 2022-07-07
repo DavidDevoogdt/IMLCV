@@ -242,13 +242,14 @@ class Observable:
             super().__init__("IMLCV_bias")
 
         def __call__(self, cv1, cv2):
+            # CVs are already in mapped space
             cvs = jnp.array([cv1, cv2])
-            # values are already mapped
             b, _ = jnp.apply_along_axis(self.bias.compute,
                                         axis=0,
                                         arr=cvs,
                                         diff=False,
-                                        map=False)
+                                        map=False, #already mapped
+                                        )
 
             b = np.array(b, dtype=np.double)
             b[np.isnan(b)] = 0

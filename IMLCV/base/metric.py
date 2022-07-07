@@ -20,18 +20,23 @@ class Metric:
     def __init__(
         self,
         periodicities,
-        bounding_box=None,
+        bounding_box,
         map_meshgrids=None,
 
     ) -> None:
         if bounding_box is None:
-            bounding_box = jnp.zeros(len(periodicities))
+            bounding_box = jnp.zeros((len(periodicities), 2))
 
         if isinstance(bounding_box, list):
             bounding_box = jnp.array(bounding_box, dtype=jnp.float32)
 
+        if bounding_box.ndim == 1:
+            bounding_box = jnp.reshape(
+                bounding_box, (1, 2))
+
         if isinstance(periodicities, list):
             periodicities = jnp.array(periodicities)
+        assert periodicities.ndim == 1
 
         self.map_meshgrids = map_meshgrids
 
@@ -39,10 +44,10 @@ class Metric:
         self.periodicities = periodicities
         self.type = periodicities
 
-        self.boundaries = np.zeros(self.bounding_box.shape)
-        self.boundaries[:, 1] = 1
+        self._boundaries = np.zeros(self.bounding_box.shape)
+        self._boundaries[:, 1] = 1
 
-    @partial(jit, static_argnums=(0, 3))
+    @partial(jit, static_argnums=(0))
     def distance(self, x1, x2):
         """x1 and x2 should already be mapped."""
         xs = x2 - x1
@@ -55,7 +60,7 @@ class Metric:
         min=True calculates distances, False translates one vector inside box
         """
 
-        per = self.boundaries
+        per = self._boundaries
 
         if min:
             o = 0.0
@@ -111,10 +116,26 @@ class Metric:
             map_meshgrids=map_meshgrids,
         )
 
-    def grid(self, n, endpoints=True, map=False):
+    def grid(self, n, map=True, endpoints=None):
+        """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
+
+        Args:
+            n: number of points in each dim
+            map: boolean. True: work in mapped space (default), False: calculate grid in space without metric
+            endpoints: if 
+
+        Returns:
+            meshgrid and vector with distances between points
+
+        """
+
+        if endpoints is None:
+            endpoints = np.array(~self.periodicities)
+        elif isinstance(endpoints, bool):
+            endpoints = np.full(self.periodicities.shape, endpoints)
 
         if map:
-            b = np.zeros(self.boundaries.shape)
+            b = np.zeros(self._boundaries.shape)
             b[:, 1] = 1
         else:
             b = self.bounding_box
@@ -122,8 +143,8 @@ class Metric:
         assert not (jnp.abs(b[:, 1] - b[:, 0]) <
                     1e-12).any(), 'give proper boundaries'
         grid = [
-            jnp.linspace(row[0], row[1], n, endpoint=endpoints)
-            for per, row in zip(self.periodicities, b)
+            jnp.linspace(row[0], row[1], n, endpoint=endpoints[i])
+            for i, row in enumerate(b)
         ]
 
         return grid

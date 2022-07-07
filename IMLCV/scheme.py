@@ -96,7 +96,7 @@ class Scheme:
                       self.md.bias.cvs.metric[:, 0]) / 20
 
         if K is None:
-            K = 2.0 * self.md.T * boltzmann
+            K = 1.0 * self.md.T * boltzmann
 
         biasmtd = BiasMTD(self.md.bias.cvs, K, sigmas, start=start, step=step)
         bias = CompositeBias([self.md.bias, biasmtd])
@@ -105,7 +105,7 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self, plot=True, max_bias=None, kind='normal'):
+    def _FESBias(self, plot=True, max_bias=np.inf, kind='normal'):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)
@@ -117,18 +117,11 @@ class Scheme:
 
     def _grid_umbrella(self, steps=1e4,  K=None, n=8):
 
-        cvs = self.md.bias.cvs
-        if ((cvs.metric.boundaries[:, 1] -
-             cvs.metric.boundaries[:, 0]) <= 1e-6).any():
-            raise NotImplementedError(
-                "Metric provide boundaries or force constant K")
+        grid = self.md.bias.cvs.metric.grid(n)
 
         if K is None:
-            K = 10.0 * self.md.T * boltzmann * (
-                n / (cvs.metric.boundaries[:, 1] -
-                     cvs.metric.boundaries[:, 0]))**2
-
-        grid = self.md.bias.cvs.metric.grid(n, endpoints=False, map=True)
+            K = 2.0 * self.md.T * boltzmann
+        K /= (np.array([a[1]-a[0] for a in grid])/2) ** 2
 
         self.rounds.run_par([CompositeBias([
             HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)),
@@ -139,12 +132,12 @@ class Scheme:
         o = Observable(self.rounds)
         self.md.bias.cvs.metric = o.new_metric(plot=plot, r=r)
 
-    def round(self, rnds=10, steps=5e4, update_metric=False, n=4):
+    def round(self, rnds=10, steps=5e4, K=None, update_metric=False, n=4):
         # startround = 0
 
         # update biases untill there are no discontinues jumps left
         for _ in range(rnds):
-            self._grid_umbrella(steps=steps, n=4)
+            self._grid_umbrella(steps=steps, n=4, K=K)
             if update_metric:
                 self._new_metric(plot=True)
                 update_metric = False
