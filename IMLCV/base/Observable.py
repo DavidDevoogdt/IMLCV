@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import (Bias, BiasF, CompositeBias, CvMonitor, FesBias,
                              GridBias, plot_app)
-from IMLCV.base.CV import CV
+from IMLCV.base.CV import CV, SystemParams
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
 from molmod.units import picosecond
 from parsl import File, python_app
@@ -76,9 +76,11 @@ class Observable:
 
                 if 'cell' in dictionary:
                     cell = dictionary["cell"][index:]
+
                     arr = np.array(
                         [
-                            bias.cvs.compute(coordinates=x, cell=y)[0]
+                            bias.cvs.compute(SystemParams(
+                                coordinates=x, cell=y))[0]
                             for (x, y) in zip(pos, cell)
                         ],
                         dtype=np.double,
@@ -86,7 +88,8 @@ class Observable:
                 else:
                     arr = np.array(
                         [
-                            bias.cvs.compute(coordinates=p, cell=None)[0]
+                            bias.cvs.compute(SystemParams(
+                                coordinates=p, cell=None))[0]
                             for p in pos
                         ],
                         dtype=np.double,
@@ -248,7 +251,7 @@ class Observable:
                                         axis=0,
                                         arr=cvs,
                                         diff=False,
-                                        map=False, #already mapped
+                                        map=False,  # already mapped
                                         )
 
             b = np.array(b, dtype=np.double)

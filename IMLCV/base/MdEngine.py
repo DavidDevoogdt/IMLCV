@@ -27,6 +27,7 @@ import yaff.sampling
 import yaff.sampling.iterative
 import yaff.system
 from IMLCV.base.bias import Bias, Energy
+from IMLCV.base.CV import SystemParams
 from yaff.log import log
 from yaff.sampling.io import XYZWriter
 
@@ -426,12 +427,15 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
         self.cvs = []
 
     def compute(self, gpos=None, vtens=None):
+
+        sp = SystemParams(coordinates=jnp.array(self.ff.system.pos),
+                          cell=jnp.array(self.ff.system.cell.rvecs))
+
         [
             ener,
             gpos_jax,
             vtens_jax,
-        ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                   cell=self.ff.system.cell.rvecs,
+        ] = self.bias.compute_coor(sp=sp,
                                    gpos=gpos is not None,
                                    vir=vtens is not None)
 
@@ -476,7 +480,9 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
         coordinates = self.ff.system.pos[:]
         cell = self.ff.system.cell.rvecs[:]
 
-        self.bias.update_bias(coordinates, cell)
+        sp = SystemParams(coordinates=coordinates, cell=cell)
+
+        self.bias.update_bias(sp)
 
 
 class _YaffFF(Energy, yaff.pes.ForceField):
@@ -498,13 +504,13 @@ class _YaffFF(Energy, yaff.pes.ForceField):
         if self.from_func:
             self.f = f
 
-    def compute_coor(self, coordinates, cell, gpos=None, vir=None):
+    def compute_coor(self, sp: SystemParams, gpos=None, vir=None):
 
         p_old = self.system.pos[:]
         c_old = self.system.cell.rvecs[:]
 
-        self.system.pos[:] = coordinates
-        self.system.cell.update_rvecs(cell)
+        self.system.pos[:] = sp.coordinates
+        self.system.cell.update_rvecs(sp.cell)
 
         ener = self.compute(gpos=gpos, vtens=vir)
 

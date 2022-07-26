@@ -303,17 +303,20 @@ class RoundsMd(Rounds):
                 pass
 
             @bash_app_python()
-            def run(steps: int, inputs=[]):
+            def run(steps: int, inputs=[], outputs=[]):
 
                 bias = Bias.load(inputs[1].filepath)
                 md = MDEngine.load(
                     inputs[0].filepath, bias=bias, filename=inputs[2].filepath)
                 md.run(steps)
+
+                bias.save(inputs[1].filepath)
                 d = md.get_trajectory()
                 return d
 
             future = run(
                 inputs=[File(common_md_name), File(b_name), File(traj_file)],
+                outputs=[File(b_name)],
                 steps=int(steps),
                 stdout=f'{temp_name}/md.stdout',
                 stderr=f'{temp_name}/md.stderr',

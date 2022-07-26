@@ -11,7 +11,7 @@ import jax.scipy as jsp
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-from IMLCV.base.CV import CV
+from IMLCV.base.CV import CV, SystemParams
 from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from jax import jacfwd, jit
 from molmod.constants import boltzmann
@@ -26,7 +26,7 @@ class Energy():
     def __init__(self) -> None:
         pass
 
-    def compute_coor(self, coordinates, cell, gpos=False, vir=False):
+    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
         raise NotImplementedError
@@ -60,7 +60,7 @@ class Bias(Energy, ABC):
 
         self.finalized = False
 
-    def update_bias(self, coordinates, cell):
+    def update_bias(self, sp: SystemParams):
         """update the bias.
 
         Can only change the properties from _get_args
@@ -100,28 +100,27 @@ class Bias(Energy, ABC):
 
         return caller
 
-    @partial(jit, static_argnums=(0, 3, 4))
-    def compute_coor(self, coordinates, cell, gpos=False, vir=False):
+    @partial(jit, static_argnums=(0, 2, 3))
+    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        if cell is not None:
-            if not (cell.shape == (0, 3) or cell.shape == (3, 3)):
+        if sp.cell is not None:
+            if not (sp.cell.shape == (0, 3) or sp.cell.shape == (3, 3)):
                 raise NotImplementedError(
                     "other cell shapes not yet supported")
 
         # bv = (vir is not None)
         # bg = (gpos is not None)
 
-        [cvs, jac_p_val, jac_c_val] = self.cvs.compute(coordinates,
-                                                       cell,
-                                                       jac_p=gpos,
-                                                       jac_c=vir)
+        [cvs, jac] = self.cvs.compute(sp=sp,
+                                      jac_p=gpos,
+                                      jac_c=vir)
         [ener, de] = self.compute(cvs, diff=(gpos or vir))
 
-        e_gpos = jnp.einsum('j,jkl->kl', de, jac_p_val) if gpos else None
-        e_vir = jnp.einsum('ji,k,kjl->il', cell, de,
-                           jac_c_val) if vir else None
+        e_gpos = jnp.einsum('j,jkl->kl', de, jac.coordinates) if gpos else None
+        e_vir = jnp.einsum('ji,k,kjl->il', sp.cell, de,
+                           jac.cell) if vir else None
 
         return ener, e_gpos, e_vir
 
@@ -311,7 +310,7 @@ class CompositeBias(Bias):
         for b in self.biases:
             b.finalize()
 
-    def update_bias(self, coordinates, cell):
+    def update_bias(self, sp: SystemParams):
 
         if self.finalized:
             return
@@ -322,7 +321,7 @@ class CompositeBias(Bias):
         self.start_list -= 1
 
         for i in np.argwhere(mask):
-            self.biases[int(i)].update_bias(coordinates=coordinates, cell=cell)
+            self.biases[int(i)].update_bias(sp=sp)
 
     def get_args(self):
         return [a for b in self.biases for a in b.get_args()]
@@ -468,7 +467,7 @@ class BiasMTD(Bias):
         assert Ks.shape[0] == q0s.shape[0]
         self.Ks = jnp.concatenate((self.Ks, Ks), axis=0)
 
-    def update_bias(self, coordinates, cell):
+    def update_bias(self, sp: SystemParams):
         """_summary_
 
         Args:
@@ -482,7 +481,7 @@ class BiasMTD(Bias):
             return
 
         # Compute current CV values
-        q0s, _, _ = self.cvs.compute(coordinates, cell)
+        q0s, _, _ = self.cvs.compute(sp)
         # Compute force constant
         K = self.K
         if self.tempering != 0.0:
@@ -607,8 +606,8 @@ class FesBias(Bias):
 
         return e + r(cvs), de
 
-    def update_bias(self, coordinates, cell):
-        self.bias.update_bias(coordinates=coordinates, cell=cell)
+    def update_bias(self, sp: SystemParams):
+        self.bias.update_bias(sp=sp)
 
     def _compute(self, cvs, *args):
         """function that calculates the bias potential."""
@@ -627,17 +626,23 @@ class CvMonitor(BiasF):
         self.step = step
 
         self.last_cv = np.nan
-        self.transitions = np.zeros((0, self.cvs.n, 2))
+        self.transitions = np.zeros((0, self.cvs.metric.ndim, 2))
 
-    def update_bias(self, coordinates, cell):
+    def update_bias(self, sp: SystemParams):
         if self.finalized:
             return
 
-        new_cv, _, _ = self.cvs.compute(coordinates=coordinates, cell=cell)
+        new_cv, _ = self.cvs.compute(sp=sp)
 
         if jnp.linalg.norm(new_cv - self.last_cv) > 1:
+            new_trans = np.array([[new_cv, self.last_cv]])
+            print(f"new trans {new_trans}")
+
             self.transitions = np.vstack(
-                (self.transitions, np.array([[new_cv, self.last_cv]])))
+                (self.transitions, new_trans))
+
+            print(self.transitions)
+
         self.last_cv = new_cv
 
 

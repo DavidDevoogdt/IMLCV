@@ -1,34 +1,75 @@
 from __future__ import annotations
 
+import typing
+from abc import abstractmethod
+from ast import Raise
+from dataclasses import dataclass
 from functools import partial
-from typing import Iterable
+from typing import Callable, Collection, Iterable, List, Optional, Tuple, Union
 
 import dill
 import jax
 # import numpy as np
 import jax.numpy as jnp
+import jax_dataclasses as jdc
 from IMLCV.base.metric import Metric
 from jax import jit
+
+
+@jdc.pytree_dataclass
+class SystemParams:
+    coordinates: jnp.ndarray
+    cell: Optional[jnp.ndarray]
+
+
+sf = Callable[[SystemParams], jnp.ndarray]
+tf = Callable[[jnp.ndarray], jnp.ndarray]  # flow from cv to cv
+
+
+class cvflow:
+    def __init__(self, cvs: Union[sf, Iterable[sf]], tranf: Optional[Union[tf, Iterable[tf]]] = None) -> None:
+
+        def f0(x):
+            # compose
+            if isinstance(cvs, Iterable):
+                y = jnp.array([h(x) for h in cvs])
+            else:
+                y = cvs(x)
+
+            # serial
+            if tranf is not None:
+                if isinstance(tranf, Iterable):
+                    for h in tranf:
+                        y = h(y)
+                else:
+                    y = tranf(y)
+            return y
+
+        self.f0 = f0
+
+    def __call__(self, x: SystemParams):
+        return self.f0(x)
+
+
+# converts system params to cv array
 
 
 class CV:
     """base class for CVs.
 
     args:
-        f: function f(coordinates, cell, **kwargs) that returns a single CV
+        f: list of
         **kwargs: arguments of custom function f
     """
 
-    def __init__(self, f, metric: Metric, n=1, **kwargs) -> None:
+    def __init__(self, f: cvflow, metric: Metric) -> None:
 
         self.f = f
-        self.kwargs = kwargs
-        self._update_params(**kwargs)
-        self.n = n
+        self._update_params()
 
         self.metric = metric
 
-    def compute(self, coordinates, cell, jac_p=False, jac_c=False):
+    def compute(self, sp: SystemParams, jac_p=False, jac_c=False):
         """
         args:
             coodinates: cartesian coordinates, as numpy array of form (number of atoms,3)
@@ -36,53 +77,25 @@ class CV:
             grad: if not None, is set to the to gradient of CV wrt coordinates
             vir: if not None, is set to the to gradient of CV wrt cell params
         """
-        val = self.cv(coordinates, cell)
-        jac_p_val = self.jac_p(coordinates, cell) if jac_p else None
-        jac_c_val = self.jac_c(coordinates, cell) if jac_c else None
+        val = self.cv(sp)
+        jac = self.jac_p(sp) if jac_p or jac_c else None
 
-        return [val, jac_p_val, jac_c_val]
+        return [val, jac]
 
-    def _update_params(self, **kwargs):
+    def _update_params(self):
         """update the CV functions."""
 
-        self.cv = jit(lambda x, y: (jnp.ravel(partial(self.f, **kwargs)
-                                              (x, y))))
-        self.jac_p = jit(jax.jacfwd(self.cv, argnums=(0)))
-        self.jac_c = jit(jax.jacfwd(self.cv, argnums=(1)))
+        self.cv = jit(lambda sp: (jnp.ravel(self.f(sp))))
+        self.jac_p = jit(jax.jacfwd(self.cv))
 
     def __eq__(self, other):
         if not isinstance(other, CV):
             return NotImplemented
         return dill.dumps(self.cv) == dill.dumps(other.cv)
 
-
-class CombineCV(CV):
-    """combine multiple CVs into one CV."""
-
-    def __init__(self, cvs: Iterable[CV]) -> None:
-        self.n = 0
-        self.cvs = cvs
-        metric = None
-
-        for cv in cvs:
-            self.n += cv.n
-            if metric is None:
-                metric = cv.metric
-            else:
-                metric += cv.metric
-
-        self.metric = metric
-        self._update_params()
-
-    def _update_params(self):
-        """function selects on ouput according to index."""
-
-        def f(x, y, cvs):
-            return jnp.array([cv.cv(x, y) for cv in cvs])
-
-        self.f = partial(f, cvs=self.cvs)
-
-        super()._update_params()
+    @ property
+    def n(self):
+        return self.metric.ndim
 
 
 class CVUtils:
@@ -95,44 +108,43 @@ class CVUtils:
     """
 
     @ staticmethod
-    def dihedral(coordinates, _, numbers):
+    def dihedral(numbers):
         """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
         angle-from-four-points-in-cartesian- coordinates-in-python.
 
         args:
             numbers: list with index of 4 atoms that form dihedral
         """
-        p0 = coordinates[numbers[0]]
-        p1 = coordinates[numbers[1]]
-        p2 = coordinates[numbers[2]]
-        p3 = coordinates[numbers[3]]
 
-        b0 = -1.0 * (p1 - p0)
-        b1 = p2 - p1
-        b2 = p3 - p2
+        def f(sp: SystemParams):
+            p0 = sp.coordinates[numbers[0]]
+            p1 = sp.coordinates[numbers[1]]
+            p2 = sp.coordinates[numbers[2]]
+            p3 = sp.coordinates[numbers[3]]
 
-        b1 /= jnp.linalg.norm(b1)
+            b0 = -1.0 * (p1 - p0)
+            b1 = p2 - p1
+            b2 = p3 - p2
 
-        v = b0 - jnp.dot(b0, b1) * b1
-        w = b2 - jnp.dot(b2, b1) * b1
+            b1 /= jnp.linalg.norm(b1)
 
-        x = jnp.dot(v, w)
-        y = jnp.dot(jnp.cross(b1, v), w)
-        return jnp.arctan2(y, x)
+            v = b0 - jnp.dot(b0, b1) * b1
+            w = b2 - jnp.dot(b2, b1) * b1
 
-    @ staticmethod
-    def Volume(_, cell):
-        return jnp.abs(jnp.dot(cell[0], jnp.cross(cell[1], cell[2])))
+            x = jnp.dot(v, w)
+            y = jnp.dot(jnp.cross(b1, v), w)
+            return jnp.arctan2(y, x)
 
-    @ staticmethod
-    def linear_combination(cv1, cv2, a=1, b=1):
-        return lambda x, y: a * cv1(x, y) + b * cv2(x, y)
+        return f
 
     @ staticmethod
-    def rotate(alpha, cv1: CV, cv2: CV):
+    def Volume():
+        def f(sp: SystemParams):
+            return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
+        return f
 
-        def f(x, y):
-            a = cv1(x, y)
-            b = cv2(x, y)
-            return jnp.array([jnp.cos(alpha)*a + jnp.sin(alpha)*b, -jnp.sin(alpha)*a + jnp.cos(alpha)*b])
+    @ staticmethod
+    def rotate(alpha):
+        def f(cv):
+            return jnp.array([[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]]) @ cv
         return f
