@@ -49,7 +49,7 @@ def test_ala_dipep_FES(name='ala6'):
                     # max_energy=70*kjmol,
                     )
 
-    scheme.round(steps=5e4, rnds=10, n=4)
+    scheme.round(steps=1e4, rnds=10, n=4)
 
 
 def test_ala_dipep_FES_non_per():
@@ -118,4 +118,4 @@ def test_grid_bias():
 if __name__ == "__main__":
     config(cluster='doduo', max_blocks=20)
 
-    test_ala_dipep_FES(name='ala_cv3')
+    test_ala_dipep_FES(name='test_cv_001')

@@ -9,6 +9,7 @@ import parsl
 import umap
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerUMAP
+from IMLCV.base.metric import Metric, MetricUMAP
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.launch.parsl_conf.config import config
 from molmod.units import kjmol
@@ -37,13 +38,14 @@ def test_cv_discovery():
     name = "ala_cv3"
     base = f"output/{name}"
 
-    cleancopy(base=base)
+    # cleancopy(base=base)
 
     rounds = RoundsMd.load(base)
 
     cvd = CVDiscovery()
 
-    cvd.compute(rounds=rounds)
+    cvd.compute(rounds=rounds, metric=MetricUMAP(
+        periodicities=[True, True]))
 
 
 if __name__ == "__main__":

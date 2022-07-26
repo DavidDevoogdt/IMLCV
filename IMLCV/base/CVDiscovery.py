@@ -5,10 +5,12 @@ from typing import Any, List, Tuple
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numba
 import numpy as np
 import umap
 from IMLCV.base.bias import Bias
 from IMLCV.base.CV import CV
+from IMLCV.base.metric import Metric, MetricUMAP
 from IMLCV.base.rounds import Rounds, RoundsMd
 from matplotlib.axes import Axes
 from matplotlib.axis import Axis
@@ -22,7 +24,7 @@ class Transformer:
     def __init__(self) -> None:
         pass
 
-    def fit(self, x, **kwargs):
+    def fit(self, x, metric: Metric, **kwargs):
         pass
 
 
@@ -30,7 +32,7 @@ class TranformerUMAP(Transformer):
     def __init__(self) -> None:
         super().__init__()
 
-    def fit(self, x, **kwargs):
+    def fit(self, x, metric: MetricUMAP, **kwargs):
 
         shape = x.shape
         x = np.reshape(x, (shape[0], -1))
@@ -39,11 +41,11 @@ class TranformerUMAP(Transformer):
         #     n_neighbors=50, min_dist=0.2, n_components=2)
         reducer = umap.UMAP(
             # densmap=True,
-            n_neighbors=80,
-            spread=1.5,
-            min_dist=0.6,
-            output_metric='cosine',
-            n_components=2
+            n_neighbors=40,
+            spread=0.5,
+            min_dist=0.1,
+            output_metric=metric.metric,
+            n_components=metric.ndim
         )
 
         trans = reducer.fit(x)
@@ -161,14 +163,14 @@ class CVDiscovery:
 
         return [pos, cell, cvs]
 
-    def compute(self, rounds: RoundsMd, plot=True,) -> CV:
+    def compute(self, rounds: RoundsMd,  plot=True, **kwargs) -> CV:
 
-        x, _, cv = self._get_data(num=6, out=1e4, rounds=rounds)
+        x, _, cv = self._get_data(num=6, out=2e3, rounds=rounds)
 
         fit = True
 
         if fit:
-            t = self.transformer.fit(x)
+            t = self.transformer.fit(x, **kwargs)
 
         if plot:
 

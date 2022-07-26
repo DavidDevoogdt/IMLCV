@@ -380,7 +380,7 @@ class HarmonicBias(Bias):
         super().__init__(cvs)
 
     def _compute(self, cvs, *args):
-        r = self.cvs.metric.distance(cvs, self.q0)
+        r = self.cvs.metric.difference(cvs, self.q0)
         return jnp.einsum('i,i,i', self.k, r, r)
 
     def get_args(self):
@@ -496,7 +496,7 @@ class BiasMTD(Bias):
         """Computes sum of hills."""
 
         deltas = jnp.apply_along_axis(
-            self.cvs.metric.distance,
+            self.cvs.metric.difference,
             axis=1,
             arr=q0s,
             x2=cvs,

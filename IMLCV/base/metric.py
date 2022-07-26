@@ -6,6 +6,7 @@ import alphashape
 # import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
+import numba
 import numpy as np
 from jax import jit
 from matplotlib import pyplot as plt
@@ -47,13 +48,13 @@ class Metric:
         self._boundaries = np.zeros(self.bounding_box.shape)
         self._boundaries[:, 1] = 1
 
-    @partial(jit, static_argnums=(0))
-    def distance(self, x1, x2):
+    # @partial(jit, static_argnums=(0))
+    def difference(self, x1, x2):
         """x1 and x2 should already be mapped."""
         xs = x2 - x1
         return self._periodic_wrap(xs, min=True)
 
-    @partial(jit, static_argnums=(0, 2))
+    # @partial(jit, static_argnums=(0, 2))
     def _periodic_wrap(self, xs, min=False):
         """Translate cvs such over unit cell.
 
@@ -77,7 +78,7 @@ class Metric:
 
     @partial(jit, static_argnums=(0))
     def map(self, y):
-        """transform CVs to ly in unit square."""
+        """transform CVs to lie in unit square."""
 
         y = (y - self.bounding_box[:, 0]) / (
             self.bounding_box[:, 1] - self.bounding_box[:, 0])
@@ -407,6 +408,40 @@ class Metric:
                 plt.savefig(f"{fn}/coord{j}")
 
         return new_metric
+
+
+class MetricUMAP(Metric):
+
+    def __init__(
+        self,
+        periodicities
+    ) -> None:
+        super().__init__(periodicities=periodicities, bounding_box=None)
+
+        per = np.array(periodicities)
+
+        @numba.njit(fastmath=True)
+        def metric(x, y):
+            """euclidean distance on hypertorus. metric as defined by UMAP, see https://umap-learn.readthedocs.io/en/latest/embedding_space.html?highlight=metric#embedding-on-a-custom-metric-space
+
+            Args:
+                x: coordinate 1
+                y: coordinate 2
+            """
+            r = x - y
+
+            coor = r[per]
+            coor = np.mod(coor, 1)
+            coor = np.where(coor > 0.5, coor - 1, coor)
+
+            r[per] = coor
+
+            dist = np.linalg.norm(r)
+            grad = r/dist
+
+            return dist, grad
+
+        self.metric = metric
 
 
 class hyperTorus(Metric):
