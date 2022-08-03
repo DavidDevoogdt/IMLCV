@@ -431,13 +431,9 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
         sp = SystemParams(coordinates=jnp.array(self.ff.system.pos),
                           cell=jnp.array(self.ff.system.cell.rvecs))
 
-        [
-            ener,
-            gpos_jax,
-            vtens_jax,
-        ] = self.bias.compute_coor(sp=sp,
-                                   gpos=gpos is not None,
-                                   vir=vtens is not None)
+        [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(sp=sp,
+                                                             gpos=gpos is not None,
+                                                             vir=vtens is not None)
 
         err = np.isnan(ener)
 
@@ -449,14 +445,10 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
         if err:
             import jax
             with jax.disable_jit():
-                [
-                    ener,
-                    gpos_jax,
-                    vtens_jax,
-                ] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                           cell=self.ff.system.cell.rvecs,
-                                           gpos=gpos is not None,
-                                           vir=vtens is not None)
+                [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(coordinates=self.ff.system.pos,
+                                                                     cell=self.ff.system.cell.rvecs,
+                                                                     gpos=gpos is not None,
+                                                                     vir=vtens is not None)
 
             raise ValueError(
                 f"Energy calculations contains nans\n ener {ener} gpos {gpos_jax}, vtens {vtens_jax}\n")

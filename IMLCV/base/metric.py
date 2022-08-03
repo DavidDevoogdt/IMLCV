@@ -222,7 +222,13 @@ class Metric:
         trajs = np.array(
             [pair[argsort, :] for argsort, pair in zip(as1, trajs)])
 
-        clustering = DBSCAN(eps=2*dist_avg).fit(get_lengths(proj)).labels_
+        clustering = DBSCAN(eps=5*dist_avg).fit(get_lengths(proj)).labels_
+
+        if fn is not None:
+            plt.clf()
+            for i in range(-1, clustering.max() + 1):
+                plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
+            plt.savefig(f"{fn}/coord_cluster_pre")
 
         # look for largest cluster and take it as starting point of indexing, shift other points cyclically
         index = np.argmax(np.bincount(clustering[clustering >= 0]))
@@ -237,7 +243,7 @@ class Metric:
 
         proj -= offset
 
-        clustering = DBSCAN(eps=2*dist_avg).fit(get_lengths(proj)).labels_
+        clustering = DBSCAN(eps=3*dist_avg).fit(get_lengths(proj)).labels_
 
         if fn is not None:
             plt.clf()

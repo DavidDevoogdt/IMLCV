@@ -4,7 +4,7 @@ from functools import partial
 
 import numpy as np
 from IMLCV.base.bias import BiasF, GridBias
-from IMLCV.base.CV import CV, CVUtils, cvflow
+from IMLCV.base.CV import CV, CvFlow, Volume, dihedral, rotate_2d
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerUMAP
 from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.metric import Metric, hyperTorus
@@ -22,53 +22,7 @@ dname = os.path.dirname(abspath)
 os.chdir(dname)
 
 
-def test_ala_dipep_FES(name='ala6'):
-
-    if os.path.isfile(f'output/{name}/rounds'):
-        # if input("recalculate?").strip().lower() != 'true':
-        #     return
-
-        import shutil
-        shutil.rmtree(f'output/{name}')
-
-    T = 600 * units.kelvin
-
-    cvs = CV(
-        f=[CVUtils.dihedral(numbers=[4, 6, 8, 14]),
-           CVUtils.dihedral(numbers=[6, 8, 14, 16])],
-        metric=Metric(
-            periodicities=[True, True],
-            bounding_box=[[-np.pi,  np.pi],
-                          [-np.pi, np.pi]])
-    )
-
-    scheme = Scheme(cvd=CVDiscovery(transformer=TranformerUMAP),
-                    cvs=cvs,
-                    Engine=YaffEngine,
-                    ener=get_alaninedipeptide_amber99ff,
-                    T=T,
-                    timestep=2.0 * units.femtosecond,
-                    timecon_thermo=100.0 * units.femtosecond,
-                    folder=f'output/{name}',
-                    write_step=20,
-                    # max_energy=70*kjmol,
-                    )
-
-    scheme.round(steps=1e4, rnds=10, n=4)
-
-
-def test_ala_dipep_FES_non_per(name="ala_np", restart=True):
-
-    d = np.sqrt(2)*np.pi*1.05
-
-    cvs = CV(
-        f=cvflow(cvs=[CVUtils.dihedral(numbers=[4, 6, 8, 14]),
-                      CVUtils.dihedral(numbers=[6, 8, 14, 16])], tranf=CVUtils.rotate(alpha=np.pi/4)),
-        metric=Metric(
-            periodicities=[False, False],
-            bounding_box=[[-d, d],
-                          [-d, d]])
-    )
+def test_ala_dipep_FES(name='ala6', find_metric=False, restart=True, max_energy=70*kjmol):
 
     if restart:
 
@@ -76,24 +30,50 @@ def test_ala_dipep_FES_non_per(name="ala_np", restart=True):
             import shutil
             shutil.rmtree(f'output/{name}')
 
-        T = 600 * kelvin
+        T = 600 * units.kelvin
 
-        s = Scheme(cvd=CVDiscovery(),
-                   cvs=cvs,
-                   Engine=YaffEngine,
-                   ener=get_alaninedipeptide_amber99ff,
-                   T=T,
-                   timestep=2.0 * units.femtosecond,
-                   timecon_thermo=100.0 * units.femtosecond,
-                   folder=f'output/{name}',
-                   write_step=10)
+        if not find_metric:
+            cvs = CV(
+                f=(
+                    dihedral(numbers=[4, 6, 8, 14]) +
+                    dihedral(numbers=[6, 8, 14, 16])
+                ),
+                metric=Metric(
+                    periodicities=[True, True],
+                    bounding_box=[[-np.pi, np.pi],
+                                  [-np.pi, np.pi]])
+            )
+        else:
+            d = np.sqrt(2)*np.pi*1.05
+
+            cvs = CV(
+                f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])) *
+                rotate_2d(alpha=np.pi/4) *
+                rotate_2d(alpha=np.pi/8),
+                metric=Metric(
+                    periodicities=[False, False],
+                    bounding_box=[[-d, d],
+                                  [-d, d]])
+            )
+
+        scheme = Scheme(cvd=CVDiscovery(transformer=TranformerUMAP),
+                        cvs=cvs,
+                        Engine=YaffEngine,
+                        ener=get_alaninedipeptide_amber99ff,
+                        T=T,
+                        timestep=2.0 * units.femtosecond,
+                        timecon_thermo=100.0 * units.femtosecond,
+                        folder=f'output/{name}',
+                        write_step=20,
+                        max_energy=max_energy,
+                        )
     else:
-        s = Scheme.from_rounds(cvd=CVDiscovery(), folder=f"output/{name}")
+        scheme = Scheme.from_rounds(cvd=CVDiscovery(), folder=f"output/{name}")
 
-    s.round(steps=1e4, K=3.0 * T * boltzmann, rnds=10, update_metric=True)
+    scheme.round(steps=2e4, rnds=10, n=4, update_metric=find_metric)
 
 
-def test_cv_discovery():
+def test_unbiasing():
 
     assert os.path.isfile('output/ala6/rounds')
 
@@ -105,26 +85,21 @@ def test_cv_discovery():
     print(bias)
 
 
-# def test_grid_bias():
-
-#     cvs = CV(f=lambda x: nan,  n=2, metric=Metric(
-#         periodicities=[False, False], bounding_box=[[0, 10], [-5, 5]]))
-
-#     a = np.linspace(0, 10, endpoint=True)
-#     b = np.linspace(-5, 5, endpoint=True)
-
-#     a1 = (a[1:]+a[:-1])/2
-#     b1 = (b[1:]+b[:-1])/2
-
-#     x, y = np.meshgrid(a1, b1, indexing='ij')
-#     x, y = x*kjmol, y*kjmol
-
-#     gb = GridBias(cvs=cvs,  vals=y)
-#     gb.plot('test', vmin=None, vmax=None)
-
-
 if __name__ == "__main__":
     config(cluster='doduo', max_blocks=20)
+    test_ala_dipep_FES(name='test_cv_003', find_metric=True)
 
-    # test_ala_dipep_FES(name='test_cv_001')
-    test_ala_dipep_FES_non_per(name='test_cv_002')
+    # d = np.sqrt(2)*np.pi*1.05
+
+    # cvs = CV(
+    #     f=(dihedral(numbers=[4, 6, 8, 14]) +
+    #         dihedral(numbers=[6, 8, 14, 16]) *
+    #         rotate_2d(alpha=np.pi/4) *
+    #         rotate_2d(alpha=np.pi/8)),
+    #     metric=Metric(
+    #         periodicities=[False, False],
+    #         bounding_box=[
+    #             [-d, d],
+    #             [-d, d]
+    #         ])
+    # )

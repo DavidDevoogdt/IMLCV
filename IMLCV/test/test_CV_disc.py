@@ -35,7 +35,7 @@ def cleancopy(base):
 
 def test_cv_discovery():
     # make copy and restore orig
-    name = "ala_cv3"
+    name = "test_cv_003"
     base = f"output/{name}"
 
     # cleancopy(base=base)

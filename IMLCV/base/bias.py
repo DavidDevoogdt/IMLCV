@@ -636,12 +636,12 @@ class CvMonitor(BiasF):
 
         if jnp.linalg.norm(new_cv - self.last_cv) > 1:
             new_trans = np.array([[new_cv, self.last_cv]])
-            print(f"new trans {new_trans}")
+            # print(f"new trans {new_trans}")
 
             self.transitions = np.vstack(
                 (self.transitions, new_trans))
 
-            print(self.transitions)
+            # print(self.transitions)
 
         self.last_cv = new_cv
 

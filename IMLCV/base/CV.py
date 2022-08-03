@@ -5,6 +5,7 @@ from abc import abstractmethod
 from ast import Raise
 from dataclasses import dataclass
 from functools import partial
+from types import MethodType
 from typing import Callable, Collection, Iterable, List, Optional, Tuple, Union
 
 import dill
@@ -23,46 +24,60 @@ class SystemParams:
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
-tf = Callable[[jnp.ndarray], jnp.ndarray]  # flow from cv to cv
+tf = Callable[[jnp.ndarray], jnp.ndarray]
 
 
-class cvflow:
-    def __init__(self, cvs: Union[sf, Iterable[sf]], tranf: Optional[Union[tf, Iterable[tf]]] = None) -> None:
+class CvTrans:
+    def __init__(self, f: tf) -> None:
+        self.f = f
 
-        def f0(x):
-            # compose
-            if isinstance(cvs, Iterable):
-                y = jnp.array([h(x) for h in cvs])
-            else:
-                y = cvs(x)
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        return self.f(x)
 
-            # serial
-            if tranf is not None:
-                if isinstance(tranf, Iterable):
-                    for h in tranf:
-                        y = h(y)
-                else:
-                    y = tranf(y)
-            return y
 
-        self.f0 = f0
+class CvFlow:
+    def __init__(self, func: sf) -> None:
+        self.f0 = func
 
     def __call__(self, x: SystemParams):
         return self.f0(x)
+
+    def __add__(self, other):
+        assert isinstance(other, CvFlow)
+
+        def f0(x):
+            return jnp.array([self(x), other(x)])
+
+        return CvFlow(func=f0)
+
+    def __mul__(self, other):
+        assert isinstance(
+            other, CvTrans), 'can only multiply by CvTrans object'
+
+        def f0(x):
+            return other(self(x))
+
+        return CvFlow(func=f0)
+
+
+def cv(func: sf):
+    """decorator to make a CV"""
+    ff = CvFlow(func=func)
+    return ff
+
+
+def cvtrans(f: tf):
+    """decorator to make a CV tranformation func"""
+    ff = CvTrans(f=f)
+    return ff
 
 
 # converts system params to cv array
 
 
 class CV:
-    """base class for CVs.
 
-    args:
-        f: list of
-        **kwargs: arguments of custom function f
-    """
-
-    def __init__(self, f: cvflow, metric: Metric) -> None:
+    def __init__(self, f: CvFlow, metric: Metric) -> None:
 
         self.f = f
         self._update_params()
@@ -98,53 +113,47 @@ class CV:
         return self.metric.ndim
 
 
-class CVUtils:
-    """collection of predifined CVs. Intended to be used as argument to CV
-    class.
+def dihedral(numbers):
+    """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
+    angle-from-four-points-in-cartesian- coordinates-in-python.
 
     args:
-        coordinates (np.array(n_atoms,3)): cartesian coordinates
-        cell (np.array((3,3)): cartesian coordinates of cell vectors
+        numbers: list with index of 4 atoms that form dihedral
     """
 
-    @ staticmethod
-    def dihedral(numbers):
-        """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
-        angle-from-four-points-in-cartesian- coordinates-in-python.
+    @cv
+    def f(sp: SystemParams):
+        p0 = sp.coordinates[numbers[0]]
+        p1 = sp.coordinates[numbers[1]]
+        p2 = sp.coordinates[numbers[2]]
+        p3 = sp.coordinates[numbers[3]]
 
-        args:
-            numbers: list with index of 4 atoms that form dihedral
-        """
+        b0 = -1.0 * (p1 - p0)
+        b1 = p2 - p1
+        b2 = p3 - p2
 
-        def f(sp: SystemParams):
-            p0 = sp.coordinates[numbers[0]]
-            p1 = sp.coordinates[numbers[1]]
-            p2 = sp.coordinates[numbers[2]]
-            p3 = sp.coordinates[numbers[3]]
+        b1 /= jnp.linalg.norm(b1)
 
-            b0 = -1.0 * (p1 - p0)
-            b1 = p2 - p1
-            b2 = p3 - p2
+        v = b0 - jnp.dot(b0, b1) * b1
+        w = b2 - jnp.dot(b2, b1) * b1
 
-            b1 /= jnp.linalg.norm(b1)
+        x = jnp.dot(v, w)
+        y = jnp.dot(jnp.cross(b1, v), w)
+        return jnp.arctan2(y, x)
 
-            v = b0 - jnp.dot(b0, b1) * b1
-            w = b2 - jnp.dot(b2, b1) * b1
+    return f
 
-            x = jnp.dot(v, w)
-            y = jnp.dot(jnp.cross(b1, v), w)
-            return jnp.arctan2(y, x)
 
-        return f
+@cv
+def Volume(sp: SystemParams):
+    return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
 
-    @ staticmethod
-    def Volume():
-        def f(sp: SystemParams):
-            return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
-        return f
 
-    @ staticmethod
-    def rotate(alpha):
-        def f(cv):
-            return jnp.array([[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]]) @ cv
-        return f
+def rotate_2d(alpha):
+    @cvtrans
+    def f(cv):
+        return jnp.array([
+            [jnp.cos(alpha), jnp.sin(alpha)],
+            [-jnp.sin(alpha), jnp.cos(alpha)]
+        ]) @ cv
+    return f
