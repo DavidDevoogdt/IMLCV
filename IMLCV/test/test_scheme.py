@@ -87,19 +87,4 @@ def test_unbiasing():
 
 if __name__ == "__main__":
     config(cluster='doduo', max_blocks=20)
-    test_ala_dipep_FES(name='test_cv_003', find_metric=True)
-
-    # d = np.sqrt(2)*np.pi*1.05
-
-    # cvs = CV(
-    #     f=(dihedral(numbers=[4, 6, 8, 14]) +
-    #         dihedral(numbers=[6, 8, 14, 16]) *
-    #         rotate_2d(alpha=np.pi/4) *
-    #         rotate_2d(alpha=np.pi/8)),
-    #     metric=Metric(
-    #         periodicities=[False, False],
-    #         bounding_box=[
-    #             [-d, d],
-    #             [-d, d]
-    #         ])
-    # )
+    test_ala_dipep_FES(name='test_cv_004', find_metric=True)

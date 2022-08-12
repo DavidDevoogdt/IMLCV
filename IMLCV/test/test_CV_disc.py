@@ -26,16 +26,16 @@ def cleancopy(base):
 
     if not os.path.exists(f"{base}_orig"):
         assert os.path.exists(f"{base}"), "folder not found"
-        shutil.copytree(f"{base}", f"{base}_orig")
+        shutil.copytree(f"{base}", f"{base}.orig")
 
     if os.path.exists(f"{base}"):
         shutil.rmtree(f"{base}")
     shutil.copytree(f"{base}_orig", f"{base}")
 
 
-def test_cv_discovery():
+def test_cv_discovery(name="test_cv_003"):
     # make copy and restore orig
-    name = "test_cv_003"
+
     base = f"output/{name}"
 
     # cleancopy(base=base)

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from IMLCV.base.CV import CV, SystemParams
 from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
-from jax import jacfwd, jit
+from jax import jacrev, jit
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
@@ -130,7 +130,7 @@ class Bias(Energy, ABC):
 
         self.e = Bias._gnool_jit(partial(self._compute),
                                  static_array_argnums=static_array_argnums)
-        self.de = Bias._gnool_jit(jacfwd(self.e, argnums=(0,)),
+        self.de = Bias._gnool_jit(jacrev(self.e, argnums=(0,)),
                                   static_array_argnums=static_array_argnums)
 
     @partial(jit, static_argnums=(0, 2, 3))
@@ -144,7 +144,7 @@ class Bias(Energy, ABC):
             cvs = self.cvs.metric.map(cvs)
 
         if diff:
-            dcvs = jacfwd(self.cvs.metric.map)(cvs)
+            dcvs = jacrev(self.cvs.metric.map)(cvs)
 
         E = self.e(cvs, *self.get_args())
         if diff:
@@ -597,12 +597,12 @@ class FesBias(Bias):
         e, de = self.bias.compute(cvs, diff=diff, map=map)
 
         r = jit(lambda x: self.T * boltzmann *
-                jnp.log(jnp.abs(jnp.linalg.det(jacfwd(self.bias.cvs.metric.map)(x)))))
+                jnp.log(jnp.abs(jnp.linalg.det(jacrev(self.bias.cvs.metric.map)(x)))))
 
         e += r(cvs)
 
         if diff:
-            de += jit(jacfwd(r))(cvs)
+            de += jit(jacrev(r))(cvs)
 
         return e + r(cvs), de
 

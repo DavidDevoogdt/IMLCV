@@ -191,8 +191,8 @@ class Observable:
 
             return None
 
-        for r in self.rounds.iter(num=1, r=r):
-            bias = Bias.load(r['attr']["name_bias"])
+        for run_data in self.rounds.iter(num=1, r=r):
+            bias = Bias.load(run_data['attr']["name_bias"])
             if cvs is None:
                 cvs = bias.cvs
 
@@ -200,6 +200,9 @@ class Observable:
             assert monitor is not None
 
             trans.append(monitor.transitions)
+
+            # this data should not be used anymore
+        self.rounds.invalidate_data(r=r)
 
         transitions = jnp.vstack(trans)
         if plot:

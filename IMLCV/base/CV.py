@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 import jax_dataclasses as jdc
 from IMLCV.base.metric import Metric
-from jax import jit
+from jax import grad, jacfwd, jit, vmap
 
 
 @jdc.pytree_dataclass
@@ -77,12 +77,13 @@ def cvtrans(f: tf):
 
 class CV:
 
-    def __init__(self, f: CvFlow, metric: Metric) -> None:
+    def __init__(self, f: CvFlow, metric: Metric, jac=jacfwd) -> None:
+        "jac: kind of jacobian. Default is jacfwd (more efficient for tall matrices), but functions with custom jvp's only support jacrev"
 
         self.f = f
-        self._update_params()
-
+        self.jac = jac
         self.metric = metric
+        self._update_params()
 
     def compute(self, sp: SystemParams, jac_p=False, jac_c=False):
         """
@@ -101,12 +102,22 @@ class CV:
         """update the CV functions."""
 
         self.cv = jit(lambda sp: (jnp.ravel(self.f(sp))))
-        self.jac_p = jit(jax.jacfwd(self.cv))
+        self.jac_p = jit(self.jac(self.cv))
 
     def __eq__(self, other):
         if not isinstance(other, CV):
             return NotImplemented
         return dill.dumps(self.cv) == dill.dumps(other.cv)
+
+
+
+    
+
+    def map_cv(self,coords,cells):
+        f= jit(vmap(lambda x, y: self.compute(SystemParams(coordinates=x, cell=y))[0]))
+        return f(coords,cells)
+        
+      
 
     @ property
     def n(self):
@@ -121,7 +132,7 @@ def dihedral(numbers):
         numbers: list with index of 4 atoms that form dihedral
     """
 
-    @cv
+    @ cv
     def f(sp: SystemParams):
         p0 = sp.coordinates[numbers[0]]
         p1 = sp.coordinates[numbers[1]]
@@ -144,13 +155,13 @@ def dihedral(numbers):
     return f
 
 
-@cv
+@ cv
 def Volume(sp: SystemParams):
     return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
 
 
 def rotate_2d(alpha):
-    @cvtrans
+    @ cvtrans
     def f(cv):
         return jnp.array([
             [jnp.cos(alpha), jnp.sin(alpha)],

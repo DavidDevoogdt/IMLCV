@@ -89,6 +89,8 @@ class Rounds(ABC):
                             if attrs[key] is not None:
                                 f[f'{self.round}/{i}'].attrs[key] = attrs[key]
 
+                        f[f'{self.round}/{i}'].attrs['valid'] = True
+
                     f[f'{self.round}'].attrs['num'] += 1
 
         self.save()
@@ -111,6 +113,7 @@ class Rounds(ABC):
                             f[f'{self.round}'].attrs[key] = attr[key]
 
                     f[f'{self.round}'].attrs['num'] = 0
+                    f[f'{self.round}'].attrs['valid'] = True
 
         self.save()
 
@@ -118,11 +121,17 @@ class Rounds(ABC):
         if r is None:
             r = self.round
 
-        for r in range(max(r - (num - 1), 0), r + 1):
-            r = self._get_round(r)
-            for i in r['names']:
-                i_dict = self._get_i(r['round'], i)
-                yield {**i_dict, 'round': r}
+        for r0 in range(max(r - (num - 1), 0), r + 1):
+
+            r_data = self._get_round(r0)
+            if not r_data['valid']:
+                continue
+
+            for i in r_data['names']:
+                i_dict = self._get_i(r_data['round'], i)
+
+                if i_dict['attr']['valid']:
+                    yield {**i_dict, 'round': r_data}
 
     def _get_round(self, r):
         with self.rlock:
@@ -143,7 +152,7 @@ class Rounds(ABC):
                 attr = {key: d.attrs[key] for key in d.attrs}
         return {**y, 'attr': attr, 'i': i}
 
-    def _get_prop(self, name, r=None):
+    def _get_attr(self, name, r=None):
         with self.rlock:
             with h5py.File(self.h5file, 'r') as f:
                 if r is not None:
@@ -156,18 +165,40 @@ class Rounds(ABC):
 
             return None
 
+    def _set_attr(self, name, value, r=None, i=None):
+
+        with self.lock:
+            with self.rlock:
+                with h5py.File(self.h5file, 'r+') as f:
+                    if r is not None:
+                        f2 = f[f"{r}"]
+                    else:
+                        f2 = f
+
+                    if i is not None:
+                        assert r is not None, "also provide round"
+                        f2 = f[f"/{i}"]
+
+                    f2.attrs[name] = value
+
     @property
     def T(self):
-        return self._get_prop('T', r=self.round)
+        return self._get_attr('T', r=self.round)
 
     @property
     def P(self):
-        return self._get_prop('P', r=self.round)
+        return self._get_attr('P', r=self.round)
 
     def n(self, r=None):
         if r is None:
             r = self.round
-        return self._get_prop('num', r=r)
+        return self._get_attr('num', r=r)
+
+    def invalidate_data(self, r=None, i=None):
+        if r is None:
+            r = self.round
+
+        self._set_attr(name='valid', value=False, r=r, i=i)
 
 
 class RoundsCV(Rounds):

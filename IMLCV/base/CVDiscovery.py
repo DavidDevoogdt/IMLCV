@@ -1,21 +1,23 @@
-from functools import partial
-from nis import match
-from random import choices, random
-from typing import Any, List, Tuple
+import functools
+import os
 
 import jax.numpy as jnp
+import matplotlib
 import matplotlib.pyplot as plt
-import numba
 import numpy as np
+import tensorflow as tf
 import umap
 from IMLCV.base.bias import Bias
-from IMLCV.base.CV import CV
+from IMLCV.base.CV import CV, CvFlow, SystemParams, cv
 from IMLCV.base.metric import Metric, MetricUMAP
 from IMLCV.base.rounds import Rounds, RoundsMd
-from matplotlib.axes import Axes
-from matplotlib.axis import Axis
+from jax import custom_jvp, grad, jacrev, jit, make_jaxpr, value_and_grad, vmap
+from jax.experimental import jax2tf
+from jax.experimental.host_callback import call
+from jax.interpreters import batching
+from jax.random import PRNGKey, choice
+from keras import backend
 from molmod.constants import boltzmann
-from numpy.random import choice
 
 plt.rcParams['text.usetex'] = True
 
@@ -24,7 +26,7 @@ class Transformer:
     def __init__(self) -> None:
         pass
 
-    def fit(self, x, metric: Metric, **kwargs):
+    def fit(self, x, metric: Metric, **kwargs) -> CV:
         pass
 
 
@@ -32,25 +34,52 @@ class TranformerUMAP(Transformer):
     def __init__(self) -> None:
         super().__init__()
 
-    def fit(self, x, metric: MetricUMAP, **kwargs):
+    def fit(self, x, output_metric: MetricUMAP, **kwargs):
 
         shape = x.shape
+
         x = np.reshape(x, (shape[0], -1))
 
-        # reducer = umap.ParametricUMAP(
-        #     n_neighbors=50, min_dist=0.2, n_components=2)
-        reducer = umap.UMAP(
-            # densmap=True,
-            n_neighbors=40,
-            spread=0.5,
-            min_dist=0.1,
-            output_metric=metric.metric,
-            n_components=metric.ndim
+        ncomps = 2
+
+        reducer = umap.ParametricUMAP(
+            n_neighbors=20,
+            min_dist=0.99,
+            n_components=ncomps,
+            output_metric=output_metric,
+            n_epochs=10,
+            # autoencoder_loss=True,
+
         )
 
-        trans = reducer.fit(x)
+        import IMLCV.test.tf2jax
+        from IMLCV.test.tf2jax import call_tf_p, loop_batcher
+        from jax.interpreters import batching
+        batching.primitive_batchers[call_tf_p] = functools.partial(
+            loop_batcher, call_tf_p)
+        # batching.primitive_batchers[call_tf_p] = functools.partial(
+        #     par_batcher, call_tf_p)
 
-        return lambda x:  trans.transform(np.reshape(x, (shape[0], -1)))
+        transf = reducer.fit(x)
+
+        # transform to function of 1 variable with correct shape
+
+        @jit
+        def func(y: SystemParams):
+            assert y.cell is None, "implement cell parameter passing"
+
+            cc = y.coordinates.reshape((-1, x.shape[1]))
+            out = jax2tf.call_tf(transf.encoder.call)(cc)
+            return jnp.reshape(out, out.shape[1:])
+
+        # fast
+        # a = func(SystemParams(coordinates=x[0:100, :], cell=None))
+        # b = vmap(lambda y: func(SystemParams(y, None)))(x[0:10000, :])
+
+        cv = CV(f=CvFlow(func=func),
+                metric=output_metric, jac=jacrev)
+
+        return cv
 
 
 class CVDiscovery:
@@ -60,53 +89,43 @@ class CVDiscovery:
         # self.rounds = rounds
         self.transformer = transformer
 
-    def _get_data(self, rounds: RoundsMd, num=3, out=1e4):
+    def _get_data(self, rounds: RoundsMd, num=4, out=1e4):
 
         pos_arr = []
         cell_arr = []
-        cvs_arr = []
-        energies = []
-        times = []
-        taus = []
+        cvs_mapped_arr = []
+        # energies = []
+        # times = []
+        # taus = []
         weights = []
-
-        def get_cvs(pos, cell, CV: CV):
-            if cell is not None:
-                cell = dictionary["cell"]
-                cvs_mapped = np.array([CV.compute(coordinates=x, cell=y)[0]
-                                       for (x, y) in zip(pos, cell)], dtype=np.double)
-            else:
-                cvs_mapped = np.array([CV.compute(coordinates=p, cell=None)[0]
-                                       for p in pos], dtype=np.double)
-                cell = None
-
-            cvs_mapped = np.array(np.apply_along_axis(lambda x:  CV.metric.map(x),
-                                                      arr=cvs_mapped,
-                                                      axis=1),
-                                  dtype=np.double)
-
-            return cvs_mapped
 
         cv = None
 
         for dictionary in rounds.iter(num=num):
-            bias = Bias.load(dictionary['attr']["name_bias"])
 
-            pos = dictionary["positions"]
-            cell = dictionary.get("cell", None)
-            cvs_mapped = get_cvs(pos, cell, bias.cvs)
+            # map cvs
+            bias = Bias.load(dictionary['attr']["name_bias"])
+            map_bias = jit(vmap(lambda x:  bias.compute(cvs=x, map=False)[0]))
 
             if cv is None:
                 cv = bias.cvs
-            biases = np.array(np.apply_along_axis(lambda x:  bias.compute(cvs=x, map=False)[0],
-                                                  arr=cvs_mapped,
-                                                  axis=1),
-                              dtype=np.double)
+                map_cv = cv.map_cv
+                #  jit(vmap(lambda x, y: cv.compute(
+                #     SystemParams(coordinates=x, cell=y))[0]))
+                map_metric = jit(vmap(cv.metric.map))
+
+            pos = dictionary["positions"]
+            cell = dictionary.get("cell", None)
+
+            # execute all the mappings
+            cvs = map_cv(pos, cell)
+            cvs_mapped = map_metric(cvs)
+            biases = map_bias(cvs_mapped)
 
             beta = 1/(dictionary['round']['T']*boltzmann)
-            weight = np.exp(beta * biases)
+            weight = jnp.exp(beta * biases)
 
-            time = dictionary["t"]
+            # time = dictionary["t"]
 
             # def integr(fx, x):
             #     y = np.array(
@@ -116,10 +135,10 @@ class CVDiscovery:
             # beta = 1/(dictionary['round']['T']*boltzmann)
             # tau = integr(np.exp(beta * biases), time)
 
-            times.append(time)
+            # times.append(time)
             # taus.append(tau)
             pos_arr.append(pos)
-            cvs_arr.append(cvs_mapped)
+            cvs_mapped_arr.append(cvs_mapped)
             # energies.append(biases)
             cell_arr.append(cell)
             weights.append(weight)
@@ -149,78 +168,87 @@ class CVDiscovery:
         # #
         # cvs = get_cvs(new_pos, new_cell, cv)
 
-        probs = np.hstack(weights)
-        probs = probs/np.sum(probs)
+        probs = jnp.hstack(weights)
+        probs = probs/jnp.sum(probs)
 
-        indices = choice(len(probs), int(out), p=probs, replace=False)
+        key = PRNGKey(0)
 
-        pos = np.vstack(pos_arr)[indices]
+        indices = choice(key=key, a=probs.shape[0], shape=(
+            int(out),), p=probs, replace=False)
+
+        pos = jnp.vstack(pos_arr)[indices]
         if cell is not None:
-            cell = np.vstack(cell_arr)[indices]
+            cell = jnp.vstack(cell_arr)[indices]
         else:
             cell = None
-        cvs = np.vstack(cvs_arr)[indices]
+        cvs = jnp.vstack(cvs_mapped_arr)[indices]
 
         return [pos, cell, cvs]
 
     def compute(self, rounds: RoundsMd,  plot=True, **kwargs) -> CV:
 
-        x, _, cv = self._get_data(num=6, out=2e3, rounds=rounds)
+        x, _, cv = self._get_data(num=2, out=1e3, rounds=rounds)
 
         fit = True
 
         if fit:
-            t = self.transformer.fit(x, **kwargs)
+            newCV = self.transformer.fit(x, output_metric=MetricUMAP(
+                periodicities=[False, False]), **kwargs)
 
         if plot:
 
             if fit:
 
-                c = t(x)
-                c = (c[:]-c.min(axis=0))/(c.max(axis=0) - c.min(axis=0))
+                def color(c):
+                    c2 = (c[:]-c.min(axis=0))/(c.max(axis=0) - c.min(axis=0))
+                    l = c2.shape[0]
+                    w = c2.shape[1]
 
-                # fig, ((ax1, ax2), (ax3, ax4), (ax5, ax6),
-                #       (ax7, ax8)) = plt.subplots(2, 2)
-                fig, ((ax1, ax3), (ax5, ax7)) = plt.subplots(2, 2)
+                    cv1 = np.ones((l, 3))
+                    cv1[:, 0:w] = c2[:]
+
+                    cv_hsv = matplotlib.colors.hsv_to_rgb(cv1)
+
+                    return cv_hsv
+
+                cv_func = jit(vmap(lambda x: newCV.compute(
+                    sp=SystemParams(coordinates=x, cell=None))))
+                tf = cv_func(x)[0]
+
+                # tf = newCV(jnp.array(x))
+                # tf = t(jnp.array(x))
+
+                fig, ax_arr = plt.subplots(2, 2)
 
                 # plot setting
-                kwargs = {'s': 2,
-                          'cmap': 'jet', }
+                kwargs = {'s': 1}
 
-                ax1.scatter(c[:, 0], c[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in cv],
-                            label='phi', **kwargs)
-                # ax2.scatter(c[:, 0], c[:, 1], c=cv[:, 1],
-                #             label='psi', **kwargs)
-                for ax in [ax1]:
-                    ax.set_xlabel('umap cv1')
-                    ax.set_ylabel('umap cv2')
+                data = [cv, tf]
+                labels = [[r'$\Phi$', r'$\Psi$'], ['umap1', 'umap2']]
+                cmaps = [None, ]
 
-                ax3.scatter(cv[:, 0], cv[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in cv],
-                            label='umap CV1', **kwargs)
-                # ax4.scatter(cv[:, 0], cv[:, 1], c=cv[:, 1],
-                #             label='umap CV2', **kwargs)
+                for [i, j] in [[0, 1], [1, 0]]:  # order
 
-                for ax in [ax3]:
-                    ax.set_xlabel(r' $\Psi$')
-                    ax.set_ylabel(r' $\Phi$')
+                    cols = color(data[i])
+                    l, r = ax_arr[i]
 
-                # plot the other way arround
-                ax5.scatter(c[:, 0], c[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in c],
-                            label='phi', **kwargs)
-                # ax6.scatter(c[:, 0], c[:, 1], c=c[:, 1],
-                #             label='psi', **kwargs)
-                for ax in [ax5]:
-                    ax.set_xlabel('umap cv1')
-                    ax.set_ylabel('umap cv2')
+                    # l.hist2d(data[i][:, 0], data[i][:, 1],
+                    #          bins=(50, 50), cmap=plt.cm.gray, alpha=0.5)
 
-                ax7.scatter(cv[:, 0], cv[:, 1], c=[[cv0, cv1, 0] for cv0, cv1 in c],
-                            label='umap CV1', **kwargs)
-                # ax8.scatter(cv[:, 0], cv[:, 1], c=c[:, 1],
-                #             label='umap CV2', **kwargs)
+                    l.scatter(data[i][:, 0], data[i]
+                              [:, 1], c=cols, **kwargs)
 
-                for ax in [ax7]:
-                    ax.set_xlabel(r' $\Psi$')
-                    ax.set_ylabel(r' $\Phi$')
+                    l.set_xlabel(labels[i][0])
+                    l.set_ylabel(labels[i][1])
+
+                    r.scatter(data[j][:, 0], data[j]
+                              [:, 1], c=cols, **kwargs)
+
+                    # r.hist2d(data[j][:, 0], data[j][:, 1],
+                    #          bins=(50, 50), cmap=plt.cm.gray, alpha=0.5)
+
+                    r.set_xlabel(labels[j][0])
+                    r.set_ylabel(labels[j][1])
 
                 plt.show()
 

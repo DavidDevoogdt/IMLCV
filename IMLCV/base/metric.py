@@ -21,12 +21,13 @@ class Metric:
     def __init__(
         self,
         periodicities,
-        bounding_box,
+        bounding_box=None,
         map_meshgrids=None,
 
     ) -> None:
         if bounding_box is None:
-            bounding_box = jnp.zeros((len(periodicities), 2))
+            bounding_box = jnp.zeros((len(periodicities), 2), jnp.float32)
+            bounding_box.at[:, 1].set(1.0)
 
         if isinstance(bounding_box, list):
             bounding_box = jnp.array(bounding_box, dtype=jnp.float32)
@@ -428,7 +429,7 @@ class MetricUMAP(Metric):
 
         @numba.njit(fastmath=True)
         def metric(x, y):
-            """euclidean distance on hypertorus. metric as defined by UMAP, see https://umap-learn.readthedocs.io/en/latest/embedding_space.html?highlight=metric#embedding-on-a-custom-metric-space
+            """euclidean distance on hypertorus. metric as defined by UMAP, see https://umap-learn.readthedocs.io/en/latest/embedding_space.html?highlight=metric#embedding-on-a-custom-metric-space This implements Metric.difference(x1,x2)
 
             Args:
                 x: coordinate 1
@@ -448,6 +449,9 @@ class MetricUMAP(Metric):
             return dist, grad
 
         self.metric = metric
+
+    def __call__(self, x, y):
+        return self.metric(x, y)
 
 
 class hyperTorus(Metric):
