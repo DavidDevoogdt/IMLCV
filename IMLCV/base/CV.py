@@ -6,13 +6,15 @@ from ast import Raise
 from dataclasses import dataclass
 from functools import partial
 from types import MethodType
-from typing import Callable, Collection, Iterable, List, Optional, Tuple, Union
+from typing import (Callable, Collection, Iterable, Iterator, List, Optional,
+                    Tuple, Union)
 
 import dill
 import jax
 # import numpy as np
 import jax.numpy as jnp
 import jax_dataclasses as jdc
+import numpy as np
 from IMLCV.base.metric import Metric
 from jax import grad, jacfwd, jit, vmap
 
@@ -21,6 +23,28 @@ from jax import grad, jacfwd, jit, vmap
 class SystemParams:
     coordinates: jnp.ndarray
     cell: Optional[jnp.ndarray]
+
+    @staticmethod
+    def flatten(sps: Union[SystemParams, Iterable[SystemParams]]) -> jnp.ndarray:
+
+        def fl(sp):
+            if sp.cell is not None:
+                if sp.cell.shape[0] != 0:
+                    return jnp.vstack([jnp.ravel(sp.coordinates), jnp.ravel(sp.cell)])
+
+            return jnp.ravel(sp.coordinates)
+
+        if isinstance(sps, Iterable):
+            return jnp.vstack([fl(sp) for sp in sps])
+
+        return fl(sps)
+
+    @staticmethod
+    def map_params(coordinates, cells):
+        if cells is None:
+            return [SystemParams(coordinates=a, cell=None) for a in coordinates]
+        else:
+            return [SystemParams(coordinates=a, cell=b) for a, b in zip(coordinates, cells)]
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
@@ -80,44 +104,26 @@ class CV:
     def __init__(self, f: CvFlow, metric: Metric, jac=jacfwd) -> None:
         "jac: kind of jacobian. Default is jacfwd (more efficient for tall matrices), but functions with custom jvp's only support jacrev"
 
-        self.f = f
-        self.jac = jac
+        # self.f = f
+        # self.jac = jac
         self.metric = metric
-        self._update_params()
+        self.cv = jit(lambda sp: (jnp.ravel(f(sp))))
+        self.jac_p = jit(jac(self.cv))
 
     def compute(self, sp: SystemParams, jac_p=False, jac_c=False):
-        """
-        args:
-            coodinates: cartesian coordinates, as numpy array of form (number of atoms,3)
-            cell: cartesian coordinates of cell vectors, as numpy array of form (3,3)
-            grad: if not None, is set to the to gradient of CV wrt coordinates
-            vir: if not None, is set to the to gradient of CV wrt cell params
-        """
+
         val = self.cv(sp)
         jac = self.jac_p(sp) if jac_p or jac_c else None
 
         return [val, jac]
-
-    def _update_params(self):
-        """update the CV functions."""
-
-        self.cv = jit(lambda sp: (jnp.ravel(self.f(sp))))
-        self.jac_p = jit(self.jac(self.cv))
 
     def __eq__(self, other):
         if not isinstance(other, CV):
             return NotImplemented
         return dill.dumps(self.cv) == dill.dumps(other.cv)
 
-
-
-    
-
-    def map_cv(self,coords,cells):
-        f= jit(vmap(lambda x, y: self.compute(SystemParams(coordinates=x, cell=y))[0]))
-        return f(coords,cells)
-        
-      
+    def map_cv(self, sps: Iterable[SystemParams]):
+        return jnp.array([self.compute(x)[0] for x in sps])
 
     @ property
     def n(self):

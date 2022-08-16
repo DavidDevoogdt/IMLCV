@@ -3,12 +3,13 @@ from __future__ import annotations
 from functools import partial
 
 import alphashape
+import jax
 # import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
 import numba
 import numpy as np
-from jax import jit
+from jax import jit, value_and_grad
 from matplotlib import pyplot as plt
 from scipy.interpolate import RBFInterpolator
 from shapely.geometry import MultiPoint, Point
@@ -27,7 +28,7 @@ class Metric:
     ) -> None:
         if bounding_box is None:
             bounding_box = jnp.zeros((len(periodicities), 2), jnp.float32)
-            bounding_box.at[:, 1].set(1.0)
+            bounding_box = bounding_box.at[:, 1].set(1.0)
 
         if isinstance(bounding_box, list):
             bounding_box = jnp.array(bounding_box, dtype=jnp.float32)
@@ -77,22 +78,22 @@ class Metric:
         coor = (coor) * (per[:, 1] - per[:, 0]) + o
         return jnp.where(self.periodicities, coor, xs)
 
-    @partial(jit, static_argnums=(0))
+    # @partial(jit, static_argnums=(0))
     def map(self, y):
         """transform CVs to lie in unit square."""
 
         y = (y - self.bounding_box[:, 0]) / (
             self.bounding_box[:, 1] - self.bounding_box[:, 0])
 
-        if self.map_meshgrids is None:
-            return y
+        if self.map_meshgrids is not None:
 
-        y = y * (jnp.array(self.map_meshgrids[0].shape) - 1)
-        mapped = jnp.array([
-            jsp.ndimage.map_coordinates(wp, y, order=1)
-            for wp in self.map_meshgrids
-        ])
-        return mapped
+            y = y * (jnp.array(self.map_meshgrids[0].shape) - 1)
+            y = jnp.array([
+                jsp.ndimage.map_coordinates(wp, y, order=1)
+                for wp in self.map_meshgrids
+            ])
+
+        return self._periodic_wrap(y, min=False)
 
     def __add__(self, other):
         assert isinstance(self, Metric)
@@ -421,37 +422,26 @@ class MetricUMAP(Metric):
 
     def __init__(
         self,
-        periodicities
+        periodicities,
+        bounding_box=None
     ) -> None:
-        super().__init__(periodicities=periodicities, bounding_box=None)
-
-        per = np.array(periodicities)
-
-        @numba.njit(fastmath=True)
-        def metric(x, y):
-            """euclidean distance on hypertorus. metric as defined by UMAP, see https://umap-learn.readthedocs.io/en/latest/embedding_space.html?highlight=metric#embedding-on-a-custom-metric-space This implements Metric.difference(x1,x2)
-
-            Args:
-                x: coordinate 1
-                y: coordinate 2
-            """
-            r = x - y
-
-            coor = r[per]
-            coor = np.mod(coor, 1)
-            coor = np.where(coor > 0.5, coor - 1, coor)
-
-            r[per] = coor
-
-            dist = np.linalg.norm(r)
-            grad = r/dist
-
-            return dist, grad
-
-        self.metric = metric
+        super().__init__(periodicities=periodicities, bounding_box=bounding_box)
 
     def __call__(self, x, y):
-        return self.metric(x, y)
+        """Umap expects numba jittable value and grad for custom call
+        """
+        with jax.disable_jit():
+            d, grad = value_and_grad(self._f)(x, y)
+            return np.array(d), np.array(grad)
+
+    def _f(self, x, y,):
+        r1 = super().map(x)
+        r2 = super().map(y)
+
+        r = super().difference(r1, r2)
+        d = jnp.sqrt(jnp.sum(r**2))
+
+        return d
 
 
 class hyperTorus(Metric):

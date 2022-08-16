@@ -237,8 +237,6 @@ class Bias(Energy, ABC):
 
         fig.set_size_inches([12, 8])
 
-        print(f"name figure = {name}")
-
         fig.savefig(name)
 
 

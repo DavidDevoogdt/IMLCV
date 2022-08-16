@@ -63,9 +63,6 @@ class Scheme:
         self.rounds.new_round(self.md)
         self.max_energy = max_energy
 
-        self.steps = 0
-        self.cont_biases = None
-
     @staticmethod
     def from_rounds(
         cvd: CVDiscovery,
@@ -82,9 +79,6 @@ class Scheme:
         self.rounds = rounds
 
         self.cvd = cvd
-        self.steps = 0
-
-        self.cont_biases = None
 
         return self
 
@@ -147,8 +141,11 @@ class Scheme:
             self.rounds.new_round(self.md)
             self.rounds.save()
 
-    def update_CV(self):
-        pass
+    def update_CV(self, plot=True):
+        new_cv = self.cvd.compute(self.rounds, plot=plot)
+        self.md.bias = NoneBias(new_cv)
+
+        self.rounds.new_round(self.md)
 
     def save(self, filename):
         raise NotImplementedError
