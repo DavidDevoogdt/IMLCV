@@ -1,24 +1,39 @@
 import functools
 import os
+import tempfile
+from calendar import different_locale
+from importlib import import_module
 from typing import Iterable
 
+import dill
+import jax
 import jax.numpy as jnp
+import keras
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 import umap
 from IMLCV.base.bias import Bias
-from IMLCV.base.CV import CV, CvFlow, SystemParams, cv
+from IMLCV.base.CV import CV, CvFlow, KerasFlow, SystemParams, cv
 from IMLCV.base.metric import Metric, MetricUMAP
 from IMLCV.base.rounds import Rounds, RoundsMd
+from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from jax import custom_jvp, grad, jacrev, jit, make_jaxpr, value_and_grad, vmap
 from jax.experimental import jax2tf
 from jax.experimental.host_callback import call
 from jax.interpreters import batching
 from jax.random import PRNGKey, choice
-from keras import backend
+from keras.api._v2 import keras as KerasAPI
 from molmod.constants import boltzmann
+from parsl.data_provider.files import File
+
+# using the import module import the tensorflow.keras module
+# and typehint that the type is KerasAPI module
+keras: KerasAPI = import_module("tensorflow.keras")
+
+
+# from tensorflow import keras
 
 
 plt.rcParams['text.usetex'] = True
@@ -36,9 +51,9 @@ class TranformerUMAP(Transformer):
     def __init__(self) -> None:
         super().__init__()
 
-    def fit(self, z: Iterable[SystemParams], output_metric: MetricUMAP, **kwargs):
+    def fit(self, z: Iterable[SystemParams], indices, decoder, parametric=True,  **kwargs):
 
-        x = SystemParams.flatten(z)
+        x, f = SystemParams.flatten_f(z)
 
         ncomps = 2
 
@@ -46,51 +61,109 @@ class TranformerUMAP(Transformer):
         dims = x.shape[1]
 
         n_components = ncomps
-        nlayers = 5
+        nlayers = 3
 
-        encoder = tf.keras.Sequential([
-            tf.keras.layers.InputLayer(input_shape=dims),
-            * [tf.keras.layers.Dense(units=256, activation="relu")
-               for _ in range(nlayers)],
-            tf.keras.layers.Dense(units=n_components),
-        ])
+        if parametric:
 
-        decoder = tf.keras.Sequential([
-            tf.keras.layers.InputLayer(input_shape=(n_components)),
-            * [tf.keras.layers.Dense(units=256, activation="relu")
-               for _ in range(nlayers)],
-            tf.keras.layers.Dense(units=dims),
+            bbox = np.array([
+                [0.0, 20.0],
+                [0.0, 20.0]
+            ])
 
-        ])
+            @tf.function
+            def output_metric(r):
+                a = tf.convert_to_tensor(bbox[:, 1]-bbox[:, 0], dtype=r.dtype)
 
-        reducer = umap.parametric_umap.ParametricUMAP(
-            n_neighbors=20,
-            min_dist=0.5,
-            n_components=ncomps,
-            output_metric=output_metric,
-            encoder=encoder,
-            # decoder=decoder,
-            batch_size=100,
-            # n_epochs=200,
-            n_training_epochs=1,
-            # parametric_reconstruction=True,
-            # autoencoder_loss=True,
-            # run_eagerly=True,
-        )
+                r = tf.math.mod(r, a)
+                r = tf.where(r > a/2, r-a, r)
+                return tf.norm(r, axis=1)
 
-        reducer.fit(x)
+            encoder = keras.Sequential([
+                keras.layers.InputLayer(input_shape=dims),
+                * [keras.layers.Dense(units=256, activation="relu")
+                   for _ in range(nlayers)],
+                keras.layers.Dense(units=n_components),
+            ])
 
-        class KerasFlow(CvFlow):
-            def __init__(self, encoder) -> None:
-                self.encoder = encoder
+            if decoder:
 
-            def __call__(self, x: SystemParams):
-                cc = SystemParams.flatten(x).reshape((1, -1))
-                out = jax2tf.call_tf(self.encoder.call)(cc)
-                return jnp.reshape(out, out.shape[1:])
+                decoder = keras.Sequential([
+                    keras.layers.InputLayer(input_shape=(n_components)),
+                    * [keras.layers.Dense(units=256, activation="relu")
+                       for _ in range(nlayers)],
+                    keras.layers.Dense(units=dims),
 
-        cv = CV(f=KerasFlow(reducer.encoder),
-                metric=output_metric, jac=jacrev)
+                ])
+            else:
+                decoder = None
+
+            reducer = umap.parametric_umap.ParametricUMAP(
+                n_neighbors=20,
+                min_dist=0.7,
+                n_components=ncomps,
+                encoder=encoder,
+                decoder=decoder,
+                output_metric=output_metric,
+                n_training_epochs=1,
+                **kwargs
+            )
+
+        else:
+
+            reducer = umap.UMAP(
+                n_neighbors=50,
+                min_dist=0.9,
+                n_components=ncomps,
+                output_metric=MetricUMAP(periodicities=[True, True]).umap_f
+
+            )
+
+        # tf.data.experimental.enable_debug_mode()
+        # tf.config.run_functions_eagerly(True)
+
+        reducer.fit(x[indices, :])
+
+        if parametric:
+            total_embedding = reducer.transform(x)
+        else:
+            total_embedding = reducer.embedding_
+
+        # bounding_box = np.array([
+        #     total_embedding.min(axis=0),
+        #     total_embedding.max(axis=0)
+        # ]).T
+        # margin = 1.0
+        # delta = (bounding_box[:, 1]-bounding_box[:, 0])*margin/2.0
+        # bounding_box[0, :] -= delta
+        # bounding_box[1, :] += delta
+
+        if parametric:
+            cv = CV(
+                f=KerasFlow(reducer.encoder, f=f),
+                metric=Metric(
+                    periodicities=[True for _ in range(ncomps)],
+                    bounding_box=bbox,
+                ),
+                jac=jacrev,
+            )
+        else:
+            raise NotImplementedError
+
+            def func(sp: SystemParams):
+                with jax.disable_jit():
+                    out = reducer.transform(f([sp]))
+                    return np.reshape(out, out.shape[1:])
+
+            cv = CV(
+                f=CvFlow(func=func),
+                metric=Metric(
+                    periodicities=[False for _ in range(ncomps)],
+                    bounding_box=bounding_box,
+                ),
+                jac=jacrev,
+            )
+
+            cv.compute(z[0])
 
         return cv
 
@@ -107,9 +180,6 @@ class CVDiscovery:
         sp_arr = []
 
         cvs_mapped_arr = []
-        # energies = []
-        # times = []
-        # taus = []
         weights = []
 
         cv = None
@@ -137,78 +207,44 @@ class CVDiscovery:
             beta = 1/(dictionary['round']['T']*boltzmann)
             weight = jnp.exp(beta * biases)
 
-            # time = dictionary["t"]
-
-            # def integr(fx, x):
-            #     y = np.array(
-            #         [0, *np.cumsum((fx[1:] + fx[:-1]) * (x[1:] - x[:-1]) / 2)])
-            #     return y
-
-            # beta = 1/(dictionary['round']['T']*boltzmann)
-            # tau = integr(np.exp(beta * biases), time)
-
             sp_arr.append(sp)
             cvs_mapped_arr.append(cvs_mapped)
 
             weights.append(weight)
 
-        # start_tuas = [0, * np.cumsum([tau[-1] for tau in taus[:-1]])]
-        # taus = [tau+st for tau, st in zip(taus, start_tuas)]
-
-        # taus = np.hstack(taus)
-        # new_taus = np.linspace(
-        #     start=taus.min(), stop=taus.max(), num=int(out))
-
-        # def _interp(x_new, x, y):
-        #     if y is not None:
-        #         return jnp.apply_along_axis(
-        #             lambda yy: jnp.interp(x_new, x, yy), arr=y, axis=0)
-        #     return None
-
-        # pos = np.vstack(pos_arr)
-        # new_pos = _interp(new_taus, taus, pos)
-
-        # if cell is not None:
-        #     cell = np.vstack(cell_arr)
-        #     new_cell = _interp(new_taus, taus, cell)
-        # else:
-        #     new_cell = None
-
-        # #
-        # cvs = get_cvs(new_pos, new_cell, cv)
-
+        # todo modify probability
         probs = jnp.hstack(weights)
         probs = probs/jnp.sum(probs)
 
         key = PRNGKey(0)
 
-        indices = choice(key=key, a=probs.shape[0], shape=(
-            int(out),), p=probs, replace=False)
+        indices = choice(
+            key=key,
+            a=probs.shape[0],
+            shape=(int(out),),
+            p=probs,
+            replace=False,
+        )
 
         system_params = [b for a in sp_arr for b in a]
-        sps = [system_params[i] for i in indices]
-        cvs = jnp.vstack(cvs_mapped_arr)[indices]
+        cvs = jnp.vstack(cvs_mapped_arr)
 
-        return [sps, cvs]
+        return [system_params, cvs, indices, cv]
 
-    def compute(self, rounds: RoundsMd,  plot=True, name=None, **kwargs) -> CV:
+    def compute(self, rounds: RoundsMd, samples=3e3,  plot=True, name=None, **kwargs) -> CV:
 
-        sps, cv = self._get_data(num=6, out=5e3, rounds=rounds)
+        sps, _, indices, cv_old = self._get_data(
+            num=6, out=samples, rounds=rounds)
 
-        fit = True
-
-        newCV = self.transformer.fit(
-            sps,
-            output_metric=MetricUMAP(
-                periodicities=[True, True],
-                bounding_box=[[-10, 10], [-10, 10]],
-            ),
+        new_cv = self.transformer.fit(
+            sps, indices,
             ** kwargs,
         )
 
-        if plot:
-            if name is None:
-                name = f"{rounds.folder}/round_{rounds.round}/new_cv.pdf"
+        @bash_app_python()
+        def plot_app(sps, old_cv: CV, new_cv: CV, outputs=[]):
+            for o in outputs:
+                os.makedirs(os.path.dirname(o), exist_ok=True)
 
             def color(c):
                 c2 = (c[:]-c.min(axis=0))/(c.max(axis=0) - c.min(axis=0))
@@ -223,46 +259,67 @@ class CVDiscovery:
 
                 return cv_hsv, cv_hsv2
 
-            tf = jit(vmap(newCV.metric.map))(newCV.map_cv(sps=sps))
+            cv_data = []
+            cv_data_mapped = []
 
-            fig, ax_arr = plt.subplots(4, 2)
+            for cv in [old_cv, new_cv]:
 
-            # plot setting
-            kwargs = {'s': 1}
+                cvd = cv.map_cv(sps)
+                cvdm = jit(vmap(cv.metric.map))(cvd)
 
-            data = [cv, tf]
-            labels = [[r'$\Phi$', r'$\Psi$'], ['umap1', 'umap2']]
-            cmaps = [None, ]
+                cv_data.append(cvd)
+                cv_data_mapped.append(cvdm)
 
-            for [i, j] in [[0, 1], [1, 0]]:  # order
+            for z, data in enumerate([cv_data, cv_data_mapped]):
 
-                colors = color(data[i])
+                # if True:
+                fig, ax_arr = plt.subplots(4, 2)
 
-                for k, col in enumerate(colors):
+                # plot setting
+                kwargs = {'s': 1}
 
-                    l, r = ax_arr[2*i+k]
+                labels = [[r'$\Phi$', r'$\Psi$'], ['umap1', 'umap2']]
+                for [i, j] in [[0, 1], [1, 0]]:  # order
 
-                    l.scatter(data[i][:, 0], data[i]
-                              [:, 1], c=col, **kwargs)
+                    colors = color(data[i])
+                    # if i == 0:
+                    #     colors = color(data[i])
+                    # else:
+                    #     colors = [data[i][:, 0],  data[i][:, 1]]
 
-                    l.set_xlabel(labels[i][0])
-                    l.set_ylabel(labels[i][1])
+                    for k, col in enumerate(colors):
 
-                    r.scatter(data[j][:, 0], data[j]
-                              [:, 1], c=col, **kwargs)
+                        l, r = ax_arr[2*i+k]
 
-                    r.set_xlabel(labels[j][0])
-                    r.set_ylabel(labels[j][1])
+                        l.scatter(data[i][:, 0], data[i]
+                                  [:, 1], c=col, **kwargs)
+                        l.set_xlabel(labels[i][0])
+                        l.set_ylabel(labels[i][1])
 
-            # plt.show()
+                        r.scatter(data[j][:, 0], data[j]
+                                  [:, 1], c=col, **kwargs)
+                        r.set_xlabel(labels[j][0])
+                        r.set_ylabel(labels[j][1])
 
-            os.makedirs(os.path.dirname(name), exist_ok=True)
+                fig.set_size_inches([12, 8])
+                fig.savefig(outputs[z])
 
-            fig.set_size_inches([12, 8])
+        if plot:
+            base_name = f"{rounds.folder}/round_{rounds.round}/new_cv"
 
-            fig.savefig(name)
+            plot_app(
+                outputs=[
+                    File(f"{base_name}.pdf"),
+                    File(f"{base_name}_mapped.pdf")
+                ],
+                old_cv=cv_old,
+                new_cv=new_cv,
+                sps=[sps[i] for i in indices],
+                stdout=f'{base_name}.stdout',
+                stderr=f'{base_name}.stderr',
+            )
 
-        return newCV
+        return new_cv
 
 
 if __name__ == "__main__":

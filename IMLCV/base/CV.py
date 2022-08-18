@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import typing
 from abc import abstractmethod
 from ast import Raise
@@ -15,8 +16,12 @@ import jax
 import jax.numpy as jnp
 import jax_dataclasses as jdc
 import numpy as np
+import tensorflow
+from fiona import bounds
 from IMLCV.base.metric import Metric
 from jax import grad, jacfwd, jit, vmap
+from jax.experimental.jax2tf import call_tf
+from tensorflow import keras
 
 
 @jdc.pytree_dataclass
@@ -25,21 +30,40 @@ class SystemParams:
     cell: Optional[jnp.ndarray]
 
     @staticmethod
-    def flatten(sps: Union[SystemParams, Iterable[SystemParams]]) -> jnp.ndarray:
+    def flatten_f(sps: Union[SystemParams, Iterable[SystemParams]], scale=True) -> jnp.ndarray:
 
-        def fl(sp):
-            if sp.cell is not None:
-                if sp.cell.shape[0] != 0:
-                    return jnp.vstack([jnp.ravel(sp.coordinates), jnp.ravel(sp.cell)])
+        def f(sps):
+            out = [jnp.stack([sp.coordinates for sp in sps], axis=0)]
 
-            return jnp.ravel(sp.coordinates)
+            if sps[0].cell is not None:
+                if sps[0].cell.shape[0] != 0:
+                    out.append(jnp.stack([sp.cell for sp in sps], axis=0))
+            return out
 
-        if isinstance(sps, Iterable):
-            return jnp.vstack([fl(sp) for sp in sps])
+        out = f(sps)
 
-        return fl(sps)
+        if scale:
+            bounds = []
 
-    @staticmethod
+            for a in out:
+                a = jnp.reshape(a, (-1, 3))
+                bounds.append(jnp.array([a.min(axis=0), a.max(axis=0)]))
+
+            def g(x):
+                return [(y-b[0, :])/(b[1, :] - b[0, :]) for y, b in zip(x, bounds)]
+
+            out = g(out)
+
+            def h(x): return g(f(x))
+        else:
+            h = f
+
+        def i(x): return jnp.hstack(
+            [jnp.reshape(y, (y.shape[0], -1)) for y in x])
+
+        return i(out), lambda x: i(h(x))
+
+    @ staticmethod
     def map_params(coordinates, cells):
         if cells is None:
             return [SystemParams(coordinates=a, cell=None) for a in coordinates]
@@ -84,6 +108,39 @@ class CvFlow:
         return CvFlow(func=f0)
 
 
+class KerasFlow(CvFlow):
+    def __init__(self, encoder, f) -> None:
+        self.encoder = encoder
+        self.f = f
+
+    def __call__(self, x: SystemParams):
+        cc = self.f([x])
+        out = call_tf(self.encoder.call)(cc)
+        return jnp.reshape(out, out.shape[1:])
+
+    def __getstate__(self):
+        # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model
+        model_str = ""
+        with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
+            tensorflow.keras.models.save_model(
+                self.encoder, fd.name, overwrite=True)
+            model_str = fd.read()
+        d = {'model_str': model_str,
+             'f': self.f}
+        return d
+
+    def __setstate__(self, state):
+        with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
+            fd.write(state['model_str'])
+            fd.flush()
+            model = keras.models.load_model(fd.name)
+
+        self.encoder = model
+        self.f = state['f']
+
+# decorators definition for functions
+
+
 def cv(func: sf):
     """decorator to make a CV"""
     ff = CvFlow(func=func)
@@ -94,9 +151,6 @@ def cvtrans(f: tf):
     """decorator to make a CV tranformation func"""
     ff = CvTrans(f=f)
     return ff
-
-
-# converts system params to cv array
 
 
 class CV:

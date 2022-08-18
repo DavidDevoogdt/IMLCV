@@ -49,7 +49,7 @@ class Observable:
 
         self.folder = rounds.folder
 
-    def _fes_2d(self, plot=True, throw_away=2*picosecond):
+    def _fes_2d(self, plot=True, throw_away=2*picosecond, update_bounds=True):
         # fes = FreeEnergySurface2D.from_txt
 
         temp = self.rounds.T
@@ -72,33 +72,17 @@ class Observable:
                 index = np.argmax(dictionary['t'] > throw_away)
                 time += dictionary['t'][-1]-dictionary['t'][index]
 
-                pos = dictionary["positions"][index:]
+                sp = SystemParams.map_params(
+                    coordinates=dictionary["positions"],
+                    cells=dictionary.get("cell", None),
+                )[index:]
 
-                if 'cell' in dictionary:
-                    cell = dictionary["cell"][index:]
+                # execute all the mappings
+                cvs = bias.cvs.map_cv(sp)
+                cvs_mapped = jax.jit(jax.vmap(bias.cvs.metric.map))(cvs)
 
-                    arr = np.array(
-                        [
-                            bias.cvs.compute(SystemParams(
-                                coordinates=x, cell=y))[0]
-                            for (x, y) in zip(pos, cell)
-                        ],
-                        dtype=np.double,
-                    )
-                else:
-                    arr = np.array(
-                        [
-                            bias.cvs.compute(SystemParams(
-                                coordinates=p, cell=None))[0]
-                            for p in pos
-                        ],
-                        dtype=np.double,
-                    )
-
-                arr_mapped = np.array(np.apply_along_axis(bias.cvs.metric.map,
-                                                          arr=arr,
-                                                          axis=1),
-                                      dtype=np.double)
+                arr = np.array(cvs, dtype=np.double, )
+                arr_mapped = np.array(cvs_mapped, dtype=np.double, )
 
                 trajs_mapped.append(arr_mapped)
                 trajs.append(arr)
@@ -265,9 +249,9 @@ class Observable:
         def print_pars(self, *pars_units):
             pass
 
-    def fes_bias(self, kind='normal', plot=False, fs=None, max_bias=np.inf):
+    def fes_bias(self, kind='normal', plot=False, fs=None, max_bias=np.inf, update_bounds=True):
         if fs is None:
-            fes, bounds = self._fes_2d(plot=plot)
+            fes, bounds = self._fes_2d(plot=plot, update_bounds=True)
 
             if kind == 'normal':
                 fs = fes.fs
@@ -286,8 +270,13 @@ class Observable:
         fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
                                    bounds=bounds), T=self.rounds.T)
 
-        fesBias = CompositeBias(biases=[fesBias,  BiasF(
-            cvs=fesBias.cvs)], fun=lambda e: jax.numpy.where(e[0] > e[1], e[0], e[1]))
+        fesBias = CompositeBias(
+            biases=[
+                fesBias,
+                BiasF(cvs=fesBias.cvs),
+            ],
+            fun=lambda e: jax.numpy.where(e[0] > e[1], e[0], e[1]),
+        )
 
         if plot:
             plot_app(bias=fesBias, outputs=[File(
