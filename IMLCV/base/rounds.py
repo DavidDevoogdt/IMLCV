@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
-import tempfile
-import threading
 from abc import ABC
 from collections.abc import Iterable
 from functools import partial
@@ -18,7 +14,6 @@ import h5py
 import IMLCV
 import jax.numpy as jnp
 import numpy as np
-import parsl
 from IMLCV import ROOT_DIR
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, NoneBias
 from IMLCV.base.MdEngine import MDEngine
@@ -44,29 +39,29 @@ class Rounds(ABC):
 
         self.folder = folder
 
-        self.h5file = f"{folder}/rounds.h5"
-
-        # overwrite if already exists
-
-        self.rlock = RLock()
+        self.h5file_name = f"{folder}/rounds.h5"
+        self.h5file = h5py.File(f"{folder}/rounds.h5", 'a')
         self.lock = Lock()
 
-        with self.lock:
-            with h5py.File(self.h5file, 'w') as f:
-                pass
+    def __del__(self):
+        self.h5file.close()
 
     def save(self):
         with open(f'{self.folder}/rounds', 'wb') as f:
-            dill.dump(self, f)
+
+            d = self.__dict__.copy()
+            del d['h5file']
+
+            dill.dump(d, f)
 
     @staticmethod
     def load(folder) -> Rounds:
         with open(f"{folder}/rounds", 'rb') as f:
-            self: Rounds = dill.load(f)
 
-        # replace locks as this can be another thread
-        self.rlock = RLock()
-        self.lock = Lock()
+            self = object.__new__(RoundsMd)
+            self.__dict__.update(dill.load(f))
+
+        self.h5file = h5py.File(self.h5file_name, 'a')
 
         return self
 
@@ -75,25 +70,25 @@ class Rounds(ABC):
         assert all(
             key in d for key in ['energy', 'positions', 'forces', 'cell', 't'])
 
+        # with self.lock:
         with self.lock:
-            with self.rlock:
-                with h5py.File(self.h5file, 'r+') as f:
-                    f.create_group(f'{self.round}/{i}')
+            f = self.h5file
+            f.create_group(f'{self.round}/{i}')
 
-                    for key in d:
-                        if d[key] is not None:
-                            f[f'{self.round}/{i}'][key] = d[key]
+            for key in d:
+                if d[key] is not None:
+                    f[f'{self.round}/{i}'][key] = d[key]
 
-                    if attrs is not None:
-                        for key in attrs:
-                            if attrs[key] is not None:
-                                f[f'{self.round}/{i}'].attrs[key] = attrs[key]
+            if attrs is not None:
+                for key in attrs:
+                    if attrs[key] is not None:
+                        f[f'{self.round}/{i}'].attrs[key] = attrs[key]
 
-                        f[f'{self.round}/{i}'].attrs['valid'] = True
+                f[f'{self.round}/{i}'].attrs['valid'] = True
 
-                    f[f'{self.round}'].attrs['num'] += 1
+            f[f'{self.round}'].attrs['num'] += 1
 
-        self.save()
+        # self.save()
 
     def new_round(self, attr):
         self.round += 1
@@ -103,17 +98,17 @@ class Rounds(ABC):
         if not os.path.isdir(dir):
             os.mkdir(dir)
 
+        # with self.lock:
         with self.lock:
-            with self.rlock:
-                with h5py.File(self.h5file, 'r+') as f:
-                    f.create_group(f"{self.round}")
+            f = self.h5file
+            f.create_group(f"{self.round}")
 
-                    for key in attr:
-                        if attr[key] is not None:
-                            f[f'{self.round}'].attrs[key] = attr[key]
+            for key in attr:
+                if attr[key] is not None:
+                    f[f'{self.round}'].attrs[key] = attr[key]
 
-                    f[f'{self.round}'].attrs['num'] = 0
-                    f[f'{self.round}'].attrs['valid'] = True
+            f[f'{self.round}'].attrs['num'] = 0
+            f[f'{self.round}'].attrs['valid'] = True
 
         self.save()
 
@@ -134,52 +129,55 @@ class Rounds(ABC):
                     yield {**i_dict, 'round': r_data}
 
     def _get_round(self, r):
-        with self.rlock:
-            with h5py.File(self.h5file, 'r') as f:
-                rounds = [k for k in f[f'{r}'].keys()]
+        # with self.lock:
+        with self.lock:
+            f = self.h5file
+            rounds = [k for k in f[f'{r}'].keys()]
 
-                d = f[f"{r}"].attrs
-                r_attr = {key: d[key] for key in d}
+            d = f[f"{r}"].attrs
+            r_attr = {key: d[key] for key in d}
         r_attr['round'] = r
         r_attr['names'] = rounds
         return r_attr
 
     def _get_i(self, r, i):
-        with self.rlock:
-            with h5py.File(self.h5file, 'r') as f:
-                d = f[f"{r}/{i}"]
-                y = {key: d[key][:] for key in d}
-                attr = {key: d.attrs[key] for key in d.attrs}
+        # with self.lock:
+        with self.lock:
+            f = self.h5file
+            d = f[f"{r}/{i}"]
+            y = {key: d[key][:] for key in d}
+            attr = {key: d.attrs[key] for key in d.attrs}
         return {**y, 'attr': attr, 'i': i}
 
     def _get_attr(self, name, r=None):
-        with self.rlock:
-            with h5py.File(self.h5file, 'r') as f:
-                if r is not None:
-                    f2 = f[f"{r}"]
-                else:
-                    f2 = f
+        # with self.lock:
+        with self.lock:
+            f = self.h5file
+            if r is not None:
+                f2 = f[f"{r}"]
+            else:
+                f2 = f
 
-                if name in f2.attrs:
-                    return f2.attrs[name]
+            if name in f2.attrs:
+                return f2.attrs[name]
 
-            return None
+        return None
 
     def _set_attr(self, name, value, r=None, i=None):
 
+        # with self.lock:
         with self.lock:
-            with self.rlock:
-                with h5py.File(self.h5file, 'r+') as f:
-                    if r is not None:
-                        f2 = f[f"{r}"]
-                    else:
-                        f2 = f
+            f = self.h5file
+            if r is not None:
+                f2 = f[f"{r}"]
+            else:
+                f2 = f
 
-                    if i is not None:
-                        assert r is not None, "also provide round"
-                        f2 = f[f"/{i}"]
+            if i is not None:
+                assert r is not None, "also provide round"
+                f2 = f[f"/{i}"]
 
-                    f2.attrs[name] = value
+            f2.attrs[name] = value
 
     @property
     def T(self):
@@ -282,20 +280,22 @@ class RoundsMd(Rounds):
         if r is None:
             r = self.round
 
-        with self.rlock:
-            with h5py.File(self.h5file, 'r') as f:
-                if i is None:
-                    bn = f[f'{r}'].attrs['name_bias']
-                else:
-                    bn = f[f'{r}'][i].attrs['name_bias']
+        with self.lock:
+            f = self.h5file
+            # with h5py.File(self.h5file, 'r') as f:
+            if i is None:
+                bn = f[f'{r}'].attrs['name_bias']
+            else:
+                bn = f[f'{r}'][i].attrs['name_bias']
         return Bias.load(bn)
 
     def get_engine(self, r=None) -> MDEngine:
         if r is None:
             r = self.round
-        with self.rlock:
-            with h5py.File(self.h5file, 'r') as f:
-                name = f[f'{r}'].attrs['name_md']
+        with self.lock:
+            f = self.h5file
+        # with h5py.File(self.h5file, 'r') as f:
+            name = f[f'{r}'].attrs['name_md']
 
         return MDEngine.load(name, filename=None)
 
@@ -303,10 +303,11 @@ class RoundsMd(Rounds):
         self.run_par([bias], steps)
 
     def run_par(self, biases: Iterable[Optional[Bias]], steps):
-        with self.rlock:
-            with h5py.File(self.h5file, 'r') as f:
-                common_bias_name = f[f'{self.round}'].attrs['name_bias']
-                common_md_name = f[f'{self.round}'].attrs['name_md']
+        with self.lock:
+            f = self.h5file
+        # with h5py.File(self.h5file, 'r') as f:
+            common_bias_name = f[f'{self.round}'].attrs['name_bias']
+            common_md_name = f[f'{self.round}'].attrs['name_md']
 
         tasks = []
 
@@ -352,13 +353,11 @@ class RoundsMd(Rounds):
                 stdout=f'{temp_name}/md.stdout',
                 stderr=f'{temp_name}/md.stderr',
             )
-
             tasks.append((i, future))
 
         # wait for tasks to finish
         for i, future in tasks:
             d = future.result()
-
             self.add(traj=d, md=md_engine,
                      bias=future.task_def['kwargs']['inputs'][1].filepath, i=i)
 
