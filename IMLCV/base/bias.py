@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from IMLCV.base.CV import CV, SystemParams
 from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
-from jax import jacrev, jit
+from jax import jacrev, jit, value_and_grad
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
@@ -140,24 +140,22 @@ class Bias(Energy, ABC):
         If map==False, the cvs are assumed to be already mapped
         """
 
-        if map:
-            cvs = self.cvs.metric.map(cvs)
+        assert not (
+            not map and diff), "cannot retreive gradient from already mapped CVs"
+
+        if not map:
+            return self.e(cvs, *self.get_args()), None
+
+        def E(x): return self.e(self.cvs.metric.map(x), *self.get_args())
 
         if diff:
-            dcvs = jacrev(self.cvs.metric.map)(cvs)
+            return value_and_grad(E)(cvs)
 
-        E = self.e(cvs, *self.get_args())
-        if diff:
-            diffE = self.de(cvs, *self.get_args())[0]
-            diffE = jnp.einsum('i,ij->j', diffE, dcvs)  # apply chain rule
-        else:
-            diffE = None
-
-        return E, diffE
+        return E(cvs), None
 
     @abstractmethod
     def _compute(self, cvs, *args):
-        """function that calculates the bias potential."""
+        """function that calculates the bias potential. CVs live in mapped space"""
         raise NotImplementedError
 
     @abstractmethod
@@ -177,7 +175,14 @@ class Bias(Energy, ABC):
     def load(filename) -> Bias:
         return Energy.load(filename)
 
-    def plot(self, name, n=50, traj=None, vmin=0, vmax=100, map=True, ):
+    def plot(self,
+             name, n=50,
+             traj=None,
+             vmin=0,
+             vmax=100,
+             map=True,
+             inverted=False,
+             ):
         """plot bias."""
 
         assert self.cvs.n == 2
@@ -200,6 +205,9 @@ class Bias(Energy, ABC):
             mask = self.cvs.metric._get_mask(tol=0.01, interp_mg=mg)
             bias = bias*mask
         # normalise lowest point of bias
+
+        if inverted:
+            bias = -bias
         bias -= bias[~np.isnan(bias)].min()
 
         # plt.clf()
@@ -247,9 +255,10 @@ def plot_app(bias: Bias,
              vmin: float = 0,
              vmax: float = 100,
              map: bool = True,
+             inverted=False,
              traj:  Optional[List[np.ndarray]] = None):
     bias.plot(name=outputs[0].filepath, n=n, traj=traj,
-              vmin=vmin, vmax=vmax, map=map)
+              vmin=vmin, vmax=vmax, map=map, inverted=inverted)
 
 
 class CompositeBias(Bias):
@@ -517,7 +526,7 @@ class GridBias(Bias):
     def __init__(self,
                  cvs: CV,
                  vals,
-                 bounds=None,
+                 #  bounds=None,
                  start=None,
                  step=None,
                  centers=True,
@@ -531,22 +540,16 @@ class GridBias(Bias):
         # extend periodically
         self.n = np.array(vals.shape)
 
-        bias = np.zeros(np.array(vals.shape) + 2)
+        bias = np.zeros(np.array(vals.shape) + 2)*np.nan
         bias[1:-1, 1:-1] = vals
 
         if self.cvs.metric.periodicities[0]:
             bias[0, :] = bias[-2, :]
             bias[-1, :] = bias[1, :]
-        else:
-            bias[0, :] = bias[1, :]
-            bias[-1, :] = bias[-2, :]
 
         if self.cvs.metric.periodicities[1]:
             bias[:, 0] = bias[:, -2]
             bias[:, -1] = bias[:, 1]
-        else:
-            bias[:, 0] = bias[:, 1]
-            bias[:, -1] = bias[:, -2]
 
         # do general interpolation
         x, y = np.indices(bias.shape)
@@ -556,18 +559,28 @@ class GridBias(Bias):
 
         self.vals = bias
 
-        if bounds is not None:
-            per = np.array(bounds)
-        else:
-            per = np.array(self.cvs.metric._boundaries)
-
-        self.per = jnp.array(per)
-
     def _compute(self, cvs):
-        per = self.per
-        # map to halfway array and shift on for (for side rows)
-        coords = jnp.array((cvs - per[:, 0]) / (per[:, 1] - per[:, 0]) *
-                           (self.n)) + 0.5
+        # overview of grid points. stars are addded to allow out of bounds extension.
+        # the bounds of the x square are per.
+        # ___ ___ ___ ___
+        # |   |   |   |   |
+        # | * | * | * | * |
+        # |___|___|___|___|
+        # |   |   |   |   |
+        # | * | x | x | * |
+        # |___|___|___|___|
+        # |   |   |   |   |
+        # | * | x | x | * |
+        # |___|___|___|___|
+        # |   |   |   |   |
+        # | * | * | * | * |
+        # |___|___|___|___|
+        # gridpoints are in the middle of
+
+        # map between vals 0 and 1
+        coords = (cvs*self.n-0.5)/(self.n - 1)
+        # scale to array size and offset extra row
+        coords = coords*(self.n - 1) + 1
 
         return jsp.ndimage.map_coordinates(self.vals,
                                            coords,

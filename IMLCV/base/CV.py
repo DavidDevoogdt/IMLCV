@@ -6,6 +6,7 @@ from abc import abstractmethod
 from ast import Raise
 from dataclasses import dataclass
 from functools import partial
+from importlib import import_module
 from types import MethodType
 from typing import (Callable, Collection, Iterable, Iterator, List, Optional,
                     Tuple, Union)
@@ -17,11 +18,15 @@ import jax.numpy as jnp
 import jax_dataclasses as jdc
 import numpy as np
 import tensorflow
-from fiona import bounds
+import tensorflow as tfl
 from IMLCV.base.metric import Metric
 from jax import grad, jacfwd, jit, vmap
 from jax.experimental.jax2tf import call_tf
-from tensorflow import keras
+# using the import module import the tensorflow.keras module
+# and typehint that the type is KerasAPI module
+from keras.api._v2 import keras as KerasAPI
+
+keras: KerasAPI = import_module("tensorflow.keras")
 
 
 @jdc.pytree_dataclass
@@ -108,6 +113,38 @@ class CvFlow:
         return CvFlow(func=f0)
 
 
+class PeriodicLayer(keras.layers.Layer):
+    def __init__(self, bbox, periodicity, **kwargs):
+        super().__init__(**kwargs)
+
+        self.bbox = np.array(bbox, dtype=np.float32)
+        self.periodicity = np.array(periodicity)
+
+    def call(self, inputs):
+        # maps to periodic box
+        bbox = self.bbox
+
+        inputs_mod = tfl.math.mod(
+            inputs - bbox[:, 0], bbox[:, 1] - bbox[:, 0])+bbox[:, 0]
+        return tfl.where(self.periodicity,  inputs_mod, inputs)
+
+    def metric(self, r):
+        # maps difference
+        a = self.bbox[:, 1] - self.bbox[:, 0]
+
+        r = tfl.math.mod(r, a)
+        r = tfl.where(r > a/2, r-a, r)
+        return tfl.norm(r, axis=1)
+
+    def get_config(self):
+        config = super().get_config().copy()
+        config.update({
+            "bbox": self.bbox,
+            "periodicity": self.periodicity,
+        })
+        return config
+
+
 class KerasFlow(CvFlow):
     def __init__(self, encoder, f) -> None:
         self.encoder = encoder
@@ -133,7 +170,10 @@ class KerasFlow(CvFlow):
         with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
             fd.write(state['model_str'])
             fd.flush()
-            model = keras.models.load_model(fd.name)
+
+            custom_objects = {"PeriodicLayer": PeriodicLayer}
+            with keras.utils.custom_object_scope(custom_objects):
+                model = keras.models.load_model(fd.name)
 
         self.encoder = model
         self.f = state['f']

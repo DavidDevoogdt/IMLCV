@@ -64,10 +64,14 @@ class Observable:
             biases = []
 
             time = 0
+            cv = None
 
             for dictionary in self.rounds.iter(num=2):
 
                 bias = Bias.load(dictionary['attr']["name_bias"])
+
+                if cv is None:
+                    cv = bias.cvs
 
                 index = np.argmax(dictionary['t'] > throw_away)
                 time += dictionary['t'][-1]-dictionary['t'][index]
@@ -104,7 +108,9 @@ class Observable:
                 plot_app(bias=common_bias, outputs=[File(
                     f'{directory}/combined.pdf')], traj=trajs_mapped)
 
-            bounds, bins = self._FES_mg(trajs=trajs_mapped, time=time)
+            # todo: take actual bounds instead of calculated bounds
+            bounds, bins = self._FES_mg(
+                trajs=trajs_mapped, time=time,  bounding_box=cv.metric.bounding_box)
 
             histo = Histogram2D.from_wham_c(
                 bins=bins,
@@ -196,7 +202,7 @@ class Observable:
 
         return cvs.metric.update_metric(transitions, fn=fn)
 
-    def _FES_mg(self, trajs, time=None, n=None):
+    def _FES_mg(self, trajs,  bounding_box, time=None, n=None):
 
         if n is None:
             n = 0
@@ -218,8 +224,8 @@ class Observable:
         bounds = [[trajs[:, i].min(), trajs[:, i].max()]
                   for i in range(trajs.shape[1])]
         bins = [
-            np.linspace(a, b, n, endpoint=True, dtype=np.double)
-            for a, b in bounds
+            np.linspace(0, 1, n, endpoint=True, dtype=np.double)
+            for _ in range(trajs.shape[1])
         ]
 
         return bounds, bins
@@ -267,8 +273,9 @@ class Observable:
 
         fs[:] = -fs[:] + np.min([max_bias, fs[~np.isnan(fs)].max()])
 
-        fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
-                                   bounds=bounds), T=self.rounds.T)
+        # fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
+        #                            bounds=bounds), T=self.rounds.T)
+        fesBias = GridBias(cvs=self.cvs,  vals=fs)
 
         fesBias = CompositeBias(
             biases=[
@@ -280,9 +287,9 @@ class Observable:
 
         if plot:
             plot_app(bias=fesBias, outputs=[File(
-                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf')], map=False)
+                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf')], map=False, inverted=True,)
 
             plot_app(bias=fesBias, outputs=[
-                File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')])
+                File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')], inverted=True,)
 
         return fesBias

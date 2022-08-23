@@ -28,3 +28,5 @@ batching.primitive_batchers[call_tf_p] = functools.partial(
 
 
 # os.environ["NUMBA_DISABLE_JIT"] = "1"
+# tf.data.experimental.enable_debug_mode()
+# tf.config.run_functions_eagerly(True)

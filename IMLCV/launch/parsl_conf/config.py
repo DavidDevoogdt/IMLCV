@@ -49,7 +49,7 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
         # )
 
         exec = parsl.ThreadPoolExecutor(
-            max_threads=16,
+            max_threads=min(15, max_blocks),
             working_dir=f"{ROOT_DIR}/.workdir",
 
         )

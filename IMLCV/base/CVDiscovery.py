@@ -1,109 +1,94 @@
-import functools
+
 import os
-import tempfile
-from calendar import different_locale
 from importlib import import_module
 from typing import Iterable
 
-import dill
 import jax
 import jax.numpy as jnp
 import keras
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import tensorflow as tf
 import umap
 from IMLCV.base.bias import Bias
-from IMLCV.base.CV import CV, CvFlow, KerasFlow, SystemParams, cv
+from IMLCV.base.CV import (CV, CvFlow, KerasFlow, PeriodicLayer, SystemParams,
+                           cv)
 from IMLCV.base.metric import Metric, MetricUMAP
 from IMLCV.base.rounds import Rounds, RoundsMd
 from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from jax import custom_jvp, grad, jacrev, jit, make_jaxpr, value_and_grad, vmap
-from jax.experimental import jax2tf
-from jax.experimental.host_callback import call
-from jax.interpreters import batching
 from jax.random import PRNGKey, choice
+# using the import module import the tensorflow.keras module
+# and typehint that the type is KerasAPI module
 from keras.api._v2 import keras as KerasAPI
+from matplotlib.transforms import Bbox
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
-# using the import module import the tensorflow.keras module
-# and typehint that the type is KerasAPI module
 keras: KerasAPI = import_module("tensorflow.keras")
-
-
-# from tensorflow import keras
 
 
 plt.rcParams['text.usetex'] = True
 
 
 class Transformer:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, outdim,  periodicity=None, bounding_box=None) -> None:
+        self.outdim = outdim
+
+        if periodicity is None:
+            periodicity = [True for _ in range(self.outdim)]
+        if bounding_box is None:
+            bounding_box = np.array([
+                [0.0, 10.0] for _ in periodicity])
+
+        self.periodicity = periodicity
+        self.bounding_box = bounding_box
 
     def fit(self, x, metric: Metric, **kwargs) -> CV:
         pass
 
 
 class TranformerUMAP(Transformer):
-    def __init__(self) -> None:
-        super().__init__()
+    # def __init__(self, outdim,  periodicity=None, bounding_box=None) -> None:
+    #     super().__init__(outdim,  periodicity, bounding_box)
 
-    def fit(self, z: Iterable[SystemParams], indices, decoder, parametric=True,  **kwargs):
+    def fit(self, z: Iterable[SystemParams], indices, decoder, nunits=256, nlayers=3, parametric=True,  **kwargs):
 
         x, f = SystemParams.flatten_f(z)
 
-        ncomps = 2
-
-        import tensorflow as tf
         dims = x.shape[1]
-
-        n_components = ncomps
-        nlayers = 3
 
         if parametric:
 
-            bbox = np.array([
-                [0.0, 20.0],
-                [0.0, 20.0]
-            ])
+            periodicity = self.periodicity
 
-            @tf.function
-            def output_metric(r):
-                a = tf.convert_to_tensor(bbox[:, 1]-bbox[:, 0], dtype=r.dtype)
-
-                r = tf.math.mod(r, a)
-                r = tf.where(r > a/2, r-a, r)
-                return tf.norm(r, axis=1)
+            pl = PeriodicLayer(bbox=self.bounding_box,
+                               periodicity=periodicity)
 
             encoder = keras.Sequential([
                 keras.layers.InputLayer(input_shape=dims),
-                * [keras.layers.Dense(units=256, activation="relu")
+                * [keras.layers.Dense(units=nunits, activation="tanh")
                    for _ in range(nlayers)],
-                keras.layers.Dense(units=n_components),
+                keras.layers.Dense(units=self.outdim),
+                pl
             ])
 
             if decoder:
-
                 decoder = keras.Sequential([
-                    keras.layers.InputLayer(input_shape=(n_components)),
-                    * [keras.layers.Dense(units=256, activation="relu")
+                    keras.layers.InputLayer(input_shape=(self.outdim)),
+                    * [keras.layers.Dense(units=nunits, activation="tanh")
                        for _ in range(nlayers)],
                     keras.layers.Dense(units=dims),
-
                 ])
             else:
                 decoder = None
 
             reducer = umap.parametric_umap.ParametricUMAP(
-                n_neighbors=20,
-                min_dist=0.7,
-                n_components=ncomps,
+
+                n_components=self.outdim,
                 encoder=encoder,
                 decoder=decoder,
-                output_metric=output_metric,
+                output_metric=pl.metric,
                 n_training_epochs=1,
                 **kwargs
             )
@@ -113,35 +98,27 @@ class TranformerUMAP(Transformer):
             reducer = umap.UMAP(
                 n_neighbors=50,
                 min_dist=0.9,
-                n_components=ncomps,
+                n_components=self.outdim,
                 output_metric=MetricUMAP(periodicities=[True, True]).umap_f
 
             )
 
-        # tf.data.experimental.enable_debug_mode()
-        # tf.config.run_functions_eagerly(True)
-
         reducer.fit(x[indices, :])
 
         if parametric:
-            total_embedding = reducer.transform(x)
-        else:
-            total_embedding = reducer.embedding_
 
-        # bounding_box = np.array([
-        #     total_embedding.min(axis=0),
-        #     total_embedding.max(axis=0)
-        # ]).T
-        # margin = 1.0
-        # delta = (bounding_box[:, 1]-bounding_box[:, 0])*margin/2.0
-        # bounding_box[0, :] -= delta
-        # bounding_box[1, :] += delta
+            bbox = self.bounding_box
 
-        if parametric:
+            out = reducer.transform(x)
+            mask = np.logical_not(np.array(self.periodicity))
+
+            bbox[mask, 1] = out.max(axis=0)[mask]
+            bbox[mask, 0] = out.min(axis=0)[mask]
+
             cv = CV(
                 f=KerasFlow(reducer.encoder, f=f),
                 metric=Metric(
-                    periodicities=[True for _ in range(ncomps)],
+                    periodicities=self.periodicity,
                     bounding_box=bbox,
                 ),
                 jac=jacrev,
@@ -158,7 +135,7 @@ class TranformerUMAP(Transformer):
                 f=CvFlow(func=func),
                 metric=Metric(
                     periodicities=[False for _ in range(ncomps)],
-                    bounding_box=bounding_box,
+                    bounding_box=bbox,
                 ),
                 jac=jacrev,
             )
@@ -171,7 +148,7 @@ class TranformerUMAP(Transformer):
 class CVDiscovery:
     """convert set of coordinates to good collective variables."""
 
-    def __init__(self, transformer: Transformer = TranformerUMAP()) -> None:
+    def __init__(self, transformer: Transformer) -> None:
         # self.rounds = rounds
         self.transformer = transformer
 
@@ -276,7 +253,7 @@ class CVDiscovery:
                 fig, ax_arr = plt.subplots(4, 2)
 
                 # plot setting
-                kwargs = {'s': 1}
+                kwargs = {'s': 0.5}
 
                 labels = [[r'$\Phi$', r'$\Psi$'], ['umap1', 'umap2']]
                 for [i, j] in [[0, 1], [1, 0]]:  # order
@@ -301,7 +278,7 @@ class CVDiscovery:
                         r.set_xlabel(labels[j][0])
                         r.set_ylabel(labels[j][1])
 
-                fig.set_size_inches([12, 8])
+                fig.set_size_inches([10, 16])
                 fig.savefig(outputs[z])
 
         if plot:

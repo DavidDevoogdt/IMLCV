@@ -1,8 +1,9 @@
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from IMLCV.base.bias import BiasF, HarmonicBias
-from IMLCV.base.CV import CV, CVUtils, Metric, SystemParams
+from IMLCV.base.bias import BiasF, GridBias, HarmonicBias
+from IMLCV.base.CV import CV, CvFlow, Metric, SystemParams
 
 
 def test_harmonic():
@@ -55,6 +56,47 @@ def test_virial():
     assert pytest.approx(vir, abs=1e-7) == vol * np.eye(3)
 
 
+def test_grid_bias():
+
+    # bounds = [[0, 3], [0, 3]]
+    n = [4, 6]
+
+    cv = CV(
+        CvFlow(func=lambda x: x.coordinates),
+        Metric(
+            periodicities=[False, False],
+            bounding_box=np.array([[-2, 2], [1, 5]]),
+        )
+    )
+
+    bins = [
+        np.linspace(a, b, ni, endpoint=True, dtype=np.double)
+        for ni, (a, b) in zip(n, cv.metric.bounding_box)
+    ]
+
+    def f(x, y):
+        return x**3+y
+
+    # reevaluation of thermolib histo
+    bin_centers1, bin_centers2 = 0.5 * \
+        (bins[0][:-1]+bins[0][1:]), 0.5*(bins[1][:-1]+bins[1][1:])
+    xc, yc = np.meshgrid(bin_centers1, bin_centers2, indexing='ij')
+    xcf = np.reshape(xc, (-1))
+    ycf = np.reshape(yc, (-1))
+    val = np.array([f(x, y) for x, y in zip(xcf, ycf)]).reshape(xc.shape)
+
+    # print(f"xc:\n{xc}\nyc:{yc}\nval:\n{ val}")
+
+    bias = GridBias(cvs=cv, vals=val)
+    def c(x, y): return bias.compute(cvs=np.array([x, y]))[0]
+
+    # test along grid centers
+
+    val2 = np.array([c(x, y) for x, y in zip(xcf, ycf)]).reshape(xc.shape)
+    assert np.allclose(val, val2)
+
+
 if __name__ == "__main__":
-    test_harmonic()
-    test_virial()
+    # test_harmonic()
+    # test_virial()
+    test_grid_bias()
