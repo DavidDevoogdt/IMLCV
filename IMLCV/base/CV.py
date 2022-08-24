@@ -117,7 +117,7 @@ class PeriodicLayer(keras.layers.Layer):
     def __init__(self, bbox, periodicity, **kwargs):
         super().__init__(**kwargs)
 
-        self.bbox = np.array(bbox, dtype=np.float32)
+        self.bbox = tfl.Variable(np.array(bbox, dtype=np.float32))
         self.periodicity = np.array(periodicity)
 
     def call(self, inputs):
@@ -139,7 +139,7 @@ class PeriodicLayer(keras.layers.Layer):
     def get_config(self):
         config = super().get_config().copy()
         config.update({
-            "bbox": self.bbox,
+            "bbox": np.array(self.bbox),
             "periodicity": self.periodicity,
         })
         return config

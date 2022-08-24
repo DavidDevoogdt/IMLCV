@@ -1,4 +1,5 @@
 
+import itertools
 import os
 from importlib import import_module
 from typing import Iterable
@@ -21,6 +22,8 @@ from jax.random import PRNGKey, choice
 # using the import module import the tensorflow.keras module
 # and typehint that the type is KerasAPI module
 from keras.api._v2 import keras as KerasAPI
+from matplotlib import gridspec
+from matplotlib.colors import hsv_to_rgb
 from matplotlib.transforms import Bbox
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
@@ -49,10 +52,8 @@ class Transformer:
 
 
 class TranformerUMAP(Transformer):
-    # def __init__(self, outdim,  periodicity=None, bounding_box=None) -> None:
-    #     super().__init__(outdim,  periodicity, bounding_box)
 
-    def fit(self, z: Iterable[SystemParams], indices, decoder, nunits=256, nlayers=3, parametric=True,  **kwargs):
+    def fit(self, z: Iterable[SystemParams], indices, decoder, nunits=256, nlayers=3, parametric=True, metric=None, **kwargs):
 
         x, f = SystemParams.flatten_f(z)
 
@@ -60,18 +61,22 @@ class TranformerUMAP(Transformer):
 
         if parametric:
 
-            periodicity = self.periodicity
-
-            pl = PeriodicLayer(bbox=self.bounding_box,
-                               periodicity=periodicity)
-
-            encoder = keras.Sequential([
+            layers = [
                 keras.layers.InputLayer(input_shape=dims),
                 * [keras.layers.Dense(units=nunits, activation="tanh")
                    for _ in range(nlayers)],
                 keras.layers.Dense(units=self.outdim),
-                pl
-            ])
+            ]
+
+            periodicity = self.periodicity
+            if metric is None:
+
+                pl = PeriodicLayer(bbox=self.bounding_box,
+                                   periodicity=periodicity)
+
+                layers.append(pl)
+
+            encoder = keras.Sequential(layers)
 
             if decoder:
                 decoder = keras.Sequential([
@@ -88,7 +93,7 @@ class TranformerUMAP(Transformer):
                 n_components=self.outdim,
                 encoder=encoder,
                 decoder=decoder,
-                output_metric=pl.metric,
+                output_metric=pl.metric if metric is None else metric,
                 n_training_epochs=1,
                 **kwargs
             )
@@ -102,18 +107,32 @@ class TranformerUMAP(Transformer):
                 output_metric=MetricUMAP(periodicities=[True, True]).umap_f
 
             )
+        # import tensorflow as tf
+        # tf.data.experimental.enable_debug_mode()
+        # tf.config.run_functions_eagerly(True)
 
         reducer.fit(x[indices, :])
 
         if parametric:
 
-            bbox = self.bounding_box
-
+            # calculate accurate bbox for non periodic dims
+            if metric is None:
+                bbox = np.array(pl.bbox)
+            else:
+                bbox = self.bounding_box
             out = reducer.transform(x)
             mask = np.logical_not(np.array(self.periodicity))
 
             bbox[mask, 1] = out.max(axis=0)[mask]
             bbox[mask, 0] = out.min(axis=0)[mask]
+
+            if metric is not None:
+
+                # extend bbox a little
+                extension_factor = 0.1
+                delta = (bbox[:, 1] - bbox[:, 0]) * extension_factor/2
+                bbox[:, 0] -= delta
+                bbox[:, 1] += delta
 
             cv = CV(
                 f=KerasFlow(reducer.encoder, f=f),
@@ -199,7 +218,7 @@ class CVDiscovery:
             key=key,
             a=probs.shape[0],
             shape=(int(out),),
-            p=probs,
+            # p=probs,
             replace=False,
         )
 
@@ -217,78 +236,125 @@ class CVDiscovery:
             sps, indices,
             ** kwargs,
         )
-
+        
         @bash_app_python()
-        def plot_app(sps, old_cv: CV, new_cv: CV, outputs=[]):
-            for o in outputs:
-                os.makedirs(os.path.dirname(o), exist_ok=True)
+        def plot_app(sps, old_cv: CV, new_cv: CV, name, outputs=[]):
 
-            def color(c):
-                c2 = (c[:]-c.min(axis=0))/(c.max(axis=0) - c.min(axis=0))
-                l = c2.shape[0]
-                w = c2.shape[1]
+            def color(c, per):
+                c2 = (c-c.min())/(c.max() - c.min())
+                if not per:
+                    c2 *= 330.0/360.0
 
-                cv1 = np.ones((l, 3))
-                cv1[:, 0:w] = c2[:]
+                col = np.ones((len(c), 3))
+                col[:, 0] = c2
 
-                cv_hsv = matplotlib.colors.hsv_to_rgb(cv1)
-                cv_hsv2 = matplotlib.colors.hsv_to_rgb(cv1[:,  [1, 0, 2]])
-
-                return cv_hsv, cv_hsv2
+                return hsv_to_rgb(col)
 
             cv_data = []
             cv_data_mapped = []
 
-            for cv in [old_cv, new_cv]:
+            cvs = [old_cv, new_cv]
+            for cv in cvs:
 
                 cvd = cv.map_cv(sps)
                 cvdm = jit(vmap(cv.metric.map))(cvd)
 
-                cv_data.append(cvd)
-                cv_data_mapped.append(cvdm)
+                cv_data.append(np.array(cvd))
+                cv_data_mapped.append(np.array(cvdm))
 
             for z, data in enumerate([cv_data, cv_data_mapped]):
-
-                # if True:
-                fig, ax_arr = plt.subplots(4, 2)
 
                 # plot setting
                 kwargs = {'s': 0.5}
 
-                labels = [[r'$\Phi$', r'$\Psi$'], ['umap1', 'umap2']]
+                labels = [[r'$\Phi$', r'$\Psi$'], [
+                    'umap 1', 'umap 2', 'umap 3']]
                 for [i, j] in [[0, 1], [1, 0]]:  # order
 
-                    colors = color(data[i])
-                    # if i == 0:
-                    #     colors = color(data[i])
-                    # else:
-                    #     colors = [data[i][:, 0],  data[i][:, 1]]
+                    indim = cvs[i].n
+                    outdim = cvs[j].n
 
-                    for k, col in enumerate(colors):
+                    if outdim == 2:
+                        proj = None
+                        wr = 1
+                    elif outdim == 3:
+                        proj = '3d'
+                        wr = 1
+                    else:
+                        raise NotImplementedError
 
-                        l, r = ax_arr[2*i+k]
+                    indim_pairs = list(
+                        itertools.combinations(range(indim), r=2))
+                    print(indim_pairs)
 
-                        l.scatter(data[i][:, 0], data[i]
-                                  [:, 1], c=col, **kwargs)
-                        l.set_xlabel(labels[i][0])
-                        l.set_ylabel(labels[i][1])
+                    fig = plt.figure()
 
-                        r.scatter(data[j][:, 0], data[j]
-                                  [:, 1], c=col, **kwargs)
-                        r.set_xlabel(labels[j][0])
-                        r.set_ylabel(labels[j][1])
+                    spec = gridspec.GridSpec(nrows=len(indim_pairs)*2, ncols=2,
+                                             width_ratios=[1, wr], wspace=0.5)
 
-                fig.set_size_inches([10, 16])
-                fig.savefig(outputs[z])
+                    for id, inpair in enumerate(indim_pairs):
+
+                        for cc in range(2):
+                            print(f"cc={cc}")
+
+                            col = color(
+                                data[i][:, inpair[cc]],  cvs[i].metric.periodicities[inpair[cc]])
+
+                            l = fig.add_subplot(spec[id*2+cc, 0])
+                            r = fig.add_subplot(
+                                spec[id*2+cc, 1], projection=proj)
+                            # len(indim_pairs)*2, 2,  id*4+2*cc + 1)
+                            # r = fig.add_subplot(
+                            #     len(indim_pairs)*2, 2,  id*4+2*cc + 2, projection=proj)
+
+                            print(f"scatter={cc}")
+                            l.scatter(
+                                *[data[i][:, l] for l in inpair],  c=col, **kwargs)
+                            l.set_xlabel(labels[i][inpair[0]])
+                            l.set_ylabel(labels[i][inpair[1]])
+
+                            if outdim == 2:
+                                print("plot r 2d")
+                                r.scatter(
+                                    *[data[j][:, l] for l in range(2)],  c=col, **kwargs)
+                                r.set_xlabel(labels[j][0])
+                                r.set_ylabel(labels[j][1])
+
+                            elif outdim == 3:
+                                print("plot r 3d")
+
+                                def plot3d(data,  ax, colors=None, labels=labels[j]):
+
+                                    ax.set_xlabel(labels[0])
+                                    ax.set_ylabel(labels[1])
+                                    ax.set_zlabel(labels[2])
+
+                                    mm = data.min(axis=0)
+                                    MM = data.max(axis=0)
+                                    offset_extra = (MM-mm)*0
+
+                                    ax.scatter(data[:, 0], data[:, 1],  mm[2]-offset_extra[2], **kwargs,
+                                               c=colors, zdir='z')
+                                    ax.scatter(data[:, 0], data[:, 2], MM[1]+offset_extra[1], **kwargs,
+                                               c=colors, zdir='y')
+                                    ax.scatter(data[:, 1], data[:, 2], mm[0]-offset_extra[0], **kwargs,
+                                               c=colors, zdir='x', )
+
+                                plot3d(data=data[j], colors=col, ax=r)
+
+                    # fig.set_size_inches([10, 16])
+
+                    n = f"{name}_{ 'mapped' if z==1 else ''}_{'old_new' if i == 0 else 'new_old'}.pdf"
+                    os.makedirs(os.path.dirname(n), exist_ok=True)
+                    fig.savefig(n)
+
+                    outputs.append(File(n))
 
         if plot:
-            base_name = f"{rounds.folder}/round_{rounds.round}/new_cv"
+            base_name = f"{rounds.folder}/round_{rounds.round}/cvdicovery"
 
             plot_app(
-                outputs=[
-                    File(f"{base_name}.pdf"),
-                    File(f"{base_name}_mapped.pdf")
-                ],
+                name=base_name,
                 old_cv=cv_old,
                 new_cv=new_cv,
                 sps=[sps[i] for i in indices],

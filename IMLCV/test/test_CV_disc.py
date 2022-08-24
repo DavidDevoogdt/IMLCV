@@ -1,5 +1,7 @@
 import os
 import shutil
+from importlib import import_module
+from math import sqrt
 
 import numpy as np
 from IMLCV.base.CV import CV, CvFlow, Volume, dihedral, rotate_2d
@@ -8,12 +10,15 @@ from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.metric import Metric
 from IMLCV.launch.parsl_conf.config import config
 from IMLCV.scheme import Scheme
+from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.constants import boltzmann
 from molmod.units import kelvin, kjmol
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
+keras: KerasAPI = import_module("tensorflow.keras")
 # parsl.load()
+
 
 abspath = os.path.abspath(__file__)
 dname = os.path.dirname(abspath)
@@ -38,18 +43,10 @@ def cleancopy(base):
 def test_cv_discovery(name="test_cv_disc_004", recalc=False):
     # make copy and restore orig
 
-    config(cluster='doduo', max_blocks=14)
+    config(cluster='doduo', max_blocks=10)
 
     full_name = f'output/{name}'
     pe = os.path.exists(full_name)
-
-    components = 22.0
-
-    cvd = CVDiscovery(transformer=TranformerUMAP(
-        outdim=2, periodicity=[False, False], bounding_box=np.array([
-            [0.0, components],
-            [0.0, components],
-        ])))
 
     if recalc or not pe:
         if pe:
@@ -67,6 +64,8 @@ def test_cv_discovery(name="test_cv_disc_004", recalc=False):
                               [-np.pi, np.pi]])
         )
 
+        cvd = CVDiscovery
+
         scheme0: Scheme = Scheme(cvd=cvd,
                                  cvs=cv0,
                                  Engine=YaffEngine,
@@ -75,14 +74,25 @@ def test_cv_discovery(name="test_cv_disc_004", recalc=False):
                                  timestep=2.0 * units.femtosecond,
                                  timecon_thermo=100.0 * units.femtosecond,
                                  folder=full_name,
-                                 write_step=5,
+                                 write_step=10,
                                  )
 
-        scheme0.round(rnds=3, steps=5e3, n=5)
+        scheme0.round(rnds=3, steps=5e3, n=10)
 
         del scheme0  # close roundsobject
 
     cleancopy(full_name)
+
+    cvd = CVDiscovery(
+        transformer=TranformerUMAP(
+            outdim=3,
+            periodicity=[False, False, False],
+            # bounding_box=np.array([
+            #     [0.0, 1.0],
+            #     [0.0, 1.0],
+            # ]),
+        )
+    )
 
     scheme0 = Scheme.from_rounds(
         cvd=cvd,
@@ -91,18 +101,24 @@ def test_cv_discovery(name="test_cv_disc_004", recalc=False):
 
     scheme0.update_CV(
         samples=5e3,
-        # parametric_reconstruction=True,
-        n_neighbors=50,
-        min_dist=0.9,
-        # densmap=True,
-        nunits=256,
-        nlayers=3,
+
+        n_neighbors=40,
+        min_dist=0.6,
+
+        nunits=100,
+        nlayers=4,
+
+        metric='l2',
+        densmap=True,
+        parametric_reconstruction=True,
+        parametric_reconstruction_loss_fcn=keras.losses.MSE,
+
 
         # global_correlation_loss_weight=0.6,
-        decoder=False,
+        decoder=True,
         # run_eagerly=True,
     )
-    scheme0.round(rnds=3, steps=5e3, n=5)
+    scheme0.round(rnds=4, steps=1e4, n=5)
 
 
 if __name__ == "__main__":

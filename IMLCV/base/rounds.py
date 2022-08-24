@@ -330,7 +330,7 @@ class RoundsMd(Rounds):
 
             traj_file = f"{temp_name}/traj.h5"
 
-            # # creat file
+            # create file
             with open(traj_file, 'wb') as f:
                 pass
 
