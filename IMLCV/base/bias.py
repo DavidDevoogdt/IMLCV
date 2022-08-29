@@ -248,7 +248,7 @@ class Bias(Energy, ABC):
         fig.savefig(name)
 
 
-@bash_app_python
+@bash_app_python()
 def plot_app(bias: Bias,
              outputs: List[File],
              n: int = 50,

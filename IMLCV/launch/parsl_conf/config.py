@@ -39,20 +39,21 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
     print(channel.userhome)
 
     if LOCAL:
-        # exec = parsl.WorkQueueExecutor(
-        #     working_dir=f"{ROOT_DIR}/.workdir",
-        #     address=address_by_hostname(),
-        #     provider=LocalProvider(
-        #         worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
-        #         channel=channel,
-        #     ),
-        # )
-
-        exec = parsl.ThreadPoolExecutor(
-            max_threads=min(15, max_blocks),
+        exec = parsl.WorkQueueExecutor(
             working_dir=f"{ROOT_DIR}/.workdir",
-
+            address=address_by_hostname(),
+            provider=LocalProvider(
+                worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
+                channel=channel,
+                max_blocks=max_blocks,
+            ),
         )
+
+        # exec = parsl.ThreadPoolExecutor(
+        #     max_threads=min(15, max_blocks),
+        #     working_dir=f"{ROOT_DIR}/.workdir",
+
+        # )
     else:
 
         def provider_init(provider="PBS", mpi=True):

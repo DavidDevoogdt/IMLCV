@@ -326,29 +326,31 @@ class RoundsMd(Rounds):
                 b = CompositeBias([Bias.load(common_bias_name), bias])
 
             b_name = f"{temp_name}/bias"
+            b_name_new = f"{temp_name}/bias_new"
             b.save(b_name)
 
             traj_file = f"{temp_name}/traj.h5"
 
             # create file
-            with open(traj_file, 'wb') as f:
-                pass
+            # with open(traj_file, 'wb') as f:
+            #     pass
 
             @bash_app_python()
             def run(steps: int, inputs=[], outputs=[]):
 
                 bias = Bias.load(inputs[1].filepath)
                 md = MDEngine.load(
-                    inputs[0].filepath, bias=bias, filename=inputs[2].filepath)
+                    inputs[0].filepath, bias=bias, filename=outputs[1].filepath)
                 md.run(steps)
 
-                bias.save(inputs[1].filepath)
+                # print(outputs[0])
+                bias.save(outputs[0].filepath)
                 d = md.get_trajectory()
                 return d
 
             future = run(
-                inputs=[File(common_md_name), File(b_name), File(traj_file)],
-                outputs=[File(b_name)],
+                inputs=[File(common_md_name), File(b_name)],
+                outputs=[File(b_name_new), File(traj_file)],
                 steps=int(steps),
                 stdout=f'{temp_name}/md.stdout',
                 stderr=f'{temp_name}/md.stderr',
@@ -359,7 +361,7 @@ class RoundsMd(Rounds):
         for i, future in tasks:
             d = future.result()
             self.add(traj=d, md=md_engine,
-                     bias=future.task_def['kwargs']['inputs'][1].filepath, i=i)
+                     bias=future.task_def['kwargs']['outputs'][0].filepath, i=i)
 
         self.i += len(tasks)
 

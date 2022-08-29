@@ -7,8 +7,6 @@ import uuid
 from typing import List, Literal, Optional, Union
 
 import dill
-import typeguard
-from isort import file
 from parsl import bash_app
 from parsl.app.bash import BashApp
 from parsl.data_provider.files import File
@@ -31,18 +29,23 @@ def bash_app_python(
 
             filename = f"{fold}/{str(uuid.uuid4())}"
 
-            # merg in and outputs
+            # merge in and outputs
             inputs = [*inputs,  *kwargs.pop("inputs", [])]
             outputs = [*outputs,  *kwargs.pop("outputs", [])]
 
-            def fun(*args, inputs, outputs, stdout, stderr,  **kwargs):
+            def fun(*args, inputs, outputs, stdout, stderr, **kwargs):
 
-                if len(inputs) > 1:
-                    kwargs['inputs'] = inputs[1:]
+                if len(inputs) > 0:
+                    kwargs['inputs'] = inputs
                 if len(outputs) > 1:
                     kwargs['outputs'] = outputs[1:]
 
-                with open(filename, 'wb+') as f:
+                filename = outputs[0].filepath
+                fold = os.path.dirname(filename)
+                if not os.path.exists(fold):
+                    os.mkdir(fold)
+
+                with open(outputs[0].filepath, 'wb+') as f:
                     dill.dump((func, args, kwargs), f)
 
                 return f'''python -u { os.path.realpath( __file__ ) } --cwd {os.getcwd()} --file {filename}'''
@@ -52,7 +55,7 @@ def bash_app_python(
                                     cache=cache, executors=executors, ignore_for_cache=ignore_for_cache)
 
             future: BashApp = bash_app_fun(
-                inputs=[File(filename), *inputs], outputs=[File(filename), *outputs], stdout=stdout, stderr=stderr, *args, **kwargs)
+                inputs=inputs, outputs=[File(filename), *outputs], stdout=stdout, stderr=stderr, *args, **kwargs)
 
             # modify the future such that the output is recovered
             _res = future.result
@@ -71,7 +74,7 @@ def bash_app_python(
             # cleanup inputs and outputs
             future._outputs = future._outputs[1:]
 
-            future.task_def['kwargs']['inputs'] = future.task_def['kwargs']['inputs'][1:]
+            # future.task_def['kwargs']['inputs'] = future.task_def['kwargs']['inputs']
             future.task_def['kwargs']['outputs'] = future.task_def['kwargs']['outputs'][1:]
 
             return future
