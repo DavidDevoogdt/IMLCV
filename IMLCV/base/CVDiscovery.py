@@ -39,7 +39,7 @@ class Transformer:
         self.outdim = outdim
 
         if periodicity is None:
-            periodicity = [True for _ in range(self.outdim)]
+            periodicity = [False for _ in range(self.outdim)]
         if bounding_box is None:
             bounding_box = np.array([
                 [0.0, 10.0] for _ in periodicity])
@@ -53,17 +53,24 @@ class Transformer:
 
 class TranformerUMAP(Transformer):
 
-    def fit(self, z: Iterable[SystemParams], indices, decoder, nunits=256, nlayers=3, parametric=True, metric=None, **kwargs):
+    def fit(self, z: Iterable[SystemParams], indices, decoder=False, prescale=True, nunits=256, nlayers=3, parametric=True, metric=None, **kwargs):
 
-        x, f = SystemParams.flatten_f(z)
+        # x, f = SystemParams.flatten_f(z, scale=prescale)
+        f = SystemParams.get_descriptor_coulomb(z_array=np.array(
+            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1]), permutation='none')
+        x = jnp.stack([f(zi) for zi in z])
 
-        dims = x.shape[1]
+        dims = x.shape[1:]
 
         if parametric:
 
+            act = keras.activations.tanh
+
             layers = [
                 keras.layers.InputLayer(input_shape=dims),
-                * [keras.layers.Dense(units=nunits, activation="tanh")
+                * [keras.layers.Dense(units=nunits,
+                                      activation=act,
+                                      )
                    for _ in range(nlayers)],
                 keras.layers.Dense(units=self.outdim),
             ]
@@ -81,7 +88,7 @@ class TranformerUMAP(Transformer):
             if decoder:
                 decoder = keras.Sequential([
                     keras.layers.InputLayer(input_shape=(self.outdim)),
-                    * [keras.layers.Dense(units=nunits, activation="tanh")
+                    * [keras.layers.Dense(units=nunits, activation=keras.activations.tanh,)
                        for _ in range(nlayers)],
                     keras.layers.Dense(units=dims),
                 ])
@@ -236,7 +243,7 @@ class CVDiscovery:
             sps, indices,
             ** kwargs,
         )
-        
+
         @bash_app_python()
         def plot_app(sps, old_cv: CV, new_cv: CV, name, outputs=[]):
 
@@ -265,7 +272,7 @@ class CVDiscovery:
             for z, data in enumerate([cv_data, cv_data_mapped]):
 
                 # plot setting
-                kwargs = {'s': 0.5}
+                kwargs = {'s': 0.2}
 
                 labels = [[r'$\Phi$', r'$\Psi$'], [
                     'umap 1', 'umap 2', 'umap 3']]
@@ -303,9 +310,6 @@ class CVDiscovery:
                             l = fig.add_subplot(spec[id*2+cc, 0])
                             r = fig.add_subplot(
                                 spec[id*2+cc, 1], projection=proj)
-                            # len(indim_pairs)*2, 2,  id*4+2*cc + 1)
-                            # r = fig.add_subplot(
-                            #     len(indim_pairs)*2, 2,  id*4+2*cc + 2, projection=proj)
 
                             print(f"scatter={cc}")
                             l.scatter(

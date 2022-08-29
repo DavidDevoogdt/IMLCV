@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import tempfile
 import typing
 from abc import abstractmethod
@@ -52,10 +53,10 @@ class SystemParams:
 
             for a in out:
                 a = jnp.reshape(a, (-1, 3))
-                bounds.append(jnp.array([a.min(axis=0), a.max(axis=0)]))
+                bounds.append([jnp.mean(a, axis=0), jnp.std(a, axis=0)])
 
             def g(x):
-                return [(y-b[0, :])/(b[1, :] - b[0, :]) for y, b in zip(x, bounds)]
+                return [(y-b[0])/b[1] for y, b in zip(x, bounds)]
 
             out = g(out)
 
@@ -68,7 +69,42 @@ class SystemParams:
 
         return i(out), lambda x: i(h(x))
 
-    @ staticmethod
+    @staticmethod
+    def get_descriptor_coulomb(z_array, permutation='l2'):
+        @jit
+        def f(sps: SystemParams):
+
+            n = sps.coordinates.shape[0]
+            out = jnp.zeros((n, n))
+
+            for i in range(n):
+                d = 0.5 * z_array[i]**2.4
+                out = out.at[i, i].set(d)
+
+            for i, j in itertools.combinations(range(n), 2):
+                d = jnp.linalg.norm(
+                    sps.coordinates[i, :]-sps.coordinates[j, :], 2)
+                d = z_array[i]*z_array[j]/d
+                out = out.at[i, j].set(d)
+                out = out.at[j, i].set(d)
+
+            if permutation == 'l2':
+
+                ind = jnp.argsort(jnp.linalg.norm(out, 2, axis=(0)))
+                out = out[ind, :]
+                out = out[:, ind]
+            elif permutation == 'none':
+                pass
+            else:
+                raise NotImplementedError
+
+            # flatten relevant coordinates
+            return out[jnp.triu_indices(n)]
+
+        return f
+
+
+    @staticmethod
     def map_params(coordinates, cells):
         if cells is None:
             return [SystemParams(coordinates=a, cell=None) for a in coordinates]
@@ -151,7 +187,7 @@ class KerasFlow(CvFlow):
         self.f = f
 
     def __call__(self, x: SystemParams):
-        cc = self.f([x])
+        cc = jnp.reshape(self.f(x), (1, -1))
         out = call_tf(self.encoder.call)(cc)
         return jnp.reshape(out, out.shape[1:])
 
