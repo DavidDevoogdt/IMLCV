@@ -429,36 +429,19 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
     def compute(self, gpos=None, vtens=None):
 
         sp = SystemParams(coordinates=jnp.array(self.ff.system.pos),
-                          cell=jnp.array(self.ff.system.cell.rvecs))
+                          cell=jnp.array(self.ff.system.cell.rvecs), _z_array=jnp.array(self.ff.system.masses)
+                          )
 
         [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(sp=sp,
                                                              gpos=gpos is not None,
                                                              vir=vtens is not None)
-
-        err = np.isnan(ener)
-
-        if gpos is not None:
-            err = err or jnp.isnan(gpos_jax).any()
-        if vtens is not None:
-            err = err or jnp.isnan(vtens_jax).any()
-
-        if err:
-            import jax
-            with jax.disable_jit():
-                [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(coordinates=self.ff.system.pos,
-                                                                     cell=self.ff.system.cell.rvecs,
-                                                                     gpos=gpos is not None,
-                                                                     vir=vtens is not None)
-
-            raise ValueError(
-                f"Energy calculations contains nans\n ener {ener} gpos {gpos_jax}, vtens {vtens_jax}\n")
 
         if gpos is not None:
             gpos[:] = np.array(gpos_jax)
         if vtens is not None:
             vtens[:] = np.array(vtens_jax)
 
-        return np.array(ener)
+        return ener
 
     def get_log(self):
         return "Yaff bias from IMLCV"

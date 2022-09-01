@@ -40,17 +40,21 @@ def cleancopy(base):
     shutil.copytree(f"{base}_orig", f"{base}")
 
 
-def test_cv_discovery(name="test_cv_disc_004", recalc=False):
+def test_cv_discovery(name="test_cv_disc_10", recalc=False):
     # make copy and restore orig
 
     config(cluster='doduo', max_blocks=10)
 
     full_name = f'output/{name}'
+    full_name_orig = f'output/{name}_orig'
     pe = os.path.exists(full_name)
+    pe_orig = os.path.exists(full_name_orig)
 
-    if recalc or not pe:
+    if recalc or (not pe and not pe_orig):
         if pe:
             shutil.rmtree(full_name)
+        if pe_orig:
+            shutil.rmtree(full_name_orig)
         T = 600*kelvin
 
         cv0 = CV(
@@ -74,10 +78,10 @@ def test_cv_discovery(name="test_cv_disc_004", recalc=False):
                                  timestep=2.0 * units.femtosecond,
                                  timecon_thermo=100.0 * units.femtosecond,
                                  folder=full_name,
-                                 write_step=10,
+                                 write_step=5,
                                  )
 
-        scheme0.round(rnds=3, steps=5e3, n=10)
+        scheme0.round(rnds=2, steps=5e3, n=4)
 
         del scheme0  # close roundsobject
 
@@ -85,8 +89,9 @@ def test_cv_discovery(name="test_cv_disc_004", recalc=False):
 
     cvd = CVDiscovery(
         transformer=TranformerUMAP(
-            outdim=3,
-            periodicity=[False, False, False],
+            outdim=2,
+            # periodicity=[True, True],
+            # periodicity=[False, False, False],
             # bounding_box=np.array([
             #     [0.0, 1.0],
             #     [0.0, 1.0],
@@ -100,25 +105,28 @@ def test_cv_discovery(name="test_cv_disc_004", recalc=False):
     )
 
     scheme0.update_CV(
-        samples=5e3,
+        samples=1e3,
 
-        n_neighbors=40,
-        min_dist=0.6,
+        n_neighbors=50,
+        min_dist=0.5,
 
         nunits=100,
         nlayers=4,
 
+        # metric=None,
         metric='l2',
         densmap=True,
         parametric_reconstruction=True,
         parametric_reconstruction_loss_fcn=keras.losses.MSE,
 
+        # prescale=True,
 
         # global_correlation_loss_weight=0.6,
-        decoder=True,
+        # decoder=True,
         # run_eagerly=True,
     )
-    scheme0.round(rnds=4, steps=1e4, n=5)
+
+    # scheme0.round(rnds=4, steps=1e4, n=3)
 
 
 if __name__ == "__main__":

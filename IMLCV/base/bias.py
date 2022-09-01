@@ -12,8 +12,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from IMLCV.base.CV import CV, SystemParams
+from IMLCV.base.tools import HashableArrayWrapper, jit_satic_array
 from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
-from jax import jacrev, jit, value_and_grad
+from jax import jacrev, jit, value_and_grad, vmap
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
@@ -56,8 +57,6 @@ class Bias(Energy, ABC):
         self.start = start
         self.step = step
 
-        self.__comp()
-
         self.finalized = False
 
     def update_bias(self, sp: SystemParams):
@@ -66,75 +65,33 @@ class Bias(Energy, ABC):
         Can only change the properties from _get_args
         """
 
-    class _HashableArrayWrapper:
-        """#see https://github.com/google/jax/issues/4572"""
-
-        def __init__(self, val):
-            self.val = val
-
-        def __hash__(self):
-            return hash(self.val.tobytes())
-
-        def __eq__(self, other):
-            eq = isinstance(
-                other, Bias._HashableArrayWrapper) and (self.__hash__()
-                                                        == other.__hash__())
-            return eq
-
-    @staticmethod
-    def _gnool_jit(fun, static_array_argnums=(), static_argnums=()):
-        """#see https://github.com/google/jax/issues/4572"""
-
-        @partial(jit, static_argnums=static_array_argnums + static_argnums)
-        def callee(*args):
-            args = list(args)
-            for i in static_array_argnums:
-                args[i] = args[i].val
-            return fun(*args)
-
-        def caller(*args):
-            args = list(args)
-            for i in static_array_argnums:
-                args[i] = Bias._HashableArrayWrapper(args[i])
-            return callee(*args)
-
-        return caller
-
     @partial(jit, static_argnums=(0, 2, 3))
     def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
-
-        if sp.cell is not None:
-            if not (sp.cell.shape == (0, 3) or sp.cell.shape == (3, 3)):
-                raise NotImplementedError(
-                    "other cell shapes not yet supported")
-
-        # bv = (vir is not None)
-        # bg = (gpos is not None)
 
         [cvs, jac] = self.cvs.compute(sp=sp,
                                       jac_p=gpos,
                                       jac_c=vir)
         [ener, de] = self.compute(cvs, diff=(gpos or vir))
 
-        e_gpos = jnp.einsum('j,jkl->kl', de, jac.coordinates) if gpos else None
-        e_vir = jnp.einsum('ji,k,kjl->il', sp.cell, de,
-                           jac.cell) if vir else None
+        e_gpos = None
+        if gpos:
+            e_gpos = jnp.einsum('nj,njkl->nkl', de, jac.coordinates)
+            if not sp.batched:
+                assert e_gpos.shape[0] == 1
+                e_gpos = e_gpos.reshape(*e_gpos.shape[1:])
+        e_vir = None
+        if vir:
+            if sp.batched:
+                e_vir = jnp.einsum('nji,nk,nkjl->nil', sp.cell, de, jac.cell)
+            else:
+                e_vir = jnp.einsum('nji,nk,kjl->il', sp.cell, de, jac.cell)
 
         return ener, e_gpos, e_vir
 
-    def __comp(self):
-        args = self.get_args()
-        static_array_argnums = tuple(i + 1 for i in range(len(args)))
-
-        self.e = Bias._gnool_jit(partial(self._compute),
-                                 static_array_argnums=static_array_argnums)
-        self.de = Bias._gnool_jit(jacrev(self.e, argnums=(0,)),
-                                  static_array_argnums=static_array_argnums)
-
-    @partial(jit, static_argnums=(0, 2, 3))
-    def compute(self, cvs, diff=False, map=True):
+    @partial(jit, static_argnums=(0, 2, 3, 4))
+    def compute(self, cvs, diff=False, map=True, batched=True):
         """compute the energy and derivative.
 
         If map==False, the cvs are assumed to be already mapped
@@ -143,15 +100,17 @@ class Bias(Energy, ABC):
         assert not (
             not map and diff), "cannot retreive gradient from already mapped CVs"
 
-        if not map:
-            return self.e(cvs, *self.get_args()), None
+        # map compute command
+        def f0(x):
+            args = self.get_args()
+            static_array_argnums = tuple(i + 1 for i in range(len(args)))
+            f = jit_satic_array(partial(self._compute),
+                                static_array_argnums=static_array_argnums)
+            return f(x, *args)
 
-        def E(x): return self.e(self.cvs.metric.map(x), *self.get_args())
-
-        if diff:
-            return value_and_grad(E)(cvs)
-
-        return E(cvs), None
+        def f1(x): return f0(self.cvs.metric.map(x)) if map else f0(x)
+        def f2(x): return value_and_grad(f1)(x) if diff else (f1(x), None)
+        return vmap(f2)(cvs) if batched else f2(cvs)
 
     @abstractmethod
     def _compute(self, cvs, *args):
@@ -197,6 +156,7 @@ class Bias(Energy, ABC):
                                        axis=0,
                                        arr=np.array(mg),
                                        diff=False,
+                                       batched=False,
                                        map=not map)
 
         extent = [xlim[0], xlim[1], ylim[0], ylim[1]]

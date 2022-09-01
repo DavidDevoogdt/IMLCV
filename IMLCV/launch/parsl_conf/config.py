@@ -29,8 +29,6 @@ from parsl.providers.slurm.template import template_string
 from parsl.providers.torque.torque import TorqueProvider
 from parsl.utils import RepresentationMixin, wtime_to_minutes
 
-parsl.set_stream_logger(level=logging.INFO)
-
 
 def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_vo/projects/IMLCV/Miniconda3/bin/activate base", max_blocks=1, spawnjob=False):
 
@@ -39,21 +37,32 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
     print(channel.userhome)
 
     if LOCAL:
-        exec = parsl.WorkQueueExecutor(
-            working_dir=f"{ROOT_DIR}/.workdir",
-            address=address_by_hostname(),
-            provider=LocalProvider(
-                worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
-                channel=channel,
-                max_blocks=max_blocks,
-            ),
-        )
-
-        # exec = parsl.ThreadPoolExecutor(
-        #     max_threads=min(15, max_blocks),
+        # exec = parsl.HighThroughputExecutor(
         #     working_dir=f"{ROOT_DIR}/.workdir",
-
+        #     address=address_by_hostname(),
+        #     mem_per_worker=2.0,
+        #     max_workers=15,
+        #     provider=LocalProvider(
+        #         worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
+        #         channel=channel,
+        #     ),
         # )
+
+        # exec = parsl.WorkQueueExecutor(
+        #     working_dir=f"{ROOT_DIR}/.workdir",
+        #     address=address_by_hostname(),
+        #     provider=LocalProvider(
+        #         worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
+        #         channel=channel,
+        #         max_blocks=max_blocks,
+        #     ),
+        # )
+
+        exec = parsl.ThreadPoolExecutor(
+            max_threads=min(15, max_blocks),
+            working_dir=f"{ROOT_DIR}/.workdir",
+
+        )
     else:
 
         def provider_init(provider="PBS", mpi=True):
@@ -91,9 +100,6 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
                     exclusive=False,
                     min_blocks=0,
                     max_blocks=4,
-                    init_blocks=0,
-                    nodes_per_block=10,
-                    cores_per_node=9,
                     walltime="00:20:00",
                     parallelism=1,
                     mem_per_node=2,  # in GB
@@ -123,9 +129,10 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
     config = Config(
         executors=[exec],
         retries=0,
-        internal_tasks_max_threads=10,
+        # internal_tasks_max_threads=10,
         run_dir=f"{ROOT_DIR}/.runinfo",
         max_idletime=60*10,
+        # initialize_logging=False
     )
     parsl.load(config=config)
 

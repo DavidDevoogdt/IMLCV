@@ -1,8 +1,9 @@
 
 import itertools
 import os
+import sys
 from importlib import import_module
-from typing import Iterable
+from typing import Iterable, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -12,10 +13,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import umap
 from IMLCV.base.bias import Bias
-from IMLCV.base.CV import (CV, CvFlow, KerasFlow, PeriodicLayer, SystemParams,
-                           cv)
+from IMLCV.base.CV import (CV, CvFlow, KerasTrans, PeriodicLayer, SystemParams,
+                           coulomb_descriptor_cv_flow, scale_cv_trans)
 from IMLCV.base.metric import Metric, MetricUMAP
 from IMLCV.base.rounds import Rounds, RoundsMd
+from IMLCV.base.tools import HashableArrayWrapper
 from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from jax import custom_jvp, grad, jacrev, jit, make_jaxpr, value_and_grad, vmap
 from jax.random import PRNGKey, choice
@@ -47,18 +49,24 @@ class Transformer:
         self.periodicity = periodicity
         self.bounding_box = bounding_box
 
+    def pre_fit(self, z: SystemParams, scale=True) -> Tuple[jnp.ndarray, CvFlow]:
+        # x, f = SystemParamss.flatten_f(z, scale=prescale)
+        x, f = coulomb_descriptor_cv_flow(z)
+        if scale:
+            x, g = scale_cv_trans(x)
+            f = f*g
+
+        return x, f
+
     def fit(self, x, metric: Metric, **kwargs) -> CV:
         pass
 
 
 class TranformerUMAP(Transformer):
 
-    def fit(self, z: Iterable[SystemParams], indices, decoder=False, prescale=True, nunits=256, nlayers=3, parametric=True, metric=None, **kwargs):
+    def fit(self, z: SystemParams, indices, decoder=False, prescale=True, nunits=256, nlayers=3, parametric=True, metric=None, **kwargs):
 
-        # x, f = SystemParams.flatten_f(z, scale=prescale)
-        f = SystemParams.get_descriptor_coulomb(z_array=np.array(
-            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1]), permutation='none')
-        x = jnp.stack([f(zi) for zi in z])
+        x, f = self.pre_fit(z)
 
         dims = x.shape[1:]
 
@@ -72,7 +80,8 @@ class TranformerUMAP(Transformer):
                                       activation=act,
                                       )
                    for _ in range(nlayers)],
-                keras.layers.Dense(units=self.outdim),
+                keras.layers.Dense(units=self.outdim,
+                                   activation=act),
             ]
 
             periodicity = self.periodicity
@@ -142,7 +151,7 @@ class TranformerUMAP(Transformer):
                 bbox[:, 1] += delta
 
             cv = CV(
-                f=KerasFlow(reducer.encoder, f=f),
+                f=f * KerasTrans(reducer.encoder),
                 metric=Metric(
                     periodicities=self.periodicity,
                     bounding_box=bbox,
@@ -152,21 +161,21 @@ class TranformerUMAP(Transformer):
         else:
             raise NotImplementedError
 
-            def func(sp: SystemParams):
-                with jax.disable_jit():
-                    out = reducer.transform(f([sp]))
-                    return np.reshape(out, out.shape[1:])
+            # def func(sp: SystemParamss):
+            #     with jax.disable_jit():
+            #         out = reducer.transform(f([sp]))
+            #         return np.reshape(out, out.shape[1:])
 
-            cv = CV(
-                f=CvFlow(func=func),
-                metric=Metric(
-                    periodicities=[False for _ in range(ncomps)],
-                    bounding_box=bbox,
-                ),
-                jac=jacrev,
-            )
+            # cv = CV(
+            #     f=CvFlow(func=func),
+            #     metric=Metric(
+            #         periodicities=[False for _ in range(ncomps)],
+            #         bounding_box=bbox,
+            #     ),
+            #     jac=jacrev,
+            # )
 
-            cv.compute(z[0])
+            # cv.compute(z[0])
 
         return cv
 
@@ -191,21 +200,23 @@ class CVDiscovery:
 
             # map cvs
             bias = Bias.load(dictionary['attr']["name_bias"])
-            map_bias = jit(vmap(lambda x:  bias.compute(cvs=x, map=False)[0]))
 
             if cv is None:
                 cv = bias.cvs
-                map_cv = cv.map_cv
+                def map_cv(x): return cv.compute(x)[0]
                 map_metric = jit(vmap(cv.metric.map))
 
-            pos = dictionary["positions"]
-            cell = dictionary.get("cell", None)
-            sp = SystemParams.map_params(pos, cell)
+            sp = SystemParams(
+                coordinates=jnp.array(dictionary["positions"]),
+                cell=dictionary.get("cell", None),
+                _z_array=jnp.array([1, 6, 1, 1, 6, 8, 7, 1, 6,
+                                   1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1]),
+            )
 
             # execute all the mappings
             cvs = map_cv(sp)
             cvs_mapped = map_metric(cvs)
-            biases = map_bias(cvs_mapped)
+            biases = bias.compute(cvs=cvs_mapped, map=False)[0]
 
             beta = 1/(dictionary['round']['T']*boltzmann)
             weight = jnp.exp(beta * biases)
@@ -229,7 +240,7 @@ class CVDiscovery:
             replace=False,
         )
 
-        system_params = [b for a in sp_arr for b in a]
+        system_params = SystemParams.stack(sp_arr)
         cvs = jnp.vstack(cvs_mapped_arr)
 
         return [system_params, cvs, indices, cv]
@@ -263,7 +274,7 @@ class CVDiscovery:
             cvs = [old_cv, new_cv]
             for cv in cvs:
 
-                cvd = cv.map_cv(sps)
+                cvd =  cv.compute(sps)  
                 cvdm = jit(vmap(cv.metric.map))(cvd)
 
                 cv_data.append(np.array(cvd))

@@ -76,14 +76,14 @@ class Observable:
                 index = np.argmax(dictionary['t'] > throw_away)
                 time += dictionary['t'][-1]-dictionary['t'][index]
 
-                sp = SystemParams.map_params(
+                sp = SystemParams(
                     coordinates=dictionary["positions"],
-                    cells=dictionary.get("cell", None),
+                    cell=dictionary.get("cell", None),
                 )[index:]
 
                 # execute all the mappings
-                cvs = bias.cvs.map_cv(sp)
-                cvs_mapped = jax.jit(jax.vmap(bias.cvs.metric.map))(cvs)
+                cvs = cv.compute(sp)[0]
+                cvs_mapped = jax.jit(jax.vmap(cv.metric.map))(cvs)
 
                 arr = np.array(cvs, dtype=np.double, )
                 arr_mapped = np.array(cvs_mapped, dtype=np.double, )
@@ -245,6 +245,7 @@ class Observable:
                                         arr=cvs,
                                         diff=False,
                                         map=False,  # already mapped
+                                        batched=False,
                                         )
 
             b = np.array(b, dtype=np.double)
