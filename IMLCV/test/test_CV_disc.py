@@ -1,23 +1,22 @@
 import os
 import shutil
 from importlib import import_module
-from math import sqrt
 
 import numpy as np
-from IMLCV.base.CV import CV, CvFlow, Volume, dihedral, rotate_2d
-from IMLCV.base.CVDiscovery import CVDiscovery, TranformerUMAP
+from keras.api._v2 import keras as KerasAPI
+
+from IMLCV.base.bias import NoneBias
+from IMLCV.base.CV import CV, dihedral
+from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder
 from IMLCV.base.MdEngine import YaffEngine
 from IMLCV.base.metric import Metric
 from IMLCV.launch.parsl_conf.config import config
 from IMLCV.scheme import Scheme
-from keras.api._v2 import keras as KerasAPI
 from molmod import units
-from molmod.constants import boltzmann
-from molmod.units import kelvin, kjmol
+from molmod.units import kelvin
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
-keras: KerasAPI = import_module("tensorflow.keras")
-# parsl.load()
+keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 
 
 abspath = os.path.abspath(__file__)
@@ -36,17 +35,18 @@ def cleancopy(base):
         shutil.copytree(f"{base}", f"{base}_orig")
 
     if os.path.exists(f"{base}"):
+
         shutil.rmtree(f"{base}")
     shutil.copytree(f"{base}_orig", f"{base}")
 
 
-def test_cv_discovery(name="test_cv_disc_10", recalc=False):
+def test_cv_discovery(name="test_cv_disc_14", recalc=True):
     # make copy and restore orig
 
-    config(cluster='doduo', max_blocks=10)
+    config(cluster="doduo", max_blocks=10)
 
-    full_name = f'output/{name}'
-    full_name_orig = f'output/{name}_orig'
+    full_name = f"output/{name}"
+    full_name_orig = f"output/{name}_orig"
     pe = os.path.exists(full_name)
     pe_orig = os.path.exists(full_name_orig)
 
@@ -55,41 +55,40 @@ def test_cv_discovery(name="test_cv_disc_10", recalc=False):
             shutil.rmtree(full_name)
         if pe_orig:
             shutil.rmtree(full_name_orig)
-        T = 600*kelvin
+        T = 300 * kelvin
 
         cv0 = CV(
-            f=(
-                dihedral(numbers=[4, 6, 8, 14]) +
-                dihedral(numbers=[6, 8, 14, 16])
-            ),
+            f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
             metric=Metric(
                 periodicities=[True, True],
-                bounding_box=[[- np.pi, np.pi],
-                              [-np.pi, np.pi]])
+                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
+            ),
         )
 
-        cvd = CVDiscovery
+        scheme0: Scheme = Scheme(
+            cvd=None,
+            cvs=cv0,
+            Engine=YaffEngine,
+            ener=get_alaninedipeptide_amber99ff,
+            T=T,
+            timestep=2.0 * units.femtosecond,
+            timecon_thermo=100.0 * units.femtosecond,
+            folder=full_name,
+            write_step=1,
+        )
 
-        scheme0: Scheme = Scheme(cvd=cvd,
-                                 cvs=cv0,
-                                 Engine=YaffEngine,
-                                 ener=get_alaninedipeptide_amber99ff,
-                                 T=T,
-                                 timestep=2.0 * units.femtosecond,
-                                 timecon_thermo=100.0 * units.femtosecond,
-                                 folder=full_name,
-                                 write_step=5,
-                                 )
+        scheme0.round(rnds=3, steps=1e4, n=4)
 
-        scheme0.round(rnds=2, steps=5e3, n=4)
+        scheme0.rounds.run(NoneBias(scheme0.rounds.get_bias().cvs), steps=1e5)
+        scheme0.rounds.save()
 
         del scheme0  # close roundsobject
 
     cleancopy(full_name)
 
     cvd = CVDiscovery(
-        transformer=TranformerUMAP(
-            outdim=2,
+        transformer=TranformerAutoEncoder(
+            outdim=3,
             # periodicity=[True, True],
             # periodicity=[False, False, False],
             # bounding_box=np.array([
@@ -106,24 +105,17 @@ def test_cv_discovery(name="test_cv_disc_10", recalc=False):
 
     scheme0.update_CV(
         samples=1e3,
-
-        n_neighbors=50,
-        min_dist=0.5,
-
-        nunits=100,
+        n_neighbors=60,
+        min_dist=0.8,
+        nunits=200,
         nlayers=4,
-
         # metric=None,
-        metric='l2',
+        metric="l2",
         densmap=True,
         parametric_reconstruction=True,
         parametric_reconstruction_loss_fcn=keras.losses.MSE,
-
-        # prescale=True,
-
-        # global_correlation_loss_weight=0.6,
-        # decoder=True,
-        # run_eagerly=True,
+        # random_state=np.random.randint(0, 1000),
+        decoder=True,
     )
 
     # scheme0.round(rnds=4, steps=1e4, n=3)

@@ -7,9 +7,6 @@
 # log.set_level(log.medium)
 
 
-
-
-
 # if __name__ == '__main__':
 #     print(sys.argv[1])
 #     run_md(folder_name=sys.argv[1])

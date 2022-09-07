@@ -2,35 +2,27 @@ from __future__ import annotations
 
 import itertools
 import tempfile
-import typing
-from abc import abstractmethod
-from ast import Raise
-from dataclasses import dataclass, field
 from functools import partial
 from importlib import import_module
-from inspect import stack
-from random import SystemRandom
-from tkinter import Y
-from types import MethodType
-from typing import (Annotated, Callable, Collection, Iterable, Iterator, List,
-                    Optional, Tuple, Union)
+from typing import Callable, Iterable
 
-import dill
 import jax
+
 # import numpy as np
 import jax.numpy as jnp
 import jax_dataclasses as jdc
-import jaxlib
 import numpy as np
 import tensorflow
 import tensorflow as tfl
-from IMLCV.base.metric import Metric
-from IMLCV.base.tools import HashableArrayWrapper
-from jax import grad, jacfwd, jit, vmap
+from jax import jacfwd, jit, vmap
 from jax.experimental.jax2tf import call_tf
+
 # using the import module import the tensorflow.keras module
 # and typehint that the type is KerasAPI module
 from keras.api._v2 import keras as KerasAPI
+
+from IMLCV.base.metric import Metric
+from IMLCV.base.tools import HashableArrayWrapper
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
@@ -38,36 +30,31 @@ keras: KerasAPI = import_module("tensorflow.keras")
 @jdc.pytree_dataclass
 class SystemParams:
     coordinates: jnp.ndarray
-    cell: Optional[jnp.ndarray] = None
-    _z_array:  jdc.Static[Optional[jnp.ndarray]] = None
+    z_array: jdc.Static[HashableArrayWrapper | None] = None
+    cell: jnp.ndarray | None = None
 
     def __post_init__(self):
-        if self._z_array is not None:
-            if isinstance(self._z_array, jnp.ndarray):
-                self.__dict__['_z_array'] = HashableArrayWrapper(self._z_array)
-
-    @property
-    def z_array(self):
-        if self._z_array is None:
-            return None
-        return self._z_array.val
+        zarr = self.z_array
+        if zarr is not None:
+            if not isinstance(zarr, HashableArrayWrapper):
+                super().__setattr__("z_array", HashableArrayWrapper(zarr))
 
     def __getitem__(self, slices):
         return SystemParams(
             coordinates=self.coordinates[slices],
             cell=(self.cell[slices] if self.cell is not None else None),
-            _z_array=self._z_array,
+            z_array=self.z_array,
         )
 
     def __iter__(self):
-        if not self._batched:
+        if not self.batched:
             yield self
             return
         for i in range(self.coordinates.shape[0]):
             yield SystemParams(
                 coordinates=self.coordinates[i, :, :],
                 cell=self.cell[i, :, :] if self.cell is not None else None,
-                _z_array=self._z_array,
+                z_array=self.z_array,
             )
         return
 
@@ -84,8 +71,8 @@ class SystemParams:
         coordinates = []
         cell = []
         has_cell = arr[0].cell is not None
-        has__z_arr = arr[0]._z_array is not None
-        _z_arr = arr[0]._z_array
+        has__z_arr = arr[0].z_array is not None
+        _z_arr = arr[0].z_array
 
         for x in arr:
             coordinates.append(x.coordinates)
@@ -96,9 +83,9 @@ class SystemParams:
                 assert x.cell is None
 
             if has__z_arr:
-                assert x._z_array == _z_arr
+                assert x.z_array == _z_arr
             else:
-                assert x._z_array is None
+                assert x.z_array is None
 
         coordinates = jnp.vstack(coordinates)
         if has_cell:
@@ -106,7 +93,7 @@ class SystemParams:
         else:
             cell = None
 
-        return SystemParams(coordinates=coordinates, cell=cell, _z_array=_z_arr)
+        return SystemParams(coordinates=coordinates, cell=cell, z_array=_z_arr)
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
@@ -114,8 +101,10 @@ tf = Callable[[jnp.ndarray], jnp.ndarray]
 
 
 class CvTrans:
-    def __init__(self, f: tf) -> None:
+    def __init__(self, f: tf, batched=True) -> None:
         self.f = f
+        assert batched == True
+        self.batched = batched
 
     @partial(jit, static_argnums=(0,))
     def compute(self, x: jnp.ndarray) -> jnp.ndarray:
@@ -123,8 +112,12 @@ class CvTrans:
 
 
 class CvFlow:
-
-    def __init__(self, func: sf, trans: Optional[Union[CvTrans, Iterable[CvTrans]]] = None, batched=False) -> None:
+    def __init__(
+        self,
+        func: sf,
+        trans: CvTrans | Iterable[CvTrans] | None = None,
+        batched=False,
+    ) -> None:
         self.f0 = func
         if trans is None:
             self.f1 = []
@@ -165,8 +158,7 @@ class CvFlow:
         return CvFlow(func=f0)
 
     def __mul__(self, other):
-        assert isinstance(
-            other, CvTrans), 'can only multiply by CvTrans object'
+        assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
 
         return CvFlow(func=self.f0, trans=[*self.f1, other], batched=self.batched)
 
@@ -182,24 +174,27 @@ class PeriodicLayer(keras.layers.Layer):
         # maps to periodic box
         bbox = self.bbox
 
-        inputs_mod = tfl.math.mod(
-            inputs - bbox[:, 0], bbox[:, 1] - bbox[:, 0])+bbox[:, 0]
-        return tfl.where(self.periodicity,  inputs_mod, inputs)
+        inputs_mod = (
+            tfl.math.mod(inputs - bbox[:, 0], bbox[:, 1] - bbox[:, 0]) + bbox[:, 0]
+        )
+        return tfl.where(self.periodicity, inputs_mod, inputs)
 
     def metric(self, r):
         # maps difference
         a = self.bbox[:, 1] - self.bbox[:, 0]
 
         r = tfl.math.mod(r, a)
-        r = tfl.where(r > a/2, r-a, r)
+        r = tfl.where(r > a / 2, r - a, r)
         return tfl.norm(r, axis=1)
 
     def get_config(self):
         config = super().get_config().copy()
-        config.update({
-            "bbox": np.array(self.bbox),
-            "periodicity": self.periodicity,
-        })
+        config.update(
+            {
+                "bbox": np.array(self.bbox),
+                "periodicity": self.periodicity,
+            }
+        )
         return config
 
 
@@ -215,16 +210,15 @@ class KerasTrans(CvTrans):
     def __getstate__(self):
         # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model
         model_str = ""
-        with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
-            tensorflow.keras.models.save_model(
-                self.encoder, fd.name, overwrite=True)
+        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+            tensorflow.keras.models.save_model(self.encoder, fd.name, overwrite=True)
             model_str = fd.read()
-        d = {'model_str': model_str}
+        d = {"model_str": model_str}
         return d
 
     def __setstate__(self, state):
-        with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
-            fd.write(state['model_str'])
+        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+            fd.write(state["model_str"])
             fd.flush()
 
             custom_objects = {"PeriodicLayer": PeriodicLayer}
@@ -232,6 +226,7 @@ class KerasTrans(CvTrans):
                 model = keras.models.load_model(fd.name)
 
         self.encoder = model
+
 
 # decorators definition for functions
 
@@ -249,7 +244,6 @@ def cvtrans(f: tf):
 
 
 class CV:
-
     def __init__(self, f: CvFlow, metric: Metric, jac=jacfwd) -> None:
         "jac: kind of jacobian. Default is jacfwd (more efficient for tall matrices), but functions with custom jvp's only support jacrev"
 
@@ -258,20 +252,26 @@ class CV:
         self.jac = jac
 
     @partial(jit, static_argnums=(0, 2, 3))
-    def compute(self, sp: SystemParams, jac_p=False, jac_c=False):
+    def compute(self, sp: SystemParams, jacobian=False, map=False):
+        if map:
 
-        cvf = self.f.compute
+            def cvf(x):
+                return vmap(self.metric.map)(self.f.compute(x))
+
+        else:
+            cvf = self.f.compute
+
         if sp.batched:
             jac = vmap(self.jac(cvf))
         else:
             jac = self.jac(cvf)
 
         val = cvf(sp)
-        jac = jac(sp) if jac_p or jac_c else None
+        jac = jac(sp) if jacobian else None
 
         return [val, jac]
 
-    @ property
+    @property
     def n(self):
         return self.metric.ndim
 
@@ -283,7 +283,8 @@ def dihedral(numbers):
     args:
         numbers: list with index of 4 atoms that form dihedral
     """
-    @ cv
+
+    @cv
     def f(sp: SystemParams):
 
         # @partial(vmap, in_axes=(0), out_axes=(0))
@@ -309,20 +310,23 @@ def dihedral(numbers):
     return f
 
 
-@ cv
+@cv
 def Volume(sp: SystemParams):
 
     return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
 
 
 def rotate_2d(alpha):
-    @ cvtrans
+    @cvtrans
     @vmap
     def f(cv):
-        return jnp.array([
-            [jnp.cos(alpha), jnp.sin(alpha)],
-            [-jnp.sin(alpha), jnp.cos(alpha)]
-        ]) @ cv
+        return (
+            jnp.array(
+                [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]]
+            )
+            @ cv
+        )
+
     return f
 
 
@@ -330,20 +334,19 @@ def scale_cv_trans(array=jnp.ndarray) -> CvTrans:
     "axis 0 is batch axis"
     maxi = jnp.max(array, axis=0)
     mini = jnp.min(array, axis=0)
-    diff = maxi-mini
+    diff = maxi - mini
     mask = jnp.abs(diff) > 1e-6
 
     @vmap
     def f0(x):
-        return (x[mask]-mini[mask])/diff[mask]
+        return (x[mask] - mini[mask]) / diff[mask]
 
     f = CvTrans(f=f0)
 
     return f.compute(array), f
 
 
-def coulomb_descriptor_cv_flow(sps: SystemParams, permutation='l2') -> CvFlow:
-
+def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2") -> CvFlow:
     @cv
     def h(x: SystemParams):
 
@@ -353,33 +356,63 @@ def coulomb_descriptor_cv_flow(sps: SystemParams, permutation='l2') -> CvFlow:
         out = jnp.zeros((n, n))
 
         for i in range(n):
-            d = 0.5 * x.z_array[i]**2.4
+            d = 0.5 * x.z_array[i] ** 2.4
             out = out.at[i, i].set(d)
 
         for i, j in itertools.combinations(range(n), 2):
-            d = jnp.linalg.norm(
-                coor[i, :]-coor[j, :], 2)
-            d = x.z_array[i]*x.z_array[j]/d
+            d = jnp.linalg.norm(coor[i, :] - coor[j, :], 2)
+            d = x.z_array[i] * x.z_array[j] / d
             out = out.at[i, j].set(d)
             out = out.at[j, i].set(d)
 
-        if permutation == 'l2':
+        if permutation == "l2":
 
             ind = jnp.argsort(jnp.linalg.norm(out, 2, axis=(0)))
             out = out[ind, :]
             out = out[:, ind]
-        elif permutation == 'none':
+        elif permutation == "none":
             pass
         else:
             raise NotImplementedError
 
+        return out
         # flatten relevant coordinates
-        return out[jnp.triu_indices(n)]
+        # return out[jnp.triu_indices(n)]
         # return g(x.coordinates)
 
-    if sps is not None:
-        x = h.compute(sps)
-    else:
-        x = None
+    return h.compute(sps), h
 
-    return x, h
+    # #
+
+    # # keep = (((l**2).cumsum()/(l**2).sum())**(1/2)
+    # #         ) < (1 - jnp.finfo(array.dtype).eps)
+
+    # # transf = (Vh.T)[:, keep]
+
+    # @cvtrans
+    # @vmap
+    # def f(x):
+    #     U, l, Vh = jnp.linalg.svd(x, full_matrices=False)
+
+    #     return (U @ x @ (Vh.T))[:, 0:out_dim]
+
+    # return f.compute(array), f
+
+
+# def svd_cv_trans(array: jnp.array, out_dim=50):
+
+#     #
+
+#     # keep = (((l**2).cumsum()/(l**2).sum())**(1/2)
+#     #         ) < (1 - jnp.finfo(array.dtype).eps)
+
+#     # transf = (Vh.T)[:, keep]
+
+#     @cvtrans
+#     @vmap
+#     def f(x):
+#         U, l, Vh = jnp.linalg.svd(x, full_matrices=False)
+
+#         return (U @ x @ (Vh.T))[:, 0:out_dim]
+
+#     return f.compute(array), f

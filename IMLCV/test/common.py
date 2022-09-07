@@ -4,6 +4,7 @@ import ase.io
 import ase.units
 import numpy as np
 from ase.calculators.cp2k import CP2K
+
 from IMLCV.base.bias import BiasMTD
 from IMLCV.base.CV import CV, CombineCV, CVUtils, hyperTorus
 from IMLCV.base.MdEngine import YaffEngine
@@ -18,15 +19,15 @@ def ala_yaff(write=1000):
 
     # ff = get_alaninedipeptide_amber99ff()
 
-    cvs = CombineCV([
-        CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
-        CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=hyperTorus(1)),
-    ])
-    bias = BiasMTD(cvs=cvs,
-                   K=2.0 * units.kjmol,
-                   sigmas=np.array([0.35, 0.35]),
-                   start=500,
-                   step=500)
+    cvs = CombineCV(
+        [
+            CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
+            CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=hyperTorus(1)),
+        ]
+    )
+    bias = BiasMTD(
+        cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500
+    )
 
     yaffmd = YaffEngine(
         ener=get_alaninedipeptide_amber99ff,
@@ -73,35 +74,36 @@ def ala_yaff(write=1000):
 def todo_ASE_yaff():
 
     # make CP2K ase calculator
-    path_atoms = Path.cwd() / 'atoms.xyz'
-    with open(path_atoms, 'r') as f:
+    path_atoms = Path.cwd() / "atoms.xyz"
+    with open(path_atoms) as f:
         atoms = ase.io.read(f)
 
-    path_source = Path('/data/gent/vo/000/gvo00003/vsc42365/Libraries')
+    path_source = Path("/data/gent/vo/000/gvo00003/vsc42365/Libraries")
 
-    path_potentials = path_source / 'GTH_POTENTIALS'
-    path_basis = path_source / 'BASIS_SETS'
-    path_dispersion = path_source / 'dftd3.dat'
+    path_potentials = path_source / "GTH_POTENTIALS"
+    path_basis = path_source / "BASIS_SETS"
+    path_dispersion = path_source / "dftd3.dat"
 
-    with open("CP2K_para.inp", "r") as f:
-        additional_input = f.read().format(path_basis, path_potentials,
-                                           path_dispersion)
+    with open("CP2K_para.inp") as f:
+        additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
 
-    calc_cp2k = CP2K(atoms=atoms,
-                     auto_write=True,
-                     basis_set=None,
-                     command='mpirun cp2k_shell.popt',
-                     cutoff=800 * ase.units.Rydberg,
-                     stress_tensor=False,
-                     print_level='LOW',
-                     inp=additional_input,
-                     pseudo_potential=None,
-                     max_scf=None,
-                     xc=None,
-                     basis_set_file=None,
-                     charge=None,
-                     potential_file=None,
-                     debug=False)
+    calc_cp2k = CP2K(
+        atoms=atoms,
+        auto_write=True,
+        basis_set=None,
+        command="mpirun cp2k_shell.popt",
+        cutoff=800 * ase.units.Rydberg,
+        stress_tensor=False,
+        print_level="LOW",
+        inp=additional_input,
+        pseudo_potential=None,
+        max_scf=None,
+        xc=None,
+        basis_set_file=None,
+        charge=None,
+        potential_file=None,
+        debug=False,
+    )
 
     atoms.calc = calc_cp2k
 
@@ -111,11 +113,9 @@ def todo_ASE_yaff():
     metric = None
 
     cvs = CV(CVUtils.Volume, metric=metric)
-    bias = BiasMTD(cvs=cvs,
-                   K=1.2 * units.kjmol,
-                   sigmas=np.array([0.35]),
-                   start=50,
-                   step=50)
+    bias = BiasMTD(
+        cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50
+    )
     yaffmd = YaffEngine(
         ener=ff,
         bias=bias,

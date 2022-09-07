@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from sys import stdout
-from typing import List, Optional
-
 import jax
 import jax.numpy as jnp
 import numpy as np
-from IMLCV.base.bias import (Bias, BiasF, CompositeBias, CvMonitor, FesBias,
-                             GridBias, plot_app)
+
+from IMLCV.base.bias import Bias, BiasF, CompositeBias, CvMonitor, GridBias, plot_app
 from IMLCV.base.CV import CV, SystemParams
 from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
 from molmod.units import picosecond
-from parsl import File, python_app
+from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
 from thermolib.thermodynamics.histogram import Histogram2D
@@ -33,7 +29,7 @@ class Observable:
     observables."""
 
     samples_per_bin = 20
-    time_per_bin = 2*picosecond
+    time_per_bin = 2 * picosecond
 
     def __init__(self, rounds: Rounds, cvs: CV = None) -> None:
         self.rounds = rounds
@@ -49,13 +45,13 @@ class Observable:
 
         self.folder = rounds.folder
 
-    def _fes_2d(self, plot=True, throw_away=2*picosecond, update_bounds=True):
+    def _fes_2d(self, plot=True, update_bounds=True):
         # fes = FreeEnergySurface2D.from_txt
 
         temp = self.rounds.T
 
         common_bias = self.rounds.get_bias()
-        directory = f'{self.folder}/round_{self.rounds.round}'
+        directory = f"{self.folder}/round_{self.rounds.round}"
 
         if isinstance(self.rounds, RoundsMd):
 
@@ -66,57 +62,70 @@ class Observable:
             time = 0
             cv = None
 
-            for dictionary in self.rounds.iter(num=2):
+            for dictionary in self.rounds.iter(num=1):
 
-                bias = Bias.load(dictionary['attr']["name_bias"])
+                bias = Bias.load(dictionary["attr"]["name_bias"])
 
                 if cv is None:
                     cv = bias.cvs
 
-                index = np.argmax(dictionary['t'] > throw_away)
-                time += dictionary['t'][-1]-dictionary['t'][index]
+                # index = np.argmax(dictionary['t'] > throw_away)
+                # time += dictionary['t'][-1]-dictionary['t'][index]
 
                 sp = SystemParams(
                     coordinates=dictionary["positions"],
                     cell=dictionary.get("cell", None),
-                )[index:]
+                )
 
                 # execute all the mappings
                 cvs = cv.compute(sp)[0]
                 cvs_mapped = jax.jit(jax.vmap(cv.metric.map))(cvs)
 
-                arr = np.array(cvs, dtype=np.double, )
-                arr_mapped = np.array(cvs_mapped, dtype=np.double, )
+                arr = np.array(
+                    cvs,
+                    dtype=np.double,
+                )
+                arr_mapped = np.array(
+                    cvs_mapped,
+                    dtype=np.double,
+                )
 
                 trajs_mapped.append(arr_mapped)
                 trajs.append(arr)
 
-                if plot:
-                    if dictionary['round']['round'] == self.rounds.round:
-                        i = dictionary['i']
+                # if plot:
+                #     if dictionary['round']['round'] == self.rounds.round:
+                #         i = dictionary['i']
 
-                        plot_app(bias=bias, outputs=[File(
-                            f'{directory}/umbrella_{i}.pdf')], traj=[arr_mapped])
+                #         plot_app(bias=bias, outputs=[File(
+                #             f'{directory}/umbrella_{i}.pdf')], traj=[arr_mapped])
 
                 biases.append(Observable._ThermoBias2D(bias))
 
             if plot:
+                plot_app(
+                    bias=common_bias,
+                    outputs=[File(f"{directory}/combined_unmapped.pdf")],
+                    map=False,
+                    traj=trajs,
+                )
 
-                plot_app(bias=common_bias, outputs=[File(
-                    f'{directory}/combined_unmapped.pdf')], map=False, traj=trajs)
-
-                plot_app(bias=common_bias, outputs=[File(
-                    f'{directory}/combined.pdf')], traj=trajs_mapped)
+                plot_app(
+                    bias=common_bias,
+                    outputs=[File(f"{directory}/combined.pdf")],
+                    traj=trajs_mapped,
+                )
 
             # todo: take actual bounds instead of calculated bounds
             bounds, bins = self._FES_mg(
-                trajs=trajs_mapped, time=time,  bounding_box=cv.metric.bounding_box)
+                trajs=trajs_mapped, bounding_box=cv.metric.bounding_box
+            )
 
             histo = Histogram2D.from_wham_c(
                 bins=bins,
                 # pinit=pinit,
                 traj_input=trajs_mapped,
-                error_estimate='mle_f',
+                error_estimate="mle_f",
                 biasses=biases,
                 temp=temp,
             )
@@ -127,7 +136,7 @@ class Observable:
             for dictionary in self.rounds.iter(num=np.Inf):
                 pos = dictionary["positions"][:]
 
-                if 'cell' in dictionary:
+                if "cell" in dictionary:
                     cell = dictionary["cell"][:]
                     arr = np.array(
                         [
@@ -138,10 +147,7 @@ class Observable:
                     )
                 else:
                     arr = np.array(
-                        [
-                            self.cvs.compute(coordinates=p, cell=None)[0]
-                            for p in pos
-                        ],
+                        [self.cvs.compute(coordinates=p, cell=None)[0] for p in pos],
                         dtype=np.double,
                     )
 
@@ -152,7 +158,7 @@ class Observable:
             histo = Histogram2D.from_single_trajectory(
                 data,
                 bins,
-                error_estimate='mle_f',
+                error_estimate="mle_f",
             )
         else:
             raise NotImplementedError
@@ -182,7 +188,7 @@ class Observable:
             return None
 
         for run_data in self.rounds.iter(num=1, r=r):
-            bias = Bias.load(run_data['attr']["name_bias"])
+            bias = Bias.load(run_data["attr"]["name_bias"])
             if cvs is None:
                 cvs = bias.cvs
 
@@ -196,13 +202,13 @@ class Observable:
 
         transitions = jnp.vstack(trans)
         if plot:
-            fn = f'{self.folder}/round_{self.rounds.round}/'
+            fn = f"{self.folder}/round_{self.rounds.round}/"
         else:
             fn = None
 
         return cvs.metric.update_metric(transitions, fn=fn)
 
-    def _FES_mg(self, trajs,  bounding_box, time=None, n=None):
+    def _FES_mg(self, trajs, bounding_box, n=None):
 
         if n is None:
             n = 0
@@ -210,19 +216,18 @@ class Observable:
                 n += t.size
 
             # 20 points per bin on average
-            n = int(n**(1 / trajs[0].ndim) / self.samples_per_bin)
+            n = int(n ** (1 / trajs[0].ndim) / self.samples_per_bin)
 
-        if time is not None:
-            bins_max = int((time/self.time_per_bin)**(1 / trajs[0].ndim))
-            if bins_max > n:
-                n = bins_max
+        # if time is not None:
+        #     bins_max = int((time/self.time_per_bin)**(1 / trajs[0].ndim))
+        #     if bins_max > n:
+        #         n = bins_max
 
         assert n >= 4, "sample more points"
 
         trajs = np.vstack(trajs)
 
-        bounds = [[trajs[:, i].min(), trajs[:, i].max()]
-                  for i in range(trajs.shape[1])]
+        bounds = [[trajs[:, i].min(), trajs[:, i].max()] for i in range(trajs.shape[1])]
         bins = [
             np.linspace(0, 1, n, endpoint=True, dtype=np.double)
             for _ in range(trajs.shape[1])
@@ -231,7 +236,6 @@ class Observable:
         return bounds, bins
 
     class _ThermoBias2D(BiasPotential2D):
-
         def __init__(self, bias: Bias) -> None:
             self.bias = bias
 
@@ -240,13 +244,14 @@ class Observable:
         def __call__(self, cv1, cv2):
             # CVs are already in mapped space
             cvs = jnp.array([cv1, cv2])
-            b, _ = jnp.apply_along_axis(self.bias.compute,
-                                        axis=0,
-                                        arr=cvs,
-                                        diff=False,
-                                        map=False,  # already mapped
-                                        batched=False,
-                                        )
+            b, _ = jnp.apply_along_axis(
+                self.bias.compute,
+                axis=0,
+                arr=cvs,
+                diff=False,
+                map=False,  # already mapped
+                batched=False,
+            )
 
             b = np.array(b, dtype=np.double)
             b[np.isnan(b)] = 0
@@ -256,15 +261,17 @@ class Observable:
         def print_pars(self, *pars_units):
             pass
 
-    def fes_bias(self, kind='normal', plot=False, fs=None, max_bias=np.inf, update_bounds=True):
+    def fes_bias(
+        self, kind="normal", plot=False, fs=None, max_bias=None, update_bounds=True
+    ):
         if fs is None:
             fes, bounds = self._fes_2d(plot=plot, update_bounds=True)
 
-            if kind == 'normal':
+            if kind == "normal":
                 fs = fes.fs
-            elif kind == 'fupper':
+            elif kind == "fupper":
                 fs = fes.fupper
-            elif kind == 'flower':
+            elif kind == "flower":
                 fs = fes.flower
             else:
                 raise ValueError
@@ -276,7 +283,7 @@ class Observable:
 
         # fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
         #                            bounds=bounds), T=self.rounds.T)
-        fesBias = GridBias(cvs=self.cvs,  vals=fs)
+        fesBias = GridBias(cvs=self.cvs, vals=fs)
 
         fesBias = CompositeBias(
             biases=[
@@ -287,10 +294,21 @@ class Observable:
         )
 
         if plot:
-            plot_app(bias=fesBias, outputs=[File(
-                f'{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf')], map=False, inverted=True,)
+            plot_app(
+                bias=fesBias,
+                outputs=[
+                    File(
+                        f"{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf"
+                    )
+                ],
+                map=False,
+                inverted=True,
+            )
 
-            plot_app(bias=fesBias, outputs=[
-                File(f'{self.folder}/FES_thermolib_{self.rounds.round}.pdf')], inverted=True,)
+            plot_app(
+                bias=fesBias,
+                outputs=[File(f"{self.folder}/FES_thermolib_{self.rounds.round}.pdf")],
+                inverted=True,
+            )
 
         return fesBias

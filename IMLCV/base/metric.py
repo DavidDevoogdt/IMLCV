@@ -3,13 +3,13 @@ from __future__ import annotations
 from functools import partial
 
 import alphashape
-import jax
+
 # import numpy as np
 import jax.numpy as jnp
 import jax.scipy as jsp
 import numba
 import numpy as np
-from jax import jit, value_and_grad
+from jax import jit
 from matplotlib import pyplot as plt
 from scipy.interpolate import RBFInterpolator
 from shapely.geometry import MultiPoint, Point
@@ -24,7 +24,6 @@ class Metric:
         periodicities,
         bounding_box=None,
         map_meshgrids=None,
-
     ) -> None:
         if bounding_box is None:
             bounding_box = jnp.zeros((len(periodicities), 2), jnp.float32)
@@ -34,8 +33,7 @@ class Metric:
             bounding_box = jnp.array(bounding_box, dtype=jnp.float32)
 
         if bounding_box.ndim == 1:
-            bounding_box = jnp.reshape(
-                bounding_box, (1, 2))
+            bounding_box = jnp.reshape(bounding_box, (1, 2))
 
         if isinstance(periodicities, list):
             periodicities = jnp.array(periodicities)
@@ -50,13 +48,13 @@ class Metric:
         # self._boundaries = np.zeros(self.bounding_box.shape)
         # self._boundaries[:, 1] = 1
 
-    # @partial(jit, static_argnums=(0))
+    @partial(jit, static_argnums=(0))
     def difference(self, x1, x2):
         """x1 and x2 should already be mapped."""
         xs = x2 - x1
         return self._periodic_wrap(xs, min=True)
 
-    # @partial(jit, static_argnums=(0, 2))
+    @partial(jit, static_argnums=(0, 2))
     def _periodic_wrap(self, xs, min=False):
         """Translate cvs such over unit cell.
 
@@ -69,20 +67,23 @@ class Metric:
 
         return jnp.where(self.periodicities, coor, xs)
 
-    # @partial(jit, static_argnums=(0))
+    @partial(jit, static_argnums=(0))
     def map(self, y):
         """transform CVs to lie in unit square."""
 
         y = (y - self.bounding_box[:, 0]) / (
-            self.bounding_box[:, 1] - self.bounding_box[:, 0])
+            self.bounding_box[:, 1] - self.bounding_box[:, 0]
+        )
 
         if self.map_meshgrids is not None:
 
             y = y * (jnp.array(self.map_meshgrids[0].shape) - 1)
-            y = jnp.array([
-                jsp.ndimage.map_coordinates(wp, y, order=1)
-                for wp in self.map_meshgrids
-            ])
+            y = jnp.array(
+                [
+                    jsp.ndimage.map_coordinates(wp, y, order=1)
+                    for wp in self.map_meshgrids
+                ]
+            )
 
         return self._periodic_wrap(y, min=False)
 
@@ -98,8 +99,7 @@ class Metric:
 
         if self.map_meshgrids is None and other.map_meshgrids is None:
             map_meshgrids = None
-        elif (self.map_meshgrids is not None) and (other.map_meshgrids
-                                                   is not None):
+        elif (self.map_meshgrids is not None) and (other.map_meshgrids is not None):
             map_meshgrids = [*self.map_meshgrids, *other.map_meshgrids]
         else:
             raise NotImplementedError
@@ -116,7 +116,7 @@ class Metric:
         Args:
             n: number of points in each dim
             map: boolean. True: work in mapped space (default), False: calculate grid in space without metric
-            endpoints: if 
+            endpoints: if
 
         Returns:
             meshgrid and vector with distances between points
@@ -134,8 +134,7 @@ class Metric:
         else:
             b = self.bounding_box
 
-        assert not (jnp.abs(b[:, 1] - b[:, 0]) <
-                    1e-12).any(), 'give proper boundaries'
+        assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), "give proper boundaries"
         grid = [
             jnp.linspace(row[0], row[1], n, endpoint=endpoints[i])
             for i, row in enumerate(b)
@@ -152,17 +151,18 @@ class Metric:
             assert self.map_meshgrids is not None
             interp_mg = self.map_meshgrids
         else:
-            interp_mg = jnp.apply_along_axis(self.map,
-                                             axis=0,
-                                             arr=np.array(interp_mg))
+            interp_mg = jnp.apply_along_axis(self.map, axis=0, arr=np.array(interp_mg))
 
-        m = np.logical_or(*[np.logical_or(ip < (-tol),  ip > (1+tol))
-                            for ip in interp_mg])
+        m = np.logical_or(
+            *[np.logical_or(ip < (-tol), ip > (1 + tol)) for ip in interp_mg]
+        )
         mask = np.ones(m.shape)
         mask[m] = np.nan
         return mask
 
-    def update_metric(self, trajs, convex=True, fn=None, acc=30, trim=False, tol=0.1) -> Metric:
+    def update_metric(
+        self, trajs, convex=True, fn=None, acc=30, trim=False, tol=0.1
+    ) -> Metric:
         """find best fitting bounding box and get affine tranformation+ new
         boundaries."""
 
@@ -188,13 +188,16 @@ class Metric:
         dist_avg = bound.length / len(trajs)
 
         if convex:
-            assert np.array([
-                bound.distance(p) for p in mpoints
-            ]).max() < acc * dist_avg, "boundaries are not convex"
+            assert (
+                np.array([bound.distance(p) for p in mpoints]).max() < acc * dist_avg
+            ), "boundaries are not convex"
 
         proj = np.array(
-            [[bound.project(Point(tr[0, :])),
-              bound.project(Point(tr[1, :]))] for tr in trajs])
+            [
+                [bound.project(Point(tr[0, :])), bound.project(Point(tr[1, :]))]
+                for tr in trajs
+            ]
+        )
 
         def get_lengths(proj):
             b = np.copy(proj[:])
@@ -209,13 +212,13 @@ class Metric:
                 a[a > i] -= j - i
 
             return a
+
         # sort pair
         as1 = proj.argsort(axis=1)
         proj = np.take_along_axis(proj, as1, axis=1)
-        trajs = np.array(
-            [pair[argsort, :] for argsort, pair in zip(as1, trajs)])
+        trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
 
-        clustering = DBSCAN(eps=5*dist_avg).fit(get_lengths(proj)).labels_
+        clustering = DBSCAN(eps=5 * dist_avg).fit(get_lengths(proj)).labels_
 
         if fn is not None:
             plt.clf()
@@ -231,12 +234,11 @@ class Metric:
 
         as1 = proj.argsort(axis=1)
         proj = np.take_along_axis(proj, as1, axis=1)
-        trajs = np.array(
-            [pair[argsort, :] for argsort, pair in zip(as1, trajs)])
+        trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
 
         proj -= offset
 
-        clustering = DBSCAN(eps=3*dist_avg).fit(get_lengths(proj)).labels_
+        clustering = DBSCAN(eps=3 * dist_avg).fit(get_lengths(proj)).labels_
 
         if fn is not None:
             plt.clf()
@@ -245,7 +247,9 @@ class Metric:
             plt.savefig(f"{fn}/coord_cluster")
 
         ndim = clustering.max() + 1
-        assert ndim <= self.ndim, """number of new periodicities do not
+        assert (
+            ndim <= self.ndim
+        ), """number of new periodicities do not
         correspond wiht original number"""
 
         if self.ndim != 2:
@@ -277,8 +281,7 @@ class Metric:
             lin1 = np.linspace(l1[0], l1[1], num=n)
             lin2 = np.linspace(l2[0], l2[1], num=n)
 
-            xr1 = np.array(
-                [np.array([f(l1), f(l2)]) for l1, l2 in zip(lin1, lin2)])
+            xr1 = np.array([np.array([f(l1), f(l2)]) for l1, l2 in zip(lin1, lin2)])
 
             lrange.append([l1, l2])
             xrange.append(xr1)
@@ -331,7 +334,7 @@ class Metric:
                     points.append(xrange[j][:, 0, :])
                     points.append(xrange[j][:, 1, :])
 
-            interps.append(RBFInterpolator(np.vstack(points),  np.hstack(z)))
+            interps.append(RBFInterpolator(np.vstack(points), np.hstack(z)))
 
         # get the boundaries from most distal points in traj + some margin
         num = 100
@@ -355,7 +358,7 @@ class Metric:
             lspaces.append(np.linspace(a, b, num=num))
 
         dims = [len(l) for l in lspaces]
-        interp_meshgrid = np.array(np.meshgrid(*lspaces, indexing='ij'))
+        interp_meshgrid = np.array(np.meshgrid(*lspaces, indexing="ij"))
         imflat = interp_meshgrid.reshape(ndim, -1).T
         interp_mg = []
         for i in range(ndim):
@@ -364,24 +367,26 @@ class Metric:
             arr = arr_flat.reshape(dims)
             interp_mg.append(arr)
 
-        new_metric = Metric(periodicities=periodicities,
-                            bounding_box=old_boundaries,
-                            map_meshgrids=interp_mg,
-                            )
+        new_metric = Metric(
+            periodicities=periodicities,
+            bounding_box=old_boundaries,
+            map_meshgrids=interp_mg,
+        )
 
         mask = new_metric._get_mask(tol=tol)
-        interp_mg = [im*mask for im in interp_mg]
+        interp_mg = [im * mask for im in interp_mg]
 
         if fn is not None:
 
             for j in [0, 1]:
 
                 plt.clf()
-                plt.pcolor(interp_meshgrid[0, :],
-                           interp_meshgrid[1, :],
-                           interp_mg[j] * mask,
-                           # cmap=plt.get_cmap('Greys')
-                           )
+                plt.pcolor(
+                    interp_meshgrid[0, :],
+                    interp_meshgrid[1, :],
+                    interp_mg[j] * mask,
+                    # cmap=plt.get_cmap('Greys')
+                )
 
                 plt.colorbar()
 
@@ -389,20 +394,24 @@ class Metric:
                     vmax = proj[clustering != -1, 0].max()
                     vmin = proj[clustering != -1, 0].min()
 
-                    plt.scatter(trajs[clustering == i, 0, 0],
-                                trajs[clustering == i, 0, 1],
-                                c=proj[clustering == i, 0],
-                                vmax=vmax,
-                                vmin=vmin,
-                                s=5,
-                                cmap=plt.get_cmap('plasma'))
-                    plt.scatter(trajs[clustering == i, 1, 0],
-                                trajs[clustering == i, 1, 1],
-                                c=proj[clustering == i, 0],
-                                vmax=vmax,
-                                vmin=vmin,
-                                s=5,
-                                cmap=plt.get_cmap('plasma'))
+                    plt.scatter(
+                        trajs[clustering == i, 0, 0],
+                        trajs[clustering == i, 0, 1],
+                        c=proj[clustering == i, 0],
+                        vmax=vmax,
+                        vmin=vmin,
+                        s=5,
+                        cmap=plt.get_cmap("plasma"),
+                    )
+                    plt.scatter(
+                        trajs[clustering == i, 1, 0],
+                        trajs[clustering == i, 1, 1],
+                        c=proj[clustering == i, 0],
+                        vmax=vmax,
+                        vmin=vmin,
+                        s=5,
+                        cmap=plt.get_cmap("plasma"),
+                    )
 
                 plt.savefig(f"{fn}/coord{j}")
 
@@ -410,12 +419,7 @@ class Metric:
 
 
 class MetricUMAP(Metric):
-
-    def __init__(
-        self,
-        periodicities,
-        bounding_box=None
-    ) -> None:
+    def __init__(self, periodicities, bounding_box=None) -> None:
         super().__init__(periodicities=periodicities, bounding_box=bounding_box)
 
         bb = np.array(self.bounding_box)
@@ -441,20 +445,19 @@ class MetricUMAP(Metric):
             # r1 = map(x)
             # r2 = map(y)
 
-            return _periodic_wrap(x-y, min=True)
+            return _periodic_wrap(x - y, min=True)
 
         @numba.njit
         def val_and_grad(x, y):
             r = g(x, y)
             d = np.sqrt(np.sum(r**2))
 
-            return d,  r/(d + 1e-6)
+            return d, r / (d + 1e-6)
 
         self.umap_f = val_and_grad
 
 
 class hyperTorus(Metric):
-
     def __init__(self, n) -> None:
         periodicities = [True for _ in range(n)]
         boundaries = jnp.zeros((n, 2))

@@ -1,7 +1,6 @@
-import jax
-import jax.numpy as jnp
 import numpy as np
 import pytest
+
 from IMLCV.base.bias import BiasF, GridBias, HarmonicBias
 from IMLCV.base.CV import CV, CvFlow, Metric, SystemParams
 
@@ -17,12 +16,13 @@ def test_harmonic():
     # cvs = CombineCV([cv0, cv1])  # combine
 
     cvs = CV(
-        f=[CVUtils.dihedral(numbers=[4, 6, 8, 14]),
-           CVUtils.dihedral(numbers=[6, 8, 14, 16])],
+        f=[
+            CVUtils.dihedral(numbers=[4, 6, 8, 14]),
+            CVUtils.dihedral(numbers=[6, 8, 14, 16]),
+        ],
         metric=Metric(
-            periodicities=[True, True],
-            bounding_box=[[0, 2 * np.pi],
-                          [0, 2 * np.pi]])
+            periodicities=[True, True], bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]]
+        ),
     )
 
     bias = HarmonicBias(cvs, q0=np.array([np.pi, -np.pi]), k=1.0)
@@ -51,8 +51,7 @@ def test_virial():
 
     bias = BiasF(cvs=cv0, f=lambda x: x)  # simply take volume as lambda
 
-    vol, _, vir = bias.compute_coor(SystemParams(
-        coordinates=None, cell=cell), vir=True)
+    vol, _, vir = bias.compute_coor(SystemParams(coordinates=None, cell=cell), vir=True)
     assert pytest.approx(vir, abs=1e-7) == vol * np.eye(3)
 
 
@@ -66,7 +65,7 @@ def test_grid_bias():
         Metric(
             periodicities=[False, False],
             bounding_box=np.array([[-2, 2], [1, 5]]),
-        )
+        ),
     )
 
     bins = [
@@ -75,12 +74,13 @@ def test_grid_bias():
     ]
 
     def f(x, y):
-        return x**3+y
+        return x**3 + y
 
     # reevaluation of thermolib histo
-    bin_centers1, bin_centers2 = 0.5 * \
-        (bins[0][:-1]+bins[0][1:]), 0.5*(bins[1][:-1]+bins[1][1:])
-    xc, yc = np.meshgrid(bin_centers1, bin_centers2, indexing='ij')
+    bin_centers1, bin_centers2 = 0.5 * (bins[0][:-1] + bins[0][1:]), 0.5 * (
+        bins[1][:-1] + bins[1][1:]
+    )
+    xc, yc = np.meshgrid(bin_centers1, bin_centers2, indexing="ij")
     xcf = np.reshape(xc, (-1))
     ycf = np.reshape(yc, (-1))
     val = np.array([f(x, y) for x, y in zip(xcf, ycf)]).reshape(xc.shape)
@@ -88,7 +88,9 @@ def test_grid_bias():
     # print(f"xc:\n{xc}\nyc:{yc}\nval:\n{ val}")
 
     bias = GridBias(cvs=cv, vals=val)
-    def c(x, y): return bias.compute(cvs=np.array([x, y]))[0]
+
+    def c(x, y):
+        return bias.compute(cvs=np.array([x, y]))[0]
 
     # test along grid centers
 

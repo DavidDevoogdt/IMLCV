@@ -8,6 +8,7 @@ config()
 @python_app
 def app_random():
     import random
+
     return random.random()
 
 

@@ -3,25 +3,25 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Iterable, List, Optional
+from typing import Iterable
 
 import dill
 import jax.numpy as jnp
 import jax.scipy as jsp
-import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-from IMLCV.base.CV import CV, SystemParams
-from IMLCV.base.tools import HashableArrayWrapper, jit_satic_array
-from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from jax import jacrev, jit, value_and_grad, vmap
+from scipy.interpolate import RBFInterpolator
+
+from IMLCV.base.CV import CV, SystemParams
+from IMLCV.base.tools import HashableArrayWrapper
+from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
-from scipy.interpolate import RBFInterpolator
 
 
-class Energy():
+class Energy:
     """base class for biased Energy of MD simulation."""
 
     def __init__(self) -> None:
@@ -33,12 +33,12 @@ class Energy():
         raise NotImplementedError
 
     def save(self, filename):
-        with open(filename, 'wb') as f:
+        with open(filename, "wb") as f:
             dill.dump(self, f)
 
     @staticmethod
     def load(filename) -> Energy:
-        with open(filename, 'rb') as f:
+        with open(filename, "rb") as f:
             self = dill.load(f)
         return self
 
@@ -47,10 +47,10 @@ class Bias(Energy, ABC):
     """base class for biased MD runs."""
 
     def __init__(self, cvs: CV, start=None, step=None) -> None:
-        """"args:
-                cvs: collective variables
-                start: number of md steps before update is called
-                step: steps between update is called"""
+        """args:
+        cvs: collective variables
+        start: number of md steps before update is called
+        step: steps between update is called"""
         super().__init__()
 
         self.cvs = cvs
@@ -70,23 +70,21 @@ class Bias(Energy, ABC):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        [cvs, jac] = self.cvs.compute(sp=sp,
-                                      jac_p=gpos,
-                                      jac_c=vir)
+        [cvs, jac] = self.cvs.compute(sp=sp, jacobian=gpos or vir)
         [ener, de] = self.compute(cvs, diff=(gpos or vir))
 
         e_gpos = None
         if gpos:
-            e_gpos = jnp.einsum('nj,njkl->nkl', de, jac.coordinates)
+            e_gpos = jnp.einsum("nj,njkl->nkl", de, jac.coordinates)
             if not sp.batched:
                 assert e_gpos.shape[0] == 1
                 e_gpos = e_gpos.reshape(*e_gpos.shape[1:])
         e_vir = None
         if vir:
             if sp.batched:
-                e_vir = jnp.einsum('nji,nk,nkjl->nil', sp.cell, de, jac.cell)
+                e_vir = jnp.einsum("nji,nk,nkjl->nil", sp.cell, de, jac.cell)
             else:
-                e_vir = jnp.einsum('nji,nk,kjl->il', sp.cell, de, jac.cell)
+                e_vir = jnp.einsum("ji,nk,nkjl->il", sp.cell, de, jac.cell)
 
         return ener, e_gpos, e_vir
 
@@ -98,18 +96,22 @@ class Bias(Energy, ABC):
         """
 
         assert not (
-            not map and diff), "cannot retreive gradient from already mapped CVs"
+            not map and diff
+        ), "cannot retreive gradient from already mapped CVs"
 
         # map compute command
         def f0(x):
-            args = self.get_args()
+            args = [HashableArrayWrapper(a) for a in self.get_args()]
             static_array_argnums = tuple(i + 1 for i in range(len(args)))
-            f = jit_satic_array(partial(self._compute),
-                                static_array_argnums=static_array_argnums)
-            return f(x, *args)
 
-        def f1(x): return f0(self.cvs.metric.map(x)) if map else f0(x)
-        def f2(x): return value_and_grad(f1)(x) if diff else (f1(x), None)
+            return jit(self._compute, static_argnums=static_array_argnums)(x, *args)
+
+        def f1(x):
+            return f0(self.cvs.metric.map(x)) if map else f0(x)
+
+        def f2(x):
+            return value_and_grad(f1)(x) if diff else (f1(x), None)
+
         return vmap(f2)(cvs) if batched else f2(cvs)
 
     @abstractmethod
@@ -134,36 +136,40 @@ class Bias(Energy, ABC):
     def load(filename) -> Bias:
         return Energy.load(filename)
 
-    def plot(self,
-             name, n=50,
-             traj=None,
-             vmin=0,
-             vmax=100,
-             map=True,
-             inverted=False,
-             ):
+    def plot(
+        self,
+        name,
+        n=50,
+        traj=None,
+        vmin=0,
+        vmax=100,
+        map=True,
+        inverted=False,
+    ):
         """plot bias."""
 
         assert self.cvs.n == 2
 
         bins = self.cvs.metric.grid(n=n, map=map, endpoints=True)
-        mg = np.meshgrid(*bins, indexing='xy')
+        mg = np.meshgrid(*bins, indexing="xy")
 
         xlim = [mg[0].min(), mg[0].max()]
         ylim = [mg[1].min(), mg[1].max()]
 
-        bias, _ = jnp.apply_along_axis(self.compute,
-                                       axis=0,
-                                       arr=np.array(mg),
-                                       diff=False,
-                                       batched=False,
-                                       map=not map)
+        bias, _ = jnp.apply_along_axis(
+            self.compute,
+            axis=0,
+            arr=np.array(mg),
+            diff=False,
+            batched=False,
+            map=not map,
+        )
 
         extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
         if map is False:
             mask = self.cvs.metric._get_mask(tol=0.01, interp_mg=mg)
-            bias = bias*mask
+            bias = bias * mask
         # normalise lowest point of bias
 
         if inverted:
@@ -171,25 +177,26 @@ class Bias(Energy, ABC):
         bias -= bias[~np.isnan(bias)].min()
 
         # plt.clf()
-        plt.switch_backend('PDF')
+        plt.switch_backend("PDF")
 
         # plt.rc('font', **{'family': 'sans-serif'})
 
         fig, ax = plt.subplots()
 
-        p = ax.imshow(bias / (kjmol),
-                      cmap=plt.get_cmap('rainbow'),
-                      origin='lower',
-                      extent=extent,
-                      vmin=vmin,
-                      vmax=vmax
-                      )
+        p = ax.imshow(
+            bias / (kjmol),
+            cmap=plt.get_cmap("rainbow"),
+            origin="lower",
+            extent=extent,
+            vmin=vmin,
+            vmax=vmax,
+        )
 
-        ax.set_xlabel('cv1', fontsize=16)
-        ax.set_ylabel('cv2', fontsize=16)
+        ax.set_xlabel("cv1", fontsize=16)
+        ax.set_ylabel("cv2", fontsize=16)
 
         cbar = fig.colorbar(p)
-        cbar.set_label('Bias [kJ/mol]', fontsize=16)
+        cbar.set_label("Bias [kJ/mol]", fontsize=16)
 
         if traj is not None:
 
@@ -209,16 +216,25 @@ class Bias(Energy, ABC):
 
 
 @bash_app_python()
-def plot_app(bias: Bias,
-             outputs: List[File],
-             n: int = 50,
-             vmin: float = 0,
-             vmax: float = 100,
-             map: bool = True,
-             inverted=False,
-             traj:  Optional[List[np.ndarray]] = None):
-    bias.plot(name=outputs[0].filepath, n=n, traj=traj,
-              vmin=vmin, vmax=vmax, map=map, inverted=inverted)
+def plot_app(
+    bias: Bias,
+    outputs: list[File],
+    n: int = 50,
+    vmin: float = 0,
+    vmax: float = 100,
+    map: bool = True,
+    inverted=False,
+    traj: list[np.ndarray] | None = None,
+):
+    bias.plot(
+        name=outputs[0].filepath,
+        n=n,
+        traj=traj,
+        vmin=vmin,
+        vmax=vmax,
+        map=map,
+        inverted=inverted,
+    )
 
 
 class CompositeBias(Bias):
@@ -250,12 +266,15 @@ class CompositeBias(Bias):
 
         self.biases.append(b)
 
-        self.start_list = np.append(self.start_list, b.start if
-                                    (b.start is not None) else -1)
-        self.step_list = np.append(self.step_list, b.step if
-                                   (b.step is not None) else -1)
-        self.args_shape = np.append(self.args_shape,
-                                    len(b.get_args()) + self.args_shape[-1])
+        self.start_list = np.append(
+            self.start_list, b.start if (b.start is not None) else -1
+        )
+        self.step_list = np.append(
+            self.step_list, b.step if (b.step is not None) else -1
+        )
+        self.args_shape = np.append(
+            self.args_shape, len(b.get_args()) + self.args_shape[-1]
+        )
 
         if self.cvs is None:
             self.cvs = b.cvs
@@ -265,11 +284,14 @@ class CompositeBias(Bias):
 
     def _compute(self, cvs, *args):
 
-        e = jnp.array([
-            self.biases[i]._compute(
-                cvs, *args[self.args_shape[i]:self.args_shape[i + 1]])
-            for i in range(len(self.biases))
-        ])
+        e = jnp.array(
+            [
+                self.biases[i]._compute(
+                    cvs, *args[self.args_shape[i] : self.args_shape[i + 1]]
+                )
+                for i in range(len(self.biases))
+            ]
+        )
 
         return self.fun(e)
 
@@ -282,7 +304,7 @@ class CompositeBias(Bias):
         if self.finalized:
             return
 
-        mask = (self.start_list == 0)
+        mask = self.start_list == 0
 
         self.start_list[mask] += self.step_list[mask]
         self.start_list -= 1
@@ -295,7 +317,6 @@ class CompositeBias(Bias):
 
 
 class MinBias(CompositeBias):
-
     def __init__(self, biases: Iterable[Bias]) -> None:
         super().__init__(biases, fun=jnp.min)
 
@@ -347,7 +368,7 @@ class HarmonicBias(Bias):
 
     def _compute(self, cvs, *args):
         r = self.cvs.metric.difference(cvs, self.q0)
-        return jnp.einsum('i,i,i', self.k, r, r)
+        return jnp.einsum("i,i,i", self.k, r, r)
 
     def get_args(self):
         return []
@@ -364,13 +385,7 @@ class BiasMTD(Bias):
     variables.
     """
 
-    def __init__(self,
-                 cvs: CV,
-                 K,
-                 sigmas,
-                 tempering=0.0,
-                 start=None,
-                 step=None):
+    def __init__(self, cvs: CV, K, sigmas, tempering=0.0, start=None, step=None):
         """_summary_
 
         Args:
@@ -468,7 +483,7 @@ class BiasMTD(Bias):
             x2=cvs,
         )
 
-        exparg = jnp.einsum('ji,ji,i -> j', deltas, deltas, self.sigmas_isq)
+        exparg = jnp.einsum("ji,ji,i -> j", deltas, deltas, self.sigmas_isq)
         energy = jnp.sum(Ks * jnp.exp(-exparg))
 
         return energy
@@ -483,14 +498,15 @@ class GridBias(Bias):
     values are caluclated in bin centers
     """
 
-    def __init__(self,
-                 cvs: CV,
-                 vals,
-                 #  bounds=None,
-                 start=None,
-                 step=None,
-                 centers=True,
-                 ) -> None:
+    def __init__(
+        self,
+        cvs: CV,
+        vals,
+        #  bounds=None,
+        start=None,
+        step=None,
+        centers=True,
+    ) -> None:
         super().__init__(cvs, start, step)
 
         if not centers:
@@ -500,7 +516,7 @@ class GridBias(Bias):
         # extend periodically
         self.n = np.array(vals.shape)
 
-        bias = np.zeros(np.array(vals.shape) + 2)*np.nan
+        bias = np.zeros(np.array(vals.shape) + 2) * np.nan
         bias[1:-1, 1:-1] = vals
 
         if self.cvs.metric.periodicities[0]:
@@ -538,14 +554,11 @@ class GridBias(Bias):
         # gridpoints are in the middle of
 
         # map between vals 0 and 1
-        coords = (cvs*self.n-0.5)/(self.n - 1)
+        coords = (cvs * self.n - 0.5) / (self.n - 1)
         # scale to array size and offset extra row
-        coords = coords*(self.n - 1) + 1
+        coords = coords * (self.n - 1) + 1
 
-        return jsp.ndimage.map_coordinates(self.vals,
-                                           coords,
-                                           mode='nearest',
-                                           order=1)
+        return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)
 
     def get_args(self):
         return []
@@ -567,8 +580,11 @@ class FesBias(Bias):
 
         e, de = self.bias.compute(cvs, diff=diff, map=map)
 
-        r = jit(lambda x: self.T * boltzmann *
-                jnp.log(jnp.abs(jnp.linalg.det(jacrev(self.bias.cvs.metric.map)(x)))))
+        r = jit(
+            lambda x: self.T
+            * boltzmann
+            * jnp.log(jnp.abs(jnp.linalg.det(jacrev(self.bias.cvs.metric.map)(x))))
+        )
 
         e += r(cvs)
 
@@ -590,7 +606,6 @@ class FesBias(Bias):
 
 
 class CvMonitor(BiasF):
-
     def __init__(self, cvs: CV, start=0, step=1):
         super().__init__(cvs, f=None)
         self.start = start
@@ -606,11 +621,10 @@ class CvMonitor(BiasF):
         new_cv, _ = self.cvs.compute(sp=sp)
 
         if jnp.linalg.norm(new_cv - self.last_cv) > 1:
-            new_trans = np.array([[new_cv, self.last_cv]])
+            new_trans = np.array([[new_cv[0, :], self.last_cv[0, :]]])
             # print(f"new trans {new_trans}")
 
-            self.transitions = np.vstack(
-                (self.transitions, new_trans))
+            self.transitions = np.vstack((self.transitions, new_trans))
 
             # print(self.transitions)
 

@@ -1,42 +1,31 @@
-from functools import partial
+from typing import Generic, TypeVar
 
-import jax
-from jax import jit
+T = TypeVar("T")  # Declare type variable
 
 
-class HashableArrayWrapper:
-    """#see https://github.com/google/jax/issues/4572"""
+class HashableArrayWrapper(Generic[T]):
+    """see https://github.com/google/jax/issues/4572"""
 
-    def __init__(self, val):
+    def __init__(self, val: T):
         self.val = val
+
+    def __getattribute__(self, prop):
+        if prop == "val" or prop == "__hash__" or prop == "__eq__":
+            return super().__getattribute__(prop)
+        return getattr(self.val, prop)
+
+    def __getitem__(self, key):
+        return self.val[key]
+
+    def __setitem__(self, key, val):
+        self.val[key] = val
 
     def __hash__(self):
         return hash(self.val.tobytes())
 
     def __eq__(self, other):
-        eq = isinstance(
-            other, HashableArrayWrapper) and (self.__hash__()
-                                              == other.__hash__())
-        return eq
+        if isinstance(other, HashableArrayWrapper):
+            return self.__hash__() == other.__hash__()
 
-    def __getitem__(self, slice):
-        return self.val[slice]
-
-
-def jit_satic_array(fun, static_array_argnums=(), static_argnums=()):
-    """#see https://github.com/google/jax/issues/4572"""
-
-    @partial(jit, static_argnums=static_array_argnums + static_argnums)
-    def callee(*args):
-        args = list(args)
-        for i in static_array_argnums:
-            args[i] = args[i].val
-        return fun(*args)
-
-    def caller(*args):
-        args = list(args)
-        for i in static_array_argnums:
-            args[i] = HashableArrayWrapper(args[i])
-        return callee(*args)
-
-    return caller
+        f = getattr(self.val, "__eq__")
+        return f(self, other)

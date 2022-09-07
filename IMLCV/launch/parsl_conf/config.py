@@ -3,34 +3,36 @@
 #
 #####
 
-import logging
 import math
 import os
 import time
-from asyncio import tasks
 from typing import Optional
 
-import parsl
 import typeguard
+
+import parsl
 from IMLCV import LOCAL, ROOT_DIR
 from parsl.addresses import address_by_hostname
 from parsl.channels import LocalChannel
 from parsl.channels.base import Channel
 from parsl.config import Config
-from parsl.executors import HighThroughputExecutor, ThreadPoolExecutor
+from parsl.executors import HighThroughputExecutor
 from parsl.launchers import AprunLauncher, MpiRunLauncher, SingleNodeLauncher
 from parsl.launchers.launchers import Launcher
 from parsl.providers.cluster_provider import ClusterProvider
-from parsl.providers.local.local import LocalProvider
-from parsl.providers.provider_base import (ExecutionProvider, JobState,
-                                           JobStatus)
+from parsl.providers.provider_base import JobState, JobStatus
 from parsl.providers.slurm.slurm import logger, translate_table
 from parsl.providers.slurm.template import template_string
 from parsl.providers.torque.torque import TorqueProvider
 from parsl.utils import RepresentationMixin, wtime_to_minutes
 
 
-def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_vo/projects/IMLCV/Miniconda3/bin/activate base", max_blocks=1, spawnjob=False):
+def config(
+    cluster="doduo",
+    python_env="source /user/gent/436/vsc43693/scratch_vo/projects/IMLCV/Miniconda3/bin/activate base",
+    max_blocks=1,
+    spawnjob=False,
+):
 
     channel = LocalChannel(script_dir=f"{ROOT_DIR}/.parsl_scripts")
 
@@ -61,7 +63,6 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
         exec = parsl.ThreadPoolExecutor(
             max_threads=min(15, max_blocks),
             working_dir=f"{ROOT_DIR}/.workdir",
-
         )
     else:
 
@@ -87,7 +88,6 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
                     walltime="01:00:00",
                     parallelism=1,
                     cluster=cluster,
-
                 )
 
             elif provider == "slurm":
@@ -115,7 +115,7 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
                 label=f"bootstrap_{cluster}",
                 provider=provider_init(mpi=False),
                 address=address_by_hostname(),
-                working_dir=f"{ROOT_DIR}/.workdir"
+                working_dir=f"{ROOT_DIR}/.workdir",
             )
 
         else:
@@ -123,7 +123,7 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
                 label=f"hpc_{cluster}",
                 provider=provider_init(mpi=False),
                 address=address_by_hostname(),
-                working_dir=f"{ROOT_DIR}/.workdir"
+                working_dir=f"{ROOT_DIR}/.workdir",
             )
 
     config = Config(
@@ -131,7 +131,7 @@ def config(cluster='doduo', python_env="source /user/gent/436/vsc43693/scratch_v
         retries=0,
         # internal_tasks_max_threads=10,
         run_dir=f"{ROOT_DIR}/.runinfo",
-        max_idletime=60*10,
+        max_idletime=60 * 10,
         # initialize_logging=False
     )
     parsl.load(config=config)
@@ -143,7 +143,7 @@ class ClusterChannel(Channel):
     def __init__(self, channel: Channel, cluster="victini"):
         self.channel = channel
         self.cluster = cluster
-        assert cluster in ["victini", "doduo", 'slaking']
+        assert cluster in ["victini", "doduo", "slaking"]
 
     def execute_wait(self, cmd, walltime=None, envs={}):
         cmd = f"""module swap cluster/{self.cluster}\n{cmd}"""
@@ -198,7 +198,9 @@ class VSCTorqueProvider(TorqueProvider):
     ):
 
         if mem_per_node is not None:
-            scheduler_options = f"#PBS -l mem={mem_per_node*nodes_per_block}gb\n{scheduler_options}"
+            scheduler_options = (
+                f"#PBS -l mem={mem_per_node*nodes_per_block}gb\n{scheduler_options}"
+            )
 
         # augment channel
         channel = ClusterChannel(channel, cluster)
@@ -236,7 +238,7 @@ export JOBNAME="${{jobname}}"
 ${{user_script}}
 """
 
-# PBS -l nodes=${nodes_per_block}:ppn=${tasks_per_node}
+        # PBS -l nodes=${nodes_per_block}:ppn=${tasks_per_node}
         self.ppn = ppn
         self.cluster = cluster
 
@@ -346,7 +348,7 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         # if cluster:
         #     self.scheduler_options += "#SBATCH --clusters={}\n".format(cluster)
         if account:
-            self.scheduler_options += "#SBATCH --account={}\n".format(account)
+            self.scheduler_options += f"#SBATCH --account={account}\n"
         self.scheduler_options += "#SBATCH --export=NONE\n"
         self.worker_init = worker_init + "\n"
 
@@ -366,15 +368,14 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
             logger.debug("No active jobs, skipping status update")
             return
 
-        cmd = "squeue --job {0}".format(job_id_list)
+        cmd = f"squeue --job {job_id_list}"
         logger.debug("Executing %s", cmd)
         retcode, stdout, stderr = self.execute_wait(cmd)
         logger.debug("sqeueue returned %s %s", stdout, stderr)
 
         # Execute_wait failed. Do no update
         if retcode != 0:
-            logger.warning(
-                "squeue failed with non-zero exit code {}".format(retcode))
+            logger.warning(f"squeue failed with non-zero exit code {retcode}")
             return
 
         jobs_missing = list(self.resources.keys())
@@ -394,12 +395,8 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         # squeue does not report on jobs that are not running. So we are filling in the
         # blanks for missing jobs, we might lose some information about why the jobs failed.
         for missing_job in jobs_missing:
-            logger.debug(
-                "Updating missing job {} to completed status".format(
-                    missing_job)
-            )
-            self.resources[missing_job]["status"] = JobStatus(
-                JobState.COMPLETED)
+            logger.debug(f"Updating missing job {missing_job} to completed status")
+            self.resources[missing_job]["status"] = JobStatus(JobState.COMPLETED)
 
     def submit(self, command, tasks_per_node, job_name="parsl.slurm"):
         """Submit the command as a slurm job.
@@ -421,23 +418,19 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         scheduler_options = self.scheduler_options
         worker_init = self.worker_init
         if self.mem_per_node is not None:
-            scheduler_options += "#SBATCH --mem={}g\n".format(
-                self.mem_per_node)
-            worker_init += "export PARSL_MEMORY_GB={}\n".format(
-                self.mem_per_node)
+            scheduler_options += f"#SBATCH --mem={self.mem_per_node}g\n"
+            worker_init += f"export PARSL_MEMORY_GB={self.mem_per_node}\n"
         if self.cores_per_node is not None:
             cpus_per_task = math.floor(self.cores_per_node / tasks_per_node)
-            scheduler_options += "#SBATCH --cpus-per-task={}".format(
-                cpus_per_task)
-            worker_init += "export PARSL_CORES={}\n".format(cpus_per_task)
+            scheduler_options += f"#SBATCH --cpus-per-task={cpus_per_task}"
+            worker_init += f"export PARSL_CORES={cpus_per_task}\n"
 
-        job_name = "{0}.{1}".format(job_name, time.time())
+        job_name = f"{job_name}.{time.time()}"
 
-        script_path = "{0}/{1}.submit".format(self.script_dir, job_name)
+        script_path = f"{self.script_dir}/{job_name}.submit"
         script_path = os.path.abspath(script_path)
 
-        logger.debug("Requesting one block with {} nodes".format(
-            self.nodes_per_block))
+        logger.debug(f"Requesting one block with {self.nodes_per_block} nodes")
 
         job_config = {}
         job_config["submit_script_dir"] = self.channel.script_dir
@@ -454,8 +447,7 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         )
 
         logger.debug("Writing submit script")
-        self._write_submit_script(
-            template_string, script_path, job_name, job_config)
+        self._write_submit_script(template_string, script_path, job_name, job_config)
 
         if self.move_files:
             logger.debug("moving files")
@@ -466,16 +458,13 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
             logger.debug("not moving files")
             channel_script_path = script_path
 
-        retcode, stdout, stderr = self.execute_wait(
-            "sbatch {0}".format(channel_script_path)
-        )
+        retcode, stdout, stderr = self.execute_wait(f"sbatch {channel_script_path}")
 
         job_id = None
         if retcode == 0:
             for line in stdout.split("\n"):
                 if line.startswith("Submitted batch job"):
-                    job_id = line.split("Submitted batch job")[
-                        1].strip().split()[0]
+                    job_id = line.split("Submitted batch job")[1].strip().split()[0]
                     self.resources[job_id] = {
                         "job_id": job_id,
                         "status": JobStatus(JobState.PENDING),
@@ -501,8 +490,7 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         """
 
         job_id_list = " ".join(job_ids)
-        retcode, stdout, stderr = self.execute_wait(
-            "scancel {0}".format(job_id_list))
+        retcode, stdout, stderr = self.execute_wait(f"scancel {job_id_list}")
         rets = None
         if retcode == 0:
             for jid in job_ids:
