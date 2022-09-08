@@ -27,5 +27,4 @@ class HashableArrayWrapper(Generic[T]):
         if isinstance(other, HashableArrayWrapper):
             return self.__hash__() == other.__hash__()
 
-        f = getattr(self.val, "__eq__")
-        return f(self, other)
+        return self.val == other

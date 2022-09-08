@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Union
+from typing import Callable
 
 # import ase
 # import ase.geometry
@@ -59,7 +59,7 @@ class MDEngine(ABC):
         bias: Bias,
         ener: Energy,
         T,
-        P,
+        P=None,
         timestep=None,
         timecon_thermo=None,
         timecon_baro=None,
@@ -191,17 +191,20 @@ class YaffEngine(MDEngine):
 
     def __init__(
         self,
-        ener=Union[yaff.pes.ForceField, Energy, Callable],
+        ener: yaff.pes.ForceField | Energy | Callable,
         log_level=log.medium,
         **kwargs,
     ) -> None:
 
         if not isinstance(ener, _YaffFF):
-            ener = _YaffFF(ener)
+            energy = _YaffFF(ener)
+        else:
+            energy = ener
 
+        self.ener: _YaffFF
         self.log_level = log_level
 
-        super().__init__(ener=ener, **kwargs)
+        super().__init__(ener=energy, **kwargs)
 
     def _init_post(self):
 
@@ -400,9 +403,9 @@ class YaffEngine(MDEngine):
         print(f"running for {steps} steps")
         self.verlet.run(int(steps))
 
-    def get_state(self):
+    def get_state(self) -> SystemParams:
         """returns the coordinates and cell at current md step."""
-        return [self.ener.system.pos[:], self.ener.system.cell.rvecs[:]]
+        return self.ener.system_params()
 
     class _GposContribStateItem(yaff.sampling.iterative.StateItem):
         """Keeps track of all the contributions to the forces."""
@@ -429,11 +432,11 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
 
     def __init__(
         self,
-        ff: yaff.pes.ForceField,
+        ener: _YaffFF,
         bias: Bias,
     ) -> None:
 
-        self.ff = ff
+        self.ener = ener
         self.bias = bias
 
         # not all biases have a hook
@@ -444,11 +447,7 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
 
     def compute(self, gpos=None, vtens=None):
 
-        sp = SystemParams(
-            coordinates=jnp.array(self.ff.system.pos),
-            cell=jnp.array(self.ff.system.cell.rvecs),
-            z_array=jnp.array(self.ff.system.masses),
-        )
+        sp = self.ener.system_params()
 
         [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(
             sp=sp, gpos=gpos is not None, vir=vtens is not None
@@ -470,11 +469,7 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
             self.init = False
             return
 
-        coordinates = self.ff.system.pos[:]
-        cell = self.ff.system.cell.rvecs[:]
-
-        sp = SystemParams(coordinates=coordinates, cell=cell)
-
+        sp = self.ener.system_params()
         self.bias.update_bias(sp)
 
 
@@ -496,13 +491,20 @@ class _YaffFF(Energy, yaff.pes.ForceField):
         if self.from_func:
             self.f = f
 
+    def system_params(self):
+        return SystemParams(
+            coordinates=jnp.array(self.system.pos),
+            cell=jnp.array(self.system.cell.rvecs),
+            z_array=jnp.array(self.system.masses),
+        )
+
     def compute_coor(self, sp: SystemParams, gpos=None, vir=None):
 
         p_old = self.system.pos[:]
         c_old = self.system.cell.rvecs[:]
 
-        self.system.pos[:] = sp.coordinates
-        self.system.cell.update_rvecs(sp.cell)
+        self.system.pos[:] = np.array(sp.coordinates, dtype=np.double)
+        self.system.cell.update_rvecs(np.array(sp.cell, dtype=np.double))
 
         ener = self.compute(gpos=gpos, vtens=vir)
 
@@ -548,44 +550,7 @@ class _YaffFF(Energy, yaff.pes.ForceField):
             from function instead"""
         )
 
-        # import inspect
-
-        # # fails:
-        # # nlist <class 'yaff.pes.nlist.NeighborList'>
-        # # pair_pot <class 'yaff.pes.ext.PairPotLJ'>
-        # # dlist <class 'yaff.pes.dlist.DeltaList'>
-        # # iclist <class 'yaff.pes.iclist.InternalCoordinateList'>
-        # # vlist <class 'yaff.pes.vlist.ValenceList'>
-
-        # def clean(k, d, p):
-        #     if k == "system":
-        #         d[k] = None
-        #     elif k == "nlist":
-        #         d[k] = None
-        #     else:
-        #         if k in p.__dict__.keys():
-        #             d[k] = p.__dict__[k]
-
-        #     return d
-
-        # t = []
-        # for p in self.parts:
-        #     d = {}
-
-        #     for k in inspect.signature(p.__init__).parameters.keys():
-        #         d = clean(k, d, p)
-        #     t.append([p.__class__, d])
-
-        # nl = {}
-        # for k in self.nlist.__dict__:
-        #     nl = clean(k, nl, self.nlist)
-        # nl = [p.__class__, nl]
-
-        # return [sysdict, nl, t]
-
     def __setstate__(self, state_dict):
-
-        # system = yaff.system.System(**state_dict["system"])
 
         if state_dict["from_func"]:
             self.__init__(state_dict["func"])
@@ -597,20 +562,3 @@ class _YaffFF(Energy, yaff.pes.ForceField):
             return self
 
         raise NotImplementedError("see https://github.com/cython/cython/issues/4713")
-
-        # [sysdict, nl, pp] = state_dict
-
-        # nlist = yaff.pes.NeighborList.__new__()
-
-        # ts = []
-        # for state_dict in pp:
-        #     [cls, kwargs] = state_dict
-        #     if 'system' in kwargs.keys():
-        #         kwargs['system'] = system
-        #     if 'nlist' in kwargs.keys():
-        #         kwargs['nlist'] = nlist()
-        #     ts.append(cls(**kwargs))
-
-        # ff = yaff.pes.ForceField(system, ts[1:], ts[0])
-
-        # return self

@@ -15,7 +15,7 @@ from scipy.interpolate import RBFInterpolator
 
 from IMLCV.base.CV import CV, SystemParams
 from IMLCV.base.tools import HashableArrayWrapper
-from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
+from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
@@ -251,7 +251,7 @@ class CompositeBias(Bias):
         self.start_list = np.array([], dtype=np.int16)
         self.step_list = np.array([], dtype=np.int16)
         self.args_shape = np.array([0])
-        # self.cvs = None
+        self.cvs: CV = None  # type: ignore
 
         for bias in biases:
             self._append_bias(bias)
@@ -419,61 +419,18 @@ class BiasMTD(Bias):
 
         super().__init__(cvs, start, step)
 
-    def _add_hill_cv(self, q0, K):
-        """Deposit a single hill.
-
-        Args:
-            q0: A NumPy array [Ncv] specifying the Gaussian center for each
-            collective variable, or a single float if there is only one
-            collective variable
-            K: the force constant of this hill
-        """
-        if isinstance(q0, float):
-            assert self.ncv == 1
-            q0 = jnp.array([q0])
-        assert q0.ndim == 1
-        assert q0.shape[0] == self.ncv
-        self.q0s = jnp.append(self.q0s, jnp.array([q0]), axis=0)
-        self.Ks = jnp.append(self.Ks, jnp.array([K]), axis=0)
-
-    def _add_hills_cv(self, q0s, Ks):
-        """Deposit multiple hills.
-
-        Args:
-        q0s: A NumPy array [Nhills,Ncv]. Each row represents a hill,
-        specifying the Gaussian center for each collective variable
-        K: A NumPy array [Nhills] providing the force constant of each hill.
-        """
-        assert q0s.ndim == 2
-        assert q0s.shape[1] == self.ncv
-        self.q0s = jnp.concatenate((self.q0s, q0s), axis=0)
-        assert Ks.ndim == 1
-        assert Ks.shape[0] == q0s.shape[0]
-        self.Ks = jnp.concatenate((self.Ks, Ks), axis=0)
-
     def update_bias(self, sp: SystemParams):
-        """_summary_
 
-        Args:
-            coordinates: _description_
-            cell: _description_
-
-        Raises:
-            NotImplementedError: _description_
-        """
         if self.finalized:
             return
-
         # Compute current CV values
-        q0s, _, _ = self.cvs.compute(sp)
-        # Compute force constant
+        q0s, _ = self.cvs.compute(sp)
         K = self.K
         if self.tempering != 0.0:
             raise NotImplementedError("untested")
-            # K *= jnp.exp(-self.compute() / molmod.constants.boltzmann /
-            #              self.tempering)
-        # Add a hill
-        self._add_hill_cv(q0s, K)
+
+        self.q0s = jnp.vstack([self.q0s, q0s])
+        self.Ks = jnp.array([*self.Ks, K])
 
     def _compute(self, cvs, q0s, Ks):
         """Computes sum of hills."""
@@ -481,12 +438,12 @@ class BiasMTD(Bias):
         deltas = jnp.apply_along_axis(
             self.cvs.metric.difference,
             axis=1,
-            arr=q0s,
+            arr=q0s.val,
             x2=cvs,
         )
 
         exparg = jnp.einsum("ji,ji,i -> j", deltas, deltas, self.sigmas_isq)
-        energy = jnp.sum(Ks * jnp.exp(-exparg))
+        energy = jnp.sum(jnp.exp(-exparg) * Ks.val)
 
         return energy
 

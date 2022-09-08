@@ -7,7 +7,7 @@ import os
 from jax.interpreters import batching
 
 import parsl
-from IMLCV.test.tf2jax import call_tf_p, loop_batcher
+from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 
 # from yaff.log import log
 

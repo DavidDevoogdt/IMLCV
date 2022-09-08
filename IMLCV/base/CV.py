@@ -7,8 +7,6 @@ from importlib import import_module
 from typing import Callable, Iterable
 
 import jax
-
-# import numpy as np
 import jax.numpy as jnp
 import jax_dataclasses as jdc
 import numpy as np
@@ -16,9 +14,6 @@ import tensorflow
 import tensorflow as tfl
 from jax import jacfwd, jit, vmap
 from jax.experimental.jax2tf import call_tf
-
-# using the import module import the tensorflow.keras module
-# and typehint that the type is KerasAPI module
 from keras.api._v2 import keras as KerasAPI
 
 from IMLCV.base.metric import Metric
@@ -142,7 +137,7 @@ class CvFlow:
             if self.batched:
                 out = self.f0(jnp.vstack([x]))
             else:
-                out = jnp.stack([self.f0(x)])
+                out = jnp.vstack([self.f0(x)])
 
         for other in self.f1:
             out = other.compute(out)

@@ -31,7 +31,7 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.metric import Metric
 from IMLCV.base.rounds import RoundsMd
-from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
+from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 

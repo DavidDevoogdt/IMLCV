@@ -5,7 +5,6 @@ import itertools
 import numpy as np
 
 from IMLCV.base.bias import BiasMTD, CompositeBias, CvMonitor, HarmonicBias, NoneBias
-from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
@@ -23,49 +22,24 @@ class Scheme:
 
     def __init__(
         self,
-        cvd: CVDiscovery,
-        cvs: CV,
-        Engine: type[MDEngine],
-        ener,
-        T,
-        P=None,
-        timestep=None,
-        timecon_thermo=None,
-        timecon_baro=None,
-        extension="extxyz",
+        Engine: MDEngine,
+        cvd: CVDiscovery | None = None,
         folder="output",
-        write_step=100,
-        screenlog=1000,
         max_energy=None,
     ) -> None:
 
-        self.md = Engine(
-            bias=NoneBias(cvs),
-            ener=ener,
-            T=T,
-            P=P,
-            timestep=timestep,
-            timecon_thermo=timecon_thermo,
-            timecon_baro=timecon_baro,
-            filename=None,
-            write_step=write_step,
-            screenlog=screenlog,
-        )
-
+        self.md = Engine
         self.cvd = cvd
-
         self.rounds = RoundsMd(
-            extension=extension,
             folder=folder,
         )
-
         self.rounds.new_round(self.md)
         self.max_energy = max_energy
 
     @staticmethod
     def from_rounds(
-        cvd: CVDiscovery,
         folder,
+        cvd: CVDiscovery | None = None,
         max_energy=None,
     ) -> Scheme:
 
@@ -153,6 +127,8 @@ class Scheme:
             self.rounds.save()
 
     def update_CV(self, samples=2e3, plot=True, **kwargs):
+        assert self.cvd is not None, "Give cv deiscovery instance to scheme"
+
         new_cv = self.cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
         self.md.bias = NoneBias(new_cv)
 

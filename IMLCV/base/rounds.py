@@ -14,7 +14,7 @@ import numpy as np
 from IMLCV.base.bias import Bias, CompositeBias, NoneBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, TrajectoryInfo
-from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
+from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
@@ -23,12 +23,9 @@ class Rounds(ABC):
 
     ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
 
-    def __init__(self, extension, folder="output") -> None:
-        if extension != "extxyz":
-            raise NotImplementedError("file type not known")
+    def __init__(self, folder="output") -> None:
 
         self.round = -1
-        self.extension = extension
         self.i = 0
 
         if not os.path.isdir(folder):
@@ -206,8 +203,8 @@ class RoundsMd(Rounds):
 
     ENGINE_KEYS = ["timestep", *Rounds.ENGINE_KEYS]
 
-    def __init__(self, extension, folder="output") -> None:
-        super().__init__(extension=extension, folder=folder)
+    def __init__(self, folder="output") -> None:
+        super().__init__(folder=folder)
 
     @staticmethod
     def load(folder) -> RoundsMd:
@@ -430,7 +427,7 @@ class RoundsMd(Rounds):
         p_new = _interp(tau_new, tau, r["positions"])
         c_new = _interp(tau_new, tau, r.get("cell"))
 
-        roundscv = RoundsCV(self.extension, f"{self.folder}_unbiased")
+        roundscv = RoundsCV(f"{self.folder}_unbiased")
         roundscv.new_round(props)
         roundscv.add(
             0,

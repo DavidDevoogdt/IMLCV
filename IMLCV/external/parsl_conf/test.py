@@ -1,4 +1,4 @@
-from IMLCV.launch.parsl_conf.config import config
+from IMLCV.external.parsl_conf.config import config
 from parsl import python_app
 
 config()

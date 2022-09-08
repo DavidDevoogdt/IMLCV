@@ -4350,3 +4350,102 @@ Traceback (most recent call last):
   File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
     raise pe.BashExitFailure(func_name, proc.returncode)
 parsl.app.errors.BashExitFailure: ('plot_app', 1)
+2022-09-08 13:51:40.860 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:41.173 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:41.497 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:41.806 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:42.124 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:43.334 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:45.067 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:45.495 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:45.780 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:46.105 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address
+2022-09-08 13:51:46.413 parsl.addresses:113 [ERROR]  Ignoring failure to fetch address from interface enp45s0
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 111, in get_all_addresses
+    s_addresses.add(address_by_interface(interface))
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/typeguard/__init__.py", line 1033, in wrapper
+    retval = func(*args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
+    return socket.inet_ntoa(fcntl.ioctl(
+OSError: [Errno 99] Cannot assign requested address

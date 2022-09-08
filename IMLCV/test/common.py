@@ -1,60 +1,94 @@
-# def ala_yaff(write=1000):
+import os
+import shutil
+from importlib import import_module
 
-#     T = 600 * units.kelvin
-#     # ff = get_alaninedipeptide_amber99ff()
+import numpy as np
+from keras.api._v2 import keras as KerasAPI
 
-#     # ff = get_alaninedipeptide_amber99ff()
+import yaff
+from IMLCV.base.bias import BiasMTD, NoneBias
+from IMLCV.base.CV import CV, Volume, dihedral
+from IMLCV.base.CVDiscovery import CVDiscovery
+from IMLCV.base.MdEngine import MDEngine, YaffEngine
+from IMLCV.base.metric import Metric
+from IMLCV.external.parsl_conf.config import config
+from IMLCV.scheme import Scheme
+from molmod import units
+from molmod.units import kelvin
+from yaff.test.common import get_alaninedipeptide_amber99ff
 
-#     cvs = CombineCV(
-#         [
-#             CV(CVUtils.dihedral, numbers=[4, 6, 8, 14], metric=hyperTorus(1)),
-#             CV(CVUtils.dihedral, numbers=[6, 8, 14, 16], metric=hyperTorus(1)),
-#         ]
-#     )
-#     bias = BiasMTD(
-#         cvs=cvs, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=500, step=500
-#     )
-
-#     yaffmd = YaffEngine(
-#         ener=get_alaninedipeptide_amber99ff,
-#         bias=bias,
-#         write_step=write,
-#         T=T,
-#         P=None,
-#         timestep=2.0 * units.femtosecond,
-#         timecon_thermo=100.0 * units.femtosecond,
-#         filename="output/aladipep.h5",
-#     )
-
-#     return yaffmd
+keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 
 
-# def mil53_yaff():
-#     T = 300 * units.kelvin
-#     P = 1 * units.atm
+abspath = os.path.abspath(__file__)
+dname = os.path.dirname(abspath)
+os.chdir(dname)
 
-#     system = System.from_file("data/MIL53.chk")
-#     ff = ForceField.generate(system, 'data/MIL53_pars.txt')
-#     cvs = CV(CVUtils.Volume)
-#     bias = BiasMTD(cvs=cvs,
-#                    K=1.2 * units.kjmol,
-#                    sigmas=np.array([0.35]),
-#                    start=50,
-#                    step=50)
 
-#     yaffmd = YaffEngine(
-#         ener=ff,
-#         bias=bias,
-#         write_step=100,
-#         T=T,
-#         P=P,
-#         timestep=1.0 * units.femtosecond,
-#         timecon_thermo=100.0 * units.femtosecond,
-#         timecon_baro=100.0 * units.femtosecond,
-#         filename="output/mil53.h5",
-#     )
+def cleancopy(base):
 
-#     return yaffmd
+    if not os.path.exists(f"{base}"):
+        os.mkdir(base)
+        return
+
+    if not os.path.exists(f"{base}_orig"):
+        assert os.path.exists(f"{base}"), "folder not found"
+        shutil.copytree(f"{base}", f"{base}_orig")
+
+    if os.path.exists(f"{base}"):
+
+        shutil.rmtree(f"{base}")
+    shutil.copytree(f"{base}_orig", f"{base}")
+
+
+def alanine_dipeptide_yaff(full_name):
+    T = 300 * kelvin
+
+    cv0 = CV(
+        f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+        metric=Metric(
+            periodicities=[True, True],
+            bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
+        ),
+    )
+
+    mde = YaffEngine(
+        ener=get_alaninedipeptide_amber99ff,
+        T=T,
+        timestep=2.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+        filename=full_name,
+        write_step=1,
+        bias=NoneBias(cv0),
+    )
+
+    return mde
+
+
+def mil53_yaff():
+    T = 300 * units.kelvin
+    P = 1 * units.atm
+
+    system = yaff.System.from_file("data/MIL53.chk")
+    ff = yaff.ForceField.generate(system, "data/MIL53_pars.txt")
+    cvs = CV(f=Volume)
+    bias = BiasMTD(
+        cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), step=50, start=50
+    )
+
+    yaffmd = YaffEngine(
+        ener=ff,
+        bias=bias,
+        write_step=10,
+        T=T,
+        P=P,
+        timestep=1.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+        timecon_baro=100.0 * units.femtosecond,
+        filename="output/mil53.h5",
+    )
+
+    return yaffmd
 
 
 # def todo_ASE_yaff():
@@ -114,3 +148,33 @@
 #     )
 
 #     return yaffmd
+
+
+def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
+    """calculate some rounds, and perform long run. Starting point for cv discovery methods"""
+
+    config(cluster="doduo", max_blocks=10)
+
+    full_name = f"output/{name}"
+    full_name_orig = f"output/{name}_orig"
+    pe = os.path.exists(full_name)
+    pe_orig = os.path.exists(full_name_orig)
+
+    if recalc or (not pe and not pe_orig):
+        if pe:
+            shutil.rmtree(full_name)
+        if pe_orig:
+            shutil.rmtree(full_name_orig)
+
+        scheme0 = Scheme(cvd=None, Engine=engine, folder=full_name)
+
+        scheme0.round(rnds=3, steps=1e4, n=4)
+
+        scheme0.rounds.run(NoneBias(scheme0.rounds.get_bias().cvs), steps=1e5)
+        scheme0.rounds.save()
+
+        del scheme0
+
+    cleancopy(full_name)
+
+    return Scheme.from_rounds(folder=full_name, cvd=cvd)
