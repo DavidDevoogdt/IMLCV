@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from IMLCV.base.bias import Bias, BiasMTD, CompositeBias
-from IMLCV.base.CV import CV, CombineCV, CVUtils
+from IMLCV.base.CV import CV
 from IMLCV.base.MdEngine import MDEngine, YaffEngine
 from IMLCV.test.common import ala_yaff, todo_ASE_yaff
 from molmod import units

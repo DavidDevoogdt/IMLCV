@@ -5,23 +5,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, CvMonitor, GridBias, plot_app
-from IMLCV.base.CV import CV, SystemParams
-from IMLCV.base.rounds import Rounds, RoundsCV, RoundsMd
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.rounds import RoundsCV, RoundsMd
 from molmod.units import picosecond
 from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
 from thermolib.thermodynamics.histogram import Histogram2D
-
-# @dataclass
-# class plotArgs:
-#     bias: Bias
-#     name: File
-#     n: int = 50
-#     vmin: float = 0
-#     vmax: float = 100
-#     map: bool = True
-#     traj: Optional[List[np.ndarray]] = None
 
 
 class Observable:
@@ -31,17 +21,10 @@ class Observable:
     samples_per_bin = 20
     time_per_bin = 2 * picosecond
 
-    def __init__(self, rounds: Rounds, cvs: CV = None) -> None:
+    def __init__(self, rounds: RoundsMd) -> None:
         self.rounds = rounds
 
-        if isinstance(rounds, RoundsMd):
-            assert cvs is None
-            self.cvs = self.rounds.get_bias().cvs
-        elif isinstance(rounds, RoundsCV):
-            assert cvs is not None
-            self.cvs = cvs
-        else:
-            raise NotImplementedError
+        self.cvs = self.rounds.get_bias().cvs
 
         self.folder = rounds.folder
 
@@ -279,7 +262,9 @@ class Observable:
         # fes is in 'xy'- indexing convention, convert to ij
         fs = np.transpose(fs)
 
-        fs[:] = -fs[:] + np.min([max_bias, fs[~np.isnan(fs)].max()])
+        if max_bias is not None:
+            fs[:] += np.min([max_bias, fs[~np.isnan(fs)].max()])
+        fs[:] = -fs[:]
 
         # fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
         #                            bounds=bounds), T=self.rounds.T)

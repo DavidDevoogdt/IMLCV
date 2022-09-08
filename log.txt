@@ -3951,3 +3951,402 @@ Traceback (most recent call last):
   File "/home/david/Documents/Projects/IMLCV/src/parsl/parsl/addresses.py", line 93, in address_by_interface
     return socket.inet_ntoa(fcntl.ioctl(
 OSError: [Errno 99] Cannot assign requested address
+2022-09-07 17:09:35.552 parsl.dataflow.dflow:333 [ERROR]  Task 6 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.585 parsl.dataflow.dflow:333 [ERROR]  Task 0 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.629 parsl.dataflow.dflow:333 [ERROR]  Task 2 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.638 parsl.dataflow.dflow:333 [ERROR]  Task 10 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.644 parsl.dataflow.dflow:333 [ERROR]  Task 12 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.645 parsl.dataflow.dflow:333 [ERROR]  Task 14 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.648 parsl.dataflow.dflow:333 [ERROR]  Task 18 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.659 parsl.dataflow.dflow:333 [ERROR]  Task 8 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.659 parsl.dataflow.dflow:333 [ERROR]  Task 4 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:09:35.681 parsl.dataflow.dflow:333 [ERROR]  Task 16 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', -2)
+2022-09-07 17:10:47.218 parsl.dataflow.dflow:333 [ERROR]  Task 27 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 469, in _unwrap_remote_exception_wrapper
+    result = future.result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+    return self.__get_result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+    raise self._exception
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 514, in launch_if_ready
+    exec_fu = self.launch_task(
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 605, in launch_task
+    exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/executors/threads.py", line 69, in submit
+    return self.executor.submit(func, *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/thread.py", line 167, in submit
+    raise RuntimeError('cannot schedule new futures after shutdown')
+RuntimeError: cannot schedule new futures after shutdown
+2022-09-07 17:10:47.218 parsl.dataflow.dflow:333 [ERROR]  Task 29 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 469, in _unwrap_remote_exception_wrapper
+    result = future.result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+    return self.__get_result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+    raise self._exception
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 514, in launch_if_ready
+    exec_fu = self.launch_task(
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 605, in launch_task
+    exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/executors/threads.py", line 69, in submit
+    return self.executor.submit(func, *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/thread.py", line 167, in submit
+    raise RuntimeError('cannot schedule new futures after shutdown')
+RuntimeError: cannot schedule new futures after shutdown
+2022-09-07 17:10:47.412 parsl.dataflow.dflow:333 [ERROR]  Task 23 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 469, in _unwrap_remote_exception_wrapper
+    result = future.result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+    return self.__get_result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+    raise self._exception
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 514, in launch_if_ready
+    exec_fu = self.launch_task(
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 605, in launch_task
+    exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/executors/threads.py", line 69, in submit
+    return self.executor.submit(func, *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/thread.py", line 167, in submit
+    raise RuntimeError('cannot schedule new futures after shutdown')
+RuntimeError: cannot schedule new futures after shutdown
+2022-09-07 17:10:47.474 parsl.dataflow.dflow:333 [ERROR]  Task 25 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 469, in _unwrap_remote_exception_wrapper
+    result = future.result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+    return self.__get_result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+    raise self._exception
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 514, in launch_if_ready
+    exec_fu = self.launch_task(
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 605, in launch_task
+    exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/executors/threads.py", line 69, in submit
+    return self.executor.submit(func, *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/thread.py", line 167, in submit
+    raise RuntimeError('cannot schedule new futures after shutdown')
+RuntimeError: cannot schedule new futures after shutdown
+2022-09-07 17:10:47.483 parsl.dataflow.dflow:333 [ERROR]  Task 21 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 469, in _unwrap_remote_exception_wrapper
+    result = future.result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+    return self.__get_result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+    raise self._exception
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 514, in launch_if_ready
+    exec_fu = self.launch_task(
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 605, in launch_task
+    exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/executors/threads.py", line 69, in submit
+    return self.executor.submit(func, *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/thread.py", line 167, in submit
+    raise RuntimeError('cannot schedule new futures after shutdown')
+RuntimeError: cannot schedule new futures after shutdown
+2022-09-07 17:10:47.847 parsl.dataflow.dflow:333 [ERROR]  Task 31 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 469, in _unwrap_remote_exception_wrapper
+    result = future.result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+    return self.__get_result()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+    raise self._exception
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 514, in launch_if_ready
+    exec_fu = self.launch_task(
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 605, in launch_task
+    exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/executors/threads.py", line 69, in submit
+    return self.executor.submit(func, *args, **kwargs)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/concurrent/futures/thread.py", line 167, in submit
+    raise RuntimeError('cannot schedule new futures after shutdown')
+RuntimeError: cannot schedule new futures after shutdown
+2022-09-07 18:03:01.086 parsl.dataflow.dflow:333 [ERROR]  Task 6 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', 1)
+2022-09-07 18:03:09.149 parsl.dataflow.dflow:333 [ERROR]  Task 20 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', 1)
+2022-09-07 18:03:17.068 parsl.dataflow.dflow:333 [ERROR]  Task 22 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', 1)
+2022-09-07 18:03:24.425 parsl.dataflow.dflow:333 [ERROR]  Task 24 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', 1)
+2022-09-07 18:03:31.800 parsl.dataflow.dflow:333 [ERROR]  Task 26 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', 1)
+2022-09-07 18:03:39.086 parsl.dataflow.dflow:333 [ERROR]  Task 28 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', 1)
+2022-09-07 18:03:47.502 parsl.dataflow.dflow:333 [ERROR]  Task 30 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('run', 1)
+2022-09-07 18:10:22.955 parsl.dataflow.dflow:333 [ERROR]  Task 33 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('plot_app', 1)
+2022-09-07 18:10:23.015 parsl.dataflow.dflow:333 [ERROR]  Task 32 failed after 0 retry attempts
+Traceback (most recent call last):
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 286, in handle_exec_update
+    res = self._unwrap_remote_exception_wrapper(future)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/dataflow/dflow.py", line 471, in _unwrap_remote_exception_wrapper
+    result.reraise()
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 131, in reraise
+    reraise(t, v, tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/six.py", line 718, in reraise
+    raise value.with_traceback(tb)
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/errors.py", line 159, in wrapper
+    return func(*args, **kwargs)  # type: ignore
+  File "/home/david/Documents/Projects/IMLCV/Miniconda3/lib/python3.10/site-packages/parsl/app/bash.py", line 79, in remote_side_bash_executor
+    raise pe.BashExitFailure(func_name, proc.returncode)
+parsl.app.errors.BashExitFailure: ('plot_app', 1)

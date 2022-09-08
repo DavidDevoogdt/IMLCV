@@ -67,7 +67,7 @@ class SystemParams:
         return self.coordinates.shape
 
     @staticmethod
-    def stack(arr: Iterable[SystemParams]):
+    def stack(arr: list[SystemParams]):
         coordinates = []
         cell = []
         has_cell = arr[0].cell is not None
@@ -87,13 +87,13 @@ class SystemParams:
             else:
                 assert x.z_array is None
 
-        coordinates = jnp.vstack(coordinates)
+        ncoordinates = jnp.vstack(coordinates)
         if has_cell:
-            cell = jnp.vstack(cell)
+            ncell = jnp.vstack(cell)
         else:
-            cell = None
+            ncell = None
 
-        return SystemParams(coordinates=coordinates, cell=cell, z_array=_z_arr)
+        return SystemParams(coordinates=ncoordinates, cell=ncell, z_array=_z_arr)
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
@@ -120,7 +120,7 @@ class CvFlow:
     ) -> None:
         self.f0 = func
         if trans is None:
-            self.f1 = []
+            self.f1: Iterable[CvTrans] = []
         else:
             if isinstance(trans, Iterable):
                 self.f1 = trans
@@ -312,7 +312,7 @@ def dihedral(numbers):
 
 @cv
 def Volume(sp: SystemParams):
-
+    assert sp.cell is not None, "can only calculate volume if there is a unit cell"
     return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
 
 
@@ -330,7 +330,7 @@ def rotate_2d(alpha):
     return f
 
 
-def scale_cv_trans(array=jnp.ndarray) -> CvTrans:
+def scale_cv_trans(array=jnp.ndarray):
     "axis 0 is batch axis"
     maxi = jnp.max(array, axis=0)
     mini = jnp.min(array, axis=0)
@@ -346,9 +346,11 @@ def scale_cv_trans(array=jnp.ndarray) -> CvTrans:
     return f.compute(array), f
 
 
-def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2") -> CvFlow:
+def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
     @cv
     def h(x: SystemParams):
+
+        assert x.z_array is not None, "Z array in systemparams for coulomb descriptor"
 
         coor = x.coordinates
 

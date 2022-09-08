@@ -52,14 +52,12 @@ class Rounds(ABC):
             dill.dump(d, f)
 
     @staticmethod
-    def load(folder) -> Rounds:
+    def load(folder):
         with open(f"{folder}/rounds", "rb") as f:
-
             self = object.__new__(RoundsMd)
             self.__dict__.update(dill.load(f))
 
         self.h5file = h5py.File(self.h5file_name, "a")
-
         return self
 
     def add(self, i, d: TrajectoryInfo, attrs=None):
@@ -215,7 +213,7 @@ class RoundsMd(Rounds):
     def load(folder) -> RoundsMd:
         return Rounds.load(folder=folder)
 
-    def add(self, traj: TrajectoryInfo, md: MDEngine, bias: str, i: int):
+    def _add(self, traj: TrajectoryInfo, md: MDEngine, bias: str, i: int):
         """adds all the saveble info of the md simulation."""
 
         if i is None:
@@ -343,7 +341,9 @@ class RoundsMd(Rounds):
                 bias = Bias.load(inputs[0].filepath)
 
                 sp = SystemParams(
-                    coordinates=traj.positions, cell=traj.cell, z_array=traj.masses
+                    coordinates=jnp.array(traj.positions),
+                    cell=jnp.array(traj.cell),
+                    z_array=jnp.array(traj.masses),
                 )
                 cvs = bias.cvs.compute(sp=sp, map=True)[0]
 
@@ -371,7 +371,7 @@ class RoundsMd(Rounds):
         # wait for tasks to finish
         for i, future in tasks:
             d = future.result()
-            self.add(
+            self._add(
                 traj=d,
                 md=md_engine,
                 bias=future.task_def["kwargs"]["outputs"][0].filepath,
@@ -434,13 +434,13 @@ class RoundsMd(Rounds):
         roundscv.new_round(props)
         roundscv.add(
             0,
-            {
-                "energy": None,
-                "positions": p_new,
-                "forces": None,
-                "cell": c_new,
-                "t": tau_new,
-            },
+            TrajectoryInfo(
+                e_pot=None,
+                positions=p_new,
+                forces=None,
+                cell=c_new,
+                t=tau_new,
+            ),
         )
 
         return roundscv

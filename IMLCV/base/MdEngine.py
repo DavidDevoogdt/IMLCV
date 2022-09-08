@@ -442,8 +442,6 @@ class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
             self.init = True
             super().__init__(start=self.bias.start, step=self.bias.step)
 
-        self.cvs = []
-
     def compute(self, gpos=None, vtens=None):
 
         sp = SystemParams(
@@ -484,7 +482,7 @@ class _YaffFF(Energy, yaff.pes.ForceField):
     def __init__(self, ff: yaff.pes.ForceField | Callable):
         super().__init__()
 
-        from_func = isinstance(ff, Callable)
+        from_func = not isinstance(ff, yaff.pes.ForceField)
         f = ff
 
         if from_func:

@@ -294,7 +294,7 @@ class Metric:
         interps = []
         for i in range(self.ndim):
 
-            points = []
+            points_arr = []
             z = []
 
             range_high = np.array([lrange[i][0][1], lrange[i][1][1]])
@@ -328,13 +328,13 @@ class Metric:
                     order = low_amin == 0
 
                 if order:
-                    points.append(xrange[j][:, 1, :])
-                    points.append(xrange[j][:, 0, :])
+                    points_arr.append(xrange[j][:, 1, :])
+                    points_arr.append(xrange[j][:, 0, :])
                 else:
-                    points.append(xrange[j][:, 0, :])
-                    points.append(xrange[j][:, 1, :])
+                    points_arr.append(xrange[j][:, 0, :])
+                    points_arr.append(xrange[j][:, 1, :])
 
-            interps.append(RBFInterpolator(np.vstack(points), np.hstack(z)))
+            interps.append(RBFInterpolator(np.vstack(points_arr), np.hstack(z)))
 
         # get the boundaries from most distal points in traj + some margin
         num = 100

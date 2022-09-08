@@ -1,7 +1,6 @@
 import itertools
 import os
 from functools import partial
-from importlib import import_module
 from typing import Tuple
 
 import jax
@@ -15,12 +14,9 @@ from flax import linen as nn
 from flax.training import train_state
 from jax import jacrev, jit, random, vmap
 from jax.random import PRNGKey, choice
-
-# using the import module import the tensorflow.keras module
-# and typehint that the type is KerasAPI module
-from keras.api._v2 import keras as KerasAPI
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
+from tensorflow import keras
 
 from IMLCV.base.bias import Bias
 from IMLCV.base.CV import (
@@ -39,7 +35,7 @@ from IMLCV.launch.parsl_conf.bash_app_python import bash_app_python
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
-keras: KerasAPI = import_module("tensorflow.keras")
+# keras: KerasAPI = import_module("tensorflow.keras")
 
 
 plt.rcParams["text.usetex"] = True
@@ -87,9 +83,9 @@ class Transformer:
     def _fit(self, x, indices, **kwargs) -> Tuple[jnp.ndarray, CvFlow]:
         raise NotImplementedError
 
-    def post_fit(self, y, scale) -> Tuple[jnp.ndarray, CvFlow]:
+    def post_fit(self, y: jnp.ndarray, scale) -> Tuple[jnp.ndarray, CvTrans]:
         if not scale:
-            return y, lambda x: x
+            return y, CvTrans(lambda x: x)
         return scale_cv_trans(y)
 
 
@@ -104,7 +100,7 @@ class TranformerUMAP(Transformer):
         parametric=True,
         metric=None,
         **kwargs,
-    ) -> Tuple[jnp.ndarray, CvFlow]:
+    ):
 
         dims = x.shape[1:]
 
@@ -234,7 +230,7 @@ class TranformerAutoEncoder(Transformer):
         parametric=True,
         metric=None,
         **kwargs,
-    ) -> Tuple[jnp.ndarray, CvFlow]:
+    ):
 
         # import tensorflow_datasets as tfds
 
@@ -354,12 +350,14 @@ class TranformerAutoEncoder(Transformer):
 
             @partial(jit, static_argnums=(0,))
             def compute(self, x):
-                encoded = VAE(**self.vae_args).apply(
+                encoded: jnp.ndarray = VAE(**self.vae_args).apply(
                     {"params": self.params}, x, method=VAE.encode
-                )
+                )[0]
                 return encoded
 
         f_enc = NNtrans(state.params, vae_args)
+
+        # a: jnp.ndarray =
 
         return f_enc.compute(x), f_enc
 

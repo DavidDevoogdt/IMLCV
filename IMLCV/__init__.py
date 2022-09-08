@@ -4,8 +4,6 @@ import functools
 import logging
 import os
 
-import jax
-import tensorflow as tf
 from jax.interpreters import batching
 
 import parsl
@@ -21,8 +19,8 @@ DEBUG = True
 
 # SETUP Jax
 
-jax.config.update("jax_platform_name", "cpu")
-tf.config.experimental.set_visible_devices([], "GPU")
+# jax.config.update("jax_platform_name", "cpu")
+# tf.config.experimental.set_visible_devices([], "GPU")
 # jax.config.update('jax_disable_jit', True)
 
 

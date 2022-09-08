@@ -134,7 +134,9 @@ class Bias(Energy, ABC):
 
     @staticmethod
     def load(filename) -> Bias:
-        return Energy.load(filename)
+        with open(filename, "rb") as f:
+            self = dill.load(f)
+        return self
 
     def plot(
         self,
@@ -244,12 +246,12 @@ class CompositeBias(Bias):
 
         self.init = True
 
-        self.biases = []
+        self.biases: list[Bias] = []
 
         self.start_list = np.array([], dtype=np.int16)
         self.step_list = np.array([], dtype=np.int16)
         self.args_shape = np.array([0])
-        self.cvs = None
+        # self.cvs = None
 
         for bias in biases:
             self._append_bias(bias)
@@ -611,7 +613,7 @@ class CvMonitor(BiasF):
         self.start = start
         self.step = step
 
-        self.last_cv = np.nan
+        self.last_cv: jnp.ndarray
         self.transitions = np.zeros((0, self.cvs.metric.ndim, 2))
 
     def update_bias(self, sp: SystemParams):
@@ -620,13 +622,10 @@ class CvMonitor(BiasF):
 
         new_cv, _ = self.cvs.compute(sp=sp)
 
-        if jnp.linalg.norm(new_cv - self.last_cv) > 1:
-            new_trans = np.array([[new_cv[0, :], self.last_cv[0, :]]])
-            # print(f"new trans {new_trans}")
-
-            self.transitions = np.vstack((self.transitions, new_trans))
-
-            # print(self.transitions)
+        if self.last_cv is not None:
+            if jnp.linalg.norm(new_cv - self.last_cv) > 1:
+                new_trans = np.array([[new_cv[0, :], self.last_cv[0, :]]])
+                self.transitions = np.vstack((self.transitions, new_trans))
 
         self.last_cv = new_cv
 
