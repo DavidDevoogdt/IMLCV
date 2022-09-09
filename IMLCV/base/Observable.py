@@ -91,6 +91,8 @@ class Observable:
                     outputs=[File(f"{directory}/combined_unmapped.pdf")],
                     map=False,
                     traj=trajs,
+                    stdout=f"{directory}/combined_unmapped.stdout",
+                    stderr=f"{directory}/combined_unmapped.stderr",
                 )
 
                 plot_app(
@@ -263,8 +265,9 @@ class Observable:
         fs = np.transpose(fs)
 
         if max_bias is not None:
-            fs[:] += np.min([max_bias, fs[~np.isnan(fs)].max()])
-        fs[:] = -fs[:]
+            fs[:] = -fs[:] + np.min([max_bias, fs[~np.isnan(fs)].max()])
+        else:
+            fs[:] = -fs[:] + fs[~np.isnan(fs)].max()
 
         # fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
         #                            bounds=bounds), T=self.rounds.T)

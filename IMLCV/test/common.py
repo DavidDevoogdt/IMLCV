@@ -2,6 +2,7 @@ import os
 import shutil
 from importlib import import_module
 
+import ase
 import numpy as np
 from keras.api._v2 import keras as KerasAPI
 
@@ -11,7 +12,6 @@ from IMLCV.base.CV import CV, Volume, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, YaffEngine
 from IMLCV.base.metric import Metric
-from IMLCV.external.parsl_conf.config import config
 from IMLCV.scheme import Scheme
 from molmod import units
 from molmod.units import kelvin
@@ -91,69 +91,67 @@ def mil53_yaff():
     return yaffmd
 
 
-# def todo_ASE_yaff():
+def todo_ASE_yaff():
 
-#     # make CP2K ase calculator
-#     path_atoms = Path.cwd() / "atoms.xyz"
-#     with open(path_atoms) as f:
-#         atoms = ase.io.read(f)
+    # make CP2K ase calculator
+    path_atoms = Path.cwd() / "atoms.xyz"
+    with open(path_atoms) as f:
+        atoms = ase.io.read(f)
 
-#     path_source = Path("/data/gent/vo/000/gvo00003/vsc42365/Libraries")
+    path_source = Path("/data/gent/vo/000/gvo00003/vsc42365/Libraries")
 
-#     path_potentials = path_source / "GTH_POTENTIALS"
-#     path_basis = path_source / "BASIS_SETS"
-#     path_dispersion = path_source / "dftd3.dat"
+    path_potentials = path_source / "GTH_POTENTIALS"
+    path_basis = path_source / "BASIS_SETS"
+    path_dispersion = path_source / "dftd3.dat"
 
-#     with open("CP2K_para.inp") as f:
-#         additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
+    with open("CP2K_para.inp") as f:
+        additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
 
-#     calc_cp2k = CP2K(
-#         atoms=atoms,
-#         auto_write=True,
-#         basis_set=None,
-#         command="mpirun cp2k_shell.popt",
-#         cutoff=800 * ase.units.Rydberg,
-#         stress_tensor=False,
-#         print_level="LOW",
-#         inp=additional_input,
-#         pseudo_potential=None,
-#         max_scf=None,
-#         xc=None,
-#         basis_set_file=None,
-#         charge=None,
-#         potential_file=None,
-#         debug=False,
-#     )
+    calc_cp2k = ase.calculators.CP2K(
+        atoms=atoms,
+        auto_write=True,
+        basis_set=None,
+        command="mpirun cp2k_shell.popt",
+        cutoff=800 * ase.units.Rydberg,
+        stress_tensor=False,
+        print_level="LOW",
+        inp=additional_input,
+        pseudo_potential=None,
+        max_scf=None,
+        xc=None,
+        basis_set_file=None,
+        charge=None,
+        potential_file=None,
+        debug=False,
+    )
 
-#     atoms.calc = calc_cp2k
+    atoms.calc = calc_cp2k
 
-#     # do yaff MD
-#     ff = YaffEngine.create_forcefield_from_ASE(atoms, calc_cp2k)
+    # do yaff MD
+    ff = YaffEngine.create_forcefield_from_ASE(atoms, calc_cp2k)
 
-#     metric = None
+    metric = None
 
-#     cvs = CV(CVUtils.Volume, metric=metric)
-#     bias = BiasMTD(
-#         cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50
-#     )
-#     yaffmd = YaffEngine(
-#         ener=ff,
-#         bias=bias,
-#         write_step=100,
-#         T=600 * units.kelvin,
-#         timestep=1.0 * units.femtosecond,
-#         timecon_thermo=100.0 * units.femtosecond,
-#         timecon_baro=100.0 * units.femtosecond,
-#         filename="output/ase.h5",
-#     )
+    cvs = CV(CVUtils.Volume, metric=metric)
+    bias = BiasMTD(
+        cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50
+    )
+    yaffmd = YaffEngine(
+        ener=ff,
+        bias=bias,
+        write_step=100,
+        T=600 * units.kelvin,
+        timestep=1.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+        timecon_baro=100.0 * units.femtosecond,
+        filename="output/ase.h5",
+    )
 
-#     return yaffmd
+    return yaffmd
 
 
 def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
     """calculate some rounds, and perform long run. Starting point for cv discovery methods"""
-
-    config(cluster="doduo", max_blocks=10)
 
     full_name = f"output/{name}"
     full_name_orig = f"output/{name}_orig"
@@ -168,7 +166,7 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
         scheme0 = Scheme(cvd=None, Engine=engine, folder=full_name)
 
-        scheme0.round(rnds=3, steps=1e4, n=4)
+        scheme0.round(rnds=3, steps=1e3, n=4)
 
         scheme0.rounds.run(NoneBias(scheme0.rounds.get_bias().cvs), steps=1e5)
         scheme0.rounds.save()

@@ -64,6 +64,7 @@ def config(
             max_threads=min(15, max_blocks),
             working_dir=f"{ROOT_DIR}/.workdir",
         )
+
     else:
 
         def provider_init(provider="PBS", mpi=True):

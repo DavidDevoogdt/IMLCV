@@ -130,7 +130,7 @@ class Rounds(ABC):
         with self.lock:
             f = self.h5file
             d = f[f"{r}/{i}"]
-            y = {key: d[key][:] for key in d}
+            y = {key: np.array(d[key]) for key in d}
             attr = {key: d.attrs[key] for key in d.attrs}
         return {**y, "attr": attr, "i": i}
 
@@ -312,22 +312,13 @@ class RoundsMd(Rounds):
             b_name_new = f"{temp_name}/bias_new"
             b.save(b_name)
 
-            traj_file = f"{temp_name}/traj.h5"
-
-            # create file
-            # with open(traj_file, 'wb') as f:
-            #     pass
-
             @bash_app_python()
             def run(steps: int, inputs=[], outputs=[]):
 
                 bias = Bias.load(inputs[1].filepath)
-                md = MDEngine.load(
-                    inputs[0].filepath, bias=bias, filename=outputs[1].filepath
-                )
+                md = MDEngine.load(inputs[0].filepath, bias=bias)
                 md.run(steps)
 
-                # print(outputs[0])
                 bias.save(outputs[0].filepath)
                 d = md.get_trajectory()
                 return d
@@ -339,8 +330,8 @@ class RoundsMd(Rounds):
 
                 sp = SystemParams(
                     coordinates=jnp.array(traj.positions),
-                    cell=jnp.array(traj.cell),
-                    z_array=jnp.array(traj.masses),
+                    cell=jnp.array(traj.cell) if traj.cell is not None else None,
+                    masses=jnp.array(traj.masses) if traj.masses is not None else None,
                 )
                 cvs = bias.cvs.compute(sp=sp, map=True)[0]
 
@@ -348,7 +339,7 @@ class RoundsMd(Rounds):
 
             future = run(
                 inputs=[File(common_md_name), File(b_name)],
-                outputs=[File(b_name_new), File(traj_file)],
+                outputs=[File(b_name_new)],
                 steps=int(steps),
                 stdout=f"{temp_name}/md.stdout",
                 stderr=f"{temp_name}/md.stderr",
@@ -434,7 +425,7 @@ class RoundsMd(Rounds):
             TrajectoryInfo(
                 e_pot=None,
                 positions=p_new,
-                forces=None,
+                gpos=None,
                 cell=c_new,
                 t=tau_new,
             ),

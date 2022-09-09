@@ -394,7 +394,7 @@ class CVDiscovery:
             sp = SystemParams(
                 coordinates=jnp.array(dictionary["positions"]),
                 cell=dictionary.get("cell", None),
-                z_array=jnp.array(
+                masses=jnp.array(
                     [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1]
                 ),
             )

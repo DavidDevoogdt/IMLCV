@@ -3,8 +3,13 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from functools import partial
-from typing import Iterable
+from typing import Callable, Iterable
 
+import ase
+import ase.calculators.calculator
+import ase.cell
+import ase.geometry
+import ase.stress
 import dill
 import jax.numpy as jnp
 import jax.scipy as jsp
@@ -13,11 +18,12 @@ import numpy as np
 from jax import jacrev, jit, value_and_grad, vmap
 from scipy.interpolate import RBFInterpolator
 
+import yaff
 from IMLCV.base.CV import CV, SystemParams
 from IMLCV.base.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from molmod.constants import boltzmann
-from molmod.units import kjmol
+from molmod.units import angstrom, electronvolt, kjmol
 from parsl.data_provider.files import File
 
 
@@ -41,6 +47,68 @@ class Energy:
         with open(filename, "rb") as f:
             self = dill.load(f)
         return self
+
+
+class YaffEnergy(Energy):
+    def __init__(self, f: Callable[[], yaff.ForceField]) -> None:
+        super().__init__()
+        self.f = f
+        self.ff = f()
+
+    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
+
+        self.ff.update_pos(np.array(sp.coordinates, dtype=np.double))
+        self.ff.update_rvecs(np.array(sp.cell, dtype=np.double))
+
+        gpos = np.zeros_like(self.ff.gpos) if gpos else None
+        vtens = np.zeros_like(self.ff.vtens) if vir else None
+
+        ener = self.ff.compute(gpos=gpos, vtens=vtens)
+
+        if gpos is not None:
+            gpos = jnp.array(gpos)
+        if vtens is not None:
+            vtens = jnp.array(vtens)
+
+        return ener, gpos, vtens
+
+    def __getstate__(self):
+        return {"f": self.f}
+
+    def __setstate__(self, state):
+
+        self.f = state["f"]
+        self.ff = self.f()
+        return self
+
+
+class AseEnergy(Energy):
+    """Conversion to ASE energy"""
+
+    def __init__(
+        self, atoms: ase.Atoms, calculator: ase.calculators.calculator.Calculator
+    ):
+        self.atoms = atoms
+        self.calculator = calculator
+
+    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
+
+        self.atoms.set_positions(np.array(sp.coordinates))
+        self.atoms.set_cell(ase.geometry.Cell(np.array(sp.cell) / angstrom))
+
+        energy = self.atoms.get_potential_energy() * electronvolt
+
+        gpos = None
+        vtens = None
+        if gpos:
+            forces = self.atoms.get_forces()
+            gpos = -jnp.array(forces) * electronvolt / angstrom
+        if vir:
+            volume = jnp.linalg.det(self.atoms.get_cell())
+            stress = self.atoms.get_stress(voigt=False)
+            vtens = volume * jnp.array(stress) * electronvolt
+
+        return energy, gpos, vtens
 
 
 class Bias(Energy, ABC):
@@ -328,12 +396,12 @@ class BiasF(Bias):
 
     def __init__(self, cvs: CV, f=None):
 
-        self.f = f if (f is not None) else lambda _: jnp.zeros((1,))
+        self.f = f if (f is not None) else lambda _: jnp.array(0.0)
         self.f = jit(self.f)
         super().__init__(cvs, start=None, step=None)
 
     def _compute(self, cvs):
-        return self.f(cvs)[0]
+        return self.f(cvs)
 
     def get_args(self):
         return []
@@ -570,7 +638,7 @@ class CvMonitor(BiasF):
         self.start = start
         self.step = step
 
-        self.last_cv: jnp.ndarray
+        self.last_cv: jnp.ndarray | None = None
         self.transitions = np.zeros((0, self.cvs.metric.ndim, 2))
 
     def update_bias(self, sp: SystemParams):

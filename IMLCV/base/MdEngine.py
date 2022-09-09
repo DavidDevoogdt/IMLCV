@@ -9,36 +9,118 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable
 
-# import ase
-# import ase.geometry
-# import ase.stress
+import ase
 import dill
-import h5py
 import jax.numpy as jnp
+import jax_dataclasses
 import numpy as np
 
 import yaff.analysis.biased_sampling
 import yaff.external
+import yaff.log
 import yaff.pes
 import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling
 import yaff.sampling.iterative
-import yaff.system
-from IMLCV.base.bias import Bias, Energy
+from IMLCV.base.bias import Bias, Energy, YaffEnergy
 from IMLCV.base.CV import SystemParams
+from molmod.units import angstrom, electronvolt
 from yaff.log import log
-from yaff.sampling.io import XYZWriter
+from yaff.pes.ff import ForceField
+from yaff.sampling.verlet import VerletScreenLog
 
 
 @dataclass
 class TrajectoryInfo:
+
     positions: np.ndarray
     cell: np.ndarray | None = None
-    forces: np.ndarray | None = None
+    gpos: np.ndarray | None = None
+    vtens: np.ndarray | None = None
     t: np.ndarray | None = None
-    masses: np.ndarray | None = None
     e_pot: np.ndarray | None = None
+    masses: np.ndarray | None = None
+
+    _items_scal = ["t", "e_pot"]
+    _items_vec = ["positions", "cell", "gpos", "vtens"]
+
+    # https://stackoverflow.com/questions/7133885/fastest-way-to-grow-a-numpy-numeric-array
+    def __post_init__(self):
+        self._capacity = 1
+        self._size = 1
+
+        for name in [*self._items_vec, *self._items_scal]:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                self.__setattr__(name, np.array([prop]))
+
+        # test wether cell is truly not None
+        if self.cell is not None:
+            if self.cell.shape[-2] == 0:
+                self.cell = None
+
+    def add(self, ti: TrajectoryInfo):
+
+        assert ti._size == 1
+
+        if self._size == self._capacity:
+
+            fact = 4
+            f = fact - 1
+
+            for name in self._items_vec:
+                prop = self.__getattribute__(name)
+                if prop is not None:
+                    self.__setattr__(
+                        name,
+                        np.vstack(
+                            [prop, np.zeros((self._capacity * f, *prop.shape[1:]))]
+                        ),
+                    )
+            for name in self._items_scal:
+                prop = self.__getattribute__(name)
+                if prop is not None:
+                    self.__setattr__(
+                        name,
+                        np.hstack([prop, np.zeros((self._capacity * f,))]),
+                    )
+
+            self._capacity *= 4
+
+        for name in self._items_vec:
+            prop_ti = ti.__getattribute__(name)
+            prop_self = self.__getattribute__(name)
+            if prop_ti is None:
+                assert prop_self is None
+            else:
+                prop_self[self._size, :] = prop_ti[0]
+
+        for name in self._items_scal:
+            prop_ti = ti.__getattribute__(name)
+            prop_self = self.__getattribute__(name)
+            if prop_ti is None:
+                assert prop_self is None
+            else:
+                prop_self[self._size] = prop_ti[0]
+        self._size += 1
+
+    def finalize(self):
+        for name in self._items_vec:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                self.__setattr__(name, prop[: self._size, :])
+        for name in self._items_scal:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                self.__setattr__(name, prop[: self._size])
+        self._capacity = self._size
+
+    @property
+    def volume(self):
+        if self.cell is not None:
+            return jnp.linalg.det(self.cell)
+        return None
 
 
 class MDEngine(ABC):
@@ -58,6 +140,7 @@ class MDEngine(ABC):
         self,
         bias: Bias,
         ener: Energy,
+        sp: SystemParams,
         T,
         P=None,
         timestep=None,
@@ -92,6 +175,9 @@ class MDEngine(ABC):
         self.ener = ener
 
         self.equilibration = 100 * timestep if equilibration is None else equilibration
+
+        self.sp = sp
+        self.trajectory_info: TrajectoryInfo | None = None
 
         self._init_post()
 
@@ -159,30 +245,59 @@ class MDEngine(ABC):
         """
 
     def get_trajectory(self) -> TrajectoryInfo:
-        """returns numpy arrays with posititons, times, forces, energies,
-
-        returns bias
-        """
-        traj = self._get_trajectory()
-
-        index = np.argmax(traj.t > self.equilibration)
-
-        return traj
-
-    def _get_trajectory(self) -> TrajectoryInfo:
-        """returns numpy arrays with posititons, times, forces, energies,
-
-        returns bias
-        """
-        raise NotImplementedError
+        assert self.trajectory_info is not None
+        self.trajectory_info.finalize()
+        return self.trajectory_info
 
     @abstractmethod
-    def get_state(self):
+    def get_state(self) -> SystemParams:
         """returns the coordinates and cell at current md step."""
         raise NotImplementedError
 
+    def hook(self, ti: TrajectoryInfo):
 
-class YaffEngine(MDEngine):
+        # write step to trajectory
+        if self.trajectory_info is None:
+            self.trajectory_info = ti
+            return
+        self.trajectory_info.add(ti)
+
+        # update bias
+        self.bias.update_bias(self.get_state())
+
+    def to_ASE_traj(self) -> ase.Atoms:
+        traj = self.get_trajectory()
+
+        pos_A = traj.positions / angstrom
+        pbc = traj.cell is not None
+        if pbc:
+            cell_A = traj.cell / angstrom
+            vol_A3 = traj.volume / angstrom**3
+            vtens_eV = traj.vtens / electronvolt
+            stresses_eVA3 = vtens_eV / vol_A3
+
+            atoms = ase.Atoms(
+                masses=traj.masses,
+                positions=pos_A,
+                pbc=pbc,
+                cell=cell_A,
+            )
+            atoms.info["stress"] = stresses_eVA3
+        else:
+            atoms = ase.Atoms(
+                masses=traj.masses,
+                positions=pos_A,
+            )
+
+        if traj.gpos is not None:
+            atoms.arrays["forces"] = -traj.gpos * angstrom / electronvolt
+        if traj.e_pot is not None:
+            atoms.info["energy"] = traj.e_pot / electronvolt
+
+        return atoms
+
+
+class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     """MD engine with YAFF as backend.
 
     Args:
@@ -191,213 +306,81 @@ class YaffEngine(MDEngine):
 
     def __init__(
         self,
-        ener: yaff.pes.ForceField | Energy | Callable,
+        ener: Energy | Callable[[], ForceField],
+        sp: SystemParams | None = None,
         log_level=log.medium,
         **kwargs,
     ) -> None:
 
-        if not isinstance(ener, _YaffFF):
-            energy = _YaffFF(ener)
+        if not isinstance(ener, Energy):
+            ener = YaffEnergy(ener)
+        if isinstance(ener, YaffEnergy):
+            if sp is None:
+                sp = SystemParams(
+                    coordinates=jnp.array(ener.ff.system.pos),
+                    cell=jnp.array(ener.ff.system.cell.rvecs),
+                    masses=jnp.array(ener.ff.system.masses),
+                )
         else:
-            energy = ener
+            assert sp is not None
 
-        self.ener: _YaffFF
-        self.log_level = log_level
+        # initialize yaff hook
 
-        super().__init__(ener=energy, **kwargs)
+        yaff.log.set_level(log_level)
+        self.start = 0
+        self.step = 1
+        self.name = "YaffEngineIMLCV"
+
+        super().__init__(ener=ener, sp=sp, **kwargs)
+
+    def __call__(self, iterative):
+        self.hook(
+            TrajectoryInfo(
+                positions=iterative.pos,
+                cell=iterative.rvecs,
+                gpos=iterative.gpos,
+                t=iterative.time,
+                masses=iterative.masses,
+                e_pot=iterative.epot,
+                vtens=iterative.vtens,
+            )
+        )
 
     def _init_post(self):
 
-        vhook = yaff.sampling.VerletScreenLog(step=self.screenlog)
-        log.set_level(self.log_level)
+        hooks = [self, VerletScreenLog(step=1000)]
 
-        whook = self._whook()
-        thook = self._thook()
-        bhook = self._add_bias()
-
-        hooks = [thook]
-        if vhook is not None:
-            hooks.append(vhook)
-        if whook is not None:
-            hooks.append(whook)
-        if bhook.hook:
-            hooks.append(bhook)
-
-        self._verlet(hooks)
-
-    def _add_bias(self):
-
-        bhook = _YaffBias(self.ener, self.bias)
-        part = yaff.pes.ForcePartBias(self.ener.system)
-        part.add_term(bhook)
-        self.ener.add_part(part)
-
-        return bhook
-
-    def _whook(self):
-        # setup writer to collect results
-        if self.filename is None:
-            return None
-        elif self.filename.endswith(".h5"):
-            fh5 = h5py.File(self.filename, "w")
-            h5writer = yaff.sampling.HDF5Writer(
-                fh5, start=5 * self.write_step, step=self.write_step
-            )
-            whook = h5writer
-        elif self.filename.endswith(".xyz"):
-            xyzhook = XYZWriter(
-                self.filename, start=5 * self.write_step, step=self.write_step
-            )
-            whook = xyzhook
-        else:
-            raise NotImplementedError("only h5 and xyz are supported as filename")
-
-        return whook
-
-    def _thook(self):
-        """setup baro/thermostat."""
         if self.thermostat:
-            nhc = yaff.sampling.NHCThermostat(self.T, timecon=self.timecon_thermo)
-        if self.barostat:
-            mtk = yaff.sampling.MTKBarostat(
-                self.ener, self.T, self.P, timecon=self.timecon_baro, anisotropic=False
+            hooks.append(
+                yaff.sampling.NHCThermostat(self.T, timecon=self.timecon_thermo)
             )
-        if self.thermostat and self.barostat:
-            thook = yaff.sampling.TBCombination(nhc, mtk)
-        elif self.thermostat and not self.barostat:
-            thook = nhc
-        elif not self.thermostat and self.barostat:
-            thook = mtk
-        else:
-            raise NotImplementedError
+        if self.barostat:
+            hooks.append(
+                yaff.sampling.MTKBarostat(
+                    self.ener,
+                    self.T,
+                    self.P,
+                    timecon=self.timecon_baro,
+                    anisotropic=False,
+                )
+            )
 
-        return thook
+        self._yaff_ener = YaffEngine._YaffFF(
+            self.sp,
+            ener=self.ener,
+            bias=self.bias,
+        )
 
-    def _verlet(self, hooks):
         self.verlet = yaff.sampling.VerletIntegrator(
-            self.ener,
+            self._yaff_ener,
             self.timestep,
             temp0=self.T,
             hooks=hooks,
-            # add forces as state item
-            state=[self._GposContribStateItem()],
         )
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
         return super().load(file, **kwargs)
-
-    # @staticmethod
-    # def create_forcefield_from_ASE(atoms, calculator) -> yaff.pes.ForceField:
-    #     """Creates force field from ASE atoms instance."""
-
-    #     class ForcePartASE(yaff.pes.ForcePart):
-    #         """YAFF Wrapper around an ASE calculator.
-
-    #         args:
-    #                system (yaff.System): system object
-    #                atoms (ase.Atoms): atoms object with calculator included.
-    #         """
-
-    #         def __init__(self, system: yaff.system.System, atoms, calculator):
-    #             yaff.pes.ForcePart.__init__(self, 'ase', system)
-    #             self.system = system
-    #             self.atoms = atoms
-    #             self.calculator = calculator
-
-    #         def _internal_compute(self, gpos=None, vtens=None):
-    #             self.atoms.set_positions(self.system.pos /
-    #                                      molmod.units.angstrom)
-    #             self.atoms.set_cell(
-    #                 ase.geometry.Cell(self.system.cell._get_rvecs() /
-    #                                   molmod.units.angstrom))
-    #             energy = self.atoms.get_potential_energy(
-    #             ) * molmod.units.electronvolt
-    #             if gpos is not None:
-    #                 forces = self.atoms.get_forces()
-    #                 gpos[:] = -forces * molmod.units.electronvolt / \
-    #                     molmod.units.angstrom
-    #             if vtens is not None:
-    #                 volume = np.linalg.det(self.atoms.get_cell())
-    #                 stress = ase.stress.voigt_6_to_full_3x3_stress(
-    #                     self.atoms.get_stress())
-    #                 vtens[:] = volume * stress * molmod.units.electronvolt
-    #             return energy
-
-    #     system = yaff.System(
-    #         numbers=atoms.get_atomic_numbers(),
-    #         pos=atoms.get_positions() * molmod.units.angstrom,
-    #         rvecs=atoms.get_cell() * molmod.units.angstrom,
-    #     )
-    #     system.set_standard_masses()
-    #     part_ase = ForcePartASE(system, atoms, calculator)
-
-    #     return yaff.pes.ForceField(system, [part_ase])
-
-    def _get_trajectory(self) -> TrajectoryInfo:
-        assert self.filename.endswith(".h5")
-        with h5py.File(self.filename, "r") as f:
-            energy = f["trajectory"]["epot"][:]
-            positions = f["trajectory"]["pos"][:]
-            forces = -f["trajectory"]["gpos_contribs"][:]
-            if "cell" in f["trajectory"]:
-                cell = f["trajectory"]["cell"][:]
-            else:
-                cell = None
-            t = f["trajectory"]["time"][:]
-
-        return TrajectoryInfo(
-            positions=positions,
-            cell=cell,
-            forces=forces,
-            t=t,
-            masses=self.verlet.ff.system.masses,
-            e_pot=energy,
-        )
-
-    # def to_ASE_traj(self):
-    #     if self.filename.endswith(".h5"):
-    #         with h5py.File(self.filename, 'r') as f:
-    #             at_numb = f['system']['numbers']
-    #             traj = []
-    #             for frame, energy_au in enumerate(f['trajectory']['epot']):
-    #                 pos_A = f['trajectory']['pos'][
-    #                     frame, :, :] / molmod.units.angstrom
-    #                 # vel_x = f['trajectory']['vel'][frame,:,:] / x
-    #                 energy_eV = energy_au / molmod.units.electronvolt
-    #                 forces_eVA = -f['trajectory']['gpos_contribs'][
-    #                     frame, 0, :, :] * molmod.units.angstrom / \
-    #                     molmod.units.electronvolt  # forces = -gpos
-
-    #                 pbc = 'cell' in f['trajectory']
-    #                 if pbc:
-    #                     cell_A = f['trajectory']['cell'][
-    #                         frame, :, :] / molmod.units.angstrom
-
-    #                     vol_A3 = f['trajectory']['volume'][
-    #                         frame] / molmod.units.angstrom**3
-    #                     vtens_eV = f['trajectory']['vtens'][
-    #                         frame, :, :] / molmod.units.electronvolt
-    #                     stresses_eVA3 = vtens_eV / vol_A3
-
-    #                     atoms = ase.Atoms(
-    #                         numbers=at_numb,
-    #                         positions=pos_A,
-    #                         pbc=pbc,
-    #                         cell=cell_A,
-    #                     )
-    #                     atoms.info['stress'] = stresses_eVA3
-    #                 else:
-    #                     atoms = ase.Atoms(numbers=at_numb, positions=pos_A)
-
-    #                 # atoms.set_velocities(vel_x)
-    #                 atoms.arrays['forces'] = forces_eVA
-
-    #                 atoms.info['energy'] = energy_eV
-    #                 traj.append(atoms)
-    #         return traj
-    #     else:
-    #         raise NotImplementedError("only for h5, impl this")
 
     def run(self, steps):
         print(f"running for {steps} steps")
@@ -405,160 +388,78 @@ class YaffEngine(MDEngine):
 
     def get_state(self) -> SystemParams:
         """returns the coordinates and cell at current md step."""
-        return self.ener.system_params()
+        return self.sp
 
-    class _GposContribStateItem(yaff.sampling.iterative.StateItem):
-        """Keeps track of all the contributions to the forces."""
+    @dataclass
+    class _yaffCell:
+        rvecs: np.ndarray
 
-        def __init__(self):
-            yaff.sampling.iterative.StateItem.__init__(self, "gpos_contribs")
+        @property
+        def nvec(self):
+            return self.rvecs.shape[0]
 
-        def get_value(self, iterative):
-            n = len(iterative.ff.parts)
-            natom, _ = iterative.gpos.shape
-            gpos_contribs = np.zeros((n, natom, 3))
-            for i in range(n):
-                gpos_contribs[i, :, :] = iterative.ff.parts[i].gpos
-            return gpos_contribs
+        def volume(self):
+            return jnp.abs(jnp.dot(self.cell[0], jnp.cross(self.cell[1], self.cell[2])))
 
-        def iter_attrs(self, iterative):
-            yield "gpos_contrib_names", np.array(
-                [part.name for part in iterative.ff.parts], dtype="S"
+    @dataclass
+    class _yaffSys:
+        cell: YaffEngine._yaffCell
+        pos: np.ndarray
+        masses: np.ndarray
+        charges: np.ndarray | None = None
+
+        @property
+        def natom(self):
+            return self.pos.shape[0]
+
+    class _YaffFF(yaff.pes.ForceField):
+        def __init__(self, sp: SystemParams, ener: Energy, bias: Bias):
+
+            super().__init__(
+                system=YaffEngine._yaffSys(
+                    pos=np.array(sp.coordinates),
+                    cell=YaffEngine._yaffCell(rvecs=np.array(sp.cell)),
+                    masses=np.array(sp.masses),
+                ),
+                parts=[],
             )
 
+            self.sp = sp
+            self.ener = ener
+            self.bias = bias
 
-class _YaffBias(yaff.sampling.iterative.Hook, yaff.pes.bias.BiasPotential):
-    """placeholder for all classes which work with yaff."""
+        def update_rvecs(self, rvecs):
+            with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
+                new_sp.cell = jnp.array(rvecs)
+            self.sp = new_sp
 
-    def __init__(
-        self,
-        ener: _YaffFF,
-        bias: Bias,
-    ) -> None:
+        def update_pos(self, pos):
+            with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
+                new_sp.coordinates = jnp.array(pos)
+            self.sp = new_sp
 
-        self.ener = ener
-        self.bias = bias
+        def _internal_compute(self, gpos, vtens):
 
-        # not all biases have a hook
-        self.hook = (self.bias.start is not None) and (self.bias.step is not None)
-        if self.hook:
-            self.init = True
-            super().__init__(start=self.bias.start, step=self.bias.step)
+            ener, gpos_jax, vtens_jax = self.ener.compute_coor(
+                self.sp,
+                gpos is not None,
+                vtens is not None,
+            )
 
-    def compute(self, gpos=None, vtens=None):
+            ener_b, gpos_jax_b, vtens_jax_b = self.bias.compute_coor(
+                self.sp,
+                gpos is not None,
+                vtens is not None,
+            )
 
-        sp = self.ener.system_params()
+            # compute quantities
+            ener += ener_b[0]
 
-        [ener, gpos_jax, vtens_jax] = self.bias.compute_coor(
-            sp=sp, gpos=gpos is not None, vir=vtens is not None
-        )
+            if gpos is not None:
+                gpos_jax += gpos_jax_b
+                gpos[:] = np.array(gpos_jax)
+            if vtens is not None:
+                vtens_jax += vtens_jax_b
+                vtens[:] = np.array(vtens_jax)
 
-        if gpos is not None:
-            gpos[:] = np.array(gpos_jax)
-        if vtens is not None:
-            vtens[:] = np.array(vtens_jax)
-
-        return float(ener[:])
-
-    def get_log(self):
-        return "Yaff bias from IMLCV"
-
-    def __call__(self, iterative):
-        # skip initial hook called by verlet integrator
-        if self.init:
-            self.init = False
-            return
-
-        sp = self.ener.system_params()
-        self.bias.update_bias(sp)
-
-
-class _YaffFF(Energy, yaff.pes.ForceField):
-    def __init__(self, ff: yaff.pes.ForceField | Callable):
-        super().__init__()
-
-        from_func = not isinstance(ff, yaff.pes.ForceField)
-        f = ff
-
-        if from_func:
-            ff = ff()
-            assert isinstance(ff, yaff.pes.ForceField)
-
-        # used for yaff logging
-
-        self.__dict__ = ff.__dict__
-        self.from_func = from_func
-        if self.from_func:
-            self.f = f
-
-    def system_params(self):
-        return SystemParams(
-            coordinates=jnp.array(self.system.pos),
-            cell=jnp.array(self.system.cell.rvecs),
-            z_array=jnp.array(self.system.masses),
-        )
-
-    def compute_coor(self, sp: SystemParams, gpos=None, vir=None):
-
-        p_old = self.system.pos[:]
-        c_old = self.system.cell.rvecs[:]
-
-        self.system.pos[:] = np.array(sp.coordinates, dtype=np.double)
-        self.system.cell.update_rvecs(np.array(sp.cell, dtype=np.double))
-
-        ener = self.compute(gpos=gpos, vtens=vir)
-
-        self.system.pos[:] = p_old
-        self.system.cell.update_rvecs(c_old)
-
-        return ener
-
-    def __getstate__(self):
-        state_dict = {}
-
-        state_dict["system"] = {
-            "numbers": self.system.numbers,
-            "pos": self.system.pos,
-            "ffatypes": self.system.ffatypes,
-            "ffatype_ids": self.system.ffatype_ids,
-            "scopes": self.system.scopes,
-            "scope_ids": self.system.scope_ids,
-            "bonds": self.system.bonds,
-            "rvecs": self.system.cell.rvecs,
-            "charges": self.system.charges,
-            "radii": self.system.radii,
-            "valence_charges": self.system.valence_charges,
-            "dipoles": self.system.dipoles,
-            "radii2": self.system.radii2,
-            "masses": self.system.masses,
-        }
-
-        state_dict["from_func"] = self.from_func
-
-        state_dict["ff_dict"] = {
-            "energy": self.energy,
-            "gpos": self.gpos,
-            "vtens": self.vtens,
-        }
-
-        if self.from_func:
-            state_dict["func"] = self.f
-            return state_dict
-
-        raise NotImplementedError(
-            """see https://github.com/cython/cython/issues/4713, generate
-            from function instead"""
-        )
-
-    def __setstate__(self, state_dict):
-
-        if state_dict["from_func"]:
-            self.__init__(state_dict["func"])
-            self.system.__init__(**state_dict["system"])
-            self.__dict__.update(state_dict["ff_dict"])
-
-            self.needs_nlist_update = True
-
-            return self
-
-        raise NotImplementedError("see https://github.com/cython/cython/issues/4713")
+            return ener

@@ -1,5 +1,4 @@
 import os
-import tempfile
 from importlib import import_module
 
 import numpy as np
@@ -21,13 +20,13 @@ from yaff.test.common import get_alaninedipeptide_amber99ff
 keras: KerasAPI = import_module("tensorflow.keras")
 
 
-def test_cv_discovery(name="test_cv_disc", recalc=True):
+def test_cv_discovery(name="test_cv_disc", recalc=False):
     # make copy and restore orig
 
-    config(cluster="doduo", max_blocks=10)
-
     md = alanine_dipeptide_yaff(name)
-
+    # sp = SystemParams(coordinates=np.random.rand(22, 3), cell=None)
+    # a = md.bias.cvs.compute(sp)[0]
+    # b = NoneBias(md.bias.cvs).compute(cvs=a)
     cvd = CVDiscovery(
         transformer=TranformerAutoEncoder(
             outdim=3,
@@ -40,7 +39,7 @@ def test_cv_discovery(name="test_cv_disc", recalc=True):
         )
     )
 
-    scheme0 = get_FES(name=name, engine=md, cvd=cvd, recalc=False)
+    scheme0 = get_FES(name=name, engine=md, cvd=cvd, recalc=recalc)
 
     scheme0.update_CV(
         samples=1e3,
@@ -219,7 +218,7 @@ def test_ala_dipep_FES(
 
             shutil.rmtree(f"output/{name}")
 
-        T = 600 * units.kelvin
+        T = 300 * units.kelvin
 
         if not find_metric:
             cvs = CV(
@@ -259,22 +258,14 @@ def test_ala_dipep_FES(
     scheme.round(steps=2e4, rnds=10, n=4, update_metric=find_metric)
 
 
-# def test_unbiasing():
-
-#     rounds = RoundsMd.load("output/ala6")
-
-#     rounds2 = rounds.unbias_rounds(calc=False)
-#     obs = Observable(rounds2, rounds.get_bias().cvs)
-#     bias = obs.fes_bias(plot=True)
-#     print(bias)
-
-
 if __name__ == "__main__":
 
-    test_virial()
-    with tempfile.TemporaryDirectory() as tmp:
-        test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
-        test_combine_bias(full_name=f"{tmp}/combine.h5")
-        test_bias_save(full_name=f"{tmp}/bias_save.h5")
+    config(cluster="doduo", max_blocks=10)
+
+    # test_virial()
+    # with tempfile.TemporaryDirectory() as tmp:
+    #     test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
+    #     test_combine_bias(full_name=f"{tmp}/combine.h5")
+    #     test_bias_save(full_name=f"{tmp}/bias_save.h5")
     # test_unbiasing()
-    test_cv_discovery
+    test_cv_discovery(recalc=True)

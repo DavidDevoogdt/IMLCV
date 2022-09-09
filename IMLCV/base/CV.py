@@ -25,11 +25,11 @@ keras: KerasAPI = import_module("tensorflow.keras")
 @jdc.pytree_dataclass
 class SystemParams:
     coordinates: jnp.ndarray
-    z_array: jdc.Static[HashableArrayWrapper | None] = None
+    masses: jdc.Static[HashableArrayWrapper | None] = None
     cell: jnp.ndarray | None = None
 
     def __post_init__(self):
-        zarr = self.z_array
+        zarr = self.masses
         if zarr is not None:
             if not isinstance(zarr, HashableArrayWrapper):
                 super().__setattr__("z_array", HashableArrayWrapper(zarr))
@@ -38,7 +38,7 @@ class SystemParams:
         return SystemParams(
             coordinates=self.coordinates[slices],
             cell=(self.cell[slices] if self.cell is not None else None),
-            z_array=self.z_array,
+            masses=self.masses,
         )
 
     def __iter__(self):
@@ -49,7 +49,7 @@ class SystemParams:
             yield SystemParams(
                 coordinates=self.coordinates[i, :, :],
                 cell=self.cell[i, :, :] if self.cell is not None else None,
-                z_array=self.z_array,
+                masses=self.masses,
             )
         return
 
@@ -66,8 +66,8 @@ class SystemParams:
         coordinates = []
         cell = []
         has_cell = arr[0].cell is not None
-        has__z_arr = arr[0].z_array is not None
-        _z_arr = arr[0].z_array
+        has__z_arr = arr[0].masses is not None
+        _z_arr = arr[0].masses
 
         for x in arr:
             coordinates.append(x.coordinates)
@@ -78,9 +78,9 @@ class SystemParams:
                 assert x.cell is None
 
             if has__z_arr:
-                assert x.z_array == _z_arr
+                assert x.masses == _z_arr
             else:
-                assert x.z_array is None
+                assert x.masses is None
 
         ncoordinates = jnp.vstack(coordinates)
         if has_cell:
@@ -88,7 +88,7 @@ class SystemParams:
         else:
             ncell = None
 
-        return SystemParams(coordinates=ncoordinates, cell=ncell, z_array=_z_arr)
+        return SystemParams(coordinates=ncoordinates, cell=ncell, masses=_z_arr)
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
@@ -135,9 +135,9 @@ class CvFlow:
                 out = jax.lax.map(self.f0, x)
         else:
             if self.batched:
-                out = self.f0(jnp.vstack([x]))
+                return self.f0(x)
             else:
-                out = jnp.vstack([self.f0(x)])
+                out = jnp.array([self.f0(x)])
 
         for other in self.f1:
             out = other.compute(out)
@@ -148,9 +148,9 @@ class CvFlow:
         assert isinstance(other, CvFlow)
 
         def f0(x):
-            return jnp.hstack([self.compute(x), other.compute(x)])
+            return jnp.stack([self.compute(x), other.compute(x)], axis=1)
 
-        return CvFlow(func=f0)
+        return CvFlow(func=f0, batched=True)
 
     def __mul__(self, other):
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
@@ -345,7 +345,7 @@ def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
     @cv
     def h(x: SystemParams):
 
-        assert x.z_array is not None, "Z array in systemparams for coulomb descriptor"
+        assert x.masses is not None, "Z array in systemparams for coulomb descriptor"
 
         coor = x.coordinates
 
@@ -353,12 +353,12 @@ def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
         out = jnp.zeros((n, n))
 
         for i in range(n):
-            d = 0.5 * x.z_array[i] ** 2.4
+            d = 0.5 * x.masses[i] ** 2.4
             out = out.at[i, i].set(d)
 
         for i, j in itertools.combinations(range(n), 2):
             d = jnp.linalg.norm(coor[i, :] - coor[j, :], 2)
-            d = x.z_array[i] * x.z_array[j] / d
+            d = x.masses[i] * x.masses[j] / d
             out = out.at[i, j].set(d)
             out = out.at[j, i].set(d)
 
