@@ -291,9 +291,10 @@ class RoundsMd(Rounds):
             # with h5py.File(self.h5file, 'r') as f:
             common_bias_name = f[f"{self.round}"].attrs["name_bias"]
             common_md_name = f[f"{self.round}"].attrs["name_md"]
+        from parsl.dataflow.dflow import AppFuture
 
-        tasks = []
-
+        tasks: list[tuple[int, AppFuture]] | None = None
+        plot_tasks = []
         md_engine = MDEngine.load(common_md_name)
 
         for i, bias in enumerate(biases):
@@ -346,25 +347,38 @@ class RoundsMd(Rounds):
             )
 
             if plot:
-                plot_app(
-                    future,
+                plot_fut = plot_app(
+                    traj=future,
                     inputs=[future.outputs[0]],
                     outputs=[File(f"{temp_name}/plot.pdf")],
                     stdout=f"{temp_name}/plot.stdout",
                     stderr=f"{temp_name}/plot.stderr",
                 )
 
-            tasks.append((i, future))
+                plot_tasks.append(plot_fut)
 
+            if tasks is None:
+                tasks = [(i, future)]
+            else:
+                tasks.append((i, future))
+
+        assert tasks is not None
         # wait for tasks to finish
+
         for i, future in tasks:
             d = future.result()
             self._add(
                 traj=d,
                 md=md_engine,
-                bias=future.task_def["kwargs"]["outputs"][0].filepath,
+                bias=future.outputs[0].filename,
                 i=i,
             )
+
+        if plot:
+
+            for future in plot_tasks:
+                d = future.result()
+                print(d)
 
         self.i += len(tasks)
 

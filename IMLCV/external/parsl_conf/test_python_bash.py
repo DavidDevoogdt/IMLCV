@@ -5,7 +5,7 @@ from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from IMLCV.external.parsl_conf.config import config
 
 
-@bash_app_python(executors=["threads"])
+@bash_app_python()
 def myfunc(i, str):
     print(f"got i={i} str={str}")
     return 3

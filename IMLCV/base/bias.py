@@ -27,7 +27,7 @@ from molmod.units import angstrom, electronvolt, kjmol
 from parsl.data_provider.files import File
 
 
-class Energy:
+class BC:
     """base class for biased Energy of MD simulation."""
 
     def __init__(self) -> None:
@@ -42,11 +42,16 @@ class Energy:
         with open(filename, "wb") as f:
             dill.dump(self, f)
 
+
+class Energy(BC):
     @staticmethod
     def load(filename) -> Energy:
         with open(filename, "rb") as f:
             self = dill.load(f)
         return self
+
+    def get_sp(self) -> SystemParams:
+        raise NotImplemented
 
 
 class YaffEnergy(Energy):
@@ -81,6 +86,13 @@ class YaffEnergy(Energy):
         self.ff = self.f()
         return self
 
+    def get_sp(self):
+        return SystemParams(
+            coordinates=jnp.array(self.ff.system.pos),
+            cell=jnp.array(self.ff.system.cell.rvecs),
+            masses=jnp.array(self.ff.system.masses),
+        )
+
 
 class AseEnergy(Energy):
     """Conversion to ASE energy"""
@@ -92,8 +104,9 @@ class AseEnergy(Energy):
         self.calculator = calculator
 
     def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
+        """use unit conventions of ASE"""
 
-        self.atoms.set_positions(np.array(sp.coordinates))
+        self.atoms.set_positions(np.array(sp.coordinates) / angstrom)
         self.atoms.set_cell(ase.geometry.Cell(np.array(sp.cell) / angstrom))
 
         energy = self.atoms.get_potential_energy() * electronvolt
@@ -110,8 +123,16 @@ class AseEnergy(Energy):
 
         return energy, gpos, vtens
 
+    def get_sp(self):
+        """get system params from initial atoms"""
+        return SystemParams(
+            coordinates=jnp.array(self.atoms.get_positions()) * angstrom,
+            cell=jnp.array(self.atoms.get_cell().array) * angstrom,
+            masses=jnp.array(self.atoms.get_masses()),
+        )
 
-class Bias(Energy, ABC):
+
+class Bias(BC, ABC):
     """base class for biased MD runs."""
 
     def __init__(self, cvs: CV, start=None, step=None) -> None:
@@ -225,6 +246,7 @@ class Bias(Energy, ABC):
 
         xlim = [mg[0].min(), mg[0].max()]
         ylim = [mg[1].min(), mg[1].max()]
+        extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
         bias, _ = jnp.apply_along_axis(
             self.compute,
@@ -235,22 +257,16 @@ class Bias(Energy, ABC):
             map=not map,
         )
 
-        extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
-
         if map is False:
             mask = self.cvs.metric._get_mask(tol=0.01, interp_mg=mg)
             bias = bias * mask
-        # normalise lowest point of bias
 
+        # normalise lowest point of bias
         if inverted:
             bias = -bias
         bias -= bias[~np.isnan(bias)].min()
 
-        # plt.clf()
         plt.switch_backend("PDF")
-
-        # plt.rc('font', **{'family': 'sans-serif'})
-
         fig, ax = plt.subplots()
 
         p = ax.imshow(
@@ -277,12 +293,10 @@ class Bias(Energy, ABC):
                 ax.scatter(tr[:, 0], tr[:, 1], s=3)
 
         ax.set_title(name)
-
         os.makedirs(os.path.dirname(name), exist_ok=True)
-
         fig.set_size_inches([12, 8])
-
         fig.savefig(name)
+        plt.close(fig=fig)  # write out
 
 
 @bash_app_python()

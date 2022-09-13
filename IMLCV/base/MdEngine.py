@@ -4,7 +4,7 @@ Currently, the MD is done with YAFF/OpenMM
 """
 from __future__ import annotations
 
-import os
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable
@@ -139,21 +139,19 @@ class MDEngine(ABC):
     def __init__(
         self,
         bias: Bias,
-        ener: Energy,
+        energy: Energy,
         sp: SystemParams,
         T,
         P=None,
         timestep=None,
         timecon_thermo=None,
         timecon_baro=None,
-        filename=None,
         write_step=100,
         screenlog=1000,
         equilibration=None,
     ) -> None:
 
         self.bias = bias
-        self.filename = filename
         self.write_step = write_step
 
         self.timestep = timestep
@@ -172,7 +170,7 @@ class MDEngine(ABC):
 
         self.screenlog = screenlog
 
-        self.ener = ener
+        self.ener = energy
 
         self.equilibration = 100 * timestep if equilibration is None else equilibration
 
@@ -193,8 +191,6 @@ class MDEngine(ABC):
             "P",
             "timestep",
             "timecon_thermo",
-            "timecon_baro",
-            "filename",
             "write_step",
             "screenlog",
         ]
@@ -207,7 +203,6 @@ class MDEngine(ABC):
 
     def __setstate__(self, arr):
         [cls, d] = arr
-        d["filename"] = None
 
         return cls(**d)
 
@@ -220,7 +215,6 @@ class MDEngine(ABC):
 
         with open(file, "rb") as f:
             [cls, d] = dill.load(f)
-        d["filename"] = None
 
         # replace and add kwargs
         for key in kwargs.keys():
@@ -228,12 +222,11 @@ class MDEngine(ABC):
 
         return cls(**d)
 
-    def new_bias(self, bias: Bias, filename, **kwargs) -> MDEngine:
-        self.save(f"{filename}_temp")
-        mde = MDEngine.load(
-            f"{filename}_temp", **{"bias": bias, "filename": filename, **kwargs}
-        )
-        os.remove(f"{filename}_temp")
+    def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
+        with tempfile.NamedTemporaryFile() as tmp:
+            print(tmp.name)
+            self.save(tmp.name)
+            mde = MDEngine.load(tmp.name, **{"bias": bias, **kwargs})
         return mde
 
     @abstractmethod
@@ -314,15 +307,9 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         if not isinstance(ener, Energy):
             ener = YaffEnergy(ener)
-        if isinstance(ener, YaffEnergy):
-            if sp is None:
-                sp = SystemParams(
-                    coordinates=jnp.array(ener.ff.system.pos),
-                    cell=jnp.array(ener.ff.system.cell.rvecs),
-                    masses=jnp.array(ener.ff.system.masses),
-                )
-        else:
-            assert sp is not None
+
+        if sp is None:
+            sp = ener.get_sp()
 
         # initialize yaff hook
 
@@ -331,7 +318,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         self.step = 1
         self.name = "YaffEngineIMLCV"
 
-        super().__init__(ener=ener, sp=sp, **kwargs)
+        super().__init__(energy=ener, sp=sp, **kwargs)
 
     def __call__(self, iterative):
         self.hook(
@@ -352,7 +339,10 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         if self.thermostat:
             hooks.append(
-                yaff.sampling.NHCThermostat(self.T, timecon=self.timecon_thermo)
+                yaff.sampling.NHCThermostat(
+                    self.T,
+                    timecon=self.timecon_thermo,
+                )
             )
         if self.barostat:
             hooks.append(
@@ -361,7 +351,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                     self.T,
                     self.P,
                     timecon=self.timecon_baro,
-                    anisotropic=False,
+                    anisotropic=True,
                 )
             )
 

@@ -4,36 +4,24 @@ import argparse
 import os
 import sys
 import uuid
-from typing import List, Literal, Optional, Union
 
 import dill
 
-from parsl import bash_app
-from parsl.app.bash import BashApp
-from parsl.data_provider.files import File
-from parsl.dataflow.dflow import DataFlowKernel
+from parsl import File, bash_app, python_app
 
 
 # @typeguard.typechecked
 def bash_app_python(
     function=None,
-    data_flow_kernel: Optional[DataFlowKernel] = None,
-    cache: bool = False,
-    executors: Union[List[str], Literal["all"]] = "all",
-    ignore_for_cache: Optional[List[str]] = None,
 ):
     def decorator(func):
         def wrapper(*args, stdout=None, stderr=None, inputs=[], outputs=[], **kwargs):
-            fold = ".bash_python_app"
-            if not os.path.exists(fold):
-                os.mkdir(fold)
-
-            filename = f"{fold}/{str(uuid.uuid4())}"
 
             # merge in and outputs
             inputs = [*inputs, *kwargs.pop("inputs", [])]
             outputs = [*outputs, *kwargs.pop("outputs", [])]
 
+            @bash_app
             def fun(*args, inputs, outputs, stdout, stderr, **kwargs):
 
                 if len(inputs) > 0:
@@ -51,37 +39,44 @@ def bash_app_python(
 
                 return f"""python -u { os.path.realpath( __file__ ) } --cwd {os.getcwd()} --file {filename}"""
 
-            fun.__name__ = func.__name__
+            from parsl.dataflow.dflow import AppFuture
 
-            bash_app_fun = bash_app(
-                fun,
-                data_flow_kernel=data_flow_kernel,
-                cache=cache,
-                executors=executors,
-                ignore_for_cache=ignore_for_cache,
-            )
+            def rename(name):
+                path, name = os.path.split(name.filepath)
+                return os.path.join(path, f"bash_app_{name}")
 
-            future: BashApp = bash_app_fun(
+                # @join_app
+                # def retrieve(inputs=[], outputs=[]):
+
+            fold = ".bash_python_app"
+            if not os.path.exists(fold):
+                os.mkdir(fold)
+
+            filename = f"{fold}/{str(uuid.uuid4())}"
+
+            file = File(filename)
+
+            future: AppFuture = fun(
                 inputs=inputs,
-                outputs=[*outputs, File(filename)],
+                outputs=[*[File(rename(o)) for o in outputs], file],
                 stdout=stdout,
                 stderr=stderr,
                 *args,
                 **kwargs,
             )
 
-            # modify the future such that the output is recovered
-            _res = future.result
+            @python_app
+            def load(inputs=[], outputs=[]):
+                with open(inputs[-1].filepath, "rb") as f:
+                    result = dill.load(f)
+                import shutil
 
-            def result():
-                _res()  # wait for result to finish
-                with open(filename, "rb") as f:
-                    ret = dill.load(f)
+                for i, o in zip(inputs[:-1], outputs):
+                    shutil.move(i.filepath, o.filepath)
+                return result
 
-                return ret
-
-            future.result = result
-            return future
+            return load(inputs=future.outputs, outputs=outputs)
+            # return load(inputs=[future.outputs[-1]])
 
         return wrapper
 
@@ -103,7 +98,7 @@ if __name__ == "__main__":
     with open(args.file, "rb") as f:
         func, fargs, fkwargs = dill.load(f)
 
-    print(f"calling {func} with {fargs} and {fkwargs}")
+    print(f"calling {func} with args {fargs} and  kwargs {fkwargs}")
 
     a = func(*fargs, **fkwargs)
 

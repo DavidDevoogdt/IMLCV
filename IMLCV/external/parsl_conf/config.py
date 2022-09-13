@@ -19,6 +19,7 @@ from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import AprunLauncher, MpiRunLauncher, SingleNodeLauncher
 from parsl.launchers.launchers import Launcher
+from parsl.providers.local.local import LocalProvider
 from parsl.providers.cluster_provider import ClusterProvider
 from parsl.providers.provider_base import JobState, JobStatus
 from parsl.providers.slurm.slurm import logger, translate_table
@@ -39,31 +40,41 @@ def config(
     print(channel.userhome)
 
     if LOCAL:
-        # exec = parsl.HighThroughputExecutor(
-        #     working_dir=f"{ROOT_DIR}/.workdir",
-        #     address=address_by_hostname(),
-        #     mem_per_worker=2.0,
-        #     max_workers=15,
-        #     provider=LocalProvider(
-        #         worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
-        #         channel=channel,
-        #     ),
-        # )
+        choice = 0
 
-        # exec = parsl.WorkQueueExecutor(
-        #     working_dir=f"{ROOT_DIR}/.workdir",
-        #     address=address_by_hostname(),
-        #     provider=LocalProvider(
-        #         worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
-        #         channel=channel,
-        #         max_blocks=max_blocks,
-        #     ),
-        # )
+        match choice:
+            case 0:
+                exec = parsl.HighThroughputExecutor(
+                    working_dir=f"{ROOT_DIR}/.workdir",
+                    address=address_by_hostname(),
+                    max_workers=6,
+                    provider=LocalProvider(
+                        worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
+                        channel=channel,
+                    ),
+                )
+            case 1:
+                exec = parsl.WorkQueueExecutor(
+                    working_dir=f"{ROOT_DIR}/.workdir",
+                    address=address_by_hostname(),
+                    provider=LocalProvider(
+                        worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
+                        channel=channel,
+                        # max_blocks=max_blocks,
+                    ),
+                    autolabel=True,
+                    autocategory=True,
+                    # worker_options="--memory  5000 --cores 12 ",
+                    # shared_fs=True,
+                )
+            case 2:
 
-        exec = parsl.ThreadPoolExecutor(
-            max_threads=min(15, max_blocks),
-            working_dir=f"{ROOT_DIR}/.workdir",
-        )
+                exec = parsl.ThreadPoolExecutor(
+                    max_threads=min(15, max_blocks),
+                    working_dir=f"{ROOT_DIR}/.workdir",
+                )
+            case _:
+                raise NotImplementedError
 
     else:
 

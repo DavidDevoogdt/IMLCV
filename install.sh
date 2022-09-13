@@ -21,3 +21,5 @@ mamba -y  install cython
 pip  install -e  git+https://github.com/molmod/yaff.git#egg=yaff
 pip  install -e git+https://github.ugent.be/lvduyfhu/ThermoLIB#egg=thermolib
 pip  install -e ./
+
+mamba -y install ndcctools

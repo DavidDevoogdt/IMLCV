@@ -1,14 +1,20 @@
 import os
+import pathlib
 import shutil
 from importlib import import_module
 
 import ase
+import ase.io
+import ase.units
+import jax.numpy as jnp
 import numpy as np
+from ase.calculators.cp2k import CP2K
 from keras.api._v2 import keras as KerasAPI
 
 import yaff
-from IMLCV.base.bias import BiasMTD, NoneBias
-from IMLCV.base.CV import CV, Volume, dihedral
+from IMLCV import ROOT_DIR
+from IMLCV.base.bias import AseEnergy, BiasMTD, NoneBias
+from IMLCV.base.CV import CV, SystemParams, Volume, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, YaffEngine
 from IMLCV.base.metric import Metric
@@ -41,7 +47,7 @@ def cleancopy(base):
     shutil.copytree(f"{base}_orig", f"{base}")
 
 
-def alanine_dipeptide_yaff(full_name):
+def alanine_dipeptide_yaff():
     T = 300 * kelvin
 
     cv0 = CV(
@@ -57,7 +63,6 @@ def alanine_dipeptide_yaff(full_name):
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        filename=full_name,
         write_step=1,
         bias=NoneBias(cv0),
     )
@@ -85,36 +90,37 @@ def mil53_yaff():
         timestep=1.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=100.0 * units.femtosecond,
-        filename="output/mil53.h5",
     )
 
     return yaffmd
 
 
-def todo_ASE_yaff():
+def ase_yaff():
+
+    base = pathlib.Path(ROOT_DIR) / "test/data/CsPbI_3"
 
     # make CP2K ase calculator
-    path_atoms = Path.cwd() / "atoms.xyz"
+    path_atoms = base / "Pos.xyz"
     with open(path_atoms) as f:
         atoms = ase.io.read(f)
 
-    path_source = Path("/data/gent/vo/000/gvo00003/vsc42365/Libraries")
+    path_source = base / "Libraries"
 
     path_potentials = path_source / "GTH_POTENTIALS"
     path_basis = path_source / "BASIS_SETS"
     path_dispersion = path_source / "dftd3.dat"
 
-    with open("CP2K_para.inp") as f:
+    with open(base / "cp2k.inp") as f:
         additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
 
-    calc_cp2k = ase.calculators.CP2K(
+    calc_cp2k = CP2K(
         atoms=atoms,
         auto_write=True,
         basis_set=None,
-        command="mpirun cp2k_shell.popt",
+        command="mpirun cp2k_shell",
         cutoff=800 * ase.units.Rydberg,
         stress_tensor=False,
-        print_level="LOW",
+        print_level="High",
         inp=additional_input,
         pseudo_potential=None,
         max_scf=None,
@@ -122,29 +128,34 @@ def todo_ASE_yaff():
         basis_set_file=None,
         charge=None,
         potential_file=None,
-        debug=False,
+        debug=True,
     )
 
-    atoms.calc = calc_cp2k
+    def f(sp: SystemParams):
+        l = jnp.linalg.norm(sp.cell, axis=0)
+
+        return jnp.array([l.min(), l.max()])
+
+    cv = CV(
+        f=f,
+        metric=Metric(
+            periodicities=[False, False],
+            bounding_box=jnp.array([[4.0, 6.0], [5.0, 9.0]]),
+        ),
+    )
+
+    bias = NoneBias(cvs=cv)
 
     # do yaff MD
-    ff = YaffEngine.create_forcefield_from_ASE(atoms, calc_cp2k)
-
-    metric = None
-
-    cvs = CV(CVUtils.Volume, metric=metric)
-    bias = BiasMTD(
-        cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), start=50, step=50
-    )
+    ener = AseEnergy(atoms=atoms, calculator=calc_cp2k)
     yaffmd = YaffEngine(
-        ener=ff,
+        ener=ener,
         bias=bias,
-        write_step=100,
-        T=600 * units.kelvin,
+        write_step=1,
+        T=300 * units.kelvin,
         timestep=1.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=100.0 * units.femtosecond,
-        filename="output/ase.h5",
     )
 
     return yaffmd

@@ -12,7 +12,7 @@ from IMLCV.base.MdEngine import MDEngine, YaffEngine
 from IMLCV.base.metric import Metric
 from IMLCV.external.parsl_conf.config import config
 from IMLCV.scheme import Scheme
-from IMLCV.test.common import alanine_dipeptide_yaff, get_FES
+from IMLCV.test.common import alanine_dipeptide_yaff, ase_yaff, get_FES
 from molmod import units
 from molmod.units import kelvin, kjmol
 from yaff.test.common import get_alaninedipeptide_amber99ff
@@ -20,22 +20,12 @@ from yaff.test.common import get_alaninedipeptide_amber99ff
 keras: KerasAPI = import_module("tensorflow.keras")
 
 
-def test_cv_discovery(name="test_cv_disc", recalc=False):
+def test_cv_discovery(name="test_cv_disc", md=alanine_dipeptide_yaff(), recalc=False):
     # make copy and restore orig
 
-    md = alanine_dipeptide_yaff(name)
-    # sp = SystemParams(coordinates=np.random.rand(22, 3), cell=None)
-    # a = md.bias.cvs.compute(sp)[0]
-    # b = NoneBias(md.bias.cvs).compute(cvs=a)
     cvd = CVDiscovery(
         transformer=TranformerAutoEncoder(
             outdim=3,
-            # periodicity=[True, True],
-            # periodicity=[False, False, False],
-            # bounding_box=np.array([
-            #     [0.0, 1.0],
-            #     [0.0, 1.0],
-            # ]),
         )
     )
 
@@ -181,7 +171,6 @@ def test_combine_bias(full_name):
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        filename=full_name,
         write_step=1,
         bias=bias,
     )
@@ -268,4 +257,5 @@ if __name__ == "__main__":
     #     test_combine_bias(full_name=f"{tmp}/combine.h5")
     #     test_bias_save(full_name=f"{tmp}/bias_save.h5")
     # test_unbiasing()
-    test_cv_discovery(recalc=True)
+    # test_cv_discovery( md=alanine_dipeptide_yaff() ,recalc=True)
+    test_cv_discovery(name="test_cv_disc_perov", md=ase_yaff(), recalc=True)

@@ -115,7 +115,7 @@ class Scheme:
         # startround = 0
 
         # update biases untill there are no discontinues jumps left
-        for _ in range(rnds):
+        for r in range(rnds):
             self._grid_umbrella(steps=steps, n=n, K=K)
             if update_metric:
                 self._new_metric(plot=True)

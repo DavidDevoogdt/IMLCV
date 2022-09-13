@@ -29,10 +29,10 @@ class SystemParams:
     cell: jnp.ndarray | None = None
 
     def __post_init__(self):
-        zarr = self.masses
-        if zarr is not None:
-            if not isinstance(zarr, HashableArrayWrapper):
-                super().__setattr__("z_array", HashableArrayWrapper(zarr))
+        masses = self.masses
+        if masses is not None:
+            if not isinstance(masses, HashableArrayWrapper):
+                super().__setattr__("masses", HashableArrayWrapper(masses))
 
     def __getitem__(self, slices):
         return SystemParams(
@@ -66,19 +66,20 @@ class SystemParams:
         coordinates = []
         cell = []
         has_cell = arr[0].cell is not None
-        has__z_arr = arr[0].masses is not None
-        _z_arr = arr[0].masses
+
+        masses = arr[0].masses
 
         for x in arr:
             coordinates.append(x.coordinates)
+
             if has_cell:
                 assert x.cell is not None
                 cell.append(x.cell)
             else:
                 assert x.cell is None
 
-            if has__z_arr:
-                assert x.masses == _z_arr
+            if masses is not None:
+                assert (x.masses == masses).all()
             else:
                 assert x.masses is None
 
@@ -88,7 +89,7 @@ class SystemParams:
         else:
             ncell = None
 
-        return SystemParams(coordinates=ncoordinates, cell=ncell, masses=_z_arr)
+        return SystemParams(coordinates=ncoordinates, cell=ncell, masses=masses)
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
@@ -378,38 +379,3 @@ def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
         # return g(x.coordinates)
 
     return h.compute(sps), h
-
-    # #
-
-    # # keep = (((l**2).cumsum()/(l**2).sum())**(1/2)
-    # #         ) < (1 - jnp.finfo(array.dtype).eps)
-
-    # # transf = (Vh.T)[:, keep]
-
-    # @cvtrans
-    # @vmap
-    # def f(x):
-    #     U, l, Vh = jnp.linalg.svd(x, full_matrices=False)
-
-    #     return (U @ x @ (Vh.T))[:, 0:out_dim]
-
-    # return f.compute(array), f
-
-
-# def svd_cv_trans(array: jnp.array, out_dim=50):
-
-#     #
-
-#     # keep = (((l**2).cumsum()/(l**2).sum())**(1/2)
-#     #         ) < (1 - jnp.finfo(array.dtype).eps)
-
-#     # transf = (Vh.T)[:, keep]
-
-#     @cvtrans
-#     @vmap
-#     def f(x):
-#         U, l, Vh = jnp.linalg.svd(x, full_matrices=False)
-
-#         return (U @ x @ (Vh.T))[:, 0:out_dim]
-
-#     return f.compute(array), f
