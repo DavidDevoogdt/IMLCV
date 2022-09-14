@@ -227,7 +227,7 @@ class KerasTrans(CvTrans):
 # decorators definition for functions
 
 
-def cv(func: sf):
+def cvflow(func: sf):
     """decorator to make a CV"""
     ff = CvFlow(func=func)
     return ff
@@ -280,7 +280,7 @@ def dihedral(numbers):
         numbers: list with index of 4 atoms that form dihedral
     """
 
-    @cv
+    @cvflow
     def f(sp: SystemParams):
 
         # @partial(vmap, in_axes=(0), out_axes=(0))
@@ -306,7 +306,7 @@ def dihedral(numbers):
     return f
 
 
-@cv
+@cvflow
 def Volume(sp: SystemParams):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
     return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
@@ -343,7 +343,7 @@ def scale_cv_trans(array=jnp.ndarray):
 
 
 def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
-    @cv
+    @cvflow
     def h(x: SystemParams):
 
         assert x.masses is not None, "Z array in systemparams for coulomb descriptor"

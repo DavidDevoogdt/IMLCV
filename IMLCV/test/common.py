@@ -10,17 +10,17 @@ import jax.numpy as jnp
 import numpy as np
 from ase.calculators.cp2k import CP2K
 from keras.api._v2 import keras as KerasAPI
+from molmod import units
+from molmod.units import kelvin
 
 import yaff
 from IMLCV import ROOT_DIR
 from IMLCV.base.bias import AseEnergy, BiasMTD, NoneBias
-from IMLCV.base.CV import CV, SystemParams, Volume, dihedral
+from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, YaffEngine
 from IMLCV.base.metric import Metric
 from IMLCV.scheme import Scheme
-from molmod import units
-from molmod.units import kelvin
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
@@ -106,9 +106,9 @@ def ase_yaff():
 
     path_source = base / "Libraries"
 
-    path_potentials = path_source / "GTH_POTENTIALS"
-    path_basis = path_source / "BASIS_SETS"
-    path_dispersion = path_source / "dftd3.dat"
+    path_potentials = os.path.relpath(path_source / "GTH_POTENTIALS")
+    path_basis = os.path.relpath(path_source / "BASIS_SETS")
+    path_dispersion = os.path.relpath(path_source / "dftd3.dat")
 
     with open(base / "cp2k.inp") as f:
         additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
@@ -117,10 +117,10 @@ def ase_yaff():
         atoms=atoms,
         auto_write=True,
         basis_set=None,
-        command="mpirun cp2k_shell",
+        command="mpirun cp2k_shell.psmp",
         cutoff=800 * ase.units.Rydberg,
-        stress_tensor=False,
-        print_level="High",
+        stress_tensor=True,
+        print_level="LOW",
         inp=additional_input,
         pseudo_potential=None,
         max_scf=None,
@@ -128,12 +128,13 @@ def ase_yaff():
         basis_set_file=None,
         charge=None,
         potential_file=None,
-        debug=True,
+        debug=False,
+        directory=".CP2K",
     )
 
+    @cvflow
     def f(sp: SystemParams):
         l = jnp.linalg.norm(sp.cell, axis=0)
-
         return jnp.array([l.min(), l.max()])
 
     cv = CV(

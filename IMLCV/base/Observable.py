@@ -3,12 +3,12 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
+from molmod.units import picosecond
+from parsl import File
 
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, CvMonitor, GridBias, plot_app
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import RoundsCV, RoundsMd
-from molmod.units import picosecond
-from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
 from thermolib.thermodynamics.histogram import Histogram2D

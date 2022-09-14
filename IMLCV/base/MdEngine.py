@@ -14,6 +14,7 @@ import dill
 import jax.numpy as jnp
 import jax_dataclasses
 import numpy as np
+from molmod.units import angstrom, electronvolt
 
 import yaff.analysis.biased_sampling
 import yaff.external
@@ -25,7 +26,6 @@ import yaff.sampling
 import yaff.sampling.iterative
 from IMLCV.base.bias import Bias, Energy, YaffEnergy
 from IMLCV.base.CV import SystemParams
-from molmod.units import angstrom, electronvolt
 from yaff.log import log
 from yaff.pes.ff import ForceField
 from yaff.sampling.verlet import VerletScreenLog
@@ -388,8 +388,11 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         def nvec(self):
             return self.rvecs.shape[0]
 
+        @property
         def volume(self):
-            return jnp.abs(jnp.dot(self.cell[0], jnp.cross(self.cell[1], self.cell[2])))
+            return jnp.abs(
+                jnp.dot(self.rvecs[0], jnp.cross(self.rvecs[1], self.rvecs[2]))
+            )
 
     @dataclass
     class _yaffSys:

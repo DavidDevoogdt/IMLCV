@@ -4,6 +4,8 @@ from importlib import import_module
 import numpy as np
 import pytest
 from keras.api._v2 import keras as KerasAPI
+from molmod import units
+from molmod.units import kelvin, kjmol
 
 from IMLCV.base.bias import Bias, BiasF, BiasMTD, CompositeBias, GridBias, HarmonicBias
 from IMLCV.base.CV import CV, CvFlow, Metric, SystemParams, Volume, dihedral, rotate_2d
@@ -13,15 +15,23 @@ from IMLCV.base.metric import Metric
 from IMLCV.external.parsl_conf.config import config
 from IMLCV.scheme import Scheme
 from IMLCV.test.common import alanine_dipeptide_yaff, ase_yaff, get_FES
-from molmod import units
-from molmod.units import kelvin, kjmol
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
 
-def test_cv_discovery(name="test_cv_disc", md=alanine_dipeptide_yaff(), recalc=False):
-    # make copy and restore orig
+def do_conf():
+    config(cluster="doduo", max_blocks=10)
+
+
+def test_cv_discovery(name="test_cv_disc", md=None, recalc=False):
+    do_conf()
+    if md is None or md == "al":
+        md = alanine_dipeptide_yaff()
+    elif md == "perov":
+        md = ase_yaff()
+    else:
+        raise ValueError("unknown system")
 
     cvd = CVDiscovery(
         transformer=TranformerAutoEncoder(
@@ -199,7 +209,7 @@ def test_bias_save(full_name):
 def test_ala_dipep_FES(
     name="ala6", find_metric=False, restart=True, max_energy=70 * kjmol
 ):
-
+    do_conf()
     if restart:
 
         if os.path.isfile(f"output/{name}/rounds"):
@@ -249,8 +259,6 @@ def test_ala_dipep_FES(
 
 if __name__ == "__main__":
 
-    config(cluster="doduo", max_blocks=10)
-
     # test_virial()
     # with tempfile.TemporaryDirectory() as tmp:
     #     test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
@@ -258,4 +266,4 @@ if __name__ == "__main__":
     #     test_bias_save(full_name=f"{tmp}/bias_save.h5")
     # test_unbiasing()
     # test_cv_discovery( md=alanine_dipeptide_yaff() ,recalc=True)
-    test_cv_discovery(name="test_cv_disc_perov", md=ase_yaff(), recalc=True)
+    test_cv_discovery(name="test_cv_disc_perov", md="perov", recalc=True)

@@ -16,6 +16,8 @@ from jax import jacrev, jit, random, vmap
 from jax.random import PRNGKey, choice
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
+from molmod.constants import boltzmann
+from parsl.data_provider.files import File
 from tensorflow import keras
 
 from IMLCV.base.bias import Bias
@@ -32,8 +34,6 @@ from IMLCV.base.CV import (
 from IMLCV.base.metric import Metric
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
-from molmod.constants import boltzmann
-from parsl.data_provider.files import File
 
 # keras: KerasAPI = import_module("tensorflow.keras")
 

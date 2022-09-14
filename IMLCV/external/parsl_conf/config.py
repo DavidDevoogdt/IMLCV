@@ -8,10 +8,8 @@ import os
 import time
 from typing import Optional
 
-import typeguard
-
 import parsl
-from IMLCV import LOCAL, ROOT_DIR
+import typeguard
 from parsl.addresses import address_by_hostname
 from parsl.channels import LocalChannel
 from parsl.channels.base import Channel
@@ -19,21 +17,27 @@ from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import AprunLauncher, MpiRunLauncher, SingleNodeLauncher
 from parsl.launchers.launchers import Launcher
-from parsl.providers.local.local import LocalProvider
 from parsl.providers.cluster_provider import ClusterProvider
+from parsl.providers.local.local import LocalProvider
 from parsl.providers.provider_base import JobState, JobStatus
 from parsl.providers.slurm.slurm import logger, translate_table
 from parsl.providers.slurm.template import template_string
 from parsl.providers.torque.torque import TorqueProvider
 from parsl.utils import RepresentationMixin, wtime_to_minutes
 
+from IMLCV import LOCAL, ROOT_DIR
+
 
 def config(
     cluster="doduo",
-    python_env="source /user/gent/436/vsc43693/scratch_vo/projects/IMLCV/Miniconda3/bin/activate base",
-    max_blocks=1,
+    python_env=f"source {ROOT_DIR}/../Miniconda3/bin/activate\n",
+    max_blocks=20,
     spawnjob=False,
 ):
+
+    if parsl.DataFlowKernelLoader._dfk is not None:
+        print("parsl already configured, using previous setup")
+        return
 
     channel = LocalChannel(script_dir=f"{ROOT_DIR}/.parsl_scripts")
 
@@ -42,51 +46,46 @@ def config(
     if LOCAL:
         choice = 0
 
-        match choice:
-            case 0:
-                exec = parsl.HighThroughputExecutor(
-                    working_dir=f"{ROOT_DIR}/.workdir",
-                    address=address_by_hostname(),
-                    max_workers=6,
-                    provider=LocalProvider(
-                        worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
-                        channel=channel,
-                    ),
-                )
-            case 1:
-                exec = parsl.WorkQueueExecutor(
-                    working_dir=f"{ROOT_DIR}/.workdir",
-                    address=address_by_hostname(),
-                    provider=LocalProvider(
-                        worker_init="source /home/david/Documents/Projects/IMLCV/Miniconda3/bin/activate /home/david/Documents/Projects/IMLCV/Miniconda3\n ",
-                        channel=channel,
-                        # max_blocks=max_blocks,
-                    ),
-                    autolabel=True,
-                    autocategory=True,
-                    # worker_options="--memory  5000 --cores 12 ",
-                    # shared_fs=True,
-                )
-            case 2:
+        if choice == 0:
+            exec = parsl.HighThroughputExecutor(
+                working_dir=f"{ROOT_DIR}/.workdir",
+                address=address_by_hostname(),
+                max_workers=6,
+                provider=LocalProvider(
+                    worker_init=python_env,
+                    channel=channel,
+                ),
+            )
+        elif choice == 1:
+            exec = parsl.WorkQueueExecutor(
+                working_dir=f"{ROOT_DIR}/.workdir",
+                address=address_by_hostname(),
+                provider=LocalProvider(
+                    worker_init=python_env,
+                    channel=channel,
+                    # max_blocks=max_blocks,
+                ),
+                autolabel=True,
+                autocategory=True,
+                # worker_options="--memory  5000 --cores 12 ",
+                # shared_fs=True,
+            )
+        elif choice == 2:
 
-                exec = parsl.ThreadPoolExecutor(
-                    max_threads=min(15, max_blocks),
-                    working_dir=f"{ROOT_DIR}/.workdir",
-                )
-            case _:
-                raise NotImplementedError
+            exec = parsl.ThreadPoolExecutor(
+                max_threads=min(15, max_blocks),
+                working_dir=f"{ROOT_DIR}/.workdir",
+            )
+        else:
+            raise NotImplementedError
 
     else:
 
         def provider_init(provider="PBS", mpi=True):
             ssh_chan = channel
-            mpi_string = "module load impi" if mpi else ""
+            # mpi_string = "module load impi" if mpi else ""
             worker_init = f"""
-
-        {mpi_string}
-        module load texlive  #needed for matplotlib
-
-        {python_env}
+{python_env}
         """
             if provider == "PBS":
                 provider = VSCTorqueProvider(

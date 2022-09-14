@@ -27,5 +27,6 @@ setup(
         "ase",
         "pytest",
         "scikit-learn",
+        "dill",
     ],
 )

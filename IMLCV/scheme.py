@@ -3,13 +3,13 @@ from __future__ import annotations
 import itertools
 
 import numpy as np
+from molmod.constants import boltzmann
 
 from IMLCV.base.bias import BiasMTD, CompositeBias, CvMonitor, HarmonicBias, NoneBias
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import RoundsMd
-from molmod.constants import boltzmann
 
 
 class Scheme:

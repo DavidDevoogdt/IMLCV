@@ -16,15 +16,15 @@ import jax.scipy as jsp
 import matplotlib.pyplot as plt
 import numpy as np
 from jax import jacrev, jit, value_and_grad, vmap
+from molmod.constants import boltzmann
+from molmod.units import angstrom, electronvolt, kjmol
+from parsl.data_provider.files import File
 from scipy.interpolate import RBFInterpolator
 
 import yaff
 from IMLCV.base.CV import CV, SystemParams
 from IMLCV.base.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
-from molmod.constants import boltzmann
-from molmod.units import angstrom, electronvolt, kjmol
-from parsl.data_provider.files import File
 
 
 class BC:
@@ -111,17 +111,17 @@ class AseEnergy(Energy):
 
         energy = self.atoms.get_potential_energy() * electronvolt
 
-        gpos = None
-        vtens = None
+        gpos_out = None
+        vtens_out = None
         if gpos:
             forces = self.atoms.get_forces()
-            gpos = -jnp.array(forces) * electronvolt / angstrom
+            gpos_out = -jnp.array(forces[:]) * electronvolt / angstrom
         if vir:
             volume = jnp.linalg.det(self.atoms.get_cell())
             stress = self.atoms.get_stress(voigt=False)
-            vtens = volume * jnp.array(stress) * electronvolt
+            vtens_out = volume * jnp.array(stress[:]) * electronvolt
 
-        return energy, gpos, vtens
+        return energy, gpos_out, vtens_out
 
     def get_sp(self):
         """get system params from initial atoms"""

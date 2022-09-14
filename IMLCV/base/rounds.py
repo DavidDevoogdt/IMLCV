@@ -10,13 +10,13 @@ import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
+from molmod.constants import boltzmann
+from parsl.data_provider.files import File
 
 from IMLCV.base.bias import Bias, CompositeBias, NoneBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, TrajectoryInfo
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
-from molmod.constants import boltzmann
-from parsl.data_provider.files import File
 
 
 class Rounds(ABC):
@@ -314,7 +314,7 @@ class RoundsMd(Rounds):
             b.save(b_name)
 
             @bash_app_python()
-            def run(steps: int, inputs=[], outputs=[]):
+            def run(steps: int, folder=temp_name, inputs=[], outputs=[]):
 
                 bias = Bias.load(inputs[1].filepath)
                 md = MDEngine.load(inputs[0].filepath, bias=bias)

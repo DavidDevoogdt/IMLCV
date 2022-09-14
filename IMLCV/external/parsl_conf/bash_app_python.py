@@ -6,7 +6,6 @@ import sys
 import uuid
 
 import dill
-
 from parsl import File, bash_app, python_app
 
 
@@ -15,11 +14,22 @@ def bash_app_python(
     function=None,
 ):
     def decorator(func):
-        def wrapper(*args, stdout=None, stderr=None, inputs=[], outputs=[], **kwargs):
+        def wrapper(
+            *args,
+            folder=None,
+            stdout=None,
+            stderr=None,
+            inputs=[],
+            outputs=[],
+            **kwargs,
+        ):
 
             # merge in and outputs
             inputs = [*inputs, *kwargs.pop("inputs", [])]
             outputs = [*outputs, *kwargs.pop("outputs", [])]
+
+            if folder is None:
+                folder = os.getcwd()
 
             @bash_app
             def fun(*args, inputs, outputs, stdout, stderr, **kwargs):
@@ -37,16 +47,15 @@ def bash_app_python(
                 with open(filename, "wb+") as f:
                     dill.dump((func, args, kwargs), f)
 
-                return f"""python -u { os.path.realpath( __file__ ) } --cwd {os.getcwd()} --file {filename}"""
+                return f"""python -u { os.path.realpath( __file__ ) } --folder {folder} --file {filename}"""
+
+            fun.__name__ == func.__name__
 
             from parsl.dataflow.dflow import AppFuture
 
             def rename(name):
                 path, name = os.path.split(name.filepath)
                 return os.path.join(path, f"bash_app_{name}")
-
-                # @join_app
-                # def retrieve(inputs=[], outputs=[]):
 
             fold = ".bash_python_app"
             if not os.path.exists(fold):
@@ -88,12 +97,12 @@ def bash_app_python(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Perform an (enhanced) biased MD")
     parser.add_argument("--file", type=str, help="path to bias")
-    parser.add_argument("--cwd", type=str, help="working directory")
+    parser.add_argument("--folder", type=str, help="working directory")
 
     print(f"got input {sys.argv}")
 
     args = parser.parse_args()
-    os.chdir(args.cwd)
+    os.chdir(args.folder)
 
     with open(args.file, "rb") as f:
         func, fargs, fkwargs = dill.load(f)

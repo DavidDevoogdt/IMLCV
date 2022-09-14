@@ -50,4 +50,6 @@ IMLCV/.runinfo/*
 IMLCV/logs/*
 IMLCV/test/.bash_python_app/*
 
-IMLCV/test/cp2k*
+
+.pip_cache/*
+IMLCV/test/.CP2K/*

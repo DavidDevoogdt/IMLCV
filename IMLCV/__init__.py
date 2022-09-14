@@ -1,6 +1,7 @@
 """summary IMLCV is still underdevelopement."""
 
 import functools
+import getpass
 import os
 
 import jax
@@ -28,9 +29,18 @@ Cp2kShell.recv = recv
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-LOCAL = True
+name = getpass.getuser()
+if name == "vsc43693":
+    LOCAL = False
+elif name == "david":
+    LOCAL = True
+else:
+    raise ValueError("unknow pc")
+
+
 DEBUG = True
 GPU = False
+
 
 # SETUP Jax
 if not GPU:
