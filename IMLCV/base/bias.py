@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import matplotlib.pyplot as plt
 import numpy as np
+from ase.calculators.cp2k import CP2K
 from jax import jacrev, jit, value_and_grad, vmap
 from molmod.constants import boltzmann
 from molmod.units import angstrom, electronvolt, kjmol
@@ -51,7 +52,7 @@ class Energy(BC):
         return self
 
     def get_sp(self) -> SystemParams:
-        raise NotImplemented
+        raise NotImplementedError
 
 
 class YaffEnergy(Energy):
@@ -130,6 +131,28 @@ class AseEnergy(Energy):
             cell=jnp.array(self.atoms.get_cell().array) * angstrom,
             masses=jnp.array(self.atoms.get_masses()),
         )
+
+    def __getstate__(self):
+
+        extra_args = {
+            "label": self.calculator.label,
+        }
+
+        if isinstance(self.calculator, CP2K):
+            extra_args["command"] = self.calculator.command
+
+        return [
+            self.calculator.__class__,
+            self.calculator.get_default_parameters(),
+            extra_args,
+            self.atoms.todict(),
+        ]
+
+    def __setstate__(self, state):
+        clss, calc_params, calc_params_extra, atom_params = state
+        self.atoms = ase.Atoms(**atom_params)
+        self.calculator = clss(**calc_params, **calc_params_extra)
+        self.atoms.calc = self.calculator
 
 
 class Bias(BC, ABC):
