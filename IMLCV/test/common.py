@@ -8,14 +8,13 @@ import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
-from ase.calculators.cp2k import CP2K
 from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import kelvin
 
 import yaff
 from IMLCV import ROOT_DIR
-from IMLCV.base.bias import AseEnergy, BiasMTD, NoneBias
+from IMLCV.base.bias import BiasMTD, Cp2kEnergy, NoneBias
 from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, YaffEngine
@@ -106,29 +105,33 @@ def ase_yaff():
 
     path_source = base / "Libraries"
 
-    path_potentials = os.path.relpath(path_source / "GTH_POTENTIALS")
-    path_basis = os.path.relpath(path_source / "BASIS_SETS")
-    path_dispersion = os.path.relpath(path_source / "dftd3.dat")
+    path_potentials = path_source / "GTH_POTENTIALS"
+    path_basis = path_source / "BASIS_SETS"
+    path_dispersion = path_source / "dftd3.dat"
 
-    with open(base / "cp2k.inp") as f:
-        additional_input = f.read().format(path_basis, path_potentials, path_dispersion)
+    input_params = {
+        "PATH_DISPERSION": path_dispersion,
+        "BASIS_SET_FILE_NAME": path_basis,
+        "POTENTIAL_FILE_NAME": path_potentials,
+    }
 
-    calc_cp2k = CP2K(
+    ener = Cp2kEnergy(
         atoms=atoms,
+        input_file=base / "cp2k.inp",
+        input_kwargs=input_params,
         auto_write=True,
         basis_set=None,
         command="mpirun cp2k_shell.psmp",
         cutoff=800 * ase.units.Rydberg,
         stress_tensor=True,
         print_level="LOW",
-        inp=additional_input,
         pseudo_potential=None,
         max_scf=None,
         xc=None,
         basis_set_file=None,
         charge=None,
         potential_file=None,
-        debug=False,
+        debug=True,
         directory=".CP2K",
     )
 
@@ -144,11 +147,8 @@ def ase_yaff():
             bounding_box=jnp.array([[4.0, 6.0], [5.0, 9.0]]),
         ),
     )
-
     bias = NoneBias(cvs=cv)
 
-    # do yaff MD
-    ener = AseEnergy(atoms=atoms, calculator=calc_cp2k)
     yaffmd = YaffEngine(
         ener=ener,
         bias=bias,
@@ -188,3 +188,8 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
     cleancopy(full_name)
 
     return Scheme.from_rounds(folder=full_name, cvd=cvd)
+
+
+if __name__ == "__main__":
+    md = ase_yaff()
+    md.run(100)

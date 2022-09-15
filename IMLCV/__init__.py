@@ -6,23 +6,9 @@ import os
 
 import jax
 import tensorflow as tf
-from ase.calculators.cp2k import Cp2kShell
 from jax.interpreters import batching
 
 from IMLCV.external.tf2jax import call_tf_p, loop_batcher
-
-
-def recv(self):
-    """Receive a line from the cp2k_shell"""
-    assert self._child.poll() is None  # child process still alive?
-    line = self._child.stdout.readline().strip()
-    if self._debug:
-        print("Received: " + line)
-    self.isready = line == "* READY"
-    return line
-
-
-Cp2kShell.recv = recv
 
 # from yaff.log import log
 

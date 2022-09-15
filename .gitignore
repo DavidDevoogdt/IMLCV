@@ -53,3 +53,4 @@ IMLCV/test/.bash_python_app/*
 
 .pip_cache/*
 IMLCV/test/.CP2K/*
+IMLCV/.ase_calculators/*

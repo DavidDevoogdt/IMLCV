@@ -12,7 +12,7 @@ def myfunc(i, str):
 
 
 if __name__ == "__main__":
-    config()
+    config(cluster="slaking")
 
     fut = myfunc(7, str=20, stdout="test.out", stderr="test.stderr")
 

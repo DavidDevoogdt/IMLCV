@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from abc import ABC, abstractmethod
 from functools import partial
+from pathlib import Path
 from typing import Callable, Iterable
 
 import ase
@@ -10,6 +12,7 @@ import ase.calculators.calculator
 import ase.cell
 import ase.geometry
 import ase.stress
+import ase.units
 import dill
 import jax.numpy as jnp
 import jax.scipy as jsp
@@ -23,6 +26,7 @@ from parsl.data_provider.files import File
 from scipy.interpolate import RBFInterpolator
 
 import yaff
+from IMLCV import ROOT_DIR
 from IMLCV.base.CV import CV, SystemParams
 from IMLCV.base.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
@@ -101,8 +105,11 @@ class AseEnergy(Energy):
     def __init__(
         self, atoms: ase.Atoms, calculator: ase.calculators.calculator.Calculator
     ):
+
         self.atoms = atoms
         self.calculator = calculator
+
+        self.atoms.calc = self.calculator
 
     def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
         """use unit conventions of ASE"""
@@ -138,21 +145,103 @@ class AseEnergy(Energy):
             "label": self.calculator.label,
         }
 
-        if isinstance(self.calculator, CP2K):
-            extra_args["command"] = self.calculator.command
+        dict = {
+            "cc": self.calculator.__class__,
+            "calc_args": {**self.calculator.todict(), **extra_args},
+            "atoms": self.atoms.todict(),
+        }
 
+        return dict
+
+    def __setstate__(self, state):
+        clss = state["cc"]
+        calc_params = state["calc_args"]
+        atom_params = state["atoms"]
+
+        self.atoms = ase.Atoms.fromdict(**atom_params)
+        self.calculator = clss(**calc_params)
+        self.atoms.calc = self.calculator
+
+
+class Cp2kEnergy(AseEnergy):
+    default_parameters = dict(
+        auto_write=False,
+        basis_set=None,
+        basis_set_file=None,
+        charge=0,
+        cutoff=800 * ase.units.Rydberg,
+        force_eval_method="Quickstep",
+        inp="",
+        max_scf=50,
+        potential_file=None,
+        pseudo_potential="auto",
+        stress_tensor=True,
+        uks=False,
+        poisson_solver="auto",
+        xc="LDA",
+        print_level="LOW",
+    )
+
+    def __init__(self, atoms: ase.Atoms, input_file, input_kwargs: dict, **kwargs):
+
+        self.atoms = atoms
+        self.cp2k_inp = os.path.abspath(input_file)
+        self.input_kwargs = input_kwargs
+        self.kwargs = kwargs
+
+        calc = self._calculator()
+
+        super().__init__(atoms, calc)
+
+    def _calculator(self):
+
+        new_dict = {}
+        for key, val in self.input_kwargs.items():
+            if Path(val).exists():
+                new_dict[key] = os.path.relpath(Path(val))
+            else:
+                new_dict[key] = val
+
+        with open(self.cp2k_inp) as f:
+            inp = "".join(f.readlines()).format(**new_dict)
+        params = self.default_parameters.copy()
+        params.update(**{"inp": inp, **self.kwargs})
+
+        if "label" in params:
+            del params["label"]
+            print("ignoring label for Cp2kEnergy")
+        if "directory" in params:
+            del params["directory"]
+            print("ignoring directory for Cp2kEnergy")
+
+        rp = Path(ROOT_DIR) / ".ase_calculators" / "cp2k"
+
+        if not rp.exists():
+            rp.mkdir(parents=True)
+
+        directory = tempfile.mkdtemp(dir=rp)
+        print(f"saving CP2K output in {directory}")
+        params["directory"] = os.path.relpath(directory)
+
+        return CP2K(**params)
+
+    def __getstate__(self):
         return [
-            self.calculator.__class__,
-            self.calculator.get_default_parameters(),
-            extra_args,
             self.atoms.todict(),
+            self.cp2k_inp,
+            self.input_kwargs,
+            self.kwargs,
         ]
 
     def __setstate__(self, state):
-        clss, calc_params, calc_params_extra, atom_params = state
-        self.atoms = ase.Atoms(**atom_params)
-        self.calculator = clss(**calc_params, **calc_params_extra)
-        self.atoms.calc = self.calculator
+        atoms_dict, cp2k_inp, input_kwargs, kwargs = state
+
+        self.__init__(
+            ase.Atoms.fromdict(atoms_dict),
+            cp2k_inp,
+            input_kwargs,
+            **kwargs,
+        )
 
 
 class Bias(BC, ABC):
