@@ -1,7 +1,6 @@
 import itertools
 import os
 from functools import partial
-from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -55,7 +54,7 @@ class Transformer:
 
     def pre_fit(
         self, z: SystemParams, svd=True, scale=True
-    ) -> Tuple[jnp.ndarray, CvFlow]:
+    ) -> tuple[jnp.ndarray, CvFlow]:
         # x, f = SystemParamss.flatten_f(z, scale=prescale)
         x, f = coulomb_descriptor_cv_flow(z)
 
@@ -80,10 +79,10 @@ class Transformer:
 
         return cv
 
-    def _fit(self, x, indices, **kwargs) -> Tuple[jnp.ndarray, CvFlow]:
+    def _fit(self, x, indices, **kwargs) -> tuple[jnp.ndarray, CvFlow]:
         raise NotImplementedError
 
-    def post_fit(self, y: jnp.ndarray, scale) -> Tuple[jnp.ndarray, CvTrans]:
+    def post_fit(self, y: jnp.ndarray, scale) -> tuple[jnp.ndarray, CvTrans]:
         if not scale:
             return y, CvTrans(lambda x: x)
         return scale_cv_trans(y)

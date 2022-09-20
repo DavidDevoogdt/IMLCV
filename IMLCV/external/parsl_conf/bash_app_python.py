@@ -8,6 +8,8 @@ import uuid
 import dill
 from parsl import File, bash_app, python_app
 
+from IMLCV import ROOT_DIR
+
 
 # @typeguard.typechecked
 def bash_app_python(
@@ -57,11 +59,12 @@ def bash_app_python(
                 path, name = os.path.split(name.filepath)
                 return os.path.join(path, f"bash_app_{name}")
 
-            fold = ".bash_python_app"
+            fold = ROOT_DIR / "IMLCV" / "bash_python_app"
             if not os.path.exists(fold):
+
                 os.mkdir(fold)
 
-            filename = f"{fold}/{str(uuid.uuid4())}"
+            filename = str(f"{fold}/{str(uuid.uuid4())}")
 
             file = File(filename)
 
@@ -78,10 +81,13 @@ def bash_app_python(
             def load(inputs=[], outputs=[]):
                 with open(inputs[-1].filepath, "rb") as f:
                     result = dill.load(f)
+                import os
                 import shutil
 
+                os.remove(inputs[-1].filepath)
                 for i, o in zip(inputs[:-1], outputs):
                     shutil.move(i.filepath, o.filepath)
+
                 return result
 
             return load(inputs=future.outputs, outputs=outputs)

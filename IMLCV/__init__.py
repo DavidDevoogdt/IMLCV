@@ -3,6 +3,7 @@
 import functools
 import getpass
 import os
+from pathlib import Path
 
 import jax
 import tensorflow as tf
@@ -12,7 +13,10 @@ from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 
 # from yaff.log import log
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = Path(os.path.dirname(__file__)).parent
+
+
+
 
 
 name = getpass.getuser()

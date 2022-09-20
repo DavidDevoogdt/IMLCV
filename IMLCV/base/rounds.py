@@ -117,7 +117,7 @@ class Rounds(ABC):
         # with self.lock:
         with self.lock:
             f = self.h5file
-            rounds = [k for k in f[f"{r}"].keys()]
+            rounds = list(f[f"{r}"].keys())
 
             d = f[f"{r}"].attrs
             r_attr = {key: d[key] for key in d}

@@ -334,8 +334,11 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         )
 
     def _init_post(self):
+        self.verlet: yaff.sampling.VerletIntegrator | None = None
 
-        hooks = [self, VerletScreenLog(step=1000)]
+    def _setup_verlet(self):
+
+        hooks = [self, VerletScreenLog(step=1)]
 
         if self.thermostat:
             hooks.append(
@@ -373,7 +376,8 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         return super().load(file, **kwargs)
 
     def run(self, steps):
-        print(f"running for {steps} steps")
+        if self.verlet is None:
+            self._setup_verlet()
         self.verlet.run(int(steps))
 
     def get_state(self) -> SystemParams:

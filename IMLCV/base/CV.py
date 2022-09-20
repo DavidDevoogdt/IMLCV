@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import itertools
 import tempfile
+from collections.abc import Iterable
 from functools import partial
 from importlib import import_module
-from typing import Callable, Iterable
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -99,7 +100,7 @@ tf = Callable[[jnp.ndarray], jnp.ndarray]
 class CvTrans:
     def __init__(self, f: tf, batched=True) -> None:
         self.f = f
-        assert batched == True
+        assert batched is True
         self.batched = batched
 
     @partial(jit, static_argnums=(0,))

@@ -1,5 +1,4 @@
 import os
-import pathlib
 import shutil
 from importlib import import_module
 
@@ -25,7 +24,7 @@ from yaff.test.common import get_alaninedipeptide_amber99ff
 keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 
 
-abspath = os.path.abspath(__file__)
+abspath = __file__
 dname = os.path.dirname(abspath)
 os.chdir(dname)
 
@@ -96,7 +95,7 @@ def mil53_yaff():
 
 def ase_yaff():
 
-    base = pathlib.Path(ROOT_DIR) / "test/data/CsPbI_3"
+    base = ROOT_DIR / "IMLCV" / "test/data/CsPbI_3"
 
     # make CP2K ase calculator
     path_atoms = base / "Pos.xyz"
@@ -121,7 +120,8 @@ def ase_yaff():
         input_kwargs=input_params,
         auto_write=True,
         basis_set=None,
-        command="mpirun cp2k_shell.psmp",
+        command="cp2k_shell.popt",
+        # command="mpirun cp2k_shell.psmp",
         cutoff=800 * ase.units.Rydberg,
         stress_tensor=True,
         print_level="LOW",
@@ -131,8 +131,7 @@ def ase_yaff():
         basis_set_file=None,
         charge=None,
         potential_file=None,
-        debug=True,
-        directory=".CP2K",
+        debug=False,
     )
 
     @cvflow

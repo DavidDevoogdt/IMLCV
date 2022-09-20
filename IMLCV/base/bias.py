@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
-from typing import Callable, Iterable
+from types import MethodType
+from typing import Callable
 
 import ase
 import ase.calculators.calculator
@@ -125,7 +127,8 @@ class AseEnergy(Energy):
             forces = self.atoms.get_forces()
             gpos_out = -jnp.array(forces[:]) * electronvolt / angstrom
         if vir:
-            volume = jnp.linalg.det(self.atoms.get_cell())
+            cell: ase.cell.Cell = self.atoms.get_cell()
+            volume = jnp.linalg.det(cell.array[:])
             stress = self.atoms.get_stress(voigt=False)
             vtens_out = volume * jnp.array(stress[:]) * electronvolt
 
@@ -214,7 +217,7 @@ class Cp2kEnergy(AseEnergy):
             del params["directory"]
             print("ignoring directory for Cp2kEnergy")
 
-        rp = Path(ROOT_DIR) / ".ase_calculators" / "cp2k"
+        rp = Path(ROOT_DIR) / "IMLCV" / ".ase_calculators" / "cp2k"
 
         if not rp.exists():
             rp.mkdir(parents=True)
@@ -223,7 +226,20 @@ class Cp2kEnergy(AseEnergy):
         print(f"saving CP2K output in {directory}")
         params["directory"] = os.path.relpath(directory)
 
-        return CP2K(**params)
+        calc = CP2K(**params)
+
+        # def recv(self):
+        #     """Receive a line from the cp2k_shell"""
+        #     assert self._child.poll() is None  # child process still alive?
+        #     line = self._child.stdout.readline().strip()
+        #     if self._debug:
+        #         print('Received: ' + line)
+        #     self.isready = line == '* READY'
+        #     return line
+
+        # calc._shell.recv = MethodType( recv,calc._shell   )
+
+        return calc    
 
     def __getstate__(self):
         return [
@@ -403,12 +419,6 @@ class Bias(BC, ABC):
             for tr in traj:
                 # trajs are ij indexed
                 ax.scatter(tr[:, 0], tr[:, 1], s=3)
-
-        ax.set_title(name)
-        os.makedirs(os.path.dirname(name), exist_ok=True)
-        fig.set_size_inches([12, 8])
-        fig.savefig(name)
-        plt.close(fig=fig)  # write out
 
 
 @bash_app_python()

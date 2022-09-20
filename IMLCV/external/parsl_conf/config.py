@@ -15,7 +15,7 @@ from parsl.channels import LocalChannel
 from parsl.channels.base import Channel
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
-from parsl.launchers import AprunLauncher, MpiRunLauncher, SingleNodeLauncher
+from parsl.launchers import AprunLauncher, SingleNodeLauncher
 from parsl.launchers.launchers import Launcher
 from parsl.providers.cluster_provider import ClusterProvider
 from parsl.providers.local.local import LocalProvider
@@ -30,8 +30,8 @@ from IMLCV import LOCAL, ROOT_DIR
 
 def config(
     cluster="doduo",
-    python_env=f"source {ROOT_DIR}/../Miniconda3/bin/activate\n",
-    max_blocks=20,
+    python_env=f"source {ROOT_DIR}/Miniconda3/bin/activate\n",
+    max_blocks=10,
     spawnjob=False,
 ):
 
@@ -39,7 +39,7 @@ def config(
         print("parsl already configured, using previous setup")
         return
 
-    channel = LocalChannel(script_dir=f"{ROOT_DIR}/.parsl_scripts")
+    channel = LocalChannel()
 
     print(channel.userhome)
 
@@ -58,7 +58,6 @@ def config(
             )
         elif choice == 1:
             exec = parsl.WorkQueueExecutor(
-                working_dir=f"{ROOT_DIR}/.workdir",
                 address=address_by_hostname(),
                 provider=LocalProvider(
                     worker_init=python_env,
@@ -74,30 +73,42 @@ def config(
 
             exec = parsl.ThreadPoolExecutor(
                 max_threads=min(15, max_blocks),
-                working_dir=f"{ROOT_DIR}/.workdir",
             )
         else:
             raise NotImplementedError
 
     else:
 
-        def provider_init(provider="PBS", mpi=True):
+        def provider_init(provider="slurm", mpi=False, max_blocks=None, mem=None):
             ssh_chan = channel
-            # mpi_string = "module load impi" if mpi else ""
+            mpi_string = "ml gompi/2021a" if mpi else ""
             worker_init = f"""
-{python_env}
-        """
+
+ml gompi/2020a
+ml CP2K/7.1-intel-2020a
+
+unset PYTHONPATH
+unset I_MPI_CPUINFO
+
+
+
+{python_env}"""
+            # ml parallel \nparallel --record-env\n
+            launcher = SingleNodeLauncher()
+            # launcher = SrunLauncher()
+            # launcher =  GnuParallelLauncher(   )
+
             if provider == "PBS":
                 provider = VSCTorqueProvider(
                     channel=ssh_chan,
                     worker_init=worker_init,
-                    launcher=MpiRunLauncher() if mpi else SingleNodeLauncher(),
-                    min_blocks=0,
+                    launcher=launcher,
+                    # min_blocks=0,
                     max_blocks=max_blocks,
-                    init_blocks=0,
+                    # init_blocks=0,
                     nodes_per_block=1,
-                    walltime="01:00:00",
-                    parallelism=1,
+                    walltime="00:20:00",
+                    parallelism=0.5,
                     cluster=cluster,
                 )
 
@@ -107,41 +118,41 @@ def config(
                     cluster=cluster,
                     channel=ssh_chan,
                     worker_init=worker_init,
-                    launcher=MpiRunLauncher() if mpi else SingleNodeLauncher(),
-                    exclusive=False,
-                    min_blocks=0,
-                    max_blocks=4,
+                    launcher=launcher,
+                    # cores_per_node=4,
+                    # min_blocks=0,
+                    max_blocks=max_blocks,
+                    # cores_per_node=1,
                     walltime="00:20:00",
                     parallelism=1,
-                    mem_per_node=2,  # in GB
+                    mem_per_node=mem,
+                    exclusive=False,
                 )
             else:
                 raise ValueError("unknonw provider")
 
             return provider
 
-        if spawnjob == True:
+        if spawnjob is True:
             max_blocks = 1
-            exec = HighThroughputExecutor(
-                label=f"bootstrap_{cluster}",
-                provider=provider_init(mpi=False),
-                address=address_by_hostname(),
-                working_dir=f"{ROOT_DIR}/.workdir",
-            )
-
+            mem = None
+            plabel = f"bootstrap_{cluster}"
         else:
-            exec = parsl.WorkQueueExecutor(
-                label=f"hpc_{cluster}",
-                provider=provider_init(mpi=False),
-                address=address_by_hostname(),
-                working_dir=f"{ROOT_DIR}/.workdir",
-            )
+            plabel = f"hpc_{cluster}"
+            mem = 10
+
+        exec = HighThroughputExecutor(
+            label=plabel,
+            provider=provider_init(max_blocks=max_blocks, mem=mem),
+            address=address_by_hostname(),
+            mem_per_worker=3,
+        )
 
     config = Config(
         executors=[exec],
         retries=0,
         # internal_tasks_max_threads=10,
-        run_dir=f"{ROOT_DIR}/.runinfo",
+        run_dir=str( ROOT_DIR / "IMLCV" / ".runinfo"),
         max_idletime=60 * 10,
         # initialize_logging=False
     )
@@ -195,7 +206,7 @@ class VSCTorqueProvider(TorqueProvider):
         queue=None,
         scheduler_options="",
         worker_init="",
-        nodes_per_block=2,
+        nodes_per_block=1,
         init_blocks=1,
         min_blocks=0,
         max_blocks=1,
@@ -205,12 +216,11 @@ class VSCTorqueProvider(TorqueProvider):
         cmd_timeout=120,
         cluster="doduo",
         mem_per_node=None,
-        ppn=1,
     ):
 
         if mem_per_node is not None:
             scheduler_options = (
-                f"#PBS -l mem={mem_per_node*nodes_per_block}gb\n{scheduler_options}"
+                f"#PBS -l mem={mem_per_node*nodes_per_block}GB\n{scheduler_options}"
             )
 
         # augment channel
@@ -235,7 +245,6 @@ class VSCTorqueProvider(TorqueProvider):
         # fix template string (-S flag is outdate and whitespace not allowed)
         self.template_string = f"""#!/bin/bash
 #PBS -N ${{jobname}}
-#PBS -m n
 #PBS -l walltime=${{walltime}}
 #PBS -l nodes=${{nodes_per_block}}:ppn=${{tasks_per_node}}
 #PBS -o ${{submit_script_dir}}/${{jobname}}.submit.stdout
@@ -250,7 +259,6 @@ ${{user_script}}
 """
 
         # PBS -l nodes=${nodes_per_block}:ppn=${tasks_per_node}
-        self.ppn = ppn
         self.cluster = cluster
 
 
@@ -327,7 +335,7 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         scheduler_options: str = "",
         worker_init: str = "",
         cmd_timeout: int = 10,
-        exclusive: bool = True,
+        exclusive: bool = False,
         move_files: bool = True,
         launcher: Launcher = SingleNodeLauncher(),
     ):
