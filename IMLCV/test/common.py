@@ -9,11 +9,11 @@ import jax.numpy as jnp
 import numpy as np
 from keras.api._v2 import keras as KerasAPI
 from molmod import units
-from molmod.units import angstrom, kelvin
+from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
 from IMLCV import CP2K_COMMAND, ROOT_DIR
-from IMLCV.base.bias import BiasMTD, Cp2kEnergy, NoneBias, YaffEnergy
+from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
@@ -78,26 +78,53 @@ def alanine_dipeptide_yaff():
 
 
 def mil53_yaff():
-    raise NotImplementedError
+
     T = 300 * units.kelvin
     P = 1 * units.atm
 
-    system = yaff.System.from_file("data/MIL53.chk")
-    ff = yaff.ForceField.generate(system, "data/MIL53_pars.txt")
-    cvs = CV(f=Volume)
-    bias = BiasMTD(
-        cvs=cvs, K=1.2 * units.kjmol, sigmas=np.array([0.35]), step=50, start=50
+    def f():
+        rd = ROOT_DIR / "IMLCV" / "test" / "data" / "MIL53"
+        system = yaff.System.from_file(str(rd / "MIL53.chk"))
+        ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
+        return ff
+
+    cvs = CV(
+        f=Volume,
+        metric=Metric(
+            periodicities=[False],
+            bounding_box=jnp.array(
+                [850, 1500],
+            )
+            * angstrom**3,
+        ),
     )
 
-    yaffmd = YaffEngine(
-        energy=ff,
-        bias=bias,
-        write_step=10,
+    bias = HarmonicBias(
+        cvs=cvs,
+        q0=np.array(
+            [1400 * angstrom],
+        ),
+        k=jnp.array(
+            [5 * kjmol / angstrom**2],
+        ),
+    )
+
+    energy = YaffEnergy(f=f)
+
+    st = StaticTrajectoryInfo(
         T=T,
         P=P,
         timestep=1.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=100.0 * units.femtosecond,
+        write_step=10,
+        atomic_numbers=energy.ff.system.numbers,
+    )
+
+    yaffmd = YaffEngine(
+        energy=energy,
+        bias=bias,
+        static_trajectory_info=st,
     )
 
     return yaffmd
@@ -213,8 +240,9 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
 
 if __name__ == "__main__":
-    md = ase_yaff()
-    # md = alanine_dipeptide_yaff()
+    # md = mil53_yaff()
+    # md = ase_yaff()
+    md = alanine_dipeptide_yaff()
     md.run(100)
 
     print(md.get_trajectory().sp.shape)

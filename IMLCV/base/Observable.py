@@ -53,7 +53,7 @@ class Observable:
                 sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
 
                 # execute all the mappings
-                cvs = cv.compute(sp)[0]
+                cvs = cv.compute(sp, map=False)[0]
                 cvs_mapped = jax.jit(jax.vmap(cv.metric.map))(cvs)
 
                 arr = np.array(

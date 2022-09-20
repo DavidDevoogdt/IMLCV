@@ -258,7 +258,10 @@ class CV:
         if map:
 
             def cvf(x):
-                return vmap(self.metric.map)(self.f.compute(x))
+                if sp.batched:
+                    return vmap(self.metric.map)(self.f.compute(x))
+                else:
+                    return self.metric.map(self.f.compute(x))
 
         else:
             cvf = self.f.compute

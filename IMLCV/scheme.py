@@ -88,20 +88,18 @@ class Scheme:
         )
         self.md = self.md.new_bias(fesBias)
 
-    def _grid_umbrella(self, steps=1e4, K=None, n=8):
+    def _grid_umbrella(self, steps=1e4, k=None, n=8):
 
         grid = self.md.bias.cvs.metric.grid(n)
 
-        if K is None:
-            K = 0.5 * self.md.static_trajectory_info.T * boltzmann
-
-        K /= (np.array([a[1] - a[0] for a in grid])) ** 2
+        if k is None:
+            k = 2 * self.md.static_trajectory_info.T * boltzmann * n**2
 
         self.rounds.run_par(
             [
                 CompositeBias(
                     [
-                        HarmonicBias(self.md.bias.cvs, np.array(x), np.array(K)),
+                        HarmonicBias(self.md.bias.cvs, np.array(x), k),
                         CvMonitor(self.md.bias.cvs),
                     ]
                 )
@@ -119,7 +117,7 @@ class Scheme:
 
         # update biases untill there are no discontinues jumps left
         for r in range(rnds):
-            self._grid_umbrella(steps=steps, n=n, K=K)
+            self._grid_umbrella(steps=steps, n=n, k=K)
             if update_metric:
                 self._new_metric(plot=True)
                 update_metric = False

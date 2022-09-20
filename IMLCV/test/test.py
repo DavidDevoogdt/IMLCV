@@ -288,7 +288,13 @@ def test_ala_dipep_FES(
 
 if __name__ == "__main__":
 
-    a = True
+    if LOCAL:
+        md = alanine_dipeptide_yaff
+        # md = mil53_yaff
+    else:
+        md = ase_yaff
+
+    a = False
 
     if a:
         test_virial()
@@ -297,10 +303,10 @@ if __name__ == "__main__":
             test_combine_bias(full_name=f"{tmp}/combine.h5")
             test_bias_save(full_name=f"{tmp}/bias_save.h5")
         # test_unbiasing()
-        test_cv_discovery(md=alanine_dipeptide_yaff(), recalc=True)
+        test_cv_discovery(md=md(), recalc=True)
 
     test_cv_discovery(
         name="test_cv_disc_perov",
-        md=alanine_dipeptide_yaff() if LOCAL else ase_yaff(),
+        md=md(),
         recalc=True,
     )

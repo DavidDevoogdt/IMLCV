@@ -392,7 +392,7 @@ class Bias(BC, ABC):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        [cvs, jac] = self.cvs.compute(sp=sp, jacobian=gpos or vir)
+        [cvs, jac] = self.cvs.compute(sp=sp, jacobian=gpos or vir, map=False)
         [ener, de] = self.compute(cvs, diff=(gpos or vir), batched=sp.batched)
 
         e_gpos = None
@@ -687,6 +687,8 @@ class HarmonicBias(Bias):
         super().__init__(cvs)
 
     def _compute(self, cvs, *args):
+        # jax.debug.print("got cvs {cvs}", cvs=cvs)
+
         r = self.cvs.metric.difference(cvs, self.q0)
         return jnp.einsum("i,i,i", self.k, r, r)
 
@@ -899,7 +901,12 @@ class CvMonitor(BiasF):
 
         if self.last_cv is not None:
             if jnp.linalg.norm(new_cv - self.last_cv) > 1:
-                new_trans = np.array([[new_cv, self.last_cv]])
+                print(f"ncv {new_cv} lcv {self.last_cv} {new_cv.shape}")
+
+                new_trans = np.array([np.stack([new_cv, self.last_cv], axis=1)])
+                print(
+                    f"newtrans {new_trans} {new_trans.shape}  {self.transitions.shape}   "
+                )
                 self.transitions = np.vstack((self.transitions, new_trans))
 
         self.last_cv = new_cv
