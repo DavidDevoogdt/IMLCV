@@ -1,6 +1,7 @@
+doduo
 ml purge
-ml gompi/2020a
-ml CP2K/7.1-intel-2020a
+ml gompi/2021a
+ml CP2K/8.2-foss-2021a
 
 unset PYTHONPATH
 
@@ -25,6 +26,9 @@ conda update -y -n base -c defaults conda
 conda install -y python=3.10 
 conda install -y mamba
 conda install pip
+
+# python -m pip install --no-cache-dir mpi4py
+
 mamba install -y pip git tensorflow-cpu jax jaxlib cython ndcctools numpy tensorflow numpy pytest
 
 

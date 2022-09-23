@@ -25,12 +25,12 @@ from parsl.providers.slurm.template import template_string
 from parsl.providers.torque.torque import TorqueProvider
 from parsl.utils import RepresentationMixin, wtime_to_minutes
 
-from IMLCV import LOCAL, ROOT_DIR
+from IMLCV import CP2K_MPI_SLOTS, HPC_WORKER_INIT, LOCAL, PY_EMV, ROOT_DIR
 
 
 def config(
     cluster="doduo",
-    python_env=f"source {ROOT_DIR}/Miniconda3/bin/activate\n",
+    provider="slurm",
     max_blocks=10,
     spawnjob=False,
 ):
@@ -38,10 +38,6 @@ def config(
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
         return
-
-    channel = LocalChannel()
-
-    print(channel.userhome)
 
     if LOCAL:
         choice = 0
@@ -52,16 +48,14 @@ def config(
                 address=address_by_hostname(),
                 max_workers=6,
                 provider=LocalProvider(
-                    worker_init=python_env,
-                    channel=channel,
+                    worker_init=PY_EMV,
                 ),
             )
         elif choice == 1:
             exec = parsl.WorkQueueExecutor(
                 address=address_by_hostname(),
                 provider=LocalProvider(
-                    worker_init=python_env,
-                    channel=channel,
+                    worker_init=PY_EMV,
                     # max_blocks=max_blocks,
                 ),
                 autolabel=True,
@@ -79,84 +73,64 @@ def config(
 
     else:
 
-        def provider_init(provider="slurm", mpi=False, max_blocks=None, mem=None):
-            ssh_chan = channel
-            mpi_string = "ml gompi/2021a" if mpi else ""
-            worker_init = f"""
-
-ml gompi/2020a
-ml CP2K/7.1-intel-2020a
-
-unset PYTHONPATH
-unset I_MPI_CPUINFO
-
-
-
-{python_env}"""
-            # ml parallel \nparallel --record-env\n
-            launcher = SingleNodeLauncher()
-            # launcher = SrunLauncher()
-            # launcher =  GnuParallelLauncher(   )
-
-            if provider == "PBS":
-                provider = VSCTorqueProvider(
-                    channel=ssh_chan,
-                    worker_init=worker_init,
-                    launcher=launcher,
-                    # min_blocks=0,
-                    max_blocks=max_blocks,
-                    # init_blocks=0,
-                    nodes_per_block=1,
-                    walltime="00:20:00",
-                    parallelism=0.5,
-                    cluster=cluster,
-                )
-
-            elif provider == "slurm":
-
-                provider = VSCProviderSlurm(
-                    cluster=cluster,
-                    channel=ssh_chan,
-                    worker_init=worker_init,
-                    launcher=launcher,
-                    # cores_per_node=4,
-                    # min_blocks=0,
-                    max_blocks=max_blocks,
-                    # cores_per_node=1,
-                    walltime="00:20:00",
-                    parallelism=1,
-                    mem_per_node=mem,
-                    exclusive=False,
-                )
-            else:
-                raise ValueError("unknonw provider")
-
-            return provider
+        kwargs = {
+            "channel": LocalChannel(),
+            "cluster": cluster,
+            "walltime": "00:20:00",
+            "worker_init": HPC_WORKER_INIT,
+        }
 
         if spawnjob is True:
-            max_blocks = 1
-            mem = None
+            kwargs["cores_per_node"] = 1
+            kwargs["max_blocks"] = 1
+            kwargs["nodes_per_block"] = 1
             plabel = f"bootstrap_{cluster}"
+            max_workers = 4
+            kwargs["launcher"] = SingleNodeLauncher()
+            cores_per_worker = 1
+
         else:
+            kwargs["cores_per_node"] = CP2K_MPI_SLOTS
+            kwargs["launcher"] = SingleNodeLauncher()
+            kwargs["max_blocks"] = 20
+            kwargs["nodes_per_block"] = 1
+            kwargs["mem_per_node"] = 3
             plabel = f"hpc_{cluster}"
-            mem = 10
+            max_workers = 100
+            cores_per_worker = CP2K_MPI_SLOTS
+
+        if provider == "PBS":
+            provider = VSCTorqueProvider(**kwargs)
+        elif provider == "slurm":
+            provider = VSCProviderSlurm(**kwargs)
+        else:
+            raise ValueError("unknonw provider")
 
         exec = HighThroughputExecutor(
             label=plabel,
-            provider=provider_init(max_blocks=max_blocks, mem=mem),
+            provider=provider,
             address=address_by_hostname(),
             mem_per_worker=3,
+            max_workers=max_workers,
+            cores_per_worker=cores_per_worker,
         )
 
     config = Config(
         executors=[exec],
         retries=0,
-        # internal_tasks_max_threads=10,
-        run_dir=str( ROOT_DIR / "IMLCV" / ".runinfo"),
+        run_dir=str(ROOT_DIR / "IMLCV" / ".runinfo"),
         max_idletime=60 * 10,
-        # initialize_logging=False
     )
     parsl.load(config=config)
+
+
+class MultiLauncher(Launcher):
+    def __init__(self, launcher: Launcher, ppn=1):
+        self.launcher = launcher
+        self.ppn = ppn
+
+    def __call__(self, command, tasks_per_node, nodes_per_block):
+        return self.launcher(command, tasks_per_node * self.ppn, nodes_per_block)
 
 
 class ClusterChannel(Channel):
@@ -168,7 +142,8 @@ class ClusterChannel(Channel):
         assert cluster in ["victini", "doduo", "slaking"]
 
     def execute_wait(self, cmd, walltime=None, envs={}):
-        cmd = f"""module swap cluster/{self.cluster}\n{cmd}"""
+
+        cmd = f""" if [ "$(module list | grep -o "cluster/\\w*" |  cut -c 9-)"  != "{self.cluster}" ]; then  module swap cluster/{self.cluster}; fi;\n{cmd}"""
         return self.channel.execute_wait(cmd, walltime, envs)
 
     @property
@@ -219,9 +194,7 @@ class VSCTorqueProvider(TorqueProvider):
     ):
 
         if mem_per_node is not None:
-            scheduler_options = (
-                f"#PBS -l mem={mem_per_node*nodes_per_block}GB\n{scheduler_options}"
-            )
+            scheduler_options = f"#PBS -l mem={mem_per_node}GB\n{scheduler_options}"
 
         # augment channel
         channel = ClusterChannel(channel, cluster)
@@ -258,7 +231,6 @@ export JOBNAME="${{jobname}}"
 ${{user_script}}
 """
 
-        # PBS -l nodes=${nodes_per_block}:ppn=${tasks_per_node}
         self.cluster = cluster
 
 
@@ -318,6 +290,23 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
     move_files : Optional[Bool]: should files be moved? by default, Parsl will try to move files.
     """
 
+    template_string = """#!/bin/bash
+
+#SBATCH --job-name=${jobname}
+#SBATCH --output=${submit_script_dir}/${jobname}.submit.stdout
+#SBATCH --error=${submit_script_dir}/${jobname}.submit.stderr
+#SBATCH --nodes=${nodes}
+#SBATCH --time=${walltime}
+#SBATCH --ntasks-per-node=${5}
+${scheduler_options}
+
+${worker_init}
+
+export JOBNAME="${jobname}"
+
+$user_script
+"""
+
     @typeguard.typechecked
     def __init__(
         self,
@@ -368,7 +357,7 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         #     self.scheduler_options += "#SBATCH --clusters={}\n".format(cluster)
         if account:
             self.scheduler_options += f"#SBATCH --account={account}\n"
-        self.scheduler_options += "#SBATCH --export=NONE\n"
+        # self.scheduler_options += "#SBATCH --export=NONE\n"
         self.worker_init = worker_init + "\n"
 
     def _status(self):
@@ -433,6 +422,8 @@ class VSCProviderSlurm(ClusterProvider, RepresentationMixin):
         None or str
             If at capacity, returns None; otherwise, a string identifier for the job
         """
+
+        # tasks_per_node = self.ppn
 
         scheduler_options = self.scheduler_options
         worker_init = self.worker_init

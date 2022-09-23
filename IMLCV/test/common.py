@@ -12,7 +12,7 @@ from molmod import units
 from molmod.units import kelvin
 
 import yaff
-from IMLCV import ROOT_DIR
+from IMLCV import CP2K_COMMAND, ROOT_DIR
 from IMLCV.base.bias import BiasMTD, Cp2kEnergy, NoneBias
 from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
@@ -120,9 +120,8 @@ def ase_yaff():
         input_kwargs=input_params,
         auto_write=True,
         basis_set=None,
-        command="cp2k_shell.popt",
-        # command="mpirun cp2k_shell.psmp",
-        cutoff=800 * ase.units.Rydberg,
+        command=CP2K_COMMAND,
+        cutoff=400 * ase.units.Rydberg,
         stress_tensor=True,
         print_level="LOW",
         pseudo_potential=None,
@@ -153,7 +152,7 @@ def ase_yaff():
         bias=bias,
         write_step=1,
         T=300 * units.kelvin,
-        timestep=1.0 * units.femtosecond,
+        timestep=0.5 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=100.0 * units.femtosecond,
     )

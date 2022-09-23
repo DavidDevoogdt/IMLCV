@@ -17,4 +17,5 @@ clean:
 	rm -rf IMLCV/.ase_calculators
 	rm -rf IMLCV/.bash_python_app
 	rm -rf IMLCV/test/output/hpc_perovskite
+	rm -rf IMLCV/test/output/test_cv_disc_perov
 	

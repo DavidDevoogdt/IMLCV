@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
-from types import MethodType
 from typing import Callable
 
 import ase
@@ -105,19 +104,24 @@ class AseEnergy(Energy):
     """Conversion to ASE energy"""
 
     def __init__(
-        self, atoms: ase.Atoms, calculator: ase.calculators.calculator.Calculator
+        self,
+        atoms: ase.Atoms,
+        calculator: ase.calculators.calculator.Calculator | None = None,
     ):
 
         self.atoms = atoms
-        self.calculator = calculator
 
-        self.atoms.calc = self.calculator
+        if calculator is not None:
+            self.atoms.calc = self.calculator
 
     def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
         """use unit conventions of ASE"""
 
         self.atoms.set_positions(np.array(sp.coordinates) / angstrom)
         self.atoms.set_cell(ase.geometry.Cell(np.array(sp.cell) / angstrom))
+
+        if self.atoms.calc is None:
+            self.atoms.calc = self._calculator()
 
         energy = self.atoms.get_potential_energy() * electronvolt
 
@@ -127,12 +131,15 @@ class AseEnergy(Energy):
             forces = self.atoms.get_forces()
             gpos_out = -jnp.array(forces[:]) * electronvolt / angstrom
         if vir:
-            cell: ase.cell.Cell = self.atoms.get_cell()
-            volume = jnp.linalg.det(cell.array[:])
+            cell = self.atoms.get_cell().array[:]
+            volume = jnp.linalg.det(cell)
             stress = self.atoms.get_stress(voigt=False)
             vtens_out = volume * jnp.array(stress[:]) * electronvolt
 
         return energy, gpos_out, vtens_out
+
+    def _calculator(self):
+        raise NotImplementedError
 
     def get_sp(self):
         """get system params from initial atoms"""
@@ -172,7 +179,7 @@ class Cp2kEnergy(AseEnergy):
         basis_set=None,
         basis_set_file=None,
         charge=0,
-        cutoff=800 * ase.units.Rydberg,
+        cutoff=400 * ase.units.Rydberg,
         force_eval_method="Quickstep",
         inp="",
         max_scf=50,
@@ -191,10 +198,12 @@ class Cp2kEnergy(AseEnergy):
         self.cp2k_inp = os.path.abspath(input_file)
         self.input_kwargs = input_kwargs
         self.kwargs = kwargs
+        super().__init__(atoms)
 
-        calc = self._calculator()
-
-        super().__init__(atoms, calc)
+        rp = Path(ROOT_DIR) / "IMLCV" / ".ase_calculators" / "cp2k"
+        rp.mkdir(parents=True, exist_ok=True)
+        # if not os.path.exists(rp):
+        #     os.makedirs(rp, exist_ok=True)
 
     def _calculator(self):
 
@@ -219,9 +228,6 @@ class Cp2kEnergy(AseEnergy):
 
         rp = Path(ROOT_DIR) / "IMLCV" / ".ase_calculators" / "cp2k"
 
-        if not rp.exists():
-            rp.mkdir(parents=True)
-
         directory = tempfile.mkdtemp(dir=rp)
         print(f"saving CP2K output in {directory}")
         params["directory"] = os.path.relpath(directory)
@@ -239,7 +245,7 @@ class Cp2kEnergy(AseEnergy):
 
         # calc._shell.recv = MethodType( recv,calc._shell   )
 
-        return calc    
+        return calc
 
     def __getstate__(self):
         return [

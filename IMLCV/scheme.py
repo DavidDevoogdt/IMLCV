@@ -58,6 +58,8 @@ class Scheme:
     def _MTDBias(self, steps, K=None, sigmas=None, start=500, step=250):
         """generate a metadynamics bias."""
 
+        raise NotImplementedError("validate this")
+
         if sigmas is None:
             sigmas = (
                 self.md.bias.cvs.metric[:, 1] - self.md.bias.cvs.metric[:, 0]
