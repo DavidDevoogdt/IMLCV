@@ -147,12 +147,12 @@ def test_yaff_save_load_func(full_name):
     yaffmd.save("output/yaff_save.d")
     yeet = MDEngine.load("output/yaff_save.d", filename="output/output2.h5")
 
-    sp1 = yaffmd.get_state()
-    sp2 = yeet.get_state()
+    sp1 = yaffmd.sp
+    sp2 = yeet.sp
 
     assert pytest.approx(sp1.coordinates) == sp2.coordinates
     assert pytest.approx(sp1.cell) == sp2.cell
-    assert pytest.approx(yaffmd.ener.compute_coor(sp1)) == yeet.ener.compute_coor(sp2)
+    assert pytest.approx(yaffmd.ener.compute_coor(sp1)) == yeet.energy.compute_coor(sp2)
 
 
 def test_combine_bias(full_name):

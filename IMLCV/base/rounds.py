@@ -318,7 +318,9 @@ class RoundsMd(Rounds):
 
                 bias = Bias.load(inputs[1].filepath)
                 md = MDEngine.load(inputs[0].filepath, bias=bias)
-                md.run(steps)
+                md.run(
+                    steps,
+                )
 
                 bias.save(outputs[0].filepath)
                 d = md.get_trajectory()

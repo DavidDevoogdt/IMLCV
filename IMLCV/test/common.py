@@ -152,9 +152,10 @@ def ase_yaff():
         bias=bias,
         write_step=1,
         T=300 * units.kelvin,
-        timestep=0.5 * units.femtosecond,
+        P=1.0 * units.bar,
+        timestep=2 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=100.0 * units.femtosecond,
+        timecon_baro=500.0 * units.femtosecond,
     )
 
     return yaffmd
@@ -189,5 +190,6 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
 
 if __name__ == "__main__":
-    md = ase_yaff()
+    # md = ase_yaff()
+    md = alanine_dipeptide_yaff()
     md.run(100)

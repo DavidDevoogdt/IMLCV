@@ -56,6 +56,9 @@ CP2K_MPI_SLOTS = 16
 
 # mpirun --map-by ppr:1:node:PE=6 --display-allocation --display-map  echo "True"
 
+
+# def pre_command
+
 # setup HPC stuff
 # print diagnostics to the error stream
 CP2K_COMMAND = f"mpirun --map-by ppr:1:node:PE={CP2K_MPI_SLOTS} --display-allocation --display-map  true 1>&2; mpirun --map-by ppr:1:node:PE={CP2K_MPI_SLOTS}  cp2k_shell.psmp"  # print diagnostics to stderr. --map-by ppr:1:socket:PE=N:  1 processes per resource ,  CP2K_MPI_SLOTS cpus per process
@@ -69,6 +72,8 @@ lscpu
 DEBUG = True
 GPU = False
 
+
+assert not GPU, "GPU cannot be activated yet, todo"
 
 # SETUP Jax
 if not GPU:

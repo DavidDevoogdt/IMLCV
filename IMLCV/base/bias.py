@@ -100,6 +100,10 @@ class YaffEnergy(Energy):
         )
 
 
+class AseError(Exception):
+    pass
+
+
 class AseEnergy(Energy):
     """Conversion to ASE energy"""
 
@@ -122,8 +126,12 @@ class AseEnergy(Energy):
 
         if self.atoms.calc is None:
             self.atoms.calc = self._calculator()
-
-        energy = self.atoms.get_potential_energy() * electronvolt
+            energy = self.atoms.get_potential_energy() * electronvolt
+        else:
+            try:
+                self.atoms.get_potential_energy() * electronvolt
+            except:
+                self._handle_exception()
 
         gpos_out = None
         vtens_out = None
@@ -138,6 +146,9 @@ class AseEnergy(Energy):
 
         return energy, gpos_out, vtens_out
 
+    def _handle_exception(self):
+        raise AseError("The ase calculator failed provide an energy")
+
     def _calculator(self):
         raise NotImplementedError
 
@@ -145,7 +156,7 @@ class AseEnergy(Energy):
         """get system params from initial atoms"""
         return SystemParams(
             coordinates=jnp.array(self.atoms.get_positions()) * angstrom,
-            cell=jnp.array(self.atoms.get_cell().array) * angstrom,
+            cell=jnp.array(self.atoms.get_cell().array[:]) * angstrom,
             masses=jnp.array(self.atoms.get_masses()),
         )
 
@@ -234,18 +245,21 @@ class Cp2kEnergy(AseEnergy):
 
         calc = CP2K(**params)
 
-        # def recv(self):
-        #     """Receive a line from the cp2k_shell"""
-        #     assert self._child.poll() is None  # child process still alive?
-        #     line = self._child.stdout.readline().strip()
-        #     if self._debug:
-        #         print('Received: ' + line)
-        #     self.isready = line == '* READY'
-        #     return line
-
-        # calc._shell.recv = MethodType( recv,calc._shell   )
-
         return calc
+
+    def _handle_exception(self):
+        p = f"{self.atoms.calc.directory}/cp2k.out"
+        assert os.path.exists(p), "no cp2k output file after failure"
+        with open(p) as f:
+            lines = f.readlines()
+        out = min(len(lines), 20)
+        assert out != 0, "cp2k.out doesn't contain output"
+
+        file = "\\n".join(lines[-out, :])
+
+        raise AseError(
+            f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is { file}"
+        )
 
     def __getstate__(self):
         return [

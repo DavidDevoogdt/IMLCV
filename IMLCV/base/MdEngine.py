@@ -7,10 +7,12 @@ from __future__ import annotations
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import ase
 import dill
+import h5py
 import jax.numpy as jnp
 import jax_dataclasses
 import numpy as np
@@ -44,11 +46,17 @@ class TrajectoryInfo:
 
     _items_scal = ["t", "e_pot"]
     _items_vec = ["positions", "cell", "gpos", "vtens"]
+    _items_stat = ["masses"]
+
+    _capacity: int = -1
+    _size: int = -1
 
     # https://stackoverflow.com/questions/7133885/fastest-way-to-grow-a-numpy-numeric-array
     def __post_init__(self):
-        self._capacity = 1
-        self._size = 1
+        if self._capacity == -1:
+            self._capacity = 1
+        if self._size == -1:
+            self._size = 1
 
         for name in [*self._items_vec, *self._items_scal]:
             prop = self.__getattribute__(name)
@@ -60,33 +68,12 @@ class TrajectoryInfo:
             if self.cell.shape[-2] == 0:
                 self.cell = None
 
-    def add(self, ti: TrajectoryInfo):
+    def __add__(self, ti: TrajectoryInfo):
 
         assert ti._size == 1
 
         if self._size == self._capacity:
-
-            fact = 4
-            f = fact - 1
-
-            for name in self._items_vec:
-                prop = self.__getattribute__(name)
-                if prop is not None:
-                    self.__setattr__(
-                        name,
-                        np.vstack(
-                            [prop, np.zeros((self._capacity * f, *prop.shape[1:]))]
-                        ),
-                    )
-            for name in self._items_scal:
-                prop = self.__getattribute__(name)
-                if prop is not None:
-                    self.__setattr__(
-                        name,
-                        np.hstack([prop, np.zeros((self._capacity * f,))]),
-                    )
-
-            self._capacity *= 4
+            self._expand_capacity
 
         for name in self._items_vec:
             prop_ti = ti.__getattribute__(name)
@@ -103,9 +90,36 @@ class TrajectoryInfo:
                 assert prop_self is None
             else:
                 prop_self[self._size] = prop_ti[0]
+
+        for name in self._items_stat:
+            prop_ti = ti.__getattribute__(name)
+            prop_self = self.__getattribute__(name)
+
+            assert (jnp.abs(prop_ti - prop_self) < 1e-6).all()
+
         self._size += 1
 
-    def finalize(self):
+    def _expand_capacity(self):
+        nc = max(self._capacity * 2, 10000)
+        delta = self._capacity - nc
+        self._capacity = nc
+
+        for name in self._items_vec:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                self.__setattr__(
+                    name,
+                    np.vstack([prop, np.zeros((delta, *prop.shape[1:]))]),
+                )
+        for name in self._items_scal:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                self.__setattr__(
+                    name,
+                    np.hstack([prop, np.zeros((delta,))]),
+                )
+
+    def _shrink_capacity(self):
         for name in self._items_vec:
             prop = self.__getattribute__(name)
             if prop is not None:
@@ -115,6 +129,40 @@ class TrajectoryInfo:
             if prop is not None:
                 self.__setattr__(name, prop[: self._size])
         self._capacity = self._size
+
+    def save(self, filename: str | Path):
+        self._shrink_capacity()
+
+        if isinstance(filename, str):
+            filename = Path(filename)
+
+        if not filename.parent.exists():
+            filename.parent.mkdir(parents=True, exist_ok=True)
+
+        with h5py.File(str(filename), "w") as hf:
+
+            for name in [*self._items_scal, *self._items_vec, *self._items_stat]:
+                prop = self.__getattribute__(name)
+                if prop is not None:
+                    hf.create_dataset(name, prop)
+
+            hf.attrs.create("_capacity", self._capacity)
+            hf.attrs.create("_size", self._size)
+
+    @classmethod
+    def load(filename) -> TrajectoryInfo:
+
+        props = {}
+        attrs = {}
+
+        with h5py.File(str(filename), "r") as hf:
+            for key, val in hf.items():
+                props[key] = val
+
+            for key, val in hf.attrs.items():
+                attrs[key] = val
+
+        return TrajectoryInfo(**props, **attrs)
 
     @property
     def volume(self):
@@ -135,6 +183,20 @@ class MDEngine(ABC):
         timecon_thermo: thermostat time constant
         timecon_baro:  barostat time constant
     """
+
+    keys = [
+        "bias",
+        "ener",
+        "T",
+        "P",
+        "timestep",
+        "timecon_thermo",
+        "timecon_baro",
+        "write_step",
+        "screenlog",
+        "sp",
+        "equilibration",
+    ]
 
     def __init__(
         self,
@@ -170,7 +232,7 @@ class MDEngine(ABC):
 
         self.screenlog = screenlog
 
-        self.ener = energy
+        self.energy = energy
 
         self.equilibration = 100 * timestep if equilibration is None else equilibration
 
@@ -184,19 +246,8 @@ class MDEngine(ABC):
         pass
 
     def __getstate__(self):
-        keys = [
-            "bias",
-            "ener",
-            "T",
-            "P",
-            "timestep",
-            "timecon_thermo",
-            "write_step",
-            "screenlog",
-        ]
-
         d = {}
-        for key in keys:
+        for key in self.keys:
             d[key] = self.__dict__[key]
 
         return [self.__class__, d]
@@ -224,28 +275,23 @@ class MDEngine(ABC):
 
     def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
         with tempfile.NamedTemporaryFile() as tmp:
-            print(tmp.name)
             self.save(tmp.name)
             mde = MDEngine.load(tmp.name, **{"bias": bias, **kwargs})
         return mde
 
     @abstractmethod
-    def run(self, steps):
+    def run(self, steps, filename=None):
         """run the integrator for a given number of steps.
 
         Args:
             steps: number of MD steps
         """
+        raise NotImplementedError
 
     def get_trajectory(self) -> TrajectoryInfo:
         assert self.trajectory_info is not None
-        self.trajectory_info.finalize()
+        # self.trajectory_info.finalize()
         return self.trajectory_info
-
-    @abstractmethod
-    def get_state(self) -> SystemParams:
-        """returns the coordinates and cell at current md step."""
-        raise NotImplementedError
 
     def hook(self, ti: TrajectoryInfo):
 
@@ -253,10 +299,10 @@ class MDEngine(ABC):
         if self.trajectory_info is None:
             self.trajectory_info = ti
             return
-        self.trajectory_info.add(ti)
+        self.trajectory_info += ti
 
         # update bias
-        self.bias.update_bias(self.get_state())
+        self.bias.update_bias(self.sp)
 
     def to_ASE_traj(self) -> ase.Atoms:
         traj = self.get_trajectory()
@@ -350,7 +396,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         if self.barostat:
             hooks.append(
                 yaff.sampling.MTKBarostat(
-                    self.ener,
+                    self.energy,
                     self.T,
                     self.P,
                     timecon=self.timecon_baro,
@@ -360,7 +406,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         self._yaff_ener = YaffEngine._YaffFF(
             self.sp,
-            ener=self.ener,
+            ener=self.energy,
             bias=self.bias,
         )
 
@@ -375,14 +421,10 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     def load(file, **kwargs) -> MDEngine:
         return super().load(file, **kwargs)
 
-    def run(self, steps):
+    def run(self, steps, filename=None):
         if self.verlet is None:
             self._setup_verlet()
         self.verlet.run(int(steps))
-
-    def get_state(self) -> SystemParams:
-        """returns the coordinates and cell at current md step."""
-        return self.sp
 
     @dataclass
     class _yaffCell:
