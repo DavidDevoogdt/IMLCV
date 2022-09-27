@@ -84,14 +84,16 @@ tf = Callable[[jnp.ndarray], jnp.ndarray]
 
 
 class CvTrans:
-    def __init__(self, f: tf, batched=True) -> None:
+    def __init__(self, f: tf, batched=False) -> None:
         self.f = f
-        assert batched is True
         self.batched = batched
 
     @partial(jit, static_argnums=(0,))
     def compute(self, x: jnp.ndarray) -> jnp.ndarray:
-        return self.f(x)
+        if self.batched:
+            return self.f(x)
+        else:
+            return vmap(self.f)(x)
 
 
 class CvFlow:
@@ -121,14 +123,27 @@ class CvFlow:
                 out = self.f0(x)
             else:
                 out = jax.lax.map(self.f0, x)
+
+            if len(out.shape) == 1:  # single cv
+                out = out.reshape((*out.shape, 1))
         else:
             if self.batched:
                 return self.f0(x)
             else:
                 out = jnp.array([self.f0(x)])
 
+        # prepare for batchehd cftrans
+        if len(out.shape) == 1:
+            out = out.reshape((1, *out.shape))
+
         for other in self.f1:
             out = other.compute(out)
+
+        # undo batching for unbatched systemparams
+        if not x.batched:
+            if len(out.shape) == 2:
+                assert out.shape[0] == 1
+                out = out[0, :]
 
         return out
 
@@ -136,7 +151,7 @@ class CvFlow:
         assert isinstance(other, CvFlow)
 
         def f0(x):
-            return jnp.stack([self.compute(x), other.compute(x)], axis=1)
+            return jnp.hstack([self.compute(x), other.compute(x)])
 
         return CvFlow(func=f0, batched=True)
 
@@ -236,6 +251,7 @@ class CV:
 
     @partial(jit, static_argnums=(0, 2, 3))
     def compute(self, sp: SystemParams, jacobian=False, map=False):
+
         if map:
 
             def cvf(x):
@@ -301,7 +317,6 @@ def Volume(sp: SystemParams):
 
 def rotate_2d(alpha):
     @cvtrans
-    @vmap
     def f(cv):
         return (
             jnp.array(
@@ -320,7 +335,6 @@ def scale_cv_trans(array=jnp.ndarray):
     diff = maxi - mini
     mask = jnp.abs(diff) > 1e-6
 
-    @vmap
     def f0(x):
         return (x[mask] - mini[mask]) / diff[mask]
 

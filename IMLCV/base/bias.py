@@ -312,20 +312,21 @@ class Bias(BC, ABC):
         the virial."""
 
         [cvs, jac] = self.cvs.compute(sp=sp, jacobian=gpos or vir)
-        [ener, de] = self.compute(cvs, diff=(gpos or vir))
+        [ener, de] = self.compute(cvs, diff=(gpos or vir), batched=sp.batched)
 
         e_gpos = None
         if gpos:
-            e_gpos = jnp.einsum("nj,njkl->nkl", de, jac.coordinates)
+            es = "nj,njkl->nkl"
             if not sp.batched:
-                assert e_gpos.shape[0] == 1
-                e_gpos = e_gpos.reshape(*e_gpos.shape[1:])
+                es = es.replace("n", "")
+            e_gpos = jnp.einsum(es, de, jac.coordinates)
+
         e_vir = None
         if vir:
-            if sp.batched:
-                e_vir = jnp.einsum("nji,nk,nkjl->nil", sp.cell, de, jac.cell)
-            else:
-                e_vir = jnp.einsum("ji,nk,nkjl->il", sp.cell, de, jac.cell)
+            es = "nji,nk,nkjl->nil"
+            if not sp.batched:
+                es = es.replace("n", "")
+            e_vir = jnp.einsum(es, sp.cell, de, jac.cell)
 
         return ener, e_gpos, e_vir
 
@@ -348,7 +349,9 @@ class Bias(BC, ABC):
             return jit(self._compute, static_argnums=static_array_argnums)(x, *args)
 
         def f1(x):
-            return f0(self.cvs.metric.map(x)) if map else f0(x)
+            if map:
+                x = self.cvs.metric.map(x)
+            return f0(x)
 
         def f2(x):
             return value_and_grad(f1)(x) if diff else (f1(x), None)
@@ -560,14 +563,14 @@ class MinBias(CompositeBias):
 class BiasF(Bias):
     """Bias according to CV."""
 
-    def __init__(self, cvs: CV, f=None):
+    def __init__(self, cvs: CV, g=None):
 
-        self.f = f if (f is not None) else lambda _: jnp.array(0.0)
-        self.f = jit(self.f)
+        self.g = g if (g is not None) else lambda _: jnp.array(0.0)
+        self.g = jit(self.g)
         super().__init__(cvs, start=None, step=None)
 
     def _compute(self, cvs):
-        return self.f(cvs)
+        return self.g(cvs)
 
     def get_args(self):
         return []
@@ -800,7 +803,7 @@ class FesBias(Bias):
 
 class CvMonitor(BiasF):
     def __init__(self, cvs: CV, start=0, step=1):
-        super().__init__(cvs, f=None)
+        super().__init__(cvs, g=None)
         self.start = start
         self.step = step
 

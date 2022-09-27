@@ -1,4 +1,5 @@
 import os
+import tempfile
 from importlib import import_module
 
 import jax
@@ -86,24 +87,21 @@ def test_harmonic():
 def test_virial():
     # virial for volume based CV is V*I(3)
 
-    metric = Metric(
-        periodicities=[False],
-        bounding_box=[
-            [0, 4],
-        ],
-    )
+    metric = Metric(periodicities=[False])
     cv0 = CV(f=Volume, metric=metric)
     coordinates = np.random.random((10, 3))
     cell = np.random.random((3, 3))
     vir = np.zeros((3, 3))
 
-    bias = BiasF(
-        cvs=cv0, f=lambda x: jax.numpy.array(x)
-    )  # simply take volume as lambda
+    def fun(x):
+        return x[0]
 
-    vol, _, vir = bias.compute_coor(
-        SystemParams(coordinates=coordinates, cell=cell), vir=True
-    )
+    bias = BiasF(cvs=cv0, g=fun)
+
+    with jax.disable_jit():
+        vol, _, vir = bias.compute_coor(
+            SystemParams(coordinates=coordinates, cell=cell), vir=True
+        )
     assert pytest.approx(vir, abs=1e-7) == vol * np.eye(3)
 
 
@@ -279,13 +277,13 @@ def test_ala_dipep_FES(
 
 if __name__ == "__main__":
 
-    # test_virial()
-    # with tempfile.TemporaryDirectory() as tmp:
-    #     test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
-    #     test_combine_bias(full_name=f"{tmp}/combine.h5")
-    #     test_bias_save(full_name=f"{tmp}/bias_save.h5")
-    # # test_unbiasing()
-    # test_cv_discovery(md=alanine_dipeptide_yaff(), recalc=True)
+    test_virial()
+    with tempfile.TemporaryDirectory() as tmp:
+        test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
+        test_combine_bias(full_name=f"{tmp}/combine.h5")
+        test_bias_save(full_name=f"{tmp}/bias_save.h5")
+    # test_unbiasing()
+    test_cv_discovery(md=alanine_dipeptide_yaff(), recalc=True)
     test_cv_discovery(
         name="test_cv_disc_perov",
         # md=ase_yaff(),

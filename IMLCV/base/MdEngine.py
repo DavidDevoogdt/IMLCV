@@ -608,7 +608,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             )
 
             # compute quantities
-            ener += ener_b[0]
+            ener += ener_b
 
             if gpos is not None:
                 gpos_jax += gpos_jax_b
@@ -617,4 +617,4 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 vtens_jax += vtens_jax_b
                 vtens[:] = np.array(vtens_jax)
 
-            return ener
+            return float(ener)
