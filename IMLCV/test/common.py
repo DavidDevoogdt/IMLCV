@@ -16,7 +16,7 @@ from IMLCV import CP2K_COMMAND, ROOT_DIR
 from IMLCV.base.bias import BiasMTD, Cp2kEnergy, NoneBias
 from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
-from IMLCV.base.MdEngine import MDEngine, YaffEngine
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
 from IMLCV.scheme import Scheme
 from yaff.test.common import get_alaninedipeptide_amber99ff
@@ -56,19 +56,29 @@ def alanine_dipeptide_yaff():
         ),
     )
 
-    mde = YaffEngine(
-        ener=get_alaninedipeptide_amber99ff,
+    tic = StaticTrajectoryInfo(
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        write_step=1,
+        write_step=10,
+        atomic_numbers=np.array(
+            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
+            dtype=int,
+        ),
+    )
+
+    mde = YaffEngine(
+        energy=get_alaninedipeptide_amber99ff,
+        tic=tic,
         bias=NoneBias(cv0),
+        trajectory_file="test.h5",
     )
 
     return mde
 
 
 def mil53_yaff():
+    raise NotImplementedError
     T = 300 * units.kelvin
     P = 1 * units.atm
 
@@ -80,7 +90,7 @@ def mil53_yaff():
     )
 
     yaffmd = YaffEngine(
-        ener=ff,
+        energy=ff,
         bias=bias,
         write_step=10,
         T=T,
@@ -114,7 +124,7 @@ def ase_yaff():
         "POTENTIAL_FILE_NAME": path_potentials,
     }
 
-    ener = Cp2kEnergy(
+    energy = Cp2kEnergy(
         atoms=atoms,
         input_file=base / "cp2k.inp",
         input_kwargs=input_params,
@@ -147,15 +157,20 @@ def ase_yaff():
     )
     bias = NoneBias(cvs=cv)
 
-    yaffmd = YaffEngine(
-        ener=ener,
-        bias=bias,
-        write_step=1,
+    tic = StaticTrajectoryInfo(
+        write_step=10,
         T=300 * units.kelvin,
         P=1.0 * units.bar,
         timestep=2 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=500.0 * units.femtosecond,
+        atomic_numbers=energy.atoms.get_atomic_numbers(),
+    )
+
+    yaffmd = YaffEngine(
+        energy=energy,
+        bias=bias,
+        tic=tic,
     )
 
     return yaffmd
@@ -177,7 +192,7 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
         scheme0 = Scheme(cvd=None, Engine=engine, folder=full_name)
 
-        scheme0.round(rnds=3, steps=1e3, n=4)
+        scheme0.round(rnds=3, steps=5e3, n=4)
 
         scheme0.rounds.run(NoneBias(scheme0.rounds.get_bias().cvs), steps=1e5)
         scheme0.rounds.save()
@@ -193,3 +208,10 @@ if __name__ == "__main__":
     # md = ase_yaff()
     md = alanine_dipeptide_yaff()
     md.run(100)
+
+    print(md.get_trajectory().sp.shape)
+
+    # md.trajectory_info.save("test.h5")
+    # ti2 = TrajectoryInfo.load("test.h5")
+
+    # print(ti2)

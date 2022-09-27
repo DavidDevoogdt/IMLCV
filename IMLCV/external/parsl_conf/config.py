@@ -15,7 +15,7 @@ from parsl.channels import LocalChannel
 from parsl.channels.base import Channel
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
-from parsl.launchers import AprunLauncher, SingleNodeLauncher
+from parsl.launchers import AprunLauncher, SimpleLauncher, SingleNodeLauncher
 from parsl.launchers.launchers import Launcher
 from parsl.providers.cluster_provider import ClusterProvider
 from parsl.providers.local.local import LocalProvider
@@ -40,7 +40,7 @@ def config(
         return
 
     if LOCAL:
-        choice = 0
+        choice = 2
 
         if choice == 0:
             exec = parsl.HighThroughputExecutor(
@@ -48,6 +48,7 @@ def config(
                 address=address_by_hostname(),
                 max_workers=6,
                 provider=LocalProvider(
+                    launcher=SimpleLauncher(),
                     worker_init=PY_EMV,
                 ),
             )

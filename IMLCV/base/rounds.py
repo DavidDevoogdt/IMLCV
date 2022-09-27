@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from abc import ABC
 from collections.abc import Iterable
+from dataclasses import dataclass
 from functools import partial
 from threading import Lock
 
@@ -14,16 +15,39 @@ from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
 from IMLCV.base.bias import Bias, CompositeBias, NoneBias
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import MDEngine, TrajectoryInfo
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
 
 class Rounds(ABC):
 
-    ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
+    # ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
 
     def __init__(self, folder="output") -> None:
+        """
+        this class saves all relevant info in a hdf5 container. It is build as follows:
+        root
+            round 0
+                attrs:
+                    - name_bias
+                    - name_md
+                    - valid
+                    - num
+                static_trajectory info
+                    data, see static_trajectory info._save
+                0:
+                    attrs:
+                        - valid
+                        - num
+                    trajectory_info
+                        data, see trajectory info._save
+                1:
+                    ..
+                ...
+            round 1
+                ...
+            ...
+        """
 
         self.round = -1
         self.i = 0
@@ -62,10 +86,9 @@ class Rounds(ABC):
         with self.lock:
             f = self.h5file
             f.create_group(f"{self.round}/{i}")
+            f[f"{self.round}/{i}"].create_group("trajectory_info")
 
-            for key, val in d.__dict__.items():
-                if val is not None:
-                    f[f"{self.round}/{i}"][key] = val
+            d._save(hf=f[f"{self.round}/{i}/trajectory_info"])
 
             if attrs is not None:
                 for key, val in attrs.items():
@@ -75,7 +98,7 @@ class Rounds(ABC):
             f[f"{self.round}/{i}"].attrs["valid"] = True
             f[f"{self.round}"].attrs["num"] += 1
 
-    def new_round(self, attr):
+    def new_round(self, attr, stic: StaticTrajectoryInfo):
         self.round += 1
         self.i = 0
 
@@ -92,65 +115,86 @@ class Rounds(ABC):
                 if attr[key] is not None:
                     f[f"{self.round}"].attrs[key] = attr[key]
 
+            f[f"{self.round}"].create_group("static_trajectory_info")
+            stic._save(hf=f[f"{self.round}/static_trajectory_info"])
+
             f[f"{self.round}"].attrs["num"] = 0
             f[f"{self.round}"].attrs["valid"] = True
 
         self.save()
 
-    def iter(self, r=None, num=3):
+    def iter(self, r=None, num=3) -> Iterable[tuple[Round, Trajectory]]:
         if r is None:
             r = self.round
 
         for r0 in range(max(r - (num - 1), 0), r + 1):
 
-            r_data = self._get_round(r0)
-            if not r_data["valid"]:
+            _r = self._get_r(r=r0)
+
+            if not _r.valid:
                 continue
 
-            for i in r_data["names"]:
-                i_dict = self._get_i(r_data["round"], i)
+            for i in range(_r.num):
+                _r_i = self._get_r_i(r=r0, i=i)
 
-                if i_dict["attr"]["valid"]:
-                    yield {**i_dict, "round": r_data}
+                if not _r_i.valid:
+                    continue
 
-    def _get_round(self, r):
-        # with self.lock:
-        with self.lock:
-            f = self.h5file
-            rounds = list(f[f"{r}"].keys())
+                yield _r, _r_i
 
-            d = f[f"{r}"].attrs
-            r_attr = {key: d[key] for key in d}
-        r_attr["round"] = r
-        r_attr["names"] = rounds
-        return r_attr
+    @dataclass
+    class Trajectory:
+        ti: TrajectoryInfo
+        valid: bool
+        round: int
+        num: int
+        name_bias: str | None = None
 
-    def _get_i(self, r, i):
+        def get_bias(self) -> Bias:
+            assert self.name_bias is not None
+            return Bias.load(self.name_bias)
+
+    def _get_r_i(self, r: int, i: int) -> Trajectory:
         # with self.lock:
         with self.lock:
             f = self.h5file
             d = f[f"{r}/{i}"]
-            y = {key: np.array(d[key]) for key in d}
-            attr = {key: d.attrs[key] for key in d.attrs}
-        return {**y, "attr": attr, "i": i}
 
-    def _get_attr(self, name, r=None):
+            ti = TrajectoryInfo._load(hf=d["trajectory_info"])
+            r_attr = {key: d.attrs[key] for key in d.attrs}
+
+        return Rounds.Trajectory(ti=ti, **r_attr, round=r, num=i)
+
+    @dataclass
+    class Round:
+        round: int
+        # names: list[str]
+        valid: bool
+        num: int
+        tic: StaticTrajectoryInfo
+        name_bias: str | None = None
+        name_md: str | None = None
+
+    def _get_r(self, r: int) -> Round:
         # with self.lock:
         with self.lock:
             f = self.h5file
-            if r is not None:
-                f2 = f[f"{r}"]
-            else:
-                f2 = f
 
-            if name in f2.attrs:
-                return f2.attrs[name]
+            # names = list(f[f"{r}"].keys())
+            stic = StaticTrajectoryInfo._load(hf=f[f"{r}/static_trajectory_info"])
 
-        return None
+            d = f[f"{r}"].attrs
+            r_attr = {key: d[key] for key in d}
+
+        return Rounds.Round(
+            round=int(r),
+            # names=names,
+            tic=stic,
+            **r_attr,
+        )
 
     def _set_attr(self, name, value, r=None, i=None):
 
-        # with self.lock:
         with self.lock:
             f = self.h5file
             if r is not None:
@@ -166,16 +210,16 @@ class Rounds(ABC):
 
     @property
     def T(self):
-        return self._get_attr("T", r=self.round)
+        return self._get_r(r=self.round).tic.T
 
     @property
     def P(self):
-        return self._get_attr("P", r=self.round)
+        return self._get_r(r=self.round).tic.P
 
     def n(self, r=None):
         if r is None:
             r = self.round
-        return self._get_attr("num", r=r)
+        return self._get_r(r=self.round).num
 
     def invalidate_data(self, r=None, i=None):
         if r is None:
@@ -194,14 +238,21 @@ class RoundsMd(Rounds):
     Gets passed between modules
     """
 
-    TRAJ_KEYS = [
-        "filename",
-        "write_step",
-        "screenlog",
-        "timestep",
-    ]
+    # TRAJ_KEYS = [
+    #     "T",
+    #     "P",
+    #     "timestep",
+    #     "timecon_thermo",
+    #     "timecon_baro",
+    #     "write_step",
+    #     "screenlog",
+    #     "equilibration",
+    # ]
 
-    ENGINE_KEYS = ["timestep", *Rounds.ENGINE_KEYS]
+    # 'bias'
+    # 'energy'
+
+    # ENGINE_KEYS = ["timestep", *Rounds.ENGINE_KEYS]
 
     def __init__(self, folder="output") -> None:
         super().__init__(folder=folder)
@@ -219,7 +270,7 @@ class RoundsMd(Rounds):
 
         self._validate(md)
 
-        attr = {k: md.__dict__[k] for k in RoundsMd.TRAJ_KEYS}
+        attr = {}
         attr["name_bias"] = bias
 
         super().add(d=traj, attrs=attr, i=i)
@@ -253,11 +304,12 @@ class RoundsMd(Rounds):
         md.save(name_md)
         md.bias.save(name_bias)
 
-        attr = {key: md.__dict__[key] for key in self.ENGINE_KEYS}
+        attr = {}
+
         attr["name_md"] = name_md
         attr["name_bias"] = name_bias
 
-        super().new_round(attr=attr)
+        super().new_round(attr=attr, stic=md.tic)
 
     def get_bias(self, r=None, i=None) -> Bias:
         if r is None:
@@ -313,36 +365,36 @@ class RoundsMd(Rounds):
             b_name_new = f"{temp_name}/bias_new"
             b.save(b_name)
 
-            @bash_app_python()
+            traj_name = f"{temp_name}/trajectory_info.h5"
+
+            @bash_app_python
             def run(steps: int, folder=temp_name, inputs=[], outputs=[]):
 
                 bias = Bias.load(inputs[1].filepath)
-                md = MDEngine.load(inputs[0].filepath, bias=bias)
-                md.run(
-                    steps,
+                md = MDEngine.load(
+                    inputs[0].filepath, bias=bias, trajectory_file=outputs[1].filepath
                 )
-
+                md.run(steps)
                 bias.save(outputs[0].filepath)
                 d = md.get_trajectory()
                 return d
 
-            @bash_app_python()
-            def plot_app(traj: TrajectoryInfo, inputs=[], outputs=[]):
+            @bash_app_python
+            def plot_app(
+                st: StaticTrajectoryInfo, traj: TrajectoryInfo, inputs=[], outputs=[]
+            ):
 
                 bias = Bias.load(inputs[0].filepath)
+                sp = traj.sp
+                if st.equilibration is not None:
+                    sp = sp[traj.t > st.equilibration]
 
-                sp = SystemParams(
-                    coordinates=jnp.array(traj.positions),
-                    cell=jnp.array(traj.cell) if traj.cell is not None else None,
-                    masses=jnp.array(traj.masses) if traj.masses is not None else None,
-                )
                 cvs = bias.cvs.compute(sp=sp, map=True)[0]
-
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
             future = run(
                 inputs=[File(common_md_name), File(b_name)],
-                outputs=[File(b_name_new)],
+                outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),
                 stdout=f"{temp_name}/md.stdout",
                 stderr=f"{temp_name}/md.stderr",
@@ -351,6 +403,7 @@ class RoundsMd(Rounds):
             if plot:
                 plot_fut = plot_app(
                     traj=future,
+                    st=md_engine.tic,
                     inputs=[future.outputs[0]],
                     outputs=[File(f"{temp_name}/plot.pdf")],
                     stdout=f"{temp_name}/plot.stdout",
@@ -377,15 +430,13 @@ class RoundsMd(Rounds):
             )
 
         if plot:
-
             for future in plot_tasks:
                 d = future.result()
-                print(d)
 
         self.i += len(tasks)
 
     def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
-
+        raise NotImplementedError
         md = self.get_engine()
         if self.n() > 1 or isinstance(self.get_bias(), NoneBias) or calc:
             from IMLCV.base.Observable import Observable
@@ -400,8 +451,8 @@ class RoundsMd(Rounds):
             self.run(None, steps)
 
         # construct rounds object
-        r = self._get_i(self.round, 0)
-        props = self._get_round(self.round)
+        r = self._get_r_i(self.round, 0)
+        props = self._get_r(self.round)
         beta = 1 / (props["T"] * boltzmann)
         bias = Bias.load(r["attr"]["name_bias"])
 

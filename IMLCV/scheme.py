@@ -86,14 +86,15 @@ class Scheme:
         fesBias = obs.fes_bias(
             kind=kind, plot=plot, max_bias=max_bias, update_bounds=True
         )
-        self.md = self.md.new_bias(fesBias, filename=None)
+        self.md = self.md.new_bias(fesBias)
 
     def _grid_umbrella(self, steps=1e4, K=None, n=8):
 
         grid = self.md.bias.cvs.metric.grid(n)
 
         if K is None:
-            K = 1.0 * self.md.T * boltzmann
+            K = 1.0 * self.md.tic.T * boltzmann
+
         K /= (np.array([a[1] - a[0] for a in grid]) / 2) ** 2
 
         self.rounds.run_par(

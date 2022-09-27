@@ -18,7 +18,7 @@ from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
 
 if "mpi4py" in sys.modules:
-    warning("mpi 4 py doens't work wel lwith cp2k calc atm")
+    warning("mpi4py doens't work wel lwith cp2k calc atm")
 
 
 name = getpass.getuser()

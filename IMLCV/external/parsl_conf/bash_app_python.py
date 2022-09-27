@@ -34,7 +34,7 @@ def bash_app_python(
                 folder = os.getcwd()
 
             @bash_app
-            def fun(*args, inputs, outputs, stdout, stderr, **kwargs):
+            def fun(*args, stdout, stderr, inputs=[], outputs=[], **kwargs):
 
                 if len(inputs) > 0:
                     kwargs["inputs"] = inputs
@@ -51,7 +51,7 @@ def bash_app_python(
 
                 return f"""python -u { os.path.realpath( __file__ ) } --folder {folder} --file {filename}"""
 
-            fun.__name__ == func.__name__
+            fun.__name__ = func.__name__
 
             from parsl.dataflow.dflow import AppFuture
 
@@ -109,6 +109,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     os.chdir(args.folder)
+
+    print(f"working in folder {os.getcwd()}")
 
     with open(args.file, "rb") as f:
         func, fargs, fkwargs = dill.load(f)

@@ -1,6 +1,7 @@
 import os
 from importlib import import_module
 
+import jax
 import numpy as np
 import pytest
 from keras.api._v2 import keras as KerasAPI
@@ -10,11 +11,11 @@ from molmod.units import kelvin, kjmol
 from IMLCV.base.bias import Bias, BiasF, BiasMTD, CompositeBias, GridBias, HarmonicBias
 from IMLCV.base.CV import CV, CvFlow, Metric, SystemParams, Volume, dihedral, rotate_2d
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
-from IMLCV.base.MdEngine import MDEngine, YaffEngine
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
 from IMLCV.external.parsl_conf.config import config
 from IMLCV.scheme import Scheme
-from IMLCV.test.common import alanine_dipeptide_yaff, ase_yaff, get_FES
+from IMLCV.test.common import alanine_dipeptide_yaff, get_FES
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 keras: KerasAPI = import_module("tensorflow.keras")
@@ -24,14 +25,14 @@ def do_conf():
     config(cluster="doduo", max_blocks=10)
 
 
-def test_cv_discovery(name="test_cv_disc", md=None, recalc=False):
+def test_cv_discovery(name="test_cv_disc", md=alanine_dipeptide_yaff(), recalc=False):
     do_conf()
-    if md is None or md == "al":
-        md = alanine_dipeptide_yaff()
-    elif md == "perov":
-        md = ase_yaff()
-    else:
-        raise ValueError("unknown system")
+    # if md is None or md == "al":
+    #     md = alanine_dipeptide_yaff()
+    # elif md == "perov":
+    #     md = ase_yaff()
+    # else:
+    #     raise ValueError("unknown system")
 
     cvd = CVDiscovery(
         transformer=TranformerAutoEncoder(
@@ -85,13 +86,20 @@ def test_harmonic():
 def test_virial():
     # virial for volume based CV is V*I(3)
 
-    metric = Metric(periodicities=[False], bounding_box=[0, 4])
+    metric = Metric(
+        periodicities=[False],
+        bounding_box=[
+            [0, 4],
+        ],
+    )
     cv0 = CV(f=Volume, metric=metric)
     coordinates = np.random.random((10, 3))
     cell = np.random.random((3, 3))
     vir = np.zeros((3, 3))
 
-    bias = BiasF(cvs=cv0, f=lambda x: x)  # simply take volume as lambda
+    bias = BiasF(
+        cvs=cv0, f=lambda x: jax.numpy.array(x)
+    )  # simply take volume as lambda
 
     vol, _, vir = bias.compute_coor(
         SystemParams(coordinates=coordinates, cell=cell), vir=True
@@ -140,19 +148,23 @@ def test_grid_bias():
 
 def test_yaff_save_load_func(full_name):
 
-    yaffmd = alanine_dipeptide_yaff(full_name=full_name)
+    yaffmd = alanine_dipeptide_yaff()
 
     yaffmd.run(int(761))
 
     yaffmd.save("output/yaff_save.d")
-    yeet = MDEngine.load("output/yaff_save.d", filename="output/output2.h5")
+    yeet = MDEngine.load("output/yaff_save.d")
 
     sp1 = yaffmd.sp
     sp2 = yeet.sp
 
     assert pytest.approx(sp1.coordinates) == sp2.coordinates
     assert pytest.approx(sp1.cell) == sp2.cell
-    assert pytest.approx(yaffmd.ener.compute_coor(sp1)) == yeet.energy.compute_coor(sp2)
+    assert pytest.approx(yaffmd.energy.compute_coor(sp1)) == yeet.energy.compute_coor(
+        sp2
+    )
+
+    # yeet.run(100)
 
 
 def test_combine_bias(full_name):
@@ -176,13 +188,21 @@ def test_combine_bias(full_name):
 
     bias = CompositeBias(biases=[bias1, bias2])
 
-    mde = YaffEngine(
-        ener=get_alaninedipeptide_amber99ff,
+    stic = StaticTrajectoryInfo(
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         write_step=1,
+        atomic_numbers=np.array(
+            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
+            dtype=int,
+        ),
+    )
+
+    mde = YaffEngine(
+        energy=get_alaninedipeptide_amber99ff,
         bias=bias,
+        tic=stic,
     )
 
     mde.run(int(1e2))
@@ -191,7 +211,7 @@ def test_combine_bias(full_name):
 def test_bias_save(full_name):
     """save and load bias to disk."""
 
-    yaffmd = alanine_dipeptide_yaff(full_name)
+    yaffmd = alanine_dipeptide_yaff()
     yaffmd.run(int(1e3))
 
     yaffmd.bias.save("output/bias_test_2.xyz")
@@ -264,6 +284,10 @@ if __name__ == "__main__":
     #     test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
     #     test_combine_bias(full_name=f"{tmp}/combine.h5")
     #     test_bias_save(full_name=f"{tmp}/bias_save.h5")
-    # test_unbiasing()
-    # test_cv_discovery( md=alanine_dipeptide_yaff() ,recalc=True)
-    test_cv_discovery(name="test_cv_disc_perov", md="perov", recalc=True)
+    # # test_unbiasing()
+    # test_cv_discovery(md=alanine_dipeptide_yaff(), recalc=True)
+    test_cv_discovery(
+        name="test_cv_disc_perov",
+        # md=ase_yaff(),
+        recalc=True,
+    )

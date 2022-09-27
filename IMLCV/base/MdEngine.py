@@ -30,7 +30,88 @@ from IMLCV.base.bias import Bias, Energy, YaffEnergy
 from IMLCV.base.CV import SystemParams
 from yaff.log import log
 from yaff.pes.ff import ForceField
-from yaff.sampling.verlet import VerletScreenLog
+from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
+
+
+@dataclass
+class StaticTrajectoryInfo:
+
+    _attr = [
+        "timestep",
+        "timecon_thermo",
+        "T",
+        "P",
+        "timecon_baro",
+        "write_step",
+        "equilibration",
+    ]
+
+    _arr = [
+        "atomic_numbers",
+        "masses",
+    ]
+
+    timestep: float
+
+    T: float
+    timecon_thermo: float
+
+    atomic_numbers: np.ndarray
+    masses: np.ndarray | None = None
+
+    P: float | None = None
+    timecon_baro: float | None = None
+
+    write_step: int = 100
+    equilibration: float | None = None
+
+    @property
+    def thermostat(self):
+        return self.T is not None
+
+    @property
+    def barostat(self):
+        return self.P is not None
+
+    def __post_init__(self):
+
+        if self.thermostat:
+            assert self.timecon_thermo is not None
+
+        if self.barostat:
+            assert self.timecon_baro is not None
+
+        if self.equilibration is None:
+            self.equilibration = 200 * self.timestep
+
+        if self.masses is None:
+            from molmod.periodic import periodic
+
+            self.masses = np.array([periodic[n].mass for n in self.atomic_numbers])
+
+    def _save(self, hf: h5py.File):
+        for name in self._arr:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                hf[name] = prop
+
+        for name in self._attr:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                hf.attrs[name] = prop
+
+    @staticmethod
+    def _load(hf: h5py.File) -> StaticTrajectoryInfo:
+        props_static = {}
+        attrs_static = {}
+
+        for key, val in hf.items():
+            props_static[key] = val[:]
+
+        for key, val in hf.attrs.items():
+            attrs_static[key] = val
+
+        return StaticTrajectoryInfo(**attrs_static, **props_static)
 
 
 @dataclass
@@ -38,15 +119,21 @@ class TrajectoryInfo:
 
     positions: np.ndarray
     cell: np.ndarray | None = None
+    charges: np.ndarray | None = None
+
+    e_pot: np.ndarray | None = None
     gpos: np.ndarray | None = None
     vtens: np.ndarray | None = None
+
     t: np.ndarray | None = None
-    e_pot: np.ndarray | None = None
-    masses: np.ndarray | None = None
+
+    # masses: np.ndarray | None = None
+
+    # static_info: StaticTrajectoryInfo | None = None
 
     _items_scal = ["t", "e_pot"]
-    _items_vec = ["positions", "cell", "gpos", "vtens"]
-    _items_stat = ["masses"]
+    _items_vec = ["positions", "cell", "gpos", "vtens", "charges"]
+    # _items_stat = ["static_info"]
 
     _capacity: int = -1
     _size: int = -1
@@ -58,10 +145,11 @@ class TrajectoryInfo:
         if self._size == -1:
             self._size = 1
 
-        for name in [*self._items_vec, *self._items_scal]:
-            prop = self.__getattribute__(name)
-            if prop is not None:
-                self.__setattr__(name, np.array([prop]))
+        if self._size == 1:
+            for name in [*self._items_vec, *self._items_scal]:
+                prop = self.__getattribute__(name)
+                if prop is not None:
+                    self.__setattr__(name, np.array([prop]))
 
         # test wether cell is truly not None
         if self.cell is not None:
@@ -73,7 +161,7 @@ class TrajectoryInfo:
         assert ti._size == 1
 
         if self._size == self._capacity:
-            self._expand_capacity
+            self._expand_capacity()
 
         for name in self._items_vec:
             prop_ti = ti.__getattribute__(name)
@@ -81,7 +169,7 @@ class TrajectoryInfo:
             if prop_ti is None:
                 assert prop_self is None
             else:
-                prop_self[self._size, :] = prop_ti[0]
+                prop_self[self._size - 1, :] = prop_ti[0]
 
         for name in self._items_scal:
             prop_ti = ti.__getattribute__(name)
@@ -89,19 +177,15 @@ class TrajectoryInfo:
             if prop_ti is None:
                 assert prop_self is None
             else:
-                prop_self[self._size] = prop_ti[0]
-
-        for name in self._items_stat:
-            prop_ti = ti.__getattribute__(name)
-            prop_self = self.__getattribute__(name)
-
-            assert (jnp.abs(prop_ti - prop_self) < 1e-6).all()
+                prop_self[self._size - 1] = prop_ti[0]
 
         self._size += 1
 
+        return self
+
     def _expand_capacity(self):
-        nc = max(self._capacity * 2, 10000)
-        delta = self._capacity - nc
+        nc = min(self._capacity * 2, self._capacity + 10000)
+        delta = nc - self._capacity
         self._capacity = nc
 
         for name in self._items_vec:
@@ -109,7 +193,7 @@ class TrajectoryInfo:
             if prop is not None:
                 self.__setattr__(
                     name,
-                    np.vstack([prop, np.zeros((delta, *prop.shape[1:]))]),
+                    np.vstack((prop, np.zeros((delta, *prop.shape[1:])))),
                 )
         for name in self._items_scal:
             prop = self.__getattribute__(name)
@@ -123,11 +207,11 @@ class TrajectoryInfo:
         for name in self._items_vec:
             prop = self.__getattribute__(name)
             if prop is not None:
-                self.__setattr__(name, prop[: self._size, :])
+                self.__setattr__(name, prop[: self._size - 1, :])
         for name in self._items_scal:
             prop = self.__getattribute__(name)
             if prop is not None:
-                self.__setattr__(name, prop[: self._size])
+                self.__setattr__(name, prop[: self._size - 1])
         self._capacity = self._size
 
     def save(self, filename: str | Path):
@@ -140,35 +224,62 @@ class TrajectoryInfo:
             filename.parent.mkdir(parents=True, exist_ok=True)
 
         with h5py.File(str(filename), "w") as hf:
+            self._save(hf=hf)
 
-            for name in [*self._items_scal, *self._items_vec, *self._items_stat]:
-                prop = self.__getattribute__(name)
-                if prop is not None:
-                    hf.create_dataset(name, prop)
+    def _save(self, hf: h5py.File):
+        for name in [*self._items_scal, *self._items_vec]:
+            prop = self.__getattribute__(name)
+            if prop is not None:
+                hf[name] = prop
 
-            hf.attrs.create("_capacity", self._capacity)
-            hf.attrs.create("_size", self._size)
+        hf.attrs.create("_capacity", self._capacity)
+        hf.attrs.create("_size", self._size)
 
-    @classmethod
+        # if self.static_info is not None:
+
+        #     hf.create_group("static_info")
+        #     self.static_info._save(hf=hf["static_info"])
+
+    @staticmethod
     def load(filename) -> TrajectoryInfo:
 
+        with h5py.File(str(filename), "r") as hf:
+            return TrajectoryInfo._load(hf=hf)
+
+    @staticmethod
+    def _load(hf: h5py.File):
         props = {}
         attrs = {}
 
-        with h5py.File(str(filename), "r") as hf:
-            for key, val in hf.items():
-                props[key] = val
+        tic = None
 
-            for key, val in hf.attrs.items():
-                attrs[key] = val
+        for key, val in hf.items():
+            # if key == "static_info":
+            #     tic = StaticTrajectoryInfo._load(hf[key])
+            # continue
+            props[key] = val[:]
 
-        return TrajectoryInfo(**props, **attrs)
+        for key, val in hf.attrs.items():
+            attrs[key] = val
+
+        return TrajectoryInfo(
+            # static_info=tic,
+            **props,
+            **attrs,
+        )
 
     @property
     def volume(self):
         if self.cell is not None:
             return jnp.linalg.det(self.cell)
         return None
+
+    @property
+    def sp(self) -> SystemParams:
+        return SystemParams(
+            coordinates=jnp.array(self.positions),
+            cell=jnp.array(self.cell) if self.cell is not None else None,
+        )
 
 
 class MDEngine(ABC):
@@ -186,16 +297,10 @@ class MDEngine(ABC):
 
     keys = [
         "bias",
-        "ener",
-        "T",
-        "P",
-        "timestep",
-        "timecon_thermo",
-        "timecon_baro",
-        "write_step",
+        "energy",
+        "tic",
         "screenlog",
         "sp",
-        "equilibration",
     ]
 
     def __init__(
@@ -203,41 +308,24 @@ class MDEngine(ABC):
         bias: Bias,
         energy: Energy,
         sp: SystemParams,
-        T,
-        P=None,
-        timestep=None,
-        timecon_thermo=None,
-        timecon_baro=None,
-        write_step=100,
+        stic: StaticTrajectoryInfo,
+        trajectory_file=None,
         screenlog=1000,
-        equilibration=None,
     ) -> None:
 
+        self.tic = stic
+
         self.bias = bias
-        self.write_step = write_step
-
-        self.timestep = timestep
-
-        self.T = T
-        self.thermostat = T is not None
-        self.timecon_thermo = timecon_thermo
-        if self.thermostat:
-            assert timecon_thermo is not None
-
-        self.P = P
-        self.barostat = P is not None
-        self.timecon_baro = timecon_baro
-        if self.barostat:
-            assert timecon_baro is not None
+        self.energy = energy
 
         self.screenlog = screenlog
 
-        self.energy = energy
-
-        self.equilibration = 100 * timestep if equilibration is None else equilibration
-
         self.sp = sp
         self.trajectory_info: TrajectoryInfo | None = None
+
+        self.step = 1
+
+        self.trajectory_file = trajectory_file
 
         self._init_post()
 
@@ -280,7 +368,7 @@ class MDEngine(ABC):
         return mde
 
     @abstractmethod
-    def run(self, steps, filename=None):
+    def run(self, steps):
         """run the integrator for a given number of steps.
 
         Args:
@@ -290,7 +378,7 @@ class MDEngine(ABC):
 
     def get_trajectory(self) -> TrajectoryInfo:
         assert self.trajectory_info is not None
-        # self.trajectory_info.finalize()
+        self.trajectory_info._shrink_capacity()
         return self.trajectory_info
 
     def hook(self, ti: TrajectoryInfo):
@@ -298,14 +386,21 @@ class MDEngine(ABC):
         # write step to trajectory
         if self.trajectory_info is None:
             self.trajectory_info = ti
-            return
-        self.trajectory_info += ti
+        else:
+            self.trajectory_info += ti
 
-        # update bias
+        if self.step % self.tic.write_step == 1:
+            if self.trajectory_file is not None:
+                self.trajectory_info.save(self.trajectory_file)  # type: ignore
+
         self.bias.update_bias(self.sp)
+
+        self.step += 1
 
     def to_ASE_traj(self) -> ase.Atoms:
         traj = self.get_trajectory()
+
+        # assert traj.static_info is not None
 
         pos_A = traj.positions / angstrom
         pbc = traj.cell is not None
@@ -316,7 +411,7 @@ class MDEngine(ABC):
             stresses_eVA3 = vtens_eV / vol_A3
 
             atoms = ase.Atoms(
-                masses=traj.masses,
+                masses=self.tic.masses,
                 positions=pos_A,
                 pbc=pbc,
                 cell=cell_A,
@@ -324,7 +419,7 @@ class MDEngine(ABC):
             atoms.info["stress"] = stresses_eVA3
         else:
             atoms = ase.Atoms(
-                masses=traj.masses,
+                masses=self.tic.masses,
                 positions=pos_A,
             )
 
@@ -345,35 +440,46 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
     def __init__(
         self,
-        ener: Energy | Callable[[], ForceField],
+        bias: Bias,
+        tic: StaticTrajectoryInfo,
+        energy: Energy | Callable[[], ForceField],
         sp: SystemParams | None = None,
         log_level=log.medium,
-        **kwargs,
+        trajectory_file=None,
+        screenlog=1000,
     ) -> None:
 
-        if not isinstance(ener, Energy):
-            ener = YaffEnergy(ener)
+        if not isinstance(energy, Energy):
+            energy = YaffEnergy(energy)
+
+            masses = energy.ff.system.masses
 
         if sp is None:
-            sp = ener.get_sp()
+            sp = energy.get_sp()
 
         # initialize yaff hook
 
         yaff.log.set_level(log_level)
         self.start = 0
-        self.step = 1
+        # self.step = 1
         self.name = "YaffEngineIMLCV"
 
-        super().__init__(energy=ener, sp=sp, **kwargs)
+        super().__init__(
+            energy=energy,
+            sp=sp,
+            bias=bias,
+            stic=tic,
+            trajectory_file=trajectory_file,
+            screenlog=screenlog,
+        )
 
-    def __call__(self, iterative):
+    def __call__(self, iterative: VerletIntegrator):
         self.hook(
             TrajectoryInfo(
                 positions=iterative.pos,
                 cell=iterative.rvecs,
                 gpos=iterative.gpos,
                 t=iterative.time,
-                masses=iterative.masses,
                 e_pot=iterative.epot,
                 vtens=iterative.vtens,
             )
@@ -386,34 +492,35 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         hooks = [self, VerletScreenLog(step=1)]
 
-        if self.thermostat:
+        if self.tic.thermostat:
             hooks.append(
                 yaff.sampling.NHCThermostat(
-                    self.T,
-                    timecon=self.timecon_thermo,
+                    self.tic.T,
+                    timecon=self.tic.timecon_thermo,
                 )
             )
-        if self.barostat:
+        if self.tic.barostat:
             hooks.append(
                 yaff.sampling.MTKBarostat(
                     self.energy,
-                    self.T,
-                    self.P,
-                    timecon=self.timecon_baro,
+                    self.tic.T,
+                    self.tic.P,
+                    timecon=self.tic.timecon_baro,
                     anisotropic=True,
                 )
             )
 
         self._yaff_ener = YaffEngine._YaffFF(
             self.sp,
-            ener=self.energy,
+            _energy=self.energy,
             bias=self.bias,
+            tic=self.tic,
         )
 
         self.verlet = yaff.sampling.VerletIntegrator(
             self._yaff_ener,
-            self.timestep,
-            temp0=self.T,
+            self.tic.timestep,
+            temp0=self.tic.T,
             hooks=hooks,
         )
 
@@ -421,7 +528,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     def load(file, **kwargs) -> MDEngine:
         return super().load(file, **kwargs)
 
-    def run(self, steps, filename=None):
+    def run(self, steps):
         if self.verlet is None:
             self._setup_verlet()
         self.verlet.run(int(steps))
@@ -436,9 +543,10 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         @property
         def volume(self):
-            return jnp.abs(
-                jnp.dot(self.rvecs[0], jnp.cross(self.rvecs[1], self.rvecs[2]))
-            )
+            if self.nvec == 0:
+                return np.nan
+
+            return np.linalg.det(self.rvecs)
 
     @dataclass
     class _yaffSys:
@@ -452,19 +560,27 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             return self.pos.shape[0]
 
     class _YaffFF(yaff.pes.ForceField):
-        def __init__(self, sp: SystemParams, ener: Energy, bias: Bias):
+        def __init__(
+            self,
+            sp: SystemParams,
+            _energy: Energy,
+            bias: Bias,
+            tic: StaticTrajectoryInfo,
+        ):
+
+            assert tic.masses is not None
 
             super().__init__(
                 system=YaffEngine._yaffSys(
                     pos=np.array(sp.coordinates),
                     cell=YaffEngine._yaffCell(rvecs=np.array(sp.cell)),
-                    masses=np.array(sp.masses),
+                    masses=tic.masses,
                 ),
                 parts=[],
             )
 
             self.sp = sp
-            self.ener = ener
+            self._energy = _energy
             self.bias = bias
 
         def update_rvecs(self, rvecs):
@@ -479,7 +595,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         def _internal_compute(self, gpos, vtens):
 
-            ener, gpos_jax, vtens_jax = self.ener.compute_coor(
+            ener, gpos_jax, vtens_jax = self._energy.compute_coor(
                 self.sp,
                 gpos is not None,
                 vtens is not None,

@@ -44,7 +44,12 @@ class BC:
         the virial."""
         raise NotImplementedError
 
-    def save(self, filename):
+    def save(self, filename: str | Path):
+        if isinstance(filename, str):
+            filename = Path(filename)
+        if not filename.parent.exists():
+            filename.parent.mkdir(parents=True, exist_ok=True)
+
         with open(filename, "wb") as f:
             dill.dump(self, f)
 
@@ -71,17 +76,17 @@ class YaffEnergy(Energy):
         self.ff.update_pos(np.array(sp.coordinates, dtype=np.double))
         self.ff.update_rvecs(np.array(sp.cell, dtype=np.double))
 
-        gpos = np.zeros_like(self.ff.gpos) if gpos else None
-        vtens = np.zeros_like(self.ff.vtens) if vir else None
+        gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
+        vtens_out = np.zeros_like(self.ff.vtens) if vir else None
 
-        ener = self.ff.compute(gpos=gpos, vtens=vtens)
+        ener = self.ff.compute(gpos=gpos_out, vtens=vtens_out)
 
-        if gpos is not None:
-            gpos = jnp.array(gpos)
-        if vtens is not None:
-            vtens = jnp.array(vtens)
+        if gpos:
+            gpos_out = jnp.array(gpos_out)
+        if vir:
+            vtens_out = jnp.array(vtens_out)
 
-        return ener, gpos, vtens
+        return ener, gpos_out, vtens_out
 
     def __getstate__(self):
         return {"f": self.f}
@@ -96,7 +101,6 @@ class YaffEnergy(Energy):
         return SystemParams(
             coordinates=jnp.array(self.ff.system.pos),
             cell=jnp.array(self.ff.system.cell.rvecs),
-            masses=jnp.array(self.ff.system.masses),
         )
 
 
@@ -439,6 +443,12 @@ class Bias(BC, ABC):
             for tr in traj:
                 # trajs are ij indexed
                 ax.scatter(tr[:, 0], tr[:, 1], s=3)
+
+        ax.set_title(name)
+        os.makedirs(os.path.dirname(name), exist_ok=True)
+        fig.set_size_inches([12, 8])
+        fig.savefig(name)
+        plt.close(fig=fig)  # write out
 
 
 @bash_app_python()

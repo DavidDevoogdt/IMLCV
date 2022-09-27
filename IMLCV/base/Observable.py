@@ -7,7 +7,6 @@ from molmod.units import picosecond
 from parsl import File
 
 from IMLCV.base.bias import Bias, BiasF, CompositeBias, CvMonitor, GridBias, plot_app
-from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import RoundsCV, RoundsMd
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
@@ -45,20 +44,13 @@ class Observable:
             time = 0
             cv = None
 
-            for dictionary in self.rounds.iter(num=1):
+            for round, trajectory in self.rounds.iter(num=1):
 
-                bias = Bias.load(dictionary["attr"]["name_bias"])
+                bias = trajectory.get_bias()
 
                 if cv is None:
                     cv = bias.cvs
-
-                # index = np.argmax(dictionary['t'] > throw_away)
-                # time += dictionary['t'][-1]-dictionary['t'][index]
-
-                sp = SystemParams(
-                    coordinates=dictionary["positions"],
-                    cell=dictionary.get("cell", None),
-                )
+                sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
 
                 # execute all the mappings
                 cvs = cv.compute(sp)[0]
@@ -75,13 +67,6 @@ class Observable:
 
                 trajs_mapped.append(arr_mapped)
                 trajs.append(arr)
-
-                # if plot:
-                #     if dictionary['round']['round'] == self.rounds.round:
-                #         i = dictionary['i']
-
-                #         plot_app(bias=bias, outputs=[File(
-                #             f'{directory}/umbrella_{i}.pdf')], traj=[arr_mapped])
 
                 biases.append(Observable._ThermoBias2D(bias))
 

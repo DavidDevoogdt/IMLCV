@@ -15,7 +15,6 @@ from jax import jacrev, jit, random, vmap
 from jax.random import PRNGKey, choice
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
-from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 from tensorflow import keras
 
@@ -377,10 +376,10 @@ class CVDiscovery:
 
         cv = None
 
-        for dictionary in rounds.iter(num=num):
+        for ti, attr in rounds.iter(num=num):
 
             # map cvs
-            bias = Bias.load(dictionary["attr"]["name_bias"])
+            bias = Bias.load(attr["name_bias"])
 
             if cv is None:
                 cv = bias.cvs
@@ -390,20 +389,14 @@ class CVDiscovery:
 
                 map_metric = jit(vmap(cv.metric.map))
 
-            sp = SystemParams(
-                coordinates=jnp.array(dictionary["positions"]),
-                cell=dictionary.get("cell", None),
-                masses=jnp.array(
-                    [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1]
-                ),
-            )
+            sp = ti.sp
 
             # execute all the mappings
             cvs = map_cv(sp)
             cvs_mapped = map_metric(cvs)
             biases = bias.compute(cvs=cvs_mapped, map=False)[0]
 
-            beta = 1 / (dictionary["round"]["T"] * boltzmann)
+            beta = 1 / attr["T"]
             weight = jnp.exp(beta * biases)
 
             sp_arr.append(sp)

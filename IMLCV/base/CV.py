@@ -18,7 +18,6 @@ from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
 
 from IMLCV.base.metric import Metric
-from IMLCV.base.tools import HashableArrayWrapper
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
@@ -26,20 +25,15 @@ keras: KerasAPI = import_module("tensorflow.keras")
 @jdc.pytree_dataclass
 class SystemParams:
     coordinates: jnp.ndarray
-    masses: jdc.Static[HashableArrayWrapper | None] = None
     cell: jnp.ndarray | None = None
 
     def __post_init__(self):
-        masses = self.masses
-        if masses is not None:
-            if not isinstance(masses, HashableArrayWrapper):
-                super().__setattr__("masses", HashableArrayWrapper(masses))
+        pass
 
     def __getitem__(self, slices):
         return SystemParams(
             coordinates=self.coordinates[slices],
             cell=(self.cell[slices] if self.cell is not None else None),
-            masses=self.masses,
         )
 
     def __iter__(self):
@@ -50,7 +44,6 @@ class SystemParams:
             yield SystemParams(
                 coordinates=self.coordinates[i, :, :],
                 cell=self.cell[i, :, :] if self.cell is not None else None,
-                masses=self.masses,
             )
         return
 
@@ -68,8 +61,6 @@ class SystemParams:
         cell = []
         has_cell = arr[0].cell is not None
 
-        masses = arr[0].masses
-
         for x in arr:
             coordinates.append(x.coordinates)
 
@@ -79,18 +70,13 @@ class SystemParams:
             else:
                 assert x.cell is None
 
-            if masses is not None:
-                assert (x.masses == masses).all()
-            else:
-                assert x.masses is None
-
         ncoordinates = jnp.vstack(coordinates)
         if has_cell:
             ncell = jnp.vstack(cell)
         else:
             ncell = None
 
-        return SystemParams(coordinates=ncoordinates, cell=ncell, masses=masses)
+        return SystemParams(coordinates=ncoordinates, cell=ncell)
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
@@ -346,7 +332,7 @@ def scale_cv_trans(array=jnp.ndarray):
 def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
     @cvflow
     def h(x: SystemParams):
-
+        raise NotImplementedError
         assert x.masses is not None, "Z array in systemparams for coulomb descriptor"
 
         coor = x.coordinates
