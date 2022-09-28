@@ -817,7 +817,7 @@ class CvMonitor(BiasF):
 
         if self.last_cv is not None:
             if jnp.linalg.norm(new_cv - self.last_cv) > 1:
-                new_trans = np.array([[new_cv[0, :], self.last_cv[0, :]]])
+                new_trans = np.array([[new_cv, self.last_cv]])
                 self.transitions = np.vstack((self.transitions, new_trans))
 
         self.last_cv = new_cv

@@ -298,8 +298,7 @@ class MDEngine(ABC):
         "static_trajectory_info",
         "trajectory_file",
         "screenlog",
-        # "_sp",
-        # "step",
+        "sp",
     ]
 
     def __init__(
@@ -310,6 +309,7 @@ class MDEngine(ABC):
         static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
         screenlog=1000,
+        sp: SystemParams | None = None,
     ) -> None:
 
         self.static_trajectory_info = static_trajectory_info
@@ -319,7 +319,10 @@ class MDEngine(ABC):
 
         self.screenlog = screenlog
 
-        self._sp = energy.get_sp()
+        if sp is None:
+            self._sp = energy.get_sp()
+        else:
+            self._sp = sp
         self.trajectory_info: TrajectoryInfo | None = None
 
         self.step = 1
@@ -339,11 +342,11 @@ class MDEngine(ABC):
             dill.dump(self, f)
 
     def __getstate__(self):
-        return [self.__class__, {key: self.__dict__[key] for key in MDEngine.keys}]
+        return {key: self.__getattribute__(key) for key in MDEngine.keys}
 
     def __setstate__(self, state):
-        cls, d = state
-        return cls(**d)
+        self.__init__(**state)
+        return self
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
@@ -426,12 +429,6 @@ class MDEngine(ABC):
 
         return atoms
 
-        # "bias",
-        # "energy",
-        # "static_trajectory_info",
-        # "trajectory_file",
-        # "screenlog",
-
 
 class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     """MD engine with YAFF as backend.
@@ -449,6 +446,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         # log_level=log.medium,
         trajectory_file=None,
         screenlog=1000,
+        sp: SystemParams | None = None,
     ) -> None:
 
         yaff.log.set_level(log.medium)
@@ -465,6 +463,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             static_trajectory_info=static_trajectory_info,
             trajectory_file=trajectory_file,
             screenlog=screenlog,
+            sp=sp,
         )
 
     @property

@@ -10,7 +10,15 @@ from molmod import units
 from molmod.units import kelvin, kjmol
 
 from IMLCV import LOCAL
-from IMLCV.base.bias import Bias, BiasF, BiasMTD, CompositeBias, GridBias, HarmonicBias
+from IMLCV.base.bias import (
+    Bias,
+    BiasF,
+    BiasMTD,
+    CompositeBias,
+    GridBias,
+    HarmonicBias,
+    YaffEnergy,
+)
 from IMLCV.base.CV import CV, CvFlow, Metric, SystemParams, Volume, dihedral, rotate_2d
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
@@ -199,7 +207,7 @@ def test_combine_bias(full_name):
     )
 
     mde = YaffEngine(
-        energy=get_alaninedipeptide_amber99ff,
+        energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         bias=bias,
         static_trajectory_info=stic,
     )
@@ -281,7 +289,7 @@ if __name__ == "__main__":
     a = True
 
     if a:
-        # test_virial()
+        test_virial()
         with tempfile.TemporaryDirectory() as tmp:
             test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
             test_combine_bias(full_name=f"{tmp}/combine.h5")
