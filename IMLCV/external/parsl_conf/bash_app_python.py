@@ -34,7 +34,7 @@ def bash_app_python(
                 folder = os.getcwd()
 
             @bash_app
-            def fun(*args, stdout, stderr, inputs=[], outputs=[], **kwargs):
+            def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
 
                 if len(inputs) > 0:
                     kwargs["inputs"] = inputs

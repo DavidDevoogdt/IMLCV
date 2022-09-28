@@ -93,7 +93,7 @@ class Scheme:
         grid = self.md.bias.cvs.metric.grid(n)
 
         if K is None:
-            K = 1.0 * self.md.tic.T * boltzmann
+            K = 1.0 * self.md.static_trajectory_info.T * boltzmann
 
         K /= (np.array([a[1] - a[0] for a in grid]) / 2) ** 2
 

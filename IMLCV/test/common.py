@@ -13,7 +13,7 @@ from molmod.units import kelvin
 
 import yaff
 from IMLCV import CP2K_COMMAND, ROOT_DIR
-from IMLCV.base.bias import BiasMTD, Cp2kEnergy, NoneBias
+from IMLCV.base.bias import BiasMTD, Cp2kEnergy, NoneBias, YaffEnergy
 from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
@@ -68,8 +68,8 @@ def alanine_dipeptide_yaff():
     )
 
     mde = YaffEngine(
-        energy=get_alaninedipeptide_amber99ff,
-        tic=tic,
+        energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
+        static_trajectory_info=tic,
         bias=NoneBias(cv0),
         trajectory_file="test.h5",
     )
@@ -170,7 +170,7 @@ def ase_yaff():
     yaffmd = YaffEngine(
         energy=energy,
         bias=bias,
-        tic=tic,
+        static_trajectory_info=tic,
     )
 
     return yaffmd

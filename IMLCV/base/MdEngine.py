@@ -8,13 +8,11 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import ase
 import dill
 import h5py
 import jax.numpy as jnp
-import jax_dataclasses
 import numpy as np
 from molmod.units import angstrom, electronvolt
 
@@ -26,10 +24,9 @@ import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling
 import yaff.sampling.iterative
-from IMLCV.base.bias import Bias, Energy, YaffEnergy
+from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from yaff.log import log
-from yaff.pes.ff import ForceField
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
 
 
@@ -298,68 +295,67 @@ class MDEngine(ABC):
     keys = [
         "bias",
         "energy",
-        "tic",
+        "static_trajectory_info",
+        "trajectory_file",
         "screenlog",
-        "sp",
+        # "_sp",
+        # "step",
     ]
 
     def __init__(
         self,
         bias: Bias,
         energy: Energy,
-        sp: SystemParams,
-        stic: StaticTrajectoryInfo,
+        # sp: SystemParams,
+        static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
         screenlog=1000,
     ) -> None:
 
-        self.tic = stic
+        self.static_trajectory_info = static_trajectory_info
 
         self.bias = bias
         self.energy = energy
 
         self.screenlog = screenlog
 
-        self.sp = sp
+        self._sp = energy.get_sp()
         self.trajectory_info: TrajectoryInfo | None = None
 
         self.step = 1
 
         self.trajectory_file = trajectory_file
 
-        self._init_post()
+    @property
+    def sp(self):
+        return self._sp
 
-    @abstractmethod
-    def _init_post(self):
-        pass
-
-    def __getstate__(self):
-        d = {}
-        for key in self.keys:
-            d[key] = self.__dict__[key]
-
-        return [self.__class__, d]
-
-    def __setstate__(self, arr):
-        [cls, d] = arr
-
-        return cls(**d)
+    @sp.setter
+    def sp(self, sp):
+        self._sp = sp
 
     def save(self, file):
         with open(file, "wb") as f:
-            dill.dump(self.__getstate__(), f)
+            dill.dump(self, f)
+
+    def __getstate__(self):
+        return [self.__class__, {key: self.__dict__[key] for key in MDEngine.keys}]
+
+    def __setstate__(self, state):
+        cls, d = state
+        return cls(**d)
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
 
         with open(file, "rb") as f:
-            [cls, d] = dill.load(f)
+            self = dill.load(f)
 
         # replace and add kwargs
         for key in kwargs.keys():
-            d[key] = kwargs[key]
+            self.__dict__[key] = kwargs[key]
 
-        return cls(**d)
+        return self
 
     def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
         with tempfile.NamedTemporaryFile() as tmp:
@@ -389,7 +385,7 @@ class MDEngine(ABC):
         else:
             self.trajectory_info += ti
 
-        if self.step % self.tic.write_step == 1:
+        if self.step % self.static_trajectory_info.write_step == 1:
             if self.trajectory_file is not None:
                 self.trajectory_info.save(self.trajectory_file)  # type: ignore
 
@@ -411,7 +407,7 @@ class MDEngine(ABC):
             stresses_eVA3 = vtens_eV / vol_A3
 
             atoms = ase.Atoms(
-                masses=self.tic.masses,
+                masses=self.static_trajectory_info.masses,
                 positions=pos_A,
                 pbc=pbc,
                 cell=cell_A,
@@ -419,7 +415,7 @@ class MDEngine(ABC):
             atoms.info["stress"] = stresses_eVA3
         else:
             atoms = ase.Atoms(
-                masses=self.tic.masses,
+                masses=self.static_trajectory_info.masses,
                 positions=pos_A,
             )
 
@@ -429,6 +425,12 @@ class MDEngine(ABC):
             atoms.info["energy"] = traj.e_pot / electronvolt
 
         return atoms
+
+        # "bias",
+        # "energy",
+        # "static_trajectory_info",
+        # "trajectory_file",
+        # "screenlog",
 
 
 class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
@@ -441,37 +443,40 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     def __init__(
         self,
         bias: Bias,
-        tic: StaticTrajectoryInfo,
-        energy: Energy | Callable[[], ForceField],
-        sp: SystemParams | None = None,
-        log_level=log.medium,
+        static_trajectory_info: StaticTrajectoryInfo,
+        energy: Energy,
+        # sp: SystemParams|None = None,
+        # log_level=log.medium,
         trajectory_file=None,
         screenlog=1000,
     ) -> None:
 
-        if not isinstance(energy, Energy):
-            energy = YaffEnergy(energy)
-
-            masses = energy.ff.system.masses
-
-        if sp is None:
-            sp = energy.get_sp()
-
-        # initialize yaff hook
-
-        yaff.log.set_level(log_level)
+        yaff.log.set_level(log.medium)
         self.start = 0
         # self.step = 1
         self.name = "YaffEngineIMLCV"
 
+        self._verlet: yaff.sampling.VerletIntegrator | None = None
+        self._yaff_ener: YaffEngine._YaffFF | None = None
+
         super().__init__(
             energy=energy,
-            sp=sp,
             bias=bias,
-            stic=tic,
+            static_trajectory_info=static_trajectory_info,
             trajectory_file=trajectory_file,
             screenlog=screenlog,
         )
+
+    @property
+    def sp(self):
+        if self._yaff_ener is not None:
+            return self._yaff_ener.sp
+        return self._sp
+
+    @sp.setter
+    def sp(self, sp):
+        assert self._yaff_ener is None
+        self._sp = sp
 
     def __call__(self, iterative: VerletIntegrator):
         self.hook(
@@ -485,42 +490,39 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             )
         )
 
-    def _init_post(self):
-        self.verlet: yaff.sampling.VerletIntegrator | None = None
-
     def _setup_verlet(self):
 
         hooks = [self, VerletScreenLog(step=1)]
-
-        if self.tic.thermostat:
-            hooks.append(
-                yaff.sampling.NHCThermostat(
-                    self.tic.T,
-                    timecon=self.tic.timecon_thermo,
-                )
-            )
-        if self.tic.barostat:
-            hooks.append(
-                yaff.sampling.MTKBarostat(
-                    self.energy,
-                    self.tic.T,
-                    self.tic.P,
-                    timecon=self.tic.timecon_baro,
-                    anisotropic=True,
-                )
-            )
 
         self._yaff_ener = YaffEngine._YaffFF(
             self.sp,
             _energy=self.energy,
             bias=self.bias,
-            tic=self.tic,
+            tic=self.static_trajectory_info,
         )
 
-        self.verlet = yaff.sampling.VerletIntegrator(
+        if self.static_trajectory_info.thermostat:
+            hooks.append(
+                yaff.sampling.NHCThermostat(
+                    self.static_trajectory_info.T,
+                    timecon=self.static_trajectory_info.timecon_thermo,
+                )
+            )
+        if self.static_trajectory_info.barostat:
+            hooks.append(
+                yaff.sampling.MTKBarostat(
+                    self._yaff_ener,
+                    self.static_trajectory_info.T,
+                    self.static_trajectory_info.P,
+                    timecon=self.static_trajectory_info.timecon_baro,
+                    anisotropic=True,
+                )
+            )
+
+        self._verlet = yaff.sampling.VerletIntegrator(
             self._yaff_ener,
-            self.tic.timestep,
-            temp0=self.tic.T,
+            self.static_trajectory_info.timestep,
+            temp0=self.static_trajectory_info.T,
             hooks=hooks,
         )
 
@@ -529,9 +531,9 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         return super().load(file, **kwargs)
 
     def run(self, steps):
-        if self.verlet is None:
+        if self._verlet is None:
             self._setup_verlet()
-        self.verlet.run(int(steps))
+        self._verlet.run(int(steps))
 
     @dataclass
     class _yaffCell:
@@ -548,50 +550,66 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
             return np.linalg.det(self.rvecs)
 
-    @dataclass
-    class _yaffSys:
-        cell: YaffEngine._yaffCell
-        pos: np.ndarray
-        masses: np.ndarray
-        charges: np.ndarray | None = None
+        def update_rvecs(self, rvecs):
+            self.rvecs = rvecs
 
-        @property
-        def natom(self):
-            return self.pos.shape[0]
+    # @dataclass
+    # class _yaffSys:
+    #     cell: YaffEngine._yaffCell
+    #     pos: np.ndarray
+    #     masses: np.ndarray
+    #     charges: np.ndarray | None = None
+
+    #     @property
+    #     def natom(self):
+    #         return self.pos.shape[0]
 
     class _YaffFF(yaff.pes.ForceField):
         def __init__(
             self,
             sp: SystemParams,
-            _energy: Energy,
+            _energy: Energy,  # name clash with yaff.pes.ForceField
             bias: Bias,
             tic: StaticTrajectoryInfo,
         ):
 
             assert tic.masses is not None
 
+            from yaff.system import System
+
             super().__init__(
-                system=YaffEngine._yaffSys(
-                    pos=np.array(sp.coordinates),
-                    cell=YaffEngine._yaffCell(rvecs=np.array(sp.cell)),
-                    masses=tic.masses,
+                system=System(
+                    pos=np.array(sp.coordinates, dtype=np.double),
+                    rvecs=np.array(sp.cell, dtype=np.double),
+                    numbers=tic.atomic_numbers,
                 ),
                 parts=[],
             )
 
-            self.sp = sp
+            # self.sp = sp
             self._energy = _energy
             self.bias = bias
 
-        def update_rvecs(self, rvecs):
-            with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
-                new_sp.cell = jnp.array(rvecs)
-            self.sp = new_sp
+        @property
+        def sp(self) -> SystemParams:
+            return SystemParams(
+                coordinates=jnp.array(self.system.pos),
+                cell=jnp.array(self.system.cell.rvecs),
+            )
 
-        def update_pos(self, pos):
-            with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
-                new_sp.coordinates = jnp.array(pos)
-            self.sp = new_sp
+        # def update_rvecs(self, rvecs):
+        #     super().update_rvecs(rvecs=rvecs)
+
+        #     # with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
+        #     #     new_sp.cell = jnp.array(rvecs)
+        #     # self.sp = new_sp
+
+        # def update_pos(self, pos):
+        #     super().update_pos(pos=pos)
+
+        #     # with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
+        #     #     new_sp.coordinates = jnp.array(pos)
+        #     # self.sp = new_sp
 
         def _internal_compute(self, gpos, vtens):
 

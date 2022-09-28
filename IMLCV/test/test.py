@@ -9,6 +9,7 @@ from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import kelvin, kjmol
 
+from IMLCV import LOCAL
 from IMLCV.base.bias import Bias, BiasF, BiasMTD, CompositeBias, GridBias, HarmonicBias
 from IMLCV.base.CV import CV, CvFlow, Metric, SystemParams, Volume, dihedral, rotate_2d
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
@@ -16,7 +17,7 @@ from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
 from IMLCV.external.parsl_conf.config import config
 from IMLCV.scheme import Scheme
-from IMLCV.test.common import alanine_dipeptide_yaff, get_FES
+from IMLCV.test.common import alanine_dipeptide_yaff, ase_yaff, get_FES
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 keras: KerasAPI = import_module("tensorflow.keras")
@@ -200,7 +201,7 @@ def test_combine_bias(full_name):
     mde = YaffEngine(
         energy=get_alaninedipeptide_amber99ff,
         bias=bias,
-        tic=stic,
+        static_trajectory_info=stic,
     )
 
     mde.run(int(1e2))
@@ -277,15 +278,19 @@ def test_ala_dipep_FES(
 
 if __name__ == "__main__":
 
-    test_virial()
-    with tempfile.TemporaryDirectory() as tmp:
-        test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
-        test_combine_bias(full_name=f"{tmp}/combine.h5")
-        test_bias_save(full_name=f"{tmp}/bias_save.h5")
-    # test_unbiasing()
-    test_cv_discovery(md=alanine_dipeptide_yaff(), recalc=True)
+    a = True
+
+    if a:
+        # test_virial()
+        with tempfile.TemporaryDirectory() as tmp:
+            test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
+            test_combine_bias(full_name=f"{tmp}/combine.h5")
+            test_bias_save(full_name=f"{tmp}/bias_save.h5")
+        # test_unbiasing()
+        test_cv_discovery(md=alanine_dipeptide_yaff(), recalc=True)
+
     test_cv_discovery(
         name="test_cv_disc_perov",
-        # md=ase_yaff(),
+        md=alanine_dipeptide_yaff() if LOCAL else ase_yaff(),
         recalc=True,
     )

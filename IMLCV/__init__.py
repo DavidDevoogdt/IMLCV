@@ -50,7 +50,7 @@ else:
 print(f"AVAILABLE CPUS {len(os.sched_getaffinity(0))}")
 
 
-CP2K_MPI_SLOTS = 16
+CP2K_THREADS = 12
 
 # mpirun --map-by ppr:1:socket:PE=5 --display-allocation --display-map
 
@@ -59,12 +59,24 @@ CP2K_MPI_SLOTS = 16
 
 # def pre_command
 
+# "hwthread", "core", "socket",
+# "l1cache", "l2cache", "l3cache", "numa", and "node"
+
+# mpirun  --map-by  ppr:1:node:PE=5:SPAN:NOOVERSUBSCRIBE --display-allocation --display-map  echo "hello"
+
+
 # setup HPC stuff
 # print diagnostics to the error stream
-CP2K_COMMAND = f"mpirun --map-by ppr:1:node:PE={CP2K_MPI_SLOTS} --display-allocation --display-map  true 1>&2; mpirun --map-by ppr:1:node:PE={CP2K_MPI_SLOTS}  cp2k_shell.psmp"  # print diagnostics to stderr. --map-by ppr:1:socket:PE=N:  1 processes per resource ,  CP2K_MPI_SLOTS cpus per process
+# mpirun --map-by ppr:1:node:PE={CP2K_MPI_SLOTS} --display-allocation --display-map  true 1>&2
+
+# CP2K_COMMAND = f"mpirun --map-by ppr:1:node:PE={CP2K_MPI_SLOTS}:SPAN:NOOVERSUBSCRIBE  cp2k_shell.psmp"  # print diagnostics to stderr. --map-by ppr:1:socket:PE=N:  1 processes per resource ,  CP2K_MPI_SLOTS cpus per process
+
+CP2K_COMMAND = f"cp2k_shell.psmp"
+
+
 PY_EMV = f"source {ROOT_DIR}/Miniconda3/bin/activate"
 HPC_WORKER_INIT = f"""
-export OMP_NUM_THREADS=1
+export OMP_NUM_THREADS={CP2K_THREADS}
 lscpu
 {PY_EMV}"""
 

@@ -2,6 +2,7 @@ import parsl
 
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from IMLCV.external.parsl_conf.config import config
+from IMLCV.test.common import ase_yaff
 from IMLCV.test.test import test_cv_discovery
 
 
@@ -24,6 +25,8 @@ def bootstrap_hpc(function):
 
 if __name__ == "__main__":
     out = bootstrap_hpc(test_cv_discovery)(
-        name="hpc_perovskite", md="perov", recalc=True
+        name="hpc_perovskite",
+        md=ase_yaff(),
+        recalc=True,
     )
     print(out)

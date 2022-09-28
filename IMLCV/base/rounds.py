@@ -309,7 +309,7 @@ class RoundsMd(Rounds):
         attr["name_md"] = name_md
         attr["name_bias"] = name_bias
 
-        super().new_round(attr=attr, stic=md.tic)
+        super().new_round(attr=attr, stic=md.static_trajectory_info)
 
     def get_bias(self, r=None, i=None) -> Bias:
         if r is None:
@@ -329,7 +329,6 @@ class RoundsMd(Rounds):
             r = self.round
         with self.lock:
             f = self.h5file
-            # with h5py.File(self.h5file, 'r') as f:
             name = f[f"{r}"].attrs["name_md"]
 
         return MDEngine.load(name, filename=None)
@@ -403,7 +402,7 @@ class RoundsMd(Rounds):
             if plot:
                 plot_fut = plot_app(
                     traj=future,
-                    st=md_engine.tic,
+                    st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
                     outputs=[File(f"{temp_name}/plot.pdf")],
                     stdout=f"{temp_name}/plot.stdout",

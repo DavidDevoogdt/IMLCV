@@ -1,4 +1,5 @@
 from ase.lattice.cubic import Diamond
+
 from pycp2k import CP2K
 
 # ====================== Create the structure with ASE ==========================

@@ -25,7 +25,7 @@ from parsl.providers.slurm.template import template_string
 from parsl.providers.torque.torque import TorqueProvider
 from parsl.utils import RepresentationMixin, wtime_to_minutes
 
-from IMLCV import CP2K_MPI_SLOTS, HPC_WORKER_INIT, LOCAL, PY_EMV, ROOT_DIR
+from IMLCV import CP2K_THREADS, HPC_WORKER_INIT, LOCAL, PY_EMV, ROOT_DIR
 
 
 def config(
@@ -91,14 +91,14 @@ def config(
             cores_per_worker = 1
 
         else:
-            kwargs["cores_per_node"] = CP2K_MPI_SLOTS
+            kwargs["cores_per_node"] = CP2K_THREADS
             kwargs["launcher"] = SingleNodeLauncher()
             kwargs["max_blocks"] = 20
             kwargs["nodes_per_block"] = 1
             kwargs["mem_per_node"] = 3
             plabel = f"hpc_{cluster}"
             max_workers = 100
-            cores_per_worker = CP2K_MPI_SLOTS
+            cores_per_worker = CP2K_THREADS
 
         if provider == "PBS":
             provider = VSCTorqueProvider(**kwargs)

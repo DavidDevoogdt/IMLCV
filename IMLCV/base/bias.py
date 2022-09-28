@@ -133,7 +133,7 @@ class AseEnergy(Energy):
             energy = self.atoms.get_potential_energy() * electronvolt
         else:
             try:
-                self.atoms.get_potential_energy() * electronvolt
+                energy = self.atoms.get_potential_energy() * electronvolt
             except:
                 self._handle_exception()
 
@@ -161,7 +161,6 @@ class AseEnergy(Energy):
         return SystemParams(
             coordinates=jnp.array(self.atoms.get_positions()) * angstrom,
             cell=jnp.array(self.atoms.get_cell().array[:]) * angstrom,
-            masses=jnp.array(self.atoms.get_masses()),
         )
 
     def __getstate__(self):
@@ -259,7 +258,7 @@ class Cp2kEnergy(AseEnergy):
         out = min(len(lines), 20)
         assert out != 0, "cp2k.out doesn't contain output"
 
-        file = "\\n".join(lines[-out, :])
+        file = "\\n".join(lines[-out:])
 
         raise AseError(
             f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is { file}"
