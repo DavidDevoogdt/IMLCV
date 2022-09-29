@@ -375,7 +375,9 @@ class MDEngine(ABC):
 
         print("saving the trajectory")
 
-        self.trajectory_info.save(self.trajectory_file)
+        self.trajectory_info._shrink_capacity()
+        if self.trajectory_file is not None:
+            self.trajectory_info.save(self.trajectory_file)
 
     @abstractmethod
     def _run(self, steps):
@@ -544,7 +546,9 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             super().__init__(
                 system=System(
                     pos=np.array(sp.coordinates, dtype=np.double),
-                    rvecs=np.array(sp.cell, dtype=np.double),
+                    rvecs=np.array(sp.cell, dtype=np.double)
+                    if sp.cell is not None
+                    else None,
                     numbers=tic.atomic_numbers,
                 ),
                 parts=[],

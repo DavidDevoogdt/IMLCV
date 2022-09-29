@@ -144,14 +144,15 @@ class YaffEnergy(Energy):
     @property
     def sp(self):
         return SystemParams(
-            coordinates=jnp.array(self.system.pos[:]),
-            cell=jnp.array(self.system.cell.rvecs[:]),
+            coordinates=jnp.array(self.ff.system.pos[:]),
+            cell=jnp.array(self.ff.system.cell.rvecs[:]),
         )
 
     @sp.setter
     def sp(self, sp: SystemParams):
         self.ff.update_pos(np.array(sp.coordinates, dtype=np.double))
-        self.ff.update_rvecs(np.array(sp.cell, dtype=np.double))
+        if sp.cell is not None:
+            self.ff.update_rvecs(np.array(sp.cell, dtype=np.double))
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
 
@@ -166,12 +167,13 @@ class YaffEnergy(Energy):
         return EnergyResult(ener, gpos_out, vtens_out)
 
     def __getstate__(self):
-        return {"f": self.f}
+        return {"f": self.f, "sp": self.sp}
 
     def __setstate__(self, state):
 
         self.f = state["f"]
         self.ff = self.f()
+        self.sp = state["sp"]
         return self
 
 
@@ -203,7 +205,8 @@ class AseEnergy(Energy):
     @sp.setter
     def sp(self, sp: SystemParams):
         self.atoms.set_positions(np.array(sp.coordinates) / angstrom)
-        self.atoms.set_cell(ase.geometry.Cell(np.array(sp.cell) / angstrom))
+        if sp.cell is not None:
+            self.atoms.set_cell(ase.geometry.Cell(np.array(sp.cell) / angstrom))
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         """use unit conventions of ASE"""
