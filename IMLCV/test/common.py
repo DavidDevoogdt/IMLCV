@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 from keras.api._v2 import keras as KerasAPI
 from molmod import units
-from molmod.units import kelvin
+from molmod.units import angstrom, kelvin
 
 import yaff
 from IMLCV import CP2K_COMMAND, ROOT_DIR
@@ -146,15 +146,19 @@ def ase_yaff():
     @cvflow
     def f(sp: SystemParams):
         l = jnp.linalg.norm(sp.cell, axis=0)
-        return jnp.array([l.min(), l.max()])
+
+        return jnp.array([jnp.min(l), jnp.max(l)])
 
     cv = CV(
         f=f,
         metric=Metric(
             periodicities=[False, False],
-            bounding_box=jnp.array([[4.0, 6.0], [5.0, 9.0]]),
+            bounding_box=jnp.array([[5.0, 8.0], [5.0, 8.0]]) * angstrom,
         ),
     )
+
+    print(f"{cv.metric.bounding_box}")
+
     bias = NoneBias(cvs=cv)
 
     tic = StaticTrajectoryInfo(
@@ -171,6 +175,10 @@ def ase_yaff():
         energy=energy,
         bias=bias,
         static_trajectory_info=tic,
+        sp=SystemParams(
+            coordinates=jnp.array(atoms.get_positions()) * angstrom,
+            cell=jnp.array(atoms.get_cell().array[:]) * angstrom,
+        ),
     )
 
     return yaffmd
@@ -205,8 +213,8 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
 
 if __name__ == "__main__":
-    # md = ase_yaff()
-    md = alanine_dipeptide_yaff()
+    md = ase_yaff()
+    # md = alanine_dipeptide_yaff()
     md.run(100)
 
     print(md.get_trajectory().sp.shape)

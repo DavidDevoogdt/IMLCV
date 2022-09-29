@@ -2,7 +2,6 @@ import os
 import tempfile
 from importlib import import_module
 
-import jax
 import numpy as np
 import pytest
 from keras.api._v2 import keras as KerasAPI
@@ -15,6 +14,7 @@ from IMLCV.base.bias import (
     BiasF,
     BiasMTD,
     CompositeBias,
+    EnergyResult,
     GridBias,
     HarmonicBias,
     YaffEnergy,
@@ -107,10 +107,11 @@ def test_virial():
 
     bias = BiasF(cvs=cv0, g=fun)
 
-    with jax.disable_jit():
-        vol, _, vir = bias.compute_coor(
-            SystemParams(coordinates=coordinates, cell=cell), vir=True
-        )
+    e_r: EnergyResult = bias.compute_coor(
+        SystemParams(coordinates=coordinates, cell=cell), vir=True
+    )
+    vol = e_r.energy
+    vir = e_r.vtens
     assert pytest.approx(vir, abs=1e-7) == vol * np.eye(3)
 
 
@@ -167,8 +168,9 @@ def test_yaff_save_load_func(full_name):
 
     assert pytest.approx(sp1.coordinates) == sp2.coordinates
     assert pytest.approx(sp1.cell) == sp2.cell
-    assert pytest.approx(yaffmd.energy.compute_coor(sp1)) == yeet.energy.compute_coor(
-        sp2
+    assert (
+        pytest.approx(yaffmd.energy.compute_coor(sp1).energy)
+        == yeet.energy.compute_coor(sp2).energy
     )
 
     # yeet.run(100)

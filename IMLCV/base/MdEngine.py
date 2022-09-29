@@ -24,7 +24,7 @@ import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling
 import yaff.sampling.iterative
-from IMLCV.base.bias import Bias, Energy
+from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
 from IMLCV.base.CV import SystemParams
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
@@ -298,7 +298,6 @@ class MDEngine(ABC):
         "static_trajectory_info",
         "trajectory_file",
         "screenlog",
-        "sp",
     ]
 
     def __init__(
@@ -309,7 +308,6 @@ class MDEngine(ABC):
         static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
         screenlog=1000,
-        sp: SystemParams | None = None,
     ) -> None:
 
         self.static_trajectory_info = static_trajectory_info
@@ -319,10 +317,7 @@ class MDEngine(ABC):
 
         self.screenlog = screenlog
 
-        if sp is None:
-            self._sp = energy.get_sp()
-        else:
-            self._sp = sp
+        # self._sp = sp
         self.trajectory_info: TrajectoryInfo | None = None
 
         self.step = 1
@@ -330,12 +325,12 @@ class MDEngine(ABC):
         self.trajectory_file = trajectory_file
 
     @property
-    def sp(self):
-        return self._sp
+    def sp(self) -> SystemParams:
+        return self.energy.sp
 
     @sp.setter
-    def sp(self, sp):
-        self._sp = sp
+    def sp(self, sp: SystemParams):
+        self.energy.sp = sp
 
     def save(self, file):
         with open(file, "wb") as f:
@@ -366,13 +361,24 @@ class MDEngine(ABC):
             mde = MDEngine.load(tmp.name, **{"bias": bias, **kwargs})
         return mde
 
-    @abstractmethod
     def run(self, steps):
         """run the integrator for a given number of steps.
 
         Args:
             steps: number of MD steps
         """
+        print(f"running for {int(steps)} steps!")
+        try:
+            self._run(int(steps))
+        except EnergyError as e:
+            print(f"The calculator finished early with error {e}")
+
+        print("saving the trajectory")
+
+        self.trajectory_info.save(self.trajectory_file)
+
+    @abstractmethod
+    def _run(self, steps):
         raise NotImplementedError
 
     def get_trajectory(self) -> TrajectoryInfo:
@@ -463,19 +469,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             static_trajectory_info=static_trajectory_info,
             trajectory_file=trajectory_file,
             screenlog=screenlog,
-            sp=sp,
         )
-
-    @property
-    def sp(self):
-        if self._yaff_ener is not None:
-            return self._yaff_ener.sp
-        return self._sp
-
-    @sp.setter
-    def sp(self, sp):
-        assert self._yaff_ener is None
-        self._sp = sp
 
     def __call__(self, iterative: VerletIntegrator):
         self.hook(
@@ -529,39 +523,10 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     def load(file, **kwargs) -> MDEngine:
         return super().load(file, **kwargs)
 
-    def run(self, steps):
+    def _run(self, steps):
         if self._verlet is None:
             self._setup_verlet()
         self._verlet.run(int(steps))
-
-    @dataclass
-    class _yaffCell:
-        rvecs: np.ndarray
-
-        @property
-        def nvec(self):
-            return self.rvecs.shape[0]
-
-        @property
-        def volume(self):
-            if self.nvec == 0:
-                return np.nan
-
-            return np.linalg.det(self.rvecs)
-
-        def update_rvecs(self, rvecs):
-            self.rvecs = rvecs
-
-    # @dataclass
-    # class _yaffSys:
-    #     cell: YaffEngine._yaffCell
-    #     pos: np.ndarray
-    #     masses: np.ndarray
-    #     charges: np.ndarray | None = None
-
-    #     @property
-    #     def natom(self):
-    #         return self.pos.shape[0]
 
     class _YaffFF(yaff.pes.ForceField):
         def __init__(
@@ -596,42 +561,25 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 cell=jnp.array(self.system.cell.rvecs),
             )
 
-        # def update_rvecs(self, rvecs):
-        #     super().update_rvecs(rvecs=rvecs)
-
-        #     # with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
-        #     #     new_sp.cell = jnp.array(rvecs)
-        #     # self.sp = new_sp
-
-        # def update_pos(self, pos):
-        #     super().update_pos(pos=pos)
-
-        #     # with jax_dataclasses.copy_and_mutate(self.sp) as new_sp:
-        #     #     new_sp.coordinates = jnp.array(pos)
-        #     # self.sp = new_sp
-
         def _internal_compute(self, gpos, vtens):
 
-            ener, gpos_jax, vtens_jax = self._energy.compute_coor(
+            ener = self._energy.compute_coor(
                 self.sp,
                 gpos is not None,
                 vtens is not None,
             )
 
-            ener_b, gpos_jax_b, vtens_jax_b = self.bias.compute_coor(
+            ener_bias: EnergyResult = self.bias.compute_coor(
                 self.sp,
                 gpos is not None,
                 vtens is not None,
             )
 
-            # compute quantities
-            ener += ener_b
+            total_energy = ener + ener_bias
 
             if gpos is not None:
-                gpos_jax += gpos_jax_b
-                gpos[:] = np.array(gpos_jax)
+                gpos[:] = np.array(total_energy.gpos)
             if vtens is not None:
-                vtens_jax += vtens_jax_b
-                vtens[:] = np.array(vtens_jax)
+                vtens[:] = np.array(total_energy.vtens)
 
-            return float(ener)
+            return total_energy.energy

@@ -28,7 +28,13 @@ class SystemParams:
     cell: jnp.ndarray | None = None
 
     def __post_init__(self):
-        pass
+        if isinstance(self.coordinates, np.ndarray):
+            self.__dict__["coordinates"] = jnp.array(self.coordinates)
+        if isinstance(self.cell, np.ndarray):
+            self.__dict__["cell"] = jnp.array(self.cell)
+        if isinstance(self.cell, jnp.ndarray):
+            if jnp.size(self.cell) == 0:
+                self.__dict__["cell"] = None
 
     def __getitem__(self, slices):
         return SystemParams(

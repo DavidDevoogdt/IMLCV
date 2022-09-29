@@ -17,6 +17,7 @@ import ase.units
 import dill
 import jax.numpy as jnp
 import jax.scipy as jsp
+import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.calculators.cp2k import CP2K
@@ -33,13 +34,45 @@ from IMLCV.base.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
 
+@jax_dataclasses.pytree_dataclass
+class EnergyResult:
+    energy: float
+    gpos: jnp.ndarray | None = None
+    vtens: jnp.ndarray | None = None
+
+    def __post_init__(self):
+        if isinstance(self.gpos, np.ndarray):
+            self.__dict__["gpos"] = jnp.array(self.gpos)
+        if isinstance(self.vtens, np.ndarray):
+            self.__dict__["vtens"] = jnp.array(self.vtens)
+
+    def __add__(self, other) -> EnergyResult:
+        assert isinstance(other, EnergyResult)
+
+        gpos = self.gpos
+        if self.gpos is None:
+            assert other.gpos is None
+        else:
+            assert other.gpos is not None
+            gpos += other.gpos
+
+        vtens = self.vtens
+        if self.vtens is None:
+            assert other.vtens is None
+        else:
+            assert other.vtens is not None
+            vtens += other.vtens
+
+        return EnergyResult(energy=self.energy + other.energy, gpos=gpos, vtens=vtens)
+
+
 class BC:
     """base class for biased Energy of MD simulation."""
 
     def __init__(self) -> None:
         pass
 
-    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
+    def compute_coor(self, sp: SystemParams, gpos=False, vir=False) -> EnergyResult:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
         raise NotImplementedError
@@ -53,40 +86,84 @@ class BC:
         with open(filename, "wb") as f:
             dill.dump(self, f)
 
-
-class Energy(BC):
     @staticmethod
-    def load(filename) -> Energy:
+    def load(filename) -> BC:
         with open(filename, "rb") as f:
             self = dill.load(f)
         return self
 
-    def get_sp(self) -> SystemParams:
-        raise NotImplementedError
+
+class EnergyError(Exception):
+    pass
+
+
+class Energy(BC):
+    @staticmethod
+    def load(filename) -> Energy:
+        energy = BC.load(filename=filename)
+        assert isinstance(energy, Energy)
+        return energy
+
+    @property
+    @abstractmethod
+    def sp(self):
+        pass
+
+    @sp.setter
+    @abstractmethod
+    def sp(self):
+        pass
+
+    @abstractmethod
+    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
+        pass
+
+    def _handle_exception(self):
+        return ""
+
+    def compute_coor(self, sp: SystemParams, gpos=False, vir=False) -> EnergyResult:
+
+        self.sp = sp
+
+        try:
+            return self._compute_coor(gpos=gpos, vir=vir)
+        except EnergyError as be:
+            raise EnergyError(
+                f"""An error occured during the nergy calculation with {self.__class__}.
+The lates coordinates were {self.sp}.                  
+raised exception from calculator:{be}"""
+            )
 
 
 class YaffEnergy(Energy):
     def __init__(self, f: Callable[[], yaff.ForceField]) -> None:
         super().__init__()
         self.f = f
-        self.ff = f()
+        self.ff: yaff.ForceField = f()
 
-    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
+    @property
+    def sp(self):
+        return SystemParams(
+            coordinates=jnp.array(self.system.pos[:]),
+            cell=jnp.array(self.system.cell.rvecs[:]),
+        )
 
+    @sp.setter
+    def sp(self, sp: SystemParams):
         self.ff.update_pos(np.array(sp.coordinates, dtype=np.double))
         self.ff.update_rvecs(np.array(sp.cell, dtype=np.double))
+
+    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
 
         gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
         vtens_out = np.zeros_like(self.ff.vtens) if vir else None
 
-        ener = self.ff.compute(gpos=gpos_out, vtens=vtens_out)
+        try:
+            ener = self.ff.compute(gpos=gpos_out, vtens=vtens_out)
+        except BaseException as be:
+            raise EnergyError(f"calculating yaff  energy raise execption:\n{be}")
 
-        if gpos:
-            gpos_out = jnp.array(gpos_out)
-        if vir:
-            vtens_out = jnp.array(vtens_out)
-
-        return ener, gpos_out, vtens_out
+        return EnergyResult(ener, gpos_out, vtens_out)
 
     def __getstate__(self):
         return {"f": self.f}
@@ -97,14 +174,8 @@ class YaffEnergy(Energy):
         self.ff = self.f()
         return self
 
-    def get_sp(self):
-        return SystemParams(
-            coordinates=jnp.array(self.ff.system.pos),
-            cell=jnp.array(self.ff.system.cell.rvecs),
-        )
 
-
-class AseError(Exception):
+class AseError(EnergyError):
     pass
 
 
@@ -122,46 +193,50 @@ class AseEnergy(Energy):
         if calculator is not None:
             self.atoms.calc = self.calculator
 
-    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
-        """use unit conventions of ASE"""
+    @property
+    def sp(self):
+        return SystemParams(
+            coordinates=jnp.array(self.atoms.get_positions()) * angstrom,
+            cell=jnp.array(self.atoms.get_cell().array[:]) * angstrom,
+        )
 
+    @sp.setter
+    def sp(self, sp: SystemParams):
         self.atoms.set_positions(np.array(sp.coordinates) / angstrom)
         self.atoms.set_cell(ase.geometry.Cell(np.array(sp.cell) / angstrom))
 
+    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
+        """use unit conventions of ASE"""
+
         if self.atoms.calc is None:
             self.atoms.calc = self._calculator()
+
+        try:
             energy = self.atoms.get_potential_energy() * electronvolt
-        else:
-            try:
-                energy = self.atoms.get_potential_energy() * electronvolt
-            except:
-                self._handle_exception()
+        except:
+            self._handle_exception()
 
         gpos_out = None
         vtens_out = None
         if gpos:
             forces = self.atoms.get_forces()
-            gpos_out = -jnp.array(forces[:]) * electronvolt / angstrom
+            gpos_out = -forces * electronvolt / angstrom
+
         if vir:
-            cell = self.atoms.get_cell().array[:]
-            volume = jnp.linalg.det(cell)
+            cell = self.atoms.get_cell().array
+            volume = np.linalg.det(cell)
             stress = self.atoms.get_stress(voigt=False)
-            vtens_out = volume * jnp.array(stress[:]) * electronvolt
+            vtens_out = volume * stress * electronvolt
 
-        return energy, gpos_out, vtens_out
+        res = EnergyResult(energy, gpos_out, vtens_out)
 
-    def _handle_exception(self):
-        raise AseError("The ase calculator failed provide an energy")
+        return res
 
     def _calculator(self):
         raise NotImplementedError
 
-    def get_sp(self):
-        """get system params from initial atoms"""
-        return SystemParams(
-            coordinates=jnp.array(self.atoms.get_positions()) * angstrom,
-            cell=jnp.array(self.atoms.get_cell().array[:]) * angstrom,
-        )
+    def _handle_exception(self):
+        raise AseError
 
     def __getstate__(self):
 
@@ -283,6 +358,10 @@ class Cp2kEnergy(AseEnergy):
         )
 
 
+class BiasError(Exception):
+    pass
+
+
 class Bias(BC, ABC):
     """base class for biased MD runs."""
 
@@ -306,7 +385,7 @@ class Bias(BC, ABC):
         """
 
     @partial(jit, static_argnums=(0, 2, 3))
-    def compute_coor(self, sp: SystemParams, gpos=False, vir=False):
+    def compute_coor(self, sp: SystemParams, gpos=False, vir=False) -> EnergyResult:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
@@ -327,7 +406,7 @@ class Bias(BC, ABC):
                 es = es.replace("n", "")
             e_vir = jnp.einsum(es, sp.cell, de, jac.cell)
 
-        return ener, e_gpos, e_vir
+        return EnergyResult(ener, e_gpos, e_vir)
 
     @partial(jit, static_argnums=(0, 2, 3, 4))
     def compute(self, cvs, diff=False, map=True, batched=True):
@@ -377,9 +456,9 @@ class Bias(BC, ABC):
 
     @staticmethod
     def load(filename) -> Bias:
-        with open(filename, "rb") as f:
-            self = dill.load(f)
-        return self
+        bias = BC.load(filename=filename)
+        assert isinstance(bias, Bias)
+        return bias
 
     def plot(
         self,
