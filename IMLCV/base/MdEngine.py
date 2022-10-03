@@ -573,6 +573,10 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             self._cell = YaffEngine._yaffCell(_ener=self._ener)
 
         @property
+        def numbers(self):
+            return self._tic.atomic_numbers
+
+        @property
         def masses(self):
             return self._tic.masses
 
@@ -595,6 +599,9 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         @property
         def natom(self):
             return self.pos.shape[0]
+        
+
+
 
     class _YaffFF(yaff.pes.ForceField):
         def __init__(
@@ -624,9 +631,11 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             return self._energy.sp
 
         def update_rvecs(self, rvecs):
+            self.clear()
             self.system.cell.rvecs = rvecs
 
         def update_pos(self, pos):
+            self.clear()
             self.system.pos = pos
 
         def _internal_compute(self, gpos, vtens):

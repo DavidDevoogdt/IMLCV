@@ -33,7 +33,7 @@ def config(
     provider="slurm",
     max_blocks=10,
     spawnjob=False,
-    time="1:00:00",
+    time="12:00:00",
 ):
 
     if parsl.DataFlowKernelLoader._dfk is not None:

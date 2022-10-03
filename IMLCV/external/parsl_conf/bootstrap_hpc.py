@@ -33,6 +33,6 @@ if __name__ == "__main__":
         name="hpc_perovskite",
         md=ase_yaff(),
         recalc=True,
-        steps=5e3,
-        K=40 * kjmol,
+        steps=100,
+        K=50 * kjmol,
     )
