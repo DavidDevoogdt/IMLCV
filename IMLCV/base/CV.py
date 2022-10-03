@@ -318,7 +318,9 @@ def dihedral(numbers):
 @cvflow
 def Volume(sp: SystemParams):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
-    return jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
+
+    vol = jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
+    return vol
 
 
 def rotate_2d(alpha):

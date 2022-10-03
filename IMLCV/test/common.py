@@ -102,10 +102,10 @@ def mil53_yaff():
     bias = HarmonicBias(
         cvs=cvs,
         q0=np.array(
-            [1400 * angstrom],
+            [1400 * angstrom**3],
         ),
         k=jnp.array(
-            [5 * kjmol / angstrom**2],
+            [10 * kjmol],
         ),
     )
 
@@ -116,7 +116,7 @@ def mil53_yaff():
         P=P,
         timestep=1.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=100.0 * units.femtosecond,
+        timecon_baro=500.0 * units.femtosecond,
         write_step=10,
         atomic_numbers=energy.ff.system.numbers,
     )
@@ -172,7 +172,7 @@ def ase_yaff():
 
     @cvflow
     def f(sp: SystemParams):
-        l = jnp.linalg.norm(sp.cell, axis=0)
+        l = jnp.linalg.norm(sp.cell, axis=1)
 
         return jnp.array([jnp.min(l), jnp.max(l)])
 
@@ -186,7 +186,11 @@ def ase_yaff():
 
     print(f"{cv.metric.bounding_box}")
 
-    bias = NoneBias(cvs=cv)
+    # bias = NoneBias(cvs=cv)
+
+    bias = HarmonicBias(
+        cvs=cv, q0=jnp.array([0 * angstrom, 6.3 * angstrom]), k=5 * kjmol
+    )
 
     tic = StaticTrajectoryInfo(
         write_step=10,
@@ -202,10 +206,6 @@ def ase_yaff():
         energy=energy,
         bias=bias,
         static_trajectory_info=tic,
-        sp=SystemParams(
-            coordinates=jnp.array(atoms.get_positions()) * angstrom,
-            cell=jnp.array(atoms.get_cell().array[:]) * angstrom,
-        ),
     )
 
     return yaffmd
@@ -241,11 +241,12 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
 if __name__ == "__main__":
     # md = mil53_yaff()
-    # md = ase_yaff()
-    md = alanine_dipeptide_yaff()
-    md.run(100)
+    md = ase_yaff()
+    # md = alanine_dipeptide_yaff()
+    # with jax.disable_jit():
+    md.run(1000)
 
-    print(md.get_trajectory().sp.shape)
+    print(md.bias.cvs.compute(md.get_trajectory().sp, map=False)[0] / angstrom**3)
 
     # md.trajectory_info.save("test.h5")
     # ti2 = TrajectoryInfo.load("test.h5")

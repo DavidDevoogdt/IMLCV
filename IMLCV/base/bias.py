@@ -106,13 +106,32 @@ class Energy(BC):
 
     @property
     @abstractmethod
-    def sp(self):
+    def cell(self):
         pass
 
-    @sp.setter
+    @cell.setter
     @abstractmethod
-    def sp(self):
+    def cell(self, cell):
         pass
+
+    @property
+    @abstractmethod
+    def coordinates(self):
+        pass
+
+    @coordinates.setter
+    @abstractmethod
+    def coordinates(self, coordinates):
+        pass
+
+    @property
+    def sp(self) -> SystemParams:
+        return SystemParams(coordinates=self.coordinates, cell=self.cell)
+
+    @sp.setter
+    def sp(self, sp: SystemParams):
+        self.cell = sp.cell
+        self.coordinates = sp.coordinates
 
     @abstractmethod
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
@@ -121,9 +140,15 @@ class Energy(BC):
     def _handle_exception(self):
         return ""
 
-    def compute_coor(self, sp: SystemParams, gpos=False, vir=False) -> EnergyResult:
-
-        self.sp = sp
+    def compute_coor(
+        self,
+        gpos=False,
+        vir=False,
+        sp: SystemParams | None = None,
+    ) -> EnergyResult:
+        if sp is not None:
+            raise NotImplementedError("untested")
+            self.sp = sp
 
         try:
             return self._compute_coor(gpos=gpos, vir=vir)
@@ -142,17 +167,22 @@ class YaffEnergy(Energy):
         self.ff: yaff.ForceField = f()
 
     @property
-    def sp(self):
-        return SystemParams(
-            coordinates=jnp.array(self.ff.system.pos[:]),
-            cell=jnp.array(self.ff.system.cell.rvecs[:]),
-        )
+    def cell(self):
+        return self.ff.system.cell.rvecs[:]
 
-    @sp.setter
-    def sp(self, sp: SystemParams):
-        self.ff.update_pos(np.array(sp.coordinates, dtype=np.double))
-        if sp.cell is not None:
-            self.ff.update_rvecs(np.array(sp.cell, dtype=np.double))
+    @cell.setter
+    def cell(self, cell):
+        if cell is not None:
+            cell = np.array(cell, dtype=np.double)
+        self.ff.update_rvecs(cell)
+
+    @property
+    def coordinates(self):
+        return self.ff.system.pos[:]
+
+    @coordinates.setter
+    def coordinates(self, coordinates):
+        self.ff.update_pos(coordinates)
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
 
@@ -196,23 +226,27 @@ class AseEnergy(Energy):
             self.atoms.calc = self.calculator
 
     @property
-    def sp(self):
-        return SystemParams(
-            coordinates=jnp.array(self.atoms.get_positions()) * angstrom,
-            cell=jnp.array(self.atoms.get_cell().array[:]) * angstrom,
-        )
+    def cell(self):
+        return self.atoms.get_cell()[:] * angstrom
 
-    @sp.setter
-    def sp(self, sp: SystemParams):
-        self.atoms.set_positions(np.array(sp.coordinates) / angstrom)
-        if sp.cell is not None:
-            self.atoms.set_cell(ase.geometry.Cell(np.array(sp.cell) / angstrom))
+    @cell.setter
+    def cell(self, cell):
+        self.atoms.set_cell(ase.geometry.Cell(np.array(cell[:]) / angstrom))
+
+    @property
+    def coordinates(self):
+        return self.atoms.get_positions() * angstrom
+
+    @coordinates.setter
+    def coordinates(self, coordinates):
+        self.atoms.set_positions(np.array(coordinates[:]) / angstrom)
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         """use unit conventions of ASE"""
 
         if self.atoms.calc is None:
             self.atoms.calc = self._calculator()
+            # self.atoms.calc.atoms = self.atoms
 
         try:
             energy = self.atoms.get_potential_energy() * electronvolt
@@ -226,16 +260,19 @@ class AseEnergy(Energy):
             gpos_out = -forces * electronvolt / angstrom
 
         if vir:
-            cell = self.atoms.get_cell().array
+            cell = self.atoms.get_cell()
             volume = np.linalg.det(cell)
             stress = self.atoms.get_stress(voigt=False)
             vtens_out = volume * stress * electronvolt
+
+            # vtens_out = 1.0 * vtens_out  # ase uses different sign
+            # # raise Warning("check sing of vtens out")
 
         res = EnergyResult(energy, gpos_out, vtens_out)
 
         return res
 
-    def _calculator(self):
+    def _calculator(self) -> ase.calculators.calculator.Calculator:
         raise NotImplementedError
 
     def _handle_exception(self):
@@ -676,15 +713,15 @@ class HarmonicBias(Bias):
             k: force constant spring
         """
 
+        super().__init__(cvs)
+
         if isinstance(k, float):
             k = q0 * 0 + k
         else:
             assert k.shape == q0.shape
         assert np.all(k > 0)
         self.k = jnp.array(k)
-        self.q0 = jnp.array(q0)
-
-        super().__init__(cvs)
+        self.q0 = self.cvs.metric.map(jnp.array(q0))
 
     def _compute(self, cvs, *args):
         # jax.debug.print("got cvs {cvs}", cvs=cvs)

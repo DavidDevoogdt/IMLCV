@@ -308,6 +308,7 @@ class MDEngine(ABC):
         static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
         screenlog=1000,
+        sp: SystemParams | None = None,
     ) -> None:
 
         self.static_trajectory_info = static_trajectory_info
@@ -321,7 +322,8 @@ class MDEngine(ABC):
         self.trajectory_info: TrajectoryInfo | None = None
 
         self.step = 1
-
+        if sp is not None:
+            self.sp = sp
         self.trajectory_file = trajectory_file
 
     @property
@@ -471,6 +473,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             static_trajectory_info=static_trajectory_info,
             trajectory_file=trajectory_file,
             screenlog=screenlog,
+            sp=sp,
         )
 
     def __call__(self, iterative: VerletIntegrator):
@@ -490,9 +493,8 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         hooks = [self, VerletScreenLog(step=1)]
 
         self._yaff_ener = YaffEngine._YaffFF(
-            self.sp,
             _energy=self.energy,
-            bias=self.bias,
+            _bias=self.bias,
             tic=self.static_trajectory_info,
         )
 
@@ -530,45 +532,102 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             self._setup_verlet()
         self._verlet.run(int(steps))
 
+    @dataclass
+    class _yaffCell:
+        _ener: Energy
+
+        @property
+        def rvecs(self):
+            return np.array(self._ener.cell)
+
+        @rvecs.setter
+        def rvecs(self, rvecs):
+            self._ener.cell = rvecs
+
+        def update_rvecs(self, rvecs):
+            self.rvecs = rvecs
+
+        @property
+        def nvec(self):
+            return self.rvecs.shape[0]
+
+        @property
+        def volume(self):
+            if self.nvec == 0:
+                return np.nan
+
+            return np.linalg.det(self.rvecs)
+
+    @dataclass
+    class _yaffSys:
+        _ener: Energy
+        _tic: StaticTrajectoryInfo
+
+        # charges: np.ndarray | None = None
+
+        def __post_init__(self):
+            self._cell = YaffEngine._yaffCell(_ener=self._ener)
+
+        @property
+        def masses(self):
+            return self._tic.masses
+
+        @property
+        def charges(self):
+            return None
+
+        @property
+        def cell(self):
+            return self._cell
+
+        @property
+        def pos(self):
+            return np.array(self._ener.coordinates)
+
+        @pos.setter
+        def pos(self, pos):
+            self._ener.coordinates = pos
+
+        @property
+        def natom(self):
+            return self.pos.shape[0]
+
     class _YaffFF(yaff.pes.ForceField):
         def __init__(
             self,
-            sp: SystemParams,
             _energy: Energy,  # name clash with yaff.pes.ForceField
-            bias: Bias,
+            _bias: Bias,
             tic: StaticTrajectoryInfo,
+            name="IMLCV_YAFF_forcepart",
         ):
 
-            assert tic.masses is not None
-
-            from yaff.system import System
-
-            super().__init__(
-                system=System(
-                    pos=np.array(sp.coordinates, dtype=np.double),
-                    rvecs=np.array(sp.cell, dtype=np.double)
-                    if sp.cell is not None
-                    else None,
-                    numbers=tic.atomic_numbers,
-                ),
-                parts=[],
-            )
-
-            # self.sp = sp
+            self._sys = YaffEngine._yaffSys(_ener=_energy, _tic=tic)
             self._energy = _energy
-            self.bias = bias
+            self.bias = _bias
+
+            super().__init__(system=self.system, parts=[])
 
         @property
-        def sp(self) -> SystemParams:
-            return SystemParams(
-                coordinates=jnp.array(self.system.pos),
-                cell=jnp.array(self.system.cell.rvecs),
-            )
+        def system(self):
+            return self._sys
+
+        @system.setter
+        def system(self, sys):
+            assert sys == self.system
+
+        @property
+        def sp(self):
+            return self._energy.sp
+
+        def update_rvecs(self, rvecs):
+            self.system.cell.rvecs = rvecs
+
+        def update_pos(self, pos):
+            self.system.pos = pos
 
         def _internal_compute(self, gpos, vtens):
 
             ener = self._energy.compute_coor(
-                self.sp,
                 gpos is not None,
                 vtens is not None,
             )
@@ -579,11 +638,15 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 vtens is not None,
             )
 
+            print(
+                f"gpos:{gpos is not None} vtens {vtens is not None}  energy {ener.energy} bias energy {ener_bias.energy}"
+            )
+
             total_energy = ener + ener_bias
 
             if gpos is not None:
-                gpos[:] = np.array(total_energy.gpos)
+                gpos[:] += np.array(total_energy.gpos)
             if vtens is not None:
-                vtens[:] = np.array(total_energy.vtens)
+                vtens[:] += np.array(total_energy.vtens)
 
             return total_energy.energy
