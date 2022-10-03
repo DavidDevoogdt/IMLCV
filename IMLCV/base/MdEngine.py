@@ -396,7 +396,7 @@ class MDEngine(ABC):
         else:
             self.trajectory_info += ti
 
-        if self.step % self.static_trajectory_info.write_step == 1:
+        if self.step % self.static_trajectory_info.write_step == 0:
             if self.trajectory_file is not None:
                 self.trajectory_info.save(self.trajectory_file)  # type: ignore
 
@@ -498,7 +498,11 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         if self.static_trajectory_info.thermostat:
             hooks.append(
-                yaff.sampling.NHCThermostat(
+                # yaff.sampling.NHCThermostat(
+                #     self.static_trajectory_info.T,
+                #     timecon=self.static_trajectory_info.timecon_thermo,
+                # )
+                yaff.sampling.LangevinThermostat(
                     self.static_trajectory_info.T,
                     timecon=self.static_trajectory_info.timecon_thermo,
                 )
@@ -582,8 +586,8 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             total_energy = ener + ener_bias
 
             if gpos is not None:
-                gpos[:] = np.array(total_energy.gpos)
+                gpos[:] += np.array(total_energy.gpos)
             if vtens is not None:
-                vtens[:] = np.array(total_energy.vtens)
+                vtens[:] += np.array(total_energy.vtens)
 
             return total_energy.energy

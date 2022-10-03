@@ -35,7 +35,13 @@ def do_conf():
     config(cluster="doduo", max_blocks=10)
 
 
-def test_cv_discovery(name="test_cv_disc", md=alanine_dipeptide_yaff(), recalc=False):
+def test_cv_discovery(
+    name="test_cv_disc",
+    md=alanine_dipeptide_yaff(),
+    recalc=False,
+    steps=5e3,
+    K=5 * kjmol,
+):
     do_conf()
     # if md is None or md == "al":
     #     md = alanine_dipeptide_yaff()
@@ -50,7 +56,14 @@ def test_cv_discovery(name="test_cv_disc", md=alanine_dipeptide_yaff(), recalc=F
         )
     )
 
-    scheme0 = get_FES(name=name, engine=md, cvd=cvd, recalc=recalc)
+    scheme0 = get_FES(
+        name=name,
+        engine=md,
+        cvd=cvd,
+        recalc=recalc,
+        steps=steps,
+        K=10 * kjmol,
+    )
 
     scheme0.update_CV(
         samples=1e3,

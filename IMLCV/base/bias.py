@@ -231,6 +231,9 @@ class AseEnergy(Energy):
             stress = self.atoms.get_stress(voigt=False)
             vtens_out = volume * stress * electronvolt
 
+            vtens_out = 1.0 * vtens_out  # ase uses opposite convention
+            print("check this convention")
+
         res = EnergyResult(energy, gpos_out, vtens_out)
 
         return res
@@ -675,6 +678,7 @@ class HarmonicBias(Bias):
             q0: rest pos spring
             k: force constant spring
         """
+        super().__init__(cvs)
 
         if isinstance(k, float):
             k = q0 * 0 + k
@@ -682,12 +686,9 @@ class HarmonicBias(Bias):
             assert k.shape == q0.shape
         assert np.all(k > 0)
         self.k = jnp.array(k)
-        self.q0 = jnp.array(q0)
-
-        super().__init__(cvs)
+        self.q0 = self.cvs.metric.map(jnp.array(q0))
 
     def _compute(self, cvs, *args):
-        # jax.debug.print("got cvs {cvs}", cvs=cvs)
 
         r = self.cvs.metric.difference(cvs, self.q0)
         return jnp.einsum("i,i,i", self.k, r, r)

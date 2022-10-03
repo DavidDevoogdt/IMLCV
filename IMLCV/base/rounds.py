@@ -238,22 +238,6 @@ class RoundsMd(Rounds):
     Gets passed between modules
     """
 
-    # TRAJ_KEYS = [
-    #     "T",
-    #     "P",
-    #     "timestep",
-    #     "timecon_thermo",
-    #     "timecon_baro",
-    #     "write_step",
-    #     "screenlog",
-    #     "equilibration",
-    # ]
-
-    # 'bias'
-    # 'energy'
-
-    # ENGINE_KEYS = ["timestep", *Rounds.ENGINE_KEYS]
-
     def __init__(self, folder="output") -> None:
         super().__init__(folder=folder)
 
@@ -278,18 +262,6 @@ class RoundsMd(Rounds):
     def _validate(self, md: MDEngine):
 
         pass
-        # md0 = self._get_prop(self.round, 0, 'engine')
-
-        # #check equivalency of CVs
-        # md.bias.cvs == md0.bias.cvs
-
-        # #check equivalency of md engine params
-
-        # for k in self.ENGINE_KEYS:
-        #     assert md0.__dict__[k] == md.__dict__[k]
-
-        # #check equivalency of energy source
-        # dill.dumps(md.ener) == dill.dumps(md.ener)
 
     def new_round(self, md: MDEngine):
 

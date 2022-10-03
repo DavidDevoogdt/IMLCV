@@ -90,7 +90,7 @@ class Scheme:
 
     def _grid_umbrella(self, steps=1e4, k=None, n=8):
 
-        grid = self.md.bias.cvs.metric.grid(n)
+        grid = self.md.bias.cvs.metric.grid(n, map=False)
 
         if k is None:
             k = 2 * self.md.static_trajectory_info.T * boltzmann * n**2

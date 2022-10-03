@@ -25,6 +25,7 @@ __________
 abs( l1-l2 )
 
 
+
 phase 1) l1=l2= +- 6.3 ang
 phase 2) l1=5 ang l2=8 ang
  

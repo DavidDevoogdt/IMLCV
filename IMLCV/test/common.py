@@ -18,6 +18,8 @@ from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
+from IMLCV.base.rounds import RoundsMd
+from IMLCV.external.parsl_conf.config import config
 from IMLCV.scheme import Scheme
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
@@ -172,15 +174,17 @@ def ase_yaff():
 
     @cvflow
     def f(sp: SystemParams):
-        l = jnp.linalg.norm(sp.cell, axis=0)
+        import jax.numpy as jnp
 
-        return jnp.array([jnp.min(l), jnp.max(l)])
+        l = jnp.linalg.norm(sp.cell, axis=1)
+
+        return jnp.array([(l[0] - l[1]) / 2, (l[0] + l[1]) / 2])
 
     cv = CV(
         f=f,
         metric=Metric(
             periodicities=[False, False],
-            bounding_box=jnp.array([[5.0, 8.0], [5.0, 8.0]]) * angstrom,
+            bounding_box=jnp.array([[0.0, 3.0], [6.0, 7.0]]) * angstrom,
         ),
     )
 
@@ -189,29 +193,34 @@ def ase_yaff():
     bias = NoneBias(cvs=cv)
 
     tic = StaticTrajectoryInfo(
-        write_step=10,
+        write_step=1,
         T=300 * units.kelvin,
         P=1.0 * units.bar,
-        timestep=2 * units.femtosecond,
+        timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=500.0 * units.femtosecond,
+        timecon_baro=1000.0 * units.femtosecond,
         atomic_numbers=energy.atoms.get_atomic_numbers(),
+        equilibration=0.0,
     )
 
     yaffmd = YaffEngine(
         energy=energy,
         bias=bias,
         static_trajectory_info=tic,
-        sp=SystemParams(
-            coordinates=jnp.array(atoms.get_positions()) * angstrom,
-            cell=jnp.array(atoms.get_cell().array[:]) * angstrom,
-        ),
+        sp=energy.sp,
     )
 
     return yaffmd
 
 
-def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
+def get_FES(
+    name,
+    engine: MDEngine,
+    cvd: CVDiscovery,
+    recalc=False,
+    steps=5e3,
+    K=5 * kjmol,
+) -> Scheme:
     """calculate some rounds, and perform long run. Starting point for cv discovery methods"""
 
     full_name = f"output/{name}"
@@ -227,9 +236,17 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
         scheme0 = Scheme(cvd=None, Engine=engine, folder=full_name)
 
-        scheme0.round(rnds=3, steps=5e3, n=4)
+        scheme0.round(
+            rnds=3,
+            steps=steps,
+            n=4,
+            K=5 * kjmol,
+        )
 
-        scheme0.rounds.run(NoneBias(scheme0.rounds.get_bias().cvs), steps=1e5)
+        scheme0.rounds.run(
+            NoneBias(scheme0.rounds.get_bias().cvs),
+            steps=1e5,
+        )
         scheme0.rounds.save()
 
         del scheme0
@@ -240,12 +257,21 @@ def get_FES(name, engine: MDEngine, cvd: CVDiscovery, recalc=False) -> Scheme:
 
 
 if __name__ == "__main__":
-    # md = mil53_yaff()
-    # md = ase_yaff()
-    md = alanine_dipeptide_yaff()
-    md.run(100)
 
-    print(md.get_trajectory().sp.shape)
+    config(cluster="doduo", max_blocks=10)
+
+    # md = mil53_yaff()
+    md = ase_yaff()
+    # md = alanine_dipeptide_yaff()
+
+    scheme = RoundsMd(folder="mdtest")
+    scheme.new_round(md=md)
+
+    scheme.run(steps=100, bias=None)
+
+    # md.run(100)
+
+    # print(md.get_trajectory().sp.shape)
 
     # md.trajectory_info.save("test.h5")
     # ti2 = TrajectoryInfo.load("test.h5")

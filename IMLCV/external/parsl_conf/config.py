@@ -33,6 +33,7 @@ def config(
     provider="slurm",
     max_blocks=10,
     spawnjob=False,
+    time="1:00:00",
 ):
 
     if parsl.DataFlowKernelLoader._dfk is not None:
@@ -77,7 +78,7 @@ def config(
         kwargs = {
             "channel": LocalChannel(),
             "cluster": cluster,
-            "walltime": "00:20:00",
+            "walltime": time,
             "worker_init": HPC_WORKER_INIT,
         }
 
