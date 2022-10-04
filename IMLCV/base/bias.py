@@ -65,6 +65,15 @@ class EnergyResult:
 
         return EnergyResult(energy=self.energy + other.energy, gpos=gpos, vtens=vtens)
 
+    def __str__(self) -> str:
+        str = f"energy [eV]: {self.energy/electronvolt}"
+        if self.gpos is not None:
+            str += f"\ndE/dx^i_j [eV/angstrom] \n {self.gpos[:]*angstrom/electronvolt}"
+        if self.vtens is not None:
+            str += f"\n  viriaal [eV] \n {self.vtens[:] / electronvolt }"
+
+        return str
+
 
 class BC:
     """base class for biased Energy of MD simulation."""
@@ -441,7 +450,8 @@ class Bias(BC, ABC):
 
         e_vir = None
         if vir:
-            es = "nji,nk,nkjl->nil"
+            # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
+            es = "nji,nk,nkjl->nli"
             if not sp.batched:
                 es = es.replace("n", "")
             e_vir = jnp.einsum(es, sp.cell, de, jac.cell)

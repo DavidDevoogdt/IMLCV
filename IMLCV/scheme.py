@@ -93,7 +93,8 @@ class Scheme:
         grid = self.md.bias.cvs.metric.grid(n, map=False)
 
         if k is None:
-            k = 2 * self.md.static_trajectory_info.T * boltzmann * n**2
+            k = 2 * self.md.static_trajectory_info.T * boltzmann
+        k *= n**2
 
         self.rounds.run_par(
             [

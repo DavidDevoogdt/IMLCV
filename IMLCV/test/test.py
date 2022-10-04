@@ -41,20 +41,38 @@ def test_cv_discovery(
     recalc=False,
     steps=5e3,
     K=5 * kjmol,
+    cvd = "AE"
 ):
     do_conf()
-    # if md is None or md == "al":
-    #     md = alanine_dipeptide_yaff()
-    # elif md == "perov":
-    #     md = ase_yaff()
-    # else:
-    #     raise ValueError("unknown system")
 
-    cvd = CVDiscovery(
-        transformer=TranformerAutoEncoder(
-            outdim=3,
-        )
-    )
+
+    match cvd:
+        case "AE":
+            cvd = CVDiscovery(
+                transformer=TranformerAutoEncoder(
+                    outdim=3,
+                )
+            )
+        case "UMAP":
+
+            cvd = CVDiscovery(
+                transformer=TranformerUMAP(
+                    outdim=3,
+                )
+            )
+
+            kwargs = dict(
+                n_neighbors=60,
+                min_dist=0.8,
+                nunits=200,
+                nlayers=4,
+                # metric=None,
+                metric="l2",
+                densmap=True,
+                parametric_reconstruction=True,
+                parametric_reconstruction_loss_fcn=keras.losses.MSE,
+                decoder=True,
+                )
 
     scheme0 = get_FES(
         name=name,
@@ -62,22 +80,12 @@ def test_cv_discovery(
         cvd=cvd,
         recalc=recalc,
         steps=steps,
-        K=10 * kjmol,
+        K=k,
     )
 
     scheme0.update_CV(
         samples=1e3,
-        n_neighbors=60,
-        min_dist=0.8,
-        nunits=200,
-        nlayers=4,
-        # metric=None,
-        metric="l2",
-        densmap=True,
-        parametric_reconstruction=True,
-        parametric_reconstruction_loss_fcn=keras.losses.MSE,
-        # random_state=np.random.randint(0, 1000),
-        decoder=True,
+
     )
 
 
@@ -304,9 +312,12 @@ if __name__ == "__main__":
     if LOCAL:
         md = alanine_dipeptide_yaff
         # md = mil53_yaff
+        k = 20 * kjmol
+        name = "test_cv_disc_ala"
     else:
         md = ase_yaff
-
+        k = 10 * kjmol
+        name = "test_cv_disc_perov"
     a = False
 
     if a:
@@ -319,7 +330,9 @@ if __name__ == "__main__":
         test_cv_discovery(md=md(), recalc=True)
 
     test_cv_discovery(
-        name="test_cv_disc_perov",
+        name=name,
         md=md(),
-        recalc=True,
+        recalc=False,
+        K=k,
+        steps=1e4,
     )

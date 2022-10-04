@@ -61,4 +61,8 @@
        POTENTIAL                   GTH-PBE-q7
      &END KIND 
    &END SUBSYS
+   &PRINT
+      &FORCES ON
+      &END FORCES
+   &END PRINT
  &END FORCE_EVAL

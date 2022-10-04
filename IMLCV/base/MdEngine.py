@@ -41,6 +41,7 @@ class StaticTrajectoryInfo:
         "timecon_baro",
         "write_step",
         "equilibration",
+        "screen_log",
     ]
 
     _arr = [
@@ -61,6 +62,7 @@ class StaticTrajectoryInfo:
 
     write_step: int = 100
     equilibration: float | None = None
+    screen_log: int = 1000
 
     @property
     def thermostat(self):
@@ -297,7 +299,6 @@ class MDEngine(ABC):
         "energy",
         "static_trajectory_info",
         "trajectory_file",
-        "screenlog",
     ]
 
     def __init__(
@@ -307,7 +308,6 @@ class MDEngine(ABC):
         # sp: SystemParams,
         static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
-        screenlog=1000,
         sp: SystemParams | None = None,
     ) -> None:
 
@@ -315,8 +315,6 @@ class MDEngine(ABC):
 
         self.bias = bias
         self.energy = energy
-
-        self.screenlog = screenlog
 
         # self._sp = sp
         self.trajectory_info: TrajectoryInfo | None = None
@@ -455,7 +453,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         # sp: SystemParams|None = None,
         # log_level=log.medium,
         trajectory_file=None,
-        screenlog=1000,
         sp: SystemParams | None = None,
     ) -> None:
 
@@ -472,7 +469,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             bias=bias,
             static_trajectory_info=static_trajectory_info,
             trajectory_file=trajectory_file,
-            screenlog=screenlog,
             sp=sp,
         )
 
@@ -490,7 +486,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
     def _setup_verlet(self):
 
-        hooks = [self, VerletScreenLog(step=1)]
+        hooks = [self, VerletScreenLog(step=self.static_trajectory_info.screen_log)]
 
         self._yaff_ener = YaffEngine._YaffFF(
             _energy=self.energy,
@@ -599,9 +595,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         @property
         def natom(self):
             return self.pos.shape[0]
-        
-
-
 
     class _YaffFF(yaff.pes.ForceField):
         def __init__(
@@ -649,10 +642,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 self.sp,
                 gpos is not None,
                 vtens is not None,
-            )
-
-            print(
-                f"gpos:{gpos is not None} vtens {vtens is not None}  energy {ener.energy} bias energy {ener_bias.energy}"
             )
 
             total_energy = ener + ener_bias

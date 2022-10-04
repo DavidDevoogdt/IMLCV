@@ -18,7 +18,6 @@ from matplotlib.colors import hsv_to_rgb
 from parsl.data_provider.files import File
 from tensorflow import keras
 
-from IMLCV.base.bias import Bias
 from IMLCV.base.CV import (
     CV,
     CvFlow,
@@ -29,6 +28,8 @@ from IMLCV.base.CV import (
     coulomb_descriptor_cv_flow,
     scale_cv_trans,
 )
+
+# from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.metric import Metric
 from IMLCV.base.rounds import RoundsMd
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
@@ -40,7 +41,12 @@ plt.rcParams["text.usetex"] = True
 
 
 class Transformer:
-    def __init__(self, outdim, periodicity=None, bounding_box=None) -> None:
+    def __init__(
+        self,
+        outdim,
+        periodicity=None,
+        bounding_box=None,
+    ) -> None:
         self.outdim = outdim
 
         if periodicity is None:
@@ -52,10 +58,14 @@ class Transformer:
         self.bounding_box = bounding_box
 
     def pre_fit(
-        self, z: SystemParams, svd=True, scale=True
+        self,
+        z: SystemParams,
+        sti,
+        svd=True,
+        scale=True,
     ) -> tuple[jnp.ndarray, CvFlow]:
         # x, f = SystemParamss.flatten_f(z, scale=prescale)
-        x, f = coulomb_descriptor_cv_flow(z)
+        x, f = coulomb_descriptor_cv_flow(z, sti)
 
         if scale:
             x, g = scale_cv_trans(x)
@@ -64,9 +74,15 @@ class Transformer:
         return x, f
 
     def fit(
-        self, sp: SystemParams, indices, prescale=True, postscale=True, **kwargs
+        self,
+        sp: SystemParams,
+        indices,
+        sti,
+        prescale=True,
+        postscale=True,
+        **kwargs,
     ) -> CV:
-        x, f = self.pre_fit(sp, scale=prescale)
+        x, f = self.pre_fit(sp, scale=prescale, sti=sti)
         y, g = self._fit(x, indices, **kwargs)
         z, h = self.post_fit(y, scale=postscale)
 
@@ -375,28 +391,26 @@ class CVDiscovery:
         weights = []
 
         cv = None
+        sti = None
 
-        for ti, attr in rounds.iter(num=num):
+        for round, traj in rounds.iter(r=4, num=num):
+            if sti is None:
+                sti = round.tic
 
             # map cvs
-            bias = Bias.load(attr["name_bias"])
+            bias = traj.get_bias()
 
             if cv is None:
                 cv = bias.cvs
 
-                def map_cv(x):
-                    return cv.compute(x)[0]
-
-                map_metric = jit(vmap(cv.metric.map))
-
-            sp = ti.sp
+            sp = traj.ti.sp
 
             # execute all the mappings
-            cvs = map_cv(sp)
-            cvs_mapped = map_metric(cvs)
-            biases = bias.compute(cvs=cvs_mapped, map=False)[0]
+            cvs, _ = bias.cvs.compute(sp, map=False)
+            cvs_mapped, _ = bias.cvs.compute(sp, map=True)
+            biases, _ = bias.compute(cvs=cvs_mapped, map=False)
 
-            beta = 1 / attr["T"]
+            beta = 1 / round.tic.T
             weight = jnp.exp(beta * biases)
 
             sp_arr.append(sp)
@@ -421,24 +435,25 @@ class CVDiscovery:
         system_params = SystemParams.stack(sp_arr)
         cvs = jnp.vstack(cvs_mapped_arr)
 
-        return [system_params, cvs, indices, cv]
+        return [system_params, cvs, indices, cv, sti]
 
     def compute(
         self, rounds: RoundsMd, samples=3e3, plot=True, name=None, **kwargs
     ) -> CV:
 
-        sps, _, indices, cv_old = self._get_data(num=1, out=samples, rounds=rounds)
+        sps, _, indices, cv_old, sti = self._get_data(num=5, out=samples, rounds=rounds)
 
         new_cv = self.transformer.fit(
             sps,
             indices,
+            sti=sti,
             **kwargs,
         )
 
         if plot:
             base_name = f"{rounds.folder}/round_{rounds.round}/cvdicovery"
 
-            plot_app(
+            fut = plot_app(
                 name=base_name,
                 old_cv=cv_old,
                 new_cv=new_cv,
@@ -450,6 +465,8 @@ class CVDiscovery:
                 stdout=f"{base_name}.stdout",
                 stderr=f"{base_name}.stderr",
             )
+
+            fut.result()
 
         return new_cv
 

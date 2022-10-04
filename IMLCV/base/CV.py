@@ -17,6 +17,7 @@ from jax import jacfwd, jit, vmap
 from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
 
+# from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.metric import Metric
 
 keras: KerasAPI = import_module("tensorflow.keras")
@@ -351,11 +352,11 @@ def scale_cv_trans(array=jnp.ndarray):
     return f.compute(array), f
 
 
-def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
+def coulomb_descriptor_cv_flow(sps: SystemParams, tic, permutation="none"):
     @cvflow
     def h(x: SystemParams):
-        raise NotImplementedError
-        assert x.masses is not None, "Z array in systemparams for coulomb descriptor"
+
+        # assert x.masses is not None, "Z array in systemparams for coulomb descriptor"
 
         coor = x.coordinates
 
@@ -363,12 +364,12 @@ def coulomb_descriptor_cv_flow(sps: SystemParams, permutation="l2"):
         out = jnp.zeros((n, n))
 
         for i in range(n):
-            d = 0.5 * x.masses[i] ** 2.4
+            d = 0.5 * tic.atomic_numbers[i] ** 2.4
             out = out.at[i, i].set(d)
 
         for i, j in itertools.combinations(range(n), 2):
             d = jnp.linalg.norm(coor[i, :] - coor[j, :], 2)
-            d = x.masses[i] * x.masses[j] / d
+            d = tic.atomic_numbers[i] * tic.atomic_numbers[j] / d
             out = out.at[i, j].set(d)
             out = out.at[j, i].set(d)
 

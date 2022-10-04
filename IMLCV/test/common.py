@@ -18,7 +18,6 @@ from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
-from IMLCV.base.rounds import RoundsMd
 from IMLCV.external.parsl_conf.config import config
 from IMLCV.scheme import Scheme
 from yaff.test.common import get_alaninedipeptide_amber99ff
@@ -62,11 +61,13 @@ def alanine_dipeptide_yaff():
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        write_step=10,
+        write_step=1000,
         atomic_numbers=np.array(
             [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
             dtype=int,
         ),
+        screen_log=1000,
+        equilibration=1000 * units.femtosecond,
     )
 
     mde = YaffEngine(
@@ -119,7 +120,7 @@ def mil53_yaff():
         timestep=1.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=500.0 * units.femtosecond,
-        write_step=10,
+        write_step=1,
         atomic_numbers=energy.ff.system.numbers,
     )
 
@@ -205,6 +206,7 @@ def ase_yaff():
         timecon_baro=1000.0 * units.femtosecond,
         atomic_numbers=energy.atoms.get_atomic_numbers(),
         equilibration=0.0,
+        screen_log=1,
     )
 
     yaffmd = YaffEngine(
@@ -240,16 +242,16 @@ def get_FES(
         scheme0 = Scheme(cvd=None, Engine=engine, folder=full_name)
 
         scheme0.round(
-            rnds=3,
+            rnds=5,
             steps=steps,
             n=4,
             K=5 * kjmol,
         )
 
-        scheme0.rounds.run(
-            NoneBias(scheme0.rounds.get_bias().cvs),
-            steps=1e5,
-        )
+        # scheme0.rounds.run(
+        #     NoneBias(scheme0.rounds.get_bias().cvs),
+        #     steps=1e5,
+        # )
         scheme0.rounds.save()
 
         del scheme0
