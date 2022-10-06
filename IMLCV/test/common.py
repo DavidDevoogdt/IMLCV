@@ -86,7 +86,6 @@ def mil53_yaff():
     P = 1 * units.atm
 
     def f():
-
         rd = ROOT_DIR / "IMLCV" / "test" / "data" / "MIL53"
         system = yaff.System.from_file(str(rd / "MIL53.chk"))
         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
@@ -141,7 +140,7 @@ def ase_yaff():
     base = ROOT_DIR / "IMLCV" / "test/data/CsPbI_3"
 
     # make CP2K ase calculator
-    path_atoms = base / "Pos.xyz"
+    path_atoms = base / "large" / "Pos.xyz"
     with open(path_atoms) as f:
         atoms = ase.io.read(f)
 
@@ -159,7 +158,7 @@ def ase_yaff():
 
     energy = Cp2kEnergy(
         atoms=atoms,
-        input_file=base / "cp2k.inp",
+        input_file=base / "large" / "cp2k.inp",
         input_kwargs=input_params,
         auto_write=True,
         basis_set=None,
