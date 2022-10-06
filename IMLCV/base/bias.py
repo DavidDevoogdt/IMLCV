@@ -274,9 +274,6 @@ class AseEnergy(Energy):
             stress = self.atoms.get_stress(voigt=False)
             vtens_out = volume * stress * electronvolt
 
-            # vtens_out = 1.0 * vtens_out  # ase uses opposite convention
-            # print("check this convention")
-
         res = EnergyResult(energy, gpos_out, vtens_out)
 
         return res
@@ -724,8 +721,6 @@ class HarmonicBias(Bias):
         """
         super().__init__(cvs)
 
-        super().__init__(cvs)
-
         if isinstance(k, float):
             k = q0 * 0 + k
         else:
@@ -765,6 +760,8 @@ class BiasMTD(Bias):
             step: _description_. Defaults to None.
             tempering: _description_. Defaults to 0.0.
         """
+
+        raise NotImplemented
 
         if isinstance(sigmas, float):
             sigmas = jnp.array([sigmas])
@@ -944,10 +941,10 @@ class CvMonitor(BiasF):
         if self.finalized:
             return
 
-        new_cv, _ = self.cvs.compute(sp=sp)
+        new_cv, _ = self.cvs.compute(sp=sp,map=True)
 
         if self.last_cv is not None:
-            if jnp.linalg.norm(new_cv - self.last_cv) > 1:
+            if jnp.linalg.norm(new_cv - self.last_cv) > 0.1:
                 print(f"ncv {new_cv} lcv {self.last_cv} {new_cv.shape}")
 
                 new_trans = np.array([np.stack([new_cv, self.last_cv], axis=1)])

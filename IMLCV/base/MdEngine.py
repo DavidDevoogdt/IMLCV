@@ -13,7 +13,7 @@ import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
-from molmod.units import bar
+from molmod.units import angstrom, bar, electronvolt
 from tabulate import tabulate
 
 import yaff.analysis.biased_sampling
@@ -123,6 +123,10 @@ class TrajectoryInfo:
     e_pot: np.ndarray | None = None
     gpos: np.ndarray | None = None
     vtens: np.ndarray | None = None
+
+    T: np.ndarray | None = None
+    P: np.ndarray | None = None
+    err: np.ndarray | None = None
 
     t: np.ndarray | None = None
 
@@ -390,6 +394,11 @@ class MDEngine(ABC):
 
     def hook(self, ti: TrajectoryInfo):
 
+        if self.step == 0:
+            print( f"{ 'cons err':^10 }|{'P[bar]':^10}|{'T[K]':^10}|walltime[s]"  )
+        else:
+            print( f"{  ti.err :<10 }|{ ti.P :<10}|{ ti.T :<10}|walltime[s]"  )
+
         # write step to trajectory
         if self.trajectory_info is None:
             self.trajectory_info = ti
@@ -423,7 +432,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         sp: SystemParams | None = None,
     ) -> None:
 
-        yaff.log.set_level(log.medium)
+        yaff.log.set_level(log.warning)
         self.start = 0
         # self.step = 1
         self.name = "YaffEngineIMLCV"
@@ -448,6 +457,9 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 t=iterative.time,
                 e_pot=iterative.epot,
                 vtens=iterative.vtens,
+                T=iterative.T,
+                P=iterative.P,
+                err=iterative.cons_err
             )
         )
 

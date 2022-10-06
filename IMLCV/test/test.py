@@ -40,40 +40,40 @@ def test_cv_discovery(
     md=alanine_dipeptide_yaff(),
     recalc=False,
     steps=5e3,
-    K=5 * kjmol,
-    cvd = "AE"
+    k=5 * kjmol,
+    cvd="AE",
 ):
     do_conf()
 
-
-    match cvd:
-        case "AE":
-            cvd = CVDiscovery(
-                transformer=TranformerAutoEncoder(
-                    outdim=3,
-                )
+    if cvd == "AE":
+        cvd = CVDiscovery(
+            transformer=TranformerAutoEncoder(
+                outdim=3,
             )
-            kwargs={}
-        case "UMAP":
+        )
+        kwargs = {}
+    elif cvd == "UMAP":
 
-            cvd = CVDiscovery(
-                transformer=TranformerUMAP(
-                    outdim=3,
-                )
+        cvd = CVDiscovery(
+            transformer=TranformerUMAP(
+                outdim=3,
             )
+        )
 
-            kwargs = dict(
-                n_neighbors=60,
-                min_dist=0.8,
-                nunits=200,
-                nlayers=4,
-                # metric=None,
-                metric="l2",
-                densmap=True,
-                parametric_reconstruction=True,
-                parametric_reconstruction_loss_fcn=keras.losses.MSE,
-                decoder=True,
-                )
+        kwargs = dict(
+            n_neighbors=60,
+            min_dist=0.8,
+            nunits=200,
+            nlayers=4,
+            # metric=None,
+            metric="l2",
+            densmap=True,
+            parametric_reconstruction=True,
+            parametric_reconstruction_loss_fcn=keras.losses.MSE,
+            decoder=True,
+        )
+    else:
+        raise ValueError
 
     scheme0 = get_FES(
         name=name,
@@ -334,6 +334,6 @@ if __name__ == "__main__":
         name=name,
         md=md(),
         recalc=False,
-        K=k,
+        k=k,
         steps=1e4,
     )

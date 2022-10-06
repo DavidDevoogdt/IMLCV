@@ -16,6 +16,7 @@ import tensorflow as tfl
 from jax import jacfwd, jit, vmap
 from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
+from molmod.units import angstrom
 
 # from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.metric import Metric
@@ -81,6 +82,11 @@ class SystemParams:
             ncell = None
 
         return SystemParams(coordinates=ncoordinates, cell=ncell)
+
+    def __str__(self):
+        str = f"coordinates shape: \n{self.coordinates.shape}"
+        if self.cell is not None:
+            str += f"\n cell [Angstrom]:\n{self.cell/angstrom }"
 
 
 sf = Callable[[SystemParams], jnp.ndarray]

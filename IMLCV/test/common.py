@@ -163,7 +163,7 @@ def ase_yaff():
         auto_write=True,
         basis_set=None,
         command=CP2K_COMMAND,
-        cutoff=400 * ase.units.Rydberg,
+        cutoff=800 * ase.units.Rydberg,
         stress_tensor=True,
         print_level="LOW",
         pseudo_potential=None,
@@ -180,8 +180,10 @@ def ase_yaff():
         import jax.numpy as jnp
 
         l = jnp.linalg.norm(sp.cell, axis=1)
+        l0 = jnp.max(l)
+        l1 = jnp.min(l)
 
-        return jnp.array([(l[0] - l[1]) / 2, (l[0] + l[1]) / 2])
+        return jnp.array([(l0 - l1) / 2, (l0 + l1) / 2])
 
     cv = CV(
         f=f,
@@ -201,7 +203,7 @@ def ase_yaff():
         P=1.0 * units.bar,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=1000.0 * units.femtosecond,
+        timecon_baro=500.0 * units.femtosecond,
         atomic_numbers=energy.atoms.get_atomic_numbers(),
         equilibration=0.0,
         screen_log=1,
@@ -263,8 +265,8 @@ if __name__ == "__main__":
 
     config(cluster="doduo", max_blocks=10)
 
-    md = mil53_yaff()
-    # md = ase_yaff()
+    # md = mil53_yaff()
+    md = ase_yaff()
     # md = alanine_dipeptide_yaff()
     # with jax.disable_jit():
     md.run(1000)
