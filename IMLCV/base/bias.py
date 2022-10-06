@@ -941,7 +941,7 @@ class CvMonitor(BiasF):
         if self.finalized:
             return
 
-        new_cv, _ = self.cvs.compute(sp=sp,map=True)
+        new_cv, _ = self.cvs.compute(sp=sp, map=True)
 
         if self.last_cv is not None:
             if jnp.linalg.norm(new_cv - self.last_cv) > 0.1:

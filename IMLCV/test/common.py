@@ -86,6 +86,7 @@ def mil53_yaff():
     P = 1 * units.atm
 
     def f():
+
         rd = ROOT_DIR / "IMLCV" / "test" / "data" / "MIL53"
         system = yaff.System.from_file(str(rd / "MIL53.chk"))
         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
@@ -266,8 +267,8 @@ if __name__ == "__main__":
     config(cluster="doduo", max_blocks=10)
 
     # md = mil53_yaff()
-    md = ase_yaff()
-    # md = alanine_dipeptide_yaff()
+    # md = ase_yaff()
+    md = alanine_dipeptide_yaff()
     # with jax.disable_jit():
     md.run(1000)
 

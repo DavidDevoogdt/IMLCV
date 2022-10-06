@@ -8,13 +8,13 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from time import time
 
 import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
-from molmod.units import angstrom, bar, electronvolt
-from tabulate import tabulate
+from molmod.units import bar
 
 import yaff.analysis.biased_sampling
 import yaff.external
@@ -134,7 +134,7 @@ class TrajectoryInfo:
 
     # static_info: StaticTrajectoryInfo | None = None
 
-    _items_scal = ["t", "e_pot"]
+    _items_scal = ["t", "e_pot", "T", "P", "err"]
     _items_vec = ["positions", "cell", "gpos", "vtens", "charges"]
     # _items_stat = ["static_info"]
 
@@ -328,6 +328,8 @@ class MDEngine(ABC):
             self.sp = sp
         self.trajectory_file = trajectory_file
 
+        self.time0 = time()
+
     @property
     def sp(self) -> SystemParams:
         return self.energy.sp
@@ -394,10 +396,20 @@ class MDEngine(ABC):
 
     def hook(self, ti: TrajectoryInfo):
 
-        if self.step == 0:
-            print( f"{ 'cons err':^10 }|{'P[bar]':^10}|{'T[K]':^10}|walltime[s]"  )
+        if self.step == 1:
+
+            str = f"{ 'cons err': ^10s}"
+            if ti.P is not None:
+                str += f"|{'P[bar]': ^10s}"
+            str += f"|{'T[K]': ^10s}|{'walltime[s]': ^10s}"
+            print(str, sep="")
+            print(f"{'='*len(str)}")
         else:
-            print( f"{  ti.err :<10 }|{ ti.P :<10}|{ ti.T :<10}|walltime[s]"  )
+            str = f"{  ti.err[0] :>6.4f}"
+            if ti.P is not None:
+                str += f"|{ ti.P[0]/bar :>8.2f}"
+            str += f"|{ ti.T[0] :>8.2f}|{ time()-self.time0 :>8.2f}"
+            print(str)
 
         # write step to trajectory
         if self.trajectory_info is None:
@@ -449,19 +461,21 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         )
 
     def __call__(self, iterative: VerletIntegrator):
-        self.hook(
-            TrajectoryInfo(
-                positions=iterative.pos,
-                cell=iterative.rvecs,
-                gpos=iterative.gpos,
-                t=iterative.time,
-                e_pot=iterative.epot,
-                vtens=iterative.vtens,
-                T=iterative.T,
-                P=iterative.P,
-                err=iterative.cons_err
-            )
+
+        kwargs = dict(
+            positions=iterative.pos,
+            cell=iterative.rvecs,
+            gpos=iterative.gpos,
+            t=iterative.time,
+            e_pot=iterative.epot,
+            vtens=iterative.vtens,
+            T=iterative.temp,
+            err=iterative.cons_err,
         )
+        if hasattr(iterative, "press"):
+            kwargs["P"] = iterative.press
+
+        self.hook(TrajectoryInfo(**kwargs))
 
     def _setup_verlet(self):
 
@@ -623,27 +637,27 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 vtens is not None,
             )
 
-            arr = []
-            arr.append(["energy [angstrom]", ener.energy, ener_bias.energy])
-            if gpos is not None:
-                arr.append(
-                    [
-                        "|gpos| [eV/angstrom]",
-                        jnp.linalg.norm(ener.gpos),
-                        jnp.linalg.norm(ener_bias.gpos),
-                    ]
-                )
+            # arr = []
+            # arr.append(["energy [angstrom]", ener.energy, ener_bias.energy])
+            # if gpos is not None:
+            #     arr.append(
+            #         [
+            #             "|gpos| [eV/angstrom]",
+            #             jnp.linalg.norm(ener.gpos),
+            #             jnp.linalg.norm(ener_bias.gpos),
+            #         ]
+            #     )
 
-            if vtens is not None:
-                arr.append(
-                    [
-                        "P [bar]",
-                        ener.vtens / self.system.cell.volume / bar,
-                        ener_bias.vtens / self.system.cell.volume / bar,
-                    ]
-                )
+            # if vtens is not None:
+            #     arr.append(
+            #         [
+            #             "P [bar]",
+            #             ener.vtens / self.system.cell.volume / bar,
+            #             ener_bias.vtens / self.system.cell.volume / bar,
+            #         ]
+            #     )
 
-            print(tabulate(arr, headers=["", "Energy", "Bias"]))
+            # print(tabulate(arr, headers=["", "Energy", "Bias"]))
 
             total_energy = ener + ener_bias
 

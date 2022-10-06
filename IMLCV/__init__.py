@@ -11,6 +11,7 @@ import jax
 import tensorflow as tf
 from jax.interpreters import batching
 
+import yaff
 from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 
 # from yaff.log import log
@@ -20,6 +21,7 @@ ROOT_DIR = Path(os.path.dirname(__file__)).parent
 if "mpi4py" in sys.modules:
     warning("mpi4py doens't work wel lwith cp2k calc atm")
 
+yaff.log.set_level(yaff.log.silent)
 
 name = getpass.getuser()
 if name == "vsc43693":
