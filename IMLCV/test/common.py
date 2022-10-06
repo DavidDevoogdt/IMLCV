@@ -112,6 +112,8 @@ def mil53_yaff():
         ),
     )
 
+    print(f"{1400 * angstrom**3}")
+
     energy = YaffEnergy(f=f)
 
     st = StaticTrajectoryInfo(
@@ -119,7 +121,7 @@ def mil53_yaff():
         P=P,
         timestep=1.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=500.0 * units.femtosecond,
+        timecon_baro=200.0 * units.femtosecond,
         write_step=1,
         atomic_numbers=energy.ff.system.numbers,
     )
@@ -191,11 +193,7 @@ def ase_yaff():
 
     print(f"{cv.metric.bounding_box}")
 
-    # bias = NoneBias(cvs=cv)
-
-    bias = HarmonicBias(
-        cvs=cv, q0=jnp.array([0 * angstrom, 6.3 * angstrom]), k=5 * kjmol
-    )
+    bias = NoneBias(cvs=cv)
 
     tic = StaticTrajectoryInfo(
         write_step=1,
@@ -265,8 +263,8 @@ if __name__ == "__main__":
 
     config(cluster="doduo", max_blocks=10)
 
-    # md = mil53_yaff()
-    md = ase_yaff()
+    md = mil53_yaff()
+    # md = ase_yaff()
     # md = alanine_dipeptide_yaff()
     # with jax.disable_jit():
     md.run(1000)

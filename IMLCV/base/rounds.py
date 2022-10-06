@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 from abc import ABC
 from collections.abc import Iterable
+from ctypes import Union
 from dataclasses import dataclass
 from functools import partial
 from threading import Lock
 
+import ase
 import dill
 import h5py
 import jax.numpy as jnp
@@ -262,6 +264,62 @@ class RoundsMd(Rounds):
     def _validate(self, md: MDEngine):
 
         pass
+
+    def iter_atoms(
+        self, r: int | None = None, num: int = 3
+    ) -> Union[ase.Atoms, Rounds.Round, Rounds.Trajectory]:
+
+        from molmod import angstrom
+
+        for round, trajejctory in self.iter(r=r, num=num):
+
+            traj = trajejctory.ti
+
+            pos_A = traj.positions / angstrom
+            pbc = traj.cell is not None
+            if pbc:
+                cell_A = traj.cell / angstrom
+                # vol_A3 = traj.volume / angstrom**3
+                # vtens_eV = traj.vtens / electronvolt
+                # stresses_eVA3 = vtens_eV / vol_A3
+
+                atoms = [
+                    ase.Atoms(
+                        masses=round.tic.masses,
+                        positions=pos,
+                        pbc=pbc,
+                        cell=cell,
+                    )
+                    for pos, cell in zip(pos_A, cell_A)
+                ]
+                # atoms.info["stress"] = stresses_eVA3
+            else:
+                atoms = [
+                    ase.Atoms(
+                        numbers=round.tic.atomic_numbers,
+                        masses=round.tic.masses,
+                        positions=positions,
+                    )
+                    for positions in pos_A
+                ]
+
+            # if traj.gpos is not None:
+            #     atoms.arrays["forces"] = -traj.gpos * angstrom / electronvolt
+            # if traj.e_pot is not None:
+            #     atoms.info["energy"] = traj.e_pot / electronvolt
+
+            yield atoms, round, trajejctory
+
+    def write_xyz(self, r: int | None = None, num: int = 3):
+
+        from ase.io.extxyz import write_extxyz
+
+        for i, (atoms, round, trajejctory) in enumerate(self.iter_atoms()):
+            with open(
+                f"{self.folder}/round_{ round.round }/temp_{ trajejctory.num}/trajectory.xyz",
+                mode="a",
+            ) as f:
+                write_extxyz(f, atoms)
 
     def new_round(self, md: MDEngine):
 

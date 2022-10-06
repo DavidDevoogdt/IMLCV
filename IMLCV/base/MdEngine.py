@@ -9,12 +9,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-import ase
 import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
-from molmod.units import angstrom, electronvolt
+from molmod.units import bar
+from tabulate import tabulate
 
 import yaff.analysis.biased_sampling
 import yaff.external
@@ -404,39 +404,6 @@ class MDEngine(ABC):
 
         self.step += 1
 
-    def to_ASE_traj(self) -> ase.Atoms:
-        traj = self.get_trajectory()
-
-        # assert traj.static_info is not None
-
-        pos_A = traj.positions / angstrom
-        pbc = traj.cell is not None
-        if pbc:
-            cell_A = traj.cell / angstrom
-            vol_A3 = traj.volume / angstrom**3
-            vtens_eV = traj.vtens / electronvolt
-            stresses_eVA3 = vtens_eV / vol_A3
-
-            atoms = ase.Atoms(
-                masses=self.static_trajectory_info.masses,
-                positions=pos_A,
-                pbc=pbc,
-                cell=cell_A,
-            )
-            atoms.info["stress"] = stresses_eVA3
-        else:
-            atoms = ase.Atoms(
-                masses=self.static_trajectory_info.masses,
-                positions=pos_A,
-            )
-
-        if traj.gpos is not None:
-            atoms.arrays["forces"] = -traj.gpos * angstrom / electronvolt
-        if traj.e_pot is not None:
-            atoms.info["energy"] = traj.e_pot / electronvolt
-
-        return atoms
-
 
 class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     """MD engine with YAFF as backend.
@@ -643,6 +610,28 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 gpos is not None,
                 vtens is not None,
             )
+
+            arr = []
+            arr.append(["energy [angstrom]", ener.energy, ener_bias.energy])
+            if gpos is not None:
+                arr.append(
+                    [
+                        "|gpos| [eV/angstrom]",
+                        jnp.linalg.norm(ener.gpos),
+                        jnp.linalg.norm(ener_bias.gpos),
+                    ]
+                )
+
+            if vtens is not None:
+                arr.append(
+                    [
+                        "P [bar]",
+                        ener.vtens / self.system.cell.volume / bar,
+                        ener_bias.vtens / self.system.cell.volume / bar,
+                    ]
+                )
+
+            print(tabulate(arr, headers=["", "Energy", "Bias"]))
 
             total_energy = ener + ener_bias
 

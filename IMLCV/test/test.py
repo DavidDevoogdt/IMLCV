@@ -53,6 +53,7 @@ def test_cv_discovery(
                     outdim=3,
                 )
             )
+            kwargs={}
         case "UMAP":
 
             cvd = CVDiscovery(
@@ -85,7 +86,7 @@ def test_cv_discovery(
 
     scheme0.update_CV(
         samples=1e3,
-
+        **kwargs,
     )
 
 
