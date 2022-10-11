@@ -13,11 +13,11 @@
 ! ********************************************
 ! WHAT KIND OF CALCULATION WILL YOU PERFORM ?
 ! ********************************************
-&GLOBAL
-  PROJECT       md
-  RUN_TYPE      MD 
-  PRINT_LEVEL   LOW                
-&END GLOBAL
+!&GLOBAL
+!  PROJECT       md
+!  RUN_TYPE      MD 
+!  PRINT_LEVEL   LOW                
+!&END GLOBAL
 
 
 ! ********************************************
@@ -27,64 +27,64 @@
 !  - ...
 ! ********************************************
 
-&MOTION
-  &MD
-    ENSEMBLE                      NPT_F
-    STEPS                         10000000
-    TIMESTEP                      2    
-    TEMPERATURE                   300
-    STEP_START_VAL 0
-    &THERMOSTAT
-      TYPE  NOSE
-      REGION  GLOBAL
-      &NOSE
-        MTS  1
-        LENGTH  3
-        TIMECON  100
-      &END NOSE
-    &END THERMOSTAT
-    &BAROSTAT
-      PRESSURE [MPa]  0.1
-      TIMECON  500                     
-      &THERMOSTAT
-        TYPE  SAME_AS_PARTICLE
-      &END THERMOSTAT
-    &END BAROSTAT
-  &END MD
-  &PRINT
-     &TRAJECTORY  
-       FORMAT  XMOL
-       &EACH
-         MD  1
-       &END EACH
-     &END TRAJECTORY
-     &CELL
-       &EACH
-         MD  1
-       &END EACH
-     &END CELL
-     &FORCES
-       &EACH
-         MD  1
-       &END EACH
-     &END FORCES
-     &STRESS
-       &EACH
-         MD  1
-       &END EACH
-     &END STRESS
-      &VELOCITIES
-       &EACH
-         MD  1
-       &END EACH
-     &END VELOCITIES
-     &RESTART_HISTORY  SILENT
-       &EACH
-         MD  1000
-       &END EACH
-     &END RESTART_HISTORY
-   &END PRINT
-&END MOTION
+!&MOTION
+!  &MD
+!    ENSEMBLE                      NPT_F
+!    STEPS                         10000000
+!    TIMESTEP                      2    
+!    TEMPERATURE                   300
+!    STEP_START_VAL 0
+!    &THERMOSTAT
+!      TYPE  NOSE
+!      REGION  GLOBAL
+!      &NOSE
+!        MTS  1
+!        LENGTH  3
+!        TIMECON  100
+!      &END NOSE
+!    &END THERMOSTAT
+!    &BAROSTAT
+!      PRESSURE [MPa]  0.1
+!      TIMECON  500                     
+!      &THERMOSTAT
+!        TYPE  SAME_AS_PARTICLE
+!      &END THERMOSTAT
+!    &END BAROSTAT
+!  &END MD
+!  &PRINT
+!     &TRAJECTORY  
+!       FORMAT  XMOL
+!       &EACH
+!         MD  1
+!       &END EACH
+!     &END TRAJECTORY
+!     &CELL
+!       &EACH
+!         MD  1
+!       &END EACH
+!     &END CELL
+!     &FORCES
+!       &EACH
+!         MD  1
+!       &END EACH
+!     &END FORCES
+!     &STRESS
+!       &EACH
+!         MD  1
+!       &END EACH
+!     &END STRESS
+!      &VELOCITIES
+!       &EACH
+!         MD  1
+!       &END EACH
+!     &END VELOCITIES
+!     &RESTART_HISTORY  SILENT
+!       &EACH
+!         MD  1000
+!       &END EACH
+!     &END RESTART_HISTORY
+!   &END PRINT
+!&END MOTION
 
 
 ! ********************************************
@@ -96,22 +96,15 @@
 &FORCE_EVAL
 
 
-  ! ********************************************
-  ! System parameters:
-  ! - cell size, xyz file, ...
-  ! - define how the atoms should be defined
-  ! ********************************************
-!  &SUBSYS
-!    &CELL
-!      A [angstrom]      25.538027      0.556076      0.211255 
-!      B [angstrom]      -0.955573      25.326923      -0.147644 
-!      C [angstrom]      0.207483      -0.152052      25.452899 
-!      PERIODIC                    XYZ          
-!    &END CELL
-!    &TOPOLOGY
-!      COORDINATE XYZ
-!      COORD_FILE_NAME Pos.xyz
-!    &END TOPOLOGY
+! ********************************************
+! System parameters:
+! - cell size, xyz file, ...
+! - define how the atoms should be defined
+! ********************************************
+  &SUBSYS
+
+
+
 
 
     &KIND                         Cs
@@ -132,13 +125,13 @@
 
   &END SUBSYS
 
-
   
-  ! ********************************************
-  ! DFT parameters
-  ! ********************************************
-  METHOD QuickStep
-  STRESS_TENSOR    ANALYTICAL
+  
+! ********************************************
+! DFT parameters
+! ********************************************
+!  METHOD QuickStep
+!  STRESS_TENSOR    ANALYTICAL
 
 
   &DFT
@@ -152,16 +145,16 @@
     &END QS
     
     &MGRID
-      CUTOFF [Ry]  400                 
+      CUTOFF [Ry]  400         
       COMMENSURATE TRUE                     
       NGRIDS 5
     &END MGRID
 
 
     
-    ! ********************************************
-    ! Exchange and Correlation functional
-    ! ********************************************
+! ********************************************
+! Exchange and Correlation functional
+! ********************************************
     &XC                                     
       &XC_FUNCTIONAL               PBE                 #Still wrong functional!!!!!!!!!!
       &END XC_FUNCTIONAL 
@@ -177,9 +170,9 @@
       &END VDW_POTENTIAL
     &END XC
 
-    ! ********************************************
-    ! SCF methods and accuracy
-    ! ********************************************
+! ********************************************
+! SCF methods and accuracy
+! ********************************************
     &SCF
       EPS_SCF 1.0e-5            ! accuracy
       SCF_GUESS RESTART
@@ -193,6 +186,19 @@
     &END SCF
 
   &END DFT
-
+  
+!**********
+! set by ASE
+!**********  
+!    &CELL
+!      A [angstrom]      25.538027      0.556076      0.211255 
+!      B [angstrom]      -0.955573      25.326923      -0.147644 
+!      C [angstrom]      0.207483      -0.152052      25.452899 
+!      PERIODIC                    XYZ          
+!    &END CELL
+!    &TOPOLOGY
+!      COORDINATE XYZ
+!      COORD_FILE_NAME Pos.xyz
+!    &END TOPOLOGY
 
 &END FORCE_EVAL

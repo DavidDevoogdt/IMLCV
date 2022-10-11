@@ -396,18 +396,20 @@ class MDEngine(ABC):
     def hook(self, ti: TrajectoryInfo):
 
         if self.step == 1:
-
-            str = f"{ 'cons err': ^10s}"
+            str = f"{ 'step': ^10s}"
+            str += f"|{ 'cons err': ^10s}"
             if ti.P is not None:
                 str += f"|{'P[bar]': ^10s}"
             str += f"|{'T[K]': ^10s}|{'walltime[s]': ^10s}"
             print(str, sep="")
             print(f"{'='*len(str)}")
-        else:
-            str = f"{  ti.err[0] :>6.4f}"
+
+        if self.step % self.static_trajectory_info.screen_log == 0:
+            str = f"{  self.step : >10d}"
+            str += f"|{  ti.err[0] : >10.4f}"
             if ti.P is not None:
-                str += f"|{ ti.P[0]/bar :>8.2f}"
-            str += f"|{ ti.T[0] :>8.2f}|{ time()-self.time0 :>8.2f}"
+                str += f" { ti.P[0]/bar : >10.2f}"
+            str += f" { ti.T[0] : >10.2f} { time()-self.time0 : >10.2f}"
             print(str)
 
         # write step to trajectory

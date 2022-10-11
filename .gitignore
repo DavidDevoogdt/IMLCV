@@ -60,3 +60,5 @@ build/lib/IMLCV/*
 python_lib/*
 IMLCV/bash_python_app/*
 output/test_cv_disc_perov/round_0/*
+venv_test/*
+nohup.out

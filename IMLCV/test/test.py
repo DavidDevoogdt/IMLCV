@@ -51,7 +51,7 @@ def test_cv_discovery(
     k=5 * kjmol,
     cvd="AE",
 ):
-    do_conf()
+    # do_conf()
 
     if cvd == "AE":
         cvd = CVDiscovery(
@@ -268,7 +268,7 @@ def test_bias_save(full_name):
 def test_ala_dipep_FES(
     name="ala6", find_metric=False, restart=True, max_energy=70 * kjmol
 ):
-    do_conf()
+    # do_conf()
     if restart:
 
         if os.path.isfile(f"output/{name}/rounds"):
@@ -343,6 +343,8 @@ if __name__ == "__main__":
         k = 10 * kjmol
         name = "test_cv_disc_perov"
     a = False
+
+    do_conf()
 
     if a:
         test_virial()

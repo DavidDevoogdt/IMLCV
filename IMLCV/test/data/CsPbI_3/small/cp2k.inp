@@ -17,17 +17,13 @@
        MAX_SCF  25
        EPS_SCF  1.0E-06
        SCF_GUESS  RESTART
-!       &DIAGONALIZATION  T
-!         ALGORITHM  STANDARD
-!       &END DIAGONALIZATION
-!       &MIXING  T
-!         METHOD  PULAY_MIXING
-!         ALPHA  0.4
-!       &END MIXING
-      &OT
-        MINIMIZER DIIS
-        PRECONDITIONER FULL_SINGLE_INVERSE
-      &END OT
+       &DIAGONALIZATION  T
+         ALGORITHM  STANDARD
+       &END DIAGONALIZATION
+       &MIXING  T
+         METHOD  BROYDEN_MIXING
+         ALPHA  0.4
+       &END MIXING
       &OUTER_SCF  T
         MAX_SCF  25
         EPS_SCF  1.0E-06

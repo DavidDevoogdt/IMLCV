@@ -10,7 +10,7 @@ def bootstrap_hpc(function):
         config(
             cluster="slaking",
             spawnjob=True,
-            time="24:00:00",
+            time="72:00:00",
         )
 
         future = bash_app_python(function=function)(
@@ -33,7 +33,7 @@ def func(name):
     from IMLCV.external.parsl_conf.config import config
     from IMLCV.test.common import ase_yaff
 
-    config(cluster="doduo", max_blocks=10)
+    config(cluster="doduo", max_blocks=10, mem_per_node=20)
 
     if os.path.exists(f"output/{name}"):
         shutil.rmtree(f"output/{name}")
@@ -46,15 +46,26 @@ def func(name):
     round.write_xyz()
 
 
-if __name__ == "__main__":
-    # out = bootstrap_hpc(test_cv_discovery)(
-    #     name="hpc_perovskite_6",
-    #     md=ase_yaff(),
-    #     recalc=True,
-    #     steps=500,
-    #     k=0.5 * kjmol,
-    # )
+def f():
+    from molmod.units import kjmol
 
-    out = bootstrap_hpc(func)(
-        name="hpc_perovskite_unbiased",
+    from IMLCV.external.parsl_conf.config import config
+    from IMLCV.test.common import ase_yaff
+    from IMLCV.test.test import test_cv_discovery
+
+    config(cluster="doduo", time="48:00:00", mem_per_node=20)
+    test_cv_discovery(
+        name="hpc_perovskite_biased_04",
+        md=ase_yaff(small=True),
+        recalc=True,
+        steps=1000,
+        k=10 * kjmol,
     )
+
+
+if __name__ == "__main__":
+    out = bootstrap_hpc(f)()
+
+    # out = bootstrap_hpc(func)(
+    #     name="hpc_perovskite_unbiased",
+    # )

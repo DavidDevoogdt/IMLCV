@@ -135,12 +135,14 @@ def mil53_yaff():
     return yaffmd
 
 
-def ase_yaff():
+def ase_yaff(small=True):
 
-    base = ROOT_DIR / "IMLCV" / "test/data/CsPbI_3"
+    base = ROOT_DIR / "IMLCV" / "test" / "data" / "CsPbI_3"
 
-    # make CP2K ase calculator
-    path_atoms = base / "Pos.xyz"
+    fb = base / "small" if small else "large"
+
+    path_atoms = fb / "Pos.xyz"
+
     with open(path_atoms) as f:
         atoms = ase.io.read(f)
 
@@ -158,20 +160,10 @@ def ase_yaff():
 
     energy = Cp2kEnergy(
         atoms=atoms,
-        input_file=base / "cp2k.inp",
+        input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
-        auto_write=True,
-        basis_set=None,
         command=CP2K_COMMAND,
-        cutoff=800 * ase.units.Rydberg,
         stress_tensor=True,
-        print_level="LOW",
-        pseudo_potential=None,
-        max_scf=None,
-        xc=None,
-        basis_set_file=None,
-        charge=None,
-        potential_file=None,
         debug=False,
     )
 
@@ -189,7 +181,7 @@ def ase_yaff():
         f=f,
         metric=Metric(
             periodicities=[False, False],
-            bounding_box=jnp.array([[0.0, 3.0], [6.0, 7.0]]) * angstrom,
+            bounding_box=jnp.array([[0.0, 4.0], [5.5, 8.5]]) * angstrom,
         ),
     )
 
@@ -205,7 +197,7 @@ def ase_yaff():
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=500.0 * units.femtosecond,
         atomic_numbers=energy.atoms.get_atomic_numbers(),
-        equilibration=0.0,
+        equilibration=200.0 * units.femtosecond,
         screen_log=1,
     )
 
@@ -266,8 +258,8 @@ if __name__ == "__main__":
     config(cluster="doduo", max_blocks=10)
 
     # md = mil53_yaff()
-    # md = ase_yaff()
-    md = alanine_dipeptide_yaff()
+    md = ase_yaff()
+    # md = alanine_dipeptide_yaff()
     # with jax.disable_jit():
     md.run(1000)
 

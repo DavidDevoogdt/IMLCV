@@ -34,6 +34,7 @@ def config(
     max_blocks=10,
     spawnjob=False,
     time="12:00:00",
+    mem_per_node=10,
 ):
 
     if parsl.DataFlowKernelLoader._dfk is not None:
@@ -96,7 +97,7 @@ def config(
             kwargs["launcher"] = SingleNodeLauncher()
             kwargs["max_blocks"] = 20
             kwargs["nodes_per_block"] = 1
-            kwargs["mem_per_node"] = 3
+            kwargs["mem_per_node"] = mem_per_node
             plabel = f"hpc_{cluster}"
             max_workers = 100
             cores_per_worker = CP2K_THREADS

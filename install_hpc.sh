@@ -5,7 +5,6 @@ ml CP2K/8.2-foss-2021a
 
 unset PYTHONPATH
 
-
 [ -d "Miniconda3" ] && rm -rf Miniconda3
 [ -d "src" ] && rm -rf src
 

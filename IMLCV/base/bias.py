@@ -310,21 +310,22 @@ class AseEnergy(Energy):
 
 
 class Cp2kEnergy(AseEnergy):
+    # override default params, only if explicitly set
     default_parameters = dict(
         auto_write=False,
         basis_set=None,
         basis_set_file=None,
-        charge=0,
-        cutoff=400 * ase.units.Rydberg,
-        force_eval_method="Quickstep",
+        charge=None,
+        cutoff=None,
+        force_eval_method=None,
         inp="",
-        max_scf=50,
+        max_scf=None,
         potential_file=None,
-        pseudo_potential="auto",
+        pseudo_potential=None,
         stress_tensor=True,
         uks=False,
-        poisson_solver="auto",
-        xc="LDA",
+        poisson_solver=None,
+        xc=None,
         print_level="LOW",
     )
 
