@@ -1,4 +1,3 @@
-import itertools
 import os
 import tempfile
 from importlib import import_module
@@ -329,14 +328,7 @@ def test_grid_selection(name="point_selection", recalc=False):
         steps=5000,
     )
 
-    for r, t in scheme.rounds.iter(num=1):
-        bias = t.get_bias()
-        cv = bias.collective_variable.compute_cv(t.ti.sp)
-
-        grid = bias.collective_variable.metric.grid(20)
-
-        for a in itertools.product(*grid):
-            print(a)
+    scheme.grid_umbrella(n=5)
 
 
 if __name__ == "__main__":
@@ -369,4 +361,4 @@ if __name__ == "__main__":
             steps=1e4,
         )
 
-    test_grid_selection(recalc=False)
+        test_grid_selection(recalc=True)

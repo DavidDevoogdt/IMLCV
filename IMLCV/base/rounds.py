@@ -17,6 +17,7 @@ from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
 from IMLCV.base.bias import Bias, CompositeBias, NoneBias
+from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
@@ -366,7 +367,13 @@ class RoundsMd(Rounds):
     def run(self, bias, steps):
         self.run_par([bias], steps)
 
-    def run_par(self, biases: Iterable[Bias], steps, plot=True):
+    def run_par(
+        self,
+        biases: Iterable[Bias],
+        steps,
+        sp: Iterable[SystemParams] | None = None,
+        plot=True,
+    ):
         with self.lock:
             f = self.h5file
             # with h5py.File(self.h5file, 'r') as f:
@@ -397,12 +404,27 @@ class RoundsMd(Rounds):
             traj_name = f"{temp_name}/trajectory_info.h5"
 
             @bash_app_python
-            def run(steps: int, folder=temp_name, inputs=[], outputs=[]):
+            def run(
+                steps: int,
+                sp: SystemParams | None,
+                folder=temp_name,
+                inputs=[],
+                outputs=[],
+            ):
 
                 bias = Bias.load(inputs[1].filepath)
-                md = MDEngine.load(
-                    inputs[0].filepath, bias=bias, trajectory_file=outputs[1].filepath
+
+                print("loading umbrella with sp = {sp}")
+
+                kwargs = dict(
+                    bias=bias,
+                    trajectory_file=outputs[1].filepath,
                 )
+
+                if sp is not None:
+                    kwargs["sp"] = sp
+
+                md = MDEngine.load(inputs[0].filepath, **kwargs)
                 md.run(steps)
                 bias.save(outputs[0].filepath)
                 d = md.get_trajectory()
@@ -422,6 +444,7 @@ class RoundsMd(Rounds):
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
             future = run(
+                sp=sp[i] if sp is not None else None,
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),

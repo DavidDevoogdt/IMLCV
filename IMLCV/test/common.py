@@ -67,7 +67,7 @@ def alanine_dipeptide_yaff():
             dtype=int,
         ),
         screen_log=1000,
-        equilibration=1000 * units.femtosecond,
+        equilibration=0 * units.femtosecond,
     )
 
     mde = YaffEngine(

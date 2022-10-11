@@ -77,7 +77,7 @@ class SystemParams:
         s = self.batch()
         o = other.batch()
 
-        assert s.shape[1, :] == o.shape[1:]
+        assert s.shape[1:] == o.shape[1:]
 
         return SystemParams(
             coordinates=jnp.vstack([s.coordinates, o.coordinates]),
@@ -137,6 +137,13 @@ class CV:
             batched=True,
             mapped=self.mapped,
         )
+
+    @property
+    def dim(self):
+        if self.batched:
+            return self.cv.shape[1]
+        else:
+            return self.cv.shape[0]
 
 
 class Metric:

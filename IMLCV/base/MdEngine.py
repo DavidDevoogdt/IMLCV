@@ -309,7 +309,6 @@ class MDEngine(ABC):
         self,
         bias: Bias,
         energy: Energy,
-        # sp: SystemParams,
         static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
         sp: SystemParams | None = None,
@@ -357,7 +356,7 @@ class MDEngine(ABC):
 
         # replace and add kwargs
         for key in kwargs.keys():
-            self.__dict__[key] = kwargs[key]
+            self.__setattr__(key, kwargs[key])
 
         return self
 
@@ -438,8 +437,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         bias: Bias,
         static_trajectory_info: StaticTrajectoryInfo,
         energy: Energy,
-        # sp: SystemParams|None = None,
-        # log_level=log.medium,
         trajectory_file=None,
         sp: SystemParams | None = None,
     ) -> None:

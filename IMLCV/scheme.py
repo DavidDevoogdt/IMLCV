@@ -100,6 +100,37 @@ class Scheme:
             k = 2 * self.md.static_trajectory_info.T * boltzmann
         k *= n**2
 
+        # select reasonable start point
+        if self.rounds.round != 0:
+            cv = None
+            sp = None
+            colvar = None
+
+            for r, t in self.rounds.iter(num=2):
+                if colvar is None:
+                    colvar = t.get_bias().collective_variable
+
+                sp0 = t.ti.sp
+                cv0, _ = colvar.compute_cv(sp0)
+                if cv is None:
+                    sp = sp0
+                    cv = cv0
+                else:
+                    sp += sp0
+                    cv += cv0
+
+            def f(a):
+                spa = sp[
+                    jnp.argmin(
+                        colvar.metric.norm(cv, CV(cv=jnp.array(a), batched=False))
+                    )
+                ]
+                return spa
+
+            out = [f(a) for a in itertools.product(*grid)]
+        else:
+            out = None
+
         self.rounds.run_par(
             [
                 CompositeBias(
@@ -114,6 +145,7 @@ class Scheme:
                 )
                 for cv in itertools.product(*grid)
             ],
+            sp=out,
             steps=steps,
         )
 
