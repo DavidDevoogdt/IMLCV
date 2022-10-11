@@ -1,3 +1,4 @@
+import itertools
 import os
 import tempfile
 from importlib import import_module
@@ -19,7 +20,15 @@ from IMLCV.base.bias import (
     HarmonicBias,
     YaffEnergy,
 )
-from IMLCV.base.CV import CV, CvFlow, Metric, SystemParams, Volume, dihedral, rotate_2d
+from IMLCV.base.CV import (
+    CollectiveVariable,
+    CvFlow,
+    Metric,
+    SystemParams,
+    Volume,
+    dihedral,
+    rotate_2d,
+)
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
@@ -92,7 +101,7 @@ def test_cv_discovery(
 
 def test_harmonic():
 
-    cvs = CV(
+    cvs = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
         metric=Metric(
             periodicities=[True, True], bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]]
@@ -103,11 +112,11 @@ def test_harmonic():
 
     x = np.random.rand(2)
 
-    a1, _ = bias.compute(np.array([np.pi, np.pi]) + x)
-    a2, _ = bias.compute(np.array([-np.pi, -np.pi] + x))
-    a3, _ = bias.compute(np.array([np.pi, -np.pi]) + x)
-    a4, _ = bias.compute(np.array([-np.pi, np.pi] + x))
-    a5, _ = bias.compute(np.array([np.pi, np.pi]) + x.T)
+    a1, _ = bias.compute_from_cv(np.array([np.pi, np.pi]) + x)
+    a2, _ = bias.compute_from_cv(np.array([-np.pi, -np.pi] + x))
+    a3, _ = bias.compute_from_cv(np.array([np.pi, -np.pi]) + x)
+    a4, _ = bias.compute_from_cv(np.array([-np.pi, np.pi] + x))
+    a5, _ = bias.compute_from_cv(np.array([np.pi, np.pi]) + x.T)
 
     assert pytest.approx(a1, abs=1e-5) == a2
     assert pytest.approx(a1, abs=1e-5) == a3
@@ -119,7 +128,7 @@ def test_virial():
     # virial for volume based CV is V*I(3)
 
     metric = Metric(periodicities=[False])
-    cv0 = CV(f=Volume, metric=metric)
+    cv0 = CollectiveVariable(f=Volume, metric=metric)
     coordinates = np.random.random((10, 3))
     cell = np.random.random((3, 3))
     vir = np.zeros((3, 3))
@@ -129,7 +138,7 @@ def test_virial():
 
     bias = BiasF(cvs=cv0, g=fun)
 
-    e_r: EnergyResult = bias.compute_coor(
+    e_r: EnergyResult = bias.compute_from_system_params(
         SystemParams(coordinates=coordinates, cell=cell), vir=True
     )
     vol = e_r.energy
@@ -142,7 +151,7 @@ def test_grid_bias():
     # bounds = [[0, 3], [0, 3]]
     n = [4, 6]
 
-    cv = CV(
+    cv = CollectiveVariable(
         CvFlow(func=lambda x: x.coordinates),
         Metric(
             periodicities=[False, False],
@@ -170,7 +179,7 @@ def test_grid_bias():
     bias = GridBias(cvs=cv, vals=val)
 
     def c(x, y):
-        return bias.compute(cvs=np.array([x, y]))[0]
+        return bias.compute_from_cv(cvs=np.array([x, y]))[0]
 
     val2 = np.array([c(x, y) for x, y in zip(xcf, ycf)]).reshape(xc.shape)
     assert np.allclose(val, val2)
@@ -191,8 +200,8 @@ def test_yaff_save_load_func(full_name):
     assert pytest.approx(sp1.coordinates) == sp2.coordinates
     assert pytest.approx(sp1.cell) == sp2.cell
     assert (
-        pytest.approx(yaffmd.energy.compute_coor(sp1).energy)
-        == yeet.energy.compute_coor(sp2).energy
+        pytest.approx(yaffmd.energy.compute_from_system_params(sp1).energy)
+        == yeet.energy.compute_from_system_params(sp2).energy
     )
 
     # yeet.run(100)
@@ -202,7 +211,7 @@ def test_combine_bias(full_name):
 
     T = 300 * kelvin
 
-    cv0 = CV(
+    cv0 = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
         metric=Metric(
             periodicities=[True, True],
@@ -250,8 +259,8 @@ def test_bias_save(full_name):
 
     cvs = np.array([0.0, 0.0])
 
-    [b, db] = yaffmd.bias.compute(cvs=cvs, diff=True)
-    [b2, db2] = bias.compute(cvs=cvs, diff=True)
+    [b, db] = yaffmd.bias.compute_from_cv(cvs=cvs, diff=True)
+    [b2, db2] = bias.compute_from_cv(cvs=cvs, diff=True)
 
     assert pytest.approx(b) == b2
     assert pytest.approx(db[0]) == db2[0]
@@ -271,7 +280,7 @@ def test_ala_dipep_FES(
         T = 300 * units.kelvin
 
         if not find_metric:
-            cvs = CV(
+            cvs = CollectiveVariable(
                 f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
                 metric=Metric(
                     periodicities=[True, True],
@@ -281,7 +290,7 @@ def test_ala_dipep_FES(
         else:
             d = np.sqrt(2) * np.pi * 1.05
 
-            cvs = CV(
+            cvs = CollectiveVariable(
                 f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16]))
                 * rotate_2d(alpha=np.pi / 4)
                 * rotate_2d(alpha=np.pi / 8),
@@ -308,6 +317,28 @@ def test_ala_dipep_FES(
     scheme.round(steps=2e4, rnds=10, n=4, update_metric=find_metric)
 
 
+def test_grid_selection(name="point_selection", recalc=False):
+    do_conf()
+
+    md = alanine_dipeptide_yaff()
+    scheme = get_FES(
+        name=name,
+        engine=md,
+        cvd=None,
+        recalc=recalc,
+        steps=5000,
+    )
+
+    for r, t in scheme.rounds.iter(num=1):
+        bias = t.get_bias()
+        cv = bias.collective_variable.compute_cv(t.ti.sp)
+
+        grid = bias.collective_variable.metric.grid(20)
+
+        for a in itertools.product(*grid):
+            print(a)
+
+
 if __name__ == "__main__":
 
     if LOCAL:
@@ -330,10 +361,12 @@ if __name__ == "__main__":
         # test_unbiasing()
         test_cv_discovery(md=md(), recalc=True)
 
-    test_cv_discovery(
-        name=name,
-        md=md(),
-        recalc=False,
-        k=k,
-        steps=1e4,
-    )
+        test_cv_discovery(
+            name=name,
+            md=md(),
+            recalc=True,
+            k=k,
+            steps=1e4,
+        )
+
+    test_grid_selection(recalc=False)

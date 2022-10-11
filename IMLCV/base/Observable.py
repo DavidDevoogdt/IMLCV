@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 from molmod.units import picosecond
 from parsl import File
 
-from IMLCV.base.bias import Bias, BiasF, CompositeBias, CvMonitor, GridBias, plot_app
+from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, plot_app
+from IMLCV.base.CV import CV
 from IMLCV.base.rounds import RoundsCV, RoundsMd
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergySurface2D
@@ -18,12 +18,13 @@ class Observable:
     observables."""
 
     samples_per_bin = 20
+
     time_per_bin = 2 * picosecond
 
     def __init__(self, rounds: RoundsMd) -> None:
         self.rounds = rounds
 
-        self.cvs = self.rounds.get_bias().cvs
+        self.cvs = self.rounds.get_bias().collective_variable
 
         self.folder = rounds.folder
 
@@ -49,24 +50,17 @@ class Observable:
                 bias = trajectory.get_bias()
 
                 if cv is None:
-                    cv = bias.cvs
+                    cv = bias.collective_variable
                 sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
 
-                # execute all the mappings
-                cvs = cv.compute(sp, map=False)[0]
-                cvs_mapped = jax.jit(jax.vmap(cv.metric.map))(cvs)
+                cvs, _ = cv.compute_cv(sp)
 
-                arr = np.array(
-                    cvs,
-                    dtype=np.double,
-                )
-                arr_mapped = np.array(
-                    cvs_mapped,
-                    dtype=np.double,
-                )
+                # arr = np.array(
+                #     cvs.cv,
+                #     dtype=np.double,
+                # )
 
-                trajs_mapped.append(arr_mapped)
-                trajs.append(arr)
+                trajs.append(cvs)
 
                 biases.append(Observable._ThermoBias2D(bias))
 
@@ -80,15 +74,23 @@ class Observable:
                     stderr=f"{directory}/combined_unmapped.stderr",
                 )
 
-                plot_app(
-                    bias=common_bias,
-                    outputs=[File(f"{directory}/combined.pdf")],
-                    traj=trajs_mapped,
+                # plot_app(
+                #     bias=common_bias,
+                #     outputs=[File(f"{directory}/combined.pdf")],
+                #     traj=trajs_mapped,
+                # )
+
+            trajs_mapped = [
+                np.array(
+                    traj.cv,
+                    dtype=np.double,
                 )
+                for traj in trajs
+            ]
 
             # todo: take actual bounds instead of calculated bounds
             bounds, bins = self._FES_mg(
-                trajs=trajs_mapped, bounding_box=cv.metric.bounding_box
+                trajs=trajs, bounding_box=cv.metric.bounding_box
             )
 
             histo = Histogram2D.from_wham_c(
@@ -98,6 +100,7 @@ class Observable:
                 error_estimate="mle_f",
                 biasses=biases,
                 temp=temp,
+                verbosity="high",
             )
 
         elif isinstance(self.rounds, RoundsCV):
@@ -110,14 +113,14 @@ class Observable:
                     cell = dictionary["cell"][:]
                     arr = np.array(
                         [
-                            self.cvs.compute(coordinates=x, cell=y)[0]
+                            self.cvs.compute_cv(coordinates=x, cell=y)[0]
                             for (x, y) in zip(pos, cell)
                         ],
                         dtype=np.double,
                     )
                 else:
                     arr = np.array(
-                        [self.cvs.compute(coordinates=p, cell=None)[0] for p in pos],
+                        [self.cvs.compute_cv(coordinates=p, cell=None)[0] for p in pos],
                         dtype=np.double,
                     )
 
@@ -160,7 +163,7 @@ class Observable:
         for run_data in self.rounds.iter(num=1, r=r):
             bias = Bias.load(run_data["attr"]["name_bias"])
             if cvs is None:
-                cvs = bias.cvs
+                cvs = bias.collective_variable
 
             monitor = find_monitor(bias)
             assert monitor is not None
@@ -178,15 +181,15 @@ class Observable:
 
         return cvs.metric.update_metric(transitions, fn=fn)
 
-    def _FES_mg(self, trajs, bounding_box, n=None):
+    def _FES_mg(self, trajs: list[CV], bounding_box, n=None):
 
         if n is None:
             n = 0
             for t in trajs:
-                n += t.size
+                n += t.cv.size
 
             # 20 points per bin on average
-            n = int(n ** (1 / trajs[0].ndim) / self.samples_per_bin)
+            n = int(n ** (1 / trajs[0].cv.ndim) / self.samples_per_bin)
 
         # if time is not None:
         #     bins_max = int((time/self.time_per_bin)**(1 / trajs[0].ndim))
@@ -195,12 +198,16 @@ class Observable:
 
         assert n >= 4, "sample more points"
 
-        trajs = np.vstack(trajs)
+        c = trajs[0]
+        for t in trajs[1:]:
+            c += t
 
-        bounds = [[trajs[:, i].min(), trajs[:, i].max()] for i in range(trajs.shape[1])]
+        a = c.cv
+
+        bounds = [[a[:, i].min(), a[:, i].max()] for i in range(a.shape[1])]
         bins = [
-            np.linspace(0, 1, n, endpoint=True, dtype=np.double)
-            for _ in range(trajs.shape[1])
+            np.linspace(mini, maxi, n, endpoint=True, dtype=np.double)
+            for mini, maxi in bounds
         ]
 
         return bounds, bins
@@ -213,14 +220,19 @@ class Observable:
 
         def __call__(self, cv1, cv2):
             # CVs are already in mapped space
+
             cvs = jnp.array([cv1, cv2])
+
+            def f(point):
+                return self.bias.compute_from_cv(
+                    cvs=CV(cv=point, batched=False),
+                    diff=False,
+                )
+
             b, _ = jnp.apply_along_axis(
-                self.bias.compute,
+                f,
                 axis=0,
                 arr=cvs,
-                diff=False,
-                map=False,  # already mapped
-                batched=False,
             )
 
             b = np.array(b, dtype=np.double)
@@ -256,27 +268,27 @@ class Observable:
 
         # fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
         #                            bounds=bounds), T=self.rounds.T)
-        fesBias = GridBias(cvs=self.cvs, vals=fs)
+        fesBias = GridBias(cvs=self.cvs, vals=fs, bounds=bounds)
 
-        fesBias = CompositeBias(
-            biases=[
-                fesBias,
-                BiasF(cvs=fesBias.cvs),
-            ],
-            fun=lambda e: jax.numpy.where(e[0] > e[1], e[0], e[1]),
-        )
+        # fesBias = CompositeBias(
+        #     biases=[
+        #         fesBias,
+        #         BiasF(cvs=fesBias.collective_variable),
+        #     ],
+        #     fun=lambda e: jax.numpy.where(e[0] > e[1], e[0], e[1]),
+        # )
 
         if plot:
-            plot_app(
-                bias=fesBias,
-                outputs=[
-                    File(
-                        f"{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf"
-                    )
-                ],
-                map=False,
-                inverted=True,
-            )
+            # plot_app(
+            #     bias=fesBias,
+            #     outputs=[
+            #         File(
+            #             f"{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf"
+            #         )
+            #     ],
+            #     map=False,
+            #     inverted=True,
+            # )
 
             plot_app(
                 bias=fesBias,

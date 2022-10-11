@@ -6,9 +6,14 @@ from collections.abc import Iterable
 from functools import partial
 from importlib import import_module
 from typing import Callable
+from xmlrpc.client import boolean
 
+import alphashape
 import jax
+
+# import numpy as np
 import jax.numpy as jnp
+import jax.scipy as jsp
 import jax_dataclasses as jdc
 import numpy as np
 import tensorflow
@@ -16,10 +21,14 @@ import tensorflow as tfl
 from jax import jacfwd, jit, vmap
 from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
+from matplotlib import pyplot as plt
 from molmod.units import angstrom
+from scipy.interpolate import RBFInterpolator
+from shapely.geometry import MultiPoint, Point
+from sklearn.cluster import DBSCAN
 
 # from IMLCV.base.MdEngine import StaticTrajectoryInfo
-from IMLCV.base.metric import Metric
+
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
@@ -60,33 +69,223 @@ class SystemParams:
     def shape(self):
         return self.coordinates.shape
 
-    @staticmethod
-    def stack(arr: list[SystemParams]):
-        coordinates = []
-        cell = []
-        has_cell = arr[0].cell is not None
+    def __add__(self, other):
+        assert isinstance(other, SystemParams)
+        if self.cell is None:
+            assert other.cell is None
 
-        for x in arr:
-            coordinates.append(x.coordinates)
+        s = self.batch()
+        o = other.batch()
 
-            if has_cell:
-                assert x.cell is not None
-                cell.append(x.cell)
-            else:
-                assert x.cell is None
+        assert s.shape[1, :] == o.shape[1:]
 
-        ncoordinates = jnp.vstack(coordinates)
-        if has_cell:
-            ncell = jnp.vstack(cell)
-        else:
-            ncell = None
-
-        return SystemParams(coordinates=ncoordinates, cell=ncell)
+        return SystemParams(
+            coordinates=jnp.vstack([s.coordinates, o.coordinates]),
+            cell=self.cell if self.cell is None else jnp.vstack([s.cell, o.cell]),
+        )
 
     def __str__(self):
         str = f"coordinates shape: \n{self.coordinates.shape}"
         if self.cell is not None:
             str += f"\n cell [Angstrom]:\n{self.cell/angstrom }"
+
+    def batch(self) -> SystemParams:
+        if self.batched:
+            return self
+
+        return SystemParams(
+            coordinates=jnp.array([self.coordinates]),
+            cell=self.cell if self.cell is None else jnp.array([self.cell]),
+        )
+
+    def unbatch(self) -> SystemParams:
+        if not self.batched:
+            return self
+        assert self.shape[0] == 1
+        return SystemParams(
+            coordinates=self.coordinates[0, :],
+            cell=self.cell if self.cell is None else self.cell[0, :],
+        )
+
+
+@jdc.pytree_dataclass
+class CV:
+    cv: jnp.ndarray
+    batched: jdc.Static[boolean]
+    mapped: jdc.Static[boolean] = False
+
+    def __post_init__(self):
+        if self.batched and len(self.cv.shape) == 1:
+            self.__dict__["cv"] = self.cv.reshape((*self.cv.shape, 1))
+
+    def batch(self) -> CV:
+        if self.batched:
+            return self
+        return CV(cv=jnp.array([self.cv]), mapped=self.mapped, batched=True)
+
+    def unbatch(self) -> CV:
+        if not self.batched:
+            return self
+        assert self.cv.shape[0] == 1
+        return CV(cv=self.cv[0, :], mapped=self.mapped, batched=False)
+
+    def __add__(self, other):
+        assert isinstance(other, CV)
+        assert self.mapped == other.mapped
+        return CV(
+            cv=jnp.vstack([self.batch().cv, other.batch().cv]),
+            batched=True,
+            mapped=self.mapped,
+        )
+
+
+class Metric:
+    """class to keep track of topology of given CV. Identifies the periodicitie of CVs and maps to unit square with correct peridicities"""
+
+    def __init__(
+        self,
+        periodicities,
+        bounding_box=None,
+        # map_meshgrids=None,
+    ) -> None:
+        if bounding_box is None:
+            bounding_box = jnp.zeros((len(periodicities), 2), jnp.float32)
+            bounding_box = bounding_box.at[:, 1].set(1.0)
+
+        if isinstance(bounding_box, list):
+            bounding_box = jnp.array(bounding_box, dtype=jnp.float32)
+
+        if bounding_box.ndim == 1:
+            bounding_box = jnp.reshape(bounding_box, (1, 2))
+
+        if isinstance(periodicities, list):
+            periodicities = jnp.array(periodicities)
+        assert periodicities.ndim == 1
+
+        self.bounding_box = bounding_box
+        self.periodicities = periodicities
+
+    @partial(jit, static_argnums=(0))
+    def difference(self, x1: CV, x2: CV) -> CV:
+
+        cv = CV(
+            cv=self.__periodic_wrap(self.map(x2).cv - self.map(x1).cv, min=True),
+            mapped=x1.mapped,
+            batched=x1.batched,
+        )
+        if not x1.mapped:
+            cv = self.unmap(cv)
+
+        return cv
+
+    def norm(self, x1: CV, x2: CV, k=None):
+        diff: CV = self.difference(x1=x1, x2=x2)
+        if diff.batched:
+            return jnp.linalg.norm(diff.cv, axis=-1)
+        return jnp.linalg.norm(diff.cv)
+
+    @partial(jit, static_argnums=(0, 2))
+    def __periodic_wrap(self, xs, min=False):
+        """Translate cvs such over unit cell.
+
+        min=True calculates distances, False translates one vector inside box
+        """
+
+        coor = jnp.mod(xs, 1)  # between 0 and 1
+        if min:
+            coor = jnp.where(coor > 0.5, coor - 1, coor)  # between [-0.5,0.5]
+
+        return jnp.where(self.periodicities, coor, xs)
+
+    @partial(jit, static_argnums=(0))
+    def map(self, x: CV) -> CV:
+        """transform CVs to lie in unit square."""
+        if x.mapped:
+            return x
+
+        y = (x.cv - self.bounding_box[:, 0]) / (
+            self.bounding_box[:, 1] - self.bounding_box[:, 0]
+        )
+
+        return CV(cv=self.__periodic_wrap(y, min=False), mapped=True, batched=x.batched)
+
+    @partial(jit, static_argnums=(0))
+    def unmap(self, x: CV) -> CV:
+        """transform CVs to lie in unit square."""
+        if not x.mapped:
+            return x
+
+        y = (
+            x.cv * (self.bounding_box[:, 1] - self.bounding_box[:, 0])
+            + self.bounding_box[:, 0]
+        )
+
+        return CV(cv=y, mapped=False, batched=x.batched)
+
+    def __add__(self, other):
+        assert isinstance(self, Metric)
+        if other is None:
+            return self
+
+        assert isinstance(other, Metric)
+
+        periodicities = jnp.hstack((self.periodicities, other.periodicities))
+        bounding_box = jnp.vstack((self.bounding_box, other.bounding_box))
+
+        return Metric(
+            periodicities=periodicities,
+            bounding_box=bounding_box,
+        )
+
+    def grid(self, n, endpoints=None):
+        """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
+
+        Args:
+            n: number of points in each dim
+            map: boolean. True: work in mapped space (default), False: calculate grid in space without metric
+            endpoints: if
+
+        Returns:
+            meshgrid and vector with distances between points
+
+        """
+
+        if endpoints is None:
+            endpoints = np.array(~self.periodicities)
+        elif isinstance(endpoints, bool):
+            endpoints = np.full(self.periodicities.shape, endpoints)
+
+            # if map:
+            #     b = np.zeros(self.bounding_box.shape)
+            #     b[:, 1] = 1
+            # else:
+        b = self.bounding_box
+
+        assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), "give proper boundaries"
+        grid = [
+            jnp.linspace(row[0], row[1], n, endpoint=endpoints[i])
+            for i, row in enumerate(b)
+        ]
+
+        return grid
+
+    @property
+    def ndim(self):
+        return len(self.periodicities)
+
+    # def _get_mask(self, tol=0.1, interp_mg=None):
+    #     if interp_mg is None:
+    #         assert self.map_meshgrids is not None
+    #         interp_mg = self.map_meshgrids
+    #     else:
+    #         interp_mg = jnp.apply_along_axis(self.map, axis=0, arr=np.array(interp_mg))
+
+    #     m = np.logical_or(
+    #         *[np.logical_or(ip < (-tol), ip > (1 + tol)) for ip in interp_mg]
+    #     )
+    #     mask = np.ones(m.shape)
+    #     mask[m] = np.nan
+    #     return mask
 
 
 sf = Callable[[SystemParams], jnp.ndarray]
@@ -94,16 +293,18 @@ tf = Callable[[jnp.ndarray], jnp.ndarray]
 
 
 class CvTrans:
-    def __init__(self, f: tf, batched=False) -> None:
+    def __init__(self, f: tf) -> None:
         self.f = f
-        self.batched = batched
 
     @partial(jit, static_argnums=(0,))
-    def compute(self, x: jnp.ndarray) -> jnp.ndarray:
-        if self.batched:
-            return self.f(x)
+    def compute_cv_trans(self, x: CV) -> CV:
+
+        assert x.mapped == False
+        # make output batched
+        if x.batched:
+            return CV(cv=vmap(self.f)(x.cv), mapped=False, batched=True)
         else:
-            return vmap(self.f)(x)
+            return CV(cv=self.f(x.cv), mapped=False, batched=False)
 
 
 class CvFlow:
@@ -125,43 +326,31 @@ class CvFlow:
         self.batched = batched
 
     @partial(jit, static_argnums=(0,))
-    def compute(self, x: SystemParams):
+    def compute_cv_flow(self, x: SystemParams) -> CV:
 
-        # make output batched
-        if x.batched:
-            if self.batched:  # fallback for unbatched f0's
-                out = self.f0(x)
-            else:
-                out = jax.lax.map(self.f0, x)
-
-            if len(out.shape) == 1:  # single cv
-                out = out.reshape((*out.shape, 1))
+        if self.batched:
+            out = CV(self.f0(x.batch()), mapped=False, batched=True)
         else:
-            if self.batched:
-                return self.f0(x)
-            else:
-                out = jnp.array([self.f0(x)])
-
-        # prepare for batchehd cftrans
-        if len(out.shape) == 1:
-            out = out.reshape((1, *out.shape))
+            a = jax.lax.map(self.f0, x.batch())
+            out = CV(cv=a, mapped=False, batched=True)
 
         for other in self.f1:
-            out = other.compute(out)
+            out = other.compute_cv_trans(out)
 
-        # undo batching for unbatched systemparams
         if not x.batched:
-            if len(out.shape) == 2:
-                assert out.shape[0] == 1
-                out = out[0, :]
+            out = out.unbatch()
 
         return out
 
     def __add__(self, other):
         assert isinstance(other, CvFlow)
 
-        def f0(x):
-            return jnp.hstack([self.compute(x), other.compute(x)])
+        def f0(x: SystemParams):
+            cv1: CV = self.compute_cv_flow(x)
+            cv2: CV = other.compute_cv_flow(x)
+
+            assert cv1.batched == cv2.batched
+            return jnp.hstack([cv1.cv, cv2.cv])
 
         return CvFlow(func=f0, batched=True)
 
@@ -169,6 +358,62 @@ class CvFlow:
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
 
         return CvFlow(func=self.f0, trans=[*self.f1, other], batched=self.batched)
+
+
+def cvflow(func: sf) -> CvFlow:
+    """decorator to make a CV"""
+    ff = CvFlow(func=func)
+    return ff
+
+
+def cvtrans(f: tf) -> CvTrans:
+    """decorator to make a CV tranformation func"""
+    ff = CvTrans(f=f)
+    return ff
+
+
+class CollectiveVariable:
+    def __init__(self, f: CvFlow, metric: Metric, jac=jacfwd) -> None:
+        "jac: kind of jacobian. Default is jacfwd (more efficient for tall matrices), but functions with custom jvp's only support jacrev"
+
+        self.metric = metric
+        self.f = f
+        self.jac = jac
+
+    @partial(jit, static_argnums=(0, 2, 3))
+    def compute_cv(self, sp: SystemParams, jacobian=False, map=False) -> tuple[CV, CV]:
+
+        if map:
+
+            def cvf(x):
+                return self.metric.map(self.f.compute_cv_flow(x))
+
+        else:
+            cvf = self.f.compute_cv_flow
+
+        if sp.batched:
+            dcv = vmap(self.jac(cvf))
+        else:
+            dcv = self.jac(cvf)
+
+        cv = cvf(sp)
+        dcv = dcv(sp) if jacobian else None
+
+        assert sp.batched == cv.batched
+
+        return (cv, dcv)
+
+    @property
+    def n(self):
+        return self.metric.ndim
+
+    def norm(self, cv0: CV, cv1: CV):
+        return self.metric.difference()
+
+
+######################################
+#       CV transformations           #
+######################################
 
 
 class PeriodicLayer(keras.layers.Layer):
@@ -211,7 +456,7 @@ class KerasTrans(CvTrans):
         self.encoder = encoder
 
     @partial(jit, static_argnums=(0,))
-    def compute(self, cc: jnp.ndarray):
+    def compute_cv_trans(self, cc: jnp.ndarray):
         out = call_tf(self.encoder.call)(cc)
         return out
 
@@ -236,126 +481,12 @@ class KerasTrans(CvTrans):
         self.encoder = model
 
 
-# decorators definition for functions
-
-
-def cvflow(func: sf):
-    """decorator to make a CV"""
-    ff = CvFlow(func=func)
-    return ff
-
-
-def cvtrans(f: tf):
-    """decorator to make a CV tranformation func"""
-    ff = CvTrans(f=f)
-    return ff
-
-
-class CV:
-    def __init__(self, f: CvFlow, metric: Metric, jac=jacfwd) -> None:
-        "jac: kind of jacobian. Default is jacfwd (more efficient for tall matrices), but functions with custom jvp's only support jacrev"
-
-        self.metric = metric
-        self.f = f
-        self.jac = jac
-
-    @partial(jit, static_argnums=(0, 2, 3))
-    def compute(self, sp: SystemParams, jacobian=False, map=False):
-
-        if map:
-
-            def cvf(x):
-                if sp.batched:
-                    return vmap(self.metric.map)(self.f.compute(x))
-                else:
-                    return self.metric.map(self.f.compute(x))
-
-        else:
-            cvf = self.f.compute
-
-        if sp.batched:
-            jac = vmap(self.jac(cvf))
-        else:
-            jac = self.jac(cvf)
-
-        val = cvf(sp)
-        jac = jac(sp) if jacobian else None
-
-        return [val, jac]
-
-    @property
-    def n(self):
-        return self.metric.ndim
-
-
-def dihedral(numbers):
-    """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
-    angle-from-four-points-in-cartesian- coordinates-in-python.
-
-    args:
-        numbers: list with index of 4 atoms that form dihedral
-    """
-
-    @cvflow
-    def f(sp: SystemParams):
-
-        # @partial(vmap, in_axes=(0), out_axes=(0))
-        coor = sp.coordinates
-        p0 = coor[numbers[0]]
-        p1 = coor[numbers[1]]
-        p2 = coor[numbers[2]]
-        p3 = coor[numbers[3]]
-
-        b0 = -1.0 * (p1 - p0)
-        b1 = p2 - p1
-        b2 = p3 - p2
-
-        b1 /= jnp.linalg.norm(b1)
-
-        v = b0 - jnp.dot(b0, b1) * b1
-        w = b2 - jnp.dot(b2, b1) * b1
-
-        x = jnp.dot(v, w)
-        y = jnp.dot(jnp.cross(b1, v), w)
-        return jnp.arctan2(y, x)
-
-    return f
-
-
 @cvflow
 def Volume(sp: SystemParams):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
     vol = jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
     return vol
-
-
-def rotate_2d(alpha):
-    @cvtrans
-    def f(cv):
-        return (
-            jnp.array(
-                [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]]
-            )
-            @ cv
-        )
-
-    return f
-
-
-def scale_cv_trans(array=jnp.ndarray):
-    "axis 0 is batch axis"
-    maxi = jnp.max(array, axis=0)
-    mini = jnp.min(array, axis=0)
-    diff = maxi - mini
-    mask = jnp.abs(diff) > 1e-6
-
-    def f0(x):
-        return (x[mask] - mini[mask]) / diff[mask]
-
-    f = CvTrans(f=f0)
-
-    return f.compute(array), f
 
 
 def coulomb_descriptor_cv_flow(sps: SystemParams, tic, permutation="none"):
@@ -394,4 +525,345 @@ def coulomb_descriptor_cv_flow(sps: SystemParams, tic, permutation="none"):
         # return out[jnp.triu_indices(n)]
         # return g(x.coordinates)
 
-    return h.compute(sps), h
+    return h.compute_cv_flow(sps), h
+
+
+def dihedral(numbers):
+    """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
+    angle-from-four-points-in-cartesian- coordinates-in-python.
+
+    args:
+        numbers: list with index of 4 atoms that form dihedral
+    """
+
+    @cvflow
+    def f(sp: SystemParams):
+
+        # @partial(vmap, in_axes=(0), out_axes=(0))
+        coor = sp.coordinates
+        p0 = coor[numbers[0]]
+        p1 = coor[numbers[1]]
+        p2 = coor[numbers[2]]
+        p3 = coor[numbers[3]]
+
+        b0 = -1.0 * (p1 - p0)
+        b1 = p2 - p1
+        b2 = p3 - p2
+
+        b1 /= jnp.linalg.norm(b1)
+
+        v = b0 - jnp.dot(b0, b1) * b1
+        w = b2 - jnp.dot(b2, b1) * b1
+
+        x = jnp.dot(v, w)
+        y = jnp.dot(jnp.cross(b1, v), w)
+        return jnp.arctan2(y, x)
+
+    return f
+
+
+######################################
+#           CV trans                 #
+######################################
+
+
+class MeshGrid(CvTrans):
+    def __init__(self, meshgrid) -> None:
+        super().__init__(f)
+
+    def _f(self, x: CV):
+        #  if self.map_meshgrids is not None:
+        y = x.cv
+
+        y = y * (jnp.array(self.map_meshgrids[0].shape) - 1)
+        y = jnp.array(
+            [jsp.ndimage.map_coordinates(wp, y, order=1) for wp in self.map_meshgrids]
+        )
+
+
+def rotate_2d(alpha):
+    @cvtrans
+    def f(cv):
+        return (
+            jnp.array(
+                [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]]
+            )
+            @ cv
+        )
+
+    return f
+
+
+def scale_cv_trans(array=jnp.ndarray):
+    "axis 0 is batch axis"
+    maxi = jnp.max(array, axis=0)
+    mini = jnp.min(array, axis=0)
+    diff = maxi - mini
+    mask = jnp.abs(diff) > 1e-6
+
+    def f0(x):
+        return (x[mask] - mini[mask]) / diff[mask]
+
+    f = CvTrans(f=f0)
+
+    return f.compute_cv_trans(array), f
+
+
+def update_metric(
+    self, trajs, convex=True, fn=None, acc=30, trim=False, tol=0.1
+) -> CvTrans:
+    """find best fitting bounding box and get affine tranformation+ new
+    boundaries."""
+
+    raise NotImplementedError("todo adapt this")
+
+    trajs = np.array(trajs)
+
+    points = np.vstack([trajs[:, 0, :], trajs[:, 1, :]])
+    mpoints = MultiPoint(points)
+
+    if convex:
+        a = mpoints.convex_hull
+        # a = mpoints.minimum_rotated_rectangle
+
+    else:
+        if len(points) > 30:
+            np.random.shuffle(points)
+            points = points[1:30]
+
+        a = alphashape.alphashape(points)
+        raise NotImplementedError
+
+    bound = a.boundary
+
+    dist_avg = bound.length / len(trajs)
+
+    if convex:
+        assert (
+            np.array([bound.distance(p) for p in mpoints]).max() < acc * dist_avg
+        ), "boundaries are not convex"
+
+    proj = np.array(
+        [
+            [bound.project(Point(tr[0, :])), bound.project(Point(tr[1, :]))]
+            for tr in trajs
+        ]
+    )
+
+    def get_lengths(proj):
+        b = np.copy(proj[:])
+        projgaps = np.sort(np.hstack([b[:, 0], b[:, 1]]))
+
+        # remove the gapps along boundary
+        gaps = (projgaps[1:] - projgaps[:-1]) > 1 * dist_avg
+        gaps = [projgaps[0:-1][gaps], projgaps[1:][gaps]]
+
+        a = np.copy(proj[:])
+        for i, j in list(zip(*gaps))[::-1]:
+            a[a > i] -= j - i
+
+        return a
+
+    # sort pair
+    as1 = proj.argsort(axis=1)
+    proj = np.take_along_axis(proj, as1, axis=1)
+    trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
+
+    clustering = DBSCAN(eps=5 * dist_avg).fit(get_lengths(proj)).labels_
+
+    if fn is not None:
+        plt.clf()
+        for i in range(-1, clustering.max() + 1):
+            plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
+        plt.savefig(f"{fn}/coord_cluster_pre")
+
+    # look for largest cluster and take it as starting point of indexing, shift other points cyclically
+    index = np.argmax(np.bincount(clustering[clustering >= 0]))
+
+    offset = proj[clustering == index, 0].min()
+    proj[proj < offset] += bound.length
+
+    as1 = proj.argsort(axis=1)
+    proj = np.take_along_axis(proj, as1, axis=1)
+    trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
+
+    proj -= offset
+
+    clustering = DBSCAN(eps=3 * dist_avg).fit(get_lengths(proj)).labels_
+
+    if fn is not None:
+        plt.clf()
+        for i in range(-1, clustering.max() + 1):
+            plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
+        plt.savefig(f"{fn}/coord_cluster")
+
+    ndim = clustering.max() + 1
+    assert (
+        ndim <= self.ndim
+    ), """number of new periodicities do not
+        correspond wiht original number"""
+
+    if self.ndim != 2:
+        raise NotImplementedError("only tested for n == 2")
+
+    boundaries = []
+    periodicities = []
+
+    n = 30
+
+    lrange = []
+    xrange = []
+    for i in range(0, clustering.max() + 1):
+
+        pi = proj[clustering == i, :]
+        a1 = pi[:, 0].argmin()
+        a2 = pi[:, 1].argmin()
+        l1 = [pi[a1, 0], pi[a2, 0]]
+        l2 = [pi[a1, 1], pi[a2, 1]]
+
+        def f(x):
+            x += offset
+            if x >= bound.length:
+                x -= bound.length
+
+            p = bound.interpolate(x)
+            return np.array(p)
+
+        lin1 = np.linspace(l1[0], l1[1], num=n)
+        lin2 = np.linspace(l2[0], l2[1], num=n)
+
+        xr1 = np.array([np.array([f(l1), f(l2)]) for l1, l2 in zip(lin1, lin2)])
+
+        lrange.append([l1, l2])
+        xrange.append(xr1)
+
+        # boundaries.append([0, avg_len])
+        boundaries.append([0, 1])
+
+        periodicities.append(True)
+
+    interps = []
+    for i in range(self.ndim):
+
+        points_arr = []
+        z = []
+
+        range_high = np.array([lrange[i][0][1], lrange[i][1][1]])
+        range_low = np.array([lrange[i][0][0], lrange[i][1][0]])
+
+        # # append other boundaries
+        for j in range(self.ndim):
+            if i == j:
+                continue
+
+            z.append(np.zeros(n))
+            z.append(np.ones(n) * boundaries[i][1])
+
+            # potentially differently ordered
+            arr = np.array(lrange[j])
+            arr.sort(axis=1)
+            range_high.sort()
+            range_low.sort()
+
+            high = abs(arr - range_high).sum(axis=1)
+            high_amin = np.argmin(high)
+            err1 = high[high_amin]
+
+            low = abs(arr - range_low).sum(axis=1)
+            low_amin = np.argmin(low)
+            err2 = low[low_amin]
+
+            if err1 < err2:
+                order = high_amin == 0
+            else:
+                order = low_amin == 0
+
+            if order:
+                points_arr.append(xrange[j][:, 1, :])
+                points_arr.append(xrange[j][:, 0, :])
+            else:
+                points_arr.append(xrange[j][:, 0, :])
+                points_arr.append(xrange[j][:, 1, :])
+
+        interps.append(RBFInterpolator(np.vstack(points_arr), np.hstack(z)))
+
+    # get the boundaries from most distal points in traj + some margin
+    num = 100
+
+    old_boundaries = []
+    lspaces = []
+
+    for i in range(ndim):
+        if trim:
+            a = trajs[:, :, i].min()
+            b = trajs[:, :, i].max()
+            d = (b - a) * 0.05
+            a = a - d
+            b = b + d
+
+        else:
+            a = self.bounding_box[i][0]
+            b = self.bounding_box[i][1]
+
+        old_boundaries.append([a, b])
+        lspaces.append(np.linspace(a, b, num=num))
+
+    dims = [len(l) for l in lspaces]
+    interp_meshgrid = np.array(np.meshgrid(*lspaces, indexing="ij"))
+    imflat = interp_meshgrid.reshape(ndim, -1).T
+    interp_mg = []
+    for i in range(ndim):
+
+        arr_flat = interps[i](imflat)
+        arr = arr_flat.reshape(dims)
+        interp_mg.append(arr)
+
+    new_metric = Metric(
+        periodicities=periodicities,
+        bounding_box=old_boundaries,
+        map_meshgrids=interp_mg,
+    )
+
+    mask = new_metric._get_mask(tol=tol)
+    interp_mg = [im * mask for im in interp_mg]
+
+    if fn is not None:
+
+        for j in [0, 1]:
+
+            plt.clf()
+            plt.pcolor(
+                interp_meshgrid[0, :],
+                interp_meshgrid[1, :],
+                interp_mg[j] * mask,
+                # cmap=plt.get_cmap('Greys')
+            )
+
+            plt.colorbar()
+
+            for i in range(0, clustering.max() + 1):
+                vmax = proj[clustering != -1, 0].max()
+                vmin = proj[clustering != -1, 0].min()
+
+                plt.scatter(
+                    trajs[clustering == i, 0, 0],
+                    trajs[clustering == i, 0, 1],
+                    c=proj[clustering == i, 0],
+                    vmax=vmax,
+                    vmin=vmin,
+                    s=5,
+                    cmap=plt.get_cmap("plasma"),
+                )
+                plt.scatter(
+                    trajs[clustering == i, 1, 0],
+                    trajs[clustering == i, 1, 1],
+                    c=proj[clustering == i, 0],
+                    vmax=vmax,
+                    vmin=vmin,
+                    s=5,
+                    cmap=plt.get_cmap("plasma"),
+                )
+
+            plt.savefig(f"{fn}/coord{j}")
+
+    return new_metric

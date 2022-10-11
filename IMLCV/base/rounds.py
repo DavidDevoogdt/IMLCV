@@ -418,7 +418,7 @@ class RoundsMd(Rounds):
                 if st.equilibration is not None:
                     sp = sp[traj.t > st.equilibration]
 
-                cvs = bias.cvs.compute(sp=sp, map=True)[0]
+                cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
             future = run(
@@ -463,6 +463,9 @@ class RoundsMd(Rounds):
                 d = future.result()
 
         self.i += len(tasks)
+
+    def grid_points(self, cvs, map=True, r=None):
+        """finds systemparams that with cv that are close to given CV"""
 
     def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
         raise NotImplementedError

@@ -14,7 +14,7 @@ from molmod.units import angstrom, kelvin, kjmol
 import yaff
 from IMLCV import CP2K_COMMAND, ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
-from IMLCV.base.CV import CV, SystemParams, Volume, cvflow, dihedral
+from IMLCV.base.CV import CollectiveVariable, SystemParams, Volume, cvflow, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
@@ -49,7 +49,7 @@ def cleancopy(base):
 def alanine_dipeptide_yaff():
     T = 300 * kelvin
 
-    cv0 = CV(
+    cv0 = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
         metric=Metric(
             periodicities=[True, True],
@@ -91,7 +91,7 @@ def mil53_yaff():
         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
         return ff
 
-    cvs = CV(
+    cvs = CollectiveVariable(
         f=Volume,
         metric=Metric(
             periodicities=[False],
@@ -140,7 +140,7 @@ def ase_yaff():
     base = ROOT_DIR / "IMLCV" / "test/data/CsPbI_3"
 
     # make CP2K ase calculator
-    path_atoms = base / "large" / "Pos.xyz"
+    path_atoms = base / "Pos.xyz"
     with open(path_atoms) as f:
         atoms = ase.io.read(f)
 
@@ -158,7 +158,7 @@ def ase_yaff():
 
     energy = Cp2kEnergy(
         atoms=atoms,
-        input_file=base / "large" / "cp2k.inp",
+        input_file=base / "cp2k.inp",
         input_kwargs=input_params,
         auto_write=True,
         basis_set=None,
@@ -185,7 +185,7 @@ def ase_yaff():
 
         return jnp.array([(l0 - l1) / 2, (l0 + l1) / 2])
 
-    cv = CV(
+    cv = CollectiveVariable(
         f=f,
         metric=Metric(
             periodicities=[False, False],
@@ -271,7 +271,7 @@ if __name__ == "__main__":
     # with jax.disable_jit():
     md.run(1000)
 
-    print(md.bias.cvs.compute(md.get_trajectory().sp, map=False)[0] / angstrom**3)
+    print(md.bias.collective_variable.compute_cv(md.get_trajectory().sp, map=False)[0])
 
     # md.trajectory_info.save("test.h5")
     # ti2 = TrajectoryInfo.load("test.h5")

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import itertools
 
-import numpy as np
+import jax.numpy as jnp
 from molmod.constants import boltzmann
 
 from IMLCV.base.bias import BiasMTD, CompositeBias, CvMonitor, HarmonicBias, NoneBias
+from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
@@ -55,27 +56,30 @@ class Scheme:
 
         return self
 
-    def _MTDBias(self, steps, K=None, sigmas=None, start=500, step=250):
+    def MTDBias(self, steps, K=None, sigmas=None, start=500, step=250):
         """generate a metadynamics bias."""
 
         raise NotImplementedError("validate this")
 
         if sigmas is None:
             sigmas = (
-                self.md.bias.cvs.metric[:, 1] - self.md.bias.cvs.metric[:, 0]
+                self.md.bias.collective_variable.metric[:, 1]
+                - self.md.bias.collective_variable.metric[:, 0]
             ) / 20
 
         if K is None:
             K = 1.0 * self.md.T * boltzmann
 
-        biasmtd = BiasMTD(self.md.bias.cvs, K, sigmas, start=start, step=step)
+        biasmtd = BiasMTD(
+            self.md.bias.collective_variable, K, sigmas, start=start, step=step
+        )
         bias = CompositeBias([self.md.bias, biasmtd])
 
         self.md = self.md.new_bias(bias, filename=None)
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def _FESBias(self, plot=True, max_bias=None, kind="normal"):
+    def FESBias(self, plot=True, max_bias=None, kind="normal"):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)
@@ -88,9 +92,9 @@ class Scheme:
         )
         self.md = self.md.new_bias(fesBias)
 
-    def _grid_umbrella(self, steps=1e4, k=None, n=8):
+    def grid_umbrella(self, steps=1e4, k=None, n=8):
 
-        grid = self.md.bias.cvs.metric.grid(n, map=False)
+        grid = self.md.bias.collective_variable.metric.grid(n)
 
         if k is None:
             k = 2 * self.md.static_trajectory_info.T * boltzmann
@@ -100,30 +104,34 @@ class Scheme:
             [
                 CompositeBias(
                     [
-                        HarmonicBias(self.md.bias.cvs, np.array(x), k),
-                        CvMonitor(self.md.bias.cvs),
+                        HarmonicBias(
+                            self.md.bias.collective_variable,
+                            CV(cv=jnp.array(cv), batched=False),
+                            k,
+                        ),
+                        CvMonitor(self.md.bias.collective_variable),
                     ]
                 )
-                for x in itertools.product(*grid)
+                for cv in itertools.product(*grid)
             ],
             steps=steps,
         )
 
-    def _new_metric(self, plot=False, r=None):
+    def new_metric(self, plot=False, r=None):
         o = Observable(self.rounds)
-        self.md.bias.cvs.metric = o.new_metric(plot=plot, r=r)
+        self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
     def round(self, rnds=10, steps=5e4, K=None, update_metric=False, n=4):
         # startround = 0
 
         # update biases untill there are no discontinues jumps left
         for r in range(rnds):
-            self._grid_umbrella(steps=steps, n=n, k=K)
+            self.grid_umbrella(steps=steps, n=n, k=K)
             if update_metric:
-                self._new_metric(plot=True)
+                self.new_metric(plot=True)
                 update_metric = False
             else:
-                self._FESBias(plot=True)
+                self.FESBias(plot=True)
 
             self.rounds.new_round(self.md)
             self.rounds.save()

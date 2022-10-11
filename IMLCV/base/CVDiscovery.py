@@ -19,7 +19,7 @@ from parsl.data_provider.files import File
 from tensorflow import keras
 
 from IMLCV.base.CV import (
-    CV,
+    CollectiveVariable,
     CvFlow,
     CvTrans,
     KerasTrans,
@@ -81,12 +81,12 @@ class Transformer:
         prescale=True,
         postscale=True,
         **kwargs,
-    ) -> CV:
+    ) -> CollectiveVariable:
         x, f = self.pre_fit(sp, scale=prescale, sti=sti)
         y, g = self._fit(x, indices, **kwargs)
         z, h = self.post_fit(y, scale=postscale)
 
-        cv = CV(
+        cv = CollectiveVariable(
             f=f * g * h,
             metric=Metric(periodicities=self.periodicity),
             jac=jacrev,
@@ -169,7 +169,7 @@ class TranformerUMAP(Transformer):
         assert parametric
 
         f = KerasTrans(reducer.encoder)
-        return f.compute(x), f
+        return f.compute_cv_trans(x), f
 
 
 class Encoder(nn.Module):
@@ -363,7 +363,7 @@ class TranformerAutoEncoder(Transformer):
                 self.vae_args = vae_args
 
             @partial(jit, static_argnums=(0,))
-            def compute(self, x):
+            def compute_cv_trans(self, x):
                 encoded: jnp.ndarray = VAE(**self.vae_args).apply(
                     {"params": self.params}, x, method=VAE.encode
                 )[0]
@@ -373,7 +373,7 @@ class TranformerAutoEncoder(Transformer):
 
         # a: jnp.ndarray =
 
-        return f_enc.compute(x), f_enc
+        return f_enc.compute_cv_trans(x), f_enc
 
 
 class CVDiscovery:
@@ -401,14 +401,14 @@ class CVDiscovery:
             bias = traj.get_bias()
 
             if cv is None:
-                cv = bias.cvs
+                cv = bias.collective_variable
 
             sp = traj.ti.sp
 
             # execute all the mappings
-            cvs, _ = bias.cvs.compute(sp, map=False)
-            cvs_mapped, _ = bias.cvs.compute(sp, map=True)
-            biases, _ = bias.compute(cvs=cvs_mapped, map=False)
+            cvs, _ = bias.collective_variable.compute_cv(sp, map=False)
+            cvs_mapped, _ = bias.collective_variable.compute_cv(sp, map=True)
+            biases, _ = bias.compute_from_cv(cvs=cvs_mapped)
 
             beta = 1 / round.tic.T
             weight = jnp.exp(beta * biases)
@@ -439,7 +439,7 @@ class CVDiscovery:
 
     def compute(
         self, rounds: RoundsMd, samples=3e3, plot=True, name=None, **kwargs
-    ) -> CV:
+    ) -> CollectiveVariable:
 
         sps, _, indices, cv_old, sti = self._get_data(num=5, out=samples, rounds=rounds)
 
@@ -472,7 +472,9 @@ class CVDiscovery:
 
 
 @bash_app_python()
-def plot_app(sps, old_cv: CV, new_cv: CV, name, outputs=[]):
+def plot_app(
+    sps, old_cv: CollectiveVariable, new_cv: CollectiveVariable, name, outputs=[]
+):
     def color(c, per):
         c2 = (c - c.min()) / (c.max() - c.min())
         if not per:
@@ -489,7 +491,7 @@ def plot_app(sps, old_cv: CV, new_cv: CV, name, outputs=[]):
     cvs = [old_cv, new_cv]
     for cv in cvs:
 
-        cvd, _ = cv.compute(sps)
+        cvd, _ = cv.compute_cv(sps)
         cvdm = vmap(cv.metric.map)(cvd)
 
         cv_data.append(np.array(cvd))

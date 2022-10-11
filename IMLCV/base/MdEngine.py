@@ -626,12 +626,12 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         def _internal_compute(self, gpos, vtens):
 
-            ener = self._energy.compute_coor(
+            ener = self._energy.compute_from_system_params(
                 gpos is not None,
                 vtens is not None,
             )
 
-            ener_bias: EnergyResult = self.bias.compute_coor(
+            ener_bias: EnergyResult = self.bias.compute_from_system_params(
                 self.sp,
                 gpos is not None,
                 vtens is not None,

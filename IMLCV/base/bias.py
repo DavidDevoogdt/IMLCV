@@ -21,15 +21,14 @@ import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
 from ase.calculators.cp2k import CP2K
-from jax import jacrev, jit, value_and_grad, vmap
-from molmod.constants import boltzmann
+from jax import jit, value_and_grad, vmap
 from molmod.units import angstrom, electronvolt, kjmol
 from parsl.data_provider.files import File
 from scipy.interpolate import RBFInterpolator
 
 import yaff
 from IMLCV import ROOT_DIR
-from IMLCV.base.CV import CV, SystemParams
+from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
 from IMLCV.base.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
@@ -81,7 +80,9 @@ class BC:
     def __init__(self) -> None:
         pass
 
-    def compute_coor(self, sp: SystemParams, gpos=False, vir=False) -> EnergyResult:
+    def compute_from_system_params(
+        self, sp: SystemParams, gpos=False, vir=False
+    ) -> EnergyResult:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
         raise NotImplementedError
@@ -149,7 +150,7 @@ class Energy(BC):
     def _handle_exception(self):
         return ""
 
-    def compute_coor(
+    def compute_from_system_params(
         self,
         gpos=False,
         vir=False,
@@ -411,14 +412,16 @@ class BiasError(Exception):
 class Bias(BC, ABC):
     """base class for biased MD runs."""
 
-    def __init__(self, cvs: CV, start=None, step=None) -> None:
+    def __init__(
+        self, collective_variable: CollectiveVariable, start=None, step=None
+    ) -> None:
         """args:
         cvs: collective variables
         start: number of md steps before update is called
         step: steps between update is called"""
         super().__init__()
 
-        self.cvs = cvs
+        self.collective_variable = collective_variable
         self.start = start
         self.step = step
 
@@ -431,19 +434,23 @@ class Bias(BC, ABC):
         """
 
     @partial(jit, static_argnums=(0, 2, 3))
-    def compute_coor(self, sp: SystemParams, gpos=False, vir=False) -> EnergyResult:
+    def compute_from_system_params(
+        self, sp: SystemParams, gpos=False, vir=False
+    ) -> EnergyResult:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        [cvs, jac] = self.cvs.compute(sp=sp, jacobian=gpos or vir, map=False)
-        [ener, de] = self.compute(cvs, diff=(gpos or vir), batched=sp.batched)
+        [cvs, jac] = self.collective_variable.compute_cv(
+            sp=sp, jacobian=gpos or vir, map=False
+        )
+        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
 
         e_gpos = None
         if gpos:
             es = "nj,njkl->nkl"
             if not sp.batched:
                 es = es.replace("n", "")
-            e_gpos = jnp.einsum(es, de, jac.coordinates)
+            e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
 
         e_vir = None
         if vir:
@@ -451,20 +458,21 @@ class Bias(BC, ABC):
             es = "nji,nk,nkjl->nli"
             if not sp.batched:
                 es = es.replace("n", "")
-            e_vir = jnp.einsum(es, sp.cell, de, jac.cell)
+            e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
 
         return EnergyResult(ener, e_gpos, e_vir)
 
-    @partial(jit, static_argnums=(0, 2, 3, 4))
-    def compute(self, cvs, diff=False, map=True, batched=True):
+    @partial(jit, static_argnums=(0, 2))
+    def compute_from_cv(self, cvs: CV, diff=False) -> CV:
         """compute the energy and derivative.
 
         If map==False, the cvs are assumed to be already mapped
         """
+        assert isinstance(cvs, CV)
 
-        assert not (
-            not map and diff
-        ), "cannot retreive gradient from already mapped CVs"
+        # assert not (
+        #     not map and diff
+        # ), "cannot retreive gradient from already mapped CVs"
 
         # map compute command
         def f0(x):
@@ -473,15 +481,15 @@ class Bias(BC, ABC):
 
             return jit(self._compute, static_argnums=static_array_argnums)(x, *args)
 
-        def f1(x):
-            if map:
-                x = self.cvs.metric.map(x)
-            return f0(x)
+        # def f1(x):
+        # if cvs.mapped:
+        #     x = self.collective_variable.metric.map(x)
+        # return f0(x)
 
         def f2(x):
-            return value_and_grad(f1)(x) if diff else (f1(x), None)
+            return value_and_grad(f0)(x) if diff else (f0(x), None)
 
-        return vmap(f2)(cvs) if batched else f2(cvs)
+        return vmap(f2)(cvs) if cvs.batched else f2(cvs)
 
     @abstractmethod
     def _compute(self, cvs, *args):
@@ -511,35 +519,35 @@ class Bias(BC, ABC):
         self,
         name,
         n=50,
-        traj=None,
+        traj: list[CV] | None = None,
         vmin=0,
         vmax=100,
-        map=True,
+        map=False,
         inverted=False,
     ):
         """plot bias."""
 
-        assert self.cvs.n == 2
+        assert self.collective_variable.n == 2
 
-        bins = self.cvs.metric.grid(n=n, map=map, endpoints=True)
+        bins = self.collective_variable.metric.grid(n=n, endpoints=True)
         mg = np.meshgrid(*bins, indexing="xy")
 
         xlim = [mg[0].min(), mg[0].max()]
         ylim = [mg[1].min(), mg[1].max()]
         extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
-        bias, _ = jnp.apply_along_axis(
-            self.compute,
-            axis=0,
-            arr=np.array(mg),
-            diff=False,
-            batched=False,
-            map=not map,
-        )
+        @jit
+        def f(point):
+            return self.compute_from_cv(
+                CV(cv=point, batched=False),
+                diff=False,
+            )
 
-        if map is False:
-            mask = self.cvs.metric._get_mask(tol=0.01, interp_mg=mg)
-            bias = bias * mask
+        bias, _ = jnp.apply_along_axis(f, axis=0, arr=np.array(mg))
+
+        # if map is False:
+        #     mask = self.collective_variable.metric._get_mask(tol=0.01, interp_mg=mg)
+        #     bias = bias * mask
 
         # normalise lowest point of bias
         if inverted:
@@ -570,7 +578,7 @@ class Bias(BC, ABC):
                 traj = [traj]
             for tr in traj:
                 # trajs are ij indexed
-                ax.scatter(tr[:, 0], tr[:, 1], s=3)
+                ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=3)
 
         ax.set_title(name)
         os.makedirs(os.path.dirname(name), exist_ok=True)
@@ -588,7 +596,7 @@ def plot_app(
     vmax: float = 100,
     map: bool = True,
     inverted=False,
-    traj: list[np.ndarray] | None = None,
+    traj: list[CV] | None = None,
 ):
     bias.plot(
         name=outputs[0].filepath,
@@ -613,14 +621,14 @@ class CompositeBias(Bias):
         self.start_list = np.array([], dtype=np.int16)
         self.step_list = np.array([], dtype=np.int16)
         self.args_shape = np.array([0])
-        self.cvs: CV = None  # type: ignore
+        self.collective_variable: CollectiveVariable = None  # type: ignore
 
         for bias in biases:
             self._append_bias(bias)
 
         self.fun = fun
 
-        super().__init__(cvs=self.cvs, start=0, step=1)
+        super().__init__(collective_variable=self.collective_variable, start=0, step=1)
         self.init = True
 
     def _append_bias(self, b: Bias):
@@ -640,8 +648,8 @@ class CompositeBias(Bias):
             self.args_shape, len(b.get_args()) + self.args_shape[-1]
         )
 
-        if self.cvs is None:
-            self.cvs = b.cvs
+        if self.collective_variable is None:
+            self.collective_variable = b.collective_variable
         else:
             pass
             # assert self.cvs == b.cvs, "CV should be the same"
@@ -688,7 +696,7 @@ class MinBias(CompositeBias):
 class BiasF(Bias):
     """Bias according to CV."""
 
-    def __init__(self, cvs: CV, g=None):
+    def __init__(self, cvs: CollectiveVariable, g=None):
 
         self.g = g if (g is not None) else lambda _: jnp.array(0.0)
         self.g = jit(self.g)
@@ -704,14 +712,14 @@ class BiasF(Bias):
 class NoneBias(BiasF):
     """dummy bias."""
 
-    def __init__(self, cvs: CV):
+    def __init__(self, cvs: CollectiveVariable):
         super().__init__(cvs)
 
 
 class HarmonicBias(Bias):
     """Harmonic bias potential centered arround q0 with force constant k."""
 
-    def __init__(self, cvs: CV, q0, k):
+    def __init__(self, cvs: CollectiveVariable, q0: CV, k):
         """generate harmonic potentia;
 
         Args:
@@ -722,17 +730,16 @@ class HarmonicBias(Bias):
         super().__init__(cvs)
 
         if isinstance(k, float):
-            k = q0 * 0 + k
+            k = jnp.zeros_like(q0.cv) + k
         else:
-            assert k.shape == q0.shape
+            assert k.shape == q0.cv.shape
         assert np.all(k > 0)
         self.k = jnp.array(k)
-        self.q0 = self.cvs.metric.map(jnp.array(q0))
+        self.q0 = q0
 
-    def _compute(self, cvs, *args):
-
-        r = self.cvs.metric.difference(cvs, self.q0)
-        return jnp.einsum("i,i,i", self.k, r, r)
+    def _compute(self, cvs: CV, *args):
+        r: CV = self.collective_variable.metric.difference(cvs, self.q0)
+        return jnp.einsum("i,i,i", self.k, r.cv, r.cv)
 
     def get_args(self):
         return []
@@ -749,7 +756,9 @@ class BiasMTD(Bias):
     variables.
     """
 
-    def __init__(self, cvs: CV, K, sigmas, tempering=0.0, start=None, step=None):
+    def __init__(
+        self, cvs: CollectiveVariable, K, sigmas, tempering=0.0, start=None, step=None
+    ):
         """_summary_
 
         Args:
@@ -788,7 +797,7 @@ class BiasMTD(Bias):
         if self.finalized:
             return
         # Compute current CV values
-        q0s, _ = self.cvs.compute(sp)
+        q0s, _ = self.collective_variable.compute_cv(sp)
         K = self.K
         if self.tempering != 0.0:
             raise NotImplementedError("untested")
@@ -800,7 +809,7 @@ class BiasMTD(Bias):
         """Computes sum of hills."""
 
         deltas = jnp.apply_along_axis(
-            self.cvs.metric.difference,
+            self.collective_variable.metric.difference,
             axis=1,
             arr=q0s.val,
             x2=cvs,
@@ -823,9 +832,9 @@ class GridBias(Bias):
 
     def __init__(
         self,
-        cvs: CV,
+        cvs: CollectiveVariable,
         vals,
-        #  bounds=None,
+        bounds=None,
         start=None,
         step=None,
         centers=True,
@@ -842,11 +851,11 @@ class GridBias(Bias):
         bias = np.zeros(np.array(vals.shape) + 2) * np.nan
         bias[1:-1, 1:-1] = vals
 
-        if self.cvs.metric.periodicities[0]:
+        if self.collective_variable.metric.periodicities[0]:
             bias[0, :] = bias[-2, :]
             bias[-1, :] = bias[1, :]
 
-        if self.cvs.metric.periodicities[1]:
+        if self.collective_variable.metric.periodicities[1]:
             bias[:, 0] = bias[:, -2]
             bias[:, -1] = bias[:, 1]
 
@@ -858,7 +867,9 @@ class GridBias(Bias):
 
         self.vals = bias
 
-    def _compute(self, cvs):
+        self.bounds = jnp.array(bounds)
+
+    def _compute(self, cvs: CV, *args):
         # overview of grid points. stars are addded to allow out of bounds extension.
         # the bounds of the x square are per.
         # ___ ___ ___ ___
@@ -877,7 +888,15 @@ class GridBias(Bias):
         # gridpoints are in the middle of
 
         # map between vals 0 and 1
-        coords = (cvs * self.n - 0.5) / (self.n - 1)
+        if self.bounds is not None:
+            coords = (cvs.cv - self.bounds[:, 0]) / (
+                self.bounds[:, 1] - self.bounds[:, 0]
+            )
+        else:
+            coords = self.collective_variable.metric.map(cvs).cv
+
+        # map between vals matrix edges
+        coords = (coords * self.n - 0.5) / (self.n - 1)
         # scale to array size and offset extra row
         coords = coords * (self.n - 1) + 1
 
@@ -887,70 +906,76 @@ class GridBias(Bias):
         return []
 
 
-class FesBias(Bias):
-    """FES bias wraps another (grid) Bias. The compute function properly accounts for the transformation formula F_{unmapped} = F_{mapped} + KT*ln( J(cvs))"""
+# class FesBias(Bias):
+#     """FES bias wraps another (grid) Bias. The compute function properly accounts for the transformation formula F_{unmapped} = F_{mapped} + KT*ln( J(cvs))"""
 
-    def __init__(self, bias: Bias, T) -> None:
+#     def __init__(self, bias: Bias, T) -> None:
 
-        self.bias = bias
-        self.T = T
+#         self.bias = bias
+#         self.T = T
 
-        super().__init__(cvs=bias.cvs, start=bias.start, step=bias.step)
+#         super().__init__(
+#             collective_variable=bias.collective_variable,
+#             start=bias.start,
+#             step=bias.step,
+#         )
 
-    def compute(self, cvs, diff=False, map=True):
-        if map is True:
-            return self.bias.compute(cvs, diff=diff, map=True)
+#     def compute_from_cv(self, cvs, diff=False):
+#         if map is True:
+#             return self.bias.compute_from_cv(cvs, diff=diff, map=True)
 
-        e, de = self.bias.compute(cvs, diff=diff, map=map)
+#         e, de = self.bias.compute_from_cv(cvs, diff=diff, map=map)
 
-        r = jit(
-            lambda x: self.T
-            * boltzmann
-            * jnp.log(jnp.abs(jnp.linalg.det(jacrev(self.bias.cvs.metric.map)(x))))
-        )
+#         r = jit(
+#             lambda x: self.T
+#             * boltzmann
+#             * jnp.log(
+#                 jnp.abs(
+#                     jnp.linalg.det(jacrev(self.bias.collective_variable.metric.map)(x))
+#                 )
+#             )
+#         )
 
-        e += r(cvs)
+#         e += r(cvs)
 
-        if diff:
-            de += jit(jacrev(r))(cvs)
+#         if diff:
+#             de += jit(jacrev(r))(cvs)
 
-        return e + r(cvs), de
+#         return e + r(cvs), de
 
-    def update_bias(self, sp: SystemParams):
-        self.bias.update_bias(sp=sp)
+#     def update_bias(self, sp: SystemParams):
+#         self.bias.update_bias(sp=sp)
 
-    def _compute(self, cvs, *args):
-        """function that calculates the bias potential."""
-        return self.bias._compute(cvs, *args)
+#     def _compute(self, cvs, *args):
+#         """function that calculates the bias potential."""
+#         return self.bias._compute(cvs, *args)
 
-    def get_args(self):
-        """function that return dictionary with kwargs of _compute."""
-        return self.bias.get_args()
+#     def get_args(self):
+#         """function that return dictionary with kwargs of _compute."""
+#         return self.bias.get_args()
 
 
 class CvMonitor(BiasF):
-    def __init__(self, cvs: CV, start=0, step=1):
+    def __init__(self, cvs: CollectiveVariable, start=0, step=1):
         super().__init__(cvs, g=None)
         self.start = start
         self.step = step
 
-        self.last_cv: jnp.ndarray | None = None
-        self.transitions = np.zeros((0, self.cvs.metric.ndim, 2))
+        self.last_cv: CV | None = None
+        self.transitions = np.zeros((0, self.collective_variable.metric.ndim, 2))
 
     def update_bias(self, sp: SystemParams):
         if self.finalized:
             return
 
-        new_cv, _ = self.cvs.compute(sp=sp, map=True)
+        new_cv, _ = self.collective_variable.compute_cv(sp=sp, map=True)
 
         if self.last_cv is not None:
-            if jnp.linalg.norm(new_cv - self.last_cv) > 0.1:
-                print(f"ncv {new_cv} lcv {self.last_cv} {new_cv.shape}")
+            if self.collective_variable.metric.norm(new_cv, self.last_cv) > 0.1:
+                a = self.collective_variable.metric.unmap(new_cv).cv
+                b = self.collective_variable.metric.unmap(self.last_cv).cv
 
-                new_trans = np.array([np.stack([new_cv, self.last_cv], axis=1)])
-                print(
-                    f"newtrans {new_trans} {new_trans.shape}  {self.transitions.shape}   "
-                )
+                new_trans = np.array([np.stack([a, b], axis=1)])
                 self.transitions = np.vstack((self.transitions, new_trans))
 
         self.last_cv = new_cv
