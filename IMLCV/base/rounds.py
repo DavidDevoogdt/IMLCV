@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from ctypes import Union
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from threading import Lock
 
 import ase
@@ -60,15 +61,15 @@ class Rounds(ABC):
 
         self.folder = folder
 
-        self.h5file_name = f"{folder}/rounds.h5"
-        self.h5file = h5py.File(f"{folder}/rounds.h5", "a")
+        self.h5file_name = self.path() / "rounds.h5"
+        self.h5file = h5py.File(self.h5file_name, "a")
         self.lock = Lock()
 
     def __del__(self):
         self.h5file.close()
 
     def save(self):
-        with open(f"{self.folder}/rounds", "wb") as f:
+        with open(self.full_path("rounds"), "wb") as f:
 
             d = self.__dict__.copy()
             del d["h5file"]
@@ -77,7 +78,7 @@ class Rounds(ABC):
 
     @staticmethod
     def load(folder):
-        with open(f"{folder}/rounds", "rb") as f:
+        with open(self.full_path("rounds"), "rb") as f:
             self = object.__new__(RoundsMd)
             self.__dict__.update(dill.load(f))
 
@@ -230,6 +231,21 @@ class Rounds(ABC):
 
         self._set_attr(name="valid", value=False, r=r, i=i)
 
+    def full_path(self, name) -> str:
+        return str(Path(name))
+
+    def rel_path(self, name):
+        return str(Path(name).relative_to(Path(self.folder)))
+
+    def path(self, round=None, i=None) -> Path:
+        p = Path(self.folder)
+        if round is not None:
+            p /= f"round_{round}"
+            if i is not None:
+                p /= f"md_{i}"
+
+        return p
+
 
 class RoundsCV(Rounds):
     """class for unbiased rounds."""
@@ -317,7 +333,7 @@ class RoundsMd(Rounds):
 
         for i, (atoms, round, trajejctory) in enumerate(self.iter_atoms()):
             with open(
-                f"{self.folder}/round_{ round.round }/temp_{ trajejctory.num}/trajectory.xyz",
+                self.path(round=round.round, i=trajejctory.num) / "trajectory.xyz",
                 mode="a",
             ) as f:
                 write_extxyz(f, atoms)
@@ -326,19 +342,19 @@ class RoundsMd(Rounds):
 
         r = self.round + 1
 
-        directory = f"{self.folder}/round_{r}"
+        directory = self.path(round=r)
         if not os.path.isdir(directory):
             os.mkdir(directory)
 
-        name_md = f"{self.folder}/round_{r}/engine"
-        name_bias = f"{self.folder}/round_{r}/bias"
+        name_md = directory / "engine"
+        name_bias = directory / "bias"
         md.save(name_md)
         md.bias.save(name_bias)
 
         attr = {}
 
-        attr["name_md"] = name_md
-        attr["name_bias"] = name_bias
+        attr["name_md"] = self.rel_path(name_md)
+        attr["name_bias"] = self.rel_path(name_bias)
 
         super().new_round(attr=attr, stic=md.static_trajectory_info)
 
@@ -362,7 +378,7 @@ class RoundsMd(Rounds):
             f = self.h5file
             name = f[f"{r}"].attrs["name_md"]
 
-        return MDEngine.load(name, filename=None)
+        return MDEngine.load(self.full_path(name), filename=None)
 
     def run(self, bias, steps):
         self.run_par([bias], steps)
@@ -377,8 +393,8 @@ class RoundsMd(Rounds):
         with self.lock:
             f = self.h5file
             # with h5py.File(self.h5file, 'r') as f:
-            common_bias_name = f[f"{self.round}"].attrs["name_bias"]
-            common_md_name = f[f"{self.round}"].attrs["name_md"]
+            common_bias_name = self.full_path(f[f"{self.round}"].attrs["name_bias"])
+            common_md_name = self.full_path(f[f"{self.round}"].attrs["name_md"])
         from parsl.dataflow.dflow import AppFuture
 
         tasks: list[tuple[int, AppFuture]] | None = None
@@ -387,7 +403,7 @@ class RoundsMd(Rounds):
 
         for i, bias in enumerate(biases):
 
-            temp_name = f"{self.folder}/round_{self.round}/temp_{i}"
+            temp_name = self.path(round=self.round, i=i)
             if not os.path.exists(temp_name):
                 os.mkdir(temp_name)
 
@@ -397,17 +413,16 @@ class RoundsMd(Rounds):
             else:
                 b = CompositeBias([Bias.load(common_bias_name), bias])
 
-            b_name = f"{temp_name}/bias"
-            b_name_new = f"{temp_name}/bias_new"
+            b_name = self.full_path(temp_name / "bias")
+            b_name_new = self.full_path(temp_name / "bias_new")
             b.save(b_name)
 
-            traj_name = f"{temp_name}/trajectory_info.h5"
+            traj_name = self.full_path(temp_name / "trajectory_info.h5")
 
             @bash_app_python
             def run(
                 steps: int,
                 sp: SystemParams | None,
-                folder=temp_name,
                 inputs=[],
                 outputs=[],
             ):
@@ -448,8 +463,8 @@ class RoundsMd(Rounds):
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),
-                stdout=f"{temp_name}/md.stdout",
-                stderr=f"{temp_name}/md.stderr",
+                stdout=temp_name / "md.stdout",
+                stderr=temp_name / "md.stderr",
             )
 
             if plot:
@@ -457,9 +472,9 @@ class RoundsMd(Rounds):
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
-                    outputs=[File(f"{temp_name}/plot.pdf")],
-                    stdout=f"{temp_name}/plot.stdout",
-                    stderr=f"{temp_name}/plot.stderr",
+                    outputs=[File(temp_name / "plot.pdf")],
+                    stdout=temp_name / "plot.stdout",
+                    stderr=temp_name / "plot.stderr",
                 )
 
                 plot_tasks.append(plot_fut)
