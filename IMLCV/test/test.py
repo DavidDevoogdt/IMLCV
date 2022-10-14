@@ -1,6 +1,8 @@
 import os
+import shutil
 import tempfile
 from importlib import import_module
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -331,12 +333,26 @@ def test_grid_selection(name="point_selection", recalc=False):
     scheme.grid_umbrella(n=5)
 
 
+def test_copy(name):
+    fold = Path("output").resolve()
+    old = fold / name
+    new = fold / f"{name}_test_copy"
+
+    if new.exists():
+        shutil.rmtree(new)
+
+    shutil.copytree(old, new)
+    s = Scheme.from_rounds(folder=new)
+
+    s.grid_umbrella(n=4)
+
+
 if __name__ == "__main__":
 
     if LOCAL:
         md = alanine_dipeptide_yaff
         # md = mil53_yaff
-        k = 20 * kjmol
+        k = 10 * kjmol
         name = "test_cv_disc_ala"
     else:
         md = ase_yaff
@@ -355,12 +371,14 @@ if __name__ == "__main__":
         # test_unbiasing()
         test_cv_discovery(md=md(), recalc=True)
 
-        test_cv_discovery(
-            name=name,
-            md=md(),
-            recalc=True,
-            k=k,
-            steps=1e4,
-        )
-
         test_grid_selection(recalc=True)
+
+        test_copy(name)
+
+    test_cv_discovery(
+        name=name,
+        md=md(),
+        recalc=False,
+        k=k,
+        steps=3e3,
+    )

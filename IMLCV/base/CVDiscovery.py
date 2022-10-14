@@ -1,6 +1,7 @@
 import itertools
 import os
 from functools import partial
+from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -19,15 +20,17 @@ from parsl.data_provider.files import File
 from tensorflow import keras
 
 from IMLCV.base.CV import (
+    CV,
     CollectiveVariable,
     CvFlow,
     CvTrans,
     KerasTrans,
     PeriodicLayer,
     SystemParams,
-    coulomb_descriptor_cv_flow,
+    distance_descriptor,
     scale_cv_trans,
 )
+from IMLCV.base.MdEngine import StaticTrajectoryInfo
 
 # from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.metric import Metric
@@ -65,7 +68,7 @@ class Transformer:
         scale=True,
     ) -> tuple[jnp.ndarray, CvFlow]:
         # x, f = SystemParamss.flatten_f(z, scale=prescale)
-        x, f = coulomb_descriptor_cv_flow(z, sti)
+        x, f = distance_descriptor(z, sti)
 
         if scale:
             x, g = scale_cv_trans(x)
@@ -383,15 +386,17 @@ class CVDiscovery:
         # self.rounds = rounds
         self.transformer = transformer
 
-    def _get_data(self, rounds: RoundsMd, num=4, out=1e4):
+    def _get_data(
+        self, rounds: RoundsMd, num=4, out=1e4
+    ) -> Tuple[SystemParams, CV, np.ndarray, CollectiveVariable, StaticTrajectoryInfo]:
 
-        sp_arr = []
-
-        cvs_mapped_arr = []
         weights = []
 
-        cv = None
-        sti = None
+        colvar: CollectiveVariable | None = None
+        sti: StaticTrajectoryInfo | None = None
+
+        sp: SystemParams | None = None
+        cv: CV | None = None
 
         for round, traj in rounds.iter(r=4, num=num):
             if sti is None:
@@ -400,23 +405,29 @@ class CVDiscovery:
             # map cvs
             bias = traj.get_bias()
 
-            if cv is None:
-                cv = bias.collective_variable
+            if colvar is None:
+                colvar = bias.collective_variable
 
-            sp = traj.ti.sp
+            sp0 = traj.ti.sp
+            cv0, _ = bias.collective_variable.compute_cv(sp0)
+            if sp is None:
+                sp = sp0
+                cv = cv0
+            else:
+                sp += sp0
+                cv += cv0
 
-            # execute all the mappings
-            cvs, _ = bias.collective_variable.compute_cv(sp, map=False)
-            cvs_mapped, _ = bias.collective_variable.compute_cv(sp, map=True)
-            biases, _ = bias.compute_from_cv(cvs=cvs_mapped)
+            biases, _ = bias.compute_from_cv(cvs=cv)
 
             beta = 1 / round.tic.T
             weight = jnp.exp(beta * biases)
 
-            sp_arr.append(sp)
-            cvs_mapped_arr.append(cvs_mapped)
-
             weights.append(weight)
+
+        assert sp is not None
+        assert cv is not None
+        assert colvar is not None
+        assert sti is not None
 
         # todo modify probability
         probs = jnp.hstack(weights)
@@ -432,10 +443,7 @@ class CVDiscovery:
             replace=False,
         )
 
-        system_params = SystemParams.stack(sp_arr)
-        cvs = jnp.vstack(cvs_mapped_arr)
-
-        return [system_params, cvs, indices, cv, sti]
+        return sp, cv, indices, colvar, sti
 
     def compute(
         self, rounds: RoundsMd, samples=3e3, plot=True, name=None, **kwargs

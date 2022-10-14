@@ -213,10 +213,11 @@ def ase_yaff(small=True):
 def get_FES(
     name,
     engine: MDEngine,
-    cvd: CVDiscovery,
+    cvd: CVDiscovery | None = None,
     recalc=False,
     steps=5e3,
     K=5 * kjmol,
+    rounds=8,
 ) -> Scheme:
     """calculate some rounds, and perform long run. Starting point for cv discovery methods"""
 
@@ -234,10 +235,10 @@ def get_FES(
         scheme0 = Scheme(cvd=None, Engine=engine, folder=full_name)
 
         scheme0.round(
-            rnds=5,
+            rnds=rounds,
             steps=steps,
             n=4,
-            K=5 * kjmol,
+            K=K,
         )
 
         # scheme0.rounds.run(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 import tempfile
 from abc import ABC, abstractmethod
@@ -15,6 +16,7 @@ import ase.geometry
 import ase.stress
 import ase.units
 import dill
+import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 import jax_dataclasses
@@ -29,7 +31,7 @@ from scipy.interpolate import RBFInterpolator
 import yaff
 from IMLCV import ROOT_DIR
 from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
-from IMLCV.base.tools import HashableArrayWrapper
+from IMLCV.base.tools.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
 
@@ -540,7 +542,7 @@ class Bias(BC, ABC):
         @jit
         def f(point):
             return self.compute_from_cv(
-                CV(cv=point, batched=False),
+                CV(cv=point),
                 diff=False,
             )
 
@@ -907,53 +909,22 @@ class GridBias(Bias):
         return []
 
 
-# class FesBias(Bias):
-#     """FES bias wraps another (grid) Bias. The compute function properly accounts for the transformation formula F_{unmapped} = F_{mapped} + KT*ln( J(cvs))"""
+class GridBiasNd(Bias):
+    # inspiration fromhttps://github.com/stanbiryukov/Nyx/tree/main/nyx/jax
 
-#     def __init__(self, bias: Bias, T) -> None:
+   
+    def __init__(
+        self,
+        collective_variable: CollectiveVariable,
+        vals,
+        bounds=None,
+        start=None,
+        step=None,
+    ) -> None:
+        super().__init__(collective_variable, start, step)
 
-#         self.bias = bias
-#         self.T = T
-
-#         super().__init__(
-#             collective_variable=bias.collective_variable,
-#             start=bias.start,
-#             step=bias.step,
-#         )
-
-#     def compute_from_cv(self, cvs, diff=False):
-#         if map is True:
-#             return self.bias.compute_from_cv(cvs, diff=diff, map=True)
-
-#         e, de = self.bias.compute_from_cv(cvs, diff=diff, map=map)
-
-#         r = jit(
-#             lambda x: self.T
-#             * boltzmann
-#             * jnp.log(
-#                 jnp.abs(
-#                     jnp.linalg.det(jacrev(self.bias.collective_variable.metric.map)(x))
-#                 )
-#             )
-#         )
-
-#         e += r(cvs)
-
-#         if diff:
-#             de += jit(jacrev(r))(cvs)
-
-#         return e + r(cvs), de
-
-#     def update_bias(self, sp: SystemParams):
-#         self.bias.update_bias(sp=sp)
-
-#     def _compute(self, cvs, *args):
-#         """function that calculates the bias potential."""
-#         return self.bias._compute(cvs, *args)
-
-#     def get_args(self):
-#         """function that return dictionary with kwargs of _compute."""
-#         return self.bias.get_args()
+    def _compute(self, cvs, *args):
+        return super()._compute(cvs, *args)
 
 
 class CvMonitor(BiasF):
