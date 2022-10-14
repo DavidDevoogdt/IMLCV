@@ -25,7 +25,7 @@ from parsl.providers.slurm.template import template_string
 from parsl.providers.torque.torque import TorqueProvider
 from parsl.utils import RepresentationMixin, wtime_to_minutes
 
-from IMLCV import CP2K_THREADS, HPC_WORKER_INIT, LOCAL, PY_EMV, ROOT_DIR
+from IMLCV import CP2K_THREADS, HPC_WORKER_INIT, LOCAL, PY_ENV, ROOT_DIR
 
 
 def config(
@@ -51,14 +51,14 @@ def config(
                 max_workers=6,
                 provider=LocalProvider(
                     launcher=SimpleLauncher(),
-                    worker_init=PY_EMV,
+                    worker_init=PY_ENV,
                 ),
             )
         elif choice == 1:
             exec = parsl.WorkQueueExecutor(
                 address=address_by_hostname(),
                 provider=LocalProvider(
-                    worker_init=PY_EMV,
+                    worker_init=PY_ENV,
                     # max_blocks=max_blocks,
                 ),
                 autolabel=True,

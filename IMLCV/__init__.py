@@ -76,11 +76,11 @@ CP2K_THREADS = 12
 CP2K_COMMAND = f"cp2k_shell.psmp"
 
 
-PY_EMV = f"source {ROOT_DIR}/Miniconda3/bin/activate"
+PY_ENV = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 HPC_WORKER_INIT = f"""
 export OMP_NUM_THREADS={CP2K_THREADS}
 lscpu
-{PY_EMV}"""
+{PY_ENV}"""
 
 
 DEBUG = True
