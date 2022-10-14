@@ -9,15 +9,15 @@ from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import RoundsCV, RoundsMd
 from thermolib.thermodynamics.bias import BiasPotential2D
-from thermolib.thermodynamics.fep import FreeEnergySurface2D
-from thermolib.thermodynamics.histogram import Histogram2D
+from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
+from thermolib.thermodynamics.histogram import Histogram2D, HistogramND
 
 
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
-    samples_per_bin = 20
+    samples_per_bin = 40
 
     time_per_bin = 2 * picosecond
 
@@ -45,7 +45,7 @@ class Observable:
             time = 0
             cv = None
 
-            for round, trajectory in self.rounds.iter(num=1):
+            for round, trajectory in self.rounds.iter(num=3):
 
                 bias = trajectory.get_bias()
 
@@ -93,10 +93,10 @@ class Observable:
                 trajs=trajs, bounding_box=cv.metric.bounding_box
             )
 
-            histo = Histogram2D.from_wham_c(
+            histo = HistogramND.from_wham(
                 bins=bins,
                 # pinit=pinit,
-                traj_input=trajs_mapped,
+                trajectories=trajs_mapped,
                 error_estimate="mle_f",
                 biasses=biases,
                 temp=temp,
@@ -136,7 +136,7 @@ class Observable:
         else:
             raise NotImplementedError
 
-        fes = FreeEnergySurface2D.from_histogram(histo, temp)
+        fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
         fes.set_ref()
 
         return fes, bounds
@@ -225,7 +225,7 @@ class Observable:
 
             def f(point):
                 return self.bias.compute_from_cv(
-                    cvs=CV(cv=point, batched=False),
+                    cvs=CV(cv=point),
                     diff=False,
                 )
 

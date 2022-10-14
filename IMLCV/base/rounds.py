@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from abc import ABC
 from collections.abc import Iterable
-from ctypes import Union
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -27,7 +26,7 @@ class Rounds(ABC):
 
     # ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
 
-    def __init__(self, folder="output") -> None:
+    def __init__(self, folder: str | Path = "output") -> None:
         """
         this class saves all relevant info in a hdf5 container. It is build as follows:
         root
@@ -59,11 +58,14 @@ class Rounds(ABC):
         if not os.path.isdir(folder):
             os.makedirs(folder)
 
-        self.folder = folder
+        self.folder = Path(folder).resolve()
 
-        self.h5file_name = self.path() / "rounds.h5"
         self.h5file = h5py.File(self.h5file_name, "a")
         self.lock = Lock()
+
+    @property
+    def h5file_name(self):
+        return self.full_path(self.path() / "rounds.h5")
 
     def __del__(self):
         self.h5file.close()
@@ -77,10 +79,11 @@ class Rounds(ABC):
             dill.dump(d, f)
 
     @staticmethod
-    def load(folder):
-        with open(self.full_path("rounds"), "rb") as f:
+    def load(folder: str | Path):
+        with open(f"{folder}/rounds", "rb") as f:
             self = object.__new__(RoundsMd)
             self.__dict__.update(dill.load(f))
+            self.folder = Path(folder).resolve()
 
         self.h5file = h5py.File(self.h5file_name, "a")
         return self
@@ -106,9 +109,9 @@ class Rounds(ABC):
         self.round += 1
         self.i = 0
 
-        dir = f"{self.folder}/round_{self.round}"
-        if not os.path.isdir(dir):
-            os.mkdir(dir)
+        dir = self.path(round=self.round)
+        if not dir.exists():
+            dir.mkdir(parents=True)
 
         # with self.lock:
         with self.lock:
@@ -232,10 +235,10 @@ class Rounds(ABC):
         self._set_attr(name="valid", value=False, r=r, i=i)
 
     def full_path(self, name) -> str:
-        return str(Path(name))
+        return str(self.folder / Path(name))
 
     def rel_path(self, name):
-        return str(Path(name).relative_to(Path(self.folder)))
+        return str(Path(name).relative_to(self.folder))
 
     def path(self, round=None, i=None) -> Path:
         p = Path(self.folder)
@@ -284,7 +287,7 @@ class RoundsMd(Rounds):
 
     def iter_atoms(
         self, r: int | None = None, num: int = 3
-    ) -> Union[ase.Atoms, Rounds.Round, Rounds.Trajectory]:
+    ) -> list[ase.Atoms, Rounds.Round, Rounds.Trajectory]:
 
         from molmod import angstrom
 
@@ -369,7 +372,7 @@ class RoundsMd(Rounds):
                 bn = f[f"{r}"].attrs["name_bias"]
             else:
                 bn = f[f"{r}"][i].attrs["name_bias"]
-        return Bias.load(bn)
+        return Bias.load(self.full_path(bn))
 
     def get_engine(self, r=None) -> MDEngine:
         if r is None:
@@ -463,18 +466,21 @@ class RoundsMd(Rounds):
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),
-                stdout=temp_name / "md.stdout",
-                stderr=temp_name / "md.stderr",
+                stdout=self.full_path(temp_name / "md.stdout"),
+                stderr=self.full_path(temp_name / "md.stderr"),
             )
 
             if plot:
+
+                plot_file = self.full_path(temp_name / "plot.pdf")
+
                 plot_fut = plot_app(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
-                    outputs=[File(temp_name / "plot.pdf")],
-                    stdout=temp_name / "plot.stdout",
-                    stderr=temp_name / "plot.stderr",
+                    outputs=[File(plot_file)],
+                    stdout=self.full_path(temp_name / "plot.stdout"),
+                    stderr=self.full_path(temp_name / "plot.stderr"),
                 )
 
                 plot_tasks.append(plot_fut)

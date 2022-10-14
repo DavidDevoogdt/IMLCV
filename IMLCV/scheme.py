@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+from pathlib import Path
 
 import jax.numpy as jnp
 from molmod.constants import boltzmann
@@ -39,7 +40,7 @@ class Scheme:
 
     @staticmethod
     def from_rounds(
-        folder,
+        folder: str | Path,
         cvd: CVDiscovery | None = None,
         max_energy=None,
     ) -> Scheme:
@@ -120,11 +121,7 @@ class Scheme:
                     cv += cv0
 
             def f(a):
-                spa = sp[
-                    jnp.argmin(
-                        colvar.metric.norm(cv, CV(cv=jnp.array(a), batched=False))
-                    )
-                ]
+                spa = sp[jnp.argmin(colvar.metric.norm(cv, CV(cv=jnp.array(a))))]
                 return spa
 
             out = [f(a) for a in itertools.product(*grid)]
@@ -137,7 +134,7 @@ class Scheme:
                     [
                         HarmonicBias(
                             self.md.bias.collective_variable,
-                            CV(cv=jnp.array(cv), batched=False),
+                            CV(cv=jnp.array(cv)),
                             k,
                         ),
                         CvMonitor(self.md.bias.collective_variable),

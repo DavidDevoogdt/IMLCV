@@ -6,10 +6,8 @@ from collections.abc import Iterable
 from functools import partial
 from importlib import import_module
 from typing import Callable
-from xmlrpc.client import boolean
 
 import alphashape
-import jax
 
 # import numpy as np
 import jax.numpy as jnp
@@ -26,9 +24,6 @@ from molmod.units import angstrom
 from scipy.interpolate import RBFInterpolator
 from shapely.geometry import MultiPoint, Point
 from sklearn.cluster import DBSCAN
-
-# from IMLCV.base.MdEngine import StaticTrajectoryInfo
-
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
@@ -111,30 +106,28 @@ class SystemParams:
 @jdc.pytree_dataclass
 class CV:
     cv: jnp.ndarray
-    batched: jdc.Static[boolean]
-    mapped: jdc.Static[boolean] = False
+    mapped: jdc.Static[bool] = False
 
-    def __post_init__(self):
-        if self.batched and len(self.cv.shape) == 1:
-            self.__dict__["cv"] = self.cv.reshape((*self.cv.shape, 1))
+    @property
+    def batched(self):
+        return len(self.cv.shape) == 2
 
     def batch(self) -> CV:
         if self.batched:
             return self
-        return CV(cv=jnp.array([self.cv]), mapped=self.mapped, batched=True)
+        return CV(cv=jnp.array([self.cv]), mapped=self.mapped)
 
     def unbatch(self) -> CV:
         if not self.batched:
             return self
         assert self.cv.shape[0] == 1
-        return CV(cv=self.cv[0, :], mapped=self.mapped, batched=False)
+        return CV(cv=self.cv[0, :], mapped=self.mapped)
 
     def __add__(self, other):
         assert isinstance(other, CV)
         assert self.mapped == other.mapped
         return CV(
             cv=jnp.vstack([self.batch().cv, other.batch().cv]),
-            batched=True,
             mapped=self.mapped,
         )
 
@@ -144,6 +137,15 @@ class CV:
             return self.cv.shape[1]
         else:
             return self.cv.shape[0]
+
+    def __iter__(self):
+        if not self.batched:
+            yield self
+            return
+
+        for i in range(self.cv.shape[0]):
+            yield CV(cv=self.cv[i, :], mapped=self.mapped)
+        return
 
 
 class Metric:
@@ -178,7 +180,6 @@ class Metric:
         cv = CV(
             cv=self.__periodic_wrap(self.map(x2).cv - self.map(x1).cv, min=True),
             mapped=x1.mapped,
-            batched=x1.batched,
         )
         if not x1.mapped:
             cv = self.unmap(cv)
@@ -214,7 +215,7 @@ class Metric:
             self.bounding_box[:, 1] - self.bounding_box[:, 0]
         )
 
-        return CV(cv=self.__periodic_wrap(y, min=False), mapped=True, batched=x.batched)
+        return CV(cv=self.__periodic_wrap(y, min=False), mapped=True)
 
     @partial(jit, static_argnums=(0))
     def unmap(self, x: CV) -> CV:
@@ -227,7 +228,7 @@ class Metric:
             + self.bounding_box[:, 0]
         )
 
-        return CV(cv=y, mapped=False, batched=x.batched)
+        return CV(cv=y, mapped=False)
 
     def __add__(self, other):
         assert isinstance(self, Metric)
@@ -280,20 +281,6 @@ class Metric:
     def ndim(self):
         return len(self.periodicities)
 
-    # def _get_mask(self, tol=0.1, interp_mg=None):
-    #     if interp_mg is None:
-    #         assert self.map_meshgrids is not None
-    #         interp_mg = self.map_meshgrids
-    #     else:
-    #         interp_mg = jnp.apply_along_axis(self.map, axis=0, arr=np.array(interp_mg))
-
-    #     m = np.logical_or(
-    #         *[np.logical_or(ip < (-tol), ip > (1 + tol)) for ip in interp_mg]
-    #     )
-    #     mask = np.ones(m.shape)
-    #     mask[m] = np.nan
-    #     return mask
-
 
 sf = Callable[[SystemParams], jnp.ndarray]
 tf = Callable[[jnp.ndarray], jnp.ndarray]
@@ -309,9 +296,9 @@ class CvTrans:
         assert x.mapped == False
         # make output batched
         if x.batched:
-            return CV(cv=vmap(self.f)(x.cv), mapped=False, batched=True)
+            return CV(cv=vmap(self.f)(x.cv), mapped=False)
         else:
-            return CV(cv=self.f(x.cv), mapped=False, batched=False)
+            return CV(cv=self.f(x.cv), mapped=False)
 
 
 class CvFlow:
@@ -335,11 +322,10 @@ class CvFlow:
     @partial(jit, static_argnums=(0,))
     def compute_cv_flow(self, x: SystemParams) -> CV:
 
-        if self.batched:
-            out = CV(self.f0(x.batch()), mapped=False, batched=True)
-        else:
-            a = jax.lax.map(self.f0, x.batch())
-            out = CV(cv=a, mapped=False, batched=True)
+        # if self.batched:
+        #     out = CV(self.f0(x.batch()), mapped=False)
+        # else:
+        out = CV(vmap(self.f0)(x.batch()), mapped=False)
 
         for other in self.f1:
             out = other.compute_cv_trans(out)
@@ -496,41 +482,19 @@ def Volume(sp: SystemParams):
     return vol
 
 
-def coulomb_descriptor_cv_flow(sps: SystemParams, tic, permutation="none"):
+def distance_descriptor(sps: SystemParams, tic, permutation="none"):
     @cvflow
     def h(x: SystemParams):
-
-        # assert x.masses is not None, "Z array in systemparams for coulomb descriptor"
 
         coor = x.coordinates
 
         n = coor.shape[0]
-        out = jnp.zeros((n, n))
+        out = jnp.zeros((n * (n - 1) / 2,))
 
-        for i in range(n):
-            d = 0.5 * tic.atomic_numbers[i] ** 2.4
-            out = out.at[i, i].set(d)
-
-        for i, j in itertools.combinations(range(n), 2):
-            d = jnp.linalg.norm(coor[i, :] - coor[j, :], 2)
-            d = tic.atomic_numbers[i] * tic.atomic_numbers[j] / d
-            out = out.at[i, j].set(d)
-            out = out.at[j, i].set(d)
-
-        if permutation == "l2":
-
-            ind = jnp.argsort(jnp.linalg.norm(out, 2, axis=(0)))
-            out = out[ind, :]
-            out = out[:, ind]
-        elif permutation == "none":
-            pass
-        else:
-            raise NotImplementedError
+        for a, (i, j) in enumerate(itertools.combinations(range(n), 2)):
+            out.at[a].set(jnp.linalg.norm(coor[i, :] - coor[j, :], 2))
 
         return out
-        # flatten relevant coordinates
-        # return out[jnp.triu_indices(n)]
-        # return g(x.coordinates)
 
     return h.compute_cv_flow(sps), h
 
@@ -576,6 +540,7 @@ def dihedral(numbers):
 
 class MeshGrid(CvTrans):
     def __init__(self, meshgrid) -> None:
+        self.map_meshgrids = meshgrid
         super().__init__(f)
 
     def _f(self, x: CV):
@@ -601,10 +566,10 @@ def rotate_2d(alpha):
     return f
 
 
-def scale_cv_trans(array=jnp.ndarray):
+def scale_cv_trans(array: CV):
     "axis 0 is batch axis"
-    maxi = jnp.max(array, axis=0)
-    mini = jnp.min(array, axis=0)
+    maxi = jnp.max(array.cv, axis=0)
+    mini = jnp.min(array.cv, axis=0)
     diff = maxi - mini
     mask = jnp.abs(diff) > 1e-6
 

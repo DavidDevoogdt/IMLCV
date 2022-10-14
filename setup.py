@@ -28,5 +28,6 @@ setup(
         "pytest",
         "scikit-learn",
         "dill",
+        "nyx",
     ],
 )
