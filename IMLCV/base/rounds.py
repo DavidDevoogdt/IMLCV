@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from threading import Lock
 
 import ase
 import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
+from filelock import FileLock
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
@@ -20,6 +21,8 @@ from IMLCV.base.bias import Bias, CompositeBias, NoneBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
+
+logging.getLogger("filelock").setLevel(logging.DEBUG)
 
 
 class Rounds(ABC):
@@ -60,20 +63,37 @@ class Rounds(ABC):
 
         self.folder = Path(folder).resolve()
 
-        self.h5file = h5py.File(self.h5file_name, "a")
-        self.lock = Lock()
+        # if not Path(self.h5file_name).exists():
 
-    @property
-    def h5file_name(self):
-        return self.full_path(self.path() / "rounds.h5")
+        self.lock = FileLock(self.h5filelock_name)
+
+        # create the file
+        with self.lock:
+            with h5py.File(self.h5file_name, mode="w-", swmr=True):
+                pass
+
+        self.h5file = h5py.File(self.h5file_name, mode="r+")
+        # self.lock = Lock()
 
     def __del__(self):
         self.h5file.close()
+
+    @property
+    def h5file_name(self):
+        return self.full_path(self.path() / "results.h5")
+
+    @property
+    def h5filelock_name(self):
+        return self.full_path(self.path() / "results.h5.lock")
+
+    # def __del__(self):
+    #     self.h5file.close()
 
     def save(self):
         with open(self.full_path("rounds"), "wb") as f:
 
             d = self.__dict__.copy()
+
             del d["h5file"]
 
             dill.dump(d, f)
@@ -85,13 +105,19 @@ class Rounds(ABC):
             self.__dict__.update(dill.load(f))
             self.folder = Path(folder).resolve()
 
-        self.h5file = h5py.File(self.h5file_name, "a")
+        with self.lock:
+            self.h5file = h5py.File(self.h5file_name, mode="r+")
+
         return self
 
     def add(self, i, d: TrajectoryInfo, attrs=None):
 
         with self.lock:
+            print("enetered add")
+            print(f"{i} got lock file {self.h5file_name}")
             f = self.h5file
+            print(f"{i} got hdf5 file")
+
             f.create_group(f"{self.round}/{i}")
             f[f"{self.round}/{i}"].create_group("trajectory_info")
 
@@ -105,6 +131,8 @@ class Rounds(ABC):
             f[f"{self.round}/{i}"].attrs["valid"] = True
             f[f"{self.round}"].attrs["num"] += 1
 
+            f.flush()
+
     def new_round(self, attr, stic: StaticTrajectoryInfo):
         self.round += 1
         self.i = 0
@@ -113,7 +141,6 @@ class Rounds(ABC):
         if not dir.exists():
             dir.mkdir(parents=True)
 
-        # with self.lock:
         with self.lock:
             f = self.h5file
             f.create_group(f"{self.round}")
@@ -127,6 +154,8 @@ class Rounds(ABC):
 
             f[f"{self.round}"].attrs["num"] = 0
             f[f"{self.round}"].attrs["valid"] = True
+
+            f.flush()
 
         self.save()
 
@@ -162,13 +191,15 @@ class Rounds(ABC):
             return Bias.load(self.name_bias)
 
     def _get_r_i(self, r: int, i: int) -> Trajectory:
-        # with self.lock:
+
         with self.lock:
             f = self.h5file
             d = f[f"{r}/{i}"]
 
             ti = TrajectoryInfo._load(hf=d["trajectory_info"])
             r_attr = {key: d.attrs[key] for key in d.attrs}
+
+            f.flush()
 
         return Rounds.Trajectory(ti=ti, **r_attr, round=r, num=i)
 
@@ -183,11 +214,10 @@ class Rounds(ABC):
         name_md: str | None = None
 
     def _get_r(self, r: int) -> Round:
-        # with self.lock:
+
         with self.lock:
             f = self.h5file
 
-            # names = list(f[f"{r}"].keys())
             stic = StaticTrajectoryInfo._load(hf=f[f"{r}/static_trajectory_info"])
 
             d = f[f"{r}"].attrs
@@ -214,6 +244,8 @@ class Rounds(ABC):
                 f2 = f[f"/{i}"]
 
             f2.attrs[name] = value
+
+            f2.flush()
 
     @property
     def T(self):
@@ -287,7 +319,7 @@ class RoundsMd(Rounds):
 
     def iter_atoms(
         self, r: int | None = None, num: int = 3
-    ) -> list[ase.Atoms, Rounds.Round, Rounds.Trajectory]:
+    ) -> tuple[ase.Atoms, Rounds.Round, Rounds.Trajectory]:
 
         from molmod import angstrom
 
@@ -367,7 +399,6 @@ class RoundsMd(Rounds):
 
         with self.lock:
             f = self.h5file
-            # with h5py.File(self.h5file, 'r') as f:
             if i is None:
                 bn = f[f"{r}"].attrs["name_bias"]
             else:
@@ -378,6 +409,7 @@ class RoundsMd(Rounds):
         if r is None:
             r = self.round
         with self.lock:
+
             f = self.h5file
             name = f[f"{r}"].attrs["name_md"]
 
@@ -395,7 +427,6 @@ class RoundsMd(Rounds):
     ):
         with self.lock:
             f = self.h5file
-            # with h5py.File(self.h5file, 'r') as f:
             common_bias_name = self.full_path(f[f"{self.round}"].attrs["name_bias"])
             common_md_name = self.full_path(f[f"{self.round}"].attrs["name_md"])
         from parsl.dataflow.dflow import AppFuture

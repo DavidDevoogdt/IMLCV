@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import itertools
+
 import jax.numpy as jnp
 import numpy as np
+from jax import jit
 from molmod.units import picosecond
 from parsl import File
 
-from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, plot_app
+from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import RoundsCV, RoundsMd
 from thermolib.thermodynamics.bias import BiasPotential2D
@@ -45,7 +48,7 @@ class Observable:
             time = 0
             cv = None
 
-            for round, trajectory in self.rounds.iter(num=3):
+            for round, trajectory in self.rounds.iter(num=2):
 
                 bias = trajectory.get_bias()
 
@@ -139,7 +142,15 @@ class Observable:
         fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
         fes.set_ref()
 
-        return fes, bounds
+        # construc list with centers CVs
+        bin_centers = [0.5 * (x[:-1] + x[1:]) for x in bins]
+        Ngrid = np.array([len(bi) for bi in bin_centers])
+        grid = []
+        for idx in itertools.product(*(range(x) for x in Ngrid)):
+            center = [bin_centers[j][k] for j, k in enumerate(idx)]
+            grid.append((idx, CV(cv=jnp.array(center))))
+
+        return fes, grid, bounds
 
     def new_metric(self, plot=False, r=None):
         assert isinstance(self.rounds, RoundsMd)
@@ -218,11 +229,12 @@ class Observable:
 
             super().__init__("IMLCV_bias")
 
-        def __call__(self, cv1, cv2):
+        def __call__(self, *cv):
             # CVs are already in mapped space
 
-            cvs = jnp.array([cv1, cv2])
+            cvs = jnp.array([*cv])
 
+            @jit
             def f(point):
                 return self.bias.compute_from_cv(
                     cvs=CV(cv=point),
@@ -236,7 +248,7 @@ class Observable:
             )
 
             b = np.array(b, dtype=np.double)
-            b[np.isnan(b)] = 0
+            # b[np.isnan(b)] = 0
 
             return b
 
@@ -244,10 +256,10 @@ class Observable:
             pass
 
     def fes_bias(
-        self, kind="normal", plot=False, fs=None, max_bias=None, update_bounds=True
+        self, kind="normal", plot=False, max_bias=None, fs=None, update_bounds=True
     ):
         if fs is None:
-            fes, bounds = self._fes_2d(plot=plot, update_bounds=True)
+            fes, grid, bounds = self._fes_2d(plot=plot, update_bounds=True)
 
             if kind == "normal":
                 fs = fes.fs
@@ -261,39 +273,68 @@ class Observable:
         # fes is in 'xy'- indexing convention, convert to ij
         fs = np.transpose(fs)
 
+        # invert to use as bias
         if max_bias is not None:
             fs[:] = -fs[:] + np.min([max_bias, fs[~np.isnan(fs)].max()])
         else:
             fs[:] = -fs[:] + fs[~np.isnan(fs)].max()
 
-        # fesBias = FesBias(GridBias(cvs=self.cvs,  vals=fs,
-        #                            bounds=bounds), T=self.rounds.T)
-        fesBias = GridBias(cvs=self.cvs, vals=fs, bounds=bounds)
+        for choice in ["gridbias", "rbf"]:
 
-        # fesBias = CompositeBias(
-        #     biases=[
-        #         fesBias,
-        #         BiasF(cvs=fesBias.collective_variable),
-        #     ],
-        #     fun=lambda e: jax.numpy.where(e[0] > e[1], e[0], e[1]),
-        # )
+            if choice == "rbf":
 
-        if plot:
-            # plot_app(
-            #     bias=fesBias,
-            #     outputs=[
-            #         File(
-            #             f"{self.folder}/FES_thermolib_unmapped_{self.rounds.round}.pdf"
-            #         )
-            #     ],
-            #     map=False,
-            #     inverted=True,
-            # )
+                fslist = []
+                smoothing_list = []
+                cv = None
 
-            plot_app(
-                bias=fesBias,
-                outputs=[File(f"{self.folder}/FES_thermolib_{self.rounds.round}.pdf")],
-                inverted=True,
-            )
+                for idx, cvi in grid:
+
+                    if not np.isnan(fs[idx]):
+                        if cv is None:
+                            cv = cvi
+                        else:
+                            cv += cvi
+                        fslist.append(fs[idx])
+                        smoothing_list.append(fes.fupper.T[idx] - fes.flower.T[idx])
+
+                    # else:
+                    #     fslist.append(0.0)
+
+                fslist = jnp.array(fslist)
+                sigmalist = jnp.array(smoothing_list)
+
+                fesBias = RbfBias(
+                    cvs=self.cvs,
+                    vals=fslist,
+                    cv=cv,
+                    kernel="thin_plate_spline",
+                    epsilon=1.0,
+                    # smoothing=sigmalist,
+                    degree=None,
+                )
+            elif choice == "gridbias":
+                fesBias = GridBias(cvs=self.cvs, vals=fs, bounds=bounds)
+            else:
+                raise ValueError
+
+            if plot:
+                plot_app(
+                    bias=fesBias,
+                    outputs=[
+                        File(
+                            f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.pdf"
+                        )
+                    ],
+                    inverted=True,
+                    stdout=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stdout",
+                    stderr=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stderr",
+                )
+
+                plot_app(
+                    bias=fesBias,
+                    outputs=[
+                        File(f"{self.folder}/FES_bias_{self.rounds.round}_{choice}.pdf")
+                    ],
+                )
 
         return fesBias
