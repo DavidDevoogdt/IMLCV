@@ -11,12 +11,14 @@ from pathlib import Path
 import ase
 import dill
 import h5py
+import jax
 import jax.numpy as jnp
 import numpy as np
 from filelock import FileLock
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
+from IMLCV import KEY
 from IMLCV.base.bias import Bias, CompositeBias, NoneBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
@@ -422,7 +424,6 @@ class RoundsMd(Rounds):
         self,
         biases: Iterable[Bias],
         steps,
-        sp: Iterable[SystemParams] | None = None,
         plot=True,
     ):
         with self.lock:
@@ -434,6 +435,18 @@ class RoundsMd(Rounds):
         tasks: list[tuple[int, AppFuture]] | None = None
         plot_tasks = []
         md_engine = MDEngine.load(common_md_name)
+
+        sp: SystemParams | None = None
+
+        for _, t in self.iter(num=2):
+            sp0 = t.ti.sp
+            if sp is None:
+                sp = sp0
+            else:
+                sp += sp0
+        if sp is None:  # no provious round available
+            sp = md_engine.sp
+        sp = sp.batch()
 
         for i, bias in enumerate(biases):
 
@@ -492,8 +505,21 @@ class RoundsMd(Rounds):
                 cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
+            if bias is not None:
+                bs = bias.compute_from_system_params(sp).energy
+                probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
+                probs = probs / jnp.linalg.norm(probs)
+            else:
+                probs = None
+
+            index = jax.random.choice(
+                a=sp.shape[0],
+                key=KEY,
+                p=probs,
+            )
+
             future = run(
-                sp=sp[i] if sp is not None else None,
+                sp=sp[index],
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),

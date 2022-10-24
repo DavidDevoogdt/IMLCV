@@ -41,7 +41,3 @@ sed -i 's/./configure --prefix=$PREFIX --disable-python --disable-libsearch --di
 
 # ./configure 
 
-
-conda install cxx-compiler
-./configure --prefix=${CONDA_PREFIX}  --enable-modules=+pycv
-make -j4

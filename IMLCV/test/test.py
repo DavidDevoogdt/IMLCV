@@ -355,8 +355,8 @@ if __name__ == "__main__":
     if LOCAL:
         md = alanine_dipeptide_yaff
         # md = mil53_yaff
-        k = 10 * kjmol / (6.14**2)
-        name = "test_cv_disc_ala"
+        k = 15 * kjmol / (6.14**2)
+        name = "test_cv_disc_ala_smoothing"
     else:
         md = ase_yaff
         k = 10 * kjmol
@@ -381,8 +381,8 @@ if __name__ == "__main__":
         md=md(),
         recalc=True,
         k=k,
-        steps=5e3,
-        n=4,
+        steps=2e3,
+        n=6,
     )
 
     # test_copy(name)

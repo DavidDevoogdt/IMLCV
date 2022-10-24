@@ -49,8 +49,8 @@ NAME_TO_FUNC = {
 
 
 def cv_norm(x: CV, y: CV, metric: Metric):
-    return metric.norm(x, y)
-    # return jnp.linalg.norm(x.cv - y.cv)
+    # return metric.norm(x, y)
+    return jnp.linalg.norm(x.cv - y.cv)
 
 
 def cv_vals(x: CV, metric: Metric):

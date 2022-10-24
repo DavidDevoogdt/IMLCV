@@ -10,18 +10,17 @@ from parsl import File
 
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
 from IMLCV.base.CV import CV
-from IMLCV.base.rounds import RoundsCV, RoundsMd
+from IMLCV.base.rounds import RoundsMd
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
-from thermolib.thermodynamics.histogram import Histogram2D, HistogramND
+from thermolib.thermodynamics.histogram import HistogramND
 
 
 class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
-    samples_per_bin = 40
-
+    samples_per_bin = 150
     time_per_bin = 2 * picosecond
 
     def __init__(self, rounds: RoundsMd) -> None:
@@ -31,7 +30,7 @@ class Observable:
 
         self.folder = rounds.folder
 
-    def _fes_2d(self, plot=True, update_bounds=True):
+    def _fes_2d(self, plot=True, update_bounds=True, n=8):
         # fes = FreeEnergySurface2D.from_txt
 
         temp = self.rounds.T
@@ -39,109 +38,62 @@ class Observable:
         common_bias = self.rounds.get_bias()
         directory = f"{self.folder}/round_{self.rounds.round}"
 
-        if isinstance(self.rounds, RoundsMd):
+        trajs = []
+        trajs_mapped = []
+        biases = []
 
-            trajs = []
-            trajs_mapped = []
-            biases = []
+        time = 0
+        cv = None
 
-            time = 0
-            cv = None
+        for round, trajectory in self.rounds.iter(num=3):
 
-            for round, trajectory in self.rounds.iter(num=2):
+            bias = trajectory.get_bias()
 
-                bias = trajectory.get_bias()
+            if cv is None:
+                cv = bias.collective_variable
+            sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
 
-                if cv is None:
-                    cv = bias.collective_variable
-                sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
+            cvs, _ = cv.compute_cv(sp)
+            trajs.append(cvs)
+            biases.append(Observable._ThermoBias2D(bias))
 
-                cvs, _ = cv.compute_cv(sp)
-
-                # arr = np.array(
-                #     cvs.cv,
-                #     dtype=np.double,
-                # )
-
-                trajs.append(cvs)
-
-                biases.append(Observable._ThermoBias2D(bias))
-
-            if plot:
-                plot_app(
-                    bias=common_bias,
-                    outputs=[File(f"{directory}/combined_unmapped.pdf")],
-                    map=False,
-                    traj=trajs,
-                    stdout=f"{directory}/combined_unmapped.stdout",
-                    stderr=f"{directory}/combined_unmapped.stderr",
-                )
-
-                # plot_app(
-                #     bias=common_bias,
-                #     outputs=[File(f"{directory}/combined.pdf")],
-                #     traj=trajs_mapped,
-                # )
-
-            trajs_mapped = [
-                np.array(
-                    traj.cv,
-                    dtype=np.double,
-                )
-                for traj in trajs
-            ]
-
-            # todo: take actual bounds instead of calculated bounds
-            bounds, bins = self._FES_mg(
-                trajs=trajs, bounding_box=cv.metric.bounding_box
+        if plot:
+            plot_app(
+                bias=common_bias,
+                outputs=[File(f"{directory}/combined.pdf")],
+                map=False,
+                traj=trajs,
+                # stdout=f"{directory}/combined.stdout",
+                # stderr=f"{directory}/combined.stderr",
             )
 
-            histo = HistogramND.from_wham(
-                bins=bins,
-                # pinit=pinit,
-                trajectories=trajs_mapped,
-                error_estimate="mle_f",
-                biasses=biases,
-                temp=temp,
-                verbosity="high",
+        trajs_mapped = [
+            np.array(
+                traj.cv,
+                dtype=np.double,
             )
+            for traj in trajs
+        ]
 
-        elif isinstance(self.rounds, RoundsCV):
-            raise NotImplementedError("check this")
-            trajs = []
-            for dictionary in self.rounds.iter(num=np.Inf):
-                pos = dictionary["positions"][:]
+        # todo: take actual bounds instead of calculated bounds
+        bounds, bins = self._FES_mg(
+            trajs=trajs, bounding_box=cv.metric.bounding_box, n=n
+        )
 
-                if "cell" in dictionary:
-                    cell = dictionary["cell"][:]
-                    arr = np.array(
-                        [
-                            self.cvs.compute_cv(coordinates=x, cell=y)[0]
-                            for (x, y) in zip(pos, cell)
-                        ],
-                        dtype=np.double,
-                    )
-                else:
-                    arr = np.array(
-                        [self.cvs.compute_cv(coordinates=p, cell=None)[0] for p in pos],
-                        dtype=np.double,
-                    )
-
-                trajs.append(arr)
-
-            bounds, bins = self._FES_mg(trajs=trajs, n=10)
-            data = np.vstack(trajs)
-            histo = Histogram2D.from_single_trajectory(
-                data,
-                bins,
-                error_estimate="mle_f",
-            )
-        else:
-            raise NotImplementedError
+        histo = HistogramND.from_wham(
+            bins=bins,
+            # pinit=pinit,
+            trajectories=trajs_mapped,
+            error_estimate="mle_f",
+            biasses=biases,
+            temp=temp,
+            verbosity="high",
+        )
 
         fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
         fes.set_ref()
 
+        # xy indexing
         # construc list with centers CVs
         bin_centers = [0.5 * (x[:-1] + x[1:]) for x in bins]
         Ngrid = np.array([len(bi) for bi in bin_centers])
@@ -200,7 +152,7 @@ class Observable:
                 n += t.cv.size
 
             # 20 points per bin on average
-            n = int(n ** (1 / trajs[0].cv.ndim) / self.samples_per_bin)
+            n = int((n / self.samples_per_bin) ** (1 / trajs[0].cv.ndim))
 
         # if time is not None:
         #     bins_max = int((time/self.time_per_bin)**(1 / trajs[0].ndim))
@@ -248,7 +200,6 @@ class Observable:
             )
 
             b = np.array(b, dtype=np.double)
-            # b[np.isnan(b)] = 0
 
             return b
 
@@ -256,10 +207,17 @@ class Observable:
             pass
 
     def fes_bias(
-        self, kind="normal", plot=False, max_bias=None, fs=None, update_bounds=True
+        self,
+        kind="normal",
+        plot=False,
+        max_bias=None,
+        fs=None,
+        update_bounds=True,
+        choice="rbf",
+        n=None,
     ):
         if fs is None:
-            fes, grid, bounds = self._fes_2d(plot=plot, update_bounds=True)
+            fes, grid, bounds = self._fes_2d(plot=plot, update_bounds=True, n=n)
 
             if kind == "normal":
                 fs = fes.fs
@@ -279,62 +237,78 @@ class Observable:
         else:
             fs[:] = -fs[:] + fs[~np.isnan(fs)].max()
 
-        for choice in ["gridbias", "rbf"]:
+            # for choice in [
+            #     "gridbias",
+            #     "rbf",
+            # ]:
 
-            if choice == "rbf":
+        if choice == "rbf":
 
-                fslist = []
-                smoothing_list = []
-                cv = None
+            fslist = []
+            smoothing_list = []
+            cv = None
 
-                for idx, cvi in grid:
+            for idx, cvi in grid:
 
-                    if not np.isnan(fs[idx]):
-                        if cv is None:
-                            cv = cvi
-                        else:
-                            cv += cvi
-                        fslist.append(fs[idx])
-                        smoothing_list.append(fes.fupper.T[idx] - fes.flower.T[idx])
+                if not np.isnan(fs[idx]):
+                    fslist.append(fs[idx])
 
-                    # else:
-                    #     fslist.append(0.0)
+                    if cv is None:
+                        cv = cvi
+                    else:
+                        cv += cvi
 
-                fslist = jnp.array(fslist)
-                sigmalist = jnp.array(smoothing_list)
+                    smoothing_list.append(fes.fupper.T[idx] - fes.flower.T[idx])
 
-                fesBias = RbfBias(
-                    cvs=self.cvs,
-                    vals=fslist,
-                    cv=cv,
-                    kernel="thin_plate_spline",
-                    epsilon=1.0,
-                    # smoothing=sigmalist,
-                    degree=None,
-                )
-            elif choice == "gridbias":
-                fesBias = GridBias(cvs=self.cvs, vals=fs, bounds=bounds)
-            else:
-                raise ValueError
+                # else:
+                #     fslist.append(0.0)
 
-            if plot:
-                plot_app(
-                    bias=fesBias,
-                    outputs=[
-                        File(
-                            f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.pdf"
-                        )
-                    ],
-                    inverted=True,
-                    stdout=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stdout",
-                    stderr=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stderr",
-                )
+            fslist = jnp.array(fslist)
+            sigmalist = jnp.array(smoothing_list)
 
-                plot_app(
-                    bias=fesBias,
-                    outputs=[
-                        File(f"{self.folder}/FES_bias_{self.rounds.round}_{choice}.pdf")
-                    ],
-                )
+            bounds = jnp.array(bounds)
+            eps = (bounds[:, 1] - bounds[:, 0]) / jnp.array(fs.shape)
+
+            fesBias = RbfBias(
+                cvs=self.cvs,
+                vals=fslist,
+                cv=cv,
+                kernel="linear",
+                # epsilon=0.5 * jnp.mean(eps),
+                smoothing=2.0 * sigmalist,
+                # degree=None,
+            )
+        elif choice == "gridbias":
+            fesBias = GridBias(cvs=self.cvs, vals=fs, bounds=bounds)
+
+        else:
+            raise ValueError
+
+        if plot:
+            plot_app(
+                bias=fesBias,
+                outputs=[
+                    File(
+                        f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.pdf"
+                    )
+                ],
+                inverted=True,
+                # stdout=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stdout",
+                # stderr=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stderr",
+            )
+
+            plot_app(
+                bias=fesBias,
+                outputs=[
+                    File(f"{self.folder}/FES_bias_{self.rounds.round}_{choice}.pdf")
+                ],
+            )
+
+        err = 0
+        for idx, cvi in grid:
+            if not jnp.isnan(fes.fs[idx]):
+                err += (fesBias.compute_from_cv(cvi)[0] - fes.fs[idx]) ** 2
+        err = jnp.sqrt(err)
+        print(err)
 
         return fesBias

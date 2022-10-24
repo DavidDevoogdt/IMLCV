@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import ase
 import ase.calculators.calculator
@@ -20,10 +20,10 @@ import jax.scipy as jsp
 import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.interpolate
+import scipy
 from ase.calculators.cp2k import CP2K
 from jax import jit, value_and_grad, vmap
-from molmod.units import angstrom, electronvolt, kjmol
+from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
 
 import yaff
@@ -32,6 +32,9 @@ from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
 from IMLCV.base.tools._rbf_interp import RBFInterpolator
 from IMLCV.base.tools.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
+
+if TYPE_CHECKING:
+    from IMLCV.base.MdEngine import MDEngine
 
 
 @jax_dataclasses.pytree_dataclass
@@ -382,7 +385,7 @@ class Cp2kEnergy(AseEnergy):
         out = min(len(lines), 20)
         assert out != 0, "cp2k.out doesn't contain output"
 
-        file = "\\n".join(lines[-out:])
+        file = "\n".join(lines[-out:])
 
         raise AseError(
             f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is { file}"
@@ -407,6 +410,10 @@ class Cp2kEnergy(AseEnergy):
         )
 
 
+class PlumedEnerg(Energy):
+    pass
+
+
 class BiasError(Exception):
     pass
 
@@ -426,14 +433,20 @@ class Bias(BC, ABC):
         self.collective_variable = collective_variable
         self.start = start
         self.step = step
+        self.couter = 0
 
         self.finalized = False
 
-    def update_bias(self, sp: SystemParams):
+    def update_bias(
+        self,
+        md: MDEngine,
+    ):
         """update the bias.
 
         Can only change the properties from _get_args
         """
+        if self.finalized:
+            return
 
     @partial(jit, static_argnums=(0, 2, 3))
     def compute_from_system_params(
@@ -662,10 +675,11 @@ class CompositeBias(Bias):
         for b in self.biases:
             b.finalize()
 
-    def update_bias(self, sp: SystemParams):
-
-        if self.finalized:
-            return
+    def update_bias(
+        self,
+        md: MDEngine,
+    ):
+        super().update_bias(md=md)
 
         mask = self.start_list == 0
 
@@ -673,7 +687,7 @@ class CompositeBias(Bias):
         self.start_list -= 1
 
         for i in np.argwhere(mask):
-            self.biases[int(i)].update_bias(sp=sp)
+            self.biases[int(i)].update_bias(md=md)
 
     def get_args(self):
         return [a for b in self.biases for a in b.get_args()]
@@ -783,7 +797,12 @@ class BiasMTD(Bias):
 
         super().__init__(cvs, start, step)
 
-    def update_bias(self, sp: SystemParams):
+    def update_bias(
+        self,
+        md: MDEngine,
+    ):
+
+        sp = trajectory_info.sp
 
         if self.finalized:
             return
@@ -895,8 +914,10 @@ class GridBias(Bias):
             if p:
 
                 def sl(a, b):
-                    out = [slice(None)] * self.collective_variable.n
+                    out = [slice(None) for _ in range(self.collective_variable.n)]
                     out[a] = b
+
+                    return tuple(out)
 
                 bias[sl(i, 0)] = bias[sl(i, -2)]
                 bias[sl(i, -1)] = bias[sl(i, 1)]
@@ -921,7 +942,7 @@ class GridBias(Bias):
     def _compute(self, cvs: CV, *args):
         # overview of grid points. stars are addded to allow out of bounds extension.
         # the bounds of the x square are per.
-        # ___ ___ ___ ___
+        #  ___ ___ ___ ___
         # |   |   |   |   |
         # | * | * | * | * |
         # |___|___|___|___|
@@ -962,9 +983,9 @@ class CvMonitor(BiasF):
         self.last_cv: CV | None = None
         self.transitions = np.zeros((0, self.collective_variable.metric.ndim, 2))
 
-    def update_bias(self, sp: SystemParams):
-        if self.finalized:
-            return
+    def update_bias(self, md: MDEngine):
+
+        sp = md.trajectory_info.sp
 
         new_cv, _ = self.collective_variable.compute_cv(sp=sp)
 
@@ -981,5 +1002,119 @@ class CvMonitor(BiasF):
         self.last_cv = new_cv
 
 
-class BiasPlumed(Bias):
+class NonJaxBias(Bias):
+
     pass
+
+
+class PlumedBias(Bias):
+    def __init__(
+        self,
+        collective_variable: CollectiveVariable,
+        kernel=None,
+        fn="plumed.dat",
+        fn_log="plumed.log",
+    ) -> None:
+
+        super().__init__(
+            collective_variable,
+            start=0,
+            step=1,
+        )
+
+        self.fn = fn
+        self.kernel = kernel
+        self.fn_log = fn_log
+        self.plumedstep = 0
+        self.hooked = False
+
+        self.setup_plumed(timestep, 0)
+
+    def setup_plumed(self, timestep, restart):
+        r"""Send commands to PLUMED to make it computation-ready.
+
+        **Arguments:**
+
+        timestep
+            The timestep (in au) of the integrator
+
+        restart
+            Set to an integer value different from 0 to let PLUMED know that
+            this is a restarted run
+        """
+        # Try to load the plumed Python wrapper, quit if not possible
+        try:
+            from plumed import Plumed
+        except:
+            raise ImportError
+
+        self.plumed = Plumed(kernel=self.kernel)
+        # Conversion between PLUMED internal units and YAFF internal units
+        # Note that PLUMED output will follow the PLUMED conventions
+        # concerning units
+        self.plumed.cmd("setMDEnergyUnits", 1.0 / kjmol)
+        self.plumed.cmd("setMDLengthUnits", 1.0 / nanometer)
+        self.plumed.cmd("setMDTimeUnits", 1.0 / picosecond)
+        # Initialize the system in PLUMED
+        self.plumed.cmd("setPlumedDat", self.fn)
+        self.plumed.cmd("setNatoms", self.system.natom)
+        self.plumed.cmd("setMDEngine", "IMLCV")
+        self.plumed.cmd("setLogFile", self.fn_log)
+        self.plumed.cmd("setTimestep", timestep)
+        self.plumed.cmd("setRestart", restart)
+        self.plumed.cmd("init")
+
+    def update_bias(self, md: MDEngine):
+        r"""When this point is reached, a complete time integration step was
+        finished and PLUMED should be notified about this.
+        """
+        if not self.hooked:
+            self.setup_plumed(
+                timestepself.plumedstep, restart=int(iterative.counter > 0)
+            )
+            self.hooked = True
+
+        # PLUMED provides a setEnergy command, which should pass the
+        # current potential energy. It seems that this is never used, so we
+        # don't pass anything for the moment.
+        #        current_energy = sum([part.energy for part in iterative.ff.parts[:-1] if not isinstance(part, ForcePartPlumed)])
+        #        self.plumed.cmd("setEnergy", current_energy)
+        # Ensure the plumedstep is an integer and not a numpy data type
+        self.plumedstep += 1
+        self._internal_compute(None, None)
+        self.plumed.cmd("update")
+
+    def _internal_compute(self, gpos, vtens):
+        self.plumed.cmd("setStep", self.plumedstep)
+        self.plumed.cmd("setPositions", self.system.pos)
+        self.plumed.cmd("setMasses", self.system.masses)
+        if self.system.charges is not None:
+            self.plumed.cmd("setCharges", self.system.charges)
+        if self.system.cell.nvec > 0:
+            rvecs = self.system.cell.rvecs.copy()
+            self.plumed.cmd("setBox", rvecs)
+        # PLUMED always needs arrays to write forces and virial to, so
+        # provide dummy arrays if Yaff does not provide them
+        # Note that gpos and forces differ by a minus sign, which has to be
+        # corrected for when interacting with PLUMED
+        if gpos is None:
+            my_gpos = np.zeros(self.system.pos.shape)
+        else:
+            gpos[:] *= -1.0
+            my_gpos = gpos
+        self.plumed.cmd("setForces", my_gpos)
+        if vtens is None:
+            my_vtens = np.zeros((3, 3))
+        else:
+            my_vtens = vtens
+        self.plumed.cmd("setVirial", my_vtens)
+        # Do the actual calculation, without an update; this should
+        # only be done at the end of a time step
+        self.plumed.cmd("prepareCalc")
+        self.plumed.cmd("performCalcNoUpdate")
+        if gpos is not None:
+            gpos[:] *= -1.0
+        # Retrieve biasing energy
+        energy = np.zeros((1,))
+        self.plumed.cmd("getBias", energy)
+        return energy[0]

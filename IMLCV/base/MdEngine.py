@@ -26,6 +26,7 @@ import yaff.sampling
 import yaff.sampling.iterative
 from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
 from IMLCV.base.CV import SystemParams
+from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
 
@@ -422,143 +423,66 @@ class MDEngine(ABC):
             if self.trajectory_file is not None:
                 self.trajectory_info.save(self.trajectory_file)  # type: ignore
 
-        self.bias.update_bias(self.sp)
+        self.bias.update_bias(self)
 
         self.step += 1
 
+    def get_energy(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
 
-class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
-    """MD engine with YAFF as backend.
-
-    Args:
-        ff (yaff.pes.ForceField)
-    """
-
-    def __init__(
-        self,
-        bias: Bias,
-        static_trajectory_info: StaticTrajectoryInfo,
-        energy: Energy,
-        trajectory_file=None,
-        sp: SystemParams | None = None,
-    ) -> None:
-
-        yaff.log.set_level(log.warning)
-        self.start = 0
-        # self.step = 1
-        self.name = "YaffEngineIMLCV"
-
-        self._verlet: yaff.sampling.VerletIntegrator | None = None
-        self._yaff_ener: YaffEngine._YaffFF | None = None
-
-        super().__init__(
-            energy=energy,
-            bias=bias,
-            static_trajectory_info=static_trajectory_info,
-            trajectory_file=trajectory_file,
-            sp=sp,
+        ener = self.energy.compute_from_system_params(
+            gpos,
+            vtens,
         )
 
-    def __call__(self, iterative: VerletIntegrator):
-
-        kwargs = dict(
-            positions=iterative.pos,
-            cell=iterative.rvecs,
-            gpos=iterative.gpos,
-            t=iterative.time,
-            e_pot=iterative.epot,
-            vtens=iterative.vtens,
-            T=iterative.temp,
-            err=iterative.cons_err,
-        )
-        if hasattr(iterative, "press"):
-            kwargs["P"] = iterative.press
-
-        self.hook(TrajectoryInfo(**kwargs))
-
-    def _setup_verlet(self):
-
-        hooks = [self, VerletScreenLog(step=self.static_trajectory_info.screen_log)]
-
-        self._yaff_ener = YaffEngine._YaffFF(
-            _energy=self.energy,
-            _bias=self.bias,
-            tic=self.static_trajectory_info,
+        ener_bias: EnergyResult = self.bias.compute_from_system_params(
+            self.sp,
+            gpos,
+            vtens,
         )
 
-        if self.static_trajectory_info.thermostat:
-            hooks.append(
-                # yaff.sampling.NHCThermostat(
-                #     self.static_trajectory_info.T,
-                #     timecon=self.static_trajectory_info.timecon_thermo,
-                # )
-                yaff.sampling.LangevinThermostat(
-                    self.static_trajectory_info.T,
-                    timecon=self.static_trajectory_info.timecon_thermo,
-                )
-            )
-        if self.static_trajectory_info.barostat:
-            hooks.append(
-                yaff.sampling.MTKBarostat(
-                    self._yaff_ener,
-                    self.static_trajectory_info.T,
-                    self.static_trajectory_info.P,
-                    timecon=self.static_trajectory_info.timecon_baro,
-                    anisotropic=True,
-                )
-            )
+        total_energy = ener + ener_bias
 
-        self._verlet = yaff.sampling.VerletIntegrator(
-            self._yaff_ener,
-            self.static_trajectory_info.timestep,
-            temp0=self.static_trajectory_info.T,
-            hooks=hooks,
-        )
+        return total_energy
 
-    @staticmethod
-    def load(file, **kwargs) -> MDEngine:
-        return super().load(file, **kwargs)
+    @property
+    def yaff_system(self) -> MDEngine.YaffSys:
+        return self.YaffSys(self.energy, self.static_trajectory_info)
 
-    def _run(self, steps):
-        if self._verlet is None:
-            self._setup_verlet()
-        self._verlet.run(int(steps))
+    # definitons of different interfaces. These encode the state of the system in the format of a given md engine
 
     @dataclass
-    class _yaffCell:
-        _ener: Energy
-
-        @property
-        def rvecs(self):
-            return np.array(self._ener.cell)
-
-        @rvecs.setter
-        def rvecs(self, rvecs):
-            self._ener.cell = rvecs
-
-        def update_rvecs(self, rvecs):
-            self.rvecs = rvecs
-
-        @property
-        def nvec(self):
-            return self.rvecs.shape[0]
-
-        @property
-        def volume(self):
-            if self.nvec == 0:
-                return np.nan
-
-            return np.linalg.det(self.rvecs)
-
-    @dataclass
-    class _yaffSys:
+    class YaffSys:
         _ener: Energy
         _tic: StaticTrajectoryInfo
 
-        # charges: np.ndarray | None = None
+        @dataclass
+        class YaffCell:
+            _ener: Energy
+
+            @property
+            def rvecs(self):
+                return np.array(self._ener.cell)
+
+            @rvecs.setter
+            def rvecs(self, rvecs):
+                self._ener.cell = rvecs
+
+            def update_rvecs(self, rvecs):
+                self.rvecs = rvecs
+
+            @property
+            def nvec(self):
+                return self.rvecs.shape[0]
+
+            @property
+            def volume(self):
+                if self.nvec == 0:
+                    return np.nan
+
+                return np.linalg.det(self.rvecs)
 
         def __post_init__(self):
-            self._cell = YaffEngine._yaffCell(_ener=self._ener)
+            self._cell = self.YaffCell(_ener=self._ener)
 
         @property
         def numbers(self):
@@ -588,24 +512,125 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         def natom(self):
             return self.pos.shape[0]
 
-    class _YaffFF(yaff.pes.ForceField):
+
+class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
+    """MD engine with YAFF as backend.
+
+    Args:
+        ff (yaff.pes.ForceField)
+    """
+
+    def __init__(
+        self,
+        bias: Bias,
+        static_trajectory_info: StaticTrajectoryInfo,
+        energy: Energy,
+        trajectory_file=None,
+        sp: SystemParams | None = None,
+        additional_parts=[],
+    ) -> None:
+
+        yaff.log.set_level(log.warning)
+        self.start = 0
+        # self.step = 1
+        self.name = "YaffEngineIMLCV"
+
+        self._verlet: yaff.sampling.VerletIntegrator | None = None
+        self._yaff_ener: YaffEngine.YaffFF | None = None
+
+        super().__init__(
+            energy=energy,
+            bias=bias,
+            static_trajectory_info=static_trajectory_info,
+            trajectory_file=trajectory_file,
+            sp=sp,
+        )
+
+        self.additional_parts = additional_parts
+
+    def __call__(self, iterative: VerletIntegrator):
+
+        kwargs = dict(
+            positions=iterative.pos,
+            cell=iterative.rvecs,
+            gpos=iterative.gpos,
+            t=iterative.time,
+            e_pot=iterative.epot,
+            vtens=iterative.vtens,
+            T=iterative.temp,
+            err=iterative.cons_err,
+        )
+        if hasattr(iterative, "press"):
+            kwargs["P"] = iterative.press
+
+        self.hook(TrajectoryInfo(**kwargs))
+
+    def _setup_verlet(self):
+
+        hooks = [self, VerletScreenLog(step=self.static_trajectory_info.screen_log)]
+
+        self._yaff_ener = YaffEngine.YaffFF(
+            md_engine=self,
+            additional_parts=self.additional_parts,
+        )
+
+        if self.static_trajectory_info.thermostat:
+            hooks.append(
+                # yaff.sampling.NHCThermostat(
+                #     self.static_trajectory_info.T,
+                #     timecon=self.static_trajectory_info.timecon_thermo,
+                # )
+                yaff.sampling.LangevinThermostat(
+                    self.static_trajectory_info.T,
+                    timecon=self.static_trajectory_info.timecon_thermo,
+                )
+            )
+        if self.static_trajectory_info.barostat:
+            hooks.append(
+                yaff.sampling.MTKBarostat(
+                    self._yaff_ener,
+                    self.static_trajectory_info.T,
+                    self.static_trajectory_info.P,
+                    timecon=self.static_trajectory_info.timecon_baro,
+                    anisotropic=True,
+                )
+            )
+
+        # plumed hook
+        for i in self.additional_parts:
+            if isinstance(i, yaff.sampling.iterative.Hook):
+                hooks.append(i)
+
+        self._verlet = yaff.sampling.VerletIntegrator(
+            self._yaff_ener,
+            self.static_trajectory_info.timestep,
+            temp0=self.static_trajectory_info.T,
+            hooks=hooks,
+        )
+
+    @staticmethod
+    def load(file, **kwargs) -> MDEngine:
+        return super().load(file, **kwargs)
+
+    def _run(self, steps):
+        if self._verlet is None:
+            self._setup_verlet()
+        self._verlet.run(int(steps))
+
+    class YaffFF(yaff.pes.ForceField):
         def __init__(
             self,
-            _energy: Energy,  # name clash with yaff.pes.ForceField
-            _bias: Bias,
-            tic: StaticTrajectoryInfo,
+            md_engine: MDEngine,
             name="IMLCV_YAFF_forcepart",
+            additional_parts=[],
         ):
+            self.md_engine = md_engine
 
-            self._sys = YaffEngine._yaffSys(_ener=_energy, _tic=tic)
-            self._energy = _energy
-            self.bias = _bias
-
-            super().__init__(system=self.system, parts=[])
+            super().__init__(system=self.system, parts=additional_parts)
 
         @property
         def system(self):
-            return self._sys
+            return self.md_engine.yaff_system
 
         @system.setter
         def system(self, sys):
@@ -613,7 +638,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         @property
         def sp(self):
-            return self._energy.sp
+            return self.md_engine.energy.sp
 
         def update_rvecs(self, rvecs):
             self.clear()
@@ -625,40 +650,10 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         def _internal_compute(self, gpos, vtens):
 
-            ener = self._energy.compute_from_system_params(
+            total_energy = self.md_engine.get_energy(
                 gpos is not None,
                 vtens is not None,
             )
-
-            ener_bias: EnergyResult = self.bias.compute_from_system_params(
-                self.sp,
-                gpos is not None,
-                vtens is not None,
-            )
-
-            # arr = []
-            # arr.append(["energy [angstrom]", ener.energy, ener_bias.energy])
-            # if gpos is not None:
-            #     arr.append(
-            #         [
-            #             "|gpos| [eV/angstrom]",
-            #             jnp.linalg.norm(ener.gpos),
-            #             jnp.linalg.norm(ener_bias.gpos),
-            #         ]
-            #     )
-
-            # if vtens is not None:
-            #     arr.append(
-            #         [
-            #             "P [bar]",
-            #             ener.vtens / self.system.cell.volume / bar,
-            #             ener_bias.vtens / self.system.cell.volume / bar,
-            #         ]
-            #     )
-
-            # print(tabulate(arr, headers=["", "Energy", "Bias"]))
-
-            total_energy = ener + ener_bias
 
             if gpos is not None:
                 gpos[:] += np.array(total_energy.gpos)
@@ -666,3 +661,52 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 vtens[:] += np.array(total_energy.vtens)
 
             return total_energy.energy
+
+
+class PlumedEngine(YaffEngine):
+
+    # Energy - kJ/mol
+    # Length - nanometers
+    # Time - picoseconds
+
+    # https://github.com/giorginolab/plumed2-pycv/tree/v2.8-pycv/src/pycv
+    # pybias  https://raimis.github.io/plumed-pybias/
+
+    # pycv doesn't work with cell vectors?
+    # this does ? https://github.com/giorginolab/plumed2-pycv/blob/v2.8-pycv/src/pycv/PythonFunction.cpp
+    # see https://github.com/giorginolab/plumed2-pycv/blob/v2.6-pycv-devel/regtest/pycv/rt-f2/plumed.dat
+
+    plumed_dat = """
+    LOAD FILE=libpybias.so
+
+    dist: DISTANCE ATOMS=1,2
+    
+
+    rc: PYTHONCV ATOMS=1,4,3 IMPORT=curvature FUNCTION=r
+
+    # Creat a PyBias action, which executes "bias.py"
+    PYBIAS ARG=rc
+
+
+    RESTRAINT ARG=rc AT=0 KAPPA=0 SLOPE=1
+    """
+
+    def __init__(
+        self,
+        bias: Bias,
+        static_trajectory_info: StaticTrajectoryInfo,
+        energy: Energy,
+        trajectory_file=None,
+        sp: SystemParams | None = None,
+    ) -> None:
+
+        super().__init__(
+            bias,
+            static_trajectory_info,
+            energy,
+            trajectory_file,
+            sp,
+            additional_parts=[
+                libplumed.ForcePartPlumed(timestep=static_trajectory_info.timestep)
+            ],
+        )

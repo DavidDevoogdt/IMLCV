@@ -6,7 +6,7 @@ from pathlib import Path
 import jax.numpy as jnp
 from molmod.constants import boltzmann
 
-from IMLCV.base.bias import BiasMTD, CompositeBias, CvMonitor, HarmonicBias, NoneBias
+from IMLCV.base.bias import BiasMTD, CompositeBias, HarmonicBias, NoneBias
 from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
@@ -80,7 +80,7 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def FESBias(self, plot=True, max_bias=None, kind="normal"):
+    def FESBias(self, plot=True, max_bias=None, kind="normal", n=None):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)
@@ -89,7 +89,7 @@ class Scheme:
             if self.max_energy is not None:
                 max_bias = self.max_energy
         fesBias = obs.fes_bias(
-            kind=kind, plot=plot, max_bias=max_bias, update_bounds=True
+            kind=kind, plot=plot, max_bias=max_bias, update_bounds=True, n=n
         )
         self.md = self.md.new_bias(fesBias)
 
@@ -101,48 +101,15 @@ class Scheme:
             k = 2 * self.md.static_trajectory_info.T * boltzmann
         k *= n**2
 
-        # select reasonable start point
-        if self.rounds.round != 0:
-            cv = None
-            sp = None
-            colvar = None
-
-            for r, t in self.rounds.iter(num=2):
-                if colvar is None:
-                    colvar = t.get_bias().collective_variable
-
-                sp0 = t.ti.sp
-                cv0, _ = colvar.compute_cv(sp0)
-                if cv is None:
-                    sp = sp0
-                    cv = cv0
-                else:
-                    sp += sp0
-                    cv += cv0
-
-            def f(a):
-                spa = sp[jnp.argmin(colvar.metric.norm(cv, CV(cv=jnp.array(a))))]
-                return spa
-
-            out = [f(a) for a in itertools.product(*grid)]
-        else:
-            out = None
-
         self.rounds.run_par(
             [
-                CompositeBias(
-                    [
-                        HarmonicBias(
-                            self.md.bias.collective_variable,
-                            CV(cv=jnp.array(cv)),
-                            k,
-                        ),
-                        CvMonitor(self.md.bias.collective_variable),
-                    ]
+                HarmonicBias(
+                    self.md.bias.collective_variable,
+                    CV(cv=jnp.array(cv)),
+                    k,
                 )
                 for cv in itertools.product(*grid)
             ],
-            sp=out,
             steps=steps,
         )
 
