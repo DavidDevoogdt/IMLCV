@@ -21,6 +21,8 @@ ROOT_DIR = Path(os.path.dirname(__file__)).parent
 if "mpi4py" in sys.modules:
     warning("mpi4py doens't work wel lwith cp2k calc atm")
 
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
 yaff.log.set_level(yaff.log.silent)
 
 name = getpass.getuser()

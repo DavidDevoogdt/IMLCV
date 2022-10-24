@@ -398,7 +398,7 @@ class CVDiscovery:
         sp: SystemParams | None = None
         cv: CV | None = None
 
-        for round, traj in rounds.iter(r=4, num=num):
+        for round, traj in rounds.iter(r=None, num=4):
             if sti is None:
                 sti = round.tic
 
@@ -500,7 +500,7 @@ def plot_app(
     for cv in cvs:
 
         cvd, _ = cv.compute_cv(sps)
-        cvdm = vmap(cv.metric.map)(cvd)
+        cvdm = vmap(cv.metric.__map)(cvd)
 
         cv_data.append(np.array(cvd))
         cv_data_mapped.append(np.array(cvdm))

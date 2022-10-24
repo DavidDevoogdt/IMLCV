@@ -20,15 +20,16 @@ import jax.scipy as jsp
 import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.interpolate
 from ase.calculators.cp2k import CP2K
 from jax import jit, value_and_grad, vmap
 from molmod.units import angstrom, electronvolt, kjmol
 from parsl.data_provider.files import File
-from scipy.interpolate import RBFInterpolator
 
 import yaff
 from IMLCV import ROOT_DIR
 from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
+from IMLCV.base.tools._rbf_interp import RBFInterpolator
 from IMLCV.base.tools.tools import HashableArrayWrapper
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
@@ -441,9 +442,7 @@ class Bias(BC, ABC):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        [cvs, jac] = self.collective_variable.compute_cv(
-            sp=sp, jacobian=gpos or vir, map=False
-        )
+        [cvs, jac] = self.collective_variable.compute_cv(sp=sp, jacobian=gpos or vir)
         [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
 
         e_gpos = None
@@ -471,21 +470,12 @@ class Bias(BC, ABC):
         """
         assert isinstance(cvs, CV)
 
-        # assert not (
-        #     not map and diff
-        # ), "cannot retreive gradient from already mapped CVs"
-
         # map compute command
         def f0(x):
             args = [HashableArrayWrapper(a) for a in self.get_args()]
             static_array_argnums = tuple(i + 1 for i in range(len(args)))
 
             return jit(self._compute, static_argnums=static_array_argnums)(x, *args)
-
-        # def f1(x):
-        # if cvs.mapped:
-        #     x = self.collective_variable.metric.map(x)
-        # return f0(x)
 
         def f2(x):
             return value_and_grad(f0)(x) if diff else (f0(x), None)
@@ -739,8 +729,8 @@ class HarmonicBias(Bias):
         self.q0 = q0
 
     def _compute(self, cvs: CV, *args):
-        r: CV = self.collective_variable.metric.difference(cvs, self.q0)
-        return jnp.einsum("i,i,i", self.k, r.cv, r.cv)
+        r = self.collective_variable.metric.difference(cvs, self.q0)
+        return jnp.einsum("i,i,i", self.k, r, r) / 2
 
     def get_args(self):
         return []
@@ -825,6 +815,56 @@ class BiasMTD(Bias):
         return [self.q0s, self.Ks]
 
 
+class RbfBias(Bias):
+    """Bias interpolated from lookup table on uniform grid.
+
+    values are caluclated in bin centers
+    """
+
+    def __init__(
+        self,
+        cvs: CollectiveVariable,
+        vals: jnp.ndarray,
+        cv: CV,
+        start=None,
+        step=None,
+        kernel="thin_plate_spline",
+        epsilon=None,
+        smoothing=0.0,
+        degree=None,
+    ) -> None:
+        super().__init__(cvs, start, step)
+
+        assert cv.batched
+        assert cv.shape[1] == cvs.n
+        assert len(vals.shape) == 1
+        assert cv.shape[0] == vals.shape[0]
+
+        self.rbf = jit(
+            RBFInterpolator(
+                y=cv,
+                kernel=kernel,
+                d=vals,
+                metric=cvs.metric,
+                smoothing=smoothing,
+                epsilon=epsilon,
+                degree=degree,
+            )
+        )
+
+        # assert jnp.allclose(vals, self.rbf(cv), atol=1e-7)
+
+    def _compute(self, cvs: CV, *args):
+
+        out = self.rbf(cvs)
+        if cvs.batched:
+            return out
+        return out[0]
+
+    def get_args(self):
+        return []
+
+
 class GridBias(Bias):
     """Bias interpolated from lookup table on uniform grid.
 
@@ -835,7 +875,7 @@ class GridBias(Bias):
         self,
         cvs: CollectiveVariable,
         vals,
-        bounds=None,
+        bounds,
         start=None,
         step=None,
         centers=True,
@@ -844,7 +884,6 @@ class GridBias(Bias):
 
         if not centers:
             raise NotImplementedError
-        assert cvs.n == 2
 
         # extend periodically
         self.n = np.array(vals.shape)
@@ -852,23 +891,41 @@ class GridBias(Bias):
         bias = np.zeros(np.array(vals.shape) + 2) * np.nan
         bias[1:-1, 1:-1] = vals
 
-        if self.collective_variable.metric.periodicities[0]:
-            bias[0, :] = bias[-2, :]
-            bias[-1, :] = bias[1, :]
+        for i, p in enumerate(self.collective_variable.metric.periodicities):
+            if p:
 
-        if self.collective_variable.metric.periodicities[1]:
-            bias[:, 0] = bias[:, -2]
-            bias[:, -1] = bias[:, 1]
+                def sl(a, b):
+                    out = [slice(None)] * self.collective_variable.n
+                    out[a] = b
+
+                bias[sl(i, 0)] = bias[sl(i, -2)]
+                bias[sl(i, -1)] = bias[sl(i, 1)]
 
         # do general interpolation
-        x, y = np.indices(bias.shape)
+        inds_pairs = np.array(np.indices(bias.shape))
         mask = np.isnan(bias)
-        rbf = RBFInterpolator(np.array([x[~mask], y[~mask]]).T, bias[~mask])
-        bias[mask] = rbf(np.array([x[mask], y[mask]]).T)
+        inds_pairs[:, mask]
+
+        rbf = scipy.interpolate.RBFInterpolator(
+            np.array([i[~mask] for i in inds_pairs]).T,
+            bias[~mask],
+        )
+
+        bias[mask] = rbf(np.array([i[mask] for i in inds_pairs]).T)
+
+        rbf = scipy.interpolate.RBFInterpolator(
+            np.array([i[~mask] for i in inds_pairs]).T,
+            bias[~mask],
+        )
+
+        bias[mask] = rbf(np.array([i[mask] for i in inds_pairs]).T)
 
         self.vals = bias
-
         self.bounds = jnp.array(bounds)
+
+        # self.cons = jnp.min(bias[~jnp.isnan(bias)])
+
+        # self.cons = jnp.min(bias[~jnp.isnan(bias)])
 
     def _compute(self, cvs: CV, *args):
         # overview of grid points. stars are addded to allow out of bounds extension.
@@ -889,12 +946,10 @@ class GridBias(Bias):
         # gridpoints are in the middle of
 
         # map between vals 0 and 1
-        if self.bounds is not None:
-            coords = (cvs.cv - self.bounds[:, 0]) / (
-                self.bounds[:, 1] - self.bounds[:, 0]
-            )
-        else:
-            coords = self.collective_variable.metric.map(cvs).cv
+        # if self.bounds is not None:
+        coords = (cvs.cv - self.bounds[:, 0]) / (self.bounds[:, 1] - self.bounds[:, 0])
+        # else:
+        #     coords = self.collective_variable.metric.__map(cvs).cv
 
         # map between vals matrix edges
         coords = (coords * self.n - 0.5) / (self.n - 1)
@@ -937,12 +992,14 @@ class CvMonitor(BiasF):
         if self.finalized:
             return
 
-        new_cv, _ = self.collective_variable.compute_cv(sp=sp, map=True)
+        new_cv, _ = self.collective_variable.compute_cv(sp=sp)
 
         if self.last_cv is not None:
             if self.collective_variable.metric.norm(new_cv, self.last_cv) > 0.1:
-                a = self.collective_variable.metric.unmap(new_cv).cv
-                b = self.collective_variable.metric.unmap(self.last_cv).cv
+                # a = self.collective_variable.metric.__unmap(new_cv).cv
+                # b = self.collective_variable.metric.__unmap(self.last_cv).cv
+                a = new_cv.cv
+                b = new_cv.cv
 
                 new_trans = np.array([np.stack([a, b], axis=1)])
                 self.transitions = np.vstack((self.transitions, new_trans))

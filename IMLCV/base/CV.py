@@ -11,7 +11,6 @@ import alphashape
 
 # import numpy as np
 import jax.numpy as jnp
-import jax.scipy as jsp
 import jax_dataclasses as jdc
 import numpy as np
 import tensorflow
@@ -144,8 +143,19 @@ class CV:
             return
 
         for i in range(self.cv.shape[0]):
-            yield CV(cv=self.cv[i, :], mapped=self.mapped)
+            yield self[i]
         return
+
+    def __getitem__(self, idx):
+        return CV(cv=self.cv[idx, :], mapped=self.mapped)
+
+    @property
+    def shape(self):
+        return self.cv.shape
+
+    @property
+    def size(self):
+        return self.cv.size
 
 
 class Metric:
@@ -175,25 +185,37 @@ class Metric:
         self.periodicities = periodicities
 
     @partial(jit, static_argnums=(0))
-    def difference(self, x1: CV, x2: CV) -> CV:
-
-        cv = CV(
-            cv=self.__periodic_wrap(self.map(x2).cv - self.map(x1).cv, min=True),
-            mapped=x1.mapped,
-        )
-        if not x1.mapped:
-            cv = self.unmap(cv)
-
-        return cv
-
-    def norm(self, x1: CV, x2: CV, k=None):
-        diff: CV = self.difference(x1=x1, x2=x2)
-        if diff.batched:
-            return jnp.linalg.norm(diff.cv, axis=-1)
-        return jnp.linalg.norm(diff.cv)
+    def norm(self, x1: CV, x2: CV):
+        diff = self.difference(x1=x1, x2=x2)
+        return jnp.linalg.norm(diff)
 
     @partial(jit, static_argnums=(0, 2))
-    def __periodic_wrap(self, xs, min=False):
+    def periodic_wrap(self, x: CV, min=False) -> CV:
+
+        out = CV(cv=self.__periodic_wrap(self.__map(x.cv), min=min), mapped=True)
+
+        if x.mapped:
+            return out
+        return self.__unmap(out)
+
+    @partial(jit, static_argnums=(0))
+    def difference(self, x1: CV, x2: CV) -> jnp.ndarray:
+        assert not x1.mapped
+        assert not x2.mapped
+
+        return self.min_cv(
+            x2.cv - x1.cv,
+        )
+
+    def min_cv(self, cv: jnp.ndarray):
+
+        return self.__unmap(
+            self.__periodic_wrap(self.__map(cv, displace=False), min=True),
+            displace=False,
+        )
+
+    @partial(jit, static_argnums=(0, 2))
+    def __periodic_wrap(self, xs: jnp.ndarray, min=False):
         """Translate cvs such over unit cell.
 
         min=True calculates distances, False translates one vector inside box
@@ -205,30 +227,27 @@ class Metric:
 
         return jnp.where(self.periodicities, coor, xs)
 
-    @partial(jit, static_argnums=(0))
-    def map(self, x: CV) -> CV:
+    @partial(jit, static_argnums=(0, 2))
+    def __map(self, x: jnp.ndarray, displace=True) -> jnp.ndarray:
         """transform CVs to lie in unit square."""
-        if x.mapped:
-            return x
 
-        y = (x.cv - self.bounding_box[:, 0]) / (
-            self.bounding_box[:, 1] - self.bounding_box[:, 0]
-        )
+        if displace:
+            x -= self.bounding_box[:, 0]
 
-        return CV(cv=self.__periodic_wrap(y, min=False), mapped=True)
+        y = x / (self.bounding_box[:, 1] - self.bounding_box[:, 0])
 
-    @partial(jit, static_argnums=(0))
-    def unmap(self, x: CV) -> CV:
+        return y
+
+    @partial(jit, static_argnums=(0, 2))
+    def __unmap(self, x: jnp.ndarray, displace=True) -> jnp.ndarray:
         """transform CVs to lie in unit square."""
-        if not x.mapped:
-            return x
 
-        y = (
-            x.cv * (self.bounding_box[:, 1] - self.bounding_box[:, 0])
-            + self.bounding_box[:, 0]
-        )
+        y = x * (self.bounding_box[:, 1] - self.bounding_box[:, 0])
 
-        return CV(cv=y, mapped=False)
+        if displace:
+            x += self.bounding_box[:, 0]
+
+        return y
 
     def __add__(self, other):
         assert isinstance(self, Metric)
@@ -276,6 +295,26 @@ class Metric:
         ]
 
         return grid
+
+    def flat_coords(self, cv: CV):
+        """return isometric embedding of coordinates in euclidean space. Every periodic dimension is becomes 2 dimension ( Whitney embedding)"""
+
+        if cv.batched:
+            return vmap(self.flat_coords)(cv)
+
+        out: list[float] = []
+
+        for p, c, bb in zip(self.periodicities, cv.cv, self.bounding_box):
+            if p:
+                scale = bb[1] - bb[0]
+                x = ((c - bb[0]) / (bb[1] - bb[0])) * jnp.pi * 2
+
+                out.append(jnp.cos(x) * scale)
+                out.append(jnp.sin(x) * scale)
+            else:
+                out.append(c)
+
+        return jnp.array(out)
 
     @property
     def ndim(self):
@@ -373,16 +412,16 @@ class CollectiveVariable:
         self.f = f
         self.jac = jac
 
-    @partial(jit, static_argnums=(0, 2, 3))
-    def compute_cv(self, sp: SystemParams, jacobian=False, map=False) -> tuple[CV, CV]:
+    @partial(jit, static_argnums=(0, 2))
+    def compute_cv(self, sp: SystemParams, jacobian=False) -> tuple[CV, CV]:
 
-        if map:
+        # if map:
 
-            def cvf(x):
-                return self.metric.map(self.f.compute_cv_flow(x))
+        #     def cvf(x):
+        #         return self.metric.__map(self.f.compute_cv_flow(x))
 
-        else:
-            cvf = self.f.compute_cv_flow
+        # else:
+        cvf = self.f.compute_cv_flow
 
         if sp.batched:
             dcv = vmap(self.jac(cvf))
@@ -399,9 +438,6 @@ class CollectiveVariable:
     @property
     def n(self):
         return self.metric.ndim
-
-    def norm(self, cv0: CV, cv1: CV):
-        return self.metric.difference()
 
 
 ######################################
@@ -538,19 +574,19 @@ def dihedral(numbers):
 ######################################
 
 
-class MeshGrid(CvTrans):
-    def __init__(self, meshgrid) -> None:
-        self.map_meshgrids = meshgrid
-        super().__init__(f)
+# class MeshGrid(CvTrans):
+#     def __init__(self, meshgrid) -> None:
+#         self.map_meshgrids = meshgrid
+#         super().__init__(f)
 
-    def _f(self, x: CV):
-        #  if self.map_meshgrids is not None:
-        y = x.cv
+#     def _f(self, x: CV):
+#         #  if self.map_meshgrids is not None:
+#         y = x.cv
 
-        y = y * (jnp.array(self.map_meshgrids[0].shape) - 1)
-        y = jnp.array(
-            [jsp.ndimage.map_coordinates(wp, y, order=1) for wp in self.map_meshgrids]
-        )
+#         y = y * (jnp.array(self.map_meshgrids[0].shape) - 1)
+#         y = jnp.array(
+#             [jsp.ndimage.map_coordinates(wp, y, order=1) for wp in self.map_meshgrids]
+#         )
 
 
 def rotate_2d(alpha):

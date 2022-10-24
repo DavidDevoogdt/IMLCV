@@ -17,8 +17,8 @@ from IMLCV.base.bias import (
     BiasMTD,
     CompositeBias,
     EnergyResult,
-    GridBias,
     HarmonicBias,
+    RbfBias,
     YaffEnergy,
 )
 from IMLCV.base.CV import (
@@ -179,7 +179,7 @@ def test_grid_bias():
     ycf = np.reshape(yc, (-1))
     val = np.array([f(x, y) for x, y in zip(xcf, ycf)]).reshape(xc.shape)
 
-    bias = GridBias(cvs=cv, vals=val)
+    bias = RbfBias(cvs=cv, vals=val)
 
     def c(x, y):
         return bias.compute_from_cv(cvs=np.array([x, y]))[0]
@@ -346,7 +346,8 @@ def test_copy(name):
     shutil.copytree(old, new)
     s = Scheme.from_rounds(folder=new)
 
-    s.grid_umbrella(n=4)
+    # s.grid_umbrella(n=4)
+    s.FESBias()
 
 
 if __name__ == "__main__":
@@ -354,7 +355,7 @@ if __name__ == "__main__":
     if LOCAL:
         md = alanine_dipeptide_yaff
         # md = mil53_yaff
-        k = 10 * kjmol
+        k = 10 * kjmol / (6.14**2)
         name = "test_cv_disc_ala"
     else:
         md = ase_yaff
@@ -375,12 +376,13 @@ if __name__ == "__main__":
 
         test_grid_selection(recalc=True)
 
-        test_copy(name)
+    test_cv_discovery(
+        name=name,
+        md=md(),
+        recalc=True,
+        k=k,
+        steps=5e3,
+        n=4,
+    )
 
-        test_cv_discovery(
-            name=name,
-            md=md(),
-            recalc=False,
-            k=k,
-            steps=3e3,
-        )
+    # test_copy(name)

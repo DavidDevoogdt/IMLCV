@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from jax import numpy as jnp
 import numpy as np
+from jax import numpy as jnp
 from scipy.interpolate import RegularGridInterpolator as _si_RegularGridInterpolator
 
 
@@ -11,12 +11,7 @@ class RegularGridInterpolator:
     # implementation by Johannes Buchner
 
     def __init__(
-        self,
-        points,
-        values,
-        method="linear",
-        bounds_error=False,
-        fill_value=jnp.nan
+        self, points, values, method="linear", bounds_error=False, fill_value=jnp.nan
     ):
         if method not in ("linear", "nearest"):
             raise ValueError(f"method {method!r} is not defined")
@@ -27,16 +22,15 @@ class RegularGridInterpolator:
             ve = f"there are {len(points)} point arrays, but values has {values.ndim} dimensions"
             raise ValueError(ve)
 
-        if hasattr(values, 'dtype') and hasattr(values, 'astype'):
+        if hasattr(values, "dtype") and hasattr(values, "astype"):
             if not np.issubdtype(values.dtype, np.inexact):
                 values = values.astype(float)
 
         self.fill_value = fill_value
         if fill_value is not None:
             fill_value_dtype = np.asarray(fill_value).dtype
-            if (
-                hasattr(values, 'dtype') and not np.
-                can_cast(fill_value_dtype, values.dtype, casting='same_kind')
+            if hasattr(values, "dtype") and not np.can_cast(
+                fill_value_dtype, values.dtype, casting="same_kind"
             ):
                 raise ValueError(
                     "fill_value must be either 'None' or "
@@ -44,7 +38,7 @@ class RegularGridInterpolator:
                 )
 
         for i, p in enumerate(points):
-            if not np.all(np.diff(p) > 0.):
+            if not np.all(np.diff(p) > 0.0):
                 ve = f"the points in dimension {i} must be strictly ascending"
                 raise ValueError(ve)
             if not np.asarray(p).ndim == 1:
@@ -56,7 +50,7 @@ class RegularGridInterpolator:
         if isinstance(points, jnp.ndarray):
             self.grid = points  # Do not unnecessarily copy arrays
         else:
-            self.grid = tuple([jnp.asarray(p) for p in points])
+            self.grid = tuple(jnp.asarray(p) for p in points)
         self.values = jnp.asarray(values)
 
     def __call__(self, xi, method=None):
@@ -93,7 +87,11 @@ class RegularGridInterpolator:
         else:
             raise AssertionError("method must be bound")
         if not self.bounds_error and self.fill_value is not None:
-            result = jnp.where(out_of_bounds.reshape(result.shape[:1] + (1, ) * (result.ndim - 1)), self.fill_value, result)
+            result = jnp.where(
+                out_of_bounds.reshape(result.shape[:1] + (1,) * (result.ndim - 1)),
+                self.fill_value,
+                result,
+            )
 
         return result.reshape(xi_shape[:-1] + self.values.shape[ndim:])
 
@@ -101,14 +99,14 @@ class RegularGridInterpolator:
         from itertools import product
 
         # slice for broadcasting over trailing dimensions in self.values
-        vslice = (slice(None), ) + (None, ) * (self.values.ndim - len(indices))
+        vslice = (slice(None),) + (None,) * (self.values.ndim - len(indices))
 
         # find relevant values
         # each i and i+1 represents a edge
         edges = product(*[[i, i + 1] for i in indices])
-        values = jnp.array(0.)
+        values = jnp.array(0.0)
         for edge_indices in edges:
-            weight = jnp.array(1.)
+            weight = jnp.array(1.0)
             for ei, i, yi in zip(edge_indices, indices, norm_distances):
                 weight *= jnp.where(ei == i, 1 - yi, yi)
             values += self.values[edge_indices] * weight[vslice]
@@ -116,8 +114,7 @@ class RegularGridInterpolator:
 
     def _evaluate_nearest(self, indices, norm_distances):
         idx_res = [
-            jnp.where(yi <= .5, i, i + 1)
-            for i, yi in zip(indices, norm_distances)
+            jnp.where(yi <= 0.5, i, i + 1) for i, yi in zip(indices, norm_distances)
         ]
         return self.values[tuple(idx_res)]
 
@@ -127,7 +124,7 @@ class RegularGridInterpolator:
         # compute distance to lower edge in unity units
         norm_distances = []
         # check for out of bounds xi
-        out_of_bounds = jnp.zeros((xi.shape[1], ), dtype=bool)
+        out_of_bounds = jnp.zeros((xi.shape[1],), dtype=bool)
         # iterate through dimensions
         for x, grid in zip(xi, self.grid):
             i = jnp.searchsorted(grid, x) - 1
