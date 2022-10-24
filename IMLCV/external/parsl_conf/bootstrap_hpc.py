@@ -62,6 +62,7 @@ def f(name):
         recalc=True,
         steps=1000,
         k=10 * kjmol,
+        n=8,
     )
 
 

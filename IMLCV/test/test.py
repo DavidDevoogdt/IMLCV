@@ -52,6 +52,7 @@ def test_cv_discovery(
     steps=5e3,
     k=5 * kjmol,
     cvd="AE",
+    n=4,
 ):
     # do_conf()
 
@@ -92,6 +93,7 @@ def test_cv_discovery(
         recalc=recalc,
         steps=steps,
         K=k,
+        n=n,
     )
 
     scheme0.update_CV(
@@ -375,10 +377,10 @@ if __name__ == "__main__":
 
         test_copy(name)
 
-    test_cv_discovery(
-        name=name,
-        md=md(),
-        recalc=False,
-        k=k,
-        steps=3e3,
-    )
+        test_cv_discovery(
+            name=name,
+            md=md(),
+            recalc=False,
+            k=k,
+            steps=3e3,
+        )

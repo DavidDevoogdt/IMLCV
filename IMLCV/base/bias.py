@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import functools
 import os
 import tempfile
 from abc import ABC, abstractmethod
@@ -16,7 +15,6 @@ import ase.geometry
 import ase.stress
 import ase.units
 import dill
-import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 import jax_dataclasses
@@ -912,7 +910,6 @@ class GridBias(Bias):
 class GridBiasNd(Bias):
     # inspiration fromhttps://github.com/stanbiryukov/Nyx/tree/main/nyx/jax
 
-   
     def __init__(
         self,
         collective_variable: CollectiveVariable,

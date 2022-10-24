@@ -95,7 +95,7 @@ def config(
         else:
             kwargs["cores_per_node"] = CP2K_THREADS
             kwargs["launcher"] = SingleNodeLauncher()
-            kwargs["max_blocks"] = 20
+            kwargs["max_blocks"] = 100
             kwargs["nodes_per_block"] = 1
             kwargs["mem_per_node"] = mem_per_node
             plabel = f"hpc_{cluster}"

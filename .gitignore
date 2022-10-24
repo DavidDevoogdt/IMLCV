@@ -62,3 +62,6 @@ IMLCV/bash_python_app/*
 output/test_cv_disc_perov/round_0/*
 venv_test/*
 nohup.out
+Miniconda3_plumed/*
+Miniconda3_plumed/pkgs/*
+IMLCV/base/tools/.mypy_cache/*
