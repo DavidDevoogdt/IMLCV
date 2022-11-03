@@ -1,3 +1,5 @@
+import argparse
+
 import parsl
 
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
@@ -38,7 +40,7 @@ def func(name):
     if os.path.exists(f"output/{name}"):
         shutil.rmtree(f"output/{name}")
 
-    engine = ase_yaff()
+    engine = ase_yaff(file)
     round = RoundsMd(folder=f"output/{name}")
     round.new_round(md=engine)
     round.run_par([None for _ in range(10)], steps=1000)
@@ -46,26 +48,27 @@ def func(name):
     round.write_xyz()
 
 
-def f():
+def f(name):
     from molmod.units import kjmol
 
     from IMLCV.external.parsl_conf.config import config
     from IMLCV.test.common import ase_yaff
     from IMLCV.test.test import test_cv_discovery
 
-    config(cluster="doduo", time="48:00:00", mem_per_node=20)
+    config(cluster="doduo", time="72:00:00", mem_per_node=20)
     test_cv_discovery(
-        name="hpc_perovskite_biased_04",
+        name=name,
         md=ase_yaff(small=True),
         recalc=True,
         steps=1000,
         k=10 * kjmol,
+        n=8,
     )
 
 
 if __name__ == "__main__":
-    out = bootstrap_hpc(f)()
+    parser = argparse.ArgumentParser(description="Execute python on hpc")
+    parser.add_argument("--name", type=str, help="name of simulation")
+    args = parser.parse_args()
 
-    # out = bootstrap_hpc(func)(
-    #     name="hpc_perovskite_unbiased",
-    # )
+    out = bootstrap_hpc(f)(name=args.name)

@@ -101,13 +101,20 @@ def bash_app_python(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Perform an (enhanced) biased MD")
-    parser.add_argument("--file", type=str, help="path to bias")
+    parser = argparse.ArgumentParser(
+        description="Execute python function in a bash app"
+    )
+    parser.add_argument(
+        "--file",
+        type=str,
+        help="path to file f containing dill.dump((func, args, kwargs), f)",
+    )
     parser.add_argument("--folder", type=str, help="working directory")
+    args = parser.parse_args()
 
+    print("#" * 20)
     print(f"got input {sys.argv}")
 
-    args = parser.parse_args()
     os.chdir(args.folder)
 
     print(f"working in folder {os.getcwd()}")
@@ -117,7 +124,12 @@ if __name__ == "__main__":
 
     print(f"calling {func} with args {fargs} and  kwargs {fkwargs}")
 
+    print("#" * 20)
+
     a = func(*fargs, **fkwargs)
 
     with open(args.file, "wb+") as f:
         dill.dump(a, f)
+
+    print("#" * 20)
+    print("function finisched properly, results dumped in {args.file}")

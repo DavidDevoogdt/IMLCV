@@ -181,7 +181,7 @@ def ase_yaff(small=True):
         f=f,
         metric=Metric(
             periodicities=[False, False],
-            bounding_box=jnp.array([[0.0, 4.0], [5.5, 8.5]]) * angstrom,
+            bounding_box=jnp.array([[0.0, 2.0], [5.5, 7.5]]) * angstrom,
         ),
     )
 

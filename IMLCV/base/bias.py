@@ -934,8 +934,17 @@ class GridBias(Bias):
 
         bias[mask] = rbf(np.array([i[mask] for i in inds_pairs]).T)
 
+        rbf = scipy.interpolate.RBFInterpolator(
+            np.array([i[~mask] for i in inds_pairs]).T,
+            bias[~mask],
+        )
+
+        bias[mask] = rbf(np.array([i[mask] for i in inds_pairs]).T)
+
         self.vals = bias
         self.bounds = jnp.array(bounds)
+
+        # self.cons = jnp.min(bias[~jnp.isnan(bias)])
 
         # self.cons = jnp.min(bias[~jnp.isnan(bias)])
 
@@ -972,6 +981,23 @@ class GridBias(Bias):
 
     def get_args(self):
         return []
+
+
+class GridBiasNd(Bias):
+    # inspiration fromhttps://github.com/stanbiryukov/Nyx/tree/main/nyx/jax
+
+    def __init__(
+        self,
+        collective_variable: CollectiveVariable,
+        vals,
+        bounds=None,
+        start=None,
+        step=None,
+    ) -> None:
+        super().__init__(collective_variable, start, step)
+
+    def _compute(self, cvs, *args):
+        return super()._compute(cvs, *args)
 
 
 class CvMonitor(BiasF):

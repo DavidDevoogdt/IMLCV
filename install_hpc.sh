@@ -32,7 +32,7 @@ mamba install -y pip git tensorflow-cpu jax jaxlib cython ndcctools numpy tensor
 
 
 pip install  -e  git+https://github.com/molmod/yaff.git#egg=yaff
-pip install  -e git+https://github.ugent.be/lvduyfhu/ThermoLIB#egg=thermolib
+pip install  -e git+https://github.ugent.be/lvduyfhu/ThermoLIB.git#egg=thermolib
 pip install  -e ./
 
 mamba install -y mypy
