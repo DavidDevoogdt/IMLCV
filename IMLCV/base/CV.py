@@ -101,6 +101,59 @@ class SystemParams:
             cell=self.cell if self.cell is None else self.cell[0, :],
         )
 
+    def neighbourghs(self, r_cut):
+        if self.cell is None:
+            pos2 = self.coordinates
+
+        else:
+            # get combinations of unit cell displacements that  fit in sphere of radius r_cut
+            q, r = jnp.linalg.qr(self.cell)
+            signs = jnp.diag(jnp.sign(jnp.diag(r)))
+            r = signs @ r
+            q = q @ signs
+
+            # nurber of cells to stack
+            n_ext = jnp.linalg.inv(r / r_cut)
+            n_ext = jnp.sum(
+                jnp.abs(n_ext), axis=1
+            )  # +1 to reach the end of the cell and +1 to account for displacemt in current cell
+
+            grid = jnp.array(jnp.meshgrid(*[jnp.arange(-ne, ne + 1) for ne in n_ext]))
+            mask = jnp.apply_along_axis(
+                lambda x: jnp.sum((r @ jnp.array(x)) ** 2) ** 0.5 < r_cut,
+                axis=0,
+                arr=grid,
+            )
+            pairs = grid[:, mask].T
+
+            # offset the positions of of the atoms to corresponding unit cell
+            @partial(vmap, in_axes=(None, 0), out_axes=1)
+            @partial(vmap, in_axes=(0, None), out_axes=0)
+            def moved_positions(pos, pair):
+                return pos + q @ (r @ pair)
+
+            pos2 = moved_positions(self.coordinates, pairs)
+
+        @partial(vmap, in_axes=(None, 1), out_axes=2)
+        @partial(vmap, in_axes=(None, 0), out_axes=1)
+        @partial(vmap, in_axes=(0, None), out_axes=0)
+        def distances(pos1, pos2):
+            return jnp.linalg.norm(pos1 - pos2)
+
+        mask = distances(self.coordinates, pos2) < r_cut
+
+        # check whether mask works
+        assert (
+            jnp.linalg.norm(pos2[mask[0]] - self.coordinates[0], axis=1) < r_cut
+        ).all()
+        assert (
+            jnp.linalg.norm(pos2[~mask[0]] - self.coordinates[0], axis=1) > r_cut
+        ).all()
+
+        neigh = [pos2[maski] for maski in mask]
+
+        return neigh
+
 
 @jdc.pytree_dataclass
 class CV:
@@ -296,25 +349,7 @@ class Metric:
 
         return grid
 
-    def flat_coords(self, cv: CV):
-        """return isometric embedding of coordinates in euclidean space. Every periodic dimension is becomes 2 dimension ( Whitney embedding)"""
-
-        if cv.batched:
-            return vmap(self.flat_coords)(cv)
-
-        out: list[float] = []
-
-        for p, c, bb in zip(self.periodicities, cv.cv, self.bounding_box):
-            if p:
-                scale = bb[1] - bb[0]
-                x = ((c - bb[0]) / (bb[1] - bb[0])) * jnp.pi * 2
-
-                out.append(jnp.cos(x) * scale)
-                out.append(jnp.sin(x) * scale)
-            else:
-                out.append(c)
-
-        return jnp.array(out)
+        return None
 
     @property
     def ndim(self):
@@ -525,10 +560,10 @@ def distance_descriptor(sps: SystemParams, tic, permutation="none"):
         coor = x.coordinates
 
         n = coor.shape[0]
-        out = jnp.zeros((n * (n - 1) / 2,))
+        out = jnp.zeros((n * (n - 1) // 2,))
 
         for a, (i, j) in enumerate(itertools.combinations(range(n), 2)):
-            out.at[a].set(jnp.linalg.norm(coor[i, :] - coor[j, :], 2))
+            out = out.at[a].set(jnp.linalg.norm(coor[i, :] - coor[j, :], 2))
 
         return out
 
@@ -606,11 +641,11 @@ def scale_cv_trans(array: CV):
     "axis 0 is batch axis"
     maxi = jnp.max(array.cv, axis=0)
     mini = jnp.min(array.cv, axis=0)
-    diff = maxi - mini
-    mask = jnp.abs(diff) > 1e-6
+    diff = (maxi - mini) / 2
+    # mask = jnp.abs(diff) > 1e-6
 
     def f0(x):
-        return (x[mask] - mini[mask]) / diff[mask]
+        return (x - (mini + maxi) / 2) / diff
 
     f = CvTrans(f=f0)
 

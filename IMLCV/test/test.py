@@ -4,6 +4,8 @@ import tempfile
 from importlib import import_module
 from pathlib import Path
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 from keras.api._v2 import keras as KerasAPI
@@ -347,7 +349,34 @@ def test_copy(name):
     s = Scheme.from_rounds(folder=new)
 
     # s.grid_umbrella(n=4)
-    s.FESBias()
+    # s.FESBias()
+
+    s.cvd = CVDiscovery(
+        transformer=TranformerAutoEncoder(
+            outdim=50,
+        )
+    )
+
+    s.update_CV(samples=1e5, num_rounds=2)
+
+
+def test_neigh():
+    rng = jax.random.PRNGKey(42)
+    key1, key2, rng = jax.random.split(rng, 3)
+
+    n = 25
+
+    sp = SystemParams(
+        coordinates=jax.random.uniform(key1, (n, 3)),
+        cell=jax.random.uniform(key2, (3, 3)),
+    )
+
+    # should convege to 1
+    r_cut = 15
+    neigh_calc = jnp.mean(jnp.array([x.shape[0] for x in sp.neighbourghs(r_cut=r_cut)]))
+    neigh_exp = n / jnp.abs(jnp.linalg.det(sp.cell)) * (4 / 3 * jnp.pi * r_cut**3)
+
+    assert jnp.abs(neigh_calc / neigh_exp - 1) < 0.1
 
 
 if __name__ == "__main__":
@@ -356,7 +385,7 @@ if __name__ == "__main__":
         md = alanine_dipeptide_yaff
         # md = mil53_yaff
         k = 15 * kjmol / (6.14**2)
-        name = "test_cv_disc_ala_smoothing"
+        name = "test_cv_disc_ala_500"
     else:
         md = ase_yaff
         k = 10 * kjmol
@@ -376,13 +405,15 @@ if __name__ == "__main__":
 
         test_grid_selection(recalc=True)
 
-    test_cv_discovery(
-        name=name,
-        md=md(),
-        recalc=True,
-        k=k,
-        steps=2e3,
-        n=6,
-    )
+        # test_cv_discovery(
+        #     name=name,
+        #     md=md(),
+        #     recalc=True,
+        #     k=k,
+        #     steps=5e2,
+        #     n=8,
+        # )
 
-    # test_copy(name)
+        test_copy(name)
+
+    test_neigh()
