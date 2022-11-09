@@ -114,9 +114,7 @@ def _build_and_solve_system(
         Domain scaling used to create the polynomial matrix.
 
     """
-    lhs, rhs, shift, scale = _build_system(
-        y, metric, d, smoothing, kernel, epsilon, powers
-    )
+    lhs, rhs = _build_system(y, metric, d, smoothing, kernel, epsilon, powers)
     _, _, coeffs, info = dgesv(lhs, rhs, overwrite_a=True, overwrite_b=True)
     if info < 0:
         raise ValueError(f"The {-info}-th argument had an illegal value.")
@@ -124,9 +122,7 @@ def _build_and_solve_system(
         msg = "Singular matrix."
         nmonos = powers.shape[0]
         if nmonos > 0:
-            pmat = _polynomial_matrix(
-                y, shift=shift, metric=metric, scale=scale, powers=powers
-            )
+            pmat = _polynomial_matrix(y, metric=metric, powers=powers)
             rank = jnp.linalg.matrix_rank(pmat)
             if rank < nmonos:
                 msg = (
@@ -137,7 +133,7 @@ def _build_and_solve_system(
 
         raise LinAlgError(msg)
 
-    return shift, scale, coeffs
+    return coeffs
 
 
 class RBFInterpolator:
@@ -342,8 +338,8 @@ class RBFInterpolator:
                     "`epsilon` must be specified if `kernel` is not one of "
                     f"{_SCALE_INVARIANT}."
                 )
-        else:
-            epsilon = float(epsilon)
+        # else:
+        #     epsilon = jnp.array(epsilon, dtype=jnp.float32)
 
         min_degree = _NAME_TO_MIN_DEGREE.get(kernel, -1)
         if degree is None:
@@ -380,13 +376,12 @@ class RBFInterpolator:
             )
 
         if neighbors is None:
-            shift, scale, coeffs = _build_and_solve_system(
+            coeffs = _build_and_solve_system(
                 y, metric, d, smoothing, kernel, epsilon, powers
             )
 
             # Make these attributes private since they do not always exist.
-            self._shift = shift
-            self._scale = scale
+
             self._coeffs = coeffs
 
         else:
@@ -402,7 +397,7 @@ class RBFInterpolator:
         self.epsilon = epsilon
         self.powers = powers
 
-    def _chunk_evaluator(self, x, y, shift, scale, coeffs, memory_budget=1000000):
+    def _chunk_evaluator(self, x, y, coeffs, memory_budget=1000000):
         """
         Evaluate the interpolation while controlling memory consumption.
         We chunk the input if we need more memory than specified.
@@ -447,13 +442,11 @@ class RBFInterpolator:
                     self.kernel,
                     self.epsilon,
                     self.powers,
-                    shift,
-                    scale,
                 )
                 out = out.at[i : i + chunksize, :].set(jnp.dot(vec, coeffs))
         else:
             vec = _build_evaluation_coefficients(
-                x, y, self.metric, self.kernel, self.epsilon, self.powers, shift, scale
+                x, y, self.metric, self.kernel, self.epsilon, self.powers
             )
             out = jnp.dot(vec, coeffs)
         return out
@@ -499,8 +492,6 @@ class RBFInterpolator:
             out = self._chunk_evaluator(
                 x,
                 self.y,
-                self._shift,
-                self._scale,
                 self._coeffs,
                 memory_budget=memory_budget,
             )
@@ -534,7 +525,7 @@ class RBFInterpolator:
                 ynbr = self.y[yidx]
                 dnbr = self.d[yidx]
                 snbr = self.smoothing[yidx]
-                shift, scale, coeffs = _build_and_solve_system(
+                coeffs = _build_and_solve_system(
                     ynbr,
                     self.metric,
                     dnbr,
@@ -545,7 +536,7 @@ class RBFInterpolator:
                 )
                 out = out.at[xidx].set(
                     self._chunk_evaluator(
-                        xnbr, ynbr, shift, scale, coeffs, memory_budget=memory_budget
+                        xnbr, ynbr, coeffs, memory_budget=memory_budget
                     )
                 )
 

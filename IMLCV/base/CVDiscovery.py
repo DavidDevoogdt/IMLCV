@@ -49,6 +49,8 @@ class Transformer:
         outdim,
         periodicity=None,
         bounding_box=None,
+        *fit_args,
+        **fit_kwargs,
     ) -> None:
         self.outdim = outdim
 
@@ -60,6 +62,9 @@ class Transformer:
         self.periodicity = periodicity
         self.bounding_box = bounding_box
 
+        self.fit_args = fit_args
+        self.fit_kwargs = fit_kwargs
+
     def pre_fit(
         self,
         z: SystemParams,
@@ -67,7 +72,6 @@ class Transformer:
         svd=True,
         scale=True,
     ) -> tuple[jnp.ndarray, CvFlow]:
-        # x, f = SystemParamss.flatten_f(z, scale=prescale)
         x, f = distance_descriptor(z, sti)
 
         if scale:
@@ -83,10 +87,9 @@ class Transformer:
         sti,
         prescale=True,
         postscale=True,
-        **kwargs,
     ) -> CollectiveVariable:
         x, f = self.pre_fit(sp, scale=prescale, sti=sti)
-        y, g = self._fit(x, indices, **kwargs)
+        y, g = self._fit(x, indices, *self.fit_args, **self.fit_kwargs)
         z, h = self.post_fit(y, scale=postscale)
 
         cv = CollectiveVariable(
@@ -97,10 +100,10 @@ class Transformer:
 
         return cv
 
-    def _fit(self, x, indices, **kwargs) -> tuple[jnp.ndarray, CvFlow]:
+    def _fit(self, x: CV, indices, **kwargs) -> tuple[CV, CvFlow]:
         raise NotImplementedError
 
-    def post_fit(self, y: jnp.ndarray, scale) -> tuple[jnp.ndarray, CvTrans]:
+    def post_fit(self, y: CV, scale) -> tuple[CV, CvTrans]:
         if not scale:
             return y, CvTrans(lambda x: x)
         return scale_cv_trans(y)
@@ -184,10 +187,25 @@ class Encoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         for i in range(self.layers):
-            x = nn.Dense(self.nunits, name=f"encoder_{i}")(x)
-            x = nn.relu(x)
-        mean_x = nn.Dense(self.latents, name="fc2_mean")(x)
-        logvar_x = nn.Dense(self.latents, name="fc2_logvar")(x)
+            x = nn.Dense(
+                self.nunits,
+                name=f"encoder_{i}",
+                # bias_init=jax.nn.initializers.normal(),
+                kernel_init=jax.nn.initializers.xavier_normal(),
+            )(x)
+            x = nn.tanh(x)
+        mean_x = nn.Dense(
+            self.latents,
+            name="fc2_mean",
+            # bias_init=jax.nn.initializers.normal(),
+            # kernel_init=jax.nn.initializers.normal(),
+        )(x)
+        logvar_x = nn.Dense(
+            self.latents,
+            name="fc2_logvar",
+            # bias_init=jax.nn.initializers.normal(),
+            # kernel_init=jax.nn.initializers.normal(),
+        )(x)
         return mean_x, logvar_x
 
 
@@ -200,9 +218,19 @@ class Decoder(nn.Module):
     @nn.compact
     def __call__(self, z):
         for i in range(self.layers):
-            z = nn.Dense(self.nunits, name=f"decoder_{i}")(z)
-            z = nn.relu(z)
-        z = nn.Dense(self.dim, name="fc2")(z)
+            z = nn.Dense(
+                self.nunits,
+                name=f"decoder_{i}",
+                # bias_init=jax.nn.initializers.normal(),
+                kernel_init=jax.nn.initializers.xavier_normal(),
+            )(z)
+            z = nn.tanh(z)
+        z = nn.Dense(
+            self.dim,
+            name="fc2",
+            # bias_init=jax.nn.initializers.normal(),
+            kernel_init=jax.nn.initializers.normal(),
+        )(z)
         return z
 
 
@@ -222,8 +250,8 @@ class VAE(nn.Module):
         recon_x = self.decoder(z)
         return recon_x, mean, logvar
 
-    def generate(self, z):
-        return nn.sigmoid(self.decoder(z))
+    # def generate(self, z):
+    #     return nn.sigmoid(self.decoder(z))
 
     def encode(self, x):
         mean, _ = self.encoder(x)
@@ -239,24 +267,36 @@ class VAE(nn.Module):
 class TranformerAutoEncoder(Transformer):
     def _fit(
         self,
-        x,
+        cv,
         indices,
-        decoder=False,
-        nunits=256,
+        nunits=250,
         nlayers=3,
-        parametric=True,
-        metric=None,
+        lr=1e-4,
+        num_epochs=100,
+        batch_size=32,
         **kwargs,
     ):
 
-        # import tensorflow_datasets as tfds
+        # import wandb
 
-        # x = x[indices, :]
+        # wandb.init(
+        #     project="TranformerAutoEncode",
+        #     config={
+        #         "cv": cv,
+        #         "nunits": nunits,
+        #         "nlayers": nlayers,
+        #         "lr": lr,
+        #         "num_epochs": num_epochs,
+        #         "batch_size": batch_size,
+        #         "outdim": self.outdim,
+        #         **self.fit_kwargs,
+        #         **kwargs,
+        #     },
+        # )
 
-        # EPS = 1e-8
-        key = random.PRNGKey(0)
+        rng = random.PRNGKey(0)
 
-        dim = x.shape[1]
+        dim = cv.shape[1]
 
         vae_args = {
             "latents": self.outdim,
@@ -271,35 +311,39 @@ class TranformerAutoEncoder(Transformer):
 
         @jax.vmap
         def mean_Squared_error(x1, x2):
-            return ((x1 - x2) ** 2).mean()
+            return 0.5 * jnp.linalg.norm(x1 - x2) ** 2
 
         def compute_metrics(recon_x, x, mean, logvar):
             bce_loss = mean_Squared_error(recon_x, x).mean()
-            kld_loss = kl_divergence(mean, logvar).mean()
+            kld_loss = 0.01 * kl_divergence(mean, logvar).mean()
             return {"bce": bce_loss, "kld": kld_loss, "loss": bce_loss + kld_loss}
 
         # @jax.vmap
         # def binary_cross_entropy_with_logits(logits, labels):
         #     logits = nn.log_sigmoid(logits)
-        #     return -jnp.sum(labels * logits + (1. - labels) * jnp.log(-jnp.expm1(logits)))
+        #     return -jnp.sum(
+        #         labels * logits + (1.0 - labels) * jnp.log(-jnp.expm1(logits))
+        #     )
 
         @jax.jit
-        def train_step(state, batch, z_rng):
+        def train_step(state: optax.TraceState, batch, z_rng):
             def loss_fn(params):
                 recon_x, mean, logvar = VAE(**vae_args).apply(
                     {"params": params}, batch, z_rng
                 )
 
                 bce_loss = mean_Squared_error(recon_x, batch).mean()
+                # bce_loss = mean_Squared_error(recon_x, batch)
                 kld_loss = kl_divergence(mean, logvar).mean()
                 loss = bce_loss + kld_loss
                 return loss
 
             grads = jax.grad(loss_fn)(state.params)
+
             return state.apply_gradients(grads=grads)
 
         @jax.jit
-        def eval(params, x, z, z_rng):
+        def eval(params, x, z_rng):
             def eval_model(vae):
                 recon_x, mean, logvar = vae(x, z_rng)
                 comparison = jnp.stack([x, recon_x])
@@ -311,13 +355,11 @@ class TranformerAutoEncoder(Transformer):
 
         # Test encoder implementation
         # Random key for initialization
-        rng = jax.random.PRNGKey(0)
+        key, rng = jax.random.split(rng, 2)
 
-        lr = 1e-4
-        num_epochs = 10
-        batch_size = 10
+        init_data = jax.random.normal(key, (batch_size, dim), jnp.float32)
 
-        init_data = jnp.ones((batch_size, dim), jnp.float32)
+        key, rng = jax.random.split(rng, 2)
 
         state = train_state.TrainState.create(
             apply_fn=VAE(**vae_args).apply,
@@ -330,9 +372,13 @@ class TranformerAutoEncoder(Transformer):
 
         rng, key = random.split(rng, 2)
 
+        x = cv.cv
         x = random.permutation(key, x)
-        x_train = x[0:-1000, :]
-        x_test = x[-1000:, :]
+
+        split = x.shape[0] // 10
+
+        x_train = x[0:-split, :]
+        x_test = x[-split:, :]
 
         steps_per_epoch = x_train.shape[0] // batch_size
 
@@ -346,19 +392,26 @@ class TranformerAutoEncoder(Transformer):
                 replace=False,
             )
 
-            for index in indices:
+            for n, index in enumerate(indices):
 
                 rng, key = random.split(rng)
-
                 state = train_step(state, x_train[index, :], key)
 
-                metrics, comparison = eval(state.params, x_test, z, eval_rng)
+                if n % 5000:
+                    metrics, comparison = eval(state.params, x_test, eval_rng)
+                    # wandb.log(
+                    #     {
+                    #         "loss": metrics["loss"],
+                    #         "kld": metrics["kld"],
+                    #         "distance": metrics["bce"],
+                    #     }
+                    # )
 
-                print(
-                    "eval epoch: {}, loss: {:.4f}, BCE: {:.4f}, KLD: {:.4f}".format(
-                        epoch + 1, metrics["loss"], metrics["bce"], metrics["kld"]
+                    print(
+                        "eval epoch: {}, loss: {:.4f}, BCE: {:.4f}, KLD: {:.4f}".format(
+                            epoch + 1, metrics["loss"], metrics["bce"], metrics["kld"]
+                        )
                     )
-                )
 
         class NNtrans(CvTrans):
             def __init__(self, params, vae_args) -> None:
@@ -366,17 +419,17 @@ class TranformerAutoEncoder(Transformer):
                 self.vae_args = vae_args
 
             @partial(jit, static_argnums=(0,))
-            def compute_cv_trans(self, x):
+            def compute_cv_trans(self, x: CV):
                 encoded: jnp.ndarray = VAE(**self.vae_args).apply(
-                    {"params": self.params}, x, method=VAE.encode
+                    {"params": self.params}, x.cv, method=VAE.encode
                 )[0]
-                return encoded
+                return CV(cv=encoded)
 
         f_enc = NNtrans(state.params, vae_args)
 
         # a: jnp.ndarray =
 
-        return f_enc.compute_cv_trans(x), f_enc
+        return f_enc.compute_cv_trans(cv), f_enc
 
 
 class CVDiscovery:
@@ -388,7 +441,9 @@ class CVDiscovery:
 
     def _get_data(
         self, rounds: RoundsMd, num=4, out=1e4
-    ) -> Tuple[SystemParams, CV, np.ndarray, CollectiveVariable, StaticTrajectoryInfo]:
+    ) -> Tuple[
+        SystemParams, CV, np.ndarray[any, any], CollectiveVariable, StaticTrajectoryInfo
+    ]:
 
         weights = []
 
@@ -398,7 +453,7 @@ class CVDiscovery:
         sp: SystemParams | None = None
         cv: CV | None = None
 
-        for round, traj in rounds.iter(r=None, num=4):
+        for round, traj in rounds.iter(stop=None, num=num):
             if sti is None:
                 sti = round.tic
 
@@ -439,17 +494,25 @@ class CVDiscovery:
             key=key,
             a=probs.shape[0],
             shape=(int(out),),
-            p=probs,
+            # p=probs,
             replace=False,
         )
 
         return sp, cv, indices, colvar, sti
 
     def compute(
-        self, rounds: RoundsMd, samples=3e3, plot=True, name=None, **kwargs
+        self,
+        rounds: RoundsMd,
+        num_rounds=4,
+        samples=3e3,
+        plot=True,
+        name=None,
+        **kwargs,
     ) -> CollectiveVariable:
 
-        sps, _, indices, cv_old, sti = self._get_data(num=5, out=samples, rounds=rounds)
+        sps, _, indices, cv_old, sti = self._get_data(
+            num=num_rounds, out=samples, rounds=rounds
+        )
 
         new_cv = self.transformer.fit(
             sps,

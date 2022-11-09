@@ -107,52 +107,79 @@ class SystemParams:
 
         else:
             # get combinations of unit cell displacements that  fit in sphere of radius r_cut
-            q, r = jnp.linalg.qr(self.cell)
-            signs = jnp.diag(jnp.sign(jnp.diag(r)))
-            r = signs @ r
-            q = q @ signs
 
-            # nurber of cells to stack
-            n_ext = jnp.linalg.inv(r / r_cut)
-            n_ext = jnp.sum(
-                jnp.abs(n_ext), axis=1
-            )  # +1 to reach the end of the cell and +1 to account for displacemt in current cell
+            r_margin = jnp.linalg.norm(
+                jnp.diag(self.cell)
+            )  # max offset within unit cell
 
-            grid = jnp.array(jnp.meshgrid(*[jnp.arange(-ne, ne + 1) for ne in n_ext]))
-            mask = jnp.apply_along_axis(
-                lambda x: jnp.sum((r @ jnp.array(x)) ** 2) ** 0.5 < r_cut,
-                axis=0,
-                arr=grid,
+            # grid = jnp.array(
+            #     jnp.meshgrid(
+            #         *[jnp.arange(-ne, ne + 1) for ne in n_ext.val], indexing="ij"
+            #     )
+            # )
+
+            n_ext = self.get_neighbourghs_n(r_cut=r_cut)
+
+            grid = jnp.array(
+                jnp.meshgrid(
+                    *[jnp.arange(-s, s + 1) for s in n_ext],
+                    indexing="ij",
+                )
             )
+
+            @jit
+            def f(x):
+                return (
+                    jnp.sum((self.cell @ jnp.array(x)) ** 2) ** 0.5 < r_cut + r_margin
+                )
+
+            mask = jnp.apply_along_axis(f, axis=0, arr=grid)
             pairs = grid[:, mask].T
 
             # offset the positions of of the atoms to corresponding unit cell
             @partial(vmap, in_axes=(None, 0), out_axes=1)
             @partial(vmap, in_axes=(0, None), out_axes=0)
+            @jit
             def moved_positions(pos, pair):
-                return pos + q @ (r @ pair)
+                return pos + self.cell @ pair
 
             pos2 = moved_positions(self.coordinates, pairs)
 
         @partial(vmap, in_axes=(None, 1), out_axes=2)
         @partial(vmap, in_axes=(None, 0), out_axes=1)
         @partial(vmap, in_axes=(0, None), out_axes=0)
+        @jit
         def distances(pos1, pos2):
             return jnp.linalg.norm(pos1 - pos2)
 
         mask = distances(self.coordinates, pos2) < r_cut
 
-        # check whether mask works
-        assert (
-            jnp.linalg.norm(pos2[mask[0]] - self.coordinates[0], axis=1) < r_cut
-        ).all()
-        assert (
-            jnp.linalg.norm(pos2[~mask[0]] - self.coordinates[0], axis=1) > r_cut
-        ).all()
-
-        neigh = [pos2[maski] for maski in mask]
+        neigh = [
+            [pos2[j, maskij] for j, maskij in enumerate(maski)]
+            for i, maski in enumerate(mask)
+        ]
 
         return neigh
+
+    def get_neighbourghs_n(self, r_cut):
+        """finds how many periodic images are needed to have all points within r_cut"""
+
+        q, r = jnp.linalg.qr(self.cell)
+        signs = jnp.diag(jnp.sign(jnp.diag(r)))
+        r = signs @ r
+        q = q @ signs
+
+        # nurber of cells to stack
+        n_ext = jnp.linalg.inv(r / r_cut)
+
+        n_ext_diag = jnp.diag(jnp.diag(n_ext))
+        offsets = (n_ext - n_ext_diag) @ n_ext_diag
+
+        n_ext = jnp.ceil(
+            jnp.sum((jnp.abs(n_ext) + jnp.abs(offsets)), axis=1)
+        )  # +1 to reach the end of the cell and +1 to account for displacemt in current cell
+
+        return [int(n) for n in n_ext]
 
 
 @jdc.pytree_dataclass
@@ -238,8 +265,8 @@ class Metric:
         self.periodicities = periodicities
 
     @partial(jit, static_argnums=(0))
-    def norm(self, x1: CV, x2: CV):
-        diff = self.difference(x1=x1, x2=x2)
+    def norm(self, x1: CV, x2: CV, k=1.0):
+        diff = self.difference(x1=x1, x2=x2) * k
         return jnp.linalg.norm(diff)
 
     @partial(jit, static_argnums=(0, 2))
@@ -262,8 +289,11 @@ class Metric:
 
     def min_cv(self, cv: jnp.ndarray):
 
+        mapped = self.__map(cv, displace=False)
+        wrapped = self.__periodic_wrap(mapped, min=True)
+
         return self.__unmap(
-            self.__periodic_wrap(self.__map(cv, displace=False), min=True),
+            wrapped,
             displace=False,
         )
 
@@ -317,7 +347,7 @@ class Metric:
             bounding_box=bounding_box,
         )
 
-    def grid(self, n, endpoints=None):
+    def grid(self, n, endpoints=None, margin=None):
         """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
 
         Args:
@@ -335,11 +365,12 @@ class Metric:
         elif isinstance(endpoints, bool):
             endpoints = np.full(self.periodicities.shape, endpoints)
 
-            # if map:
-            #     b = np.zeros(self.bounding_box.shape)
-            #     b[:, 1] = 1
-            # else:
         b = self.bounding_box
+
+        if margin is not None:
+            diff = (b[:, 1] - b[:, 0]) * margin
+            b = b.at[:, 0].set(b[:, 0] - diff)
+            b = b.at[:, 1].set(b[:, 1] + diff)
 
         assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), "give proper boundaries"
         grid = [

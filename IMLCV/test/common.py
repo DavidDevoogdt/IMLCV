@@ -219,6 +219,7 @@ def get_FES(
     K=5 * kjmol,
     rounds=8,
     n=4,
+    init=500,
 ) -> Scheme:
     """calculate some rounds, and perform long run. Starting point for cv discovery methods"""
 
@@ -240,6 +241,7 @@ def get_FES(
             steps=steps,
             n=n,
             K=K,
+            init=init,
         )
 
         # scheme0.rounds.run(

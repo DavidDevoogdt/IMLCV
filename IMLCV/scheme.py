@@ -117,12 +117,16 @@ class Scheme:
         o = Observable(self.rounds)
         self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
-    def round(self, rnds=10, steps=5e4, K=None, update_metric=False, n=4):
-        # startround = 0
+    def round(self, rnds=10, init=None, steps=5e4, K=None, update_metric=False, n=4):
 
-        # update biases untill there are no discontinues jumps left
+        if init is not None:
+            self.grid_umbrella(steps=init, n=n, k=K)
+        self.rounds.new_round(self.md)
+        self.rounds.save()
+
         for r in range(rnds):
             self.grid_umbrella(steps=steps, n=n, k=K)
+
             if update_metric:
                 self.new_metric(plot=True)
                 update_metric = False

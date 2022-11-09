@@ -528,12 +528,13 @@ class Bias(BC, ABC):
         vmax=100,
         map=False,
         inverted=False,
+        margin=None,
     ):
         """plot bias."""
 
         assert self.collective_variable.n == 2
 
-        bins = self.collective_variable.metric.grid(n=n, endpoints=True)
+        bins = self.collective_variable.metric.grid(n=n, endpoints=True, margin=margin)
         mg = np.meshgrid(*bins, indexing="xy")
 
         xlim = [mg[0].min(), mg[0].max()]
@@ -586,8 +587,12 @@ class Bias(BC, ABC):
 
         ax.set_title(name)
         os.makedirs(os.path.dirname(name), exist_ok=True)
-        fig.set_size_inches([12, 8])
-        fig.savefig(name)
+
+        plt.tight_layout()
+        plt.savefig(name)
+        # fig.set_size_inches([12, 8])
+        # fig.savefig(name)
+
         plt.close(fig=fig)  # write out
 
 
@@ -601,6 +606,7 @@ def plot_app(
     map: bool = True,
     inverted=False,
     traj: list[CV] | None = None,
+    margin=None,
 ):
     bias.plot(
         name=outputs[0].filepath,
@@ -610,6 +616,7 @@ def plot_app(
         vmax=vmax,
         map=map,
         inverted=inverted,
+        margin=margin,
     )
 
 

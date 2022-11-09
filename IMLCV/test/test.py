@@ -55,6 +55,7 @@ def test_cv_discovery(
     k=5 * kjmol,
     cvd="AE",
     n=4,
+    init=500,
 ):
     # do_conf()
 
@@ -96,6 +97,7 @@ def test_cv_discovery(
         steps=steps,
         K=k,
         n=n,
+        init=init,
     )
 
     scheme0.update_CV(
@@ -364,7 +366,7 @@ def test_neigh():
     rng = jax.random.PRNGKey(42)
     key1, key2, rng = jax.random.split(rng, 3)
 
-    n = 25
+    n = 10
 
     sp = SystemParams(
         coordinates=jax.random.uniform(key1, (n, 3)),
@@ -372,11 +374,16 @@ def test_neigh():
     )
 
     # should convege to 1
-    r_cut = 15
-    neigh_calc = jnp.mean(jnp.array([x.shape[0] for x in sp.neighbourghs(r_cut=r_cut)]))
+    r_cut = 20
+
+    neihg_ij = sp.neighbourghs(r_cut)
+
+    new_shapes = jnp.array([[a.shape[0] for a in b] for b in neihg_ij])
+
+    neigh_calc = jnp.mean(jnp.sum(new_shapes, axis=0))
     neigh_exp = n / jnp.abs(jnp.linalg.det(sp.cell)) * (4 / 3 * jnp.pi * r_cut**3)
 
-    assert jnp.abs(neigh_calc / neigh_exp - 1) < 0.1
+    print(f"err neigh density {jnp.abs(neigh_calc / neigh_exp - 1)}")
 
 
 if __name__ == "__main__":
@@ -384,8 +391,8 @@ if __name__ == "__main__":
     if LOCAL:
         md = alanine_dipeptide_yaff
         # md = mil53_yaff
-        k = 15 * kjmol / (6.14**2)
-        name = "test_cv_disc_ala_500"
+        k = 10 * kjmol / (6.14**2)
+        name = "test_cv_disc_ala_1000"
     else:
         md = ase_yaff
         k = 10 * kjmol
@@ -405,15 +412,8 @@ if __name__ == "__main__":
 
         test_grid_selection(recalc=True)
 
-        # test_cv_discovery(
-        #     name=name,
-        #     md=md(),
-        #     recalc=True,
-        #     k=k,
-        #     steps=5e2,
-        #     n=8,
-        # )
-
         test_copy(name)
 
-    test_neigh()
+        test_neigh()
+
+    test_cv_discovery(name=name, md=md(), recalc=True, k=k, steps=2e3, n=6, init=500)

@@ -161,11 +161,14 @@ class Rounds(ABC):
 
         self.save()
 
-    def iter(self, r=None, num=3) -> Iterable[tuple[Round, Trajectory]]:
-        if r is None:
-            r = self.round
+    def iter(self, start=None, stop=None, num=3) -> Iterable[tuple[Round, Trajectory]]:
+        if stop is None:
+            stop = self.round
 
-        for r0 in range(max(r - (num - 1), 0), r + 1):
+        if start is None:
+            start = 0
+
+        for r0 in range(max(stop - (num - 1), start), stop + 1):
 
             _r = self._get_r(r=r0)
 
@@ -325,7 +328,7 @@ class RoundsMd(Rounds):
 
         from molmod import angstrom
 
-        for round, trajejctory in self.iter(r=r, num=num):
+        for round, trajejctory in self.iter(stop=r, num=num):
 
             traj = trajejctory.ti
 
