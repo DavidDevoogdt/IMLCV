@@ -55,12 +55,12 @@ def f(name):
     from IMLCV.test.common import ase_yaff
     from IMLCV.test.test import test_cv_discovery
 
-    config(cluster="doduo", time="72:00:00", mem_per_node=20)
+    config(cluster="doduo", time="72:00:00", mem_per_node=10)
     test_cv_discovery(
         name=name,
         md=ase_yaff(small=True),
         recalc=True,
-        steps=1000,
+        steps=500,
         k=10 * kjmol,
         n=8,
     )

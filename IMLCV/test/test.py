@@ -412,14 +412,14 @@ if __name__ == "__main__":
 
         test_grid_selection(recalc=True)
 
-        test_copy(name)
-
-        test_neigh()
-
-    # test_cv_discovery(name=name, md=md(), recalc=True, k=k, steps=2e3, n=6, init=None)
-
-    scheme0 = Scheme.from_rounds(folder=f"output/{name}")
-    scheme0.rounds.recover()
+    test_cv_discovery(
+        name=name,
+        md=md(),
+        recalc=True,
+        k=k,
+        steps=5e3,
+        n=6,
+    )
 
     scheme0.FESBias(plot=True)
     scheme0.rounds.new_round(scheme0.md)
