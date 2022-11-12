@@ -197,7 +197,7 @@ def ase_yaff(small=True):
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=500.0 * units.femtosecond,
         atomic_numbers=energy.atoms.get_atomic_numbers(),
-        equilibration=200.0 * units.femtosecond,
+        equilibration=0 * units.femtosecond,
         screen_log=1,
     )
 

@@ -412,14 +412,14 @@ if __name__ == "__main__":
 
         test_grid_selection(recalc=True)
 
-        test_copy(name)
-
-        test_neigh()
-
-    # test_cv_discovery(name=name, md=md(), recalc=True, k=k, steps=2e3, n=6, init=None)
-
-    # r = Rounds.load(f"output/{name}")
-    # r.recover(sti=md().static_trajectory_info)
+        test_cv_discovery(
+            name=name,
+            md=md(),
+            recalc=True,
+            k=k,
+            steps=5e3,
+            n=6,
+        )
 
     # del r
 

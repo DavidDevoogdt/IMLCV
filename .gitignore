@@ -67,3 +67,4 @@ Miniconda3_plumed/pkgs/*
 IMLCV/base/tools/.mypy_cache/*
 IMLCV/test/wandb/*
 wandb/*
+nohup.out

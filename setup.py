@@ -29,5 +29,6 @@ setup(
         "scikit-learn",
         "dill",
         "nyx",
+        "filelock",
     ],
 )
