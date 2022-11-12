@@ -131,7 +131,7 @@ class Scheme:
                 self.new_metric(plot=True)
                 update_metric = False
             else:
-                self.FESBias(plot=True)
+                self.FESBias(plot=True, n=n)
 
             self.rounds.new_round(self.md)
             self.rounds.save()
@@ -142,7 +142,7 @@ class Scheme:
         new_cv = self.cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
         self.md.bias = NoneBias(new_cv)
 
-        self.rounds.new_round(self.md)
+        self.rounds.new_round(self.md, self.md.static_trajectory_info)
         self.rounds.save()
 
     def save(self, filename):

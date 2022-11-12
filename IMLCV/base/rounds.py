@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -69,6 +70,9 @@ class Rounds(ABC):
 
         self.lock = FileLock(self.h5filelock_name)
 
+        self._make_file()
+
+    def _make_file(self):
         # create the file
         with self.lock:
             with h5py.File(self.h5file_name, mode="w-", swmr=True):
@@ -77,8 +81,8 @@ class Rounds(ABC):
         self.h5file = h5py.File(self.h5file_name, mode="r+")
         # self.lock = Lock()
 
-    def __del__(self):
-        self.h5file.close()
+    # def __del__(self):
+    #     self.h5file.close()
 
     @property
     def h5file_name(self):
@@ -101,18 +105,25 @@ class Rounds(ABC):
             dill.dump(d, f)
 
     @staticmethod
-    def load(folder: str | Path):
+    def load(folder: str | Path, sti: None | StaticTrajectoryInfo = None):
         with open(f"{folder}/rounds", "rb") as f:
             self = object.__new__(RoundsMd)
             self.__dict__.update(dill.load(f))
             self.folder = Path(folder).resolve()
 
-        with self.lock:
-            self.h5file = h5py.File(self.h5file_name, mode="r+")
+        try:
+            with self.lock:
+                self.h5file = h5py.File(self.h5file_name, mode="r+")
+        except:
+            if Path(self.h5file_name).exists():
+                shutil.move(self.h5file_name, f"{self.h5file_name}_bak")
+            self._make_file()
 
         return self
 
-    def add(self, i, d: TrajectoryInfo, attrs=None):
+    def add(self, i, d: TrajectoryInfo, attrs=None, r=None):
+        if r is None:
+            r = self.round
 
         with self.lock:
             print("enetered add")
@@ -120,43 +131,47 @@ class Rounds(ABC):
             f = self.h5file
             print(f"{i} got hdf5 file")
 
-            if f"{i}" not in f[f"{self.round}"]:
-                f.create_group(f"{self.round}/{i}")
-            if "trajectory_info" not in f[f"{self.round}/{i}"]:
-                f[f"{self.round}/{i}"].create_group("trajectory_info")
-                d._save(hf=f[f"{self.round}/{i}/trajectory_info"])
+            if f"{i}" not in f[f"{r}"]:
+                f.create_group(f"{r}/{i}")
+            if "trajectory_info" not in f[f"{r}/{i}"]:
+                f[f"{r}/{i}"].create_group("trajectory_info")
+                d._save(hf=f[f"{r}/{i}/trajectory_info"])
 
             if attrs is not None:
                 for key, val in attrs.items():
                     if val is not None:
-                        f[f"{self.round}/{i}"].attrs[key] = val
+                        f[f"{r}/{i}"].attrs[key] = val
 
-            f[f"{self.round}/{i}"].attrs["valid"] = True
-            f[f"{self.round}"].attrs["num"] += 1
+            f[f"{r}/{i}"].attrs["valid"] = True
+            f[f"{r}"].attrs["num"] += 1
 
             f.flush()
 
-    def new_round(self, attr, stic: StaticTrajectoryInfo):
+    def new_round(self, attr, stic: StaticTrajectoryInfo, r=None):
+
         self.round += 1
         self.i = 0
 
-        dir = self.path(round=self.round)
+        if r is None:
+            r = self.round
+
+        dir = self.path(round=r)
         if not dir.exists():
             dir.mkdir(parents=True)
 
         with self.lock:
             f = self.h5file
-            f.create_group(f"{self.round}")
+            f.create_group(f"{r}")
 
             for key in attr:
                 if attr[key] is not None:
-                    f[f"{self.round}"].attrs[key] = attr[key]
+                    f[f"{r}"].attrs[key] = attr[key]
 
-            f[f"{self.round}"].create_group("static_trajectory_info")
-            stic._save(hf=f[f"{self.round}/static_trajectory_info"])
+            f[f"{r}"].create_group("static_trajectory_info")
+            stic._save(hf=f[f"{r}/static_trajectory_info"])
 
-            f[f"{self.round}"].attrs["num"] = 0
-            f[f"{self.round}"].attrs["valid"] = True
+            f[f"{r}"].attrs["num"] = 0
+            f[f"{r}"].attrs["valid"] = True
 
             f.flush()
 
@@ -306,7 +321,14 @@ class RoundsMd(Rounds):
     def load(folder) -> RoundsMd:
         return Rounds.load(folder=folder)
 
-    def _add(self, traj: TrajectoryInfo, md: MDEngine, bias: str, i: int):
+    def _add(
+        self,
+        traj: TrajectoryInfo,
+        md: MDEngine,
+        bias: str,
+        i: int,
+        r: int | None = None,
+    ):
         """adds all the saveble info of the md simulation."""
 
         if i is None:
@@ -318,7 +340,7 @@ class RoundsMd(Rounds):
         attr = {}
         attr["name_bias"] = bias
 
-        super().add(d=traj, attrs=attr, i=i)
+        super().add(d=traj, attrs=attr, i=i, r=r)
 
     def _validate(self, md: MDEngine):
 
@@ -422,20 +444,33 @@ class RoundsMd(Rounds):
 
         return MDEngine.load(self.full_path(name), filename=None)
 
-    def recover(self):
+    def recover(self, sti):
+        rounds = -1
+
         for round_r in self.path().glob("round_*"):
+            rounds += 1
             r = round_r.parts[-1][6:]
 
             f = self.h5file
-            assert r in f.keys(), "implement revover for rounds"
+
+            if not r in f.keys():
+                assert (round_r / "bias").exists()
+                assert (round_r / "engine").exists()
+
+                attr = {}
+
+                attr["name_md"] = self.rel_path(round_r / "engine")
+                attr["name_bias"] = self.rel_path(round_r / "bias")
+
+                directory = self.path(round=r)
+
+                super().new_round(attr=attr, stic=sti, r=r)
 
             rr = self._get_r(r=r)
             md = MDEngine.load(file=self.full_path(rr.name_md))
 
-            num = 0
-
             for md_i in round_r.glob("md_*"):
-                num = num + 1
+
                 i = md_i.parts[-1][3:]
 
                 if i in f[f"{r}"].keys():
@@ -444,17 +479,18 @@ class RoundsMd(Rounds):
                 if not (md_i / "bias").exists():
                     continue
 
-                if not (md_i / "trajectory_info.h5").exists():
-                    continue
+                tin = md_i / "trajectory_info.h5"
 
-                traj = TrajectoryInfo.load(md_i / "trajectory_info.h5")
+                if not (tin).exists():
+                    if not (md_i / "bash_app_trajectory_info.h5").exists():
+                        continue
+                    else:
+                        tin = md_i / "bash_app_trajectory_info.h5"
 
-                self._add(
-                    bias=self.rel_path(md_i / "bias"),
-                    traj=traj,
-                    md=md,
-                    i=i,
-                )
+                traj = TrajectoryInfo.load(tin)
+
+                self._add(bias=self.rel_path(md_i / "bias"), traj=traj, md=md, i=i, r=r)
+        self.round = rounds
 
         self.save()
 

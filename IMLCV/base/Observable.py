@@ -6,7 +6,7 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 from jax import jit
-from molmod.units import kjmol, picosecond
+from molmod.units import picosecond
 from parsl import File
 
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
@@ -21,7 +21,7 @@ class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
-    samples_per_bin = 500
+    samples_per_bin = 200
     time_per_bin = 2 * picosecond
 
     def __init__(self, rounds: RoundsMd) -> None:
@@ -46,7 +46,7 @@ class Observable:
         time = 0
         cv = None
 
-        for round, trajectory in self.rounds.iter(num=3):
+        for round, trajectory in self.rounds.iter(num=1):
 
             bias = trajectory.get_bias()
 
@@ -85,7 +85,7 @@ class Observable:
             bins=bins,
             # pinit=pinit,
             trajectories=trajs_mapped,
-            error_estimate="mle_f",
+            # error_estimate="mle_f",
             biasses=biases,
             temp=temp,
             verbosity="high",
@@ -231,11 +231,11 @@ class Observable:
 
         # fs[~mask] = 0.0
 
-        fl = fes.flower.T
-        fu = fes.fupper.T
+        # fl = fes.flower.T
+        # fu = fes.fupper.T
 
-        sigma = fu - fl
-        sigma = (sigma) / (5 * kjmol)
+        # sigma = fu - fl
+        # sigma = (sigma) / (5 * kjmol)
 
         # for choice in [
         #     "gridbias",
@@ -261,13 +261,13 @@ class Observable:
                     else:
                         cv += cvi
 
-                    smoothing_list.append(sigma[idx])
+                    # smoothing_list.append(sigma[idx])
 
                 # else:
                 #     fslist.append(0.0)
 
             fslist = jnp.array(fslist)
-            sigmalist = jnp.array(smoothing_list)
+            # sigmalist = jnp.array(smoothing_list)
 
             bounds = jnp.array(bounds)
 
@@ -284,7 +284,7 @@ class Observable:
                     # kernel="linear",
                     kernel="gaussian",
                     epsilon=eps,
-                    smoothing=sigmalist,
+                    # smoothing=sigmalist,
                     degree=-1,
                 )
                 return fesBias

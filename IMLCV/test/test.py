@@ -389,10 +389,10 @@ def test_neigh():
 if __name__ == "__main__":
 
     if LOCAL:
-        md = alanine_dipeptide_yaff
+        md = ase_yaff
         # md = mil53_yaff
         k = 10 * kjmol / (6.14**2)
-        name = "test_cv_disc_ala_restart"
+        name = "perovskite_002_a"
     else:
         md = ase_yaff
         k = 10 * kjmol
@@ -418,10 +418,20 @@ if __name__ == "__main__":
 
     # test_cv_discovery(name=name, md=md(), recalc=True, k=k, steps=2e3, n=6, init=None)
 
-    scheme0 = Scheme.from_rounds(folder=f"output/{name}")
-    scheme0.rounds.recover()
+    # r = Rounds.load(f"output/{name}")
+    # r.recover(sti=md().static_trajectory_info)
 
-    scheme0.FESBias(plot=True)
+    # del r
+
+    scheme0 = Scheme.from_rounds(f"output/{name}")
+    scheme0.FESBias(plot=True, n=8)
     scheme0.rounds.new_round(scheme0.md)
     scheme0.rounds.save()
-    scheme0.round(rnds=5, init=None, steps=1e3, K=k, update_metric=False, n=8)
+
+    # scheme0 = Scheme.from_rounds(folder=f"output/{name}")
+    # scheme0.rounds.recover()
+
+    # scheme0.FESBias(plot=True)
+    # scheme0.rounds.new_round(scheme0.md)
+    # scheme0.rounds.save()
+    # scheme0.round(rnds=5, init=None, steps=1e3, K=k, update_metric=False, n=8)
