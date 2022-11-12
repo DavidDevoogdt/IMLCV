@@ -392,7 +392,7 @@ if __name__ == "__main__":
         md = alanine_dipeptide_yaff
         # md = mil53_yaff
         k = 10 * kjmol / (6.14**2)
-        name = "test_cv_disc_ala_1000"
+        name = "test_cv_disc_ala_restart"
     else:
         md = ase_yaff
         k = 10 * kjmol
@@ -407,7 +407,7 @@ if __name__ == "__main__":
             test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
             test_combine_bias(full_name=f"{tmp}/combine.h5")
             test_bias_save(full_name=f"{tmp}/bias_save.h5")
-        # test_unbiasing()
+        # test_unbiasing()ct (object 'round_0' doesn't
         test_cv_discovery(md=md(), recalc=True)
 
         test_grid_selection(recalc=True)
@@ -416,4 +416,12 @@ if __name__ == "__main__":
 
         test_neigh()
 
-    test_cv_discovery(name=name, md=md(), recalc=True, k=k, steps=2e3, n=6, init=500)
+    # test_cv_discovery(name=name, md=md(), recalc=True, k=k, steps=2e3, n=6, init=None)
+
+    scheme0 = Scheme.from_rounds(folder=f"output/{name}")
+    scheme0.rounds.recover()
+
+    scheme0.FESBias(plot=True)
+    scheme0.rounds.new_round(scheme0.md)
+    scheme0.rounds.save()
+    scheme0.round(rnds=5, init=None, steps=1e3, K=k, update_metric=False, n=8)

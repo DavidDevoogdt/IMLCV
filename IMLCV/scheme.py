@@ -121,8 +121,8 @@ class Scheme:
 
         if init is not None:
             self.grid_umbrella(steps=init, n=n, k=K)
-        self.rounds.new_round(self.md)
-        self.rounds.save()
+            self.rounds.new_round(self.md)
+            self.rounds.save()
 
         for r in range(rnds):
             self.grid_umbrella(steps=steps, n=n, k=K)

@@ -120,10 +120,11 @@ class Rounds(ABC):
             f = self.h5file
             print(f"{i} got hdf5 file")
 
-            f.create_group(f"{self.round}/{i}")
-            f[f"{self.round}/{i}"].create_group("trajectory_info")
-
-            d._save(hf=f[f"{self.round}/{i}/trajectory_info"])
+            if f"{i}" not in f[f"{self.round}"]:
+                f.create_group(f"{self.round}/{i}")
+            if "trajectory_info" not in f[f"{self.round}/{i}"]:
+                f[f"{self.round}/{i}"].create_group("trajectory_info")
+                d._save(hf=f[f"{self.round}/{i}/trajectory_info"])
 
             if attrs is not None:
                 for key, val in attrs.items():
@@ -189,11 +190,12 @@ class Rounds(ABC):
         valid: bool
         round: int
         num: int
+        folder: Path
         name_bias: str | None = None
 
         def get_bias(self) -> Bias:
             assert self.name_bias is not None
-            return Bias.load(self.name_bias)
+            return Bias.load(self.folder / self.name_bias)
 
     def _get_r_i(self, r: int, i: int) -> Trajectory:
 
@@ -206,7 +208,7 @@ class Rounds(ABC):
 
             f.flush()
 
-        return Rounds.Trajectory(ti=ti, **r_attr, round=r, num=i)
+        return Rounds.Trajectory(ti=ti, **r_attr, round=r, num=i, folder=self.folder)
 
     @dataclass
     class Round:
@@ -419,6 +421,42 @@ class RoundsMd(Rounds):
             name = f[f"{r}"].attrs["name_md"]
 
         return MDEngine.load(self.full_path(name), filename=None)
+
+    def recover(self):
+        for round_r in self.path().glob("round_*"):
+            r = round_r.parts[-1][6:]
+
+            f = self.h5file
+            assert r in f.keys(), "implement revover for rounds"
+
+            rr = self._get_r(r=r)
+            md = MDEngine.load(file=self.full_path(rr.name_md))
+
+            num = 0
+
+            for md_i in round_r.glob("md_*"):
+                num = num + 1
+                i = md_i.parts[-1][3:]
+
+                if i in f[f"{r}"].keys():
+                    continue
+
+                if not (md_i / "bias").exists():
+                    continue
+
+                if not (md_i / "trajectory_info.h5").exists():
+                    continue
+
+                traj = TrajectoryInfo.load(md_i / "trajectory_info.h5")
+
+                self._add(
+                    bias=self.rel_path(md_i / "bias"),
+                    traj=traj,
+                    md=md,
+                    i=i,
+                )
+
+        self.save()
 
     def run(self, bias, steps):
         self.run_par([bias], steps)

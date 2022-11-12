@@ -132,4 +132,4 @@ if __name__ == "__main__":
         dill.dump(a, f)
 
     print("#" * 20)
-    print("function finisched properly, results dumped in {args.file}")
+    print(f"function finished properly, results dumped in {args.file}")

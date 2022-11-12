@@ -93,7 +93,7 @@ DEBUG = True
 GPU = False
 
 
-assert not GPU, "GPU cannot be activated yet, todo"
+# assert not GPU, "GPU cannot be activated yet, todo"
 
 # SETUP Jax
 if not GPU:
