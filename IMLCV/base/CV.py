@@ -380,8 +380,6 @@ class Metric:
 
         return grid
 
-        return None
-
     @property
     def ndim(self):
         return len(self.periodicities)

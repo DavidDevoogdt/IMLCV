@@ -118,6 +118,7 @@ class Rounds(ABC):
             if Path(self.h5file_name).exists():
                 shutil.move(self.h5file_name, f"{self.h5file_name}_bak")
             self._make_file()
+            self.recover()
 
         return self
 
@@ -366,6 +367,7 @@ class RoundsMd(Rounds):
 
                 atoms = [
                     ase.Atoms(
+                        numbers=round.tic.atomic_numbers,
                         masses=round.tic.masses,
                         positions=pos,
                         pbc=pbc,
@@ -391,15 +393,18 @@ class RoundsMd(Rounds):
 
             yield atoms, round, trajejctory
 
-    def write_xyz(self, r: int | None = None, num: int = 3):
+    def write_xyz(self, r: int | None = None, num: int = 1, repeat=None):
 
         from ase.io.extxyz import write_extxyz
 
-        for i, (atoms, round, trajejctory) in enumerate(self.iter_atoms()):
+        for i, (atoms, round, trajejctory) in enumerate(self.iter_atoms(r=r, num=num)):
             with open(
                 self.path(round=round.round, i=trajejctory.num) / "trajectory.xyz",
-                mode="a",
+                mode="w",
             ) as f:
+                if repeat is not None:
+                    atoms = [a.repeat(repeat) for a in atoms]
+
                 write_extxyz(f, atoms)
 
     def new_round(self, md: MDEngine):
@@ -444,8 +449,9 @@ class RoundsMd(Rounds):
 
         return MDEngine.load(self.full_path(name), filename=None)
 
-    def recover(self, sti):
+    def recover(self):
         rounds = -1
+        self.round = -1
 
         for round_r in self.path().glob("round_*"):
             rounds += 1
@@ -461,6 +467,10 @@ class RoundsMd(Rounds):
 
                 attr["name_md"] = self.rel_path(round_r / "engine")
                 attr["name_bias"] = self.rel_path(round_r / "bias")
+
+                sti = MDEngine.load(
+                    self.full_path(round_r / "engine")
+                ).static_trajectory_info
 
                 directory = self.path(round=r)
 
@@ -490,7 +500,6 @@ class RoundsMd(Rounds):
                 traj = TrajectoryInfo.load(tin)
 
                 self._add(bias=self.rel_path(md_i / "bias"), traj=traj, md=md, i=i, r=r)
-        self.round = rounds
 
         self.save()
 

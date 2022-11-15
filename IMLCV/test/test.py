@@ -389,10 +389,15 @@ def test_neigh():
 if __name__ == "__main__":
 
     if LOCAL:
-        md = ase_yaff
+        # md = ase_yaff
+        # # md = mil53_yaff
+        # k = 10 * kjmol / (6.14**2)
+        # name = "perovskite_002_a"
+
+        md = alanine_dipeptide_yaff
         # md = mil53_yaff
         k = 10 * kjmol / (6.14**2)
-        name = "perovskite_002_a"
+        name = "ala_001"
     else:
         md = ase_yaff
         k = 10 * kjmol
@@ -412,21 +417,44 @@ if __name__ == "__main__":
 
         test_grid_selection(recalc=True)
 
-        test_cv_discovery(
-            name=name,
-            md=md(),
-            recalc=True,
-            k=k,
-            steps=5e3,
-            n=6,
-        )
+    test_cv_discovery(
+        name=name,
+        md=md(),
+        recalc=True,
+        k=k,
+        steps=2e3,
+        n=8,
+        init=500,
+    )
 
-    # del r
+    # r0 = RoundsMd(folder=f"output/{name}")
+    # r0.recover()
+    # del r0
 
-    scheme0 = Scheme.from_rounds(f"output/{name}")
-    scheme0.FESBias(plot=True, n=8)
-    scheme0.rounds.new_round(scheme0.md)
-    scheme0.rounds.save()
+    # scheme0 = Scheme.from_rounds(f"output/{name}")
+
+    # scheme0.FESBias(
+    #     plot=True,
+    #     n=8,
+    #     rbf_kernel="gaussian",
+    #     rbf_degree=0,
+    #     vmax=100 * kjmol,
+    #     start_r=1,
+    #     choice="rbf",
+    #     x_unit="ang",
+    #     y_unit="ang",
+    #     bins=[
+    #         jnp.linspace(0 * angstrom, 2.2 * angstrom, num=50),
+    #         jnp.linspace(6 * angstrom, 7.7 * angstrom, num=50),
+    #     ],
+    #     # x_lim=[0 * angstrom, 2.5 * angstrom],
+    #     # y_lim=[],
+    # )
+
+    # scheme0.rounds.new_round(scheme0.md)
+    # scheme0.rounds.save()
+
+    # scheme0.rounds.write_xyz(repeat=3, r=1)
 
     # scheme0 = Scheme.from_rounds(folder=f"output/{name}")
     # scheme0.rounds.recover()

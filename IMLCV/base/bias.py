@@ -522,23 +522,56 @@ class Bias(BC, ABC):
     def plot(
         self,
         name,
+        x_unit: str | None = None,
+        y_unit: str | None = None,
         n=50,
         traj: list[CV] | None = None,
         vmin=0,
-        vmax=100,
+        vmax=100 * kjmol,
         map=False,
         inverted=False,
         margin=None,
+        x_lim=None,
+        y_lim=None,
+        bins=None,
     ):
         """plot bias."""
 
         assert self.collective_variable.n == 2
 
-        bins = self.collective_variable.metric.grid(n=n, endpoints=True, margin=margin)
+        if bins is None:
+            bins = self.collective_variable.metric.grid(
+                n=n, endpoints=True, margin=margin
+            )
         mg = np.meshgrid(*bins, indexing="xy")
 
-        xlim = [mg[0].min(), mg[0].max()]
-        ylim = [mg[1].min(), mg[1].max()]
+        if x_unit is not None:
+            if x_unit == "rad":
+                x_unit_label = "rad"
+                x_fact = 0
+            elif x_unit == "ang":
+                x_unit_label = "Ang"
+                x_fact = angstrom
+        else:
+            x_fact = 1
+            x_unit_label = "a.u."
+
+        if y_unit is not None:
+            if y_unit == "rad":
+                y_unit_label = "rad"
+                y_fact = 0
+            elif x_unit == "ang":
+                y_unit_label = "Ang"
+                y_fact = angstrom
+        else:
+            y_fact = 1
+            y_unit_label = "a.u."
+
+        if x_lim is None:
+            xlim = [mg[0].min() / x_fact, mg[0].max() / x_fact]
+        if y_lim is None:
+            ylim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
+
         extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
         @jit
@@ -567,15 +600,18 @@ class Bias(BC, ABC):
             cmap=plt.get_cmap("rainbow"),
             origin="lower",
             extent=extent,
-            vmin=vmin,
-            vmax=vmax,
+            vmin=vmin / kjmol,
+            vmax=vmax / kjmol,
         )
 
-        ax.set_xlabel("cv1", fontsize=16)
-        ax.set_ylabel("cv2", fontsize=16)
+        ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
+        ax.set_ylabel(f"cv2 [{y_unit_label}]", fontsize=16)
+
+        ax.tick_params(axis="both", which="major", labelsize=18)
+        ax.tick_params(axis="both", which="minor", labelsize=16)
 
         cbar = fig.colorbar(p)
-        cbar.set_label("Bias [kJ/mol]", fontsize=16)
+        cbar.set_label("Bias [kJ/mol]", size=18)
 
         if traj is not None:
 
@@ -585,8 +621,10 @@ class Bias(BC, ABC):
                 # trajs are ij indexed
                 ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=3)
 
-        ax.set_title(name)
+        # ax.set_title(name)
         os.makedirs(os.path.dirname(name), exist_ok=True)
+
+        # plt.rcParams.update({"font.size": 22})
 
         plt.tight_layout()
         plt.savefig(name)
@@ -602,11 +640,16 @@ def plot_app(
     outputs: list[File],
     n: int = 50,
     vmin: float = 0,
-    vmax: float = 100,
+    vmax: float = 100 * kjmol,
     map: bool = True,
     inverted=False,
     traj: list[CV] | None = None,
     margin=None,
+    x_unit=None,
+    y_unit=None,
+    x_lim=None,
+    y_lim=None,
+    bins=None,
 ):
     bias.plot(
         name=outputs[0].filepath,
@@ -617,6 +660,11 @@ def plot_app(
         map=map,
         inverted=inverted,
         margin=margin,
+        x_unit=x_unit,
+        y_unit=y_unit,
+        x_lim=x_lim,
+        y_lim=y_lim,
+        bins=bins,
     )
 
 

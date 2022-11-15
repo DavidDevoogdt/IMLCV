@@ -80,17 +80,11 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def FESBias(self, plot=True, max_bias=None, kind="normal", n=None):
+    def FESBias(self, **kwargs):
         """replace the current md bias with the computed FES from current
         round."""
         obs = Observable(self.rounds)
-
-        if max_bias is None:
-            if self.max_energy is not None:
-                max_bias = self.max_energy
-        fesBias = obs.fes_bias(
-            kind=kind, plot=plot, max_bias=max_bias, update_bounds=True, n=n
-        )
+        fesBias = obs.fes_bias(**kwargs)
         self.md = self.md.new_bias(fesBias)
 
     def grid_umbrella(self, steps=1e4, k=None, n=8):
@@ -117,9 +111,9 @@ class Scheme:
         o = Observable(self.rounds)
         self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
-    def round(self, rnds=10, init=None, steps=5e4, K=None, update_metric=False, n=4):
+    def round(self, rnds=10, init=0, steps=5e4, K=None, update_metric=False, n=4):
 
-        if init is not None:
+        if init != 0:
             self.grid_umbrella(steps=init, n=n, k=K)
             self.rounds.new_round(self.md)
             self.rounds.save()

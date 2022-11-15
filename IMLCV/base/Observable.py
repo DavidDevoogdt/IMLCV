@@ -6,12 +6,13 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 from jax import jit
-from molmod.units import picosecond
+from molmod.units import kjmol, picosecond
 from parsl import File
 
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import RoundsMd
+from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
@@ -21,7 +22,7 @@ class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
-    samples_per_bin = 200
+    samples_per_bin = 400
     time_per_bin = 2 * picosecond
 
     def __init__(self, rounds: RoundsMd) -> None:
@@ -31,7 +32,7 @@ class Observable:
 
         self.folder = rounds.folder
 
-    def _fes_2d(self, plot=True, update_bounds=True, n=8):
+    def _fes_2d(self, plot=True, n=8, start_r=0):
         # fes = FreeEnergySurface2D.from_txt
 
         temp = self.rounds.T
@@ -46,7 +47,7 @@ class Observable:
         time = 0
         cv = None
 
-        for round, trajectory in self.rounds.iter(num=1):
+        for round, trajectory in self.rounds.iter(start=start_r, num=4):
 
             bias = trajectory.get_bias()
 
@@ -81,15 +82,17 @@ class Observable:
             trajs=trajs, bounding_box=cv.metric.bounding_box, n=n
         )
 
-        histo = HistogramND.from_wham(
+        histo = bash_app_python(HistogramND.from_wham)(
             bins=bins,
             # pinit=pinit,
             trajectories=trajs_mapped,
-            # error_estimate="mle_f",
+            error_estimate="mle_f",
             biasses=biases,
             temp=temp,
-            verbosity="high",
-        )
+            # verbosity="high",
+            stdout=f"{directory}/histo.stdout",
+            stderr=f"{directory}/histo.stderr",
+        ).result()
 
         fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
         fes.set_ref()
@@ -207,16 +210,19 @@ class Observable:
 
     def fes_bias(
         self,
-        kind="normal",
         plot=False,
         max_bias=None,
         fs=None,
-        update_bounds=True,
         choice="rbf",
         n=None,
+        start_r=0,
+        rbf_kernel="gaussian",
+        rbf_degree=-1,
+        smoothing_threshold=5 * kjmol,
+        **plot_kwargs,
     ):
         if fs is None:
-            fes, grid, bounds = self._fes_2d(plot=plot, update_bounds=True, n=n)
+            fes, grid, bounds = self._fes_2d(plot=plot, start_r=start_r)
 
         # fes is in 'xy'- indexing convention, convert to ij
         fs = np.transpose(fes.fs)
@@ -229,13 +235,13 @@ class Observable:
         else:
             fs[:] = -fs[:] + fs[mask].max()
 
-        # fs[~mask] = 0.0
+        fs[~mask] = 0.0
 
-        # fl = fes.flower.T
-        # fu = fes.fupper.T
+        fl = fes.flower.T
+        fu = fes.fupper.T
 
-        # sigma = fu - fl
-        # sigma = (sigma) / (5 * kjmol)
+        sigma = fu - fl
+        sigma = (sigma) / smoothing_threshold
 
         # for choice in [
         #     "gridbias",
@@ -261,7 +267,7 @@ class Observable:
                     else:
                         cv += cvi
 
-                    # smoothing_list.append(sigma[idx])
+                    smoothing_list.append(sigma[idx])
 
                 # else:
                 #     fslist.append(0.0)
@@ -273,7 +279,7 @@ class Observable:
 
             def get_b(fact):
 
-                eps = jnp.array(fs.shape) / (bounds[:, 1] - bounds[:, 0]) * fact
+                eps = n / (bounds[:, 1] - bounds[:, 0]) * fact
 
                 # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
 
@@ -282,16 +288,15 @@ class Observable:
                     vals=fslist,
                     cv=cv,
                     # kernel="linear",
-                    kernel="gaussian",
+                    kernel=rbf_kernel,
                     epsilon=eps,
                     # smoothing=sigmalist,
-                    degree=-1,
+                    degree=rbf_degree,
                 )
                 return fesBias
 
             # for fact in 10 ** (jnp.linspace(-1, 1, num=10)):
             #     fesBias = get_b(fact)
-
             #     err = 0
             #     for idx, cvi in grid:
             #         if not jnp.isnan(fes.fs[idx]):
@@ -344,6 +349,7 @@ class Observable:
                     )
                 ],
                 inverted=True,
+                **plot_kwargs
                 # margin=1,
                 # stdout=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stdout",
                 # stderr=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stderr",
@@ -354,6 +360,7 @@ class Observable:
                 outputs=[
                     File(f"{self.folder}/FES_bias_{self.rounds.round}_{choice}.pdf")
                 ],
+                **plot_kwargs
                 # margin=1.0,
             )
 
