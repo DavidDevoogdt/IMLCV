@@ -6,6 +6,7 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import jax.random
 import numpy as np
 import pytest
 from keras.api._v2 import keras as KerasAPI
@@ -376,14 +377,26 @@ def test_neigh():
     # should convege to 1
     r_cut = 20
 
-    neihg_ij = sp.neighbourghs(r_cut)
-
-    new_shapes = jnp.array([[a.shape[0] for a in b] for b in neihg_ij])
-
-    neigh_calc = jnp.mean(jnp.sum(new_shapes, axis=0))
+    neigh_calc = jax.jit(SystemParams.neighbourghs)(sp, r_cut)
     neigh_exp = n / jnp.abs(jnp.linalg.det(sp.cell)) * (4 / 3 * jnp.pi * r_cut**3)
 
     print(f"err neigh density {jnp.abs(neigh_calc / neigh_exp - 1)}")
+
+
+def test_minkowski_reduce():
+    prng = jax.random.PRNGKey(42)
+    key1, key2, prng = jax.random.split(prng, 3)
+
+    from scipy.spatial.transform import Rotation as R
+
+    rot = jnp.array(R.random().as_matrix())
+
+    sp = SystemParams(
+        coordinates=jnp.zeros((22, 3)),
+        cell=jnp.array([[2, 0, 0], [6, 1, 0], [8, 9, 1]]),
+    ).minkowski_reduce()
+
+    print(f"{   sp.cell }")
 
 
 if __name__ == "__main__":
@@ -404,7 +417,7 @@ if __name__ == "__main__":
         name = "test_cv_disc_perov"
     a = False
 
-    do_conf()
+    # do_conf()
 
     if a:
         test_virial()
@@ -417,15 +430,15 @@ if __name__ == "__main__":
 
         test_grid_selection(recalc=True)
 
-    test_cv_discovery(
-        name=name,
-        md=md(),
-        recalc=True,
-        k=k,
-        steps=2e3,
-        n=8,
-        init=500,
-    )
+    # test_cv_discovery(
+    #     name=name,
+    #     md=md(),
+    #     recalc=True,
+    #     k=k,
+    #     steps=2e3,
+    #     n=8,
+    #     init=500,
+    # )
 
     # r0 = RoundsMd(folder=f"output/{name}")
     # r0.recover()
@@ -463,3 +476,5 @@ if __name__ == "__main__":
     # scheme0.rounds.new_round(scheme0.md)
     # scheme0.rounds.save()
     # scheme0.round(rnds=5, init=None, steps=1e3, K=k, update_metric=False, n=8)
+
+    test_neigh()

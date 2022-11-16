@@ -169,7 +169,12 @@ def ase_yaff(small=True):
 
     @cvflow
     def f(sp: SystemParams):
+
         import jax.numpy as jnp
+
+        assert sp.cell is not None
+
+        cell = sp.canonicalized_cell()
 
         l = jnp.linalg.norm(sp.cell, axis=1)
         l0 = jnp.max(l)

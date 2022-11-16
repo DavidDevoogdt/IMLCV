@@ -8,6 +8,7 @@ from importlib import import_module
 from typing import Callable
 
 import alphashape
+import jax.lax
 
 # import numpy as np
 import jax.numpy as jnp
@@ -101,85 +102,342 @@ class SystemParams:
             cell=self.cell if self.cell is None else self.cell[0, :],
         )
 
-    def neighbourghs(self, r_cut):
-        if self.cell is None:
-            pos2 = self.coordinates
+    @partial(jit, static_argnums=(2))
+    def neighbourghs(self, r_cut, center_coordiantes=jnp.zeros(3), g=lambda neigh: 1):
+        def apply_g(farg, ijk=None):
+            if ijk is not None:
+                i, j, k = ijk
 
-        else:
-            # get combinations of unit cell displacements that  fit in sphere of radius r_cut
+            def _f(c, farg, ijk):
+                if ijk is not None:
+                    pos = c + jnp.array([i, j, k]) @ sp.cell
+                else:
+                    pos = c
 
-            r_margin = jnp.linalg.norm(
-                jnp.diag(self.cell)
-            )  # max offset within unit cell
-
-            # grid = jnp.array(
-            #     jnp.meshgrid(
-            #         *[jnp.arange(-ne, ne + 1) for ne in n_ext.val], indexing="ij"
-            #     )
-            # )
-
-            n_ext = self.get_neighbourghs_n(r_cut=r_cut)
-
-            grid = jnp.array(
-                jnp.meshgrid(
-                    *[jnp.arange(-s, s + 1) for s in n_ext],
-                    indexing="ij",
+                return jax.lax.cond(
+                    jnp.linalg.norm(pos - center_coordiantes) < r_cut,
+                    lambda: farg + g(pos),
+                    lambda: farg,
                 )
+
+            farg = jax.lax.fori_loop(
+                0,
+                self.coordinates.shape[0],
+                lambda i, farg: _f(c=self.coordinates[i], farg=farg, ijk=ijk),
+                init_val=farg,
             )
 
-            @jit
-            def f(x):
-                return (
-                    jnp.sum((self.cell @ jnp.array(x)) ** 2) ** 0.5 < r_cut + r_margin
+            if ijk is None:
+                return farg
+            else:
+                return j, (i, farg)
+
+        if self.cell is None:
+            return apply_g(0)
+
+        else:
+            # unit cell angles are in range [45,135] degrees
+            sp = self.minkowski_reduce()
+            q, r = jnp.linalg.qr(sp.cell.T)
+
+            # orthogonal distance for number of blocks
+            bounds = jnp.abs(r_cut / jnp.diag(r.T)) + 1
+            # off diagonal added distance
+            bounds = bounds + jnp.ceil(bounds @ jnp.abs(r.T - jnp.diag(jnp.diag(r.T))))
+            bounds = jnp.array([jnp.floor(-bounds), jnp.ceil(bounds) + 1]).T
+
+            # loop over combinations of unit cell vectors
+            return jax.lax.fori_loop(
+                lower=bounds[0, 0],
+                upper=bounds[0, 1],
+                body_fun=lambda i, farg: jax.lax.fori_loop(
+                    lower=bounds[1, 0],
+                    upper=bounds[1, 1],
+                    body_fun=lambda j, i_farg: jax.lax.fori_loop(
+                        lower=bounds[2, 0],
+                        upper=bounds[2, 1],
+                        body_fun=lambda k, j_i_farg: apply_g(
+                            farg=j_i_farg[1][1], ijk=(j_i_farg[1][0], j_i_farg[0], k)
+                        ),
+                        init_val=(j, i_farg),
+                    )[1],
+                    init_val=(i, farg),
+                )[1],
+                init_val=0,
+            )
+
+    def minkowski_reduce(self) -> SystemParams:
+        """base on code from ASE: https://wiki.fysik.dtu.dk/ase/_modules/ase/geometry/minkowski_reductsp.cellion.html#minkowski_reduce"""
+        if self.cell is None:
+            return self
+
+        import itertools
+
+        TOL = 1e-12
+        # MAX_IT = 100000  # in practice this is not exceeded
+
+        @partial(jit, static_argnums=(0,))
+        def cycle_checker(d):
+            assert d in [2, 3]
+            max_cycle_length = {2: 60, 3: 3960}[d]
+            return jnp.zeros((max_cycle_length, 3 * d), dtype=int)
+
+        def add_site(visited, H):
+            # flatten array for simplicity
+            H = H.ravel()
+
+            # check if site exists
+            found = (visited == H).all(axis=1).any()
+
+            # shift all visited sites down and place current site at the top
+            visited = jnp.roll(visited, 1, axis=0)
+            visited = visited.at[0].set(H)
+            return visited, found
+
+        def reduction_gauss(B, hu, hv):
+            """Calculate a Gauss-reduced lattice basis (2D reduction)."""
+            visited = cycle_checker(2)
+            u = hu @ B
+            v = hv @ B
+
+            def body(vals):
+                u, v, hu, hv, visited, found, i = vals
+
+                # for it in range(MAX_IT):
+                x = jnp.array(jnp.round(jnp.dot(u, v) / jnp.dot(u, u)), dtype=jnp.int32)
+                hu, hv = hv - x * hu, hu
+                u = hu @ B
+                v = hv @ B
+                site = jnp.array([hu, hv])
+
+                visited, found = add_site(visited=visited, H=site)
+
+                return (u, v, hu, hv, visited, found, i + 1)
+
+            def cond_fun(vals):
+                u, v, hu, hv, visited, found, i = vals
+
+                return jnp.logical_not(
+                    jnp.logical_and(
+                        jnp.logical_or(jnp.dot(u, u) >= jnp.dot(v, v), found), i != 0
+                    )
                 )
 
-            mask = jnp.apply_along_axis(f, axis=0, arr=grid)
-            pairs = grid[:, mask].T
+            u, v, hu, hv, visited, found, i = jax.lax.while_loop(
+                cond_fun=cond_fun,
+                body_fun=body,
+                init_val=(u, v, hu, hv, visited, False, 0),
+            )
 
-            # offset the positions of of the atoms to corresponding unit cell
-            @partial(vmap, in_axes=(None, 0), out_axes=1)
-            @partial(vmap, in_axes=(0, None), out_axes=0)
-            @jit
-            def moved_positions(pos, pair):
-                return pos + self.cell @ pair
+            return hv, hu
 
-            pos2 = moved_positions(self.coordinates, pairs)
+        def relevant_vectors_2D(u, v):
+            cs = jnp.array([e for e in itertools.product([-1, 0, 1], repeat=2)])
+            vs = cs @ jnp.array([u, v])
+            indices = jnp.argsort(jnp.linalg.norm(vs, axis=1))[:7]
+            return vs[indices], cs[indices]
 
-        @partial(vmap, in_axes=(None, 1), out_axes=2)
-        @partial(vmap, in_axes=(None, 0), out_axes=1)
-        @partial(vmap, in_axes=(0, None), out_axes=0)
+        def closest_vector(t0, u, v):
+            t = t0
+            a = jnp.zeros(2, dtype=int)
+            rs, cs = relevant_vectors_2D(u, v)
+
+            dprev = float("inf")
+            ds = jnp.linalg.norm(rs + t, axis=1)
+            index = jnp.argmin(ds)
+
+            def body_fun(vals):
+                ds, index, a, _, t, i = vals
+
+                dprev = ds[index]
+
+                r = rs[index]
+                kopt = jnp.array(
+                    jnp.round(-jnp.dot(t, r) / jnp.dot(r, r)), dtype=jnp.int32
+                )
+                a += kopt * cs[index]
+                t = t0 + a[0] * u + a[1] * v
+
+                ds = jnp.linalg.norm(rs + t, axis=1)
+                index = jnp.argmin(ds)
+
+                return ds, index, a, dprev, t, i + 1
+
+            def cond_fun(vals):
+                ds, index, a, dprev, t, i = vals
+
+                return jnp.logical_not(jnp.logical_or(index == 0, ds[index] >= dprev))
+
+            ds, index, a, dprev, t, i = jax.lax.while_loop(
+                cond_fun=cond_fun,
+                body_fun=body_fun,
+                init_val=(ds, index, a, dprev, t0, 0),
+            )
+
+            return a
+
+            # for it in range(MAX_IT):
+
+            # raise RuntimeError(f"Closest vector not found after {MAX_IT} iterations")
+
+        def reduction_full(B):
+            """Calculate a Minkowski-reduced lattice basis (3D reduction)."""
+            # init
+            visited = cycle_checker(d=3)
+            H = jnp.eye(3, dtype=int)
+            norms = jnp.linalg.norm(B, axis=1)
+
+            def body(vals):
+                H, norms, visited, _, i = vals
+                # for it in range(MAX_IT):
+                # Sort vectors by norm
+                H = H[jnp.argsort(norms)]
+
+                # Gauss-reduce smallest two vectors
+                hw = H[2]
+                hu, hv = reduction_gauss(B, H[0], H[1])
+                H = jnp.array([hu, hv, hw])
+                R = H @ B
+
+                # Orthogonalize vectors using Gram-Schmidt
+                u, v, _ = R
+                X = u / jnp.linalg.norm(u)
+                Y = v - X * jnp.dot(v, X)
+                Y /= jnp.linalg.norm(Y)
+
+                # Find closest vector to last element of R
+                pu, pv, pw = R @ jnp.array([X, Y]).T
+                nb = closest_vector(pw, pu, pv)
+
+                # Update basis
+                H = H.at[2].set(jnp.array([nb[0], nb[1], 1]) @ H)
+                R = H @ B
+
+                norms = jnp.linalg.norm(R, axis=1)
+
+                visited, found = add_site(visited, H)
+
+                return H, norms, visited, found, i + 1
+
+            def cond_fun(vals):
+                _, norms, _, found, i = vals
+
+                return jnp.logical_not(
+                    jnp.logical_and(jnp.logical_or(norms[2] >= norms[1], found), i != 0)
+                )
+
+            H, norms, visited, found, i = jax.lax.while_loop(
+                cond_fun, body, (H, norms, visited, False, 0)
+            )
+
+            return H @ B, H
+
+        def is_minkowski_reduced(cell):
+            """Tests if a cell is Minkowski-reduced.
+
+            Parameters:
+
+            cell: array
+                The lattice basis to test (in row-vector format).
+            pbc: array, optional
+                The periodic boundary conditions of the cell (Default `True`).
+                If `pbc` is provided, only periodic cell vectors are tested.
+
+            Returns:
+
+            is_reduced: bool
+                True if cell is Minkowski-reduced, False otherwise.
+            """
+
+            """These conditions are due to Minkowski, but a nice description in English
+            can be found in the thesis of Carine Jaber: "Algorithmic approaches to
+            Siegel's fundamental domain", https://www.theses.fr/2017UBFCK006.pdf
+            This is also good background reading for Minkowski reduction.
+
+            0D and 1D cells are trivially reduced. For 2D cells, the conditions which
+            an already-reduced basis fulfil are:
+            |b1| ≤ |b2|
+            |b2| ≤ |b1 - b2|
+            |b2| ≤ |b1 + b2|
+
+            For 3D cells, the conditions which an already-reduced basis fulfil are:
+            |b1| ≤ |b2| ≤ |b3|
+
+            |b1 + b2|      ≥ |b2|
+            |b1 + b3|      ≥ |b3|
+            |b2 + b3|      ≥ |b3|
+            |b1 - b2|      ≥ |b2|
+            |b1 - b3|      ≥ |b3|
+            |b2 - b3|      ≥ |b3|
+            |b1 + b2 + b3| ≥ |b3|
+            |b1 - b2 + b3| ≥ |b3|
+            |b1 + b2 - b3| ≥ |b3|
+            |b1 - b2 - b3| ≥ |b3|
+            """
+
+            A = jnp.array(
+                [
+                    [0, 1, 0],
+                    [0, 0, 1],
+                    [1, 1, 0],
+                    [1, 0, 1],
+                    [0, 1, 1],
+                    [1, -1, 0],
+                    [1, 0, -1],
+                    [0, 1, -1],
+                    [1, 1, 1],
+                    [1, -1, 1],
+                    [1, 1, -1],
+                    [1, -1, -1],
+                ]
+            )
+            lhs = jnp.linalg.norm(A @ cell, axis=1)
+            norms = jnp.linalg.norm(cell, axis=1)
+            rhs = norms[jnp.array([0, 1, 1, 2, 2, 1, 2, 2, 2, 2, 2, 2])]
+
+            return (lhs >= rhs - TOL).all()
+
         @jit
-        def distances(pos1, pos2):
-            return jnp.linalg.norm(pos1 - pos2)
+        def minkowski_reduce(cell):
+            """Calculate a Minkowski-reduced lattice basis.  The reduced basis
+            has the shortest possible vector lengths and has
+            norm(a) <= norm(b) <= norm(c).
 
-        mask = distances(self.coordinates, pos2) < r_cut
+            Implements the method described in:
 
-        neigh = [
-            [pos2[j, maskij] for j, maskij in enumerate(maski)]
-            for i, maski in enumerate(mask)
-        ]
+            Low-dimensional Lattice Basis Reduction Revisited
+            Nguyen, Phong Q. and Stehlé, Damien,
+            ACM Trans. Algorithms 5(4) 46:1--46:48, 2009
+            :doi:`10.1145/1597036.1597050`
 
-        return neigh
+            Parameters:
 
-    def get_neighbourghs_n(self, r_cut):
-        """finds how many periodic images are needed to have all points within r_cut"""
+            cell: array
+                The lattice basis to reduce (in row-vector format).
+            pbc: array, optional
+                The periodic boundary conditions of the cell (Default `True`).
+                If `pbc` is provided, only periodic cell vectors are reduced.
 
-        q, r = jnp.linalg.qr(self.cell)
-        signs = jnp.diag(jnp.sign(jnp.diag(r)))
-        r = signs @ r
-        q = q @ signs
+            Returns:
 
-        # nurber of cells to stack
-        n_ext = jnp.linalg.inv(r / r_cut)
+            rcell: array
+                The reduced lattice basis.
+            op: array
+                The unimodular matrix transformation (rcell = op @ cell).
+            """
 
-        n_ext_diag = jnp.diag(jnp.diag(n_ext))
-        offsets = (n_ext - n_ext_diag) @ n_ext_diag
+            return jax.lax.cond(
+                is_minkowski_reduced(cell=cell),
+                lambda: cell,
+                lambda: reduction_full(cell)[1] @ cell,
+            )
 
-        n_ext = jnp.ceil(
-            jnp.sum((jnp.abs(n_ext) + jnp.abs(offsets)), axis=1)
-        )  # +1 to reach the end of the cell and +1 to account for displacemt in current cell
+        if self.batched:
+            cell = vmap(minkowski_reduce)(self.cell)
+        else:
+            cell = minkowski_reduce(self.cell)
 
-        return [int(n) for n in n_ext]
+        return SystemParams(coordinates=self.coordinates, cell=cell)
 
 
 @jdc.pytree_dataclass
