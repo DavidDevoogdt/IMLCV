@@ -25,6 +25,8 @@ from scipy.interpolate import RBFInterpolator
 from shapely.geometry import MultiPoint, Point
 from sklearn.cluster import DBSCAN
 
+from IMLCV.base.MdEngine import StaticTrajectoryInfo
+
 keras: KerasAPI = import_module("tensorflow.keras")
 
 
@@ -102,28 +104,52 @@ class SystemParams:
             cell=self.cell if self.cell is None else self.cell[0, :],
         )
 
-    @partial(jit, static_argnums=(2))
-    def neighbourghs(self, r_cut, center_coordiantes=jnp.zeros(3), g=lambda neigh: 1):
+    def apply_fun_neighbourghs(
+        self,
+        r_cut,
+        center_coordiantes=jnp.zeros(3),
+        g=lambda r_ij, atom_index_j: 1,
+        exclude_self=True,
+    ):
+        """
+
+        the function g should be jax jttable, and takes as arguments the relative vector r_ij and its atom index
+        """
+
+        if exclude_self is not True:
+            raise NotImplementedError
+
+        @jit
         def apply_g(farg, ijk=None):
             if ijk is not None:
                 i, j, k = ijk
 
-            def _f(c, farg, ijk):
+            @jit
+            def _f(atom_index_j, farg, ijk):
+                c = self.coordinates[atom_index_j]
                 if ijk is not None:
                     pos = c + jnp.array([i, j, k]) @ sp.cell
                 else:
                     pos = c
+                r_ij = pos - center_coordiantes
+                norm = jnp.linalg.norm(r_ij)
+
+                def true_fun():
+                    out = g(r_ij, atom_index_j)
+                    if len(farg) > 2:
+                        return tuple(a + b for a, b in zip(farg, (1, *out)))
+                    return farg[0] + 1, farg[1] + out
 
                 return jax.lax.cond(
-                    jnp.linalg.norm(pos - center_coordiantes) < r_cut,
-                    lambda: farg + g(pos),
+                    jnp.logical_and(norm < r_cut, norm != 0.0),
+                    true_fun,
                     lambda: farg,
                 )
 
             farg = jax.lax.fori_loop(
                 0,
                 self.coordinates.shape[0],
-                lambda i, farg: _f(c=self.coordinates[i], farg=farg, ijk=ijk),
+                lambda at_ind, farg: _f(atom_index_j=at_ind, farg=farg, ijk=ijk),
                 init_val=farg,
             )
 
@@ -132,13 +158,19 @@ class SystemParams:
             else:
                 return j, (i, farg)
 
+        out = jax.eval_shape(g, jnp.zeros(3), 0)
+        if not isinstance(out, jax.ShapeDtypeStruct):
+            init_val = (0, *[jnp.zeros(shape=o.shape, dtype=o.dtype) for o in out])
+        else:
+            init_val = (0, jnp.zeros(shape=out.shape, dtype=out.dtype))
+
         if self.cell is None:
-            return apply_g(0)
+            return apply_g(init_val)
 
         else:
             # unit cell angles are in range [45,135] degrees
             sp = self.minkowski_reduce()
-            q, r = jnp.linalg.qr(sp.cell.T)
+            _, r = jnp.linalg.qr(sp.cell.T)
 
             # orthogonal distance for number of blocks
             bounds = jnp.abs(r_cut / jnp.diag(r.T)) + 1
@@ -163,8 +195,64 @@ class SystemParams:
                     )[1],
                     init_val=(i, farg),
                 )[1],
-                init_val=0,
+                init_val=init_val,
             )
+
+    def apply_fun_neighbourgh_pairs(
+        self,
+        r_cut,
+        center_coordiantes=jnp.zeros(3),
+        g=lambda r_ij, r_ik, atom_index_j, atom_index_k: 1,
+        exclude_self=True,
+        sp2: SystemParams | None = None,
+    ):
+        """
+        function that loops over all pairs of atoms within cutoff radius.
+
+        if sp2 is none, all pairs with itself are made, otherwise all pairs with sp2
+        """
+
+        if sp2 is None:
+            sp2 is self
+
+        out = jax.eval_shape(g, jnp.zeros(3), jnp.zeros(3), 0, 0)
+        if not isinstance(out, jax.ShapeDtypeStruct):
+            init_val = (0, *[jnp.zeros(shape=o.shape, dtype=o.dtype) for o in out])
+        else:
+            init_val = (0, jnp.zeros(shape=out.shape, dtype=out.dtype))
+
+        @jit
+        def h(r_ij, r_ik, atom_index_j, atom_index_k):
+            def true_fun():
+                out = g(r_ij, r_ik, atom_index_j, atom_index_k)
+
+                if len(init_val) > 2:
+                    return (1, *out)
+                return (1, out)
+
+            return jax.lax.cond(
+                jnp.linalg.norm(r_ij - r_ik) != 0.0,
+                true_fun,
+                lambda: init_val,
+            )
+
+        @jit
+        def f(r_ij, atom_index_j):
+            return sp2.apply_fun_neighbourghs(
+                r_cut,
+                center_coordiantes=center_coordiantes,
+                g=lambda r_ik, atom_index_k: h(r_ij, r_ik, atom_index_j, atom_index_k),
+                exclude_self=exclude_self,
+            )
+
+        i, j, k, val = self.apply_fun_neighbourghs(
+            r_cut,
+            center_coordiantes=center_coordiantes,
+            g=f,
+            exclude_self=exclude_self,
+        )
+
+        return k, val
 
     def minkowski_reduce(self) -> SystemParams:
         """base on code from ASE: https://wiki.fysik.dtu.dk/ase/_modules/ase/geometry/minkowski_reductsp.cellion.html#minkowski_reduce"""
@@ -232,7 +320,7 @@ class SystemParams:
             return hv, hu
 
         def relevant_vectors_2D(u, v):
-            cs = jnp.array([e for e in itertools.product([-1, 0, 1], repeat=2)])
+            cs = jnp.array(list(itertools.product([-1, 0, 1], repeat=2)))
             vs = cs @ jnp.array([u, v])
             indices = jnp.argsort(jnp.linalg.norm(vs, axis=1))[:7]
             return vs[indices], cs[indices]
@@ -654,7 +742,7 @@ class CvTrans:
     @partial(jit, static_argnums=(0,))
     def compute_cv_trans(self, x: CV) -> CV:
 
-        assert x.mapped == False
+        assert x.mapped is False
         # make output batched
         if x.batched:
             return CV(cv=vmap(self.f)(x.cv), mapped=False)
@@ -840,7 +928,7 @@ def Volume(sp: SystemParams):
     return vol
 
 
-def distance_descriptor(sps: SystemParams, tic, permutation="none"):
+def distance_descriptor(tic, permutation="none"):
     @cvflow
     def h(x: SystemParams):
 
@@ -854,7 +942,7 @@ def distance_descriptor(sps: SystemParams, tic, permutation="none"):
 
         return out
 
-    return h.compute_cv_flow(sps), h
+    return h
 
 
 def dihedral(numbers):
@@ -887,6 +975,25 @@ def dihedral(numbers):
         x = jnp.dot(v, w)
         y = jnp.dot(jnp.cross(b1, v), w)
         return jnp.arctan2(y, x)
+
+    return f
+
+
+def sb_descriptor(r_cut, z1: None, z2: None, sti: StaticTrajectoryInfo):
+
+    from IMLCV.base.tools.soap_kernel import p_i, p_inl_sb
+
+    @cvflow
+    def f(sp: SystemParams):
+
+        return p_i(
+            sp=sp,
+            sti=sti,
+            p=p_inl_sb,
+            r_cut=r_cut,
+            z1=z1,
+            z2=z2,
+        )
 
     return f
 
@@ -931,12 +1038,11 @@ def scale_cv_trans(array: CV):
     diff = (maxi - mini) / 2
     # mask = jnp.abs(diff) > 1e-6
 
+    @cvtrans
     def f0(x):
         return (x - (mini + maxi) / 2) / diff
 
-    f = CvTrans(f=f0)
-
-    return f.compute_cv_trans(array), f
+    return f0
 
 
 def update_metric(

@@ -377,10 +377,45 @@ def test_neigh():
     # should convege to 1
     r_cut = 20
 
-    neigh_calc = jax.jit(SystemParams.neighbourghs)(sp, r_cut)
+    import functools
+
+    neigh_calc, r_exp = jax.jit(
+        functools.partial(
+            SystemParams.apply_fun_neighbourghs, g=lambda r_ij, _: jnp.linalg.norm(r_ij)
+        )
+    )(self=sp, r_cut=r_cut)
     neigh_exp = n / jnp.abs(jnp.linalg.det(sp.cell)) * (4 / 3 * jnp.pi * r_cut**3)
 
-    print(f"err neigh density {jnp.abs(neigh_calc / neigh_exp - 1)}")
+    print(f"err neigh density {jnp.abs(  (neigh_calc - neigh_exp) /neigh_exp)}")
+
+
+def test_neigh_pair():
+    rng = jax.random.PRNGKey(42)
+    key1, key2, rng = jax.random.split(rng, 3)
+
+    n = 20
+
+    sp = SystemParams(
+        coordinates=jax.random.uniform(key1, (n, 3)) * 0.5,
+        cell=jax.random.uniform(key2, (3, 3)) * 0.5,
+    )
+
+    # should convege to 1
+    r_cut = 1
+
+    k, pair_dist = sp.apply_fun_neighbourgh_pairs(
+        r_cut=r_cut,
+        g=lambda r_ij, r_ik, atom_index_j, atom_index_k: jnp.linalg.norm(r_ij - r_ik),
+        exclude_self=True,
+    )
+
+    pair_dist_avg = pair_dist / k
+    # https://math.stackexchange.com/questions/167932/mean-distance-between-2-points-in-a-ball
+    pair_dist_exact = 36 / 35
+
+    print(
+        f"err neigh density {jnp.abs( (pair_dist_avg -pair_dist_exact)/pair_dist_exact  )}"
+    )
 
 
 def test_minkowski_reduce():
@@ -478,3 +513,5 @@ if __name__ == "__main__":
     # scheme0.round(rnds=5, init=None, steps=1e3, K=k, update_metric=False, n=8)
 
     test_neigh()
+
+    test_neigh_pair()

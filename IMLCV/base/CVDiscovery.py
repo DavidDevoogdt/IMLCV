@@ -27,8 +27,9 @@ from IMLCV.base.CV import (
     KerasTrans,
     PeriodicLayer,
     SystemParams,
-    distance_descriptor,
     scale_cv_trans,
+    sb_descriptor,
+    distance_descriptor
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 
@@ -49,6 +50,8 @@ class Transformer:
         outdim,
         periodicity=None,
         bounding_box=None,
+        descriptor = "sb",
+        descriptor_kwargs = None,
         *fit_args,
         **fit_kwargs,
     ) -> None:
@@ -65,17 +68,33 @@ class Transformer:
         self.fit_args = fit_args
         self.fit_kwargs = fit_kwargs
 
+        self.descriptor:CvFlow
+
+        match descriptor:
+            case "sb":
+                self.descriptor =  sb_descriptor( **descriptor_kwargs )
+            case "distance":
+                self.descriptor =  distance_descriptor( **descriptor_kwargs )
+            case _:
+                raise NotImplementedError
+
+
+
+
     def pre_fit(
         self,
         z: SystemParams,
         sti,
         svd=True,
         scale=True,
-    ) -> tuple[jnp.ndarray, CvFlow]:
-        x, f = distance_descriptor(z, sti)
-
+    ) -> tuple[CV, CvFlow]:
+        f = self.descriptor
+        x =   f.compute_cv_flow(z)
+      
         if scale:
-            x, g = scale_cv_trans(x)
+            g = scale_cv_trans(x)
+            x = g.compute_cv_trans(x)
+
             f = f * g
 
         return x, f
@@ -106,7 +125,8 @@ class Transformer:
     def post_fit(self, y: CV, scale) -> tuple[CV, CvTrans]:
         if not scale:
             return y, CvTrans(lambda x: x)
-        return scale_cv_trans(y)
+        h = scale_cv_trans(y)
+        return  h.compute_cv_trans(y),  h
 
 
 class TranformerUMAP(Transformer):
@@ -442,7 +462,7 @@ class CVDiscovery:
     def _get_data(
         self, rounds: RoundsMd, num=4, out=1e4
     ) -> Tuple[
-        SystemParams, CV, np.ndarray[any, any], CollectiveVariable, StaticTrajectoryInfo
+        SystemParams, CV, jax.Array, CollectiveVariable, StaticTrajectoryInfo
     ]:
 
         weights = []
