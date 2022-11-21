@@ -1,7 +1,6 @@
 import itertools
 import os
 from functools import partial
-from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -27,9 +26,9 @@ from IMLCV.base.CV import (
     KerasTrans,
     PeriodicLayer,
     SystemParams,
-    scale_cv_trans,
+    distance_descriptor,
     sb_descriptor,
-    distance_descriptor
+    scale_cv_trans,
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 
@@ -50,8 +49,8 @@ class Transformer:
         outdim,
         periodicity=None,
         bounding_box=None,
-        descriptor = "sb",
-        descriptor_kwargs = None,
+        descriptor="sb",
+        descriptor_kwargs=None,
         *fit_args,
         **fit_kwargs,
     ) -> None:
@@ -68,18 +67,14 @@ class Transformer:
         self.fit_args = fit_args
         self.fit_kwargs = fit_kwargs
 
-        self.descriptor:CvFlow
+        self.descriptor: CvFlow
 
-        match descriptor:
-            case "sb":
-                self.descriptor =  sb_descriptor( **descriptor_kwargs )
-            case "distance":
-                self.descriptor =  distance_descriptor( **descriptor_kwargs )
-            case _:
-                raise NotImplementedError
-
-
-
+        if descriptor == "sb":
+            self.descriptor = sb_descriptor(**descriptor_kwargs)
+        elif descriptor == "distance":
+            self.descriptor = distance_descriptor(**descriptor_kwargs)
+        else:
+            raise NotImplementedError
 
     def pre_fit(
         self,
@@ -89,8 +84,8 @@ class Transformer:
         scale=True,
     ) -> tuple[CV, CvFlow]:
         f = self.descriptor
-        x =   f.compute_cv_flow(z)
-      
+        x = f.compute_cv_flow(z)
+
         if scale:
             g = scale_cv_trans(x)
             x = g.compute_cv_trans(x)
@@ -126,7 +121,7 @@ class Transformer:
         if not scale:
             return y, CvTrans(lambda x: x)
         h = scale_cv_trans(y)
-        return  h.compute_cv_trans(y),  h
+        return h.compute_cv_trans(y), h
 
 
 class TranformerUMAP(Transformer):
@@ -461,9 +456,7 @@ class CVDiscovery:
 
     def _get_data(
         self, rounds: RoundsMd, num=4, out=1e4
-    ) -> Tuple[
-        SystemParams, CV, jax.Array, CollectiveVariable, StaticTrajectoryInfo
-    ]:
+    ) -> tuple[SystemParams, CV, jax.Array, CollectiveVariable, StaticTrajectoryInfo]:
 
         weights = []
 

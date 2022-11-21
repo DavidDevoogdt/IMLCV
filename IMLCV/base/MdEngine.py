@@ -407,6 +407,9 @@ class MDEngine(ABC):
 
         if self.step % self.static_trajectory_info.screen_log == 0:
             str = f"{  self.step : >10d}"
+            assert ti.err is not None
+            assert ti.T is not None
+
             str += f"|{  ti.err[0] : >10.4f}"
             if ti.P is not None:
                 str += f" { ti.P[0]/bar : >10.2f}"

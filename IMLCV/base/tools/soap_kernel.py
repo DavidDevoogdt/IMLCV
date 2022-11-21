@@ -78,8 +78,12 @@ def p_i(
         sp.minkowski_reduce()
 
     if z1 is not None:
+        assert sti is not None
+        assert sti.atomic_numbers is not None
         sp_z1 = sp[sti.atomic_numbers == z1]
     else:
+        assert sti is not None
+        assert sti.atomic_numbers is not None
         sp_z1 = sp
 
     if z2 is not None:
@@ -95,7 +99,7 @@ def p_i(
                 g=p,
             )
         )
-    )(sp.coordinates)
+    )(sp_z2.coordinates)
 
     # normalize
     return jnp.einsum("i...,i->i...", val, 1 / vmap(jnp.linalg.norm)(val))

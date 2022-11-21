@@ -830,7 +830,7 @@ class BiasMTD(Bias):
             tempering: _description_. Defaults to 0.0.
         """
 
-        raise NotImplemented
+        raise NotImplementedError
 
         if isinstance(sigmas, float):
             sigmas = jnp.array([sigmas])

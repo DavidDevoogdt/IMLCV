@@ -102,7 +102,7 @@ def kernel_matrix(x: CV, metric: Metric, eps, kernel_func):
 def polynomial_matrix(x: CV, metric: Metric, powers):
     """Evaluate monomials, with exponents from `powers`, at `x`."""
 
-    g = lambda x, powers: (cv_vals(x, powers, metric=metric))
+    g = lambda x, powers: cv_vals(x, powers, metric=metric)
 
     f00 = lambda x, powers: jnp.prod(g(x, powers))
     f10 = jax.vmap(f00, in_axes=(0, None), out_axes=0)

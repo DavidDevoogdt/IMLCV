@@ -105,7 +105,7 @@ class Rounds(ABC):
             dill.dump(d, f)
 
     @staticmethod
-    def load(folder: str | Path, sti: None | StaticTrajectoryInfo = None):
+    def load(folder: str | Path, sti: StaticTrajectoryInfo | None = None):
         with open(f"{folder}/rounds", "rb") as f:
             self = object.__new__(RoundsMd)
             self.__dict__.update(dill.load(f))
@@ -459,7 +459,7 @@ class RoundsMd(Rounds):
 
             f = self.h5file
 
-            if not r in f.keys():
+            if r not in f.keys():
                 assert (round_r / "bias").exists()
                 assert (round_r / "engine").exists()
 
@@ -586,7 +586,8 @@ class RoundsMd(Rounds):
                 bias = Bias.load(inputs[0].filepath)
                 sp = traj.sp
                 if st.equilibration is not None:
-                    sp = sp[traj.t > st.equilibration]
+                    if traj.t is not None:
+                        sp = sp[traj.t > st.equilibration]
 
                 cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
