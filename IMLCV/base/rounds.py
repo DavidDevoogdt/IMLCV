@@ -592,7 +592,7 @@ class RoundsMd(Rounds):
                 cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
-            if bias is not None:
+            if bias is not None and sp.shape[0] > 1:
                 bs = bias.compute_from_system_params(sp).energy
                 probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
                 probs = probs / jnp.linalg.norm(probs)

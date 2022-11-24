@@ -445,8 +445,23 @@ class Bias(BC, ABC):
 
         Can only change the properties from _get_args
         """
+
+    def _update_bias(self):
+        """update the bias.
+
+        Can only change the properties from _get_args
+        """
         if self.finalized:
-            return
+            return False
+
+        if self.start is None or self.step is None:
+            return False
+
+        if self.start == 0:
+            self.start += self.step - 1
+            return True
+        self.start -= 1
+        return False
 
     @partial(jit, static_argnums=(0, 2, 3))
     def compute_from_system_params(
@@ -677,8 +692,8 @@ class CompositeBias(Bias):
 
         self.biases: list[Bias] = []
 
-        self.start_list = np.array([], dtype=np.int16)
-        self.step_list = np.array([], dtype=np.int16)
+        # self.start_list = np.array([], dtype=np.int16)
+        # self.step_list = np.array([], dtype=np.int16)
         self.args_shape = np.array([0])
         self.collective_variable: CollectiveVariable = None  # type: ignore
 
@@ -697,12 +712,12 @@ class CompositeBias(Bias):
 
         self.biases.append(b)
 
-        self.start_list = np.append(
-            self.start_list, b.start if (b.start is not None) else -1
-        )
-        self.step_list = np.append(
-            self.step_list, b.step if (b.step is not None) else -1
-        )
+        # self.start_list = np.append(
+        #     self.start_list, b.start if (b.start is not None) else -1
+        # )
+        # self.step_list = np.append(
+        #     self.step_list, b.step if (b.step is not None) else -1
+        # )
         self.args_shape = np.append(
             self.args_shape, len(b.get_args()) + self.args_shape[-1]
         )
@@ -734,15 +749,8 @@ class CompositeBias(Bias):
         self,
         md: MDEngine,
     ):
-        super().update_bias(md=md)
-
-        mask = self.start_list == 0
-
-        self.start_list[mask] += self.step_list[mask]
-        self.start_list -= 1
-
-        for i in np.argwhere(mask):
-            self.biases[int(i)].update_bias(md=md)
+        for b in self.biases:
+            b.update_bias(md=md)
 
     def get_args(self):
         return [a for b in self.biases for a in b.get_args()]
@@ -830,7 +838,7 @@ class BiasMTD(Bias):
             tempering: _description_. Defaults to 0.0.
         """
 
-        raise NotImplementedError
+        # raise NotImplementedError
 
         if isinstance(sigmas, float):
             sigmas = jnp.array([sigmas])
@@ -856,13 +864,16 @@ class BiasMTD(Bias):
         self,
         md: MDEngine,
     ):
+        if not self._update_bias():
+            return
 
-        sp = trajectory_info.sp
+        assert md.trajectory_info is not None
+        sp = md.trajectory_info.last_sp
 
         if self.finalized:
             return
         # Compute current CV values
-        q0s, _ = self.collective_variable.compute_cv(sp)
+        q0s = self.collective_variable.compute_cv(sp)[0].cv
         K = self.K
         if self.tempering != 0.0:
             raise NotImplementedError("untested")
@@ -873,12 +884,10 @@ class BiasMTD(Bias):
     def _compute(self, cvs, q0s, Ks):
         """Computes sum of hills."""
 
-        deltas = jnp.apply_along_axis(
-            self.collective_variable.metric.difference,
-            axis=1,
-            arr=q0s.val,
-            x2=cvs,
-        )
+        def f(x):
+            return self.collective_variable.metric.difference(x1=CV(cv=x), x2=cvs)
+
+        deltas = jnp.apply_along_axis(f, axis=1, arr=q0s.val)
 
         exparg = jnp.einsum("ji,ji,i -> j", deltas, deltas, self.sigmas_isq)
         energy = jnp.sum(jnp.exp(-exparg) * Ks.val)
@@ -1065,6 +1074,12 @@ class CvMonitor(BiasF):
         self.transitions = np.zeros((0, self.collective_variable.metric.ndim, 2))
 
     def update_bias(self, md: MDEngine):
+
+        if not self._update_bias():
+            return
+
+        raise NotImplementedError
+        assert md.trajectory_info is not None
 
         sp = md.trajectory_info.sp
 

@@ -43,6 +43,8 @@ from yaff.test.common import get_alaninedipeptide_amber99ff
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
+from molmod.units import angstrom
+
 
 def do_conf():
     config(cluster="doduo", max_blocks=10)
@@ -57,23 +59,26 @@ def test_cv_discovery(
     cvd="AE",
     n=4,
     init=500,
+    out_dim=3,
 ):
     # do_conf()
 
+    tf_kwargs = {
+        "outdim": out_dim,
+        "descriptor": "sb",
+        "descriptor_kwargs": {
+            "r_cut": 5 * angstrom,
+            "sti": md.static_trajectory_info,
+        },
+    }
+
     if cvd == "AE":
-        cvd = CVDiscovery(
-            transformer=TranformerAutoEncoder(
-                outdim=3,
-            )
-        )
+        tf = TranformerAutoEncoder(**tf_kwargs)
+
         kwargs = {}
     elif cvd == "UMAP":
 
-        cvd = CVDiscovery(
-            transformer=TranformerUMAP(
-                outdim=3,
-            )
-        )
+        tf = TranformerUMAP(**tf_kwargs)
 
         kwargs = dict(
             n_neighbors=60,
@@ -89,6 +94,10 @@ def test_cv_discovery(
         )
     else:
         raise ValueError
+
+    cvd = CVDiscovery(
+        transformer=tf,
+    )
 
     scheme0 = get_FES(
         name=name,
@@ -142,7 +151,7 @@ def test_virial():
     vir = np.zeros((3, 3))
 
     def fun(x):
-        return x[0]
+        return x.cv[0]
 
     bias = BiasF(cvs=cv0, g=fun)
 
@@ -208,7 +217,7 @@ def test_yaff_save_load_func(full_name):
     assert pytest.approx(sp1.coordinates) == sp2.coordinates
     assert pytest.approx(sp1.cell) == sp2.cell
     assert (
-        pytest.approx(yaffmd.energy.compute_from_system_params(sp1).energy)
+        pytest.approx(yaffmd.energy.compute_from_system_params(sp1).energy, abs=1e-6)
         == yeet.energy.compute_from_system_params(sp2).energy
     )
 
@@ -259,19 +268,29 @@ def test_combine_bias(full_name):
 def test_bias_save(full_name):
     """save and load bias to disk."""
 
-    yaffmd = alanine_dipeptide_yaff()
+    yaffmd = alanine_dipeptide_yaff(
+        bias=lambda cv0: BiasMTD(
+            cvs=cv0,
+            K=2.0 * units.kjmol,
+            sigmas=np.array([0.35, 0.35]),
+            start=25,
+            step=500,
+        )
+    )
     yaffmd.run(int(1e3))
 
     yaffmd.bias.save("output/bias_test_2.xyz")
     bias = Bias.load("output/bias_test_2.xyz")
 
-    cvs = np.array([0.0, 0.0])
+    from IMLCV.base.CV import CV
+
+    cvs = CV(cv=jnp.array([0.0, 0.0]))
 
     [b, db] = yaffmd.bias.compute_from_cv(cvs=cvs, diff=True)
     [b2, db2] = bias.compute_from_cv(cvs=cvs, diff=True)
 
     assert pytest.approx(b) == b2
-    assert pytest.approx(db[0]) == db2[0]
+    assert pytest.approx(db.cv) == db2.cv
 
 
 def test_ala_dipep_FES(
@@ -450,19 +469,21 @@ if __name__ == "__main__":
         md = ase_yaff
         k = 10 * kjmol
         name = "test_cv_disc_perov"
-    a = False
 
-    # do_conf()
-
-    if a:
+    if True:
         test_virial()
         with tempfile.TemporaryDirectory() as tmp:
             test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")
             test_combine_bias(full_name=f"{tmp}/combine.h5")
             test_bias_save(full_name=f"{tmp}/bias_save.h5")
         # test_unbiasing()ct (object 'round_0' doesn't
-        test_cv_discovery(md=md(), recalc=True)
 
+        test_neigh()
+        test_neigh_pair()
+
+    if True:
+        do_conf()
+        test_cv_discovery(md=md(), recalc=True, k=k, n=8)
         test_grid_selection(recalc=True)
 
     # test_cv_discovery(
@@ -511,7 +532,3 @@ if __name__ == "__main__":
     # scheme0.rounds.new_round(scheme0.md)
     # scheme0.rounds.save()
     # scheme0.round(rnds=5, init=None, steps=1e3, K=k, update_metric=False, n=8)
-
-    test_neigh()
-
-    test_neigh_pair()

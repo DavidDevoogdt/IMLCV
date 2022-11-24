@@ -78,9 +78,7 @@ class Observable:
         ]
 
         # todo: take actual bounds instead of calculated bounds
-        bounds, bins = self._FES_mg(
-            trajs=trajs, bounding_box=cv.metric.bounding_box, n=n
-        )
+        bounds, bins = self._FES_mg(cvs=trajs, bounding_box=cv.metric.bounding_box, n=n)
 
         histo = bash_app_python(HistogramND.from_wham)(
             bins=bins,
@@ -148,15 +146,15 @@ class Observable:
 
         return cvs.metric.update_metric(transitions, fn=fn)
 
-    def _FES_mg(self, trajs: list[CV], bounding_box, n=None):
+    def _FES_mg(self, cvs: list[CV], bounding_box, n=None):
 
         if n is None:
             n = 0
-            for t in trajs:
+            for t in cvs:
                 n += t.cv.size
 
             # 20 points per bin on average
-            n = int((n / self.samples_per_bin) ** (1 / trajs[0].cv.ndim))
+            n = int((n / self.samples_per_bin) ** (1 / cvs[0].cv.ndim))
 
         # if time is not None:
         #     bins_max = int((time/self.time_per_bin)**(1 / trajs[0].ndim))
@@ -165,10 +163,7 @@ class Observable:
 
         assert n >= 4, "sample more points"
 
-        c = trajs[0]
-        for t in trajs[1:]:
-            c += t
-
+        c = CV.stack(*cvs)
         a = c.cv
 
         bounds = [[a[:, i].min(), a[:, i].max()] for i in range(a.shape[1])]
@@ -255,26 +250,19 @@ class Observable:
 
             fslist = []
             smoothing_list = []
-            cv = None
+            cv: list[CV] = []
 
             for idx, cvi in grid:
 
                 if not np.isnan(fs[idx]):
                     fslist.append(fs[idx])
 
-                    if cv is None:
-                        cv = cvi
-                    else:
-                        cv += cvi
+                    cv += [cvi]
 
                     smoothing_list.append(sigma[idx])
-
-                # else:
-                #     fslist.append(0.0)
+            cv = CV.stack(*cv)
 
             fslist = jnp.array(fslist)
-            # sigmalist = jnp.array(smoothing_list)
-
             bounds = jnp.array(bounds)
 
             def get_b(fact):
@@ -294,43 +282,6 @@ class Observable:
                     degree=rbf_degree,
                 )
                 return fesBias
-
-            # for fact in 10 ** (jnp.linspace(-1, 1, num=10)):
-            #     fesBias = get_b(fact)
-            #     err = 0
-            #     for idx, cvi in grid:
-            #         if not jnp.isnan(fes.fs[idx]):
-            #             err += (fesBias.compute_from_cv(cvi)[0] - fes.fs[idx]) ** 2
-            #     err = jnp.sqrt(err)
-            #     print(err)
-
-            #     if err < min_err:
-            #         min_err = err
-            #         min_eps = fact
-
-            #     if plot:
-            #         plot_app(
-            #             bias=fesBias,
-            #             outputs=[
-            #                 File(
-            #                     f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}_{fact}.pdf"
-            #                 )
-            #             ],
-            #             inverted=True,
-            #             margin=1,
-            #             # stdout=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stdout",
-            #             # stderr=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stderr",
-            #         )
-
-            #         plot_app(
-            #             bias=fesBias,
-            #             outputs=[
-            #                 File(
-            #                     f"{self.folder}/FES_bias_{self.rounds.round}_{choice}_{fact}.pdf"
-            #                 )
-            #             ],
-            #             margin=1.0,
-            #         )
 
             fesBias = get_b(1.0)
 

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import tempfile
+from abc import abstractmethod
+
+# from IMLCV.base.CV import CV, CvTrans
 from functools import partial
 from importlib import import_module
 from typing import TYPE_CHECKING, Callable
 
-import alphashape
+import jax
 import jax.lax
 
 # import numpy as np
@@ -15,14 +19,12 @@ import jax_dataclasses as jdc
 import numpy as np
 import tensorflow
 import tensorflow as tfl
+from flax import linen as nn
+from flax.linen.linear import Dense
 from jax import Array, jacfwd, jit, vmap
 from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
-from matplotlib import pyplot as plt
 from molmod.units import angstrom
-from scipy.interpolate import RBFInterpolator
-from shapely.geometry import MultiPoint, Point
-from sklearn.cluster import DBSCAN
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import StaticTrajectoryInfo
@@ -213,7 +215,7 @@ class SystemParams:
         """
 
         if sp2 is None:
-            sp2 is self
+            sp2 = self
 
         out = jax.eval_shape(g, jnp.zeros(3), jnp.zeros(3), 0, 0)
         if not isinstance(out, jax.ShapeDtypeStruct):
@@ -532,32 +534,82 @@ class SystemParams:
 class CV:
     cv: jnp.ndarray
     mapped: jdc.Static[bool] = False
-    in_dims: jdc.Static[list | None] = None
+    _combine_dims: jdc.Static[list | None] = None
+    _stack_dims: jdc.Static[list | None] = None
 
     @property
     def batched(self):
         return len(self.cv.shape) == 2
 
+    @property
+    def batch_dim(self):
+        if self.batched:
+            return self.shape[0]
+        return 1
+
+    @property
+    def dim(self):
+        return self.cv.shape[-1]
+
+    @property
+    def size(self):
+        return self.cv.size
+
+    @property
+    def shape(self):
+        return self.cv.shape
+
+    @property
+    def combine_dims(self):
+        if self._combine_dims is None:
+            return self.dim
+        return self._combine_dims
+
+    @property
+    def stack_dims(self):
+        if self._stack_dims is None:
+            return [self.batch_dim]
+        return self._stack_dims
+
+    def __add__(self, other) -> CV:
+        assert isinstance(other, Array)
+        return CV(cv=self.cv + other)
+
+    def __radd__(self, other) -> CV:
+        return other + self
+
+    def __sub__(self, other) -> CV:
+        assert isinstance(other, Array)
+        return CV(cv=self.cv - other)
+
+    def __rsub__(self, other) -> CV:
+        return other - self
+
+    def __mul__(self, other) -> CV:
+        assert isinstance(other, Array)
+        return CV(cv=self.cv * other)
+
+    def __rmul__(self, other) -> CV:
+        return other * self
+
+    def __matmul__(self, other) -> CV:
+        assert isinstance(other, Array)
+        return CV(cv=self.cv @ other)
+
+    def __rmatmul__(self, other) -> CV:
+        return other @ self
+
+    def __div__(self, other) -> CV:
+        assert isinstance(other, Array)
+        return CV(cv=self.cv / other)
+
+    def __rdiv__(self, other) -> CV:
+        return other / self
+
     def batch(self) -> CV:
         if self.batched:
             return self
         return CV(cv=jnp.array([self.cv]), mapped=self.mapped)
-
-    def unbatch(self) -> CV:
-        if not self.batched:
-            return self
-        assert self.cv.shape[0] == 1
-        return CV(cv=self.cv[0, :], mapped=self.mapped)
-
-    def __add__(self, other):
-        return CV.combine(self, other)
-
-    @property
-    def dim(self):
-        if self.batched:
-            return self.cv.shape[1]
-        else:
-            return self.cv.shape[0]
 
     def __iter__(self):
         if not self.batched:
@@ -569,18 +621,62 @@ class CV:
         return
 
     def __getitem__(self, idx):
+        assert self.batched
         return CV(cv=self.cv[idx, :], mapped=self.mapped)
 
-    @property
-    def shape(self):
-        return self.cv.shape
+    def unbatch(self) -> CV:
+        if not self.batched:
+            return self
+        assert self.cv.shape[0] == 1
+        return CV(cv=self.cv[0, :], mapped=self.mapped)
 
-    @property
-    def size(self):
-        return self.cv.size
+    @staticmethod
+    def stack(*cvs: CV) -> CV:
+        in_dims = None
+        mapped = None
+
+        cv_arr = []
+        stack_dims = []
+
+        for cv in cvs:
+            assert isinstance(cv, CV)
+            if in_dims is None:
+                in_dims = cv._combine_dims
+                mapped = cv.mapped
+            else:
+                assert cv._combine_dims == in_dims
+                assert cv.mapped == mapped
+
+            cv_arr.append(cv.batch().cv)
+            stack_dims += cv.stack_dims
+
+        assert mapped is not None
+
+        return CV(
+            cv=jnp.vstack(cv_arr),
+            mapped=mapped,
+            _combine_dims=in_dims,
+            _stack_dims=stack_dims,
+        )
+
+    def unstack(self) -> list[CV]:
+        i = 0
+
+        out: list[CV] = []
+        for j in self.stack_dims:
+            out += [
+                CV(
+                    cv=self.cv[i : i + j, :],
+                    mapped=self.mapped,
+                    _combine_dims=self._combine_dims,
+                )
+            ]
+            i += j
+        return out
 
     def split(self, flatten=False) -> list[CV]:
-        if self.in_dims is None:
+        """inverse operation of combine"""
+        if self._combine_dims is None:
             return [CV(cv=self.cv, mapped=self.mapped)]
 
         def broaden_tree(subtree):
@@ -593,29 +689,28 @@ class CV:
             return num
 
         if not flatten:
-            sz = [sum(broaden_tree(a)) for a in self.in_dims]
-            out_dim = self.in_dims
+            sz = [sum(broaden_tree(a)) for a in self._combine_dims]
+            out_dim = self._combine_dims
         else:
-            sz = broaden_tree(self.in_dims)
+            sz = broaden_tree(self._combine_dims)
             out_dim = sz
 
         end = jnp.cumsum(jnp.array(sz))
         start = jnp.hstack([0, end[:-1]])
 
-        a = [
+        return [
             CV(
                 cv=jax.lax.dynamic_slice_in_dim(
                     self.cv, start_index=s, slice_size=e, axis=-1
                 ),
-                in_dims=out_dim[i] if isinstance(out_dim[i], list) else None,
+                _combine_dims=out_dim[i] if isinstance(out_dim[i], list) else None,
             )
             for i, (s, e) in enumerate(zip(start, sz))
         ]
 
-        return a
-
     @staticmethod
     def combine(*cvs: CV, flatten=False) -> CV:
+        """merges a list of CVs into a single CV. The dimenisions are stored such that it can later be split into separated CVs"""
 
         out_cv: list[jnp.ndarray] = []
         out_dim: list[int] = []
@@ -641,21 +736,16 @@ class CV:
             if batched is None:
                 batched = cv.batched
                 if batched:
-                    bdim = cv.shape[0]
+                    bdim = cv.batch_dim
             else:
                 assert batched == cv.batched
                 if batched:
-                    assert bdim == cv.shape[0]
+                    assert bdim == cv.batch_dim
 
             def simple(cv: CV):
-                if cv.in_dims is not None:
-                    a = cv.in_dims
-                else:
-                    a = cv.shape[-1]
+                return [cv.cv], [cv.combine_dims]
 
-                return [cv.cv], [a]
-
-            if cv.in_dims is not None and flatten:
+            if cv._combine_dims is not None and flatten:
                 cv_split = cv.split()
 
                 cvi: list[jnp.ndarray] = []
@@ -663,7 +753,7 @@ class CV:
 
                 for ii in cv_split:
 
-                    if ii.in_dims is None:
+                    if ii._combine_dims is None:
                         a, b = simple(ii)
                     else:
                         a, b = a, b = inner(ii)
@@ -681,7 +771,7 @@ class CV:
             out_cv += a
             out_dim += b
 
-        return CV(cv=jnp.hstack(out_cv), mapped=mapped, in_dims=out_dim)  # type: ignore
+        return CV(cv=jnp.hstack(out_cv), mapped=mapped, _combine_dims=out_dim)  # type: ignore
 
 
 class Metric:
@@ -831,36 +921,162 @@ class Metric:
         return len(self.periodicities)
 
 
-sf = Callable[[SystemParams], CV]
-tf = Callable[[CV], CV]
-tff = Callable[[Array], Array]
+import dataclasses
 
 
+@dataclasses.dataclass(kw_only=True)
 class CvTrans:
     """f can either be a single CV tranformation or a list of transformations"""
 
-    def __init__(
-        self,
-        f: tf | CvTrans | list[tf | CvTrans],
-        trans: list[CvTrans] | None = None,
-        split_indices: list[list[int]] | None = None,
-    ) -> None:
-        # ff: list[tf | CvTrans]
+    trans: tuple[CvLink]
 
-        if not isinstance(f, list):
-            f = [f]
+    @dataclasses.dataclass(kw_only=True)
+    class CVInput:
+        inputs: list[int]
+        relative: bool
 
-        self.f = f
+        @staticmethod
+        def combine(
+            self: list[CvTrans.CVInput], other: list[CvTrans.CVInput]
+        ) -> list[CvTrans.CVInput]:
 
-        if trans is None:
-            trans = []
+            out = self.copy()
 
-        self.f1 = trans
+            offset = len(self)
+            for o in other:
+                if o.relative:
+                    inp = [a + offset for a in o.inputs]
+                else:
+                    inp = o.inputs
+                out.append(CvTrans.CVInput(inputs=inp, relative=o.relative))
 
-        self.split_indices = split_indices
+            return out
+
+    @dataclasses.dataclass(kw_only=True)
+    class CvFun:
+        """used to instantiate flax linen CvTrans"""
+
+        f: Callable[[CV], CV] | None = None
+        b: Callable[[CV], CV] | None = None
+        cv_input: CvTrans.CVInput | None = None
+
+        def to_cv_link(self):
+            if self.cv_input is None:
+                self.cv_input = CvTrans.CVInput(inputs=[0], relative=True)
+
+            return CvTrans.CvLink(func=[self], split_indices=[self.cv_input])
+
+        def __add__(self, other):
+            assert isinstance(other, CvTrans.CvFun | CvTrans.CvFunNn)
+            return self.to_cv_link() + other.to_cv_link()
+
+    class CvFunNn(nn.Module):
+        """used to instantiate flax linen CvTrans"""
+
+        _: dataclasses.KW_ONLY
+        cv_input: CvTrans.CVInput | None = None
+
+        @abstractmethod
+        def setup(self) -> None:
+            pass
+
+        @abstractmethod
+        def f(self, x: CV) -> CV:
+            pass
+
+        def b(self, x: CV) -> CV | None:
+            return None
+
+        @nn.nowrap
+        def to_cv_link(self):
+            if self.cv_input is None:
+                self.cv_input = CvTrans.CVInput(inputs=[0], relative=True)
+
+            return CvTrans.CvLink(func=[self], split_indices=[self.cv_input])
+
+        def __add__(self, other) -> CvTrans.CvLink:
+            return other + self
+
+    @dataclasses.dataclass(kw_only=True)
+    class CvLink:
+
+        _: dataclasses.KW_ONLY
+        # funcs= list[ CvTrans.Cv]
+
+        func: list[CvTrans.CvFun | CvTrans.CvFunNn] = dataclasses.field(
+            default_factory=lambda: []
+        )
+        split_indices: list[CvTrans.CVInput]
+
+        def _calc(self, x: CV, reversed=False):
+            # todo: fix non used split indices as identity
+
+            cvs = x.split(flatten=True)
+
+            if self.split_indices is not None:
+
+                args = [
+                    CV.combine(*[cvs[j] for j in i.inputs]) for i in self.split_indices
+                ]
+            else:
+                args = cvs
+
+            out: list[CV] = []
+            for xi, fi in zip(args, self.func):
+
+                if reversed:
+                    if fi.b is None:
+                        raise
+                    val = fi.b(xi)
+                    if val is None:
+                        raise
+                    out.append(val)
+                else:
+                    if fi.f is None:
+                        raise
+                    val = fi.f(xi)
+                    if val is None:
+                        raise
+                    out.append(val)
+
+            return CV.combine(*out)
+
+        def fw(self, x: CV):
+            return self._calc(x, reversed=False)
+
+        def bw(self, x: CV):
+            return self._calc(x, reversed=True)
+
+        def to_chain(self) -> CvTrans:
+            return CvTrans(trans=(self,))
+
+        def __add__(
+            self, other: CvTrans.CvLink | CvTrans.CvFun | CvTrans.CvFunNn
+        ) -> CvTrans.CvLink:
+
+            if not isinstance(other, CvTrans.CvLink):
+                other = CvTrans.CvLink(func=[other])
+
+            return CvTrans.CvLink(
+                func=[*self.func, *other.func],
+                split_indices=CvTrans.CVInput.combine(
+                    self.split_indices, other.split_indices
+                ),
+            )
+
+        def __mul__(
+            self, other: CvTrans | CvTrans.CvLink | CvTrans.CvFun | CvTrans.CvFunNn
+        ) -> CvTrans:
+            if not isinstance(other, CvTrans.CvLink | CvTrans):
+                other = other.to_cv_link()
+
+            if not isinstance(other, CvTrans):
+                other = other.to_chain()
+
+            return self.to_chain() * other
 
     @staticmethod
-    def from_function(f):
+    def from_array_function(f: Callable[[Array], Array]):
         def f2(x: CV):
             if x.batched:
                 out = vmap(f)(x.cv)
@@ -869,63 +1085,125 @@ class CvTrans:
 
             return CV(cv=out)
 
-        return CvTrans(f=f2)
+        return CvTrans.from_cv_function(f=f2)
 
-    @partial(jit, static_argnums=(0,))
-    def compute_cv_trans(self, x: CV) -> CV:
+    @staticmethod
+    def from_cv_function(f: Callable[[CV], CV]) -> CvTrans:
+        return CvTrans.from_cv_fun(proto=CvTrans.CvFun(f=f))
+
+    @staticmethod
+    def from_cv_fun(proto: CvFun | CvFunNn):
+        return CvTrans.from_cv_link(proto.to_cv_link())
+
+    @staticmethod
+    def from_cv_link(cv_link: CvLink):
+        return cv_link.to_chain()
+
+    # @partial(jit, static_argnums=(0,))
+    def compute_cv_trans(self, x: CV, reverse=False) -> CV:
         """
         result is always batched
         arg: CV
         """
-        for xi in x:
-            assert not xi.mapped
 
-        if len(self.f) > 1:
-
-            cvs = x.split()
-
-            if self.split_indices is not None:
-
-                args = [CV.combine(*[cvs[j] for j in i]) for i in self.split_indices]
-            else:
-                args = cvs
+        if reverse:
+            for tr in reversed(self.trans):
+                x = tr.bw(x)
         else:
-            args = [x]
+            for tr in self.trans:
+                x = tr.fw(x)
 
-        out = []
-
-        for xi, fi in zip(args, self.f):
-            if isinstance(fi, CvTrans):
-                out.append(fi.compute_cv_trans(xi))
-            else:
-                out.append(fi(xi))
-
-        cv = CV.combine(*out)
-
-        for other in self.f1:
-            cv = other.compute_cv_trans(cv)  # output should be a single CV
-
-        return cv
-
-    def __add__(self, other):
-
-        return CvTrans(f=[self, other])
+        return x
 
     def __mul__(self, other):
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
-        return CvTrans(f=[self], trans=[other])
+        return CvTrans(trans=(*self.trans, *other.trans))
+
+    def __add__(self, other):
+        assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
+        return CvTrans(trans=tuple([s + o for s, o in zip(self.trans, other.trans)]))
+
+    def __radd__(self, other):
+        return self + other
+
+
+class CvTransNN(nn.Module, CvTrans):
+
+    trans: tuple[CvTrans.CvLink]
+
+    def setup(self) -> None:
+        """replaces all CvFunNn by initilized version"""
+
+        for s, t, link in self.iter_nn_links():
+            name = f"links_{s}_{t}"
+            self.__setattr__(name, link)
+            self.trans[s].func[t] = self.__getattr__(name)
+
+    def iter_nn_links(self):
+        for j, tr in enumerate(self.trans):
+            for i, fun in enumerate(tr.func):
+                if isinstance(fun, CvTrans.CvFunNn):
+                    yield j, i, fun
+
+    def compute_cv_trans(self, x: CV, reverse=False) -> CV:
+        return super().compute_cv_trans(x, reverse)
+
+    @nn.nowrap
+    def __add__(self, other):
+        assert isinstance(other, CvTrans | CvTransNN)
+        return CvTransNN(trans=(*self.trans, *other.trans))
+
+    @nn.nowrap
+    def __mul__(self, other):
+        assert isinstance(other, CvTrans | CvTransNN)
+        return CvTransNN(trans=tuple([s + o for s, o in zip(self.trans, other.trans)]))
+
+
+class NormalizingFlow(nn.Module):
+    """normalizing flow. _ProtoCvTransNN are stored separately because they need to be initialized by this module in setup"""
+
+    flow: CvTransNN | CvTransNN
+
+    def setup(self) -> None:
+        if isinstance(self.flow, CvTrans):
+            self.nn_flow = CvTransNN(trans=self.flow.trans)
+        else:
+            self.nn_flow = self.flow
+
+    def _calc(self, y, reverse: bool):
+        def g(cv):
+            return self.nn_flow.compute_cv_trans(cv, reverse=reverse)
+
+        a = g(y)
+        b = jacfwd(g)(y)
+
+        return a, jnp.abs(jnp.linalg.det(b.cv.cv))
+
+    def forward(self, x: CV) -> CV:
+        return self._calc(x, reverse=False)
+
+    def backward(self, x: CV) -> CV:
+        return self._calc(x, reverse=True)
 
 
 class CvFlow:
     def __init__(
         self,
-        func: sf,
+        func: Callable[[SystemParams], CV],
         trans: CvTrans | None = None,
         batched=False,
     ) -> None:
         self.f0 = func
         self.f1 = trans
         self.batched = batched
+
+    @staticmethod
+    def from_function(f: Callable[[SystemParams], Array]) -> CvFlow:
+        def f2(sp: SystemParams):
+
+            return CV(cv=f(sp))
+
+        return CvFlow(func=f2)
 
     @partial(jit, static_argnums=(0,))
     def compute_cv_flow(self, x: SystemParams) -> CV:
@@ -947,7 +1225,7 @@ class CvFlow:
             cv1: CV = self.compute_cv_flow(x)
             cv2: CV = other.compute_cv_flow(x)
 
-            return cv1 + cv2
+            return CV.combine(cv1, cv2)
 
         return CvFlow(func=f_add, batched=True)
 
@@ -960,77 +1238,6 @@ class CvFlow:
             self.f1 *= other
 
         return self
-
-
-# from flax import linen as nn
-
-
-class NormalizingFlow:
-    def __init__(self, forward: CvTrans, backward: CvTrans) -> None:
-        self.fw = forward
-        self.bw = backward
-
-    @partial(jit, static_argnums=(0, 2))
-    def _calc(self, y, f: CvTrans):
-
-        a = f.compute_cv_trans(y)
-        b = jacfwd(f.compute_cv_trans)(y)
-
-        return a, jnp.abs(jnp.linalg.det(b.cv.cv))
-
-    @partial(jit, static_argnums=(0,))
-    def forward(self, x: CV) -> CV:
-        return self._calc(x, self.fw)
-
-    @partial(jit, static_argnums=(0,))
-    def backward(self, x: CV) -> CV:
-        return self._calc(x, self.bw)
-
-    def __mul__(self, other):
-        assert isinstance(other, NormalizingFlow)
-
-        return NormalizingFlow(forward=self.fw * other.fw, backward=other.bw * self.bw)
-
-    def __add__(self, other):
-        assert isinstance(other, NormalizingFlow)
-
-        return NormalizingFlow(forward=self.fw + other.fw, backward=self.bw + other.bw)
-
-
-class RealNVP(NormalizingFlow):
-    def __init__(self, s, t, n) -> None:
-        def fw(x: CV):
-
-            x1, x2 = x.split()
-            return CV(cv=x2.cv * (x1.cv * s) + x1.cv * t)
-
-        def bw(z: CV):
-            z1, z2 = z.split()
-
-            return CV(cv=(z2.cv - z1.cv * t) / (z1.cv * s))
-
-        super().__init__(
-            forward=CvTrans(
-                f=[cvtrans(f=lambda x: x), CvTrans(f=fw)],
-                split_indices=[[0], [0, 1]],
-            ),
-            backward=CvTrans(
-                f=[cvtrans(f=lambda x: x), CvTrans(f=bw)],
-                split_indices=[[0], [0, 1]],
-            ),
-        )
-
-
-def cvflow(func: sf) -> CvFlow:
-    """decorator to make a CV"""
-    ff = CvFlow(func=func)
-    return ff
-
-
-def cvtrans(f: tff) -> CvTrans:
-    """decorator to make a CV tranformation func"""
-    ff = CvTrans.from_function(f=f)
-    return ff
 
 
 class CollectiveVariable:
@@ -1139,7 +1346,7 @@ class KerasTrans(CvTrans):
         self.encoder = model
 
 
-@cvflow
+@CvFlow.from_function
 def Volume(sp: SystemParams):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
@@ -1148,7 +1355,7 @@ def Volume(sp: SystemParams):
 
 
 def distance_descriptor(tic, permutation="none"):
-    @cvflow
+    @CvFlow.from_function
     def h(x: SystemParams):
 
         coor = x.coordinates
@@ -1172,10 +1379,9 @@ def dihedral(numbers):
         numbers: list with index of 4 atoms that form dihedral
     """
 
-    @cvflow
+    @CvFlow.from_function
     def f(sp: SystemParams):
 
-        # @partial(vmap, in_axes=(0), out_axes=(0))
         coor = sp.coordinates
         p0 = coor[numbers[0]]
         p1 = coor[numbers[1]]
@@ -1198,11 +1404,13 @@ def dihedral(numbers):
     return f
 
 
-def sb_descriptor(r_cut, z1: None, z2: None, sti: StaticTrajectoryInfo):
+def sb_descriptor(
+    r_cut, sti: StaticTrajectoryInfo, z1: int | None = None, z2: int | None = None
+):
 
     from IMLCV.base.tools.soap_kernel import p_i, p_inl_sb
 
-    @cvflow
+    @CvFlow.from_function
     def f(sp: SystemParams):
 
         return p_i(
@@ -1238,8 +1446,8 @@ def sb_descriptor(r_cut, z1: None, z2: None, sti: StaticTrajectoryInfo):
 
 
 def rotate_2d(alpha):
-    @cvtrans
-    def f(cv):
+    @CvTrans.from_cv_function
+    def f(cv: CV):
         return (
             jnp.array(
                 [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]]
@@ -1257,273 +1465,42 @@ def scale_cv_trans(array: CV):
     diff = (maxi - mini) / 2
     # mask = jnp.abs(diff) > 1e-6
 
-    @cvtrans
+    @CvTrans.from_array_function
     def f0(x):
         return (x - (mini + maxi) / 2) / diff
 
     return f0
 
 
-def update_metric(
-    self, trajs, convex=True, fn=None, acc=30, trim=False, tol=0.1
-) -> CvTrans:
-    """find best fitting bounding box and get affine tranformation+ new
-    boundaries."""
+@dataclasses.dataclass(kw_only=True)
+class IdentityTrans(CvTrans.CvFun):
+    id: Callable[[CV], CV] = lambda x: x
 
-    raise NotImplementedError("todo adapt this")
+    f: Callable[[CV], CV] = id
+    b: Callable[[CV], CV] = id
 
-    trajs = np.array(trajs)
 
-    points = np.vstack([trajs[:, 0, :], trajs[:, 1, :]])
-    mpoints = MultiPoint(points)
+class RealNVP(CvTrans.CvFunNn):
+    """use in combination with swaplink"""
 
-    if convex:
-        a = mpoints.convex_hull
-        # a = mpoints.minimum_rotated_rectangle
+    _: dataclasses.KW_ONLY
+    features: int
+    cv_input: CvTrans.CVInput
 
-    else:
-        if len(points) > 30:
-            np.random.shuffle(points)
-            points = points[1:30]
+    def setup(self) -> None:
+        self.s = Dense(features=self.features)
+        self.t = Dense(features=self.features)
 
-        a = alphashape.alphashape(points)
-        raise NotImplementedError
+    def f(self, x: CV):
+        x1, x2 = x.split()
+        return CV(cv=x2.cv * self.s(x1.cv) + self.t(x1.cv))
 
-    bound = a.boundary
+    def b(self, z: CV):
+        z1, z2 = z.split()
+        return CV(cv=(z2.cv - self.t(z1.cv)) / self.s(z1.cv))
 
-    dist_avg = bound.length / len(trajs)
 
-    if convex:
-        assert (
-            np.array([bound.distance(p) for p in mpoints]).max() < acc * dist_avg
-        ), "boundaries are not convex"
-
-    proj = np.array(
-        [
-            [bound.project(Point(tr[0, :])), bound.project(Point(tr[1, :]))]
-            for tr in trajs
-        ]
-    )
-
-    def get_lengths(proj):
-        b = np.copy(proj[:])
-        projgaps = np.sort(np.hstack([b[:, 0], b[:, 1]]))
-
-        # remove the gapps along boundary
-        gaps = (projgaps[1:] - projgaps[:-1]) > 1 * dist_avg
-        gaps = [projgaps[0:-1][gaps], projgaps[1:][gaps]]
-
-        a = np.copy(proj[:])
-        for i, j in list(zip(*gaps))[::-1]:
-            a[a > i] -= j - i
-
-        return a
-
-    # sort pair
-    as1 = proj.argsort(axis=1)
-    proj = np.take_along_axis(proj, as1, axis=1)
-    trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
-
-    clustering = DBSCAN(eps=5 * dist_avg).fit(get_lengths(proj)).labels_
-
-    if fn is not None:
-        plt.clf()
-        for i in range(-1, clustering.max() + 1):
-            plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
-        plt.savefig(f"{fn}/coord_cluster_pre")
-
-    # look for largest cluster and take it as starting point of indexing, shift other points cyclically
-    index = np.argmax(np.bincount(clustering[clustering >= 0]))
-
-    offset = proj[clustering == index, 0].min()
-    proj[proj < offset] += bound.length
-
-    as1 = proj.argsort(axis=1)
-    proj = np.take_along_axis(proj, as1, axis=1)
-    trajs = np.array([pair[argsort, :] for argsort, pair in zip(as1, trajs)])
-
-    proj -= offset
-
-    clustering = DBSCAN(eps=3 * dist_avg).fit(get_lengths(proj)).labels_
-
-    if fn is not None:
-        plt.clf()
-        for i in range(-1, clustering.max() + 1):
-            plt.scatter(proj[clustering == i, 0], proj[clustering == i, 1])
-        plt.savefig(f"{fn}/coord_cluster")
-
-    ndim = clustering.max() + 1
-    assert (
-        ndim <= self.ndim
-    ), """number of new periodicities do not
-        correspond wiht original number"""
-
-    if self.ndim != 2:
-        raise NotImplementedError("only tested for n == 2")
-
-    boundaries = []
-    periodicities = []
-
-    n = 30
-
-    lrange = []
-    xrange = []
-    for i in range(0, clustering.max() + 1):
-
-        pi = proj[clustering == i, :]
-        a1 = pi[:, 0].argmin()
-        a2 = pi[:, 1].argmin()
-        l1 = [pi[a1, 0], pi[a2, 0]]
-        l2 = [pi[a1, 1], pi[a2, 1]]
-
-        def f(x):
-            x += offset
-            if x >= bound.length:
-                x -= bound.length
-
-            p = bound.interpolate(x)
-            return np.array(p)
-
-        lin1 = np.linspace(l1[0], l1[1], num=n)
-        lin2 = np.linspace(l2[0], l2[1], num=n)
-
-        xr1 = np.array([np.array([f(l1), f(l2)]) for l1, l2 in zip(lin1, lin2)])
-
-        lrange.append([l1, l2])
-        xrange.append(xr1)
-
-        # boundaries.append([0, avg_len])
-        boundaries.append([0, 1])
-
-        periodicities.append(True)
-
-    interps = []
-    for i in range(self.ndim):
-
-        points_arr = []
-        z = []
-
-        range_high = np.array([lrange[i][0][1], lrange[i][1][1]])
-        range_low = np.array([lrange[i][0][0], lrange[i][1][0]])
-
-        # # append other boundaries
-        for j in range(self.ndim):
-            if i == j:
-                continue
-
-            z.append(np.zeros(n))
-            z.append(np.ones(n) * boundaries[i][1])
-
-            # potentially differently ordered
-            arr = np.array(lrange[j])
-            arr.sort(axis=1)
-            range_high.sort()
-            range_low.sort()
-
-            high = abs(arr - range_high).sum(axis=1)
-            high_amin = np.argmin(high)
-            err1 = high[high_amin]
-
-            low = abs(arr - range_low).sum(axis=1)
-            low_amin = np.argmin(low)
-            err2 = low[low_amin]
-
-            if err1 < err2:
-                order = high_amin == 0
-            else:
-                order = low_amin == 0
-
-            if order:
-                points_arr.append(xrange[j][:, 1, :])
-                points_arr.append(xrange[j][:, 0, :])
-            else:
-                points_arr.append(xrange[j][:, 0, :])
-                points_arr.append(xrange[j][:, 1, :])
-
-        interps.append(RBFInterpolator(np.vstack(points_arr), np.hstack(z)))
-
-    # get the boundaries from most distal points in traj + some margin
-    num = 100
-
-    old_boundaries = []
-    lspaces = []
-
-    for i in range(ndim):
-        if trim:
-            a = trajs[:, :, i].min()
-            b = trajs[:, :, i].max()
-            d = (b - a) * 0.05
-            a = a - d
-            b = b + d
-
-        else:
-            a = self.bounding_box[i][0]
-            b = self.bounding_box[i][1]
-
-        old_boundaries.append([a, b])
-        lspaces.append(np.linspace(a, b, num=num))
-
-    dims = [len(l) for l in lspaces]
-    interp_meshgrid = np.array(np.meshgrid(*lspaces, indexing="ij"))
-    imflat = interp_meshgrid.reshape(ndim, -1).T
-    interp_mg = []
-    for i in range(ndim):
-
-        arr_flat = interps[i](imflat)
-        arr = arr_flat.reshape(dims)
-        interp_mg.append(arr)
-
-    new_metric = Metric(
-        periodicities=periodicities,
-        bounding_box=old_boundaries,
-        map_meshgrids=interp_mg,
-    )
-
-    mask = new_metric._get_mask(tol=tol)
-    interp_mg = [im * mask for im in interp_mg]
-
-    if fn is not None:
-
-        for j in [0, 1]:
-
-            plt.clf()
-            plt.pcolor(
-                interp_meshgrid[0, :],
-                interp_meshgrid[1, :],
-                interp_mg[j] * mask,
-                # cmap=plt.get_cmap('Greys')
-            )
-
-            plt.colorbar()
-
-            for i in range(0, clustering.max() + 1):
-                vmax = proj[clustering != -1, 0].max()
-                vmin = proj[clustering != -1, 0].min()
-
-                plt.scatter(
-                    trajs[clustering == i, 0, 0],
-                    trajs[clustering == i, 0, 1],
-                    c=proj[clustering == i, 0],
-                    vmax=vmax,
-                    vmin=vmin,
-                    s=5,
-                    cmap=plt.get_cmap("plasma"),
-                )
-                plt.scatter(
-                    trajs[clustering == i, 1, 0],
-                    trajs[clustering == i, 1, 1],
-                    c=proj[clustering == i, 0],
-                    vmax=vmax,
-                    vmin=vmin,
-                    s=5,
-                    cmap=plt.get_cmap("plasma"),
-                )
-
-            plt.savefig(f"{fn}/coord{j}")
-
-    return new_metric
-
-
+############################
 def test_cv_split_combine():
 
     import jax.random
@@ -1548,55 +1525,54 @@ def test_cv_split_combine():
         assert ((x.cv - z.cv) == 0).all()
 
 
-def test_cvtrans_combine():
-    import jax.random
+def test_nf():
+    def test(mf, x, k2):
 
-    prng = jax.random.PRNGKey(42)
+        var_a = mf.init(k2, x, False, method=NormalizingFlow._calc)
 
-    shape = (5,)
+        y, Jy = mf.apply(variables=var_a, method=NormalizingFlow.forward, x=x)
+        x2, Jx = mf.apply(variables=var_a, method=NormalizingFlow.backward, x=y)
 
-    def get_real_nvp(prng):
+        print(f"dx{x.cv - x2.cv}  jac f(f^-1) {Jy*Jx} ")
 
-        k1, k2, prng = jax.random.split(prng, 3)
+        print(var_a)
 
-        return prng, RealNVP(
-            s=jax.random.normal(k1, shape=shape),
-            t=jax.random.normal(k2, shape=shape),
-            n=5,
-        )
+    def get_chain():
+        chain = (
+            IdentityTrans()
+            + RealNVP(
+                features=features,
+                cv_input=CvTrans.CVInput(inputs=[-1, 0], relative=True),
+            )
+        ).to_chain()
+        return chain
 
-    def test_flow(rnvp, prng, num=1):
+    features = 5
 
-        cvi = []
-        ## single flow round trip
-        for i in range(num):
-            k1, k2, prng = jax.random.split(prng, 3)
-            x = CV(cv=jax.random.normal(k1, shape=shape))
-            y = CV(cv=jax.random.normal(k2, shape=shape))
-            cvi.append(CV.combine(x, y))
+    prng = jax.random.PRNGKey(seed=42)
+    ##test 0
 
-        x = CV.combine(*cvi)
+    key_1, key_2, prng = jax.random.split(prng, 3)
+    x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[[5, 5]])
 
-        z, Jz = rnvp.forward(x)
-        x2, Jx = rnvp.backward(z)
+    test(NormalizingFlow(flow=get_chain()), x, key_2)
 
-        assert jnp.linalg.norm(x.cv - x2.cv) < 1e-5
-        assert jnp.abs(1 - Jz * Jx) < 1e-5
+    ##test 1
 
-        return prng
+    key_1, key_2, prng = jax.random.split(prng, 3)
+    x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[[5, 5]])
+    test(NormalizingFlow(flow=get_chain() * get_chain()), x, key_2)
 
-    ## combined flow round trip
-    rnvps = []
-    for i in range(4):
-        prng, a = get_real_nvp(prng)
-        rnvps.append(a)
-    for r in rnvps:
-        prng = test_flow(rnvp=r, prng=prng, num=1)
-    for r, l in itertools.combinations(rnvps, 2):
-        prng = test_flow(rnvp=r * l, prng=prng, num=1)
-        prng = test_flow(rnvp=r + l, prng=prng, num=2)
+    ##test 2
+
+    key_1, key_2, prng = jax.random.split(prng, 3)
+    x2 = CV(
+        cv=jax.random.uniform(key=key_1, shape=(20,)), _combine_dims=[[5, 5], [5, 5]]
+    )
+    test(NormalizingFlow(flow=get_chain() + get_chain()), x2, key_2)
 
 
 if __name__ == "__main__":
     test_cv_split_combine()
-    test_cvtrans_combine()
+
+    test_nf()

@@ -281,8 +281,19 @@ class TrajectoryInfo:
     @property
     def sp(self) -> SystemParams:
         return SystemParams(
-            coordinates=jnp.array(self.positions),
-            cell=jnp.array(self.cell) if self.cell is not None else None,
+            coordinates=jnp.array(self.positions[0 : self._size - 1, :]),
+            cell=jnp.array(self.cell[0 : self._size - 1, :])
+            if self.cell is not None
+            else None,
+        )
+
+    @property
+    def last_sp(self) -> SystemParams:
+        return SystemParams(
+            coordinates=jnp.array(self.positions[self._size - 2, :]),
+            cell=jnp.array(self.cell[self._size - 2, :])
+            if self.cell is not None
+            else None,
         )
 
 

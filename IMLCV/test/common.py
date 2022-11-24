@@ -14,7 +14,7 @@ from molmod.units import angstrom, kelvin, kjmol
 import yaff
 from IMLCV import CP2K_COMMAND, ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
-from IMLCV.base.CV import CollectiveVariable, SystemParams, Volume, cvflow, dihedral
+from IMLCV.base.CV import CollectiveVariable, SystemParams, Volume, dihedral
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
@@ -46,7 +46,7 @@ def cleancopy(base):
     shutil.copytree(f"{base}_orig", f"{base}")
 
 
-def alanine_dipeptide_yaff():
+def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0)):
     T = 300 * kelvin
 
     cv0 = CollectiveVariable(
@@ -73,7 +73,7 @@ def alanine_dipeptide_yaff():
     mde = YaffEngine(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         static_trajectory_info=tic,
-        bias=NoneBias(cv0),
+        bias=bias(cv0),
         trajectory_file="test.h5",
     )
 
@@ -167,7 +167,9 @@ def ase_yaff(small=True):
         debug=False,
     )
 
-    @cvflow
+    from IMLCV.base.CV import CvFlow
+
+    @CvFlow.from_function
     def f(sp: SystemParams):
 
         import jax.numpy as jnp

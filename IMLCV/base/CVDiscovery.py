@@ -50,7 +50,7 @@ class Transformer:
         periodicity=None,
         bounding_box=None,
         descriptor="sb",
-        descriptor_kwargs=None,
+        descriptor_kwargs={},
         *fit_args,
         **fit_kwargs,
     ) -> None:
@@ -483,7 +483,7 @@ class CVDiscovery:
                 cv = cv0
             else:
                 sp += sp0
-                cv += cv0
+                cv = CV.stack(cv, cv0)  # type:ignore
 
             biases, _ = bias.compute_from_cv(cvs=cv)
 
