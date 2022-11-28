@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
-import itertools
 import tempfile
 from abc import abstractmethod
-from collections.abc import Iterable
 
 # from IMLCV.base.CV import CV, CvTrans
 from functools import partial
@@ -16,7 +14,10 @@ import jax.lax
 
 # import numpy as np
 import jax.numpy as jnp
+import jax.scipy.optimize
 import jax_dataclasses as jdc
+import jaxopt
+import jaxopt.objective
 import numpy as np
 import tensorflow
 import tensorflow as tfl
@@ -993,9 +994,6 @@ class CvFunBase:
         return a, log_det
 
 
-from typing import Concatenate
-
-
 @dataclasses.dataclass(kw_only=True)
 class CvFun(CvFunBase):
 
@@ -1249,6 +1247,26 @@ class CvFlow:
 
         return self
 
+    def find_sp(
+        self, x0: SystemParams, target: CV, maxiter=10000, tol=1e-4
+    ) -> SystemParams:
+
+        pass
+
+        def loss(x):
+            def g(x):
+                cvi = self.compute_cv_flow(x)
+                return jnp.max((cvi.cv - target.cv) ** 2)
+
+            return g(x), jacfwd(g)(x)
+
+        solver = jaxopt.LBFGS(fun=loss, value_and_grad=True, maxiter=maxiter, tol=tol)
+        params, state = solver.run(init_params=x0)
+
+        assert (jnp.abs(self.compute_cv_flow(params).cv - target.cv) < tol).all()
+
+        return params
+
 
 class CollectiveVariable:
     def __init__(self, f: CvFlow, metric: Metric, jac=jacfwd) -> None:
@@ -1364,19 +1382,23 @@ def Volume(sp: SystemParams):
     return vol
 
 
-def distance_descriptor(tic, permutation="none"):
+def distance_descriptor():
     @CvFlow.from_function
     def h(x: SystemParams):
 
         coor = x.coordinates
 
-        n = coor.shape[0]
-        out = jnp.zeros((n * (n - 1) // 2,))
+        @partial(vmap, in_axes=(None, 0))
+        @partial(vmap, in_axes=(0, None))
+        def d(x, y):
+            n_s = jnp.sum((x - y) ** 2)
+            return jnp.where(n_s == 0, 0, n_s**0.5)
 
-        for a, (i, j) in enumerate(itertools.combinations(range(n), 2)):
-            out = out.at[a].set(jnp.linalg.norm(coor[i, :] - coor[j, :], 2))
+        out = d(coor, coor)
 
-        return out
+        return out[jnp.triu_indices_from(out, k=1)]
+
+        # return out
 
     return h
 
@@ -1623,7 +1645,35 @@ def test_nf():
     test(NormalizingFlow(chain), x2, key_2)
 
 
+def test_reconstruction():
+
+    prng = jax.random.PRNGKey(seed=42)
+    k1, k2, prng = jax.random.split(prng, 3)
+
+    sp0 = SystemParams(
+        coordinates=jax.random.uniform(k1, shape=(22, 3)),
+        cell=jax.random.uniform(k2, shape=(3, 3)),
+    )
+
+    flow = distance_descriptor()
+    cv0 = flow.compute_cv_flow(sp0)
+
+    k1, k2, prng = jax.random.split(prng, 3)
+    sp1 = SystemParams(
+        coordinates=jax.random.uniform(k1, shape=(22, 3)) * 0.1,
+        cell=jax.random.uniform(k2, shape=(3, 3)),
+    )
+
+    tol = 1e-4
+
+    sp01 = flow.find_sp(x0=sp1, target=cv0, tol=tol)
+
+    assert (
+        jnp.abs(flow.compute_cv_flow(sp0).cv - flow.compute_cv_flow(sp01).cv) < tol
+    ).all()
+
+
 if __name__ == "__main__":
     test_cv_split_combine()
-
     test_nf()
+    test_reconstruction()
