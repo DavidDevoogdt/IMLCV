@@ -4,6 +4,7 @@ import dataclasses
 import itertools
 import tempfile
 from abc import abstractmethod
+from collections.abc import Iterable
 
 # from IMLCV.base.CV import CV, CvTrans
 from functools import partial
@@ -30,6 +31,16 @@ if TYPE_CHECKING:
     from IMLCV.base.MdEngine import StaticTrajectoryInfo
 
 keras: KerasAPI = import_module("tensorflow.keras")
+
+import distrax
+
+# from tensorflow_probability.python import bijectors as bijectorsAPI
+from tensorflow_probability.substrates import jax as tfp
+
+tfb = tfp.bijectors
+
+
+# from distrax import Bijector
 
 
 @jdc.pytree_dataclass
@@ -925,155 +936,240 @@ import dataclasses
 
 
 @dataclasses.dataclass(kw_only=True)
+class CvFunInput:
+    inputs: list[int]
+    relative: bool
+
+    @staticmethod
+    def combine(self: list[CvFunInput], other: list[CvFunInput]) -> list[CvFunInput]:
+
+        out = self.copy()
+
+        offset = len(self)
+        for o in other:
+            if o.relative:
+                inp = [a + offset for a in o.inputs]
+            else:
+                inp = o.inputs
+            out.append(CvFunInput(inputs=inp, relative=o.relative))
+
+        return out
+
+
+@dataclasses.dataclass(kw_only=True)
+class CvFunBase:
+    _: dataclasses.KW_ONLY
+    cv_input: CvFunInput | None = None
+
+    @abstractmethod
+    def calc(self, x: CV, reverse=False, log_det=False):
+        pass
+
+    def to_cv_link(self):
+        if self.cv_input is None:
+            self.cv_input = CvFunInput(inputs=[0], relative=True)
+
+        return CvLink(cv_fun=[self], block_indices=[self.cv_input])
+
+    def __add__(self, other):
+        assert isinstance(other, CvFun | CvFunNn)
+        return self.to_cv_link() + other.to_cv_link()
+
+    def _log_Jf(self, x: CV, reverse=False) -> tuple[CV, Array]:
+        """naive automated implementation, overrride this"""
+        f = lambda y: self.calc(x=y, reverse=reverse)
+
+        a = f(x)
+        b = jacfwd(f)(x)
+        jac = jnp.log(jnp.abs(jnp.linalg.det(CV.split(b.cv)[-1].cv)))
+
+        return a, jac
+
+
+@dataclasses.dataclass(kw_only=True)
+class CvFun(CvFunBase):
+
+    forward: Callable[[CV], CV] | None = None
+    backward: Callable[[CV], CV] | None = None
+
+    def calc(self, x: CV, reverse=False, log_det=False):
+        if log_det:
+            return self._log_Jf(x=x, reverse=reverse)
+
+        if reverse:
+            assert self.forward is not None
+            return self.forward(x)
+        else:
+            assert self.backward is not None
+            return self.backward(x)
+
+
+class CvFunNn(nn.Module, CvFunBase):
+    """used to instantiate flax linen CvTrans"""
+
+    @abstractmethod
+    def setup(self):
+        pass
+
+    def calc(self, x: CV, reverse=False, log_det=False):
+        if log_det:
+            return self._log_Jf(x, reverse=reverse)
+
+        if reverse:
+            return self.forward(x)
+        else:
+            return self.backward(x)
+
+    @abstractmethod
+    def forward(self, x: CV) -> CV:
+        pass
+
+    @abstractmethod
+    def backward(self, x: CV) -> CV:
+        pass
+
+
+class CvFunDistrax(nn.Module, CvFunBase):
+    """
+    creates bijective CV function based on a distrax flow. The seup function should initialize the bijector
+
+    class RealNVP(CvFunDistrax):
+        _: dataclasses.KW_ONLY
+        latent_dim: int
+
+        def setup(self):
+            self.s = Dense(features=self.latent_dim)
+            self.t = Dense(features=self.latent_dim)
+
+            # Alternating binary mask.
+            self.bijector = distrax.as_bijector(
+                tfb.RealNVP(
+                    fraction_masked=0.5,
+                    shift_and_log_scale_fn=self.shift_and_scale,
+                )
+            )
+
+        def shift_and_scale(self, x0, input_depth, **condition_kwargs):
+            return self.s(x0), self.t(x0)
+    """
+
+    bijector: distrax.Bijector = dataclasses.field(init=False)
+
+    @abstractmethod
+    def setup(self):
+        """setups self.bijector"""
+
+    def calc(self, x: CV, reverse=False, log_det=False):
+        if log_det:
+            return self._log_Jf(x, reverse=reverse)
+
+        if reverse:
+            assert self.bijector is not None
+            return CV(self.bijector.inverse(x.cv))
+        else:
+            assert self.bijector is not None
+            return CV(self.bijector.forward(x.cv))
+
+    def _log_Jf(self, x: CV, reverse=False) -> tuple[CV, Array]:
+        """naive implementation, overrride this"""
+        assert self.bijector is not None
+        f = (
+            self.bijector.inverse_and_log_det
+            if reverse
+            else self.bijector.forward_and_log_det
+        )
+        y, jac = f(x.cv)
+        return CV(cv=y), jac
+
+
+@dataclasses.dataclass(kw_only=True)
+class CvLink:
+
+    cv_fun: list[CvFunDistrax] | list[CvFun | CvFunNn]
+    block_indices: list[CvFunInput]
+
+    def calc(self, x: CV, reversed=False, log_Jf=False) -> CV | tuple[CV, jnp.float_]:
+
+        cvs = x.split(flatten=True)
+        assert self.block_indices is not None
+        x_list = [CV.combine(*[cvs[j] for j in i.inputs]) for i in self.block_indices]
+
+        # if isinstance(self.cv_fun[0], CvFunDistrax):
+
+        #     flow = []
+
+        #     for cvf, bi in zip(self.cv_fun, self.block_indices):
+        #         mask = [jnp.zeros(jnp.size(jnp.array(i))) for i in x.combine_dims]
+        #         for i in bi.inputs:
+        #             mask[i] += 1
+        #         mask = jnp.hstack(mask) == 0
+
+        #         flow.append(  distrax.SplitCoupling  MaskedCoupling(   mask=mask       )  )
+
+        #         x =
+
+        #     return self.cv_fun.calc(x, reverse=reversed, log_det=log_Jf)
+        # else:
+        out: list[CV] = []
+        out_Jf = jnp.array(0.0)
+
+        for i, (xi, spl, cv_f_i) in enumerate(
+            zip(x_list, self.block_indices, self.cv_fun)
+        ):
+            if not log_Jf:
+                oi = cv_f_i.calc(x=xi, reverse=reversed)
+            else:
+                if (
+                    spl.inputs[-1] != i
+                    or (jnp.array(spl.inputs[:-1]) >= spl.inputs[-1]).any()
+                ):
+                    raise ValueError(
+                        "only autoregressive flows are supported. For more complex flows, use distrax. Conditioner split indices schould be lower than the last index, which corresponds to the output number"
+                    )
+
+                oi, Jfi = cv_f_i.calc(x=xi, reverse=reversed, log_det=log_Jf)
+                out_Jf += Jfi
+
+            out.append(oi)
+
+        cv_out = CV.combine(*out)
+
+        if log_Jf:
+            return cv_out, out_Jf
+        else:
+            return cv_out
+
+    def to_chain(self) -> CvTrans:
+        return CvTrans(trans=(self,))
+
+    def __add__(self, other: CvLink | CvFun | CvFunNn) -> CvLink:
+
+        if isinstance(other, CvFun | CvFunNn):
+            other = other.to_cv_link()
+        assert isinstance(other, CvLink)
+
+        block_indices = CvFunInput.combine(self.block_indices, other.block_indices)
+
+        return CvLink(
+            cv_fun=[*self.cv_fun, *other.cv_fun],
+            block_indices=block_indices,
+        )
+
+    def __mul__(self, other: CvTrans | CvLink | CvFun | CvFunNn) -> CvTrans:
+        if not isinstance(other, CvLink | CvTrans):
+            other = other.to_cv_link()
+
+        if isinstance(other, CvLink):
+            other = other.to_chain()
+
+        return self.to_chain() * other
+
+
+@dataclasses.dataclass(kw_only=True)
 class CvTrans:
     """f can either be a single CV tranformation or a list of transformations"""
 
     trans: tuple[CvLink]
-
-    @dataclasses.dataclass(kw_only=True)
-    class CVInput:
-        inputs: list[int]
-        relative: bool
-
-        @staticmethod
-        def combine(
-            self: list[CvTrans.CVInput], other: list[CvTrans.CVInput]
-        ) -> list[CvTrans.CVInput]:
-
-            out = self.copy()
-
-            offset = len(self)
-            for o in other:
-                if o.relative:
-                    inp = [a + offset for a in o.inputs]
-                else:
-                    inp = o.inputs
-                out.append(CvTrans.CVInput(inputs=inp, relative=o.relative))
-
-            return out
-
-    @dataclasses.dataclass(kw_only=True)
-    class CvFun:
-        """used to instantiate flax linen CvTrans"""
-
-        f: Callable[[CV], CV] | None = None
-        b: Callable[[CV], CV] | None = None
-        cv_input: CvTrans.CVInput | None = None
-
-        def to_cv_link(self):
-            if self.cv_input is None:
-                self.cv_input = CvTrans.CVInput(inputs=[0], relative=True)
-
-            return CvTrans.CvLink(func=[self], split_indices=[self.cv_input])
-
-        def __add__(self, other):
-            assert isinstance(other, CvTrans.CvFun | CvTrans.CvFunNn)
-            return self.to_cv_link() + other.to_cv_link()
-
-    class CvFunNn(nn.Module):
-        """used to instantiate flax linen CvTrans"""
-
-        _: dataclasses.KW_ONLY
-        cv_input: CvTrans.CVInput | None = None
-
-        @abstractmethod
-        def setup(self) -> None:
-            pass
-
-        @abstractmethod
-        def f(self, x: CV) -> CV:
-            pass
-
-        def b(self, x: CV) -> CV | None:
-            return None
-
-        @nn.nowrap
-        def to_cv_link(self):
-            if self.cv_input is None:
-                self.cv_input = CvTrans.CVInput(inputs=[0], relative=True)
-
-            return CvTrans.CvLink(func=[self], split_indices=[self.cv_input])
-
-        def __add__(self, other) -> CvTrans.CvLink:
-            return other + self
-
-    @dataclasses.dataclass(kw_only=True)
-    class CvLink:
-
-        _: dataclasses.KW_ONLY
-        # funcs= list[ CvTrans.Cv]
-
-        func: list[CvTrans.CvFun | CvTrans.CvFunNn] = dataclasses.field(
-            default_factory=lambda: []
-        )
-        split_indices: list[CvTrans.CVInput]
-
-        def _calc(self, x: CV, reversed=False):
-            # todo: fix non used split indices as identity
-
-            cvs = x.split(flatten=True)
-
-            if self.split_indices is not None:
-
-                args = [
-                    CV.combine(*[cvs[j] for j in i.inputs]) for i in self.split_indices
-                ]
-            else:
-                args = cvs
-
-            out: list[CV] = []
-            for xi, fi in zip(args, self.func):
-
-                if reversed:
-                    if fi.b is None:
-                        raise
-                    val = fi.b(xi)
-                    if val is None:
-                        raise
-                    out.append(val)
-                else:
-                    if fi.f is None:
-                        raise
-                    val = fi.f(xi)
-                    if val is None:
-                        raise
-                    out.append(val)
-
-            return CV.combine(*out)
-
-        def fw(self, x: CV):
-            return self._calc(x, reversed=False)
-
-        def bw(self, x: CV):
-            return self._calc(x, reversed=True)
-
-        def to_chain(self) -> CvTrans:
-            return CvTrans(trans=(self,))
-
-        def __add__(
-            self, other: CvTrans.CvLink | CvTrans.CvFun | CvTrans.CvFunNn
-        ) -> CvTrans.CvLink:
-
-            if not isinstance(other, CvTrans.CvLink):
-                other = CvTrans.CvLink(func=[other])
-
-            return CvTrans.CvLink(
-                func=[*self.func, *other.func],
-                split_indices=CvTrans.CVInput.combine(
-                    self.split_indices, other.split_indices
-                ),
-            )
-
-        def __mul__(
-            self, other: CvTrans | CvTrans.CvLink | CvTrans.CvFun | CvTrans.CvFunNn
-        ) -> CvTrans:
-            if not isinstance(other, CvTrans.CvLink | CvTrans):
-                other = other.to_cv_link()
-
-            if not isinstance(other, CvTrans):
-                other = other.to_chain()
-
-            return self.to_chain() * other
 
     @staticmethod
     def from_array_function(f: Callable[[Array], Array]):
@@ -1089,7 +1185,7 @@ class CvTrans:
 
     @staticmethod
     def from_cv_function(f: Callable[[CV], CV]) -> CvTrans:
-        return CvTrans.from_cv_fun(proto=CvTrans.CvFun(f=f))
+        return CvTrans.from_cv_fun(proto=CvFun(forward=f))
 
     @staticmethod
     def from_cv_fun(proto: CvFun | CvFunNn):
@@ -1099,21 +1195,28 @@ class CvTrans:
     def from_cv_link(cv_link: CvLink):
         return cv_link.to_chain()
 
-    # @partial(jit, static_argnums=(0,))
-    def compute_cv_trans(self, x: CV, reverse=False) -> CV:
+    def compute_cv_trans(
+        self, x: CV, reverse=False, log_Jf=False
+    ) -> CV | tuple[CV, jnp.float_]:
         """
         result is always batched
         arg: CV
         """
 
-        if reverse:
-            for tr in reversed(self.trans):
-                x = tr.bw(x)
-        else:
-            for tr in self.trans:
-                x = tr.fw(x)
+        ordered = reversed(self.trans) if reverse else self.trans
 
-        return x
+        out_Jf: jnp.float_ = 0.0
+        for tr in ordered:
+            if log_Jf:
+                x, oi = tr.calc(x=x, reversed=reverse, log_Jf=log_Jf)
+                out_Jf += oi
+            else:
+                x = tr.calc(x=x, reversed=reverse, log_Jf=log_Jf)  # type: ignore
+
+        if log_Jf:
+            return x, out_Jf
+        else:
+            return x
 
     def __mul__(self, other):
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
@@ -1129,24 +1232,35 @@ class CvTrans:
 
 class CvTransNN(nn.Module, CvTrans):
 
-    trans: tuple[CvTrans.CvLink]
+    trans: tuple[CvLink]
 
     def setup(self) -> None:
-        """replaces all CvFunNn by initilized version"""
+        """replaces all nn.Modules by initilized version"""
 
         for s, t, link in self.iter_nn_links():
             name = f"links_{s}_{t}"
             self.__setattr__(name, link)
-            self.trans[s].func[t] = self.__getattr__(name)
+
+            if t is not None:
+                self.trans[s].cv_fun[t] = self.__getattr__(name)  # type: ignore
+            else:
+                self.trans[s].cv_fun = self.__getattr__(name)
 
     def iter_nn_links(self):
         for j, tr in enumerate(self.trans):
-            for i, fun in enumerate(tr.func):
-                if isinstance(fun, CvTrans.CvFunNn):
-                    yield j, i, fun
 
-    def compute_cv_trans(self, x: CV, reverse=False) -> CV:
-        return super().compute_cv_trans(x, reverse)
+            if isinstance(tr, Iterable):
+                for i, fun in enumerate(tr.cv_fun):
+                    if isinstance(fun, nn.Module):
+                        yield j, i, fun
+            else:
+                if isinstance(tr, nn.Module):
+                    yield j, None, fun
+
+    def compute_cv_trans(
+        self, x: CV, reverse=False, log_Jf=False
+    ) -> CV | tuple[CV, jnp.float_]:
+        return super().compute_cv_trans(x, reverse, log_Jf)
 
     @nn.nowrap
     def __add__(self, other):
@@ -1170,14 +1284,25 @@ class NormalizingFlow(nn.Module):
         else:
             self.nn_flow = self.flow
 
-    def _calc(self, y, reverse: bool):
-        def g(cv):
-            return self.nn_flow.compute_cv_trans(cv, reverse=reverse)
+    def _calc(self, y, reverse: bool, test_log_det=False):
 
-        a = g(y)
-        b = jacfwd(g)(y)
+        a, b = self.nn_flow.compute_cv_trans(y, reverse=reverse, log_Jf=True)
 
-        return a, jnp.abs(jnp.linalg.det(b.cv.cv))
+        if test_log_det:
+            b2 = jnp.log(
+                jnp.abs(
+                    jnp.linalg.det(
+                        jacfwd(
+                            lambda x: self.nn_flow.compute_cv_trans(
+                                x, reverse=reverse, log_Jf=False
+                            )
+                        )(y).cv.cv
+                    )
+                )
+            )
+            assert jnp.abs(b - b2) < 1e-5
+
+        return a, b
 
     def forward(self, x: CV) -> CV:
         return self._calc(x, reverse=False)
@@ -1472,32 +1597,60 @@ def scale_cv_trans(array: CV):
     return f0
 
 
+######################################
+#           CV Fun                   #
+######################################
+
+
 @dataclasses.dataclass(kw_only=True)
-class IdentityTrans(CvTrans.CvFun):
-    id: Callable[[CV], CV] = lambda x: x
+class IdentityTrans(CvFun):
+    # id: Callable[[CV], CV] = lambda x: x
 
-    f: Callable[[CV], CV] = id
-    b: Callable[[CV], CV] = id
+    forward: Callable[[CV], CV] = lambda x: x
+    backward: Callable[[CV], CV] = lambda x: x
+    cv_input: CvFunInput | None = None
 
 
-class RealNVP(CvTrans.CvFunNn):
+class RealNVP(CvFunNn):
     """use in combination with swaplink"""
 
     _: dataclasses.KW_ONLY
     features: int
-    cv_input: CvTrans.CVInput
+    cv_input: CvFunInput
 
     def setup(self) -> None:
         self.s = Dense(features=self.features)
         self.t = Dense(features=self.features)
 
-    def f(self, x: CV):
+    def forward(self, x: CV):
         x1, x2 = x.split()
         return CV(cv=x2.cv * self.s(x1.cv) + self.t(x1.cv))
 
-    def b(self, z: CV):
+    def backward(self, z: CV):
         z1, z2 = z.split()
         return CV(cv=(z2.cv - self.t(z1.cv)) / self.s(z1.cv))
+
+
+class DistraxRealNVP(CvFunDistrax):
+
+    _: dataclasses.KW_ONLY
+    latent_dim: int
+
+    def setup(self):
+        """Creates the flow model."""
+        self.s = Dense(features=self.latent_dim)
+        self.t = Dense(features=self.latent_dim)
+
+        # Alternating binary mask.
+        self.bijector = distrax.as_bijector(
+            tfb.RealNVP(
+                fraction_masked=0.5,
+                shift_and_log_scale_fn=self.shift_and_scale,
+            )
+        )
+
+    def shift_and_scale(self, x0, input_depth, **condition_kwargs):
+        return self.s(x0), self.t(x0)
 
 
 ############################
@@ -1533,16 +1686,15 @@ def test_nf():
         y, Jy = mf.apply(variables=var_a, method=NormalizingFlow.forward, x=x)
         x2, Jx = mf.apply(variables=var_a, method=NormalizingFlow.backward, x=y)
 
-        print(f"dx{x.cv - x2.cv}  jac f(f^-1) {Jy*Jx} ")
-
-        print(var_a)
+        assert (jnp.abs(x.cv - x2.cv) < 1e-5).all()
+        assert (jnp.abs(Jx + Jy) < 1e-5).all()
 
     def get_chain():
         chain = (
             IdentityTrans()
             + RealNVP(
                 features=features,
-                cv_input=CvTrans.CVInput(inputs=[-1, 0], relative=True),
+                cv_input=CvFunInput(inputs=[-1, 0], relative=True),
             )
         ).to_chain()
         return chain
@@ -1570,6 +1722,34 @@ def test_nf():
         cv=jax.random.uniform(key=key_1, shape=(20,)), _combine_dims=[[5, 5], [5, 5]]
     )
     test(NormalizingFlow(flow=get_chain() + get_chain()), x2, key_2)
+
+    ##test 3
+
+    key_1, key_2, prng = jax.random.split(prng, 3)
+    x2 = CV(
+        cv=jax.random.uniform(key=key_1, shape=(20,)), _combine_dims=[[5, 5], [5, 5]]
+    )
+    test(
+        NormalizingFlow(flow=(get_chain() + get_chain()) * (get_chain() + get_chain())),
+        x2,
+        key_2,
+    )
+
+    ## test with distrax
+
+    # https://www.tensorflow.org/probability/api_docs/python/tfp/bijectors/RealNVP
+    key_1, key_2, prng = jax.random.split(prng, 3)
+    x2 = CV(cv=jax.random.uniform(key=key_1, shape=(10,)))
+
+    chain = (
+        DistraxRealNVP(
+            latent_dim=5,
+        )
+        .to_cv_link()
+        .to_chain()
+    )
+
+    test(NormalizingFlow(chain), x2, key_2)
 
 
 if __name__ == "__main__":

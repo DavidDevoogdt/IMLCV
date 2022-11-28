@@ -30,5 +30,6 @@ setup(
         "dill",
         "nyx",
         "filelock",
+        "distrax",
     ],
 )
