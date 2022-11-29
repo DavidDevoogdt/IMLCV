@@ -33,15 +33,17 @@ if TYPE_CHECKING:
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
-import distrax
+import dataclasses
 
-# from tensorflow_probability.python import bijectors as bijectorsAPI
+import distrax
+import jax.numpy as jnp
+import numba
+import numpy as np
 from tensorflow_probability.substrates import jax as tfp
 
-tfb = tfp.bijectors
-
-
-# from distrax import Bijector
+######################################
+#        Data types                  #
+######################################
 
 
 @jdc.pytree_dataclass
@@ -933,7 +935,9 @@ class Metric:
         return len(self.periodicities)
 
 
-import dataclasses
+######################################
+#       CV tranformations            #
+######################################
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -1052,7 +1056,7 @@ class CvFunDistrax(nn.Module, CvFunBase):
 
             # Alternating binary mask.
             self.bijector = distrax.as_bijector(
-                tfb.RealNVP(
+                tfp.bijectors.RealNVP(
                     fraction_masked=0.5,
                     shift_and_log_scale_fn=self.shift_and_scale,
                 )
@@ -1098,7 +1102,9 @@ class CvTrans:
 
     @staticmethod
     def from_array_function(f: Callable[[Array], Array]):
-        def f2(x: CV):
+        def f2(x: CV, cond: CV | None = None):
+            assert cond is None, "implement this"
+
             if x.batched:
                 out = vmap(f)(x.cv)
             else:
@@ -1109,7 +1115,7 @@ class CvTrans:
         return CvTrans.from_cv_function(f=f2)
 
     @staticmethod
-    def from_cv_function(f: Callable[[CV], CV]) -> CvTrans:
+    def from_cv_function(f: Callable[[CV, CV | None], CV]) -> CvTrans:
         return CvTrans.from_cv_fun(proto=CvFun(forward=f))
 
     @staticmethod
@@ -1250,9 +1256,6 @@ class CvFlow:
     def find_sp(
         self, x0: SystemParams, target: CV, maxiter=10000, tol=1e-4
     ) -> SystemParams:
-
-        pass
-
         def loss(x):
             def g(x):
                 cvi = self.compute_cv_flow(x)
@@ -1266,6 +1269,11 @@ class CvFlow:
         assert (jnp.abs(self.compute_cv_flow(params).cv - target.cv) < tol).all()
 
         return params
+
+
+######################################
+#       Collective variable          #
+######################################
 
 
 class CollectiveVariable:
@@ -1541,7 +1549,7 @@ class DistraxRealNVP(CvFunDistrax):
 
         # Alternating binary mask.
         self.bijector = distrax.as_bijector(
-            tfb.RealNVP(
+            tfp.bijectors.RealNVP(
                 fraction_masked=0.5,
                 shift_and_log_scale_fn=self.shift_and_scale,
             )
@@ -1551,7 +1559,65 @@ class DistraxRealNVP(CvFunDistrax):
         return self.s(x0), self.t(x0)
 
 
-############################
+######################################
+#           Test                     #
+######################################
+
+
+class MetricUMAP(Metric):
+    def __init__(self, periodicities, bounding_box=None) -> None:
+        super().__init__(periodicities=periodicities, bounding_box=bounding_box)
+
+        bb = np.array(self.bounding_box)
+        per = np.array(self.periodicities)
+
+        # @numba.njit
+        # def map(y):
+
+        #     return (y - bb[:, 0]) / (
+        #         bb[:, 1] - bb[:, 0])
+
+        @numba.njit
+        def _periodic_wrap(xs, min=False):
+            coor = np.mod(xs, 1)  # between 0 and 1
+            if min:
+                # between [-0.5,0.5]
+                coor = np.where(coor > 0.5, coor - 1, coor)
+
+            return np.where(per, coor, xs)
+
+        @numba.njit
+        def g(x, y):
+            # r1 = map(x)
+            # r2 = map(y)
+
+            return _periodic_wrap(x - y, min=True)
+
+        @numba.njit
+        def val_and_grad(x, y):
+            r = g(x, y)
+            d = np.sqrt(np.sum(r**2))
+
+            return d, r / (d + 1e-6)
+
+        self.umap_f = val_and_grad
+
+
+class hyperTorus(Metric):
+    def __init__(self, n) -> None:
+        periodicities = [True for _ in range(n)]
+        boundaries = jnp.zeros((n, 2))
+        boundaries = boundaries.at[:, 0].set(-jnp.pi)
+        boundaries = boundaries.at[:, 1].set(jnp.pi)
+
+        super().__init__(periodicities, boundaries)
+
+
+######################################
+#           Test                     #
+######################################
+
+
 def test_cv_split_combine():
 
     import jax.random
@@ -1673,7 +1739,81 @@ def test_reconstruction():
     ).all()
 
 
+def test_neigh():
+    rng = jax.random.PRNGKey(42)
+    key1, key2, rng = jax.random.split(rng, 3)
+
+    n = 10
+
+    sp = SystemParams(
+        coordinates=jax.random.uniform(key1, (n, 3)),
+        cell=jax.random.uniform(key2, (3, 3)),
+    )
+
+    # should convege to 1
+    r_cut = 20
+
+    import functools
+
+    neigh_calc, r_exp = jax.jit(
+        functools.partial(
+            SystemParams.apply_fun_neighbourghs, g=lambda r_ij, _: jnp.linalg.norm(r_ij)
+        )
+    )(self=sp, r_cut=r_cut)
+    neigh_exp = n / jnp.abs(jnp.linalg.det(sp.cell)) * (4 / 3 * jnp.pi * r_cut**3)
+
+    print(f"err neigh density {jnp.abs(  (neigh_calc - neigh_exp) /neigh_exp)}")
+
+
+def test_neigh_pair():
+    rng = jax.random.PRNGKey(42)
+    key1, key2, rng = jax.random.split(rng, 3)
+
+    n = 20
+
+    sp = SystemParams(
+        coordinates=jax.random.uniform(key1, (n, 3)) * 0.5,
+        cell=jax.random.uniform(key2, (3, 3)) * 0.5,
+    )
+
+    # should convege to 1
+    r_cut = 1
+
+    k, pair_dist = sp.apply_fun_neighbourgh_pairs(
+        r_cut=r_cut,
+        g=lambda r_ij, r_ik, atom_index_j, atom_index_k: jnp.linalg.norm(r_ij - r_ik),
+        exclude_self=True,
+    )
+
+    pair_dist_avg = pair_dist / k
+    # https://math.stackexchange.com/questions/167932/mean-distance-between-2-points-in-a-ball
+    pair_dist_exact = 36 / 35
+
+    print(
+        f"err neigh density {jnp.abs( (pair_dist_avg -pair_dist_exact)/pair_dist_exact  )}"
+    )
+
+
+def test_minkowski_reduce():
+    prng = jax.random.PRNGKey(42)
+    key1, key2, prng = jax.random.split(prng, 3)
+
+    from scipy.spatial.transform import Rotation as R
+
+    rot = jnp.array(R.random().as_matrix())
+
+    sp = SystemParams(
+        coordinates=jnp.zeros((22, 3)),
+        cell=jnp.array([[2, 0, 0], [6, 1, 0], [8, 9, 1]]),
+    ).minkowski_reduce()
+
+    print(f"{   sp.cell }")
+
+
 if __name__ == "__main__":
     test_cv_split_combine()
     test_nf()
     test_reconstruction()
+    test_neigh()
+    test_neigh_pair()
+    test_minkowski_reduce()

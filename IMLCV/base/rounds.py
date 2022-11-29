@@ -29,10 +29,7 @@ logging.getLogger("filelock").setLevel(logging.DEBUG)
 
 
 class Rounds(ABC):
-
-    # ENGINE_KEYS = ["T", "P", "timecon_thermo", "timecon_baro"]
-
-    def __init__(self, folder: str | Path = "output") -> None:
+    def __init__(self, folder: str | Path = "output", new_folder=True) -> None:
         """
         this class saves all relevant info in a hdf5 container. It is build as follows:
         root
@@ -66,11 +63,22 @@ class Rounds(ABC):
 
         self.folder = Path(folder).resolve()
 
-        # if not Path(self.h5file_name).exists():
-
         self.lock = FileLock(self.h5filelock_name)
 
-        self._make_file()
+        # make a copy of the folder
+        if Path(self.h5file_name).exists() and new_folder:
+
+            i = 0
+            while True:
+                p = Path(self.h5file_name) / f"{i:0>3}"
+                if p.exists():
+                    i += 1
+                else:
+                    shutil.move(self.folder, p)
+                    continue
+
+        if not Path(self.h5file_name).exists():
+            self._make_file()
 
     def _make_file(self):
         # create the file
@@ -79,10 +87,6 @@ class Rounds(ABC):
                 pass
 
         self.h5file = h5py.File(self.h5file_name, mode="r+")
-        # self.lock = Lock()
-
-    # def __del__(self):
-    #     self.h5file.close()
 
     @property
     def h5file_name(self):
@@ -91,9 +95,6 @@ class Rounds(ABC):
     @property
     def h5filelock_name(self):
         return self.full_path(self.path() / "results.h5.lock")
-
-    # def __del__(self):
-    #     self.h5file.close()
 
     def save(self):
         with open(self.full_path("rounds"), "wb") as f:
@@ -105,7 +106,7 @@ class Rounds(ABC):
             dill.dump(d, f)
 
     @staticmethod
-    def load(folder: str | Path, sti: StaticTrajectoryInfo | None = None):
+    def load(folder: str | Path):
         with open(f"{folder}/rounds", "rb") as f:
             self = object.__new__(RoundsMd)
             self.__dict__.update(dill.load(f))
@@ -347,9 +348,7 @@ class RoundsMd(Rounds):
 
         pass
 
-    def iter_atoms(
-        self, r: int | None = None, num: int = 3
-    ) -> tuple[ase.Atoms, Rounds.Round, Rounds.Trajectory]:
+    def iter_atoms(self, r: int | None = None, num: int = 3):
 
         from molmod import angstrom
 
@@ -407,7 +406,7 @@ class RoundsMd(Rounds):
 
                 write_extxyz(f, atoms)
 
-    def new_round(self, md: MDEngine):
+    def new_round_from_md(self, md: MDEngine):
 
         r = self.round + 1
 
@@ -659,9 +658,9 @@ class RoundsMd(Rounds):
         raise NotImplementedError
         md = self.get_engine()
         if self.n() > 1 or isinstance(self.get_bias(), NoneBias) or calc:
-            from IMLCV.base.Observable import Observable
+            from IMLCV.base.Observable import ThermoLIB
 
-            obs = Observable(self)
+            obs = ThermoLIB(self)
             fesBias = obs.fes_bias(plot=True)
 
             md = md.new_bias(fesBias, filename=None, write_step=5)

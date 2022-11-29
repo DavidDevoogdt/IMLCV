@@ -18,7 +18,7 @@ from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
 
 
-class Observable:
+class ThermoLIB:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
@@ -32,8 +32,35 @@ class Observable:
 
         self.folder = rounds.folder
 
-    def _fes_2d(self, plot=True, n=8, start_r=0):
-        # fes = FreeEnergySurface2D.from_txt
+    def fes_nd_thermolib(self, plot=True, n=8, start_r=0):
+        class _ThermoBias2D(BiasPotential2D):
+            def __init__(self, bias: Bias) -> None:
+                self.bias = bias
+
+                super().__init__("IMLCV_bias")
+
+            def __call__(self, *cv):
+                # map meshgrids of cvs to IMLCV biases and evaluate
+                return np.array(self.f_par(jnp.array([*cv])), dtype=np.double)
+
+            @partial(jit, static_argnums=(0,))
+            def f_par(self, cvs):
+                b, _ = jnp.apply_along_axis(
+                    self.f,
+                    axis=0,
+                    arr=cvs,
+                )
+                return b
+
+            @partial(jit, static_argnums=(0,))
+            def f(self, point):
+                return self.bias.compute_from_cv(
+                    cvs=CV(cv=point),
+                    diff=False,
+                )
+
+            def print_pars(self, *pars_units):
+                pass
 
         temp = self.rounds.T
 
@@ -57,7 +84,7 @@ class Observable:
 
             cvs, _ = cv.compute_cv(sp)
             trajs.append(cvs)
-            biases.append(Observable._ThermoBias2D(bias))
+            biases.append(ThermoLIB._ThermoBias2D(bias))
 
         if plot:
             plot_app(
@@ -153,13 +180,7 @@ class Observable:
             for t in cvs:
                 n += t.cv.size
 
-            # 20 points per bin on average
             n = int((n / self.samples_per_bin) ** (1 / cvs[0].cv.ndim))
-
-        # if time is not None:
-        #     bins_max = int((time/self.time_per_bin)**(1 / trajs[0].ndim))
-        #     if bins_max > n:
-        #         n = bins_max
 
         assert n >= 4, "sample more points"
 
@@ -173,35 +194,6 @@ class Observable:
         ]
 
         return bounds, bins
-
-    class _ThermoBias2D(BiasPotential2D):
-        def __init__(self, bias: Bias) -> None:
-            self.bias = bias
-
-            super().__init__("IMLCV_bias")
-
-        def __call__(self, *cv):
-            # map meshgrids of cvs to IMLCV biases and evaluate
-            return np.array(self.f_par(jnp.array([*cv])), dtype=np.double)
-
-        @partial(jit, static_argnums=(0,))
-        def f_par(self, cvs):
-            b, _ = jnp.apply_along_axis(
-                self.f,
-                axis=0,
-                arr=cvs,
-            )
-            return b
-
-        @partial(jit, static_argnums=(0,))
-        def f(self, point):
-            return self.bias.compute_from_cv(
-                cvs=CV(cv=point),
-                diff=False,
-            )
-
-        def print_pars(self, *pars_units):
-            pass
 
     def fes_bias(
         self,
@@ -217,7 +209,7 @@ class Observable:
         **plot_kwargs,
     ):
         if fs is None:
-            fes, grid, bounds = self._fes_2d(plot=plot, start_r=start_r)
+            fes, grid, bounds = self.fes_nd_thermolib(plot=plot, start_r=start_r)
 
         # fes is in 'xy'- indexing convention, convert to ij
         fs = np.transpose(fes.fs)
@@ -237,11 +229,6 @@ class Observable:
 
         sigma = fu - fl
         sigma = (sigma) / smoothing_threshold
-
-        # for choice in [
-        #     "gridbias",
-        #     "rbf",
-        # ]:
 
         if choice == "rbf":
 

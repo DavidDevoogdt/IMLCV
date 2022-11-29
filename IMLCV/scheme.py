@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import itertools
+from importlib import import_module
 from pathlib import Path
 
 import jax.numpy as jnp
+from keras.api._v2 import keras as KerasAPI
 from molmod.constants import boltzmann
 
 from IMLCV.base.bias import BiasMTD, CompositeBias, HarmonicBias, NoneBias
 from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.Observable import Observable
+from IMLCV.base.Observable import ThermoLIB
 from IMLCV.base.rounds import RoundsMd
+
+keras: KerasAPI = import_module("tensorflow.keras")
 
 
 class Scheme:
@@ -25,24 +29,18 @@ class Scheme:
     def __init__(
         self,
         Engine: MDEngine,
-        cvd: CVDiscovery | None = None,
         folder="output",
-        max_energy=None,
     ) -> None:
 
         self.md = Engine
-        self.cvd = cvd
         self.rounds = RoundsMd(
             folder=folder,
         )
-        self.rounds.new_round(self.md)
-        self.max_energy = max_energy
+        self.rounds.new_round_from_md(self.md)
 
     @staticmethod
     def from_rounds(
         folder: str | Path,
-        cvd: CVDiscovery | None = None,
-        max_energy=None,
     ) -> Scheme:
 
         self = Scheme.__new__(Scheme)
@@ -50,10 +48,7 @@ class Scheme:
         rounds = RoundsMd.load(folder)
         self.md = rounds.get_engine()
 
-        self.max_energy = max_energy
         self.rounds = rounds
-
-        self.cvd = cvd
 
         return self
 
@@ -83,7 +78,7 @@ class Scheme:
     def FESBias(self, **kwargs):
         """replace the current md bias with the computed FES from current
         round."""
-        obs = Observable(self.rounds)
+        obs = ThermoLIB(self.rounds)
         fesBias = obs.fes_bias(**kwargs)
         self.md = self.md.new_bias(fesBias)
 
@@ -108,7 +103,7 @@ class Scheme:
         )
 
     def new_metric(self, plot=False, r=None):
-        o = Observable(self.rounds)
+        o = ThermoLIB(self.rounds)
         self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
     def round(self, rnds=10, init=0, steps=5e4, K=None, update_metric=False, n=4):
@@ -130,10 +125,9 @@ class Scheme:
             self.rounds.new_round(self.md)
             self.rounds.save()
 
-    def update_CV(self, samples=2e3, plot=True, **kwargs):
-        assert self.cvd is not None, "Give cv deiscovery instance to scheme"
+    def update_CV(self, cvd: CVDiscovery, samples=2e3, plot=True, **kwargs):
 
-        new_cv = self.cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
+        new_cv = cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
         self.md.bias = NoneBias(new_cv)
 
         self.rounds.new_round(self.md, self.md.static_trajectory_info)
@@ -145,3 +139,8 @@ class Scheme:
     @classmethod
     def load(cls, filename):
         raise NotImplementedError
+
+
+######################################
+#           Test                     #
+######################################

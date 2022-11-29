@@ -1,5 +1,4 @@
 import os
-import shutil
 from importlib import import_module
 
 import ase
@@ -15,11 +14,8 @@ import yaff
 from IMLCV import CP2K_COMMAND, ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import CollectiveVariable, SystemParams, Volume, dihedral
-from IMLCV.base.CVDiscovery import CVDiscovery
-from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
+from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
 from IMLCV.base.metric import Metric
-from IMLCV.external.parsl_conf.config import config
-from IMLCV.scheme import Scheme
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
@@ -28,22 +24,6 @@ keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 abspath = __file__
 dname = os.path.dirname(abspath)
 os.chdir(dname)
-
-
-def cleancopy(base):
-
-    if not os.path.exists(f"{base}"):
-        os.mkdir(base)
-        return
-
-    if not os.path.exists(f"{base}_orig"):
-        assert os.path.exists(f"{base}"), "folder not found"
-        shutil.copytree(f"{base}", f"{base}_orig")
-
-    if os.path.exists(f"{base}"):
-
-        shutil.rmtree(f"{base}")
-    shutil.copytree(f"{base}_orig", f"{base}")
 
 
 def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0)):
@@ -176,7 +156,7 @@ def ase_yaff(small=True):
 
         assert sp.cell is not None
 
-        cell = sp.canonicalized_cell()
+        sp = sp.minkowski_reduce()
 
         l = jnp.linalg.norm(sp.cell, axis=1)
         l0 = jnp.max(l)
@@ -215,68 +195,3 @@ def ase_yaff(small=True):
     )
 
     return yaffmd
-
-
-def get_FES(
-    name,
-    engine: MDEngine,
-    cvd: CVDiscovery | None = None,
-    recalc=False,
-    steps=5e3,
-    K=5 * kjmol,
-    rounds=8,
-    n=4,
-    init=500,
-) -> Scheme:
-    """calculate some rounds, and perform long run. Starting point for cv discovery methods"""
-
-    full_name = f"output/{name}"
-    full_name_orig = f"output/{name}_orig"
-    pe = os.path.exists(full_name)
-    pe_orig = os.path.exists(full_name_orig)
-
-    if recalc or (not pe and not pe_orig):
-        if pe:
-            shutil.rmtree(full_name)
-        if pe_orig:
-            shutil.rmtree(full_name_orig)
-
-        scheme0 = Scheme(cvd=None, Engine=engine, folder=full_name)
-
-        scheme0.round(
-            rnds=rounds,
-            steps=steps,
-            n=n,
-            K=K,
-            init=init,
-        )
-
-        # scheme0.rounds.run(
-        #     NoneBias(scheme0.rounds.get_bias().cvs),
-        #     steps=1e5,
-        # )
-        scheme0.rounds.save()
-
-        del scheme0
-
-    cleancopy(full_name)
-
-    return Scheme.from_rounds(folder=full_name, cvd=cvd)
-
-
-if __name__ == "__main__":
-
-    config(cluster="doduo", max_blocks=10)
-
-    # md = mil53_yaff()
-    md = ase_yaff()
-    # md = alanine_dipeptide_yaff()
-    # with jax.disable_jit():
-    md.run(1000)
-
-    print(md.bias.collective_variable.compute_cv(md.get_trajectory().sp, map=False)[0])
-
-    # md.trajectory_info.save("test.h5")
-    # ti2 = TrajectoryInfo.load("test.h5")
-
-    # print(ti2)

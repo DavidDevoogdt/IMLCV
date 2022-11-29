@@ -36,6 +36,32 @@ from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine
 
+import os
+import tempfile
+from pathlib import Path
+
+import jax.numpy as jnp
+import numpy as np
+import pytest
+from molmod import units
+from molmod.units import kelvin, kjmol
+
+from IMLCV.base.CV import (
+    CollectiveVariable,
+    CvFlow,
+    Metric,
+    SystemParams,
+    Volume,
+    dihedral,
+)
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
+from IMLCV.examples.example_systems import alanine_dipeptide_yaff
+from yaff.test.common import get_alaninedipeptide_amber99ff
+
+######################################
+#              Energy                #
+######################################
+
 
 @jax_dataclasses.pytree_dataclass
 class EnergyResult:
@@ -85,7 +111,10 @@ class BC:
         pass
 
     def compute_from_system_params(
-        self, sp: SystemParams, gpos=False, vir=False
+        self,
+        gpos=False,
+        vir=False,
+        sp: SystemParams | None = None,
     ) -> EnergyResult:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -412,6 +441,11 @@ class Cp2kEnergy(AseEnergy):
 
 class PlumedEnerg(Energy):
     pass
+
+
+######################################
+#       Biases                       #
+######################################
 
 
 class BiasError(Exception):
@@ -1041,7 +1075,7 @@ class GridBias(Bias):
         # scale to array size and offset extra row
         coords = coords * (self.n - 1) + 1
 
-        return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)
+        return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)  # type: ignore
 
     def get_args(self):
         return []
@@ -1098,15 +1132,11 @@ class CvMonitor(BiasF):
         self.last_cv = new_cv
 
 
-class NonJaxBias(Bias):
-
-    pass
-
-
 class PlumedBias(Bias):
     def __init__(
         self,
         collective_variable: CollectiveVariable,
+        timestep,
         kernel=None,
         fn="plumed.dat",
         fn_log="plumed.log",
@@ -1125,6 +1155,8 @@ class PlumedBias(Bias):
         self.hooked = False
 
         self.setup_plumed(timestep, 0)
+
+        raise NotImplementedError("this is untested")
 
     def setup_plumed(self, timestep, restart):
         r"""Send commands to PLUMED to make it computation-ready.
@@ -1165,9 +1197,7 @@ class PlumedBias(Bias):
         finished and PLUMED should be notified about this.
         """
         if not self.hooked:
-            self.setup_plumed(
-                timestepself.plumedstep, restart=int(iterative.counter > 0)
-            )
+            self.setup_plumed(timestep=self.plumedstep, restart=int(md.step > 0))
             self.hooked = True
 
         # PLUMED provides a setEnergy command, which should pass the
@@ -1214,3 +1244,173 @@ class PlumedBias(Bias):
         energy = np.zeros((1,))
         self.plumed.cmd("getBias", energy)
         return energy[0]
+
+
+######################################
+#              test                  #
+######################################
+
+
+def test_harmonic():
+
+    cvs = CollectiveVariable(
+        f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+        metric=Metric(
+            periodicities=[True, True], bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]]
+        ),
+    )
+
+    bias = HarmonicBias(cvs, q0=np.array([np.pi, -np.pi]), k=1.0)
+
+    x = np.random.rand(2)
+
+    a1, _ = bias.compute_from_cv(np.array([np.pi, np.pi]) + x)
+    a2, _ = bias.compute_from_cv(np.array([-np.pi, -np.pi] + x))
+    a3, _ = bias.compute_from_cv(np.array([np.pi, -np.pi]) + x)
+    a4, _ = bias.compute_from_cv(np.array([-np.pi, np.pi] + x))
+    a5, _ = bias.compute_from_cv(np.array([np.pi, np.pi]) + x.T)
+
+    assert pytest.approx(a1, abs=1e-5) == a2
+    assert pytest.approx(a1, abs=1e-5) == a3
+    assert pytest.approx(a1, abs=1e-5) == a4
+    assert pytest.approx(a1, abs=1e-5) == a5
+
+
+def test_virial():
+    # virial for volume based CV is V*I(3)
+
+    metric = Metric(periodicities=[False])
+    cv0 = CollectiveVariable(f=Volume, metric=metric)
+    coordinates = np.random.random((10, 3))
+    cell = np.random.random((3, 3))
+    vir = np.zeros((3, 3))
+
+    def fun(x):
+        return x.cv[0]
+
+    bias = BiasF(cvs=cv0, g=fun)
+
+    e_r: EnergyResult = bias.compute_from_system_params(
+        SystemParams(coordinates=coordinates, cell=cell), vir=True
+    )
+    vol = e_r.energy
+    vir = e_r.vtens
+    assert pytest.approx(vir, abs=1e-7) == vol * np.eye(3)
+
+
+def test_grid_bias():
+
+    # bounds = [[0, 3], [0, 3]]
+    n = [4, 6]
+
+    cv = CollectiveVariable(
+        CvFlow(func=lambda x: x.coordinates),
+        Metric(
+            periodicities=[False, False],
+            bounding_box=np.array([[-2, 2], [1, 5]]),
+        ),
+    )
+
+    bins = [
+        np.linspace(a, b, ni, endpoint=True, dtype=np.double)
+        for ni, (a, b) in zip(n, cv.metric.bounding_box)
+    ]
+
+    def f(x, y):
+        return x**3 + y
+
+    # reevaluation of thermolib histo
+    bin_centers1, bin_centers2 = 0.5 * (bins[0][:-1] + bins[0][1:]), 0.5 * (
+        bins[1][:-1] + bins[1][1:]
+    )
+    xc, yc = np.meshgrid(bin_centers1, bin_centers2, indexing="ij")
+    xcf = np.reshape(xc, (-1))
+    ycf = np.reshape(yc, (-1))
+    val = np.array([f(x, y) for x, y in zip(xcf, ycf)]).reshape(xc.shape)
+
+    bias = RbfBias(cvs=cv, vals=val)
+
+    def c(x, y):
+        return bias.compute_from_cv(cvs=np.array([x, y]))[0]
+
+    val2 = np.array([c(x, y) for x, y in zip(xcf, ycf)]).reshape(xc.shape)
+    assert np.allclose(val, val2)
+
+
+def test_combine_bias(full_name):
+
+    T = 300 * kelvin
+
+    cv0 = CollectiveVariable(
+        f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+        metric=Metric(
+            periodicities=[True, True],
+            bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
+        ),
+    )
+
+    bias1 = BiasMTD(
+        cvs=cv0, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=25, step=500
+    )
+    bias2 = BiasMTD(
+        cvs=cv0, K=0.5 * units.kjmol, sigmas=np.array([0.1, 0.1]), start=50, step=250
+    )
+
+    bias = CompositeBias(biases=[bias1, bias2])
+
+    stic = StaticTrajectoryInfo(
+        T=T,
+        timestep=2.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+        write_step=1,
+        atomic_numbers=np.array(
+            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
+            dtype=int,
+        ),
+    )
+
+    mde = YaffEngine(
+        energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
+        bias=bias,
+        static_trajectory_info=stic,
+    )
+
+    mde.run(int(1e2))
+
+
+def test_bias_save(full_name):
+    """save and load bias to disk."""
+
+    yaffmd = alanine_dipeptide_yaff(
+        bias=lambda cv0: BiasMTD(
+            cvs=cv0,
+            K=2.0 * units.kjmol,
+            sigmas=np.array([0.35, 0.35]),
+            start=25,
+            step=500,
+        )
+    )
+    yaffmd.run(int(1e3))
+
+    yaffmd.bias.save("output/bias_test_2.xyz")
+    bias = Bias.load("output/bias_test_2.xyz")
+
+    from IMLCV.base.CV import CV
+
+    cvs = CV(cv=jnp.array([0.0, 0.0]))
+
+    [b, db] = yaffmd.bias.compute_from_cv(cvs=cvs, diff=True)
+    [b2, db2] = bias.compute_from_cv(cvs=cvs, diff=True)
+
+    assert pytest.approx(b) == b2
+    assert pytest.approx(db.cv) == db2.cv
+
+
+if __name__ == "__main__":
+    test_harmonic()
+    test_virial()
+    test_grid_bias()
+    test_virial()
+    with tempfile.TemporaryDirectory() as tmp:
+        test_combine_bias(full_name=f"{tmp}/combine.h5")
+        test_bias_save(full_name=f"{tmp}/bias_save.h5")

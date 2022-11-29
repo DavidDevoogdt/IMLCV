@@ -14,6 +14,7 @@ import dill
 import h5py
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from molmod.units import bar
 
 import yaff.analysis.biased_sampling
@@ -26,9 +27,14 @@ import yaff.sampling
 import yaff.sampling.iterative
 from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
 from IMLCV.base.CV import SystemParams
+from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
+
+######################################
+#             Trajectory             #
+######################################
 
 
 @dataclass
@@ -295,6 +301,11 @@ class TrajectoryInfo:
             if self.cell is not None
             else None,
         )
+
+
+######################################
+#             MDEngine               #
+######################################
 
 
 class MDEngine(ABC):
@@ -724,3 +735,33 @@ class PlumedEngine(YaffEngine):
                 libplumed.ForcePartPlumed(timestep=static_trajectory_info.timestep)
             ],
         )
+
+
+######################################
+#              test                  #
+######################################
+
+
+def test_yaff_save_load_func(full_name):
+
+    yaffmd = alanine_dipeptide_yaff()
+
+    yaffmd.run(int(761))
+
+    yaffmd.save("output/yaff_save.d")
+    yeet = MDEngine.load("output/yaff_save.d")
+
+    sp1 = yaffmd.sp
+    sp2 = yeet.sp
+
+    assert pytest.approx(sp1.coordinates) == sp2.coordinates
+    assert pytest.approx(sp1.cell) == sp2.cell
+    assert (
+        pytest.approx(yaffmd.energy.compute_from_system_params(sp1).energy, abs=1e-6)
+        == yeet.energy.compute_from_system_params(sp2).energy
+    )
+
+
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory() as tmp:
+        test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")

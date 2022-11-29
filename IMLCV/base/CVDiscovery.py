@@ -15,6 +15,7 @@ from jax import jacrev, jit, random, vmap
 from jax.random import PRNGKey, choice
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
+from molmod.units import angstrom, kjmol
 from parsl.data_provider.files import File
 from tensorflow import keras
 
@@ -31,14 +32,10 @@ from IMLCV.base.CV import (
     scale_cv_trans,
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
-
-# from IMLCV.base.MdEngine import StaticTrajectoryInfo
-from IMLCV.base.metric import Metric
 from IMLCV.base.rounds import RoundsMd
+from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
-
-# keras: KerasAPI = import_module("tensorflow.keras")
-
+from IMLCV.scheme import Scheme
 
 plt.rcParams["text.usetex"] = True
 
@@ -119,7 +116,7 @@ class Transformer:
 
     def post_fit(self, y: CV, scale) -> tuple[CV, CvTrans]:
         if not scale:
-            return y, CvTrans(lambda x: x)
+            return y, CvTrans.from_cv_function(lambda x, y: x)
         h = scale_cv_trans(y)
         return h.compute_cv_trans(y), h
 
@@ -744,7 +741,75 @@ def plot_app(
             outputs.append(File(n))
 
 
-if __name__ == "__main__":
-    from IMLCV.test.test_CV_disc import test_cv_discovery
+######################################
+#              test                  #
+######################################
 
+
+def test_cv_discovery(
+    name="test_cv_disc",
+    md=alanine_dipeptide_yaff(),
+    recalc=False,
+    steps=5e3,
+    k=5 * kjmol,
+    cvd="AE",
+    n=4,
+    init=500,
+    out_dim=3,
+):
+    # do_conf()
+
+    tf_kwargs = {
+        "outdim": out_dim,
+        "descriptor": "sb",
+        "descriptor_kwargs": {
+            "r_cut": 5 * angstrom,
+            "sti": md.static_trajectory_info,
+        },
+    }
+
+    if cvd == "AE":
+        tf = TranformerAutoEncoder(**tf_kwargs)
+
+        kwargs = {}
+    elif cvd == "UMAP":
+
+        tf = TranformerUMAP(**tf_kwargs)
+
+        kwargs = dict(
+            n_neighbors=60,
+            min_dist=0.8,
+            nunits=200,
+            nlayers=4,
+            # metric=None,
+            metric="l2",
+            densmap=True,
+            parametric_reconstruction=True,
+            parametric_reconstruction_loss_fcn=keras.losses.MSE,
+            decoder=True,
+        )
+    else:
+        raise ValueError
+
+    cvd = CVDiscovery(
+        transformer=tf,
+    )
+
+    from pathlib import Path
+
+    if Path(name).exists():
+        scheme0 = Scheme.from_rounds(folder=Path(name))
+
+    else:
+        scheme0 = Scheme(md=md, folder=name)
+        scheme0.round(rnds=5, K=k, n=n, init=init, steps=steps)
+
+    scheme0.update_CV(
+        samples=1e3,
+        cvd=cvd,
+        **kwargs,
+    )
+
+
+if __name__ == "__main__":
     test_cv_discovery()
