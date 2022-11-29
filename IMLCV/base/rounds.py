@@ -70,12 +70,12 @@ class Rounds(ABC):
 
             i = 0
             while True:
-                p = Path(self.h5file_name) / f"{i:0>3}"
+                p = Path(folder).parent / (f"{Path(folder).name}_{i:0>3}")
                 if p.exists():
                     i += 1
                 else:
-                    shutil.move(self.folder, p)
-                    continue
+                    shutil.move(Path(folder), p)
+                    break
 
         if not Path(self.h5file_name).exists():
             self._make_file()

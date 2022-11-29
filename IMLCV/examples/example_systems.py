@@ -13,9 +13,8 @@ from molmod.units import angstrom, kelvin, kjmol
 import yaff
 from IMLCV import CP2K_COMMAND, ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
-from IMLCV.base.CV import CollectiveVariable, SystemParams, Volume, dihedral
+from IMLCV.base.CV import CollectiveVariable, CvMetric, SystemParams, Volume, dihedral
 from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
-from IMLCV.base.metric import Metric
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
@@ -31,7 +30,7 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0)):
 
     cv0 = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
-        metric=Metric(
+        metric=CvMetric(
             periodicities=[True, True],
             bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
         ),
@@ -73,7 +72,7 @@ def mil53_yaff():
 
     cvs = CollectiveVariable(
         f=Volume,
-        metric=Metric(
+        metric=CvMetric(
             periodicities=[False],
             bounding_box=jnp.array(
                 [850, 1500],
@@ -117,7 +116,7 @@ def mil53_yaff():
 
 def ase_yaff(small=True):
 
-    base = ROOT_DIR / "IMLCV" / "test" / "data" / "CsPbI_3"
+    base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
 
     fb = base / "small" if small else "large"
 
@@ -166,7 +165,7 @@ def ase_yaff(small=True):
 
     cv = CollectiveVariable(
         f=f,
-        metric=Metric(
+        metric=CvMetric(
             periodicities=[False, False],
             bounding_box=jnp.array([[0.0, 2.0], [5.5, 7.5]]) * angstrom,
         ),

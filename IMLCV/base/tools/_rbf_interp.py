@@ -10,7 +10,7 @@ from scipy.linalg.lapack import dgesv
 from scipy.spatial import KDTree
 from scipy.special import comb
 
-from IMLCV.base.CV import CV, Metric  # type: ignore[attr-defined]
+from IMLCV.base.CV import CV, CvMetric  # type: ignore[attr-defined]
 
 from ._rbfinterp_pythran import (
     _build_evaluation_coefficients,
@@ -85,7 +85,7 @@ def _monomial_powers(ndim, degree):
 
 
 def _build_and_solve_system(
-    y: CV, metric: Metric, d, smoothing, kernel, epsilon, powers
+    y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers
 ):
     """Build and solve the RBF interpolation system of equations.
 
@@ -289,7 +289,7 @@ class RBFInterpolator:
     def __init__(
         self,
         y: CV,
-        metric: Metric,
+        metric: CvMetric,
         d,
         neighbors=None,
         smoothing=0.0,

@@ -104,6 +104,7 @@ class Scheme:
 
     def new_metric(self, plot=False, r=None):
         o = ThermoLIB(self.rounds)
+
         self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
     def round(self, rnds=10, init=0, steps=5e4, K=None, update_metric=False, n=4):
@@ -122,7 +123,7 @@ class Scheme:
             else:
                 self.FESBias(plot=True, n=n)
 
-            self.rounds.new_round(self.md)
+            self.rounds.new_round_from_md(self.md)
             self.rounds.save()
 
     def update_CV(self, cvd: CVDiscovery, samples=2e3, plot=True, **kwargs):

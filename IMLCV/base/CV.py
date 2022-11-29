@@ -126,6 +126,7 @@ class SystemParams:
         center_coordiantes=jnp.zeros(3),
         g=lambda r_ij, atom_index_j: 1,
         exclude_self=True,
+        op=lambda a, b: a + b,
     ):
         """
 
@@ -134,6 +135,11 @@ class SystemParams:
 
         if exclude_self is not True:
             raise NotImplementedError
+
+        sp = self.canoncialize()
+        center_coordiantes = SystemParams._wrap_pos(
+            cell=sp.cell, coordinates=center_coordiantes
+        )
 
         @jit
         def apply_g(farg, ijk=None):
@@ -153,8 +159,8 @@ class SystemParams:
                 def true_fun():
                     out = g(r_ij, atom_index_j)
                     if len(farg) > 2:
-                        return tuple(a + b for a, b in zip(farg, (1, *out)))
-                    return farg[0] + 1, farg[1] + out
+                        return farg[0] + 1, *[op(a, b) for a, b in zip(farg[1:], out)]
+                    return farg[0] + 1, op(farg[1], out)
 
                 return jax.lax.cond(
                     jnp.logical_and(norm < r_cut, norm != 0.0),
@@ -185,7 +191,6 @@ class SystemParams:
 
         else:
             # unit cell angles are in range [45,135] degrees
-            sp = self.minkowski_reduce()
             _, r = jnp.linalg.qr(sp.cell.T)
 
             # orthogonal distance for number of blocks
@@ -228,8 +233,12 @@ class SystemParams:
         if sp2 is none, all pairs with itself are made, otherwise all pairs with sp2
         """
 
+        sp = self.canoncialize()
+
         if sp2 is None:
-            sp2 = self
+            sp2 = sp
+        else:
+            sp2 = sp2.canoncialize()
 
         out = jax.eval_shape(g, jnp.zeros(3), jnp.zeros(3), 0, 0)
         if not isinstance(out, jax.ShapeDtypeStruct):
@@ -261,7 +270,7 @@ class SystemParams:
                 exclude_self=exclude_self,
             )
 
-        i, j, k, val = self.apply_fun_neighbourghs(
+        i, j, k, val = sp.apply_fun_neighbourghs(
             r_cut,
             center_coordiantes=center_coordiantes,
             g=f,
@@ -278,7 +287,6 @@ class SystemParams:
         import itertools
 
         TOL = 1e-12
-        # MAX_IT = 100000  # in practice this is not exceeded
 
         @partial(jit, static_argnums=(0,))
         def cycle_checker(d):
@@ -379,10 +387,6 @@ class SystemParams:
             )
 
             return a
-
-            # for it in range(MAX_IT):
-
-            # raise RuntimeError(f"Closest vector not found after {MAX_IT} iterations")
 
         def reduction_full(B):
             """Calculate a Minkowski-reduced lattice basis (3D reduction)."""
@@ -530,11 +534,14 @@ class SystemParams:
                 The unimodular matrix transformation (rcell = op @ cell).
             """
 
-            return jax.lax.cond(
+            reduced = jax.lax.cond(
                 is_minkowski_reduced(cell=cell),
                 lambda: cell,
                 lambda: reduction_full(cell)[1] @ cell,
             )
+
+            reduced = jnp.diag(jnp.sign(jnp.sum(jnp.sign(reduced), axis=1))) @ reduced
+            return reduced
 
         if self.batched:
             cell = vmap(minkowski_reduce)(self.cell)
@@ -542,6 +549,57 @@ class SystemParams:
             cell = minkowski_reduce(self.cell)
 
         return SystemParams(coordinates=self.coordinates, cell=cell)
+
+    def wrap_positions(self, coordinates: Array | None = None) -> SystemParams:
+        """wrap pos to lie within unit cell"""
+        assert self.batched is False
+
+        if self.cell is None:
+            return self
+
+        if coordinates is None:
+            coordinates = self.coordinates
+
+        return SystemParams(
+            coordinates=SystemParams._wrap_pos(cell=self.cell, coordinates=coordinates),
+            cell=self.cell,
+        )
+
+    @staticmethod
+    def _wrap_pos(cell: Array, coordinates: Array) -> Array:
+
+        scaled = jnp.linalg.solve(cell.T, coordinates.T).T
+        reduced = jnp.mod(scaled, 1)
+        return reduced @ cell.T
+
+    def canoncialize(self) -> SystemParams:
+        sp = self.minkowski_reduce()
+        return sp.wrap_positions()
+
+    def min_distance(self, index_1, index_2):
+        assert self.batched is False
+
+        if index_1 == index_2:
+            return 0.0
+
+        sp = self.minkowski_reduce()  # necessary if cell is skewed
+        coor1 = sp.coordinates[index_1, :]
+        coor2 = sp.coordinates[index_2, :]
+
+        @partial(vmap, in_axes=(None, None, 0))
+        @partial(vmap, in_axes=(None, 0, None))
+        @partial(vmap, in_axes=(0, None, None))
+        def dist(n0, n1, n2):
+            return jnp.linalg.norm(
+                coor2
+                - coor1
+                + n0 * sp.cell[0, :]
+                + n1 * sp.cell[1, :]
+                + n2 * sp.cell[2, :]
+            )
+
+        ind = jnp.array([-1, 0, 1])
+        return jnp.min(dist(ind, ind, ind))
 
 
 @jdc.pytree_dataclass
@@ -788,7 +846,7 @@ class CV:
         return CV(cv=jnp.hstack(out_cv), mapped=mapped, _combine_dims=out_dim)  # type: ignore
 
 
-class Metric:
+class CvMetric:
     """class to keep track of topology of given CV. Identifies the periodicitie of CVs and maps to unit square with correct peridicities"""
 
     def __init__(
@@ -883,16 +941,16 @@ class Metric:
         return y
 
     def __add__(self, other):
-        assert isinstance(self, Metric)
+        assert isinstance(self, CvMetric)
         if other is None:
             return self
 
-        assert isinstance(other, Metric)
+        assert isinstance(other, CvMetric)
 
         periodicities = jnp.hstack((self.periodicities, other.periodicities))
         bounding_box = jnp.vstack((self.bounding_box, other.bounding_box))
 
-        return Metric(
+        return CvMetric(
             periodicities=periodicities,
             bounding_box=bounding_box,
         )
@@ -1277,7 +1335,7 @@ class CvFlow:
 
 
 class CollectiveVariable:
-    def __init__(self, f: CvFlow, metric: Metric, jac=jacfwd) -> None:
+    def __init__(self, f: CvFlow, metric: CvMetric, jac=jacfwd) -> None:
         "jac: kind of jacobian. Default is jacfwd (more efficient for tall matrices), but functions with custom jvp's only support jacrev"
 
         self.metric = metric
@@ -1564,7 +1622,7 @@ class DistraxRealNVP(CvFunDistrax):
 ######################################
 
 
-class MetricUMAP(Metric):
+class MetricUMAP(CvMetric):
     def __init__(self, periodicities, bounding_box=None) -> None:
         super().__init__(periodicities=periodicities, bounding_box=bounding_box)
 
@@ -1603,7 +1661,7 @@ class MetricUMAP(Metric):
         self.umap_f = val_and_grad
 
 
-class hyperTorus(Metric):
+class hyperTorus(CvMetric):
     def __init__(self, n) -> None:
         periodicities = [True for _ in range(n)]
         boundaries = jnp.zeros((n, 2))
@@ -1798,16 +1856,60 @@ def test_minkowski_reduce():
     prng = jax.random.PRNGKey(42)
     key1, key2, prng = jax.random.split(prng, 3)
 
-    from scipy.spatial.transform import Rotation as R
-
-    rot = jnp.array(R.random().as_matrix())
-
     sp = SystemParams(
         coordinates=jnp.zeros((22, 3)),
-        cell=jnp.array([[2, 0, 0], [6, 1, 0], [8, 9, 1]]),
+        cell=jnp.array(
+            [
+                [2, 0, 0],
+                [6, 1, 0],
+                [8, 9, 1],
+            ]
+        ),
     ).minkowski_reduce()
 
-    print(f"{   sp.cell }")
+    assert jnp.linalg.norm(sp.cell - jnp.array([[0, 1, 0], [0, 0, 1], [2, 0, 0]])) == 0
+
+
+def test_canoncicalize():
+
+    prng = jax.random.PRNGKey(42)
+    k1, k2, prng = jax.random.split(prng, 3)
+
+    cell = jax.random.uniform(k1, (3, 3))
+    coordinates = jax.random.uniform(k2, (2, 3))
+
+    # make scramled cell
+
+    cell2 = cell
+    for i in range(10):
+        k1, prng = jax.random.split(prng, 2)
+
+        k1, prng = jax.random.split(prng, 2)
+
+        new_combo = jax.random.randint(k1, (3,), minval=-2, maxval=2)
+        new_combo = new_combo.at[i % 3].set(1)
+
+        cell2 = cell2.at[i, :].set(new_combo @ cell2)
+
+    k1, prng = jax.random.split(prng, 2)
+    coordinates2 = (
+        coordinates + jax.random.randint(k1, (3,), minval=-3, maxval=3) @ cell
+    )
+
+    sp0 = SystemParams(cell=cell, coordinates=coordinates)
+    sp1 = SystemParams(cell=cell2, coordinates=coordinates2)
+
+    # test distance
+    assert jnp.abs(sp0.min_distance(0, 1) - sp1.min_distance(0, 1)) < 1e-6
+
+    # test minkowski reduction
+    sp0, sp1 = sp0.minkowski_reduce(), sp1.minkowski_reduce()
+
+    assert (jnp.abs(sp0.cell - sp1.cell) < 1e-6).all()
+
+    sp0, sp1 = sp0.wrap_positions(), sp1.wrap_positions()
+
+    assert (jnp.abs(sp0.coordinates - sp1.coordinates) < 1e-6).all()
 
 
 if __name__ == "__main__":
@@ -1817,3 +1919,4 @@ if __name__ == "__main__":
     test_neigh()
     test_neigh_pair()
     test_minkowski_reduce()
+    test_canoncicalize()

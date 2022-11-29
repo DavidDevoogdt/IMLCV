@@ -68,3 +68,4 @@ IMLCV/base/tools/.mypy_cache/*
 IMLCV/test/wandb/*
 wandb/*
 nohup.out
+IMLCV/examples/output/*

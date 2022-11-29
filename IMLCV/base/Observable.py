@@ -33,7 +33,7 @@ class ThermoLIB:
         self.folder = rounds.folder
 
     def fes_nd_thermolib(self, plot=True, n=8, start_r=0):
-        class _ThermoBias2D(BiasPotential2D):
+        class ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias) -> None:
                 self.bias = bias
 
@@ -84,7 +84,7 @@ class ThermoLIB:
 
             cvs, _ = cv.compute_cv(sp)
             trajs.append(cvs)
-            biases.append(ThermoLIB._ThermoBias2D(bias))
+            biases.append(ThermoBiasND(bias))
 
         if plot:
             plot_app(

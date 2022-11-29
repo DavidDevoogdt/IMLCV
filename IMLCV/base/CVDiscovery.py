@@ -23,6 +23,7 @@ from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
     CvFlow,
+    CvMetric,
     CvTrans,
     KerasTrans,
     PeriodicLayer,
@@ -33,9 +34,7 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.rounds import RoundsMd
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
-from IMLCV.scheme import Scheme
 
 plt.rcParams["text.usetex"] = True
 
@@ -105,7 +104,7 @@ class Transformer:
 
         cv = CollectiveVariable(
             f=f * g * h,
-            metric=Metric(periodicities=self.periodicity),
+            metric=CvMetric(periodicities=self.periodicity),
             jac=jacrev,
         )
 
@@ -748,7 +747,7 @@ def plot_app(
 
 def test_cv_discovery(
     name="test_cv_disc",
-    md=alanine_dipeptide_yaff(),
+    md=None,
     recalc=False,
     steps=5e3,
     k=5 * kjmol,
@@ -757,7 +756,13 @@ def test_cv_discovery(
     init=500,
     out_dim=3,
 ):
+    from IMLCV.scheme import Scheme
+
     # do_conf()
+    if md is None:
+        from IMLCV.examples.example_systems import alanine_dipeptide_yaff
+
+        md = alanine_dipeptide_yaff()
 
     tf_kwargs = {
         "outdim": out_dim,

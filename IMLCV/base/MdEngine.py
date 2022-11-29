@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
+from typing import TYPE_CHECKING
 
 import dill
 import h5py
@@ -25,12 +26,14 @@ import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling
 import yaff.sampling.iterative
-from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
 from IMLCV.base.CV import SystemParams
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
+
+if TYPE_CHECKING:
+    from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
+
 
 ######################################
 #             Trajectory             #
@@ -743,6 +746,7 @@ class PlumedEngine(YaffEngine):
 
 
 def test_yaff_save_load_func(full_name):
+    from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
     yaffmd = alanine_dipeptide_yaff()
 

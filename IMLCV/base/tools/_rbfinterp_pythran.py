@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.CV import CV, Metric
+from IMLCV.base.CV import CV, CvMetric
 
 
 def linear(r):
@@ -48,12 +48,12 @@ NAME_TO_FUNC = {
 }
 
 
-def cv_norm(x: CV, y: CV, metric: Metric, eps):
+def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
     return metric.norm(x, y, eps)
     # return jnp.linalg.norm((metric.min_cv(x.cv) - metric.min_cv(y.cv)) * eps)
 
 
-def cv_vals(x: CV, powers, metric: Metric):
+def cv_vals(x: CV, powers, metric: CvMetric):
 
     return (
         metric.min_cv(x.cv)
@@ -63,7 +63,7 @@ def cv_vals(x: CV, powers, metric: Metric):
     # metric.difference( x,y  ) # metric.min_cv(x.cv)  # x.cv  # metric.min_cv(x.cv)
 
 
-def kernel_vector(x: CV, y: CV, metric: Metric, epsilon, kernel_func):
+def kernel_vector(x: CV, y: CV, metric: CvMetric, epsilon, kernel_func):
     """Evaluate RBFs, with centers at `y`, at the point `x`."""
 
     f0 = lambda y: kernel_func(cv_norm(x, y, metric, epsilon))
@@ -74,7 +74,7 @@ def kernel_vector(x: CV, y: CV, metric: Metric, epsilon, kernel_func):
     return out0
 
 
-def polynomial_vector(x: CV, powers, metric: Metric):
+def polynomial_vector(x: CV, powers, metric: CvMetric):
     """Evaluate monomials, with exponents from `powers`, at the point `x`."""
 
     g = lambda x, powers: cv_vals(x, powers, metric=metric)
@@ -86,7 +86,7 @@ def polynomial_vector(x: CV, powers, metric: Metric):
     return out0
 
 
-def kernel_matrix(x: CV, metric: Metric, eps, kernel_func):
+def kernel_matrix(x: CV, metric: CvMetric, eps, kernel_func):
     """Evaluate RBFs, with centers at `x`, at `x`."""
 
     f00 = lambda x, y: cv_norm(x, y, metric, eps)
@@ -99,7 +99,7 @@ def kernel_matrix(x: CV, metric: Metric, eps, kernel_func):
     return out_kernel
 
 
-def polynomial_matrix(x: CV, metric: Metric, powers):
+def polynomial_matrix(x: CV, metric: CvMetric, powers):
     """Evaluate monomials, with exponents from `powers`, at `x`."""
 
     g = lambda x, powers: cv_vals(x, powers, metric=metric)
@@ -137,7 +137,7 @@ def _polynomial_matrix(x: CV, powers, metric):
 #                              str,
 #                              float,
 #                              int[:, :])
-def _build_system(y: CV, metric: Metric, d, smoothing, kernel, epsilon, powers):
+def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers):
     """Build the system used to solve for the RBF interpolant coefficients.
 
     Parameters
@@ -204,7 +204,7 @@ def _build_system(y: CV, metric: Metric, d, smoothing, kernel, epsilon, powers):
 #                          float[:],
 #                          float[:])
 def _build_evaluation_coefficients(
-    x: CV, y: CV, metric: Metric, kernel, epsilon, powers
+    x: CV, y: CV, metric: CvMetric, kernel, epsilon, powers
 ):
     """Construct the coefficients needed to evaluate
     the RBF.

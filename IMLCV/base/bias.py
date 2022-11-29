@@ -49,14 +49,12 @@ from molmod.units import kelvin, kjmol
 from IMLCV.base.CV import (
     CollectiveVariable,
     CvFlow,
-    Metric,
+    CvMetric,
     SystemParams,
     Volume,
     dihedral,
 )
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
-from yaff.test.common import get_alaninedipeptide_amber99ff
 
 ######################################
 #              Energy                #
@@ -1255,7 +1253,7 @@ def test_harmonic():
 
     cvs = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
-        metric=Metric(
+        metric=CvMetric(
             periodicities=[True, True], bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]]
         ),
     )
@@ -1279,7 +1277,7 @@ def test_harmonic():
 def test_virial():
     # virial for volume based CV is V*I(3)
 
-    metric = Metric(periodicities=[False])
+    metric = CvMetric(periodicities=[False])
     cv0 = CollectiveVariable(f=Volume, metric=metric)
     coordinates = np.random.random((10, 3))
     cell = np.random.random((3, 3))
@@ -1305,7 +1303,7 @@ def test_grid_bias():
 
     cv = CollectiveVariable(
         CvFlow(func=lambda x: x.coordinates),
-        Metric(
+        CvMetric(
             periodicities=[False, False],
             bounding_box=np.array([[-2, 2], [1, 5]]),
         ),
@@ -1338,12 +1336,13 @@ def test_grid_bias():
 
 
 def test_combine_bias(full_name):
+    from yaff.test.common import get_alaninedipeptide_amber99ff
 
     T = 300 * kelvin
 
     cv0 = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
-        metric=Metric(
+        metric=CvMetric(
             periodicities=[True, True],
             bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
         ),
@@ -1380,6 +1379,7 @@ def test_combine_bias(full_name):
 
 def test_bias_save(full_name):
     """save and load bias to disk."""
+    from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
     yaffmd = alanine_dipeptide_yaff(
         bias=lambda cv0: BiasMTD(
