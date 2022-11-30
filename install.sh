@@ -27,21 +27,21 @@ pip  install -e ./
 mamba update  -y  ndcctools
 
 
-mamba install gcc
-mamba install cxx-compiler
+# mamba install gcc
+# mamba install cxx-compiler
 
-mamba install libopenblas-static
-cd src 
-git clone https://github.com/giorginolab/plumed2-pycv.git
-cd plumed-pycv
-cd conda/
-export VERSION=2.8
-sed -i 's/./configure --prefix=$PREFIX --disable-python --disable-libsearch --disable-static-patch --disable-static-archive/./configure --prefix=$PREFIX --disable-python --disable-libsearch --disable-static-patch --disable-static-archive --enable-modules=+pycv/g' input
-./run-conda-build.sh 
+# mamba install libopenblas-static
+# cd src 
+# git clone https://github.com/giorginolab/plumed2-pycv.git
+# cd plumed-pycv
+# cd conda/
+# export VERSION=2.8
+# sed -i 's/./configure --prefix=$PREFIX --disable-python --disable-libsearch --disable-static-patch --disable-static-archive/./configure --prefix=$PREFIX --disable-python --disable-libsearch --disable-static-patch --disable-static-archive --enable-modules=+pycv/g' input
+# ./run-conda-build.sh 
 
-# ./configure 
+# # ./configure 
 
 
-conda install cxx-compiler
-./configure --prefix=${CONDA_PREFIX}  --enable-modules=+pycv
-make -j4
+# conda install cxx-compiler
+# ./configure --prefix=${CONDA_PREFIX}  --enable-modules=+pycv
+# make -j4

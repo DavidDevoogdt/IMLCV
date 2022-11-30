@@ -13,7 +13,7 @@ from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import ThermoLIB
-from IMLCV.base.rounds import RoundsMd
+from IMLCV.base.rounds import Rounds
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
@@ -33,19 +33,20 @@ class Scheme:
     ) -> None:
 
         self.md = Engine
-        self.rounds = RoundsMd(
+        self.rounds = Rounds(
             folder=folder,
         )
-        self.rounds.new_round_from_md(self.md)
+        self.rounds.add_round_from_md(self.md)
 
     @staticmethod
     def from_rounds(
         folder: str | Path,
+        copy=False,
     ) -> Scheme:
 
         self = Scheme.__new__(Scheme)
 
-        rounds = RoundsMd.load(folder)
+        rounds = Rounds(folder, copy=copy)
         self.md = rounds.get_engine()
 
         self.rounds = rounds
@@ -111,7 +112,7 @@ class Scheme:
 
         if init != 0:
             self.grid_umbrella(steps=init, n=n, k=K)
-            self.rounds.new_round(self.md)
+            self.rounds.add_round(self.md)
             self.rounds.save()
 
         for r in range(rnds):
@@ -123,15 +124,14 @@ class Scheme:
             else:
                 self.FESBias(plot=True, n=n)
 
-            self.rounds.new_round_from_md(self.md)
-            self.rounds.save()
+            self.rounds.add_round_from_md(self.md)
 
     def update_CV(self, cvd: CVDiscovery, samples=2e3, plot=True, **kwargs):
 
         new_cv = cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
         self.md.bias = NoneBias(new_cv)
 
-        self.rounds.new_round(self.md, self.md.static_trajectory_info)
+        self.rounds.add_round(self.md, self.md.static_trajectory_info)
         self.rounds.save()
 
     def save(self, filename):

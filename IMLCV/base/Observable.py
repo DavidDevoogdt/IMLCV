@@ -11,7 +11,7 @@ from parsl import File
 
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
 from IMLCV.base.CV import CV
-from IMLCV.base.rounds import RoundsMd
+from IMLCV.base.rounds import Rounds
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
@@ -25,11 +25,9 @@ class ThermoLIB:
     samples_per_bin = 400
     time_per_bin = 2 * picosecond
 
-    def __init__(self, rounds: RoundsMd) -> None:
+    def __init__(self, rounds: Rounds) -> None:
         self.rounds = rounds
-
         self.cvs = self.rounds.get_bias().collective_variable
-
         self.folder = rounds.folder
 
     def fes_nd_thermolib(self, plot=True, n=8, start_r=0):
@@ -134,7 +132,7 @@ class ThermoLIB:
         return fes, grid, bounds
 
     def new_metric(self, plot=False, r=None):
-        assert isinstance(self.rounds, RoundsMd)
+        assert isinstance(self.rounds, Rounds)
 
         trans = []
         cvs = None

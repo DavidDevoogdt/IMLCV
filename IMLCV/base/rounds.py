@@ -1,35 +1,62 @@
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 
 import ase
-import dill
 import h5py
 import jax
 import jax.numpy as jnp
-import numpy as np
 from filelock import FileLock
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
 from IMLCV import KEY
-from IMLCV.base.bias import Bias, CompositeBias, NoneBias
+from IMLCV.base.bias import Bias, CompositeBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
-logging.getLogger("filelock").setLevel(logging.DEBUG)
+
+@dataclass
+class TrajectoryInformation:
+    ti: TrajectoryInfo
+    valid: bool
+    round: int
+    num: int
+    folder: Path
+    name_bias: str | None = None
+
+    def get_bias(self) -> Bias:
+        assert self.name_bias is not None
+        return Bias.load(self.folder / self.name_bias)
+
+
+@dataclass
+class RoundInformation:
+    round: int
+    valid: bool
+    num: int
+    tic: StaticTrajectoryInfo
+    folder: Path
+    name_bias: str | None = None
+    name_md: str | None = None
+
+    def get_bias(self) -> Bias:
+        assert self.name_bias is not None
+        return Bias.load(self.folder / self.name_bias)
+
+    def get_engine(self) -> MDEngine:
+        assert self.name_md is not None
+        return MDEngine.load(self.folder / self.name_md)
 
 
 class Rounds(ABC):
-    def __init__(self, folder: str | Path = "output", new_folder=True) -> None:
+    def __init__(self, folder: str | Path = "output", copy=True) -> None:
         """
         this class saves all relevant info in a hdf5 container. It is build as follows:
         root
@@ -55,36 +82,50 @@ class Rounds(ABC):
             ...
         """
 
-        self.round = -1
-        self.i = 0
+        folder = Path(folder)
 
-        if not os.path.isdir(folder):
-            os.makedirs(folder)
+        if folder.exists():
+            if copy:
+                folder = Rounds._get_copy(folder=Path(folder))
+        else:
+            folder.mkdir(parents=True)
 
-        self.folder = Path(folder).resolve()
-
+        self.folder = folder
         self.lock = FileLock(self.h5filelock_name)
 
-        # make a copy of the folder
-        if Path(self.h5file_name).exists() and new_folder:
+        # load h5file or create from files if corrupt/non existent
+        try:
+            with self.lock:
+                self.h5file = h5py.File(self.h5file_name, mode="r+")
+        except:
 
-            i = 0
-            while True:
-                p = Path(folder).parent / (f"{Path(folder).name}_{i:0>3}")
-                if p.exists():
-                    i += 1
-                else:
-                    shutil.move(Path(folder), p)
-                    break
-
-        if not Path(self.h5file_name).exists():
             self._make_file()
+            self.recover()
+
+    ######################################
+    #             IO                     #
+    ######################################
+
+    @staticmethod
+    def _get_copy(folder: Path) -> Path:
+
+        i = 0
+        while True:
+            p = folder.parent / (f"{folder.name}_{i:0>3}")
+            if p.exists():
+                i += 1
+            else:
+                shutil.copytree(folder, p)
+                break
+
+        return p
 
     def _make_file(self):
-        # create the file
-        with self.lock:
-            with h5py.File(self.h5file_name, mode="w-", swmr=True):
-                pass
+        if not Path(self.h5file_name).exists():
+            # create the file
+            with self.lock:
+                with h5py.File(self.h5file_name, mode="w-", swmr=True):
+                    pass
 
         self.h5file = h5py.File(self.h5file_name, mode="r+")
 
@@ -96,48 +137,103 @@ class Rounds(ABC):
     def h5filelock_name(self):
         return self.full_path(self.path() / "results.h5.lock")
 
-    def save(self):
-        with open(self.full_path("rounds"), "wb") as f:
+    def full_path(self, name) -> str:
+        return str(self.folder / Path(name))
 
-            d = self.__dict__.copy()
+    def rel_path(self, name):
+        return str(Path(name).relative_to(self.folder))
 
-            del d["h5file"]
+    def path(self, r=None, i=None) -> Path:
+        p = Path(self.folder)
+        if r is not None:
+            p /= f"round_{r}"
+            if i is not None:
+                p /= f"md_{i}"
 
-            dill.dump(d, f)
+        return p
 
     @staticmethod
-    def load(folder: str | Path):
-        with open(f"{folder}/rounds", "rb") as f:
-            self = object.__new__(RoundsMd)
-            self.__dict__.update(dill.load(f))
-            self.folder = Path(folder).resolve()
+    def load(folder: str | Path, copy=False):
 
-        try:
-            with self.lock:
-                self.h5file = h5py.File(self.h5file_name, mode="r+")
-        except:
-            if Path(self.h5file_name).exists():
-                shutil.move(self.h5file_name, f"{self.h5file_name}_bak")
-            self._make_file()
-            self.recover()
+        return Rounds(folder=folder, copy=copy)
 
-        return self
+    def write_xyz(self, r: int | None = None, num: int = 1, repeat=None):
 
-    def add(self, i, d: TrajectoryInfo, attrs=None, r=None):
+        from ase.io.extxyz import write_extxyz
+
+        for i, (atoms, round, trajejctory) in enumerate(
+            self.iter_ase_atoms(r=r, num=num)
+        ):
+            with open(
+                self.path(r=round.round, i=trajejctory.num) / "trajectory.xyz",
+                mode="w",
+            ) as f:
+                if repeat is not None:
+                    atoms = [a.repeat(repeat) for a in atoms]
+
+                write_extxyz(f, atoms)
+
+    ######################################
+    #             storage                #
+    ######################################
+
+    def recover(self):
+
+        for round_r in self.path().glob("round_*"):
+            r = round_r.parts[-1][6:]
+
+            f = self.h5file
+
+            if r not in f.keys():
+
+                attr = {}
+                sti = StaticTrajectoryInfo.load(
+                    filename=self.path(r=r) / "static_trajectory_info.h5"
+                )
+
+                if (p := (self.path(r) / "bias")).exists():
+                    attr["name_bias"] = self.rel_path(p)
+
+                if (p := (self.path(r) / "engine")).exists():
+                    attr["name_bias"] = self.rel_path(p)
+
+                self.add_round(attr=attr, stic=sti, r=r)
+
+            for md_i in round_r.glob("md_*"):
+
+                i = md_i.parts[-1][3:]
+
+                if i in f[f"{r}"].keys():
+                    continue
+
+                tin = md_i / "trajectory_info.h5"
+
+                if not (tin).exists():
+                    if not (md_i / "bash_app_trajectory_info.h5").exists():
+                        continue
+                    else:
+                        tin = md_i / "bash_app_trajectory_info.h5"
+
+                traj = TrajectoryInfo.load(tin)
+                self.add_md(i=i, r=r, d=traj, attrs=None)
+
+    def add_md(self, i, d: TrajectoryInfo, attrs=None, bias: str | None = None, r=None):
         if r is None:
             r = self.round
 
         with self.lock:
-            print("enetered add")
-            print(f"{i} got lock file {self.h5file_name}")
-            f = self.h5file
-            print(f"{i} got hdf5 file")
 
+            f = self.h5file
             if f"{i}" not in f[f"{r}"]:
                 f.create_group(f"{r}/{i}")
-            if "trajectory_info" not in f[f"{r}/{i}"]:
-                f[f"{r}/{i}"].create_group("trajectory_info")
-                d._save(hf=f[f"{r}/{i}/trajectory_info"])
+
+            d.save(filename=self.path(r=r, i=i) / "trajectory_info.h5")
+
+            if attrs is None:
+                attrs = {}
+
+            if bias is not None:
+                attrs["name_bias"] = bias
 
             if attrs is not None:
                 for key, val in attrs.items():
@@ -149,15 +245,15 @@ class Rounds(ABC):
 
             f.flush()
 
-    def new_round(self, attr, stic: StaticTrajectoryInfo, r=None):
-
-        self.round += 1
-        self.i = 0
+    def add_round(self, stic: StaticTrajectoryInfo, r=None, attr=None):
 
         if r is None:
-            r = self.round
+            r = self.round + 1
 
-        dir = self.path(round=r)
+        if attr is None:
+            attr = {}
+
+        dir = self.path(r=r)
         if not dir.exists():
             dir.mkdir(parents=True)
 
@@ -169,17 +265,41 @@ class Rounds(ABC):
                 if attr[key] is not None:
                     f[f"{r}"].attrs[key] = attr[key]
 
-            f[f"{r}"].create_group("static_trajectory_info")
-            stic._save(hf=f[f"{r}/static_trajectory_info"])
+            stic.save(self.path(r=r) / "static_trajectory_info.h5")
 
             f[f"{r}"].attrs["num"] = 0
             f[f"{r}"].attrs["valid"] = True
 
             f.flush()
 
-        self.save()
+    def add_round_from_md(self, md: MDEngine):
 
-    def iter(self, start=None, stop=None, num=3) -> Iterable[tuple[Round, Trajectory]]:
+        r = self.round + 1
+
+        directory = self.path(r=r)
+        if not os.path.isdir(directory):
+            os.mkdir(directory)
+
+        name_md = directory / "engine"
+        name_bias = directory / "bias"
+        md.save(name_md)
+        md.bias.save(name_bias)
+        md.bias.collective_variable
+
+        attr = {}
+
+        attr["name_md"] = self.rel_path(name_md)
+        attr["name_bias"] = self.rel_path(name_bias)
+
+        self.add_round(attr=attr, stic=md.static_trajectory_info, r=r)
+
+    ######################################
+    #             retreiveal             #
+    ######################################
+
+    def iter(
+        self, start=None, stop=None, num=3
+    ) -> Iterable[tuple[RoundInformation, TrajectoryInformation]]:
         if stop is None:
             stop = self.round
 
@@ -188,167 +308,20 @@ class Rounds(ABC):
 
         for r0 in range(max(stop - (num - 1), start), stop + 1):
 
-            _r = self._get_r(r=r0)
+            _r = self.round_information(r=r0)
 
             if not _r.valid:
                 continue
 
             for i in range(_r.num):
-                _r_i = self._get_r_i(r=r0, i=i)
+                _r_i = self.get_trajectory_information(r=r0, i=i)
 
                 if not _r_i.valid:
                     continue
 
                 yield _r, _r_i
 
-    @dataclass
-    class Trajectory:
-        ti: TrajectoryInfo
-        valid: bool
-        round: int
-        num: int
-        folder: Path
-        name_bias: str | None = None
-
-        def get_bias(self) -> Bias:
-            assert self.name_bias is not None
-            return Bias.load(self.folder / self.name_bias)
-
-    def _get_r_i(self, r: int, i: int) -> Trajectory:
-
-        with self.lock:
-            f = self.h5file
-            d = f[f"{r}/{i}"]
-
-            ti = TrajectoryInfo._load(hf=d["trajectory_info"])
-            r_attr = {key: d.attrs[key] for key in d.attrs}
-
-            f.flush()
-
-        return Rounds.Trajectory(ti=ti, **r_attr, round=r, num=i, folder=self.folder)
-
-    @dataclass
-    class Round:
-        round: int
-        # names: list[str]
-        valid: bool
-        num: int
-        tic: StaticTrajectoryInfo
-        name_bias: str | None = None
-        name_md: str | None = None
-
-    def _get_r(self, r: int) -> Round:
-
-        with self.lock:
-            f = self.h5file
-
-            stic = StaticTrajectoryInfo._load(hf=f[f"{r}/static_trajectory_info"])
-
-            d = f[f"{r}"].attrs
-            r_attr = {key: d[key] for key in d}
-
-        return Rounds.Round(
-            round=int(r),
-            # names=names,
-            tic=stic,
-            **r_attr,
-        )
-
-    def _set_attr(self, name, value, r=None, i=None):
-
-        with self.lock:
-            f = self.h5file
-            if r is not None:
-                f2 = f[f"{r}"]
-            else:
-                f2 = f
-
-            if i is not None:
-                assert r is not None, "also provide round"
-                f2 = f[f"/{i}"]
-
-            f2.attrs[name] = value
-
-            f2.flush()
-
-    @property
-    def T(self):
-        return self._get_r(r=self.round).tic.T
-
-    @property
-    def P(self):
-        return self._get_r(r=self.round).tic.P
-
-    def n(self, r=None):
-        if r is None:
-            r = self.round
-        return self._get_r(r=self.round).num
-
-    def invalidate_data(self, r=None, i=None):
-        if r is None:
-            r = self.round
-
-        self._set_attr(name="valid", value=False, r=r, i=i)
-
-    def full_path(self, name) -> str:
-        return str(self.folder / Path(name))
-
-    def rel_path(self, name):
-        return str(Path(name).relative_to(self.folder))
-
-    def path(self, round=None, i=None) -> Path:
-        p = Path(self.folder)
-        if round is not None:
-            p /= f"round_{round}"
-            if i is not None:
-                p /= f"md_{i}"
-
-        return p
-
-
-class RoundsCV(Rounds):
-    """class for unbiased rounds."""
-
-
-class RoundsMd(Rounds):
-    """helper class to save/load all data in a consistent way.
-
-    Gets passed between modules
-    """
-
-    def __init__(self, folder="output") -> None:
-        super().__init__(folder=folder)
-
-    @staticmethod
-    def load(folder) -> RoundsMd:
-        return Rounds.load(folder=folder)
-
-    def _add(
-        self,
-        traj: TrajectoryInfo,
-        md: MDEngine,
-        bias: str,
-        i: int,
-        r: int | None = None,
-    ):
-        """adds all the saveble info of the md simulation."""
-
-        if i is None:
-            i = self.i
-            self.i += 1
-
-        self._validate(md)
-
-        attr = {}
-        attr["name_bias"] = bias
-
-        super().add(d=traj, attrs=attr, i=i, r=r)
-
-    def _validate(self, md: MDEngine):
-
-        pass
-
-    def iter_atoms(self, r: int | None = None, num: int = 3):
+    def iter_ase_atoms(self, r: int | None = None, num: int = 3):
 
         from molmod import angstrom
 
@@ -392,115 +365,120 @@ class RoundsMd(Rounds):
 
             yield atoms, round, trajejctory
 
-    def write_xyz(self, r: int | None = None, num: int = 1, repeat=None):
+    def get_trajectory_information(self, r: int, i: int) -> TrajectoryInformation:
 
-        from ase.io.extxyz import write_extxyz
+        with self.lock:
+            f = self.h5file
+            d = f[f"{r}/{i}"]
 
-        for i, (atoms, round, trajejctory) in enumerate(self.iter_atoms(r=r, num=num)):
-            with open(
-                self.path(round=round.round, i=trajejctory.num) / "trajectory.xyz",
-                mode="w",
-            ) as f:
-                if repeat is not None:
-                    atoms = [a.repeat(repeat) for a in atoms]
+            ti = TrajectoryInfo.load(self.path(r=r, i=i) / "trajectory_info.h5")
+            r_attr = {key: d.attrs[key] for key in d.attrs}
 
-                write_extxyz(f, atoms)
+            f.flush()
 
-    def new_round_from_md(self, md: MDEngine):
+        return TrajectoryInformation(
+            ti=ti, **r_attr, round=r, num=i, folder=self.folder
+        )
 
-        r = self.round + 1
+    def round_information(self, r: int) -> RoundInformation:
 
-        directory = self.path(round=r)
-        if not os.path.isdir(directory):
-            os.mkdir(directory)
+        with self.lock:
+            f = self.h5file
 
-        name_md = directory / "engine"
-        name_bias = directory / "bias"
-        md.save(name_md)
-        md.bias.save(name_bias)
+            folder = self.path(r=r)
 
-        attr = {}
+            stic = StaticTrajectoryInfo.load(folder / "static_trajectory_info.h5")
 
-        attr["name_md"] = self.rel_path(name_md)
-        attr["name_bias"] = self.rel_path(name_bias)
+            d = f[f"{r}"].attrs
+            r_attr = {key: d[key] for key in d}
 
-        super().new_round(attr=attr, stic=md.static_trajectory_info)
+        return RoundInformation(
+            round=int(r),
+            folder=folder,
+            tic=stic,
+            **r_attr,
+        )
+
+    ######################################
+    #           Properties               #
+    ######################################
+    def _set_attr(self, name, value, r=None, i=None):
+        with self.lock:
+            f = self.h5file
+            if r is not None:
+                f2 = f[f"{r}"]
+            else:
+                f2 = f
+
+            if i is not None:
+                assert r is not None, "also provide round"
+                f2 = f[f"/{i}"]
+
+            f2.attrs[name] = value
+
+            f2.flush()
+
+    def _get_attr(self, name, r=None, i=None):
+
+        with self.lock:
+            f = self.h5file
+            if r is not None:
+                f2 = f[f"{r}"]
+            else:
+                f2 = f
+
+            if i is not None:
+                assert r is not None, "also provide round"
+                f2 = f[f"/{i}"]
+
+            return f2.attrs[name]
+
+    @property
+    def T(self):
+        return self.round_information(r=self.round).tic.T
+
+    @property
+    def P(self):
+        return self.round_information(r=self.round).tic.P
+
+    @property
+    def round(self):
+        with self.lock:
+            f = self.h5file
+            return len(f.keys()) - 1
+
+    def n(self, r=None):
+        if r is None:
+            r = self.round
+        return self.round_information(r=self.round).num
+
+    def invalidate_data(self, r=None, i=None):
+        if r is None:
+            r = self.round
+
+        self._set_attr(name="valid", value=False, r=r, i=i)
+
+    def _validate(self, md: MDEngine):
+
+        pass
 
     def get_bias(self, r=None, i=None) -> Bias:
         if r is None:
             r = self.round
 
-        with self.lock:
-            f = self.h5file
-            if i is None:
-                bn = f[f"{r}"].attrs["name_bias"]
-            else:
-                bn = f[f"{r}"][i].attrs["name_bias"]
+        bn = self._get_attr("name_bias", r=r, i=i)
         return Bias.load(self.full_path(bn))
 
     def get_engine(self, r=None) -> MDEngine:
         if r is None:
             r = self.round
-        with self.lock:
 
-            f = self.h5file
-            name = f[f"{r}"].attrs["name_md"]
-
+        name = self._get_attr("name_bias", r=r)
         return MDEngine.load(self.full_path(name), filename=None)
 
-    def recover(self):
-        rounds = -1
-        self.round = -1
-
-        for round_r in self.path().glob("round_*"):
-            rounds += 1
-            r = round_r.parts[-1][6:]
-
-            f = self.h5file
-
-            if r not in f.keys():
-                assert (round_r / "bias").exists()
-                assert (round_r / "engine").exists()
-
-                attr = {}
-
-                attr["name_md"] = self.rel_path(round_r / "engine")
-                attr["name_bias"] = self.rel_path(round_r / "bias")
-
-                sti = MDEngine.load(
-                    self.full_path(round_r / "engine")
-                ).static_trajectory_info
-
-                directory = self.path(round=r)
-
-                super().new_round(attr=attr, stic=sti, r=r)
-
-            rr = self._get_r(r=r)
-            md = MDEngine.load(file=self.full_path(rr.name_md))
-
-            for md_i in round_r.glob("md_*"):
-
-                i = md_i.parts[-1][3:]
-
-                if i in f[f"{r}"].keys():
-                    continue
-
-                if not (md_i / "bias").exists():
-                    continue
-
-                tin = md_i / "trajectory_info.h5"
-
-                if not (tin).exists():
-                    if not (md_i / "bash_app_trajectory_info.h5").exists():
-                        continue
-                    else:
-                        tin = md_i / "bash_app_trajectory_info.h5"
-
-                traj = TrajectoryInfo.load(tin)
-
-                self._add(bias=self.rel_path(md_i / "bias"), traj=traj, md=md, i=i, r=r)
-
-        self.save()
+    ######################################
+    #          MD simulations            #
+    ######################################
 
     def run(self, bias, steps):
         self.run_par([bias], steps)
@@ -535,7 +513,7 @@ class RoundsMd(Rounds):
 
         for i, bias in enumerate(biases):
 
-            temp_name = self.path(round=self.round, i=i)
+            temp_name = self.path(r=self.round, i=i)
             if not os.path.exists(temp_name):
                 os.mkdir(temp_name)
 
@@ -634,87 +612,13 @@ class RoundsMd(Rounds):
                 tasks.append((i, future))
 
         assert tasks is not None
-        # wait for tasks to finish
 
+        # wait for tasks to finish
         for i, future in tasks:
             d = future.result()
-            self._add(
-                traj=d,
-                md=md_engine,
-                bias=future.outputs[0].filename,
-                i=i,
-            )
+            self.add_md(d=d, bias=future.outputs[0].filename, i=i)
 
+        # wait for plots to finish
         if plot:
             for future in plot_tasks:
                 d = future.result()
-
-        self.i += len(tasks)
-
-    def grid_points(self, cvs, map=True, r=None):
-        """finds systemparams that with cv that are close to given CV"""
-
-    def unbias_rounds(self, steps=1e5, num=1e7, calc=False) -> RoundsCV:
-        raise NotImplementedError
-        md = self.get_engine()
-        if self.n() > 1 or isinstance(self.get_bias(), NoneBias) or calc:
-            from IMLCV.base.Observable import ThermoLIB
-
-            obs = ThermoLIB(self)
-            fesBias = obs.fes_bias(plot=True)
-
-            md = md.new_bias(fesBias, filename=None, write_step=5)
-            self.new_round(md)
-
-        if self.n() == 0:
-            self.run(None, steps)
-
-        # construct rounds object
-        r = self._get_r_i(self.round, 0)
-        props = self._get_r(self.round)
-        beta = 1 / (props["T"] * boltzmann)
-        bias = Bias.load(r["attr"]["name_bias"])
-
-        p = r["positions"][:]
-        c = r.get("cell")
-        t_orig = r["t"][:]
-
-        def _interp(x_new, x, y):
-            if y is not None:
-                return jnp.apply_along_axis(
-                    lambda yy: jnp.interp(x_new, x, yy), arr=y, axis=0
-                )
-            return None
-
-        def bt(x, x_orig):
-            pt = partial(_interp, x=x_orig, y=p)
-            ct = partial(_interp, x=x_orig, y=c)
-            return bias.compute_coor(coordinates=pt(x), cell=ct(x))[0]
-
-        bt = jnp.vectorize(bt, excluded=[1])
-
-        def integr(fx, x):
-            return np.array([0, *np.cumsum((fx[1:] + fx[:-1]) * (x[1:] - x[:-1]) / 2)])
-
-        t = t_orig[:]
-        eb = np.exp(-beta * bt(t, t_orig))
-        tau = integr(1 / eb, t)
-        tau_new = np.linspace(start=0.0, stop=tau.max(), num=int(num))
-
-        p_new = _interp(tau_new, tau, r["positions"])
-        c_new = _interp(tau_new, tau, r.get("cell"))
-
-        roundscv = RoundsCV(f"{self.folder}_unbiased")
-        roundscv.new_round(props)
-        roundscv.add(
-            0,
-            TrajectoryInfo(
-                e_pot=None,
-                positions=p_new,
-                gpos=None,
-                cell=c_new,
-                t=tau_new,
-            ),
-        )
-
-        return roundscv

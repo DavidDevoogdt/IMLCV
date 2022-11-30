@@ -33,7 +33,7 @@ from IMLCV.base.CV import (
     scale_cv_trans,
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
-from IMLCV.base.rounds import RoundsMd
+from IMLCV.base.rounds import Rounds
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
 
 plt.rcParams["text.usetex"] = True
@@ -451,7 +451,7 @@ class CVDiscovery:
         self.transformer = transformer
 
     def _get_data(
-        self, rounds: RoundsMd, num=4, out=1e4
+        self, rounds: Rounds, num=4, out=1e4
     ) -> tuple[SystemParams, CV, jax.Array, CollectiveVariable, StaticTrajectoryInfo]:
 
         weights = []
@@ -511,7 +511,7 @@ class CVDiscovery:
 
     def compute(
         self,
-        rounds: RoundsMd,
+        rounds: Rounds,
         num_rounds=4,
         samples=3e3,
         plot=True,

@@ -722,11 +722,10 @@ class CV:
             cv_arr.append(cv.batch().cv)
             stack_dims += cv.stack_dims
 
-        assert mapped is not None
+        assert mapped is False
 
         return CV(
             cv=jnp.vstack(cv_arr),
-            mapped=mapped,
             _combine_dims=in_dims,
             _stack_dims=stack_dims,
         )
@@ -1345,12 +1344,6 @@ class CollectiveVariable:
     @partial(jit, static_argnums=(0, 2))
     def compute_cv(self, sp: SystemParams, jacobian=False) -> tuple[CV, CV]:
 
-        # if map:
-
-        #     def cvf(x):
-        #         return self.metric.__map(self.f.compute_cv_flow(x))
-
-        # else:
         cvf = self.f.compute_cv_flow
 
         if sp.batched:
@@ -1503,7 +1496,12 @@ def dihedral(numbers):
 
 
 def sb_descriptor(
-    r_cut, sti: StaticTrajectoryInfo, z1: int | None = None, z2: int | None = None
+    r_cut,
+    sti: StaticTrajectoryInfo,
+    n_max: int,
+    l_max: int,
+    z1: int | None = None,
+    z2: int | None = None,
 ):
 
     from IMLCV.base.tools.soap_kernel import p_i, p_inl_sb
@@ -1514,7 +1512,7 @@ def sb_descriptor(
         return p_i(
             sp=sp,
             sti=sti,
-            p=p_inl_sb,
+            p=p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max),
             r_cut=r_cut,
             z1=z1,
             z2=z2,

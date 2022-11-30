@@ -109,6 +109,16 @@ class StaticTrajectoryInfo:
             if prop is not None:
                 hf.attrs[name] = prop
 
+    def save(self, filename: str | Path):
+        if isinstance(filename, str):
+            filename = Path(filename)
+
+        if not filename.parent.exists():
+            filename.parent.mkdir(parents=True, exist_ok=True)
+
+        with h5py.File(str(filename), "w") as hf:
+            self._save(hf=hf)
+
     @staticmethod
     def _load(hf: h5py.File) -> StaticTrajectoryInfo:
         props_static = {}
@@ -121,6 +131,12 @@ class StaticTrajectoryInfo:
             attrs_static[key] = val
 
         return StaticTrajectoryInfo(**attrs_static, **props_static)
+
+    @staticmethod
+    def load(filename) -> StaticTrajectoryInfo:
+
+        with h5py.File(str(filename), "r") as hf:
+            return StaticTrajectoryInfo._load(hf=hf)
 
 
 @dataclass
@@ -247,11 +263,6 @@ class TrajectoryInfo:
 
         hf.attrs.create("_capacity", self._capacity)
         hf.attrs.create("_size", self._size)
-
-        # if self.static_info is not None:
-
-        #     hf.create_group("static_info")
-        #     self.static_info._save(hf=hf["static_info"])
 
     @staticmethod
     def load(filename) -> TrajectoryInfo:

@@ -31,7 +31,7 @@ def func(name):
     import os
     import shutil
 
-    from IMLCV.base.rounds import RoundsMd
+    from IMLCV.base.rounds import Rounds
     from IMLCV.external.parsl_conf.config import config
     from IMLCV.test.common import ase_yaff
 
@@ -41,8 +41,8 @@ def func(name):
         shutil.rmtree(f"output/{name}")
 
     engine = ase_yaff(file)
-    round = RoundsMd(folder=f"output/{name}")
-    round.new_round(md=engine)
+    round = Rounds(folder=f"output/{name}")
+    round.add_round(md=engine)
     round.run_par([None for _ in range(10)], steps=1000)
 
     round.write_xyz()
