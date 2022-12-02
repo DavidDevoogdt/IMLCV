@@ -18,7 +18,7 @@ def f(recalc=False):
         scheme = Scheme.from_rounds(path, copy=True)
     else:
         scheme = Scheme(folder=path, Engine=alanine_dipeptide_yaff())
-        scheme.round(K=10 * kjmol / 6.14**2, n=6, steps=2000)
+        scheme.round(K=10 * kjmol / 6.14**2, n=8, steps=2000)
 
 
 def test_recon():
@@ -29,11 +29,13 @@ def test_recon():
 
     for a, b in rounds.iter(num=2):
         if desc is None:
-            desc = sb_descriptor(r_cut=5 * angstrom, sti=a.tic, n_max=5, l_max=5)
-        cv += [desc.compute_cv_flow(b.ti.sp)]
+            desc = sb_descriptor(r_cut=3 * angstrom, sti=a.tic, n_max=3, l_max=2)
+
+        out = desc.compute_cv_flow(b.ti.sp)
+        cv += [out]
     cv_tot = CV.stack(*cv)
 
 
 if __name__ == "__main__":
-    f(recalc=True)
+    # f()
     test_recon()

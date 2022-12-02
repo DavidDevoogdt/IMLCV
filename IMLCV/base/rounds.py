@@ -416,7 +416,7 @@ class Rounds(ABC):
 
             f2.attrs[name] = value
 
-            f2.flush()
+            f.flush()
 
     def _get_attr(self, name, r=None, i=None):
 
@@ -457,10 +457,6 @@ class Rounds(ABC):
             r = self.round
 
         self._set_attr(name="valid", value=False, r=r, i=i)
-
-    def _validate(self, md: MDEngine):
-
-        pass
 
     def get_bias(self, r=None, i=None) -> Bias:
         if r is None:

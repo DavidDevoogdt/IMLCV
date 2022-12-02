@@ -9,13 +9,15 @@ import jax.numpy.linalg
 import jax.random
 import jax.scipy
 import matplotlib.pyplot as plt
-from jax import jacfwd, jit, lax, vmap
+import scipy.special
+from jax import Array, jacfwd, jit, lax, vmap
 from scipy.optimize import root
 from scipy.spatial.transform import Rotation as R
-from scipy.special import jn_zeros, spherical_jn
 from tensorflow_probability.substrates import jax as tfp
 
-from IMLCV.base.tools.bessel_callback import spherical_jv
+from IMLCV.base.tools.bessel_callback import spherical_jn
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import StaticTrajectoryInfo
 
 
 @jit
@@ -49,15 +51,6 @@ def legendre(x, n):
     )
 
 
-from jax.config import config
-
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import StaticTrajectoryInfo
-
-config.update("jax_debug_nans", True)
-
-
-@partial(jit, static_argnums=(1, 2, 4, 5))
 def p_i(
     sp: SystemParams,
     sti: StaticTrajectoryInfo | None,
@@ -74,38 +67,46 @@ def p_i(
     """
     # with jax.disable_jit():
 
+    if sp.batched:
+        return vmap(
+            lambda x: p_i(
+                sp=x,
+                sti=sti,
+                p=p,
+                r_cut=r_cut,
+                z1=z1,
+                z2=z2,
+            )
+        )(sp)
+
     if sp.cell is not None:
         sp.minkowski_reduce()
 
+    mask1 = None
     if z1 is not None:
         assert sti is not None
         assert sti.atomic_numbers is not None
-        sp_z1 = sp[sti.atomic_numbers == z1]
-    else:
+        mask1 = sti.atomic_numbers == z1
+
+    mask2 = None
+    if z2 is not None:
         assert sti is not None
         assert sti.atomic_numbers is not None
-        sp_z1 = sp
+        mask2 = sti.atomic_numbers == z2
 
-    if z2 is not None:
-        sp_z2 = sp[sti.atomic_numbers == z2]
-    else:
-        sp_z2 = sp
+    k, val = sp.apply_fun_neighbourgh_pairs(
+        r_cut=r_cut,
+        g=p,
+        center_coordiantes=sp.coordinates,
+        mask1=mask1,
+        mask2=mask2,
+    )
 
-    k, val = vmap(
-        jit(
-            lambda coor: sp_z1.apply_fun_neighbourgh_pairs(
-                r_cut=r_cut,
-                center_coordiantes=coor,
-                g=p,
-            )
-        )
-    )(sp_z2.coordinates)
-
-    # normalize
     return jnp.einsum("i...,i->i...", val, 1 / vmap(jnp.linalg.norm)(val))
 
 
 @partial(vmap, in_axes=(0, None, None), out_axes=0)
+@jit
 def lengendre_l(l, pj, pk):
     cos_theta = jnp.dot(pj, pk) / (jnp.linalg.norm(pj) * jnp.linalg.norm(pk))
     return legendre(cos_theta, l)
@@ -174,6 +175,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     U = jnp.diag(jnp.sqrt(L)) @ V.T
     U_inv_nm = jnp.linalg.pinv(U)
 
+    @jit
     def _p_i_soap_2(p_ij, p_ik, atom_index_j, atom_index_k):
         r_ij = jnp.linalg.norm(p_ij)
         r_ik = jnp.linalg.norm(p_ik)
@@ -197,10 +199,16 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     def spherical_jn_zeros(n, m):
         def fn(x):
-            return spherical_jn(n, x)
+            return scipy.special.spherical_jn(n, x)
 
         return jnp.array(
-            [root(fn, x0).x[0] for x0 in (jn_zeros(n + 1, m) + jn_zeros(n, m)) / 2]
+            [
+                root(fn, x0).x[0]
+                for x0 in (
+                    scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)
+                )
+                / 2
+            ]
         )
 
     def show_spherical_jn_zeros(n, m, ngrid=100):
@@ -219,26 +227,10 @@ def p_inl_sb(l_max, n_max, r_cut):
         [plt.axvline(x0, color="b") for x0 in zeros_guess]
         plt.axhline(0, color="k")
 
-    # uln is the (n + 1)th nonzero root of jl(r),
-    u_ln = jnp.array([spherical_jn_zeros(n, l_max) for n in range(n_max + 1)])
+    u_ln = jnp.array([spherical_jn_zeros(n, l_max + 2) for n in range(n_max + 2)]).T
 
-    @partial(vmap, in_axes=(None, 0, None), out_axes=0)
-    def f_nl(n, l, r):
-
-        a_nl = u_ln[l, n + 1] / spherical_jv(l + 1, u_ln[l, n])
-        b_nl = u_ln[l, n] / spherical_jv(l + 1, u_ln[l, n + 1])
-        norm_nl = jnp.sqrt(2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3)
-
-        return (
-            a_nl * spherical_jv(l, r * u_ln[l, n] / r_cut)
-            + b_nl * spherical_jv(l, r * u_ln[l, n + 1] / r_cut)
-        ) * norm_nl
-
-    l_vec = jnp.arange(l_max + 1)
-    n_vec = jnp.arange(n_max + 1)
-
-    @partial(vmap, in_axes=(0, None), out_axes=0)
-    def e_nl(l, n):
+    def e(x):
+        n, l = x
         return (
             u_ln[l, n - 1] ** 2
             * u_ln[l, n + 1] ** 2
@@ -248,23 +240,71 @@ def p_inl_sb(l_max, n_max, r_cut):
             )
         )
 
-    def g_nl(r):
+    def a(x):
+        n, l = x
+        return u_ln[l, n + 1] / spherical_jn(l + 1, u_ln[l, n])
 
-        d_xl = 1
-        g_xl = None
+    def b(x):
+        n, l = x
+        return u_ln[l, n] / spherical_jn(l + 1, u_ln[l, n + 1])
 
-        for n in range(n_max):
+    def norm(x):
+        n, l = x
+        return (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3) ** (0.5)
+
+    mlg = jnp.array(jnp.meshgrid(jnp.arange(l_max + 2), jnp.arange(n_max + 2)))
+    e_nl = jnp.apply_along_axis(func1d=e, axis=0, arr=mlg)
+    a_nl = jnp.apply_along_axis(func1d=a, axis=0, arr=mlg)
+    b_nl = jnp.apply_along_axis(func1d=b, axis=0, arr=mlg)
+    norm_nl = jnp.apply_along_axis(func1d=norm, axis=0, arr=mlg)
+
+    @partial(vmap, in_axes=(None, 0, None))
+    def f_nl(n, l, r):
+        return (
+            a_nl[n, l] * spherical_jn(l, r * u_ln[l, n] / r_cut)
+            + b_nl[n, l] * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
+        ) * norm_nl[n, l]
+
+    l_list = list(range(l_max + 1))
+    l_vec = jnp.array(l_list)
+    n_vec = jnp.arange(n_max + 1)
+
+    @jit
+    def g_nl(r: Array):
+        def body(args, n):
+
             fnl = f_nl(n, l_vec, r)
-            if g_xl is None:  # n=0
-                g_xl = [fnl]
-                continue
-            enl = e_nl(l_vec, n)
 
-            d_xl = 1 - enl / d_xl
-            g_xl.append(1 / jnp.sqrt(d_xl) * (fnl + jnp.sqrt(enl / d_xl) * g_xl[-1]))
+            def inner(args):
+                d_xl, g_xl = args
 
-        return jnp.array(g_xl)
+                enl = e_nl[n, l_vec]
+                d_xl = 1 - e_nl[n, l_vec] / d_xl
+                g_xl = 1 / jnp.sqrt(d_xl) * (fnl + jnp.sqrt(enl / d_xl) * g_xl)
 
+                return (d_xl, g_xl), g_xl
+
+            def first(args):
+                return (args[0], fnl), fnl
+
+            return jax.lax.cond(n == 0, first, inner, args)
+
+        init = (lambda o: jnp.ones(shape=o.shape, dtype=o.dtype))(
+            jax.eval_shape(f_nl, 0, l_vec, r)
+        )
+
+        _, out = lax.scan(
+            f=body,
+            init=(
+                init,
+                init,
+            ),
+            xs=jnp.arange(n_max),
+        )
+
+        return out
+
+    @jit
     def _p_i_sb_2(p_ij, p_ik, atom_index_j, atom_index_k):
         r_ij = jnp.linalg.norm(p_ij)
         r_ik = jnp.linalg.norm(p_ik)
@@ -279,7 +319,7 @@ def p_inl_sb(l_max, n_max, r_cut):
             return lax.cond(
                 l <= n,
                 lambda: a[n - l, l],
-                lambda: 0.0,
+                lambda: jnp.zeros_like(a[0, 0]),
             )
 
         g_nml_l_j = a_nml_l(n_vec, l_vec, a_jnl)

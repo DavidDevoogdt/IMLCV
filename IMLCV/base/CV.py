@@ -123,10 +123,10 @@ class SystemParams:
     def apply_fun_neighbourghs(
         self,
         r_cut,
-        center_coordiantes=jnp.zeros(3),
+        center_coordiantes: Array | None = jnp.zeros(3),
+        disable_center_map=False,
         g=lambda r_ij, atom_index_j: 1,
         exclude_self=True,
-        op=lambda a, b: a + b,
     ):
         """
 
@@ -137,59 +137,68 @@ class SystemParams:
             raise NotImplementedError
 
         sp = self.canoncialize()
-        center_coordiantes = SystemParams._wrap_pos(
-            cell=sp.cell, coordinates=center_coordiantes
-        )
+        if center_coordiantes is None:
+            center_coordiantes = sp.coordinates
 
-        @jit
-        def apply_g(farg, ijk=None):
-            if ijk is not None:
-                i, j, k = ijk
+        assert len(center_coordiantes.shape) <= 3
+        assert center_coordiantes.shape[-1] == 3
+        if len(center_coordiantes.shape) == 3:
+            assert sp.batched
+            assert sp.shape[0] == center_coordiantes.shape[0]
 
-            @jit
-            def _f(atom_index_j, farg, ijk):
-                c = self.coordinates[atom_index_j]
-                if ijk is not None:
-                    pos = c + jnp.array([i, j, k]) @ sp.cell
-                else:
-                    pos = c
-                r_ij = pos - center_coordiantes
-                norm = jnp.linalg.norm(r_ij)
+        def apply_g_inner(pos: Array, center_coordinates: Array):
 
-                def true_fun():
-                    out = g(r_ij, atom_index_j)
-                    if len(farg) > 2:
-                        return farg[0] + 1, *[op(a, b) for a, b in zip(farg[1:], out)]
-                    return farg[0] + 1, op(farg[1], out)
+            r_ij = pos - center_coordinates
+            norm = jnp.linalg.norm(r_ij, axis=1)
+            index_j = jnp.ones_like(norm).cumsum() - 1
 
-                return jax.lax.cond(
-                    jnp.logical_and(norm < r_cut, norm != 0.0),
-                    true_fun,
-                    lambda: farg,
-                )
+            @vmap
+            def g_map(r_ij, index_j):
+                return g(r_ij, index_j)
 
-            farg = jax.lax.fori_loop(
-                0,
-                self.coordinates.shape[0],
-                lambda at_ind, farg: _f(atom_index_j=at_ind, farg=farg, ijk=ijk),
-                init_val=farg,
+            bools = jnp.logical_and(norm < r_cut, norm != 0.0)
+
+            if sp.batched:
+                g_map = vmap(g_map)
+
+            out_true = g_map(r_ij, index_j)
+            out_false = jax.tree_map(
+                jnp.zeros_like,
+                out_true,
             )
 
-            if ijk is None:
-                return farg
-            else:
-                return j, (i, farg)
+            def choose(bool, fm, ov):
+                # reduce
+                @vmap
+                def f(bool, fm, ov):
+                    return jax.lax.cond(bool, lambda: fm, lambda: ov)
 
-        out = jax.eval_shape(g, jnp.zeros(3), 0)
-        if not isinstance(out, jax.ShapeDtypeStruct):
-            init_val = (0, *[jnp.zeros(shape=o.shape, dtype=o.dtype) for o in out])
-        else:
-            init_val = (0, jnp.zeros(shape=out.shape, dtype=out.dtype))
+                out = f(bool, fm, ov)
 
-        if self.cell is None:
-            return apply_g(init_val)
+                out = jax.tree_map(lambda x: jnp.sum(x, axis=0), out)
+                return jnp.sum(bools), out
 
-        else:
+            if sp.batched:
+                choose = vmap(choose)
+
+            n, vals = choose(
+                bools,
+                out_true,
+                out_false,
+            )
+
+            return n, vals
+
+        def call_g(sp: SystemParams, center_coordinates):
+
+            if self.cell is None:
+                return apply_g_inner(sp.coordinates, center_coordinates)
+
+            init_val = jax.tree_map(
+                lambda o: jnp.zeros(shape=o.shape, dtype=o.dtype),
+                jax.eval_shape(apply_g_inner, sp.coordinates, center_coordinates),
+            )
+
             # unit cell angles are in range [45,135] degrees
             _, r = jnp.linalg.qr(sp.cell.T)
 
@@ -200,84 +209,139 @@ class SystemParams:
             bounds = jnp.array([jnp.floor(-bounds), jnp.ceil(bounds) + 1]).T
 
             # loop over combinations of unit cell vectors
+            def i_loop(i, farg):
+                def j_loop(j, farg):
+                    def k_loop(k, farg):
+                        @vmap
+                        def get_pos(c):
+                            return c + jnp.array([i, j, k]) @ sp.cell
+
+                        n, vals = apply_g_inner(
+                            get_pos(sp.coordinates), center_coordinates
+                        )
+                        farg = (
+                            farg[0] + n,
+                            jax.tree_map(lambda x, y: x + y, farg[1], vals),
+                        )
+                        return farg
+
+                    return jax.lax.fori_loop(
+                        lower=bounds[2, 0],
+                        upper=bounds[2, 1],
+                        body_fun=k_loop,
+                        init_val=farg,
+                    )
+
+                return jax.lax.fori_loop(
+                    lower=bounds[1, 0],
+                    upper=bounds[1, 1],
+                    body_fun=j_loop,
+                    init_val=farg,
+                )
+
             return jax.lax.fori_loop(
                 lower=bounds[0, 0],
                 upper=bounds[0, 1],
-                body_fun=lambda i, farg: jax.lax.fori_loop(
-                    lower=bounds[1, 0],
-                    upper=bounds[1, 1],
-                    body_fun=lambda j, i_farg: jax.lax.fori_loop(
-                        lower=bounds[2, 0],
-                        upper=bounds[2, 1],
-                        body_fun=lambda k, j_i_farg: apply_g(
-                            farg=j_i_farg[1][1], ijk=(j_i_farg[1][0], j_i_farg[0], k)
-                        ),
-                        init_val=(j, i_farg),
-                    )[1],
-                    init_val=(i, farg),
-                )[1],
+                body_fun=i_loop,
                 init_val=init_val,
             )
+
+        if len(center_coordiantes.shape) >= 2 and not disable_center_map:
+            call_g = vmap(call_g, in_axes=(None, -2))
+
+        if sp.batched:
+            call_g = vmap(call_g)
+
+        return call_g(sp, center_coordiantes)
 
     def apply_fun_neighbourgh_pairs(
         self,
         r_cut,
-        center_coordiantes=jnp.zeros(3),
+        center_coordiantes: Array | None = jnp.zeros((3,)),
+        disable_center_map=False,
         g=lambda r_ij, r_ik, atom_index_j, atom_index_k: 1,
         exclude_self=True,
-        sp2: SystemParams | None = None,
+        mask1=None,
+        mask2=None,
     ):
         """
         function that loops over all pairs of atoms within cutoff radius.
 
         if sp2 is none, all pairs with itself are made, otherwise all pairs with sp2
-        """
 
+        center_coordinates
+
+        """
         sp = self.canoncialize()
 
-        if sp2 is None:
-            sp2 = sp
-        else:
-            sp2 = sp2.canoncialize()
-
-        out = jax.eval_shape(g, jnp.zeros(3), jnp.zeros(3), 0, 0)
-        if not isinstance(out, jax.ShapeDtypeStruct):
-            init_val = (0, *[jnp.zeros(shape=o.shape, dtype=o.dtype) for o in out])
-        else:
-            init_val = (0, jnp.zeros(shape=out.shape, dtype=out.dtype))
+        if center_coordiantes is None:
+            center_coordiantes = sp.coordinates
 
         @jit
         def h(r_ij, r_ik, atom_index_j, atom_index_k):
-            def true_fun():
-                out = g(r_ij, r_ik, atom_index_j, atom_index_k)
+            nonlocal g
 
-                if len(init_val) > 2:
-                    return (1, *out)
-                return (1, out)
-
-            return jax.lax.cond(
-                jnp.linalg.norm(r_ij - r_ik) != 0.0,
-                true_fun,
-                lambda: init_val,
+            bools = jnp.logical_and(
+                jnp.logical_and(
+                    jnp.linalg.norm(r_ij - r_ik) != 0.0,
+                    jnp.linalg.norm(r_ij) != 0.0,
+                ),
+                jnp.linalg.norm(r_ik) != 0.0,
             )
 
-        @jit
-        def f(r_ij, atom_index_j):
-            return sp2.apply_fun_neighbourghs(
+            fun_true = g(r_ij, r_ik, atom_index_j, atom_index_k)
+            fun_false = jax.tree_map(jnp.zeros_like, fun_true)
+
+            choose = lambda x, y, z: (x * 1, jax.lax.cond(x, lambda: y, lambda: z))
+
+            return choose(bools, fun_true, fun_false)
+
+        def apply(center_coordiantes: Array, sp: SystemParams):
+
+            if mask1 is not None:
+                sp1 = sp[mask1]
+            else:
+                sp1 = sp
+
+            if mask2 is not None:
+                sp2 = sp[mask2]
+            else:
+                sp2 = sp
+
+            @jit
+            def f(r_ij, atom_index_j):
+                a = sp2.apply_fun_neighbourghs(
+                    r_cut,
+                    center_coordiantes=center_coordiantes,
+                    g=lambda r_ik, atom_index_k: h(
+                        r_ij, r_ik, atom_index_j, atom_index_k
+                    ),
+                    disable_center_map=True,
+                    exclude_self=exclude_self,
+                )
+
+                return a
+
+            i, (j, (k, val)) = sp1.apply_fun_neighbourghs(
                 r_cut,
                 center_coordiantes=center_coordiantes,
-                g=lambda r_ik, atom_index_k: h(r_ij, r_ik, atom_index_j, atom_index_k),
+                g=f,
+                disable_center_map=True,
                 exclude_self=exclude_self,
             )
 
-        i, j, k, val = sp.apply_fun_neighbourghs(
-            r_cut,
-            center_coordiantes=center_coordiantes,
-            g=f,
-            exclude_self=exclude_self,
-        )
+            return k, val
 
-        return k, val
+        vmap_centers = len(center_coordiantes.shape) >= 2 and not disable_center_map
+        if vmap_centers:
+            apply = vmap(apply, in_axes=(-2, None))
+
+        if sp.batched:
+            apply = vmap(apply)
+
+        out = apply(center_coordiantes, sp)
+
+        return out
 
     def minkowski_reduce(self) -> SystemParams:
         """base on code from ASE: https://wiki.fysik.dtu.dk/ase/_modules/ase/geometry/minkowski_reductsp.cellion.html#minkowski_reduce"""
@@ -550,23 +614,22 @@ class SystemParams:
 
         return SystemParams(coordinates=self.coordinates, cell=cell)
 
-    def wrap_positions(self, coordinates: Array | None = None) -> SystemParams:
+    def wrap_positions(self) -> SystemParams:
         """wrap pos to lie within unit cell"""
-        assert self.batched is False
 
-        if self.cell is None:
-            return self
-
-        if coordinates is None:
-            coordinates = self.coordinates
+        f = lambda x, y: SystemParams._wrap_pos(cell=x, coordinates=y)
+        if self.batched:
+            f = vmap(f)
 
         return SystemParams(
-            coordinates=SystemParams._wrap_pos(cell=self.cell, coordinates=coordinates),
+            coordinates=f(self.cell, self.coordinates),
             cell=self.cell,
         )
 
     @staticmethod
-    def _wrap_pos(cell: Array, coordinates: Array) -> Array:
+    def _wrap_pos(cell: Array | None, coordinates: Array) -> Array:
+        if cell is None:
+            return coordinates
 
         scaled = jnp.linalg.solve(cell.T, coordinates.T).T
         reduced = jnp.mod(scaled, 1)
@@ -722,7 +785,7 @@ class CV:
             cv_arr.append(cv.batch().cv)
             stack_dims += cv.stack_dims
 
-        assert mapped is False
+        assert mapped is not None
 
         return CV(
             cv=jnp.vstack(cv_arr),
@@ -1186,6 +1249,8 @@ class CvTrans:
         result is always batched
         arg: CV
         """
+        if x.batched:
+            return vmap(self.compute_cv_trans)(x, reverse, log_Jf)
 
         ordered = reversed(self.trans) if reverse else self.trans
 
@@ -1262,11 +1327,11 @@ class CvFlow:
         self,
         func: Callable[[SystemParams], CV],
         trans: CvTrans | None = None,
-        batched=False,
+        # batched=False,
     ) -> None:
         self.f0 = func
         self.f1 = trans
-        self.batched = batched
+        # self.batched = batched
 
     @staticmethod
     def from_function(f: Callable[[SystemParams], Array]) -> CvFlow:
@@ -1278,14 +1343,13 @@ class CvFlow:
 
     @partial(jit, static_argnums=(0,))
     def compute_cv_flow(self, x: SystemParams) -> CV:
+        if x.batched:
+            return vmap(jit(self.compute_cv_flow))(x)
 
-        out = vmap(self.f0)(x.batch())
+        out = self.f0(x)
 
         if self.f1 is not None:
             out, _ = self.f1.compute_cv_trans(out)
-
-        if not x.batched:
-            out = out.unbatch()
 
         return out
 
@@ -1508,8 +1572,7 @@ def sb_descriptor(
 
     @CvFlow.from_function
     def f(sp: SystemParams):
-
-        return p_i(
+        out = p_i(
             sp=sp,
             sti=sti,
             p=p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max),
@@ -1517,6 +1580,18 @@ def sb_descriptor(
             z1=z1,
             z2=z2,
         )
+
+        # only lower triangluar values are nonzero
+        to_lower = lambda o: o[jnp.tril_indices_from(o)]
+        to_lower = vmap(to_lower)  # batch over different atoms
+        if sp.batched:
+            to_lower = vmap(to_lower)  # bach
+
+        out = to_lower(out)
+
+        if sp.batched:
+            return jnp.reshape(out, (sp.shape[0], -1))
+        return jnp.reshape(out, (-1))
 
     return f
 

@@ -1,7 +1,10 @@
+from functools import partial
+
 import jax.lax
 import jax.numpy as jnp
 import scipy.special
-from jax import custom_jvp, pure_callback, vmap
+from jax import Array, custom_jvp, jit, pure_callback
+
 
 # see https://github.com/google/jax/issues/11002
 
@@ -9,12 +12,13 @@ from jax import custom_jvp, pure_callback, vmap
 def generate_bessel(function):
     """function is Jv, Yv, Hv_1,Hv_2"""
 
-    @custom_jvp
+    @partial(custom_jvp, nondiff_argnums=(0))
+    @partial(jit, static_argnums=(0))
     def cv(v, x):
         return pure_callback(
-            lambda vx: function(*vx),
+            lambda x: function(v, x),
             x,
-            (v, x),
+            x,
             vectorized=True,
         )
 
@@ -45,13 +49,14 @@ hankel2 = generate_bessel(scipy.special.hankel2)
 def generate_modified_bessel(function, sign):
     """function is Kv and Iv"""
 
-    @custom_jvp
-    def cv(v, x):
+    @partial(custom_jvp, nondiff_argnums=(0))
+    @partial(jit, static_argnums=(0))
+    def cv(v: float, x: Array):
         return pure_callback(
-            lambda vx: function(*vx),
+            lambda x: function(v, x),
             x,
-            (v, x),
-            vectorized=True,
+            x,
+            vectorized=False,
         )
 
     @cv.defjvp
@@ -77,16 +82,41 @@ iv = generate_modified_bessel(scipy.special.iv, sign=+1)
 
 
 def spherical_bessel_genearator(f):
-    def g(v, x):
-        return f(v + 0.5, x) * jnp.sqrt(jnp.pi / (2 * x))
+    @custom_jvp
+    def cv(v: int, x: Array):
+        y = x.astype(jnp.float64)
 
-    return g
+        out = pure_callback(
+            f,
+            y,
+            v,
+            y,
+            vectorized=True,
+        )
+
+        return out
+
+    @cv.defjvp
+    def cv_jvp(primals, tangents):
+        v, x = primals
+        dv, dx = tangents
+
+        primal_out = cv(v, x)
+
+        # https://dlmf.nist.gov/10.51
+
+        if v == 0:
+            tangents_out = -cv(v + 1, x)
+        else:
+            tangents_out = cv(v - 1, x) - (v + 1) / x * primal_out
+
+        return primal_out, tangents_out * dx
+
+    return cv
 
 
-spherical_jv = spherical_bessel_genearator(jv)
-spherical_yv = spherical_bessel_genearator(yv)
-spherical_hankel1 = spherical_bessel_genearator(hankel1)
-spherical_hankel2 = spherical_bessel_genearator(hankel2)
+spherical_jn = spherical_bessel_genearator(scipy.special.spherical_jn)
+spherical_yn = spherical_bessel_genearator(scipy.special.spherical_yn)
 
 if __name__ == "__main__":
 
@@ -96,15 +126,21 @@ if __name__ == "__main__":
 
     # a = jax.grad(lambda z: jv(2.0, z))(jnp.array(5.0))
 
+    # for func, name in zip(
+    #     [jv, yv, iv, kv, spherical_jn, spherical_yn],
+    #     ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv"],
+    # ):
+
     for func, name in zip(
-        [jv, yv, iv, kv, spherical_jv, spherical_yv],
-        ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv"],
+        [spherical_jn, spherical_yn],
+        [" spherical_jv", "spherical_yv"],
     ):
 
         plt.figure()
 
         for i in range(5):
-            y = vmap(func, in_axes=(None, 0))(i, x)
+
+            y = func(jnp.array(i), x)
             plt.plot(x, y, label=i)
 
         plt.ylim([-1.1, 1.1])

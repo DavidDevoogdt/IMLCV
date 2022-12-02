@@ -23,7 +23,7 @@ ROOT_DIR = Path(os.path.dirname(__file__)).parent
 KEY = random.PRNGKey(0)
 
 if "mpi4py" in sys.modules:
-    warning("mpi4py doens't work wel lwith cp2k calc atm")
+    warning("mpi4py doens't work well with cp2k calc atm")
 
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
@@ -100,6 +100,8 @@ if not GPU:
     jax.config.update("jax_platform_name", "cpu")
     tf.config.experimental.set_visible_devices([], "GPU")
 # jax.config.update('jax_disable_jit', True)
+
+jax.config.update("jax_enable_x64", True)
 
 
 batching.primitive_batchers[call_tf_p] = functools.partial(loop_batcher, call_tf_p)

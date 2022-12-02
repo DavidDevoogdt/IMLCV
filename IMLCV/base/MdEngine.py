@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 ######################################
 
 
-@dataclass
+@dataclass(frozen=True)
 class StaticTrajectoryInfo:
 
     _attr = [
