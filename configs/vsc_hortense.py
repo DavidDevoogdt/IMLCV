@@ -298,11 +298,15 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
         return 60
 
 
-def get_config(path_internal,py_env,account="2022_069",channel=LocalChannel(),   ):
+def get_config(
+    path_internal,
+    py_env,
+    account="2022_069",
+    channel=LocalChannel(),
+):
     from parsl.config import Config
     from parsl.executors import HighThroughputExecutor
 
-    
     worker_init = f"{py_env};\n"
     provider = SlurmProvider(
         partition="cpu_rome",
@@ -350,9 +354,7 @@ def get_config(path_internal,py_env,account="2022_069",channel=LocalChannel(),  
         cores_per_worker=cores_per_model,
     )
     cores_per_gpu = 12
-    worker_init = (
-       f"{py_env}; \n" 
-    )
+    worker_init = f"{py_env}; \n"
     worker_init += "unset SLURM_CPUS_PER_TASK\n"
     worker_init += "export SLURM_NTASKS_PER_NODE={}\n".format(cores_per_gpu)
     worker_init += "export SLURM_TASKS_PER_NODE={}\n".format(cores_per_gpu)
@@ -387,9 +389,7 @@ def get_config(path_internal,py_env,account="2022_069",channel=LocalChannel(),  
     # cp2k. Essentially, this means we have to reproduce the environment as
     # if we launched a job using 'qsub -l nodes=1:ppn=cores_per_singlepoint'
     cores_per_singlepoint = 32
-    worker_init = (
-      f"{py_env};ml vsc-mympirun \n"
-    )
+    worker_init = f"{py_env};ml vsc-mympirun \n"
     worker_init += "unset SLURM_CPUS_PER_TASK\n"
     worker_init += "export SLURM_NTASKS_PER_NODE={}\n".format(cores_per_singlepoint)
     worker_init += "export SLURM_TASKS_PER_NODE={}\n".format(cores_per_singlepoint)

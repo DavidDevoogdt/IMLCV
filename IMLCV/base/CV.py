@@ -684,6 +684,8 @@ class CV:
 
     @property
     def dim(self):
+        if self.cv.shape == ():
+            return (1,)
         return self.cv.shape[-1]
 
     @property

@@ -12,7 +12,7 @@ from parsl.channels import LocalChannel
 from parsl.channels.base import Channel
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
-from parsl.launchers import  SimpleLauncher, SingleNodeLauncher
+from parsl.launchers import SimpleLauncher, SingleNodeLauncher
 from parsl.launchers.launchers import Launcher
 from parsl.providers.cluster_provider import ClusterProvider
 from parsl.providers.local.local import LocalProvider
@@ -160,7 +160,6 @@ class ClusterChannel(Channel):
         return self.channel.abspath(path)
 
 
-
 # This provides custom scripts to load the right cluster
 parsl.providers.torque.torque.translate_table["F"] = JobState.FAILED
 
@@ -287,6 +286,6 @@ $user_script
         # self.scheduler_options += "#SBATCH --export=NONE\n"
         self.worker_init = worker_init + "\n"
 
-    
+
 def get_config(folder):
     pass

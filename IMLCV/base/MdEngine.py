@@ -31,8 +31,8 @@ from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
 
-# if TYPE_CHECKING:
-from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
+if TYPE_CHECKING:
+    from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
 
 from molmod.periodic import periodic
 
@@ -97,7 +97,6 @@ class StaticTrajectoryInfo:
 
         if self.equilibration is None:
             self.equilibration = 200 * self.timestep
-
 
     def _save(self, hf: h5py.File):
         for name in self._arr:
@@ -410,6 +409,9 @@ class MDEngine(ABC):
         Args:
             steps: number of MD steps
         """
+
+        from IMLCV.base.bias import EnergyError
+
         print(f"running for {int(steps)} steps!")
         try:
             self._run(int(steps))

@@ -2,7 +2,7 @@ from molmod.units import angstrom, kjmol
 
 from IMLCV import ROOT_DIR
 from IMLCV.base.CV import CV, sb_descriptor
-from configs.config_general import  config
+from configs.config_general import config
 from IMLCV.base.rounds import Rounds
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.scheme import Scheme
@@ -41,3 +41,4 @@ if __name__ == "__main__":
     # test_recon()
 
     f(recalc=True)
+    # g()

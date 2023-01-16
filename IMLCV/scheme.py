@@ -131,8 +131,7 @@ class Scheme:
         new_cv = cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
         self.md.bias = NoneBias(new_cv)
 
-        self.rounds.add_round(self.md, self.md.static_trajectory_info)
-        self.rounds.save()
+        self.rounds.add_round(self.md.static_trajectory_info)
 
     def save(self, filename):
         raise NotImplementedError
