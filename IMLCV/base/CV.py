@@ -1362,7 +1362,7 @@ class CvFlow:
 
             return CV.combine(cv1, cv2)
 
-        return CvFlow(func=f_add, batched=True)
+        return CvFlow(func=f_add)
 
     def __mul__(self, other):
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"

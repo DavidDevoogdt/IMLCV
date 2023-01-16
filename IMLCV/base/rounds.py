@@ -525,7 +525,7 @@ class Rounds(ABC):
 
             traj_name = self.full_path(temp_name / "trajectory_info.h5")
 
-            @bash_app_python
+            @bash_app_python(executors=["reference"])
             def run(
                 steps: int,
                 sp: SystemParams | None,

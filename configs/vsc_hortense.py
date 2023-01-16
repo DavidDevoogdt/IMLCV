@@ -298,15 +298,15 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
         return 60
 
 
-def get_config(path_internal):
+def get_config(path_internal,py_env,account="2022_069",channel=LocalChannel(),   ):
     from parsl.config import Config
     from parsl.executors import HighThroughputExecutor
 
-    channel = LocalChannel(script_dir=str(path_internal / "local_script_dir"))
-    worker_init = "ml PLUMED/2.7.2-intel-2021a; ml psiflow-develop/10Jan2023-CPU\n"
+    
+    worker_init = f"{py_env};\n"
     provider = SlurmProvider(
         partition="cpu_rome",
-        account="2022_050",
+        account=account,
         channel=channel,
         nodes_per_block=1,
         cores_per_node=16,
@@ -326,11 +326,11 @@ def get_config(path_internal):
         cores_per_worker=1,
     )
     cores_per_model = 4
-    worker_init = "ml PLUMED/2.7.2-intel-2021a; ml psiflow-develop/10Jan2023-CPU\n"
+    worker_init = f"{py_env}; \n"
     worker_init += "set OMP_NUM_THREADS={}\n".format(cores_per_model)
     provider = SlurmProvider(
         partition="cpu_rome",
-        account="2022_050",
+        account=account,
         channel=channel,
         nodes_per_block=1,
         cores_per_node=8,
@@ -351,7 +351,7 @@ def get_config(path_internal):
     )
     cores_per_gpu = 12
     worker_init = (
-        "ml PLUMED/2.7.2-intel-2021a; ml psiflow-develop/10Jan2023-CUDA-11.3.1\n"
+       f"{py_env}; \n" 
     )
     worker_init += "unset SLURM_CPUS_PER_TASK\n"
     worker_init += "export SLURM_NTASKS_PER_NODE={}\n".format(cores_per_gpu)
@@ -361,7 +361,7 @@ def get_config(path_internal):
     worker_init += "export OMP_NUM_THREADS={}\n".format(cores_per_gpu)
     provider = SlurmProvider(
         partition="gpu_rome_a100",
-        account="2022_050",
+        account=account,
         channel=channel,
         nodes_per_block=1,
         cores_per_node=cores_per_gpu,  # must be equal to cpus-per-gpu
@@ -388,7 +388,7 @@ def get_config(path_internal):
     # if we launched a job using 'qsub -l nodes=1:ppn=cores_per_singlepoint'
     cores_per_singlepoint = 32
     worker_init = (
-        "ml vsc-mympirun; ml CP2K/8.2-foss-2021a; ml psiflow-develop/10Jan2023-CPU\n"
+      f"{py_env};ml vsc-mympirun \n"
     )
     worker_init += "unset SLURM_CPUS_PER_TASK\n"
     worker_init += "export SLURM_NTASKS_PER_NODE={}\n".format(cores_per_singlepoint)
@@ -398,7 +398,7 @@ def get_config(path_internal):
     worker_init += "export OMP_NUM_THREADS=1\n"
     provider = SlurmProvider(
         partition="cpu_rome",
-        account="2022_050",
+        account=account,
         channel=channel,
         nodes_per_block=1,
         cores_per_node=cores_per_singlepoint,

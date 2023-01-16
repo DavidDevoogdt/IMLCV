@@ -13,7 +13,7 @@ from IMLCV import ROOT_DIR
 
 # @typeguard.typechecked
 def bash_app_python(
-    function=None,
+    function=None,executors='all',
 ):
     def decorator(func):
         def wrapper(
@@ -33,7 +33,7 @@ def bash_app_python(
             if folder is None:
                 folder = os.getcwd()
 
-            @bash_app
+            @bash_app( executors= executors  )
             def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
 
                 if len(inputs) > 0:

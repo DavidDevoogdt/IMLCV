@@ -2,7 +2,7 @@
 
 
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
-from IMLCV.external.parsl_conf.config import config
+from configs.vsc_stevin import config
 
 
 @bash_app_python()

@@ -11,7 +11,7 @@ from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
-from IMLCV import CP2K_COMMAND, ROOT_DIR
+from IMLCV import  ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import CollectiveVariable, CvMetric, SystemParams, Volume, dihedral
 from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
@@ -137,11 +137,14 @@ def ase_yaff(small=True):
         "POTENTIAL_FILE_NAME": path_potentials,
     }
 
+    cp2k_tasks = os.environ["SLURM_TASKS_PER_NODE"]
+    os.environ['OMP_NUM_THREADS'] = '1'
+
     energy = Cp2kEnergy(
         atoms=atoms,
         input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
-        command=CP2K_COMMAND,
+        command=f"mpirun -np {cp2k_tasks} cp2k_shell.psmp",
         stress_tensor=True,
         debug=False,
     )

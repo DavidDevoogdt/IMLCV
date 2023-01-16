@@ -20,54 +20,26 @@ source Miniconda3/bin/activate
 # eval "$(conda shell.bash hook)"
 
 
-
 conda update -y -n base -c defaults conda
 conda install -y python=3.10 
-conda install -y mamba
-conda install pip
-
-# python -m pip install --no-cache-dir mpi4py
+conda config --add channels conda-forgen
+conda config --set channel_priority strict
+conda install -y  mamba
+conda install -y mamba pip
 
 mamba install -y pip git tensorflow-cpu jax jaxlib cython ndcctools numpy tensorflow numpy pytest
+
+mamba install -y mypy
 
 
 pip install  -e  git+https://github.com/molmod/yaff.git#egg=yaff
 pip install  -e git+https://github.ugent.be/lvduyfhu/ThermoLIB.git#egg=thermolib
 pip install  -e ./
 
-mamba install -y mypy
+pip install install cryptography interface  pyopenssl --upgrade
 
+mamba install -y tensorflow numpy scipy
 
-# OMPI_MCA_opal_cuda_support=true
+mamba -y install cp2k
 
-
-
-
-#doduo
-
-# ml purge
-# ml CP2K/8.2-foss-2021a
-# ml jax/0.3.9-foss-2021a
-# ml TensorFlow/2.6.0-foss-2021a
-# module unload  SciPy-bundle
-
-# python -m venv .venv
-# source .venv/bin/activate 
-
-# ml gompi/2022a
-# ml Python/3.10
-
-# mkdir python_lib/lib/python3.10/site-packages/
-
-# export PYTHONPATH="/user/gent/436/vsc43693/scratch_vo/projects/IMLCV/python_lib/lib/python3.10/site-packages/:${PYTHONPATH}"
-
-# pip install --prefix="$(pwd)/python_lib"  --upgrade -I pip setuptools
-
-# pip install Cython
-# pip install --prefix="$(pwd)/python_lib"  --upgrade pip
-# pip install  --prefix="$(pwd)/python_lib"  cython
-# pip install  --prefix="$(pwd)/python_lib" numpy
-# pip  install --prefix="$(pwd)/python_lib" -e  git+https://github.com/molmod/yaff.git#egg=yaff
-# pip  install --prefix="$(pwd)/python_lib" -e git+https://github.ugent.be/lvduyfhu/ThermoLIB#egg=thermolib
-# pip  install --prefix="$(pwd)/python_lib" -e ./
-# pip install -e git+https://github.com/google/jax@jaxlib-v0.3.9#egg=jax #corresponding jax vesion
+pip install setuptools==59.5.0 #AttributeError: module 'distutils' has no attribute 'version'

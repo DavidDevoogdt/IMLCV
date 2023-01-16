@@ -31,9 +31,10 @@ from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
 
-if TYPE_CHECKING:
-    from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
+# if TYPE_CHECKING:
+from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
 
+from molmod.periodic import periodic
 
 ######################################
 #             Trajectory             #
@@ -56,7 +57,7 @@ class StaticTrajectoryInfo:
 
     _arr = [
         "atomic_numbers",
-        "masses",
+        # "masses",
     ]
 
     timestep: float
@@ -65,7 +66,7 @@ class StaticTrajectoryInfo:
     timecon_thermo: float
 
     atomic_numbers: np.ndarray
-    masses: np.ndarray | None = None
+    # masses: np.ndarray | None = None
 
     P: float | None = None
     timecon_baro: float | None = None
@@ -73,6 +74,10 @@ class StaticTrajectoryInfo:
     write_step: int = 100
     equilibration: float | None = None
     screen_log: int = 1000
+
+    @property
+    def masses(self):
+        return np.array([periodic[n].mass for n in self.atomic_numbers])
 
     @property
     def thermostat(self):
@@ -93,10 +98,6 @@ class StaticTrajectoryInfo:
         if self.equilibration is None:
             self.equilibration = 200 * self.timestep
 
-        if self.masses is None:
-            from molmod.periodic import periodic
-
-            self.masses = np.array([periodic[n].mass for n in self.atomic_numbers])
 
     def _save(self, hf: h5py.File):
         for name in self._arr:

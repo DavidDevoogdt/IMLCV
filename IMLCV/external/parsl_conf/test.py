@@ -1,6 +1,6 @@
 from parsl import python_app
 
-from IMLCV.external.parsl_conf.config import config
+from configs.vsc_stevin import config
 from functools import partial, wraps
 
 config()

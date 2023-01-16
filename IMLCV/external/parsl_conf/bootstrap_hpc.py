@@ -3,7 +3,7 @@ import argparse
 import parsl
 
 from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
-from IMLCV.external.parsl_conf.config import config
+from configs.vsc_stevin import config
 
 
 def bootstrap_hpc(function):
@@ -32,7 +32,7 @@ def func(name):
     import shutil
 
     from IMLCV.base.rounds import Rounds
-    from IMLCV.external.parsl_conf.config import config
+    from configs.vsc_stevin import config
     from IMLCV.test.common import ase_yaff
 
     config(cluster="doduo", max_blocks=10, mem_per_node=20)
@@ -51,7 +51,7 @@ def func(name):
 def f(name):
     from molmod.units import kjmol
 
-    from IMLCV.external.parsl_conf.config import config
+    from configs.vsc_stevin import config
     from IMLCV.test.common import ase_yaff
     from IMLCV.test.test import test_cv_discovery
 

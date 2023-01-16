@@ -1,4 +1,4 @@
-from IMLCV.external.parsl_conf.config import config
+from configs.vsc_stevin import config
 
 
 def do_conf():
