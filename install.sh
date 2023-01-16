@@ -45,3 +45,11 @@ mamba update  -y  ndcctools
 # conda install cxx-compiler
 # ./configure --prefix=${CONDA_PREFIX}  --enable-modules=+pycv
 # make -j4
+
+
+
+pip install --upgrade tensorflow-gpu
+pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+pip install --upgrade tensorrt
+
+conda install -c nvidia cuda-nvcc

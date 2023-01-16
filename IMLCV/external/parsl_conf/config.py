@@ -363,159 +363,159 @@ $user_script
         # self.scheduler_options += "#SBATCH --export=NONE\n"
         self.worker_init = worker_init + "\n"
 
-    def _status(self):
-        """Internal: Do not call. Returns the status list for a list of job_ids
+    # def _status(self):
+    #     """Internal: Do not call. Returns the status list for a list of job_ids
 
-        Args:
-              self
+    #     Args:
+    #           self
 
-        Returns:
-              [status...] : Status list of all jobs
-        """
-        job_id_list = ",".join(
-            [jid for jid, job in self.resources.items() if not job["status"].terminal]
-        )
-        if not job_id_list:
-            logger.debug("No active jobs, skipping status update")
-            return
+    #     Returns:
+    #           [status...] : Status list of all jobs
+    #     """
+    #     job_id_list = ",".join(
+    #         [jid for jid, job in self.resources.items() if not job["status"].terminal]
+    #     )
+    #     if not job_id_list:
+    #         logger.debug("No active jobs, skipping status update")
+    #         return
 
-        cmd = f"squeue --job {job_id_list}"
-        logger.debug("Executing %s", cmd)
-        retcode, stdout, stderr = self.execute_wait(cmd)
-        logger.debug("sqeueue returned %s %s", stdout, stderr)
+    #     cmd = f"squeue --job {job_id_list}"
+    #     logger.debug("Executing %s", cmd)
+    #     retcode, stdout, stderr = self.execute_wait(cmd)
+    #     logger.debug("sqeueue returned %s %s", stdout, stderr)
 
-        # Execute_wait failed. Do no update
-        if retcode != 0:
-            logger.warning(f"squeue failed with non-zero exit code {retcode}")
-            return
+    #     # Execute_wait failed. Do no update
+    #     if retcode != 0:
+    #         logger.warning(f"squeue failed with non-zero exit code {retcode}")
+    #         return
 
-        jobs_missing = list(self.resources.keys())
-        for line in stdout.split("\n"):
-            parts = line.split()
-            if parts and parts[0] not in ["JOBID", "CLUSTER:"]:
-                job_id = parts[0]
-                status = translate_table.get(parts[4], JobState.UNKNOWN)
-                logger.debug(
-                    "Updating job {} with slurm status {} to parsl status {}".format(
-                        job_id, parts[4], status
-                    )
-                )
-                self.resources[job_id]["status"] = JobStatus(status)
-                jobs_missing.remove(job_id)
+    #     jobs_missing = list(self.resources.keys())
+    #     for line in stdout.split("\n"):
+    #         parts = line.split()
+    #         if parts and parts[0] not in ["JOBID", "CLUSTER:"]:
+    #             job_id = parts[0]
+    #             status = translate_table.get(parts[4], JobState.UNKNOWN)
+    #             logger.debug(
+    #                 "Updating job {} with slurm status {} to parsl status {}".format(
+    #                     job_id, parts[4], status
+    #                 )
+    #             )
+    #             self.resources[job_id]["status"] = JobStatus(status)
+    #             jobs_missing.remove(job_id)
 
-        # squeue does not report on jobs that are not running. So we are filling in the
-        # blanks for missing jobs, we might lose some information about why the jobs failed.
-        for missing_job in jobs_missing:
-            logger.debug(f"Updating missing job {missing_job} to completed status")
-            self.resources[missing_job]["status"] = JobStatus(JobState.COMPLETED)
+    #     # squeue does not report on jobs that are not running. So we are filling in the
+    #     # blanks for missing jobs, we might lose some information about why the jobs failed.
+    #     for missing_job in jobs_missing:
+    #         logger.debug(f"Updating missing job {missing_job} to completed status")
+    #         self.resources[missing_job]["status"] = JobStatus(JobState.COMPLETED)
 
-    def submit(self, command, tasks_per_node, job_name="parsl.slurm"):
-        """Submit the command as a slurm job.
+    # def submit(self, command, tasks_per_node, job_name="parsl.slurm"):
+    #     """Submit the command as a slurm job.
 
-        Parameters
-        ----------
-        command : str
-            Command to be made on the remote side.
-        tasks_per_node : int
-            Command invocations to be launched per node
-        job_name : str
-            Name for the job
-        Returns
-        -------
-        None or str
-            If at capacity, returns None; otherwise, a string identifier for the job
-        """
+    #     Parameters
+    #     ----------
+    #     command : str
+    #         Command to be made on the remote side.
+    #     tasks_per_node : int
+    #         Command invocations to be launched per node
+    #     job_name : str
+    #         Name for the job
+    #     Returns
+    #     -------
+    #     None or str
+    #         If at capacity, returns None; otherwise, a string identifier for the job
+    #     """
 
-        # tasks_per_node = self.ppn
+    #     # tasks_per_node = self.ppn
 
-        scheduler_options = self.scheduler_options
-        worker_init = self.worker_init
-        if self.mem_per_node is not None:
-            scheduler_options += f"#SBATCH --mem={self.mem_per_node}g\n"
-            worker_init += f"export PARSL_MEMORY_GB={self.mem_per_node}\n"
-        if self.cores_per_node is not None:
-            cpus_per_task = math.floor(self.cores_per_node / tasks_per_node)
-            scheduler_options += f"#SBATCH --cpus-per-task={cpus_per_task}"
-            worker_init += f"export PARSL_CORES={cpus_per_task}\n"
+    #     scheduler_options = self.scheduler_options
+    #     worker_init = self.worker_init
+    #     if self.mem_per_node is not None:
+    #         scheduler_options += f"#SBATCH --mem={self.mem_per_node}g\n"
+    #         worker_init += f"export PARSL_MEMORY_GB={self.mem_per_node}\n"
+    #     if self.cores_per_node is not None:
+    #         cpus_per_task = math.floor(self.cores_per_node / tasks_per_node)
+    #         scheduler_options += f"#SBATCH --cpus-per-task={cpus_per_task}"
+    #         worker_init += f"export PARSL_CORES={cpus_per_task}\n"
 
-        job_name = f"{job_name}.{time.time()}"
+    #     job_name = f"{job_name}.{time.time()}"
 
-        script_path = f"{self.script_dir}/{job_name}.submit"
-        script_path = os.path.abspath(script_path)
+    #     script_path = f"{self.script_dir}/{job_name}.submit"
+    #     script_path = os.path.abspath(script_path)
 
-        logger.debug(f"Requesting one block with {self.nodes_per_block} nodes")
+    #     logger.debug(f"Requesting one block with {self.nodes_per_block} nodes")
 
-        job_config = {}
-        job_config["submit_script_dir"] = self.channel.script_dir
-        job_config["nodes"] = self.nodes_per_block
-        job_config["tasks_per_node"] = tasks_per_node
-        job_config["walltime"] = wtime_to_minutes(self.walltime)
-        job_config["scheduler_options"] = scheduler_options
-        job_config["worker_init"] = worker_init
-        job_config["user_script"] = command
+    #     job_config = {}
+    #     job_config["submit_script_dir"] = self.channel.script_dir
+    #     job_config["nodes"] = self.nodes_per_block
+    #     job_config["tasks_per_node"] = tasks_per_node
+    #     job_config["walltime"] = wtime_to_minutes(self.walltime)
+    #     job_config["scheduler_options"] = scheduler_options
+    #     job_config["worker_init"] = worker_init
+    #     job_config["user_script"] = command
 
-        # Wrap the command
-        job_config["user_script"] = self.launcher(
-            command, tasks_per_node, self.nodes_per_block
-        )
+    #     # Wrap the command
+    #     job_config["user_script"] = self.launcher(
+    #         command, tasks_per_node, self.nodes_per_block
+    #     )
 
-        logger.debug("Writing submit script")
-        self._write_submit_script(template_string, script_path, job_name, job_config)
+    #     logger.debug("Writing submit script")
+    #     self._write_submit_script(template_string, script_path, job_name, job_config)
 
-        if self.move_files:
-            logger.debug("moving files")
-            channel_script_path = self.channel.push_file(
-                script_path, self.channel.script_dir
-            )
-        else:
-            logger.debug("not moving files")
-            channel_script_path = script_path
+    #     if self.move_files:
+    #         logger.debug("moving files")
+    #         channel_script_path = self.channel.push_file(
+    #             script_path, self.channel.script_dir
+    #         )
+    #     else:
+    #         logger.debug("not moving files")
+    #         channel_script_path = script_path
 
-        retcode, stdout, stderr = self.execute_wait(f"sbatch {channel_script_path}")
+    #     retcode, stdout, stderr = self.execute_wait(f"sbatch {channel_script_path}")
 
-        job_id = None
-        if retcode == 0:
-            for line in stdout.split("\n"):
-                if line.startswith("Submitted batch job"):
-                    job_id = line.split("Submitted batch job")[1].strip().split()[0]
-                    self.resources[job_id] = {
-                        "job_id": job_id,
-                        "status": JobStatus(JobState.PENDING),
-                    }
-        else:
-            print("Submission of command to scale_out failed")
-            logger.error(
-                "Retcode:%s STDOUT:%s STDERR:%s",
-                retcode,
-                stdout.strip(),
-                stderr.strip(),
-            )
-        return job_id
+    #     job_id = None
+    #     if retcode == 0:
+    #         for line in stdout.split("\n"):
+    #             if line.startswith("Submitted batch job"):
+    #                 job_id = line.split("Submitted batch job")[1].strip().split()[0]
+    #                 self.resources[job_id] = {
+    #                     "job_id": job_id,
+    #                     "status": JobStatus(JobState.PENDING),
+    #                 }
+    #     else:
+    #         print("Submission of command to scale_out failed")
+    #         logger.error(
+    #             "Retcode:%s STDOUT:%s STDERR:%s",
+    #             retcode,
+    #             stdout.strip(),
+    #             stderr.strip(),
+    #         )
+    #     return job_id
 
-    def cancel(self, job_ids):
-        """Cancels the jobs specified by a list of job ids
+    # def cancel(self, job_ids):
+    #     """Cancels the jobs specified by a list of job ids
 
-        Args:
-        job_ids : [<job_id> ...]
+    #     Args:
+    #     job_ids : [<job_id> ...]
 
-        Returns :
-        [True/False...] : If the cancel operation fails the entire list will be False.
-        """
+    #     Returns :
+    #     [True/False...] : If the cancel operation fails the entire list will be False.
+    #     """
 
-        job_id_list = " ".join(job_ids)
-        retcode, stdout, stderr = self.execute_wait(f"scancel {job_id_list}")
-        rets = None
-        if retcode == 0:
-            for jid in job_ids:
-                self.resources[jid]["status"] = JobStatus(
-                    JobState.CANCELLED
-                )  # Setting state to cancelled
-            rets = [True for i in job_ids]
-        else:
-            rets = [False for i in job_ids]
+    #     job_id_list = " ".join(job_ids)
+    #     retcode, stdout, stderr = self.execute_wait(f"scancel {job_id_list}")
+    #     rets = None
+    #     if retcode == 0:
+    #         for jid in job_ids:
+    #             self.resources[jid]["status"] = JobStatus(
+    #                 JobState.CANCELLED
+    #             )  # Setting state to cancelled
+    #         rets = [True for i in job_ids]
+    #     else:
+    #         rets = [False for i in job_ids]
 
-        return rets
+    #     return rets
 
-    @property
-    def status_polling_interval(self):
-        return 60
+    # @property
+    # def status_polling_interval(self):
+    #     return 60

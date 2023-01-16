@@ -102,7 +102,7 @@ if not GPU:
 # jax.config.update('jax_disable_jit', True)
 
 jax.config.update("jax_enable_x64", True)
-
+# jax.config.update("jax_array", True)
 
 batching.primitive_batchers[call_tf_p] = functools.partial(loop_batcher, call_tf_p)
 

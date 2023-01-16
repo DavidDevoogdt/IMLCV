@@ -1,22 +1,54 @@
 from parsl import python_app
 
 from IMLCV.external.parsl_conf.config import config
+from functools import partial, wraps
 
 config()
 
 
-# Map function that returns double the input integer
+def unpack(num):
+    def _unpack(fun):
+        @wraps(fun)
+        def inner(*args, **kwargs):
+            fut = fun(*args, *kwargs)
+
+            @python_app
+            def __unpack(fut, ind):
+                return fut[ind]
+
+            return (*[__unpack(fut, i) for i in range(num)],)
+
+        return inner
+
+    return _unpack
+
+
+@unpack(num=2)
 @python_app
 def app_random():
     import random
+    import time
 
-    return random.random()
+    time.sleep(2.0)
+
+    return random.random(), random.random()
 
 
-results = []
+results_x = []
+results_y = []
 for i in range(0, 10):
-    x = app_random()
-    results.append(x)
+    x, y = app_random()
+    results_x.append(x)
+    results_y.append(y)
 
-for r in results:
-    print(r.result())
+
+@python_app
+def sum(*x):
+    out = 0
+    for i in x:
+        out += i
+    return out
+
+
+print(sum(*results_x).result())
+print(sum(*results_y).result())

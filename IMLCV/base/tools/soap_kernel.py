@@ -19,6 +19,9 @@ from IMLCV.base.tools.bessel_callback import spherical_jn
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 
+# todo: Optimizing many-body atomic descriptors for enhanced computational performance of
+# machine learning based interatomic potentials
+
 
 @jit
 def comb(n, k):
@@ -49,6 +52,23 @@ def legendre(x, n):
         + comb(n, k) * comb(n + k, k) * ((x - 1.0) / 2.0) ** k,
         init_val=val,
     )
+
+
+# @partial(jit, static_argnums=(1,))
+# def legendre(x, n):
+
+#     return jax.lax.cond(
+#         n == 0,
+#         lambda: 0.0,
+#         lambda: jax.lax.cond(
+#             n == 1,
+#             lambda: x,
+#             lambda: (
+#                 (2 * n - 1) * x * legendre(x, n - 1) - (n - 1) * legendre(x, n - 2)
+#             )
+#             / n,
+#         ),
+#     )
 
 
 def p_i(

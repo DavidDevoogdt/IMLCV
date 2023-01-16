@@ -6,6 +6,7 @@ from IMLCV.base.hwsetup import do_conf
 from IMLCV.base.rounds import Rounds
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.scheme import Scheme
+from jax import jit
 
 path = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala"
 
@@ -29,13 +30,12 @@ def test_recon():
 
     for a, b in rounds.iter(num=2):
         if desc is None:
-            desc = sb_descriptor(r_cut=3 * angstrom, sti=a.tic, n_max=3, l_max=2)
+            desc = sb_descriptor(r_cut=3 * angstrom, sti=a.tic, n_max=5, l_max=5)
 
-        out = desc.compute_cv_flow(b.ti.sp)
+        out = desc.compute_cv_flow(b.ti.sp[0:100])
         cv += [out]
     cv_tot = CV.stack(*cv)
 
 
 if __name__ == "__main__":
-    # f()
     test_recon()
