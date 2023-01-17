@@ -8,8 +8,8 @@ from logging import warning
 from pathlib import Path
 
 
-
 import jax
+
 # import tensorflow as tf
 from jax import random
 from jax.interpreters import batching
@@ -27,8 +27,6 @@ if "mpi4py" in sys.modules:
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 yaff.log.set_level(yaff.log.silent)
-
-
 
 
 jax.config.update("jax_enable_x64", True)
