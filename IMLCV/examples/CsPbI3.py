@@ -4,11 +4,11 @@ from IMLCV import ROOT_DIR
 from IMLCV.base.CV import CV, sb_descriptor
 from configs.config_general import config
 from IMLCV.base.rounds import Rounds
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
+from IMLCV.examples.example_systems import alanine_dipeptide_yaff,CsPbI3
 from IMLCV.scheme import Scheme
 from jax import jit
 
-path = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala"
+path = ROOT_DIR / "IMLCV" / "examples" / "output" / "CsPbI3"
 
 
 def f(recalc=False):
@@ -18,9 +18,8 @@ def f(recalc=False):
     if path.exists() and not recalc:
         scheme = Scheme.from_rounds(path, copy=True)
     else:
-        scheme = Scheme(folder=path, Engine=alanine_dipeptide_yaff())
-        scheme.round(K=10 * kjmol / 6.14**2, n=8, steps=2000)
-
+        scheme = Scheme(folder=path, Engine=CsPbI3())
+        scheme.inner_loop(K=10 * kjmol , n=8, steps=2000)
 
 def test_recon():
     rounds = Rounds(folder=path, copy=False)
@@ -38,7 +37,5 @@ def test_recon():
 
 
 if __name__ == "__main__":
-    # test_recon()
 
     f(recalc=True)
-    # g()

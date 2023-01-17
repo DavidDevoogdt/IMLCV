@@ -4,4 +4,4 @@
 
 cd /dodrio/scratch/projects/2022_069/david/IMLCV/
 source /dodrio/scratch/projects/2022_069/david/IMLCV/Miniconda3/bin/activate base
-python IMLCV/examples/alanine_dipeptide_CV_disc.py
+python IMLCV/examples/CsPbI3.py

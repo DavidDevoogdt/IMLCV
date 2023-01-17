@@ -807,7 +807,7 @@ def test_cv_discovery(
 
     else:
         scheme0 = Scheme(md=md, folder=name)
-        scheme0.round(rnds=5, K=k, n=n, init=init, steps=steps)
+        scheme0.inner_loop(rnds=5, K=k, n=n, init=init, steps=steps)
 
     scheme0.update_CV(
         samples=1e3,

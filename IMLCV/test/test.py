@@ -19,7 +19,7 @@ def f(recalc=False):
         scheme = Scheme.from_rounds(path, copy=True)
     else:
         scheme = Scheme(folder=path, Engine=alanine_dipeptide_yaff())
-        scheme.round(K=10 * kjmol / 6.14**2, n=8, steps=2000)
+        scheme.inner_loop(K=10 * kjmol / 6.14**2, n=8, steps=2000)
 
 
 def test_recon():

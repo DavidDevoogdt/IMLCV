@@ -114,7 +114,7 @@ def mil53_yaff():
     return yaffmd
 
 
-def ase_yaff(small=True):
+def CsPbI3(small=True):
 
     base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
 
@@ -137,14 +137,11 @@ def ase_yaff(small=True):
         "POTENTIAL_FILE_NAME": path_potentials,
     }
 
-    cp2k_tasks = os.environ["SLURM_TASKS_PER_NODE"]
-    os.environ['OMP_NUM_THREADS'] = '1'
-
     energy = Cp2kEnergy(
         atoms=atoms,
         input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
-        command=f"mpirun -np {cp2k_tasks} cp2k_shell.psmp",
+        command=f"mpirun cp2k_shell.psmp",
         stress_tensor=True,
         debug=False,
     )
@@ -197,3 +194,10 @@ def ase_yaff(small=True):
     )
 
     return yaffmd
+
+
+if __name__ == "__main__":
+    
+
+    sys = CsPbI3()
+    sys.run(2)

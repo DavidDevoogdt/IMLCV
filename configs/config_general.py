@@ -19,9 +19,9 @@ def config(env=None):
 
     if env is None:
         node = platform.node()
-        if re.search("node[0-9]*.dodrio.os", node):
+        if re.search("(node|login)[0-9]*.dodrio.os", node):
             env = "hortense"
-        elif node == re.search("gligar[0-9]*.gasstly.os", node):
+        elif node == re.search("gligar[0-9]*.gastly.os", node):
             env = "stevin"
         elif node == "david-CMM":
             env = "local"
