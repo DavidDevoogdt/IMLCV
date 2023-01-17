@@ -49,8 +49,8 @@ NAME_TO_FUNC = {
 
 
 def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
-    return metric.norm(x, y, eps)
-    # return jnp.linalg.norm((metric.min_cv(x.cv) - metric.min_cv(y.cv)) * eps)
+    # return metric.norm(x, y, eps)
+    return jnp.linalg.norm((metric.min_cv(x.cv) - metric.min_cv(y.cv)) * eps)
 
 
 def cv_vals(x: CV, powers, metric: CvMetric):

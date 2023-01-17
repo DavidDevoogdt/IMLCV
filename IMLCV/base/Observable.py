@@ -198,10 +198,10 @@ class ThermoLIB:
         plot=False,
         max_bias=None,
         fs=None,
-        choice="rbf",
+        choice="gridbias",
         n=None,
         start_r=0,
-        rbf_kernel="gaussian",
+        rbf_kernel="thin_plate_spline",
         rbf_degree=-1,
         smoothing_threshold=5 * kjmol,
         **plot_kwargs,
@@ -275,6 +275,10 @@ class ThermoLIB:
 
         else:
             raise ValueError
+
+        # for cvs in [CV(cv=jnp.zeros((2,))), CV(cv=jnp.zeros((5, 2)))]:
+
+        #      out = fesBias.compute_from_cv(cvs)
 
         if plot:
             plot_app(

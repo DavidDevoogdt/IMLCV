@@ -471,7 +471,9 @@ class RBFInterpolator:
 
         assert isinstance(x, CV)
 
-        if not x.batched:
+        isbatched = x.batched
+
+        if not isbatched:
             x = x.batch()
 
         nx, ndim = x.shape
@@ -539,7 +541,9 @@ class RBFInterpolator:
                         xnbr, ynbr, coeffs, memory_budget=memory_budget
                     )
                 )
-
         out = out.view(self.d_dtype)
-        out = out.reshape((nx,) + self.d_shape)
-        return out
+
+        if isbatched:
+            return out.reshape((nx, ndim) + self.d_shape)
+        else:
+            return out.reshape((ndim,) + self.d_shape)
