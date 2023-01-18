@@ -388,7 +388,7 @@ def get_config(
     # based on the number of parsl tasks, NOT on the number of MPI tasks for
     # cp2k. Essentially, this means we have to reproduce the environment as
     # if we launched a job using 'qsub -l nodes=1:ppn=cores_per_singlepoint'
-    mpi_cores_per_singlepoint = 32
+    mpi_cores_per_singlepoint = 16
     open_mp_threads_per_singlepoint = 1
     total_cores = mpi_cores_per_singlepoint * open_mp_threads_per_singlepoint
 
@@ -398,6 +398,10 @@ def get_config(
     worker_init += f"export SLURM_TASKS_PER_NODE={mpi_cores_per_singlepoint}\n"
     worker_init += f"export SLURM_NTASKS={mpi_cores_per_singlepoint}\n"
     worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_singlepoint}\n"
+
+    # export OMP_PROC_BIND=true
+
+
     provider = SlurmProvider(
         partition="cpu_rome",
         account=account,
