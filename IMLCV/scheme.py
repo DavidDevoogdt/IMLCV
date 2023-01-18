@@ -108,19 +108,19 @@ class Scheme:
 
         self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
-    def inner_loop(self, 
-            rnds=10, 
-            init=0, 
-            steps=5e4, 
-            K=None, 
-            update_metric=False, 
-            n=4,
-            ):
+    def inner_loop(
+        self,
+        rnds=10,
+        init=500,
+        steps=5e4,
+        K=None,
+        update_metric=False,
+        n=4,
+    ):
 
         if init != 0:
             self.grid_umbrella(steps=init, n=n, k=K)
             self.rounds.add_round(self.md)
-            self.rounds.save()
 
         for r in range(rnds):
             self.grid_umbrella(steps=steps, n=n, k=K)
