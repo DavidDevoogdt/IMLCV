@@ -325,7 +325,7 @@ def get_config(
     default = HighThroughputExecutor(
         label="default",
         provider=provider,
-        address=os.environ["HOSTNAME"],
+        # address=os.environ["HOSTNAME"],
         working_dir=str(path_internal / "default_executor"),
         cores_per_worker=1,
     )
@@ -349,7 +349,7 @@ def get_config(
     model = HighThroughputExecutor(
         label="model",
         provider=provider,
-        address=os.environ["HOSTNAME"],
+        # address=os.environ["HOSTNAME"],
         working_dir=str(path_internal / "model_executor"),
         cores_per_worker=cores_per_model,
     )
@@ -379,7 +379,7 @@ def get_config(
     training = HighThroughputExecutor(
         label="training",
         provider=provider,
-        address=os.environ["HOSTNAME"],
+        # address=os.environ["HOSTNAME"],
         working_dir="gpu_working_dir",
         cores_per_worker=cores_per_gpu,
     )
@@ -388,34 +388,40 @@ def get_config(
     # based on the number of parsl tasks, NOT on the number of MPI tasks for
     # cp2k. Essentially, this means we have to reproduce the environment as
     # if we launched a job using 'qsub -l nodes=1:ppn=cores_per_singlepoint'
-    cores_per_singlepoint = 32
-    worker_init = f"{py_env};ml vsc-mympirun \n"
-    worker_init += "unset SLURM_CPUS_PER_TASK\n"
-    worker_init += "export SLURM_NTASKS_PER_NODE={}\n".format(cores_per_singlepoint)
-    worker_init += "export SLURM_TASKS_PER_NODE={}\n".format(cores_per_singlepoint)
-    worker_init += "export SLURM_NTASKS={}\n".format(cores_per_singlepoint)
-    worker_init += "export SLURM_NPROCS={}\n".format(cores_per_singlepoint)
-    worker_init += "export OMP_NUM_THREADS=1\n"
+    mpi_cores_per_singlepoint = 16
+    open_mp_threads_per_singlepoint = 1
+    total_cores = mpi_cores_per_singlepoint * open_mp_threads_per_singlepoint
+
+    worker_init = f"{py_env}; \n"
+    worker_init += f"export SLURM_CPUS_PER_TASK={open_mp_threads_per_singlepoint}\n"
+    worker_init += f"export SLURM_NTASKS_PER_NODE={mpi_cores_per_singlepoint}\n"
+    worker_init += f"export SLURM_TASKS_PER_NODE={mpi_cores_per_singlepoint}\n"
+    worker_init += f"export SLURM_NTASKS={mpi_cores_per_singlepoint}\n"
+    worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_singlepoint}\n"
+
+    # export OMP_PROC_BIND=true
+
+
     provider = SlurmProvider(
         partition="cpu_rome",
         account=account,
         channel=channel,
         nodes_per_block=1,
-        cores_per_node=cores_per_singlepoint,
+        cores_per_node=total_cores,
         init_blocks=0,
         min_blocks=0,
-        max_blocks=16,
+        max_blocks=64,
         parallelism=1,
-        walltime="01:00:00",
+        walltime="48:00:00",
         worker_init=worker_init,
         exclusive=False,
     )
     reference = HighThroughputExecutor(
         label="reference",
         provider=provider,
-        address=os.environ["HOSTNAME"],
+        # address=os.environ["HOSTNAME"],
         working_dir=str(path_internal / "reference_executor"),
-        cores_per_worker=cores_per_singlepoint,
+        cores_per_worker=total_cores,
         cpu_affinity="alternating",
     )
     return Config(

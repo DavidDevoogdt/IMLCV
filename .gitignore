@@ -72,3 +72,5 @@ IMLCV/examples/output/*
 
 
 .mypy_cache/*
+
+src/*

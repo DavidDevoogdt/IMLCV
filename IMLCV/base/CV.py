@@ -98,9 +98,11 @@ class SystemParams:
         )
 
     def __str__(self):
-        str = f"coordinates shape: \n{self.coordinates.shape}"
+        string = f"coordinates shape: \n{self.coordinates.shape}"
         if self.cell is not None:
-            str += f"\n cell [Angstrom]:\n{self.cell/angstrom }"
+            string += f"\n cell [Angstrom]:\n{self.cell/angstrom }"
+
+        return string
 
     def batch(self) -> SystemParams:
         if self.batched:

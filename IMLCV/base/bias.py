@@ -233,7 +233,7 @@ class YaffEnergy(Energy):
         try:
             ener = self.ff.compute(gpos=gpos_out, vtens=vtens_out)
         except BaseException as be:
-            raise EnergyError(f"calculating yaff  energy raise execption:\n{be}")
+            raise EnergyError(f"calculating yaff  energy raised execption:\n{be}\n")
 
         return EnergyResult(ener, gpos_out, vtens_out)
 
@@ -247,9 +247,6 @@ class YaffEnergy(Energy):
         self.sp = state["sp"]
         return self
 
-
-class AseError(EnergyError):
-    pass
 
 
 class AseEnergy(Energy):
@@ -314,7 +311,7 @@ class AseEnergy(Energy):
         raise NotImplementedError
 
     def _handle_exception(self):
-        raise AseError
+        raise EnergyError("Ase failed to provide an energy\n")
 
     def __getstate__(self):
 
@@ -409,12 +406,12 @@ class Cp2kEnergy(AseEnergy):
         assert os.path.exists(p), "no cp2k output file after failure"
         with open(p) as f:
             lines = f.readlines()
-        out = min(len(lines), 20)
+        out = min(len(lines), 50)
         assert out != 0, "cp2k.out doesn't contain output"
 
         file = "\n".join(lines[-out:])
 
-        raise AseError(
+        raise EnergyError(
             f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is { file}"
         )
 

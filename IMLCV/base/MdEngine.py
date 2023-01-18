@@ -156,13 +156,9 @@ class TrajectoryInfo:
 
     t: np.ndarray | None = None
 
-    # masses: np.ndarray | None = None
-
-    # static_info: StaticTrajectoryInfo | None = None
 
     _items_scal = ["t", "e_pot", "T", "P", "err"]
     _items_vec = ["positions", "cell", "gpos", "vtens", "charges"]
-    # _items_stat = ["static_info"]
 
     _capacity: int = -1
     _size: int = -1
