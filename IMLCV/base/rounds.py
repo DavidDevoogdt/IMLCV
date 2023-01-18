@@ -11,6 +11,7 @@ import ase
 import h5py
 import jax
 import jax.numpy as jnp
+import numpy as np
 from filelock import FileLock
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
@@ -41,6 +42,7 @@ class RoundInformation:
     round: int
     valid: bool
     num: int
+    num_vals: np.ndarray
     tic: StaticTrajectoryInfo
     folder: Path
     name_bias: str | None = None
@@ -94,13 +96,13 @@ class Rounds(ABC):
         self.lock = FileLock(self.h5filelock_name)
 
         # load h5file or create from files if corrupt/non existent
-        try:
-            with self.lock:
-                self.h5file = h5py.File(self.h5file_name, mode="r+")
-        except:
+        # try:
+        #     with self.lock:
+        #         self.h5file = h5py.File(self.h5file_name, mode="r+")
+        # except:
 
-            self._make_file()
-            self.recover()
+        self._make_file()
+        self.recover()
 
     ######################################
     #             IO                     #
@@ -124,7 +126,7 @@ class Rounds(ABC):
         if not Path(self.h5file_name).exists():
             # create the file
             with self.lock:
-                with h5py.File(self.h5file_name, mode="w-", swmr=True):
+                with h5py.File(self.h5file_name, mode="w-"):
                     pass
 
         self.h5file = h5py.File(self.h5file_name, mode="r+")
@@ -214,8 +216,12 @@ class Rounds(ABC):
                     else:
                         tin = md_i / "bash_app_trajectory_info.h5"
 
+                bias = None
+                if (p := (md_i / "bias")).exists():
+                    bias = self.rel_path(p)
+
                 traj = TrajectoryInfo.load(tin)
-                self.add_md(i=i, r=r, d=traj, attrs=None)
+                self.add_md(i=i, r=r, d=traj, bias=bias)
 
     def add_md(self, i, d: TrajectoryInfo, attrs=None, bias: str | None = None, r=None):
         if r is None:
@@ -242,6 +248,7 @@ class Rounds(ABC):
 
             f[f"{r}/{i}"].attrs["valid"] = True
             f[f"{r}"].attrs["num"] += 1
+            f[f"{r}"].attrs["num_vals"] = np.append(f[f"{r}"].attrs["num_vals"], int(i))
 
             f.flush()
 
@@ -268,6 +275,7 @@ class Rounds(ABC):
             stic.save(self.path(r=r) / "static_trajectory_info.h5")
 
             f[f"{r}"].attrs["num"] = 0
+            f[f"{r}"].attrs["num_vals"] = np.array([], dtype=np.int32)
             f[f"{r}"].attrs["valid"] = True
 
             f.flush()
@@ -313,7 +321,7 @@ class Rounds(ABC):
             if not _r.valid:
                 continue
 
-            for i in range(_r.num):
+            for i in _r.num_vals:
                 _r_i = self.get_trajectory_information(r=r0, i=i)
 
                 if not _r_i.valid:

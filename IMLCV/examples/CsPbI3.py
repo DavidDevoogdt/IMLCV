@@ -4,7 +4,7 @@ from IMLCV import ROOT_DIR
 from IMLCV.base.CV import CV, sb_descriptor
 from configs.config_general import config
 from IMLCV.base.rounds import Rounds
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff,CsPbI3
+from IMLCV.examples.example_systems import alanine_dipeptide_yaff, CsPbI3
 from IMLCV.scheme import Scheme
 from jax import jit
 
