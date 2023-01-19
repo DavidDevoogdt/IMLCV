@@ -53,6 +53,7 @@ class Scheme:
 
         return self
 
+
     def MTDBias(self, steps, K=None, sigmas=None, start=500, step=250):
         """generate a metadynamics bias."""
 
@@ -120,7 +121,7 @@ class Scheme:
 
         if init != 0:
             self.grid_umbrella(steps=init, n=n, k=K)
-            self.rounds.add_round(self.md)
+            self.rounds.add_round_from_md(self.md)
 
         for r in range(rnds):
             self.grid_umbrella(steps=steps, n=n, k=K)

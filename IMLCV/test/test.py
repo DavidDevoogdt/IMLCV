@@ -1,6 +1,6 @@
 from molmod.units import angstrom, kjmol
 
-from IMLCV import ROOT_DIR
+from configs.config_general import ROOT_DIR
 from IMLCV.base.CV import CV, sb_descriptor
 from IMLCV.base.hwsetup import do_conf
 from IMLCV.base.rounds import Rounds

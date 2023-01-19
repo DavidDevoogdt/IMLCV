@@ -18,7 +18,8 @@ from parsl.providers.cluster_provider import ClusterProvider
 from parsl.providers.local.local import LocalProvider
 from parsl.providers.provider_base import JobState
 
-from IMLCV import CP2K_THREADS, HPC_WORKER_INIT, LOCAL, PY_ENV, ROOT_DIR
+from IMLCV import CP2K_THREADS, HPC_WORKER_INIT, LOCAL, PY_ENV
+from configs.config_general import ROOT_DIR
 
 
 def config(

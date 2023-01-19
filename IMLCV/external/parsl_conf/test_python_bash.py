@@ -1,7 +1,7 @@
 # this is a helper function to perform md simulations. Executed by parsl on HPC infrastructure, but
 
 
-from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
+from configs.bash_app_python import bash_app_python
 from configs.vsc_stevin import config
 
 

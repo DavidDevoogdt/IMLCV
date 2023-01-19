@@ -27,11 +27,11 @@ from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
 
 import yaff
-from IMLCV import ROOT_DIR
+from configs.config_general import ROOT_DIR
 from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
 from IMLCV.base.tools._rbf_interp import RBFInterpolator
 from IMLCV.base.tools.tools import HashableArrayWrapper
-from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
+from configs.bash_app_python import bash_app_python
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine

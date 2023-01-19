@@ -8,7 +8,7 @@ import uuid
 import dill
 from parsl import File, bash_app, python_app
 
-from IMLCV import ROOT_DIR
+from configs.config_general import ROOT_DIR
 
 
 # @typeguard.typechecked

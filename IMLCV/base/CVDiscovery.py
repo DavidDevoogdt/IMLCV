@@ -34,7 +34,7 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.rounds import Rounds
-from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
+from configs.bash_app_python import bash_app_python
 
 plt.rcParams["text.usetex"] = True
 

@@ -1,17 +1,20 @@
 import parsl
 import configs.vsc_hortense
 import configs.local_threadpool
-
+from pathlib import Path
+import os
 import re
 
 import platform
-from IMLCV import ROOT_DIR
+
+
+ROOT_DIR = Path(os.path.dirname(__file__)).parent
 
 
 py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
 
-def config(env=None):
+def config(env=None,singlepoint_nodes = 16,walltime="48:00:00"):
 
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
@@ -37,7 +40,7 @@ def config(env=None):
         config = configs.local_threadpool.get_config(path_internal, py_env)
     elif env == "hortense":
         config = configs.vsc_hortense.get_config(
-            path_internal, py_env, account="2022_069"
+            path_internal, py_env, account="2022_069",singlepoint_nodes=singlepoint_nodes,walltime=walltime
         )
     elif env == "stevin":
         raise NotImplementedError

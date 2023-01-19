@@ -11,7 +11,7 @@ from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
-from IMLCV import  ROOT_DIR
+from configs.config_general import ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import CollectiveVariable, CvMetric, SystemParams, Volume, dihedral
 from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine

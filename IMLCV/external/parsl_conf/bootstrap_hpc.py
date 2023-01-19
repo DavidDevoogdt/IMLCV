@@ -2,7 +2,7 @@ import argparse
 
 import parsl
 
-from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
+from configs.bash_app_python import bash_app_python
 from configs.vsc_stevin import config
 
 

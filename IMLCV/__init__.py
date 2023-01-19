@@ -18,7 +18,7 @@ import yaff
 from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 
 
-ROOT_DIR = Path(os.path.dirname(__file__)).parent
+
 KEY = random.PRNGKey(0)
 
 if "mpi4py" in sys.modules:

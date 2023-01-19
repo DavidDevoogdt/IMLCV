@@ -20,8 +20,9 @@ from IMLCV import KEY
 from IMLCV.base.bias import Bias, CompositeBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
-from IMLCV.external.parsl_conf.bash_app_python import bash_app_python
+from configs.bash_app_python import bash_app_python
 
+#todo: invaildate with files instead of db tha gets deleted
 
 @dataclass
 class TrajectoryInformation:
@@ -35,7 +36,6 @@ class TrajectoryInformation:
     def get_bias(self) -> Bias:
         assert self.name_bias is not None
         return Bias.load(self.folder / self.name_bias)
-
 
 @dataclass
 class RoundInformation:
@@ -87,19 +87,26 @@ class Rounds(ABC):
         folder = Path(folder)
 
         if folder.exists():
+
+            #look for first avaialble folder
+            i = 0
+            while True:
+                p = folder.parent / (f"{folder.name}_{i:0>3}")
+                if p.exists():
+                    i += 1
+                else:
+                    break
+
             if copy:
-                folder = Rounds._get_copy(folder=Path(folder))
+                shutil.copytree(folder, p)
         else:
-            folder.mkdir(parents=True)
+            p = folder
 
-        self.folder = folder
+        if not p.exists():
+            p.mkdir(parents=True)
+                
+        self.folder = p
         self.lock = FileLock(self.h5filelock_name)
-
-        # load h5file or create from files if corrupt/non existent
-        # try:
-        #     with self.lock:
-        #         self.h5file = h5py.File(self.h5file_name, mode="r+")
-        # except:
 
         self._make_file()
         self.recover()
@@ -108,26 +115,16 @@ class Rounds(ABC):
     #             IO                     #
     ######################################
 
-    @staticmethod
-    def _get_copy(folder: Path) -> Path:
-
-        i = 0
-        while True:
-            p = folder.parent / (f"{folder.name}_{i:0>3}")
-            if p.exists():
-                i += 1
-            else:
-                shutil.copytree(folder, p)
-                break
-
-        return p
 
     def _make_file(self):
-        if not Path(self.h5file_name).exists():
-            # create the file
-            with self.lock:
-                with h5py.File(self.h5file_name, mode="w-"):
-                    pass
+        #todo: make backup
+        if  (p := Path(self.h5file_name)).exists():
+            os.remove(p)
+            
+        # create the file
+        with self.lock:
+            with h5py.File(self.h5file_name, mode="w-"):
+                pass
 
         self.h5file = h5py.File(self.h5file_name, mode="r+")
 
@@ -197,7 +194,12 @@ class Rounds(ABC):
                     attr["name_bias"] = self.rel_path(p)
 
                 if (p := (self.path(r) / "engine")).exists():
-                    attr["name_bias"] = self.rel_path(p)
+                    attr["name_md"] = self.rel_path(p)
+
+                if (p := (self.path(r) / "invalid")).exists():
+                    attr["valid"] = False
+
+
 
                 self.add_round(attr=attr, stic=sti, r=r)
 
@@ -217,11 +219,18 @@ class Rounds(ABC):
                         tin = md_i / "bash_app_trajectory_info.h5"
 
                 bias = None
-                if (p := (md_i / "bias")).exists():
+                if (p := (md_i / "new_bias")).exists():
+                    bias = self.rel_path(p)
+                elif (p := (md_i / "bias")).exists():
                     bias = self.rel_path(p)
 
+                attr = None
+
+                if (p := (md_i / "invalid")).exists():
+                    attr["valid"] = False
+
                 traj = TrajectoryInfo.load(tin)
-                self.add_md(i=i, r=r, d=traj, bias=bias)
+                self.add_md(i=i, r=r, d=traj, bias=bias,attrs=attr)
 
     def add_md(self, i, d: TrajectoryInfo, attrs=None, bias: str | None = None, r=None):
         if r is None:
@@ -238,6 +247,9 @@ class Rounds(ABC):
             if attrs is None:
                 attrs = {}
 
+            if "valid" in attrs:
+                attrs["valid"] = True
+
             if bias is not None:
                 attrs["name_bias"] = bias
 
@@ -246,7 +258,6 @@ class Rounds(ABC):
                     if val is not None:
                         f[f"{r}/{i}"].attrs[key] = val
 
-            f[f"{r}/{i}"].attrs["valid"] = True
             f[f"{r}"].attrs["num"] += 1
             f[f"{r}"].attrs["num_vals"] = np.append(f[f"{r}"].attrs["num_vals"], int(i))
 
@@ -325,6 +336,10 @@ class Rounds(ABC):
                 _r_i = self.get_trajectory_information(r=r0, i=i)
 
                 if not _r_i.valid:
+                    continue
+
+                #no points in collection
+                if _r_i.ti._size <= 0:
                     continue
 
                 yield _r, _r_i
@@ -464,6 +479,10 @@ class Rounds(ABC):
         if r is None:
             r = self.round
 
+        if not (p :=   self.path(r=r,i=i) / "invalid" ).exists():
+            with open(p,"w+"):
+                pass
+
         self._set_attr(name="valid", value=False, r=r, i=i)
 
     def get_bias(self, r=None, i=None) -> Bias:
@@ -477,7 +496,7 @@ class Rounds(ABC):
         if r is None:
             r = self.round
 
-        name = self._get_attr("name_bias", r=r)
+        name = self._get_attr("name_md", r=r)
         return MDEngine.load(self.full_path(name), filename=None)
 
     ######################################
@@ -505,7 +524,7 @@ class Rounds(ABC):
 
         sp: SystemParams | None = None
 
-        for _, t in self.iter(num=2):
+        for _, t in self.iter(start=0,num=3):
             sp0 = t.ti.sp
             if sp is None:
                 sp = sp0
@@ -513,6 +532,8 @@ class Rounds(ABC):
                 sp += sp0
         if sp is None:  # no provious round available
             sp = md_engine.sp
+            print("using standard output")
+
         sp = sp.batch()
 
         for i, bias in enumerate(biases):
@@ -573,6 +594,7 @@ class Rounds(ABC):
                 cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
+            #todo: move this to an app?
             if bias is not None and sp.shape[0] > 1:
                 bs = bias.compute_from_system_params(sp).energy
                 probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))

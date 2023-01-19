@@ -303,7 +303,11 @@ def get_config(
     py_env,
     account="2022_069",
     channel=LocalChannel(),
+    singlepoint_nodes=16,
+    walltime = "48:00:00",
 ):
+
+
     from parsl.config import Config
     from parsl.executors import HighThroughputExecutor
 
@@ -388,15 +392,15 @@ def get_config(
     # based on the number of parsl tasks, NOT on the number of MPI tasks for
     # cp2k. Essentially, this means we have to reproduce the environment as
     # if we launched a job using 'qsub -l nodes=1:ppn=cores_per_singlepoint'
-    mpi_cores_per_singlepoint = 16
+    # singlepoint_nodes = 16
     open_mp_threads_per_singlepoint = 1
-    total_cores = mpi_cores_per_singlepoint * open_mp_threads_per_singlepoint
+    total_cores = singlepoint_nodes * open_mp_threads_per_singlepoint
 
     worker_init = f"{py_env}; \n"
     worker_init += f"export SLURM_CPUS_PER_TASK={open_mp_threads_per_singlepoint}\n"
-    worker_init += f"export SLURM_NTASKS_PER_NODE={mpi_cores_per_singlepoint}\n"
-    worker_init += f"export SLURM_TASKS_PER_NODE={mpi_cores_per_singlepoint}\n"
-    worker_init += f"export SLURM_NTASKS={mpi_cores_per_singlepoint}\n"
+    worker_init += f"export SLURM_NTASKS_PER_NODE={singlepoint_nodes}\n"
+    worker_init += f"export SLURM_TASKS_PER_NODE={singlepoint_nodes}\n"
+    worker_init += f"export SLURM_NTASKS={singlepoint_nodes}\n"
     worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_singlepoint}\n"
 
     # export OMP_PROC_BIND=true
@@ -412,7 +416,7 @@ def get_config(
         min_blocks=0,
         max_blocks=64,
         parallelism=1,
-        walltime="48:00:00",
+        walltime=walltime,
         worker_init=worker_init,
         exclusive=False,
     )
