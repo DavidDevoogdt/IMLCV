@@ -16,26 +16,28 @@ from filelock import FileLock
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
+from configs.bash_app_python import bash_app_python
 from IMLCV import KEY
 from IMLCV.base.bias import Bias, CompositeBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
-from configs.bash_app_python import bash_app_python
 
-#todo: invaildate with files instead of db tha gets deleted
+# todo: invaildate with files instead of db tha gets deleted
+
 
 @dataclass
 class TrajectoryInformation:
     ti: TrajectoryInfo
-    valid: bool
     round: int
     num: int
     folder: Path
     name_bias: str | None = None
+    valid: bool = True
 
     def get_bias(self) -> Bias:
         assert self.name_bias is not None
         return Bias.load(self.folder / self.name_bias)
+
 
 @dataclass
 class RoundInformation:
@@ -88,7 +90,7 @@ class Rounds(ABC):
 
         if folder.exists():
 
-            #look for first avaialble folder
+            # look for first avaialble folder
             i = 0
             while True:
                 p = folder.parent / (f"{folder.name}_{i:0>3}")
@@ -104,7 +106,7 @@ class Rounds(ABC):
 
         if not p.exists():
             p.mkdir(parents=True)
-                
+
         self.folder = p
         self.lock = FileLock(self.h5filelock_name)
 
@@ -115,12 +117,11 @@ class Rounds(ABC):
     #             IO                     #
     ######################################
 
-
     def _make_file(self):
-        #todo: make backup
-        if  (p := Path(self.h5file_name)).exists():
+        # todo: make backup
+        if (p := Path(self.h5file_name)).exists():
             os.remove(p)
-            
+
         # create the file
         with self.lock:
             with h5py.File(self.h5file_name, mode="w-"):
@@ -199,8 +200,6 @@ class Rounds(ABC):
                 if (p := (self.path(r) / "invalid")).exists():
                     attr["valid"] = False
 
-
-
                 self.add_round(attr=attr, stic=sti, r=r)
 
             for md_i in round_r.glob("md_*"):
@@ -230,7 +229,7 @@ class Rounds(ABC):
                     attr["valid"] = False
 
                 traj = TrajectoryInfo.load(tin)
-                self.add_md(i=i, r=r, d=traj, bias=bias,attrs=attr)
+                self.add_md(i=i, r=r, d=traj, bias=bias, attrs=attr)
 
     def add_md(self, i, d: TrajectoryInfo, attrs=None, bias: str | None = None, r=None):
         if r is None:
@@ -242,7 +241,9 @@ class Rounds(ABC):
             if f"{i}" not in f[f"{r}"]:
                 f.create_group(f"{r}/{i}")
 
-            d.save(filename=self.path(r=r, i=i) / "trajectory_info.h5")
+            # check if in recover mode
+            if not (p := self.path(r=r, i=i) / "trajectory_info.h5").exists():
+                d.save(filename=p)
 
             if attrs is None:
                 attrs = {}
@@ -317,7 +318,11 @@ class Rounds(ABC):
     ######################################
 
     def iter(
-        self, start=None, stop=None, num=3
+        self,
+        start=None,
+        stop=None,
+        num=3,
+        ignore_invalid=False,
     ) -> Iterable[tuple[RoundInformation, TrajectoryInformation]]:
         if stop is None:
             stop = self.round
@@ -335,10 +340,10 @@ class Rounds(ABC):
             for i in _r.num_vals:
                 _r_i = self.get_trajectory_information(r=r0, i=i)
 
-                if not _r_i.valid:
+                if not _r_i.valid and not ignore_invalid:
                     continue
 
-                #no points in collection
+                # no points in collection
                 if _r_i.ti._size <= 0:
                     continue
 
@@ -479,8 +484,8 @@ class Rounds(ABC):
         if r is None:
             r = self.round
 
-        if not (p :=   self.path(r=r,i=i) / "invalid" ).exists():
-            with open(p,"w+"):
+        if not (p := self.path(r=r, i=i) / "invalid").exists():
+            with open(p, "w+"):
                 pass
 
         self._set_attr(name="valid", value=False, r=r, i=i)
@@ -524,15 +529,19 @@ class Rounds(ABC):
 
         sp: SystemParams | None = None
 
-        for _, t in self.iter(start=0,num=3):
+        # also get smaples form init round
+        for _, t in self.iter(start=0, num=1, ignore_invalid=True):
             sp0 = t.ti.sp
             if sp is None:
                 sp = sp0
             else:
                 sp += sp0
+
         if sp is None:  # no provious round available
             sp = md_engine.sp
             print("using standard output")
+        else:
+            print(f"using exisitng sp samples, shape = {sp.shape}")
 
         sp = sp.batch()
 
@@ -580,7 +589,7 @@ class Rounds(ABC):
                 d = md.get_trajectory()
                 return d
 
-            @bash_app_python
+            @bash_app_python(executors=["default"])
             def plot_app(
                 st: StaticTrajectoryInfo, traj: TrajectoryInfo, inputs=[], outputs=[]
             ):
@@ -594,7 +603,7 @@ class Rounds(ABC):
                 cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
-            #todo: move this to an app?
+            # todo: move this to an app?
             if bias is not None and sp.shape[0] > 1:
                 bs = bias.compute_from_system_params(sp).energy
                 probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))

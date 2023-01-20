@@ -1,7 +1,8 @@
+from functools import wraps
+
 from parsl import python_app
 
 from configs.vsc_stevin import config
-from functools import partial, wraps
 
 config()
 

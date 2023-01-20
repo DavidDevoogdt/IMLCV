@@ -27,11 +27,11 @@ from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
 
 import yaff
+from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR
 from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
 from IMLCV.base.tools._rbf_interp import RBFInterpolator
 from IMLCV.base.tools.tools import HashableArrayWrapper
-from configs.bash_app_python import bash_app_python
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine
@@ -246,7 +246,6 @@ class YaffEnergy(Energy):
         self.ff = self.f()
         self.sp = state["sp"]
         return self
-
 
 
 class AseEnergy(Energy):
@@ -678,7 +677,7 @@ class Bias(BC, ABC):
         plt.close(fig=fig)  # write out
 
 
-@bash_app_python()
+@bash_app_python(executors=["default"])
 def plot_app(
     bias: Bias,
     outputs: list[File],

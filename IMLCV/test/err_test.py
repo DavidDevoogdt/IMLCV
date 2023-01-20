@@ -6,7 +6,6 @@ class EnergyError(Exception):
     pass
 
 
-
 class AseError(EnergyError):
     pass
 
@@ -17,10 +16,10 @@ def handle():
     except:
         raise AseError("yeet")
 
-class myclass:
 
+class myclass:
     def __init__(self) -> None:
-        self.sp = (  jnp.zeros((22,3)),None  )
+        self.sp = (jnp.zeros((22, 3)), None)
 
     def run(self):
         try:
@@ -32,6 +31,7 @@ An error occured during the energy calculation {self.__class__}
 The lates coordinates were {self.sp}.                  
 raised exception from calculator:{be}"""
             )
+
 
 if __name__ == "__main__":
     a = myclass()

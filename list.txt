@@ -1,0 +1,14 @@
+CLUSTER: dodrio
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           2250552  cpu_rome parsl.sl vsc43693  R       1:42      1 node5082.dodrio.os
+           2250529  cpu_rome parsl.sl vsc43693  R       6:22      1 node5088.dodrio.os
+           2250523  cpu_rome parsl.sl vsc43693  R       8:43      1 node5054.dodrio.os
+           2250410  cpu_rome parsl.sl vsc43693  R      15:47      1 node5088.dodrio.os
+           2250386  cpu_rome parsl.sl vsc43693  R      19:49      1 node5065.dodrio.os
+           2250549  cpu_rome parsl.sl vsc43693  R       2:16      1 node5064.dodrio.os
+           2250550  cpu_rome parsl.sl vsc43693  R       2:16      1 node5064.dodrio.os
+           2250551  cpu_rome parsl.sl vsc43693  R       2:16      1 node5064.dodrio.os
+           2250505 gpu_rome_ parsl.sl vsc43693  R       9:54      1 gpu505.dodrio.os
+           2250506 gpu_rome_ parsl.sl vsc43693  R       9:54      1 gpu505.dodrio.os
+           2250507 gpu_rome_ parsl.sl vsc43693  R       9:54      1 gpu505.dodrio.os
+           2250508 gpu_rome_ parsl.sl vsc43693  R       9:54      1 gpu508.dodrio.os

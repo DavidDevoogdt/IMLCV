@@ -31,6 +31,6 @@ setup(
         "nyx",
         "filelock",
         "distrax",
-        "jaxopt"
+        "jaxopt",
     ],
 )

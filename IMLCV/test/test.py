@@ -6,7 +6,6 @@ from IMLCV.base.hwsetup import do_conf
 from IMLCV.base.rounds import Rounds
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.scheme import Scheme
-from jax import jit
 
 path = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala"
 

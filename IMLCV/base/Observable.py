@@ -9,10 +9,10 @@ from jax import jit
 from molmod.units import kjmol, picosecond
 from parsl import File
 
+from configs.bash_app_python import bash_app_python
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
-from configs.bash_app_python import bash_app_python
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
@@ -80,11 +80,9 @@ class ThermoLIB:
                 cv = bias.collective_variable
             sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
 
-            from typing import Any
-
             cvs, _ = cv.compute_cv(sp)
 
-            if cvs.batch_dim <=1:
+            if cvs.batch_dim <= 1:
                 print("##############bdim {cvs.batch_dim} ignored\n")
                 continue
 

@@ -197,7 +197,6 @@ def CsPbI3(small=True):
 
 
 if __name__ == "__main__":
-    
 
     sys = CsPbI3()
     sys.run(2)

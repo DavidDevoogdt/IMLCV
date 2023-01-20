@@ -15,9 +15,9 @@ from scipy.optimize import root
 from scipy.spatial.transform import Rotation as R
 from tensorflow_probability.substrates import jax as tfp
 
-from IMLCV.base.tools.bessel_callback import spherical_jn
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
+from IMLCV.base.tools.bessel_callback import spherical_jn
 
 # todo: Optimizing many-body atomic descriptors for enhanced computational performance of
 # machine learning based interatomic potentials

@@ -1,7 +1,7 @@
+from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import SingleNodeLauncher
 from parsl.providers import LocalProvider
-from parsl.config import Config
 
 
 def get_config(path_internal, py_env):

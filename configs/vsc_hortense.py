@@ -1,11 +1,10 @@
-import os
-import math
-import time
 import logging
-import typeguard
-
+import math
+import os
+import time
 from typing import Optional
 
+import typeguard
 from parsl.channels import LocalChannel
 from parsl.channels.base import Channel
 from parsl.launchers import SingleNodeLauncher
@@ -128,9 +127,9 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
         if exclusive:
             self.scheduler_options += "#SBATCH --exclusive\n"
         if partition:
-            self.scheduler_options += "#SBATCH --partition={}\n".format(partition)
+            self.scheduler_options += f"#SBATCH --partition={partition}\n"
         if account:
-            self.scheduler_options += "#SBATCH --account={}\n".format(account)
+            self.scheduler_options += f"#SBATCH --account={account}\n"
         self.worker_init = worker_init + "\n"
 
     def _status(self):
@@ -149,14 +148,14 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
             logger.debug("No active jobs, skipping status update")
             return
 
-        cmd = "squeue --noheader --format='%i %t' --job '{0}'".format(job_id_list)
+        cmd = f"squeue --noheader --format='%i %t' --job '{job_id_list}'"
         logger.debug("Executing %s", cmd)
         retcode, stdout, stderr = self.execute_wait(cmd)
         logger.debug("squeue returned %s %s", stdout, stderr)
 
         # Execute_wait failed. Do no update
         if retcode != 0:
-            logger.warning("squeue failed with non-zero exit code {}".format(retcode))
+            logger.warning(f"squeue failed with non-zero exit code {retcode}")
             return
 
         jobs_missing = set(self.resources.keys())
@@ -179,9 +178,7 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
         # squeue does not report on jobs that are not running. So we are filling in the
         # blanks for missing jobs, we might lose some information about why the jobs failed.
         for missing_job in jobs_missing:
-            logger.debug(
-                "Updating missing job {} to completed status".format(missing_job)
-            )
+            logger.debug(f"Updating missing job {missing_job} to completed status")
             self.resources[missing_job]["status"] = JobStatus(JobState.COMPLETED)
 
     def submit(self, command, tasks_per_node, job_name="parsl.slurm"):
@@ -204,19 +201,19 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
         scheduler_options = self.scheduler_options
         worker_init = self.worker_init
         if self.mem_per_node is not None:
-            scheduler_options += "#SBATCH --mem={}g\n".format(self.mem_per_node)
-            worker_init += "export PARSL_MEMORY_GB={}\n".format(self.mem_per_node)
+            scheduler_options += f"#SBATCH --mem={self.mem_per_node}g\n"
+            worker_init += f"export PARSL_MEMORY_GB={self.mem_per_node}\n"
         if self.cores_per_node is not None:
             cpus_per_task = math.floor(self.cores_per_node / tasks_per_node)
-            scheduler_options += "#SBATCH --cpus-per-task={}".format(cpus_per_task)
-            worker_init += "export PARSL_CORES={}\n".format(cpus_per_task)
+            scheduler_options += f"#SBATCH --cpus-per-task={cpus_per_task}"
+            worker_init += f"export PARSL_CORES={cpus_per_task}\n"
 
-        job_name = "{0}.{1}".format(job_name, time.time())
+        job_name = f"{job_name}.{time.time()}"
 
-        script_path = "{0}/{1}.submit".format(self.script_dir, job_name)
+        script_path = f"{self.script_dir}/{job_name}.submit"
         script_path = os.path.abspath(script_path)
 
-        logger.debug("Requesting one block with {} nodes".format(self.nodes_per_block))
+        logger.debug(f"Requesting one block with {self.nodes_per_block} nodes")
 
         job_config = {}
         job_config["submit_script_dir"] = self.channel.script_dir
@@ -246,7 +243,7 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
 
         retcode, stdout, stderr = self.execute_wait(
             "sbatch {1} {0}".format(
-                channel_script_path, "--partition={}".format(self.partition)
+                channel_script_path, f"--partition={self.partition}"
             )
         )
 
@@ -280,7 +277,7 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
         """
 
         job_id_list = " ".join(job_ids)
-        retcode, stdout, stderr = self.execute_wait("scancel {0}".format(job_id_list))
+        retcode, stdout, stderr = self.execute_wait(f"scancel {job_id_list}")
         rets = None
         if retcode == 0:
             for jid in job_ids:
@@ -304,12 +301,42 @@ def get_config(
     account="2022_069",
     channel=LocalChannel(),
     singlepoint_nodes=16,
-    walltime = "48:00:00",
+    walltime="48:00:00",
+    bootstrap=False,
 ):
-
 
     from parsl.config import Config
     from parsl.executors import HighThroughputExecutor
+
+    if bootstrap:
+        worker_init = f"{py_env};\n"
+        provider = SlurmProvider(
+            partition="cpu_rome",
+            account=account,
+            channel=channel,
+            nodes_per_block=1,
+            cores_per_node=16,
+            init_blocks=1,
+            min_blocks=1,
+            max_blocks=1,
+            parallelism=0,
+            walltime=walltime,
+            worker_init=worker_init,
+            exclusive=False,
+            mem_per_node=15,
+        )
+        bootstrap = HighThroughputExecutor(
+            label="default",
+            provider=provider,
+            # address=os.environ["HOSTNAME"],
+            working_dir=str(path_internal / "bootstrap"),
+            cores_per_worker=1,
+        )
+        return Config(
+            executors=[bootstrap],
+            usage_tracking=True,
+            run_dir=str(path_internal),
+        )
 
     worker_init = f"{py_env};\n"
     provider = SlurmProvider(
@@ -333,9 +360,10 @@ def get_config(
         working_dir=str(path_internal / "default_executor"),
         cores_per_worker=1,
     )
+
     cores_per_model = 4
     worker_init = f"{py_env}; \n"
-    worker_init += "set OMP_NUM_THREADS={}\n".format(cores_per_model)
+    worker_init += f"set OMP_NUM_THREADS={cores_per_model}\n"
     provider = SlurmProvider(
         partition="cpu_rome",
         account=account,
@@ -346,7 +374,7 @@ def get_config(
         min_blocks=0,
         max_blocks=512,
         parallelism=1,
-        walltime="02:00:00",
+        walltime=walltime,
         worker_init=worker_init,
         exclusive=False,
     )
@@ -360,11 +388,11 @@ def get_config(
     cores_per_gpu = 12
     worker_init = f"{py_env}; \n"
     worker_init += "unset SLURM_CPUS_PER_TASK\n"
-    worker_init += "export SLURM_NTASKS_PER_NODE={}\n".format(cores_per_gpu)
-    worker_init += "export SLURM_TASKS_PER_NODE={}\n".format(cores_per_gpu)
-    worker_init += "export SLURM_NTASKS={}\n".format(cores_per_gpu)
-    worker_init += "export SLURM_NPROCS={}\n".format(cores_per_gpu)
-    worker_init += "export OMP_NUM_THREADS={}\n".format(cores_per_gpu)
+    worker_init += f"export SLURM_NTASKS_PER_NODE={cores_per_gpu}\n"
+    worker_init += f"export SLURM_TASKS_PER_NODE={cores_per_gpu}\n"
+    worker_init += f"export SLURM_NTASKS={cores_per_gpu}\n"
+    worker_init += f"export SLURM_NPROCS={cores_per_gpu}\n"
+    worker_init += f"export OMP_NUM_THREADS={cores_per_gpu}\n"
     provider = SlurmProvider(
         partition="gpu_rome_a100",
         account=account,
@@ -404,7 +432,6 @@ def get_config(
     worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_singlepoint}\n"
 
     # export OMP_PROC_BIND=true
-
 
     provider = SlurmProvider(
         partition="cpu_rome",

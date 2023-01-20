@@ -32,7 +32,7 @@ from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
 
 if TYPE_CHECKING:
-    from IMLCV.base.bias import Bias, Energy, EnergyError, EnergyResult
+    from IMLCV.base.bias import Bias, Energy, EnergyResult
 
 from molmod.periodic import periodic
 
@@ -155,7 +155,6 @@ class TrajectoryInfo:
     err: np.ndarray | None = None
 
     t: np.ndarray | None = None
-
 
     _items_scal = ["t", "e_pot", "T", "P", "err"]
     _items_vec = ["positions", "cell", "gpos", "vtens", "charges"]

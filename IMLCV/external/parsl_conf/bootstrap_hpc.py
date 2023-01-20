@@ -31,8 +31,8 @@ def func(name):
     import os
     import shutil
 
-    from IMLCV.base.rounds import Rounds
     from configs.vsc_stevin import config
+    from IMLCV.base.rounds import Rounds
     from IMLCV.test.common import ase_yaff
 
     config(cluster="doduo", max_blocks=10, mem_per_node=20)

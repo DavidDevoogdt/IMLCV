@@ -19,6 +19,7 @@ from molmod.units import angstrom, kjmol
 from parsl.data_provider.files import File
 from tensorflow import keras
 
+from configs.bash_app_python import bash_app_python
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
@@ -34,7 +35,6 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.rounds import Rounds
-from configs.bash_app_python import bash_app_python
 
 plt.rcParams["text.usetex"] = True
 
@@ -551,7 +551,7 @@ class CVDiscovery:
         return new_cv
 
 
-@bash_app_python()
+@bash_app_python(executors=["default"])
 def plot_app(
     sps, old_cv: CollectiveVariable, new_cv: CollectiveVariable, name, outputs=[]
 ):

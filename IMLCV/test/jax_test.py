@@ -1,7 +1,8 @@
 from functools import partial
-from jax import jit, grad, vmap
-import matplotlib.pyplot as plt
+
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
+from jax import grad, jit, vmap
 
 
 @partial(jit, static_argnums=(1,))

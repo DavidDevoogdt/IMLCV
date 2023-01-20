@@ -1,5 +1,5 @@
-from parsl.executors import ThreadPoolExecutor
 from parsl.config import Config
+from parsl.executors import ThreadPoolExecutor
 
 
 def get_config(path_internal, py_env):

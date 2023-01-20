@@ -13,7 +13,8 @@ from configs.config_general import ROOT_DIR
 
 # @typeguard.typechecked
 def bash_app_python(
-    function=None,executors='all',
+    function=None,
+    executors="all",
 ):
     def decorator(func):
         def wrapper(
@@ -33,7 +34,7 @@ def bash_app_python(
             if folder is None:
                 folder = os.getcwd()
 
-            @bash_app( executors= executors  )
+            @bash_app(executors=executors)
             def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
 
                 if len(inputs) > 0:
@@ -77,7 +78,7 @@ def bash_app_python(
                 **kwargs,
             )
 
-            @python_app
+            @python_app(executors=["default"])
             def load(inputs=[], outputs=[]):
                 with open(inputs[-1].filepath, "rb") as f:
                     result = dill.load(f)
