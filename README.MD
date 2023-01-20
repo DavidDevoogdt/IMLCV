@@ -6,6 +6,15 @@ ThermoLIB is available upon request, see https://molmod.ugent.be/software
 
 # Installation
 
+for local and hpc installation see `install.sh` and `install_hpc.sh`
+
+# Examples
+See command line interface got to this foler in (linux) terminal, and type
 ```
-pip install -e .
+source ./Miniconda3/bin/activate base
+python IMLCV/examples/simul.py -s ala
+```
+For more options, see 
+```
+python IMLCV/examples/simul.py  --help
 ```
