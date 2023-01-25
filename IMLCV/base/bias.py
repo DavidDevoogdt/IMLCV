@@ -27,6 +27,8 @@ from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
 
 import yaff
+
+yaff.log.set_level(yaff.log.silent)
 from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR
 from IMLCV.base.CV import CV, CollectiveVariable, SystemParams

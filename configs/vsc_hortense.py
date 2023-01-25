@@ -315,7 +315,7 @@ def get_config(
             account=account,
             channel=channel,
             nodes_per_block=1,
-            cores_per_node=16,
+            cores_per_node=4,
             init_blocks=1,
             min_blocks=1,
             max_blocks=1,
@@ -323,14 +323,15 @@ def get_config(
             walltime=walltime,
             worker_init=worker_init,
             exclusive=False,
-            mem_per_node=15,
+            mem_per_node=5,
+            cmd_timeout=60,
         )
         bootstrap = HighThroughputExecutor(
             label="default",
             provider=provider,
+            cores_per_worker=4,
             # address=os.environ["HOSTNAME"],
             working_dir=str(path_internal / "bootstrap"),
-            cores_per_worker=1,
         )
         return Config(
             executors=[bootstrap],
@@ -344,7 +345,7 @@ def get_config(
         account=account,
         channel=channel,
         nodes_per_block=1,
-        cores_per_node=16,
+        cores_per_node=4,
         init_blocks=1,
         min_blocks=1,
         max_blocks=512,
@@ -352,6 +353,7 @@ def get_config(
         walltime="02:00:00",
         worker_init=worker_init,
         exclusive=False,
+        cmd_timeout=60,
     )
     default = HighThroughputExecutor(
         label="default",
@@ -369,7 +371,7 @@ def get_config(
         account=account,
         channel=channel,
         nodes_per_block=1,
-        cores_per_node=8,
+        cores_per_node=4,
         init_blocks=0,
         min_blocks=0,
         max_blocks=512,
@@ -377,6 +379,8 @@ def get_config(
         walltime=walltime,
         worker_init=worker_init,
         exclusive=False,
+        cmd_timeout=60,
+        mem_per_node=10,
     )
     model = HighThroughputExecutor(
         label="model",
@@ -407,6 +411,7 @@ def get_config(
         worker_init=worker_init,
         exclusive=False,
         scheduler_options="#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu=12\n#SBATCH --export=None",  # request gpu
+        cmd_timeout=60,
     )
     training = HighThroughputExecutor(
         label="training",
@@ -441,11 +446,12 @@ def get_config(
         cores_per_node=total_cores,
         init_blocks=0,
         min_blocks=0,
-        max_blocks=64,
+        max_blocks=256,
         parallelism=1,
         walltime=walltime,
         worker_init=worker_init,
         exclusive=False,
+        cmd_timeout=60,
     )
     reference = HighThroughputExecutor(
         label="reference",

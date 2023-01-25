@@ -1,6 +1,5 @@
 import argparse
 
-
 from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR, config
 
@@ -18,6 +17,7 @@ if __name__ == "__main__":
     parser.add_argument("-ni", "--n_steps_init", type=int, default=100)
     parser.add_argument("-r", "--rounds", type=int, default=20)
     parser.add_argument("-nu", "--n_umbrellas", type=int, default=8)
+    parser.add_argument("-spb", "--samples_per_bin", type=int, default=400)
     parser.add_argument(
         "-K",
         "--K_umbrellas",
@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     if args.cont:
         assert args.folder.exists()
-        args.init = 0
+        args.n_steps_init = 0
     else:
         assert (
             not args.folder.exists()
@@ -83,8 +83,8 @@ if __name__ == "__main__":
         if not args.cont:
             scheme = Scheme(folder=args.folder, Engine=engine)
         else:
-            scheme = Scheme.from_rounds(folder=args.folder, copy=True)
-            scheme.FESBias(plot=True, n=args.n_umbrellas)
+            scheme = Scheme.from_rounds(folder=args.folder, new_folder=False)
+            scheme.FESBias(plot=True, samples_per_bin=args.samples_per_bin)
             scheme.rounds.add_round_from_md(scheme.md)
 
         scheme.inner_loop(
@@ -92,10 +92,11 @@ if __name__ == "__main__":
             n=args.n_umbrellas,
             init=args.n_steps_init,
             steps=args.n_steps,
+            samples_per_bin=args.samples_per_bin,
         )
 
     app(
         args=args,
-        stdout=str(args.folder / "stdout"),
-        stderr=str(args.folder / "stderr"),
+        stdout=str(args.folder / "IMLCV.stdout"),
+        stderr=str(args.folder / "IMLCV.stderr"),
     ).result()

@@ -22,15 +22,25 @@ class ThermoLIB:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
-    samples_per_bin = 400
     time_per_bin = 2 * picosecond
 
-    def __init__(self, rounds: Rounds) -> None:
+    def __init__(self, rounds: Rounds, rnd=None) -> None:
         self.rounds = rounds
-        self.cvs = self.rounds.get_bias().collective_variable
+        if rnd is None:
+            rnd = rounds.round
+        self.rnd = rnd
+        self.common_bias = self.rounds.get_bias(r=self.rnd)
+        self.cvs = self.rounds.get_bias(r=self.rnd).collective_variable
         self.folder = rounds.folder
 
-    def fes_nd_thermolib(self, plot=True, n=8, start_r=0):
+    def fes_nd_thermolib(
+        self,
+        plot=True,
+        n=None,
+        start_r=0,
+        update_bounding_box=False,
+        samples_per_bin=500,
+    ):
         class ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias) -> None:
                 self.bias = bias
@@ -62,17 +72,18 @@ class ThermoLIB:
 
         temp = self.rounds.T
 
-        common_bias = self.rounds.get_bias()
-        directory = f"{self.folder}/round_{self.rounds.round}"
+        directory = f"{self.folder}/round_{self.rnd}"
+
+        rnd = self.rnd
 
         trajs = []
-        trajs_mapped = []
+        trajs_plot = []
         biases = []
 
         time = 0
         cv = None
 
-        for round, trajectory in self.rounds.iter(start=start_r, num=4):
+        for round, trajectory in self.rounds.iter(start=start_r, num=4, stop=self.rnd):
 
             bias = trajectory.get_bias()
 
@@ -88,32 +99,38 @@ class ThermoLIB:
 
             trajs.append(cvs)
             biases.append(ThermoBiasND(bias))
+            if plot:
+                if round.round == rnd:
+                    trajs_plot.append(cvs)
 
         if plot:
             plot_app(
-                bias=common_bias,
+                bias=self.common_bias,
                 outputs=[File(f"{directory}/combined.pdf")],
                 map=False,
-                traj=trajs,
-                # stdout=f"{directory}/combined.stdout",
-                # stderr=f"{directory}/combined.stderr",
+                traj=trajs_plot,
             )
-
-        trajs_mapped = [
-            np.array(
-                traj.cv,
-                dtype=np.double,
-            )
-            for traj in trajs
-        ]
 
         # todo: take actual bounds instead of calculated bounds
-        bounds, bins = self._FES_mg(cvs=trajs, bounding_box=cv.metric.bounding_box, n=n)
+        if update_bounding_box:
+            bb = None
+        else:
+            bb = self.cvs.metric.bounding_box
 
-        histo = bash_app_python(HistogramND.from_wham)(
+        bounds, bins = self._FES_mg(
+            cvs=trajs, bounding_box=bb, n=n, samples_per_bin=samples_per_bin
+        )
+
+        histo = bash_app_python(HistogramND.from_wham, executors=["model"])(
             bins=bins,
             # pinit=pinit,
-            trajectories=trajs_mapped,
+            trajectories=[
+                np.array(
+                    traj.cv,
+                    dtype=np.double,
+                )
+                for traj in trajs
+            ],
             error_estimate="mle_f",
             biasses=biases,
             temp=temp,
@@ -170,27 +187,26 @@ class ThermoLIB:
 
         transitions = jnp.vstack(trans)
         if plot:
-            fn = f"{self.folder}/round_{self.rounds.round}/"
+            fn = f"{self.folder}/round_{self.rnd}/"
         else:
             fn = None
 
         return cvs.metric.update_metric(transitions, fn=fn)
 
-    def _FES_mg(self, cvs: list[CV], bounding_box, n=None):
+    def _FES_mg(self, cvs: list[CV], bounding_box, samples_per_bin=500, n=None):
+
+        c = CV.stack(*cvs)
 
         if n is None:
-            n = 0
-            for t in cvs:
-                n += t.cv.size
-
-            n = int((n / self.samples_per_bin) ** (1 / cvs[0].cv.ndim))
+            n = int((c.batch_dim / samples_per_bin) ** (1 / c.dim))
 
         assert n >= 4, "sample more points"
 
-        c = CV.stack(*cvs)
-        a = c.cv
+        if bounding_box is None:
+            bounds = [[c.cv[:, i].min(), c.cv[:, i].max()] for i in range(c.dim)]
+        else:
+            bounds = bounding_box
 
-        bounds = [[a[:, i].min(), a[:, i].max()] for i in range(a.shape[1])]
         bins = [
             np.linspace(mini, maxi, n, endpoint=True, dtype=np.double)
             for mini, maxi in bounds
@@ -209,10 +225,13 @@ class ThermoLIB:
         rbf_kernel="thin_plate_spline",
         rbf_degree=-1,
         smoothing_threshold=5 * kjmol,
+        samples_per_bin=500,
         **plot_kwargs,
     ):
         if fs is None:
-            fes, grid, bounds = self.fes_nd_thermolib(plot=plot, start_r=start_r)
+            fes, grid, bounds = self.fes_nd_thermolib(
+                plot=plot, start_r=start_r, samples_per_bin=samples_per_bin
+            )
 
         # fes is in 'xy'- indexing convention, convert to ij
         fs = np.transpose(fes.fs)
@@ -281,32 +300,26 @@ class ThermoLIB:
         else:
             raise ValueError
 
-        # for cvs in [CV(cv=jnp.zeros((2,))), CV(cv=jnp.zeros((5, 2)))]:
-
-        #      out = fesBias.compute_from_cv(cvs)
-
         if plot:
             plot_app(
                 bias=fesBias,
                 outputs=[
                     File(
-                        f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.pdf"
+                        f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.pdf"
                     )
                 ],
                 inverted=True,
-                **plot_kwargs
-                # margin=1,
-                # stdout=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stdout",
-                # stderr=f"{self.folder}/FES_thermolib_{self.rounds.round}_inverted_{choice}.stderr",
+                stdout=f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.stdout",
+                stderr=f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.stderr",
+                **plot_kwargs,
             )
 
             plot_app(
                 bias=fesBias,
-                outputs=[
-                    File(f"{self.folder}/FES_bias_{self.rounds.round}_{choice}.pdf")
-                ],
-                **plot_kwargs
-                # margin=1.0,
+                outputs=[File(f"{self.folder}/FES_bias_{self.rnd}_{choice}.pdf")],
+                stdout=f"{self.folder}/FES_bias_{self.rnd}_{choice}.stdout",
+                stderr=f"{self.folder}/FES_bias_{self.rnd}_{choice}.stderr",
+                **plot_kwargs,
             )
 
         return fesBias

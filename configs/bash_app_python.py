@@ -4,6 +4,8 @@ import argparse
 import os
 import sys
 import uuid
+from datetime import datetime
+from pathlib import Path
 
 import dill
 from parsl import File, bash_app, python_app
@@ -60,13 +62,18 @@ def bash_app_python(
                 path, name = os.path.split(name.filepath)
                 return os.path.join(path, f"bash_app_{name}")
 
-            fold = ROOT_DIR / "IMLCV" / "bash_python_app"
+            if stdout is not None:
+                fold = Path(stdout).parent
+                filename = f"{fold}/{Path(stdout).stem}.dill"
+            elif stderr is not None:
+                fold = Path(stderr).parent
+                filename = f"{fold }/{Path(stderr).stem}.dill"
+            else:  # no option provided
+                fold = ROOT_DIR / "IMLCV" / "bash_python_app"
+                filename = str(fold / f"{str(uuid.uuid4())}.dill")
+
             if not os.path.exists(fold):
-
                 os.mkdir(fold)
-
-            filename = str(f"{fold}/{str(uuid.uuid4())}")
-
             file = File(filename)
 
             future: AppFuture = fun(
@@ -92,7 +99,6 @@ def bash_app_python(
                 return result
 
             return load(inputs=future.outputs, outputs=outputs)
-            # return load(inputs=[future.outputs[-1]])
 
         return wrapper
 
@@ -115,6 +121,7 @@ if __name__ == "__main__":
 
     print("#" * 20)
     print(f"got input {sys.argv}")
+    print(f"task started at {datetime.now():%d/%m/%Y %H:%M:%S }")
 
     os.chdir(args.folder)
 
@@ -122,9 +129,6 @@ if __name__ == "__main__":
 
     with open(args.file, "rb") as f:
         func, fargs, fkwargs = dill.load(f)
-
-    print(f"calling {func} with args {fargs} and  kwargs {fkwargs}")
-
     print("#" * 20)
 
     a = func(*fargs, **fkwargs)
@@ -133,4 +137,5 @@ if __name__ == "__main__":
         dill.dump(a, f)
 
     print("#" * 20)
-    print(f"function finished properly, results dumped in {args.file}")
+    print(f"task finished at {datetime.now():%d/%m/%Y %H:%M:%S}")
+    print("#" * 20)

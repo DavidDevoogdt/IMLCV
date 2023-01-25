@@ -60,7 +60,9 @@ class RoundInformation:
 
 
 class Rounds(ABC):
-    def __init__(self, folder: str | Path = "output", copy=True) -> None:
+    def __init__(
+        self, folder: str | Path = "output", copy=True, new_folder=True
+    ) -> None:
         """
         this class saves all relevant info in a hdf5 container. It is build as follows:
         root
@@ -88,13 +90,14 @@ class Rounds(ABC):
 
         folder = Path(folder)
 
-        if folder.exists():
+        # only consider folder if it has reults file in it
+        if (folder / "results.h5").exists() and new_folder:
 
             # look for first avaialble folder
             i = 0
             while True:
                 p = folder.parent / (f"{folder.name}_{i:0>3}")
-                if p.exists():
+                if (p / "results.h5").exists():
                     i += 1
                 else:
                     break
@@ -334,7 +337,7 @@ class Rounds(ABC):
 
             _r = self.round_information(r=r0)
 
-            if not _r.valid:
+            if not _r.valid and not ignore_invalid:
                 continue
 
             for i in _r.num_vals:
@@ -530,7 +533,7 @@ class Rounds(ABC):
         sp: SystemParams | None = None
 
         # also get smaples form init round
-        for _, t in self.iter(start=0, num=1, ignore_invalid=True):
+        for _, t in self.iter(start=0, num=2, ignore_invalid=True):
             sp0 = t.ti.sp
             if sp is None:
                 sp = sp0
@@ -539,9 +542,9 @@ class Rounds(ABC):
 
         if sp is None:  # no provious round available
             sp = md_engine.sp
-            print("using standard output")
-        else:
-            print(f"using exisitng sp samples, shape = {sp.shape}")
+        #     print("using standard output")
+        # else:
+        #     print(f"using exisitng sp samples, shape = {sp.shape}")
 
         sp = sp.batch()
 
@@ -573,15 +576,28 @@ class Rounds(ABC):
 
                 bias = Bias.load(inputs[1].filepath)
 
-                print("loading umbrella with sp = {sp}")
-
                 kwargs = dict(
                     bias=bias,
                     trajectory_file=outputs[1].filepath,
                 )
 
                 if sp is not None:
-                    kwargs["sp"] = sp
+                    # todo: move this to an app?
+                    if sp.shape[0] > 1:
+                        bs = bias.compute_from_system_params(sp).energy
+                        probs = jnp.exp(
+                            -bs / (md_engine.static_trajectory_info.T * boltzmann)
+                        )
+                        probs = probs / jnp.linalg.norm(probs)
+                    else:
+                        probs = None
+
+                    index = jax.random.choice(
+                        a=sp.shape[0],
+                        key=KEY,
+                        p=probs,
+                    )
+                    kwargs["sp"] = sp[index]
 
                 md = MDEngine.load(inputs[0].filepath, **kwargs)
                 md.run(steps)
@@ -603,22 +619,8 @@ class Rounds(ABC):
                 cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
-            # todo: move this to an app?
-            if bias is not None and sp.shape[0] > 1:
-                bs = bias.compute_from_system_params(sp).energy
-                probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
-                probs = probs / jnp.linalg.norm(probs)
-            else:
-                probs = None
-
-            index = jax.random.choice(
-                a=sp.shape[0],
-                key=KEY,
-                p=probs,
-            )
-
             future = run(
-                sp=sp[index],
+                sp=sp,
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),

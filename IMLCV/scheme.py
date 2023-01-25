@@ -41,12 +41,13 @@ class Scheme:
     @staticmethod
     def from_rounds(
         folder: str | Path,
-        copy=False,
+        new_folder=True,
+        copy=True,
     ) -> Scheme:
 
         self = Scheme.__new__(Scheme)
 
-        rounds = Rounds(folder, copy=copy)
+        rounds = Rounds(folder, new_folder=new_folder, copy=copy)
         self.md = rounds.get_engine()
 
         self.rounds = rounds
@@ -118,12 +119,13 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
+        samples_per_bin=500,
     ):
 
         if init != 0:
             self.grid_umbrella(steps=init, n=n, k=K)
-            self.rounds.add_round_from_md(self.md)
             self.rounds.invalidate_data()
+            self.rounds.add_round_from_md(self.md)
 
         for r in range(rnds):
             self.grid_umbrella(steps=steps, n=n, k=K)
@@ -132,7 +134,7 @@ class Scheme:
                 self.new_metric(plot=True)
                 update_metric = False
             else:
-                self.FESBias(plot=True, n=n)
+                self.FESBias(plot=True, samples_per_bin=samples_per_bin)
 
             self.rounds.add_round_from_md(self.md)
 

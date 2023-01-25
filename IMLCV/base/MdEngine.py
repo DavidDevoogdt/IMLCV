@@ -31,6 +31,8 @@ from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
 
+yaff.log.set_level(yaff.log.silent)
+
 if TYPE_CHECKING:
     from IMLCV.base.bias import Bias, Energy, EnergyResult
 

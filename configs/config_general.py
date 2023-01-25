@@ -50,6 +50,5 @@ def config(env=None, singlepoint_nodes=16, walltime="48:00:00", bootstrap=False)
     elif env == "stevin":
         raise NotImplementedError
 
-    print(config)
-
+    #
     parsl.load(config=config)

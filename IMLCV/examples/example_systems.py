@@ -11,6 +11,8 @@ from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
+
+yaff.log.set_level(yaff.log.silent)
 from configs.config_general import ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import CollectiveVariable, CvMetric, SystemParams, Volume, dihedral
@@ -171,10 +173,7 @@ def CsPbI3(small=True):
         ),
     )
 
-    print(f"{cv.metric.bounding_box}")
-
     bias = NoneBias(cvs=cv)
-
     tic = StaticTrajectoryInfo(
         write_step=1,
         T=300 * units.kelvin,

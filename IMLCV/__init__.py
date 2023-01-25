@@ -12,6 +12,9 @@ from jax import random
 from jax.interpreters import batching
 
 import yaff
+
+yaff.log.set_level(yaff.log.silent)
+
 from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 
 KEY = random.PRNGKey(0)
@@ -20,8 +23,6 @@ if "mpi4py" in sys.modules:
     warning("mpi4py doens't work well with cp2k calc atm")
 
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-
-yaff.log.set_level(yaff.log.silent)
 
 
 jax.config.update("jax_enable_x64", True)
