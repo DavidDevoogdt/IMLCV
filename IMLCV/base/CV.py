@@ -3,11 +3,12 @@ from __future__ import annotations
 import dataclasses
 import tempfile
 from abc import abstractmethod
+from collections.abc import Callable
 
 # from IMLCV.base.CV import CV, CvTrans
 from functools import partial
 from importlib import import_module
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import jax
 import jax.lax

@@ -14,7 +14,15 @@ ROOT_DIR = Path(os.path.dirname(__file__)).parent
 py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
 
-def config(env=None, singlepoint_nodes=16, walltime="48:00:00", bootstrap=False):
+def config(
+    env=None,
+    singlepoint_nodes=16,
+    walltime="48:00:00",
+    bootstrap=False,
+    memory_per_core=None,
+    min_memery_per_node=None,
+    path_internal: Path | None = None,
+):
 
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
@@ -33,7 +41,9 @@ def config(env=None, singlepoint_nodes=16, walltime="48:00:00", bootstrap=False)
 
     print(env)
 
-    path_internal = ROOT_DIR / "IMLCV" / ".runinfo"
+    if path_internal is None:
+        path_internal = ROOT_DIR / "IMLCV" / ".runinfo"
+
     py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
     if env == "local":
@@ -43,9 +53,11 @@ def config(env=None, singlepoint_nodes=16, walltime="48:00:00", bootstrap=False)
             path_internal,
             py_env,
             account="2022_069",
-            singlepoint_nodes=singlepoint_nodes,
+            singlepoint_cores=singlepoint_nodes,
             walltime=walltime,
             bootstrap=bootstrap,
+            memory_per_core=memory_per_core,
+            min_memory=min_memery_per_node,
         )
     elif env == "stevin":
         raise NotImplementedError

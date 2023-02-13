@@ -17,7 +17,6 @@ from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
 from configs.bash_app_python import bash_app_python
-from IMLCV import KEY
 from IMLCV.base.bias import Bias, CompositeBias
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
@@ -123,14 +122,14 @@ class Rounds(ABC):
     def _make_file(self):
         # todo: make backup
         if (p := Path(self.h5file_name)).exists():
-            os.remove(p)
+            os.removep()
 
         # create the file
-        with self.lock:
-            with h5py.File(self.h5file_name, mode="w-"):
-                pass
+        # with self.lock:
+        #     with h5py.File(self.h5file_name, mode="w-"):
+        #         pass
 
-        self.h5file = h5py.File(self.h5file_name, mode="r+")
+        self.h5file = h5py.File(self.h5file_name, mode="w")
 
     @property
     def h5file_name(self):
@@ -542,17 +541,29 @@ class Rounds(ABC):
 
         if sp is None:  # no provious round available
             sp = md_engine.sp
-        #     print("using standard output")
-        # else:
-        #     print(f"using exisitng sp samples, shape = {sp.shape}")
 
         sp = sp.batch()
 
+        # todo: ofsset umbrellas based on FES
+
+        # preselect at random
+        global KEY
+        if sp.shape[0] > 100:
+            KEY, k = jax.random.split(KEY, 2)
+
+            indices = jax.random.choice(
+                a=sp.shape[0],
+                shape=(100,),
+                key=k,
+                p=None,
+            )
+            sp = sp[indices]
+
         for i, bias in enumerate(biases):
 
-            temp_name = self.path(r=self.round, i=i)
-            if not os.path.exists(temp_name):
-                os.mkdir(temp_name)
+            path_name = self.path(r=self.round, i=i)
+            if not os.path.exists(path_name):
+                os.mkdir(path_name)
 
             # construct bias
             if bias is None:
@@ -560,11 +571,11 @@ class Rounds(ABC):
             else:
                 b = CompositeBias([Bias.load(common_bias_name), bias])
 
-            b_name = self.full_path(temp_name / "bias")
-            b_name_new = self.full_path(temp_name / "bias_new")
+            b_name = self.full_path(path_name / "bias")
+            b_name_new = self.full_path(path_name / "bias_new")
             b.save(b_name)
 
-            traj_name = self.full_path(temp_name / "trajectory_info.h5")
+            traj_name = self.full_path(path_name / "trajectory_info.h5")
 
             @bash_app_python(executors=["reference"])
             def run(
@@ -582,22 +593,8 @@ class Rounds(ABC):
                 )
 
                 if sp is not None:
-                    # todo: move this to an app?
-                    if sp.shape[0] > 1:
-                        bs = bias.compute_from_system_params(sp).energy
-                        probs = jnp.exp(
-                            -bs / (md_engine.static_trajectory_info.T * boltzmann)
-                        )
-                        probs = probs / jnp.linalg.norm(probs)
-                    else:
-                        probs = None
 
-                    index = jax.random.choice(
-                        a=sp.shape[0],
-                        key=KEY,
-                        p=probs,
-                    )
-                    kwargs["sp"] = sp[index]
+                    kwargs["sp"] = sp
 
                 md = MDEngine.load(inputs[0].filepath, **kwargs)
                 md.run(steps)
@@ -619,26 +616,44 @@ class Rounds(ABC):
                 cvs, _ = bias.collective_variable.compute_cv(sp=sp)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
+            if sp.shape[0] > 1:  # type: ignore
+
+                bs = bias.compute_from_system_params(sp).energy
+                probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
+                probs = probs / jnp.linalg.norm(probs)
+            else:
+                probs = None
+
+            KEY, k = jax.random.split(KEY, 2)
+
+            index = jax.random.choice(
+                a=sp.shape[0],  # type: ignore
+                key=k,
+                p=probs,
+            )
+
             future = run(
-                sp=sp,
+                sp=sp[index],  # type: ignore
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),
-                stdout=self.full_path(temp_name / "md.stdout"),
-                stderr=self.full_path(temp_name / "md.stderr"),
+                execution_folder=path_name,
+                stdout="md.stdout",
+                stderr="md.stderr",
             )
 
             if plot:
 
-                plot_file = self.full_path(temp_name / "plot.pdf")
+                plot_file = self.full_path(path_name / "plot.pdf")
 
                 plot_fut = plot_app(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
                     outputs=[File(plot_file)],
-                    stdout=self.full_path(temp_name / "plot.stdout"),
-                    stderr=self.full_path(temp_name / "plot.stderr"),
+                    execution_folder=path_name,
+                    stdout="plot.stdout",
+                    stderr="plot.stderr",
                 )
 
                 plot_tasks.append(plot_fut)

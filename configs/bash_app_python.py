@@ -3,14 +3,11 @@
 import argparse
 import os
 import sys
-import uuid
 from datetime import datetime
 from pathlib import Path
 
 import dill
 from parsl import File, bash_app, python_app
-
-from configs.config_general import ROOT_DIR
 
 
 # @typeguard.typechecked
@@ -21,7 +18,7 @@ def bash_app_python(
     def decorator(func):
         def wrapper(
             *args,
-            folder=None,
+            execution_folder=None,
             stdout=None,
             stderr=None,
             inputs=[],
@@ -32,9 +29,6 @@ def bash_app_python(
             # merge in and outputs
             inputs = [*inputs, *kwargs.pop("inputs", [])]
             outputs = [*outputs, *kwargs.pop("outputs", [])]
-
-            if folder is None:
-                folder = os.getcwd()
 
             @bash_app(executors=executors)
             def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
@@ -52,7 +46,7 @@ def bash_app_python(
                 with open(filename, "wb+") as f:
                     dill.dump((func, args, kwargs), f)
 
-                return f"""python -u { os.path.realpath( __file__ ) } --folder {folder} --file {filename}"""
+                return f"""python  -u { os.path.realpath( __file__ ) }  --folder {execution_folder} --file {filename}"""
 
             fun.__name__ = func.__name__
 
@@ -62,25 +56,23 @@ def bash_app_python(
                 path, name = os.path.split(name.filepath)
                 return os.path.join(path, f"bash_app_{name}")
 
-            if stdout is not None:
-                fold = Path(stdout).parent
-                filename = f"{fold}/{Path(stdout).stem}.dill"
-            elif stderr is not None:
-                fold = Path(stderr).parent
-                filename = f"{fold }/{Path(stderr).stem}.dill"
-            else:  # no option provided
-                fold = ROOT_DIR / "IMLCV" / "bash_python_app"
-                filename = str(fold / f"{str(uuid.uuid4())}.dill")
+            if execution_folder is None:
+                p = Path.cwd() / func.__name__
 
-            if not os.path.exists(fold):
-                os.mkdir(fold)
-            file = File(filename)
+                i = 0
+                while p.exists():
+                    p = Path.cwd() / (f"{func.__name__}_{i:0>3}")
+
+                execution_folder = p
+
+            execution_folder.mkdir(exist_ok=True)
+            file = File(str(execution_folder / "function.dill"))
 
             future: AppFuture = fun(
                 inputs=inputs,
                 outputs=[*[File(rename(o)) for o in outputs], file],
-                stdout=stdout,
-                stderr=stderr,
+                stdout=str(execution_folder / ("stdout" if stdout is None else stdout)),
+                stderr=str(execution_folder / ("stderr" if stderr is None else stderr)),
                 *args,
                 **kwargs,
             )

@@ -74,3 +74,6 @@ IMLCV/examples/output/*
 .mypy_cache/*
 
 src/*
+scaling.png
+profile.py
+workdir/*

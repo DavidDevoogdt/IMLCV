@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import tempfile
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import ase
 import ase.calculators.calculator
@@ -30,7 +30,6 @@ import yaff
 
 yaff.log.set_level(yaff.log.silent)
 from configs.bash_app_python import bash_app_python
-from configs.config_general import ROOT_DIR
 from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
 from IMLCV.base.tools._rbf_interp import RBFInterpolator
 from IMLCV.base.tools.tools import HashableArrayWrapper
@@ -358,7 +357,14 @@ class Cp2kEnergy(AseEnergy):
         print_level="LOW",
     )
 
-    def __init__(self, atoms: ase.Atoms, input_file, input_kwargs: dict, **kwargs):
+    def __init__(
+        self,
+        atoms: ase.Atoms,
+        input_file,
+        input_kwargs: dict,
+        cp2k_path: Path | None = None,
+        **kwargs,
+    ):
 
         self.atoms = atoms
         self.cp2k_inp = os.path.abspath(input_file)
@@ -366,10 +372,7 @@ class Cp2kEnergy(AseEnergy):
         self.kwargs = kwargs
         super().__init__(atoms)
 
-        rp = Path(ROOT_DIR) / "IMLCV" / ".ase_calculators" / "cp2k"
-        rp.mkdir(parents=True, exist_ok=True)
-        # if not os.path.exists(rp):
-        #     os.makedirs(rp, exist_ok=True)
+        self.rp = cp2k_path
 
     def _calculator(self):
 
@@ -392,11 +395,14 @@ class Cp2kEnergy(AseEnergy):
             del params["directory"]
             print("ignoring directory for Cp2kEnergy")
 
-        rp = Path(ROOT_DIR) / "IMLCV" / ".ase_calculators" / "cp2k"
+        if self.rp is None:
+            rp = Path.cwd()
+        else:
+            rp = self.rp
 
-        directory = tempfile.mkdtemp(dir=rp)
-        print(f"saving CP2K output in {directory}")
-        params["directory"] = os.path.relpath(directory)
+        rp.mkdir(parents=True, exist_ok=True)
+        print(f"saving CP2K output in {rp}")
+        params["directory"] = os.path.relpath(rp)
 
         calc = CP2K(**params)
 

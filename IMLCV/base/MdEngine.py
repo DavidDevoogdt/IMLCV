@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from IMLCV.base.bias import Bias, Energy, EnergyResult
 
 from molmod.periodic import periodic
+from molmod.units import kjmol
 
 ######################################
 #             Trajectory             #
@@ -149,8 +150,12 @@ class TrajectoryInfo:
     charges: np.ndarray | None = None
 
     e_pot: np.ndarray | None = None
-    gpos: np.ndarray | None = None
-    vtens: np.ndarray | None = None
+    e_pot_gpos: np.ndarray | None = None
+    e_pot_vtens: np.ndarray | None = None
+
+    e_bias: np.ndarray | None = None
+    e_bias_gpos: np.ndarray | None = None
+    e_bias_vtens: np.ndarray | None = None
 
     T: np.ndarray | None = None
     P: np.ndarray | None = None
@@ -158,8 +163,16 @@ class TrajectoryInfo:
 
     t: np.ndarray | None = None
 
-    _items_scal = ["t", "e_pot", "T", "P", "err"]
-    _items_vec = ["positions", "cell", "gpos", "vtens", "charges"]
+    _items_scal = ["t", "e_pot", "e_bias", "T", "P", "err"]
+    _items_vec = [
+        "positions",
+        "cell",
+        "e_pot_gpos",
+        "e_pot_vtens",
+        "e_bias_gpos",
+        "e_bias_vtens",
+        "charges",
+    ]
 
     _capacity: int = -1
     _size: int = -1
@@ -362,6 +375,7 @@ class MDEngine(ABC):
         self.trajectory_file = trajectory_file
 
         self.time0 = time()
+        self.last_ti: TrajectoryInfo | None = None
 
     @property
     def sp(self) -> SystemParams:
@@ -435,6 +449,8 @@ class MDEngine(ABC):
         if self.step == 1:
             str = f"{ 'step': ^10s}"
             str += f"|{ 'cons err': ^10s}"
+            str += f"|{ 'e_pot[Kj/mol]': ^15s}"
+            str += f"|{ 'e_bias[Kj/mol]': ^15s}"
             if ti.P is not None:
                 str += f"|{'P[bar]': ^10s}"
             str += f"|{'T[K]': ^10s}|{'walltime[s]': ^10s}"
@@ -445,8 +461,12 @@ class MDEngine(ABC):
             str = f"{  self.step : >10d}"
             assert ti.err is not None
             assert ti.T is not None
+            assert ti.e_pot is not None
+            assert ti.e_bias is not None
 
             str += f"|{  ti.err[0] : >10.4f}"
+            str += f"|{  ti.e_pot[0]  *kjmol : >15.4f}"
+            str += f"|{  ti.e_bias[0] *kjmol : >15.4f}"
             if ti.P is not None:
                 str += f" { ti.P[0]/bar : >10.2f}"
             str += f" { ti.T[0] : >10.2f} { time()-self.time0 : >10.2f}"
@@ -480,7 +500,6 @@ class MDEngine(ABC):
         )
 
         total_energy = ener + ener_bias
-
         return total_energy
 
     @property
@@ -569,9 +588,8 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         additional_parts=[],
     ) -> None:
 
-        yaff.log.set_level(log.warning)
+        yaff.log.set_level(log.silent)
         self.start = 0
-        # self.step = 1
         self.name = "YaffEngineIMLCV"
 
         self._verlet: yaff.sampling.VerletIntegrator | None = None
@@ -589,16 +607,27 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
     def __call__(self, iterative: VerletIntegrator):
 
+        # untangle biased and unbiased energy and others
+        ener_bias: EnergyResult = self.bias.compute_from_system_params(
+            SystemParams(coordinates=iterative.pos, cell=iterative.rvecs),
+            gpos=True,
+            vir=True,
+        )
+
         kwargs = dict(
             positions=iterative.pos,
             cell=iterative.rvecs,
-            gpos=iterative.gpos,
             t=iterative.time,
-            e_pot=iterative.epot,
-            vtens=iterative.vtens,
+            e_pot=iterative.epot - ener_bias.energy,
+            e_pot_gpos=iterative.gpos - ener_bias.gpos,
+            e_pot_vtens=iterative.vtens - ener_bias.vtens,
+            e_bias=ener_bias.energy,
+            e_bias_gpos=ener_bias.gpos,
+            e_bias_vtens=ener_bias.vtens,
             T=iterative.temp,
             err=iterative.cons_err,
         )
+
         if hasattr(iterative, "press"):
             kwargs["P"] = iterative.press
 

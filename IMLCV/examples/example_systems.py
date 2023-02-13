@@ -1,12 +1,10 @@
-import os
-from importlib import import_module
-
 import ase
 import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
-from keras.api._v2 import keras as KerasAPI
+
+# from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
@@ -19,12 +17,7 @@ from IMLCV.base.CV import CollectiveVariable, CvMetric, SystemParams, Volume, di
 from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
-keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
-
-
-abspath = __file__
-dname = os.path.dirname(abspath)
-os.chdir(dname)
+# keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 
 
 def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0)):
@@ -116,22 +109,42 @@ def mil53_yaff():
     return yaffmd
 
 
-def CsPbI3(small=True):
+def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
 
     base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
 
-    fb = base / "small" if small else "large"
+    match unit_cells:
+        case [x, y, z]:
+            pass
+        case [n]:
+            x = n
+            y = n
+            z = n
+        case _:
+            raise ValueError(
+                f"provided unit cell {unit_cells}, please provide 1 or 3 arguments "
+            )
+    fb = base / f"{x}x{y}x{z}"
 
-    path_atoms = fb / "Pos.xyz"
+    assert (p := fb).exists(), f"cannot find {p}"
+    atoms = []
 
-    with open(path_atoms) as f:
-        atoms = ase.io.read(f)
+    for a in fb.glob("*.xyz"):
+        atoms.append(ase.io.read(str(a)))
+    assert len(atoms) != 0, "no xyz file found"
 
     path_source = base / "Libraries"
+
+    assert (p := path_source).exists(), f"cannot find {p}"
 
     path_potentials = path_source / "GTH_POTENTIALS"
     path_basis = path_source / "BASIS_SETS"
     path_dispersion = path_source / "dftd3.dat"
+
+    assert (p := fb / "cp2k.inp").exists(), f"cannot find {p}"
+
+    for p in [path_potentials, path_basis, path_dispersion]:
+        assert p.exists(), f"cannot find {p}"
 
     input_params = {
         "PATH_DISPERSION": path_dispersion,
@@ -140,7 +153,7 @@ def CsPbI3(small=True):
     }
 
     energy = Cp2kEnergy(
-        atoms=atoms,
+        atoms=atoms[0],
         input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
         command=f"mpirun cp2k_shell.psmp",
@@ -150,28 +163,35 @@ def CsPbI3(small=True):
 
     from IMLCV.base.CV import CvFlow
 
-    @CvFlow.from_function
-    def f(sp: SystemParams):
+    if cv == "cell_vec":
 
-        import jax.numpy as jnp
+        @CvFlow.from_function
+        def f(sp: SystemParams):
 
-        assert sp.cell is not None
+            import jax.numpy as jnp
 
-        sp = sp.minkowski_reduce()
+            assert sp.cell is not None
 
-        l = jnp.linalg.norm(sp.cell, axis=1)
-        l0 = jnp.max(l)
-        l1 = jnp.min(l)
+            sp = sp.minkowski_reduce()
 
-        return jnp.array([(l0 - l1) / 2, (l0 + l1) / 2])
+            l = jnp.linalg.norm(sp.cell, axis=1)
+            l0 = jnp.max(l)
+            l1 = jnp.min(l)
 
-    cv = CollectiveVariable(
-        f=f,
-        metric=CvMetric(
-            periodicities=[False, False],
-            bounding_box=jnp.array([[0.0, 2.0], [5.5, 7.5]]) * angstrom,
-        ),
-    )
+            return jnp.array([(l0 - l1) / 2, (l0 + l1) / 2])
+
+        assert x == y
+        assert x == z
+
+        cv = CollectiveVariable(
+            f=f,
+            metric=CvMetric(
+                periodicities=[False, False],
+                bounding_box=jnp.array([[0.0, 3.0 * x], [5.5 * x, 8.0 * x]]) * angstrom,
+            ),
+        )
+    else:
+        raise NotImplementedError(f"cv {cv} unrecognized for CsPbI3")
 
     bias = NoneBias(cvs=cv)
     tic = StaticTrajectoryInfo(

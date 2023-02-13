@@ -1,6 +1,7 @@
 """summary IMLCV is still underdevelopement."""
 
 import functools
+import logging
 import os
 import sys
 from logging import warning
@@ -18,6 +19,8 @@ yaff.log.set_level(yaff.log.silent)
 from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 
 KEY = random.PRNGKey(0)
+LOGLEVEL = logging.CRITICAL
+
 
 if "mpi4py" in sys.modules:
     warning("mpi4py doens't work well with cp2k calc atm")

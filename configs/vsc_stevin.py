@@ -3,7 +3,6 @@
 #
 #####
 
-from typing import Optional
 
 import parsl
 import typeguard
@@ -238,11 +237,11 @@ $user_script
     def __init__(
         self,
         cluster: str,
-        account: Optional[str] = None,
+        account: str | None = None,
         channel: Channel = LocalChannel(),
         nodes_per_block: int = 1,
-        cores_per_node: Optional[int] = None,
-        mem_per_node: Optional[int] = None,
+        cores_per_node: int | None = None,
+        mem_per_node: int | None = None,
         init_blocks: int = 1,
         min_blocks: int = 0,
         max_blocks: int = 1,

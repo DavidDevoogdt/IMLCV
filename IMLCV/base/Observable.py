@@ -135,8 +135,7 @@ class ThermoLIB:
             biasses=biases,
             temp=temp,
             verbosity="high",
-            stdout=f"{directory}/histo.stdout",
-            stderr=f"{directory}/histo.stderr",
+            execution_folder=directory,
         ).result()
 
         fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
@@ -309,16 +308,18 @@ class ThermoLIB:
                     )
                 ],
                 inverted=True,
-                stdout=f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.stdout",
-                stderr=f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.stderr",
+                execution_folder=self.folder,
+                stdout=f"FES_thermolib_{self.rnd}_inverted_{choice}.stdout",
+                stderr=f"FES_thermolib_{self.rnd}_inverted_{choice}.stderr",
                 **plot_kwargs,
             )
 
             plot_app(
                 bias=fesBias,
                 outputs=[File(f"{self.folder}/FES_bias_{self.rnd}_{choice}.pdf")],
-                stdout=f"{self.folder}/FES_bias_{self.rnd}_{choice}.stdout",
-                stderr=f"{self.folder}/FES_bias_{self.rnd}_{choice}.stderr",
+                execution_folder=self.folder,
+                stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
+                stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
                 **plot_kwargs,
             )
 

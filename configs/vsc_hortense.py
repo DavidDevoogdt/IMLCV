@@ -2,7 +2,6 @@ import logging
 import math
 import os
 import time
-from typing import Optional
 
 import typeguard
 from parsl.channels import LocalChannel
@@ -85,12 +84,12 @@ class SlurmProvider(ClusterProvider, RepresentationMixin):
     @typeguard.typechecked
     def __init__(
         self,
-        partition: Optional[str] = None,
-        account: Optional[str] = None,
+        partition: str | None = None,
+        account: str | None = None,
         channel: Channel = LocalChannel(),
         nodes_per_block: int = 1,
-        cores_per_node: Optional[int] = None,
-        mem_per_node: Optional[int] = None,
+        cores_per_node: int | None = None,
+        mem_per_node: int | None = None,
         init_blocks: int = 1,
         min_blocks: int = 0,
         max_blocks: int = 1,
@@ -300,9 +299,11 @@ def get_config(
     py_env,
     account="2022_069",
     channel=LocalChannel(),
-    singlepoint_nodes=16,
+    singlepoint_cores=16,
     walltime="48:00:00",
     bootstrap=False,
+    memory_per_core=None,
+    min_memory=None,
 ):
 
     from parsl.config import Config
@@ -427,16 +428,24 @@ def get_config(
     # if we launched a job using 'qsub -l nodes=1:ppn=cores_per_singlepoint'
     # singlepoint_nodes = 16
     open_mp_threads_per_singlepoint = 1
-    total_cores = singlepoint_nodes * open_mp_threads_per_singlepoint
+    total_cores = singlepoint_cores * open_mp_threads_per_singlepoint
 
     worker_init = f"{py_env}; \n"
     worker_init += f"export SLURM_CPUS_PER_TASK={open_mp_threads_per_singlepoint}\n"
-    worker_init += f"export SLURM_NTASKS_PER_NODE={singlepoint_nodes}\n"
-    worker_init += f"export SLURM_TASKS_PER_NODE={singlepoint_nodes}\n"
-    worker_init += f"export SLURM_NTASKS={singlepoint_nodes}\n"
+    worker_init += f"export SLURM_NTASKS_PER_NODE={singlepoint_cores}\n"
+    worker_init += f"export SLURM_TASKS_PER_NODE={singlepoint_cores}\n"
+    worker_init += f"export SLURM_NTASKS={singlepoint_cores}\n"
     worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_singlepoint}\n"
 
-    # export OMP_PROC_BIND=true
+    mem = min_memory
+    if memory_per_core is not None:
+
+        if mem is None:
+
+            mem = total_cores * memory_per_core
+        else:
+            if mem < total_cores * memory_per_core:
+                mem = total_cores * memory_per_core
 
     provider = SlurmProvider(
         partition="cpu_rome",
@@ -452,6 +461,7 @@ def get_config(
         worker_init=worker_init,
         exclusive=False,
         cmd_timeout=60,
+        mem_per_node=mem,
     )
     reference = HighThroughputExecutor(
         label="reference",
