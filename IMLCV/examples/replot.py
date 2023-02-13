@@ -11,6 +11,7 @@ def f():
     from IMLCV.base.rounds import Rounds
 
     config()
+    rounds = Rounds(folder=folder, new_folder=False)
 
     folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "CsPbI3_plot"
     rounds = Rounds(folder=folder, copy=True)
@@ -29,10 +30,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.folder
+
     config()
 
     f(
-        execution_folder=ROOT_DIR / "IMLCV" / "examples" / "output" / args.folder,
-        stdout="replot.stdout",
-        stderr="replot.stderr",
+        stdout=str(folder / "replot.stdout"),
+        stderr=str(folder / "replot.stderr"),
     ).result()

@@ -150,7 +150,6 @@ class SystemParams:
             assert sp.shape[0] == center_coordiantes.shape[0]
 
         def apply_g_inner(pos: Array, center_coordinates: Array):
-
             r_ij = pos - center_coordinates
             norm = jnp.linalg.norm(r_ij, axis=1)
             index_j = jnp.ones_like(norm).cumsum() - 1
@@ -193,8 +192,7 @@ class SystemParams:
             return n, vals
 
         def call_g(sp: SystemParams, center_coordinates):
-
-            if self.cell is None:
+            if sp.cell is None:
                 return apply_g_inner(sp.coordinates, center_coordinates)
 
             init_val = jax.tree_map(
@@ -300,7 +298,6 @@ class SystemParams:
             return choose(bools, fun_true, fun_false)
 
         def apply(center_coordiantes: Array, sp: SystemParams):
-
             if mask1 is not None:
                 sp1 = sp[mask1]
             else:
@@ -891,7 +888,6 @@ class CV:
                 dimi: list[int] = []
 
                 for ii in cv_split:
-
                     if ii._combine_dims is None:
                         a, b = simple(ii)
                     else:
@@ -946,7 +942,6 @@ class CvMetric:
 
     @partial(jit, static_argnums=(0, 2))
     def periodic_wrap(self, x: CV, min=False) -> CV:
-
         out = CV(cv=self.__periodic_wrap(self.__map(x.cv), min=min), mapped=True)
 
         if x.mapped:
@@ -963,7 +958,6 @@ class CvMetric:
         )
 
     def min_cv(self, cv: jnp.ndarray):
-
         mapped = self.__map(cv, displace=False)
         wrapped = self.__periodic_wrap(mapped, min=True)
 
@@ -1125,12 +1119,10 @@ class CvFunBase:
 
 @dataclasses.dataclass(kw_only=True)
 class CvFun(CvFunBase):
-
     forward: Callable[[CV, CV | None], CV] | None = None
     backward: Callable[[CV, CV | None], CV] | None = None
 
     def _calc(self, x: CV, *conditioners: CV, reverse=False) -> CV:
-
         if len(conditioners) == 0:
             c = None
         else:
@@ -1152,7 +1144,6 @@ class CvFunNn(nn.Module, CvFunBase):
         pass
 
     def _calc(self, x: CV, *y: CV, reverse=False) -> CV:
-
         if reverse:
             return self.backward(x, *y)
         else:
@@ -1277,7 +1268,6 @@ class CvTrans:
 
 
 class CvTransNN(nn.Module, CvTrans):
-
     trans: list[CvFunBase]
 
     def setup(self) -> None:
@@ -1307,7 +1297,6 @@ class NormalizingFlow(nn.Module):
             self.nn_flow = self.flow
 
     def calc(self, x: CV, reverse: bool, test_log_det=False):
-
         a, b = self.nn_flow.compute_cv_trans(x, reverse=reverse, log_Jf=True)
 
         if test_log_det:
@@ -1341,7 +1330,6 @@ class CvFlow:
     @staticmethod
     def from_function(f: Callable[[SystemParams], Array]) -> CvFlow:
         def f2(sp: SystemParams):
-
             return CV(cv=f(sp))
 
         return CvFlow(func=f2)
@@ -1412,7 +1400,6 @@ class CollectiveVariable:
 
     @partial(jit, static_argnums=(0, 2))
     def compute_cv(self, sp: SystemParams, jacobian=False) -> tuple[CV, CV]:
-
         cvf = self.f.compute_cv_flow
 
         if sp.batched:
@@ -1513,7 +1500,6 @@ def Volume(sp: SystemParams):
 def distance_descriptor():
     @CvFlow.from_function
     def h(x: SystemParams):
-
         coor = x.coordinates
 
         @partial(vmap, in_axes=(None, 0))
@@ -1541,7 +1527,6 @@ def dihedral(numbers):
 
     @CvFlow.from_function
     def f(sp: SystemParams):
-
         coor = sp.coordinates
         p0 = coor[numbers[0]]
         p1 = coor[numbers[1]]
@@ -1572,7 +1557,6 @@ def sb_descriptor(
     z1: int | None = None,
     z2: int | None = None,
 ):
-
     from IMLCV.base.tools.soap_kernel import p_i, p_inl_sb
 
     @CvFlow.from_function
@@ -1674,7 +1658,6 @@ class RealNVP(CvFunNn):
 
 
 class DistraxRealNVP(CvFunDistrax):
-
     _: dataclasses.KW_ONLY
     latent_dim: int
 
@@ -1755,7 +1738,6 @@ class hyperTorus(CvMetric):
 
 
 def test_cv_split_combine():
-
     import jax.random
 
     prng = jax.random.PRNGKey(42)
@@ -1780,7 +1762,6 @@ def test_cv_split_combine():
 
 def test_nf():
     def test(mf, x, k2):
-
         var_a = mf.init(k2, x, False, method=NormalizingFlow.calc)
 
         y, Jy = mf.apply(
@@ -1847,8 +1828,7 @@ def test_nf():
     test(NormalizingFlow(chain), x2, key_2)
 
 
-def test_reconstruction():
-
+def test_reconstruction(flow=distance_descriptor()):
     prng = jax.random.PRNGKey(seed=42)
     k1, k2, prng = jax.random.split(prng, 3)
 
@@ -1857,7 +1837,6 @@ def test_reconstruction():
         cell=jax.random.uniform(k2, shape=(3, 3)),
     )
 
-    flow = distance_descriptor()
     cv0 = flow.compute_cv_flow(sp0)
 
     k1, k2, prng = jax.random.split(prng, 3)
@@ -1949,7 +1928,6 @@ def test_minkowski_reduce():
 
 
 def test_canoncicalize():
-
     prng = jax.random.PRNGKey(42)
     k1, k2, prng = jax.random.split(prng, 3)
 
@@ -1991,9 +1969,31 @@ def test_canoncicalize():
 
 
 if __name__ == "__main__":
+    pass
+
+    from IMLCV.base.MdEngine import StaticTrajectoryInfo
+
+    # jax.config.update('jax_platforms', 'cpu')
+
     test_cv_split_combine()
     test_nf()
-    test_reconstruction()
+
+    # test_reconstruction(
+    #     flow=sb_descriptor(
+    #         r_cut=0.5,
+    #         sti=StaticTrajectoryInfo(
+    #             timestep=0,
+    #             T=300,
+    #             timecon_thermo=100 * femtosecond,
+    #             atomic_numbers=np.array(
+    #                 [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6]
+    #             ),
+    #             equilibration=0,
+    #         ),
+    #         n_max=5,
+    #         l_max=5,
+    #     )
+    # )
     test_neigh()
     test_neigh_pair()
     test_minkowski_reduce()

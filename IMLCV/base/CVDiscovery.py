@@ -47,8 +47,6 @@ class Transformer:
         bounding_box=None,
         descriptor="sb",
         descriptor_kwargs={},
-        *fit_args,
-        **fit_kwargs,
     ) -> None:
         self.outdim = outdim
 
@@ -59,9 +57,6 @@ class Transformer:
 
         self.periodicity = periodicity
         self.bounding_box = bounding_box
-
-        self.fit_args = fit_args
-        self.fit_kwargs = fit_kwargs
 
         self.descriptor: CvFlow
 
@@ -75,8 +70,6 @@ class Transformer:
     def pre_fit(
         self,
         z: SystemParams,
-        sti,
-        svd=True,
         scale=True,
     ) -> tuple[CV, CvFlow]:
         f = self.descriptor
@@ -97,9 +90,11 @@ class Transformer:
         sti,
         prescale=True,
         postscale=True,
+        *fit_args,
+        **fit_kwargs,
     ) -> CollectiveVariable:
         x, f = self.pre_fit(sp, scale=prescale, sti=sti)
-        y, g = self._fit(x, indices, *self.fit_args, **self.fit_kwargs)
+        y, g = self._fit(x, indices, *fit_args, **fit_kwargs)
         z, h = self.post_fit(y, scale=postscale)
 
         cv = CollectiveVariable(
@@ -132,7 +127,6 @@ class TranformerUMAP(Transformer):
         metric=None,
         **kwargs,
     ):
-
         dims = x.shape[1:]
 
         kwargs["n_components"] = self.outdim
@@ -145,7 +139,6 @@ class TranformerUMAP(Transformer):
             kwargs["output_metric"] = metric
 
         if parametric:
-
             act = keras.activations.tanh
             layers = [
                 keras.layers.InputLayer(input_shape=dims),
@@ -287,7 +280,6 @@ class TranformerAutoEncoder(Transformer):
         batch_size=32,
         **kwargs,
     ):
-
         # import wandb
 
         # wandb.init(
@@ -394,7 +386,6 @@ class TranformerAutoEncoder(Transformer):
         steps_per_epoch = x_train.shape[0] // batch_size
 
         for epoch in range(num_epochs):
-
             rng, key = random.split(rng)
             indices = jax.random.choice(
                 key=key,
@@ -404,7 +395,6 @@ class TranformerAutoEncoder(Transformer):
             )
 
             for n, index in enumerate(indices):
-
                 rng, key = random.split(rng)
                 state = train_step(state, x_train[index, :], key)
 
@@ -453,7 +443,6 @@ class CVDiscovery:
     def _get_data(
         self, rounds: Rounds, num=4, out=1e4
     ) -> tuple[SystemParams, CV, jax.Array, CollectiveVariable, StaticTrajectoryInfo]:
-
         weights = []
 
         colvar: CollectiveVariable | None = None
@@ -518,7 +507,6 @@ class CVDiscovery:
         name=None,
         **kwargs,
     ) -> CollectiveVariable:
-
         sps, _, indices, cv_old, sti = self._get_data(
             num=num_rounds, out=samples, rounds=rounds
         )
@@ -570,7 +558,6 @@ def plot_app(
 
     cvs = [old_cv, new_cv]
     for cv in cvs:
-
         cvd, _ = cv.compute_cv(sps)
         cvdm = vmap(cv.metric.__map)(cvd)
 
@@ -579,13 +566,11 @@ def plot_app(
 
     # for z, data in enumerate([cv_data, cv_data_mapped]):
     for z, data in enumerate([cv_data]):
-
         # plot setting
         kwargs = {"s": 0.2}
 
         labels = [[r"$\Phi$", r"$\Psi$"], ["umap 1", "umap 2", "umap 3"]]
         for [i, j] in [[0, 1], [1, 0]]:  # order
-
             indim = cvs[i].n
             outdim = cvs[j].n
 
@@ -614,7 +599,6 @@ def plot_app(
                 spec = gridspec.GridSpec(nrows=len(indim_pairs) * 2, ncols=3)
 
             for id, inpair in enumerate(indim_pairs):
-
                 for cc in range(2):
                     print(f"cc={cc}")
 
@@ -647,13 +631,11 @@ def plot_app(
                         print("plot r 3d")
 
                         def plot3d(data, ax, colors=None, labels=labels[j], mode=0):
-
                             ax.set_xlabel(labels[0])
                             ax.set_ylabel(labels[1])
                             ax.set_zlabel(labels[2])
 
                             if mode == 0:
-
                                 ax.scatter(
                                     data[:, 0],
                                     data[:, 1],
@@ -664,7 +646,6 @@ def plot_app(
                                 )
 
                                 for a, b, z in [[0, 1, "z"], [0, 2, "y"], [1, 2, "x"]]:
-
                                     Z, X, Y = np.histogram2d(data[:, a], data[:, b])
 
                                     X = (X[1:] + X[:-1]) / 2
@@ -694,10 +675,8 @@ def plot_app(
                                         ax.plot_surface(zz, X, Y, **kw)
 
                             else:
-
                                 zz = np.zeros(data[:, 0].shape)
                                 for z in ["x", "y", "z"]:
-
                                     if z == "z":
                                         ax.scatter(
                                             data[:, 0],
@@ -778,7 +757,6 @@ def test_cv_discovery(
 
         kwargs = {}
     elif cvd == "UMAP":
-
         tf = TranformerUMAP(**tf_kwargs)
 
         kwargs = dict(

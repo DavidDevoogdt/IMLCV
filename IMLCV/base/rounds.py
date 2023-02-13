@@ -91,7 +91,6 @@ class Rounds(ABC):
 
         # only consider folder if it has reults file in it
         if (folder / "results.h5").exists() and new_folder:
-
             # look for first avaialble folder
             i = 0
             while True:
@@ -156,11 +155,9 @@ class Rounds(ABC):
 
     @staticmethod
     def load(folder: str | Path, copy=False):
-
         return Rounds(folder=folder, copy=copy)
 
     def write_xyz(self, r: int | None = None, num: int = 1, repeat=None):
-
         from ase.io.extxyz import write_extxyz
 
         for i, (atoms, round, trajejctory) in enumerate(
@@ -180,14 +177,12 @@ class Rounds(ABC):
     ######################################
 
     def recover(self):
-
         for round_r in self.path().glob("round_*"):
             r = round_r.parts[-1][6:]
 
             f = self.h5file
 
             if r not in f.keys():
-
                 attr = {}
                 sti = StaticTrajectoryInfo.load(
                     filename=self.path(r=r) / "static_trajectory_info.h5"
@@ -205,7 +200,6 @@ class Rounds(ABC):
                 self.add_round(attr=attr, stic=sti, r=r)
 
             for md_i in round_r.glob("md_*"):
-
                 i = md_i.parts[-1][3:]
 
                 if i in f[f"{r}"].keys():
@@ -238,7 +232,6 @@ class Rounds(ABC):
             r = self.round
 
         with self.lock:
-
             f = self.h5file
             if f"{i}" not in f[f"{r}"]:
                 f.create_group(f"{r}/{i}")
@@ -267,7 +260,6 @@ class Rounds(ABC):
             f.flush()
 
     def add_round(self, stic: StaticTrajectoryInfo, r=None, attr=None):
-
         if r is None:
             r = self.round + 1
 
@@ -295,7 +287,6 @@ class Rounds(ABC):
             f.flush()
 
     def add_round_from_md(self, md: MDEngine):
-
         r = self.round + 1
 
         directory = self.path(r=r)
@@ -333,7 +324,6 @@ class Rounds(ABC):
             start = 0
 
         for r0 in range(max(stop - (num - 1), start), stop + 1):
-
             _r = self.round_information(r=r0)
 
             if not _r.valid and not ignore_invalid:
@@ -352,11 +342,9 @@ class Rounds(ABC):
                 yield _r, _r_i
 
     def iter_ase_atoms(self, r: int | None = None, num: int = 3):
-
         from molmod import angstrom
 
         for round, trajejctory in self.iter(stop=r, num=num):
-
             traj = trajejctory.ti
 
             pos_A = traj.positions / angstrom
@@ -396,7 +384,6 @@ class Rounds(ABC):
             yield atoms, round, trajejctory
 
     def get_trajectory_information(self, r: int, i: int) -> TrajectoryInformation:
-
         with self.lock:
             f = self.h5file
             d = f[f"{r}/{i}"]
@@ -410,7 +397,9 @@ class Rounds(ABC):
             ti=ti, **r_attr, round=r, num=i, folder=self.folder
         )
 
-    def round_information(self, r: int) -> RoundInformation:
+    def round_information(self, r: int | None = None) -> RoundInformation:
+        if r is None:
+            r = self.round
 
         with self.lock:
             f = self.h5file
@@ -449,7 +438,6 @@ class Rounds(ABC):
             f.flush()
 
     def _get_attr(self, name, r=None, i=None):
-
         with self.lock:
             f = self.h5file
             if r is not None:
@@ -560,7 +548,6 @@ class Rounds(ABC):
             sp = sp[indices]
 
         for i, bias in enumerate(biases):
-
             path_name = self.path(r=self.round, i=i)
             if not os.path.exists(path_name):
                 os.mkdir(path_name)
@@ -584,7 +571,6 @@ class Rounds(ABC):
                 inputs=[],
                 outputs=[],
             ):
-
                 bias = Bias.load(inputs[1].filepath)
 
                 kwargs = dict(
@@ -593,7 +579,6 @@ class Rounds(ABC):
                 )
 
                 if sp is not None:
-
                     kwargs["sp"] = sp
 
                 md = MDEngine.load(inputs[0].filepath, **kwargs)
@@ -606,7 +591,6 @@ class Rounds(ABC):
             def plot_app(
                 st: StaticTrajectoryInfo, traj: TrajectoryInfo, inputs=[], outputs=[]
             ):
-
                 bias = Bias.load(inputs[0].filepath)
                 sp = traj.sp
                 if st.equilibration is not None:
@@ -617,7 +601,6 @@ class Rounds(ABC):
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
             if sp.shape[0] > 1:  # type: ignore
-
                 bs = bias.compute_from_system_params(sp).energy
                 probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
                 probs = probs / jnp.linalg.norm(probs)
@@ -643,7 +626,6 @@ class Rounds(ABC):
             )
 
             if plot:
-
                 plot_file = self.full_path(path_name / "plot.pdf")
 
                 plot_fut = plot_app(
