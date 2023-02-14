@@ -1,8 +1,13 @@
 import argparse
 
-import keras
+
+from importlib import import_module
 from molmod.units import angstrom
-from tensorflow import keras
+
+from keras.api._v2 import keras as KerasAPI
+
+keras: KerasAPI = import_module("tensorflow.keras")
+
 
 from configs.config_general import ROOT_DIR, config
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
@@ -63,7 +68,10 @@ def test_cv_discovery(
 
 
 if __name__ == "__main__":
-    test_cv_discovery(name=ROOT_DIR / "IMLCV" / "examples" / "output" / "ala", cvd="AE")
+
+    test_cv_discovery(
+        name=ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_02", cvd="AE"
+    )
 
     raise
 

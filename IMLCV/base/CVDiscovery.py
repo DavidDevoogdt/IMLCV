@@ -86,15 +86,19 @@ class Transformer:
     def fit(
         self,
         sp: SystemParams,
-        indices,
-        sti,
+        # indices,
         prescale=True,
         postscale=True,
         *fit_args,
         **fit_kwargs,
     ) -> CollectiveVariable:
-        x, f = self.pre_fit(sp, scale=prescale, sti=sti)
-        y, g = self._fit(x, indices, *fit_args, **fit_kwargs)
+        x, f = self.pre_fit(sp, scale=prescale)
+        y, g = self._fit(
+            x,
+            # indices,
+            *fit_args,
+            **fit_kwargs,
+        )
         z, h = self.post_fit(y, scale=postscale)
 
         cv = CollectiveVariable(
@@ -105,7 +109,12 @@ class Transformer:
 
         return cv
 
-    def _fit(self, x: CV, indices, **kwargs) -> tuple[CV, CvFlow]:
+    def _fit(
+        self,
+        x: CV,
+        # indices,
+        **kwargs,
+    ) -> tuple[CV, CvFlow]:
         raise NotImplementedError
 
     def post_fit(self, y: CV, scale) -> tuple[CV, CvTrans]:
@@ -119,7 +128,7 @@ class TranformerUMAP(Transformer):
     def _fit(
         self,
         x,
-        indices,
+        # indices,
         decoder=False,
         nunits=256,
         nlayers=3,
@@ -174,7 +183,7 @@ class TranformerUMAP(Transformer):
         else:
             reducer = umap.UMAP(**kwargs)
 
-        reducer.fit(x[indices, :])
+        reducer.fit(x)
 
         assert parametric
 
@@ -442,7 +451,13 @@ class CVDiscovery:
 
     def _get_data(
         self, rounds: Rounds, num=4, out=1e4
-    ) -> tuple[SystemParams, CV, jax.Array, CollectiveVariable, StaticTrajectoryInfo]:
+    ) -> tuple[
+        SystemParams,
+        CV,
+        #    jax.Array,
+        CollectiveVariable,
+        StaticTrajectoryInfo,
+    ]:
         weights = []
 
         colvar: CollectiveVariable | None = None
@@ -470,7 +485,7 @@ class CVDiscovery:
                 sp += sp0
                 cv = CV.stack(cv, cv0)  # type:ignore
 
-            biases, _ = bias.compute_from_cv(cvs=cv)
+            biases, _ = bias.compute_from_cv(cvs=cv0)
 
             beta = 1 / round.tic.T
             weight = jnp.exp(beta * biases)
@@ -496,7 +511,12 @@ class CVDiscovery:
             replace=False,
         )
 
-        return sp, cv, indices, colvar, sti
+        return (
+            sp[indices],
+            cv,
+            colvar,
+            sti,
+        )
 
     def compute(
         self,
@@ -507,13 +527,17 @@ class CVDiscovery:
         name=None,
         **kwargs,
     ) -> CollectiveVariable:
-        sps, _, indices, cv_old, sti = self._get_data(
-            num=num_rounds, out=samples, rounds=rounds
-        )
+        (
+            sps,
+            _,
+            # indices,
+            cv_old,
+            sti,
+        ) = self._get_data(num=num_rounds, out=samples, rounds=rounds)
 
         new_cv = self.transformer.fit(
             sps,
-            indices,
+            # indices,
             sti=sti,
             **kwargs,
         )

@@ -4,7 +4,7 @@ from itertools import combinations_with_replacement
 
 import jax.numpy as np
 import jax.numpy as jnp
-import numpy as onp
+from jax import Array
 from numpy.linalg import LinAlgError
 from scipy.linalg.lapack import dgesv
 from scipy.spatial import KDTree
@@ -70,14 +70,15 @@ def _monomial_powers(ndim, degree):
 
     """
     nmonos = comb(degree + ndim, ndim, exact=True)
-    out = onp.zeros((nmonos, ndim), dtype=int)
+
+    out = jnp.zeros((nmonos, ndim), dtype=int)
     count = 0
     for deg in range(degree + 1):
         for mono in combinations_with_replacement(range(ndim), deg):
             # `mono` is a tuple of variables in the current monomial with
             # multiplicity indicating power (e.g., (0, 1, 1) represents x*y**2)
             for var in mono:
-                out[count, var] += 1
+                out.at[count, var].set(out[count, var] + 1)
 
             count += 1
 
@@ -514,7 +515,7 @@ class RBFInterpolator:
             # `inv` tells us which neighborhood will be used by each evaluation
             # point. Now we find which evaluation points will be using each
             # neighborhood.
-            xindices = [[] for _ in range(len(yindices))]
+            xindices: list[list[Array]] = [[] for _ in range(len(yindices))]
             for i, j in enumerate(inv):
                 xindices[j].append(i)
 

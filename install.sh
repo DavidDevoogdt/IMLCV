@@ -1,4 +1,10 @@
 [ -d "Miniconda3" ] && rm -rf Miniconda3
+[ -d ".pip_cache" ] && rm -rf .pip_cache
+mkdir .pip_cache
+export PIP_CACHE_DIR=.pip_cache
+
+
+[ -d "src" ] && rm -rf src
 
 curl -sL \
   "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh" > \
@@ -15,9 +21,9 @@ conda install -y mamba
 mamba install -y pip git
 
 # mamba install -y -c conda-forge tensorflow-gpu 
-pip install --upgrade jax==0.3.15 jaxlib==0.3.15+cuda11.cudnn82 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-
-
+pip install --upgrade jax[uda11.cudnn82] jaxlib -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+pip install --upgrade tensorflow-cpu
+pip install --upgrade tensorrt
 
 mamba update -y  cython
 pip  install -e  git+https://github.com/molmod/yaff.git#egg=yaff
@@ -27,29 +33,8 @@ pip  install -e ./
 mamba update  -y  ndcctools
 
 
-# mamba install gcc
-# mamba install cxx-compiler
+# pip install --upgrade tensorflow-cpu
+# pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# pip install --upgrade tensorrt
 
-# mamba install libopenblas-static
-# cd src 
-# git clone https://github.com/giorginolab/plumed2-pycv.git
-# cd plumed-pycv
-# cd conda/
-# export VERSION=2.8
-# sed -i 's/./configure --prefix=$PREFIX --disable-python --disable-libsearch --disable-static-patch --disable-static-archive/./configure --prefix=$PREFIX --disable-python --disable-libsearch --disable-static-patch --disable-static-archive --enable-modules=+pycv/g' input
-# ./run-conda-build.sh 
-
-# # ./configure 
-
-
-# conda install cxx-compiler
-# ./configure --prefix=${CONDA_PREFIX}  --enable-modules=+pycv
-# make -j4
-
-
-
-pip install --upgrade tensorflow-gpu
-pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-pip install --upgrade tensorrt
-
-conda install -c nvidia cuda-nvcc
+# conda install -c nvidia cuda-nvcc #install separately

@@ -151,14 +151,15 @@ class SystemParams:
 
         def apply_g_inner(pos: Array, center_coordinates: Array):
             r_ij = pos - center_coordinates
-            norm = jnp.linalg.norm(r_ij, axis=1)
-            index_j = jnp.ones_like(norm).cumsum() - 1
+
+            norm2 = jnp.sum(r_ij**2, axis=1)
+            index_j = jnp.ones_like(norm2).cumsum() - 1
 
             @vmap
             def g_map(r_ij, index_j):
                 return g(r_ij, index_j)
 
-            bools = jnp.logical_and(norm < r_cut, norm != 0.0)
+            bools = jnp.logical_and(norm2 < r_cut**2, norm2 != 0.0)
 
             if sp.batched:
                 g_map = vmap(g_map)
@@ -1574,8 +1575,7 @@ def sb_descriptor(
         to_lower = lambda o: o[jnp.tril_indices_from(o)]
         to_lower = vmap(to_lower)  # batch over different atoms
         if sp.batched:
-            to_lower = vmap(to_lower)  # bach
-
+            to_lower = vmap(to_lower)  # batch
         out = to_lower(out)
 
         if sp.batched:
@@ -1975,26 +1975,28 @@ if __name__ == "__main__":
 
     # jax.config.update('jax_platforms', 'cpu')
 
-    test_cv_split_combine()
-    test_nf()
+    # test_cv_split_combine()
+    # test_nf()
 
-    # test_reconstruction(
-    #     flow=sb_descriptor(
-    #         r_cut=0.5,
-    #         sti=StaticTrajectoryInfo(
-    #             timestep=0,
-    #             T=300,
-    #             timecon_thermo=100 * femtosecond,
-    #             atomic_numbers=np.array(
-    #                 [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6]
-    #             ),
-    #             equilibration=0,
-    #         ),
-    #         n_max=5,
-    #         l_max=5,
-    #     )
-    # )
-    test_neigh()
-    test_neigh_pair()
-    test_minkowski_reduce()
-    test_canoncicalize()
+    from molmod.units import femtosecond
+
+    test_reconstruction(
+        flow=sb_descriptor(
+            r_cut=0.5,
+            sti=StaticTrajectoryInfo(
+                timestep=0,
+                T=300,
+                timecon_thermo=100 * femtosecond,
+                atomic_numbers=np.array(
+                    [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6]
+                ),
+                equilibration=0,
+            ),
+            n_max=5,
+            l_max=5,
+        )
+    )
+    # test_neigh()
+    # test_neigh_pair()
+    # test_minkowski_reduce()
+    # test_canoncicalize()

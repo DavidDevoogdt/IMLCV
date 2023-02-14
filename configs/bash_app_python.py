@@ -65,6 +65,9 @@ def bash_app_python(
 
                 execution_folder = p
 
+            if isinstance(execution_folder, str):
+                execution_folder = Path(execution_folder)
+
             execution_folder.mkdir(exist_ok=True)
             file = File(str(execution_folder / "function.dill"))
 

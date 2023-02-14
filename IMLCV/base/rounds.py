@@ -121,7 +121,7 @@ class Rounds(ABC):
     def _make_file(self):
         # todo: make backup
         if (p := Path(self.h5file_name)).exists():
-            os.removep()
+            os.remove(p)
 
         # create the file
         # with self.lock:
@@ -506,7 +506,11 @@ class Rounds(ABC):
         biases: Iterable[Bias],
         steps,
         plot=True,
+        KEY=42,
     ):
+        if isinstance(KEY, int):
+            KEY = jax.random.PRNGKey(KEY)
+
         with self.lock:
             f = self.h5file
             common_bias_name = self.full_path(f[f"{self.round}"].attrs["name_bias"])
@@ -535,7 +539,7 @@ class Rounds(ABC):
         # todo: ofsset umbrellas based on FES
 
         # preselect at random
-        global KEY
+
         if sp.shape[0] > 100:
             KEY, k = jax.random.split(KEY, 2)
 
