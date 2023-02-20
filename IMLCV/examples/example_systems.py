@@ -113,17 +113,19 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
 
     base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
 
-    match unit_cells:
-        case [x, y, z]:
-            pass
-        case [n]:
-            x = n
-            y = n
-            z = n
-        case _:
-            raise ValueError(
-                f"provided unit cell {unit_cells}, please provide 1 or 3 arguments "
-            )
+    assert isinstance(unit_cells, list)
+
+    if len(unit_cells) == 3:
+        [x, y, z] = unit_cells
+    elif len(unit_cells) == 1:
+        [n] = unit_cells
+        x = n
+        y = n
+        z = n
+    else:
+        raise ValueError(
+            f"provided unit cell {unit_cells}, please provide 1 or 3 arguments "
+        )
     fb = base / f"{x}x{y}x{z}"
 
     assert (p := fb).exists(), f"cannot find {p}"

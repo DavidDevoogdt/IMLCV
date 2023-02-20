@@ -1,10 +1,8 @@
 import argparse
-
-
 from importlib import import_module
-from molmod.units import angstrom
 
 from keras.api._v2 import keras as KerasAPI
+from molmod.units import angstrom
 
 keras: KerasAPI = import_module("tensorflow.keras")
 

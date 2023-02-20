@@ -8,17 +8,15 @@ import jax.numpy as jnp
 import jax.numpy.linalg
 import jax.random
 import jax.scipy
+import jaxopt
 import matplotlib.pyplot as plt
 import scipy.special
 from jax import Array, jacfwd, jit, lax, vmap
-from scipy.optimize import root
 from scipy.spatial.transform import Rotation as R
-
-# from tensorflow_probability.substrates import jax as tfp
 
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
-from IMLCV.base.tools.bessel_callback import spherical_jn, ive
+from IMLCV.base.tools.bessel_callback import ive, spherical_jn
 
 # todo: Optimizing many-body atomic descriptors for enhanced computational performance of
 # machine learning based interatomic potentials
@@ -55,23 +53,6 @@ def legendre(x, n):
     )
 
 
-# @partial(jit, static_argnums=(1,))
-# def legendre(x, n):
-
-#     return jax.lax.cond(
-#         n == 0,
-#         lambda: 0.0,
-#         lambda: jax.lax.cond(
-#             n == 1,
-#             lambda: x,
-#             lambda: (
-#                 (2 * n - 1) * x * legendre(x, n - 1) - (n - 1) * legendre(x, n - 2)
-#             )
-#             / n,
-#         ),
-#     )
-
-
 def p_i(
     sp: SystemParams,
     sti: StaticTrajectoryInfo | None,
@@ -101,7 +82,7 @@ def p_i(
         )(sp)
 
     if sp.cell is not None:
-        sp.minkowski_reduce()
+        sp = sp.canoncialize()
 
     mask1 = None
     if z1 is not None:
@@ -115,13 +96,17 @@ def p_i(
         assert sti.atomic_numbers is not None
         mask2 = sti.atomic_numbers == z2
 
-    k, val = sp.apply_fun_neighbourgh_pairs(
-        r_cut=r_cut,
-        g=p,
-        center_coordiantes=sp.coordinates,
-        mask1=mask1,
-        mask2=mask2,
-    )
+    k, val = vmap(
+        lambda c: sp.apply_fun_neighbourgh_pairs(
+            r_cut=r_cut,
+            func=p,
+            center_coordinates=c,
+            mask1=mask1,
+            mask2=mask2,
+        )
+    )(sp.coordinates)
+
+    jax.debug.print("{}", k)
 
     return jnp.einsum("i...,i->i...", val, 1 / vmap(jnp.linalg.norm)(val))
 
@@ -161,9 +146,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
                     * jnp.exp(-((r - r_ij) ** 2) / (2 * sigma_a**2))
                 )
 
-                ive_batch = jnp.stack(
-                    [ive(l + 0.5, r * r_ij / sigma_a**2) for l in l_vec]
-                )
+                ive_batch = vmap(lambda l: ive(l + 0.5, r * r_ij / sigma_a**2))(l_vec)
 
                 return jnp.outer(base, ive_batch)
 
@@ -242,12 +225,18 @@ def p_inl_sb(l_max, n_max, r_cut):
     assert l_max <= n_max, "l_max should be smaller or equal to n_max"
 
     def spherical_jn_zeros(n, m):
-        def fn(x):
-            return spherical_jn(n, x)
 
-        zeros = (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
-
-        return jnp.array([root(fn, x0).x[0] for x0 in zeros])
+        return vmap(
+            lambda x: jaxopt.GradientDescent(
+                lambda x: spherical_jn(n, x) ** 2, maxiter=1000
+            )
+            .run(x)
+            .params
+        )(
+            jnp.array(
+                (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
+            )
+        )
 
     def show_spherical_jn_zeros(n, m, ngrid=100):
         """Graphical test for the above function"""
@@ -288,6 +277,7 @@ def p_inl_sb(l_max, n_max, r_cut):
         arr=jnp.array(jnp.meshgrid(jnp.arange(l_max + 2), jnp.arange(n_max + 2))),
     )
 
+    @partial(vmap, in_axes=(0, None, None))
     @partial(vmap, in_axes=(None, 0, None))
     def f_nl(n, l, r):
         return (
@@ -303,12 +293,11 @@ def p_inl_sb(l_max, n_max, r_cut):
     l_vec = jnp.array(l_list)
     n_vec = jnp.arange(n_max + 1)
 
-    @jit
     def g_nl(r: Array):
+
+        fnl = f_nl(n_vec, l_vec, r)
+
         def body(args, n):
-
-            fnl = f_nl(n, l_vec, r)
-
             def inner(args):
                 d_xlm, g_xlm = args
 
@@ -316,25 +305,21 @@ def p_inl_sb(l_max, n_max, r_cut):
                 g_xl = (
                     1
                     / jnp.sqrt(d_xl)
-                    * (fnl + jnp.sqrt(e_nl[n, l_vec] / d_xlm) * g_xlm)
+                    * (fnl[n, :] + jnp.sqrt(e_nl[n, l_vec] / d_xlm) * g_xlm)
                 )
 
                 return (d_xl, g_xl), g_xl
 
             def first(args):
-                return (args[0], fnl), fnl
+                return (jnp.ones_like(fnl[0, :]), fnl[0, :]), fnl[0, :]
 
             return jax.lax.cond(n == 0, first, inner, args)
 
-        init = (lambda o: jnp.ones(shape=o.shape, dtype=o.dtype))(
-            jax.eval_shape(f_nl, 0, l_vec, r)
-        )
-
-        _, out = lax.scan(
+        state, out = lax.scan(
             f=body,
             init=(
-                init,
-                init,
+                fnl[0, :] * 0 + 1,
+                fnl[0, :],
             ),
             xs=jnp.arange(n_max),
         )
@@ -381,21 +366,41 @@ def Kernel(p1, p2, xi=2):
 
 
 if __name__ == "__main__":
+
+    n = 5
+
+    ## sp
     rng = jax.random.PRNGKey(42)
     key, rng = jax.random.split(rng)
-    pos = jax.random.uniform(key, (22, 3)) * 5
+    pos = jax.random.uniform(key, (n, 3)) * 5
+    key, rng = jax.random.split(rng)
+    cell = jnp.eye(3) * 7 + jax.random.normal(key, (3, 3)) * 0.5
+    sp = SystemParams(coordinates=pos, cell=cell)
 
-    key, key2, rng = jax.random.split(rng, 3)
-    pos2 = pos @ jnp.array(R.random().as_matrix())
-    # pos2 = jax.random.permutation(key, pos2) #random order other atoms
-    pos2 = pos2 + jax.random.uniform(key, (3,))
+    ## sp2
+    from scipy.spatial.transform import Rotation as R
 
-    pos3 = jax.random.uniform(key, (22, 3)) * 5
+    rot_mat = jnp.array(
+        R.random(random_state=int(jax.random.randint(key, (), 0, 100))).as_matrix()
+    )
+    pos2 = (
+        vmap(lambda a: rot_mat @ a, in_axes=0)(sp.coordinates)
+        + jax.random.normal(key, (3,)) * 5
+    )
+    cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.cell)
+    sp2 = SystemParams(coordinates=pos2, cell=cell_r)
+
+    ## sp3
+    key, rng = jax.random.split(rng)
+    pos = jax.random.uniform(key, (n, 3)) * 5
+    key, rng = jax.random.split(rng)
+    cell = jnp.eye(3) * 7 + jax.random.normal(key, (3, 3)) * 0.5
+    sp3 = SystemParams(coordinates=pos, cell=cell)
 
     l_max = 7
     n_max = 7
 
-    r_cut = 3.5
+    r_cut = 4
 
     for pp in [
         p_inl_sb(
@@ -413,30 +418,34 @@ if __name__ == "__main__":
         ),
     ]:
 
-        def f(pos):
+        @jit
+        def fi(r_ij, r_ik, ind_j, ind_k):
+            return jnp.exp(r_ij - r_ik)
+
+        @jit
+        def f(sp):
             return p_i(
-                sp=SystemParams(coordinates=pos, cell=None), p=pp, r_cut=r_cut, sti=None
+                sp=sp,
+                p=pp,
+                r_cut=r_cut,
+                sti=None,
             )
 
-        from jax.config import config
-        from jax import disable_jit
-
-        config.update("jax_debug_nans", True)
-
-        with disable_jit():
-            a = f(pos)
+        a = f(sp)
 
         from time import time_ns
 
         before = time_ns()
-        b = f(pos2)
+        b = f(sp2)
         after = time_ns()
-        c = f(pos3)
+        c = f(sp3)
 
         print(
             f"l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={ jnp.mean( Kernel( a,b ) ) }, <kernel(orig, rand)>= { jnp.mean( Kernel( a,c ) ) }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
         )
 
         # check the derivatives
-        c = jacfwd(f)(pos)
-        print(f"gradient shape:{c.shape} nans: {jnp.sum(  jnp.isnan(c ) )}")
+        c = jacfwd(f)(sp)
+        print(
+            f"gradient shape:{c.shape} nans coor : {jnp.sum(  jnp.isnan(c.coordinates ) )} nans cell : {jnp.sum(  jnp.isnan(c.cell ) )}"
+        )
