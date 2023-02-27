@@ -55,7 +55,7 @@ from IMLCV.base.CV import (
     Volume,
     dihedral,
 )
-from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
+
 
 ######################################
 #              Energy                #
@@ -85,11 +85,12 @@ class EnergyResult:
             gpos += other.gpos
 
         vtens = self.vtens
-        if self.vtens is None:
-            assert other.vtens is None
-        else:
-            assert other.vtens is not None
-            vtens += other.vtens
+
+        if other.vtens is not None:
+            if vtens is not None:
+                vtens += other.vtens
+            else:
+                vtens = other.vtens
 
         return EnergyResult(energy=self.energy + other.energy, gpos=gpos, vtens=vtens)
 
@@ -210,7 +211,12 @@ class YaffEnergy(Energy):
 
     @property
     def cell(self):
-        return self.ff.system.cell.rvecs[:]
+        out = self.ff.system.cell.rvecs[
+            :
+        ]  # empty cell represented as array with shape (0,3)
+        if out.size == 0:
+            return None
+        return out
 
     @cell.setter
     def cell(self, cell):
@@ -517,7 +523,7 @@ class Bias(BC, ABC):
             e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
 
         e_vir = None
-        if vir:
+        if vir and sp.cell is not None:
             # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
             es = "nji,nk,nkjl->nli"
             if not sp.batched:
@@ -1341,6 +1347,8 @@ def test_grid_bias():
 
 def test_combine_bias(full_name):
     from yaff.test.common import get_alaninedipeptide_amber99ff
+    from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
+
 
     T = 300 * kelvin
 

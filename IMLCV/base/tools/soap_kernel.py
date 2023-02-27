@@ -96,23 +96,28 @@ def p_i(
         assert sti.atomic_numbers is not None
         mask2 = sti.atomic_numbers == z2
 
-    k, val = vmap(
-        lambda c: sp.apply_fun_neighbourgh_pairs(
-            r_cut=r_cut,
-            func=p,
-            center_coordinates=c,
-            mask1=mask1,
-            mask2=mask2,
+    k, val = jit(
+        vmap(
+            lambda c: sp.apply_fun_neighbour_pairs(
+                r_cut=r_cut,
+                func=p,
+                center_coordinates=c,
+                mask1=mask1,
+                mask2=mask2,
+            )
         )
     )(sp.coordinates)
 
-    jax.debug.print("{}", k)
+    norms = vmap(jnp.linalg.norm)(val)
 
-    return jnp.einsum("i...,i->i...", val, 1 / vmap(jnp.linalg.norm)(val))
+    # jax.debug.print("k {} norms {}", k, norms)
+
+    norms_inv = jnp.where(norms != 0, 1 / norms, 0.0)
+
+    return jnp.einsum("i...,i->i...", val, norms_inv)
 
 
 @partial(vmap, in_axes=(0, None, None), out_axes=0)
-@jit
 def lengendre_l(l, pj, pk):
     # https://jax.readthedocs.io/en/latest/faq.html#gradients-contain-nan-where-using-where
 
@@ -129,26 +134,24 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
+    @jit
     def phi(n, n_max, r, r_cut, sigma_a):
         return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2))
 
-    # @partial(vmap, in_axes=(None, None, 0), out_axes=1)
-    # # @partial(vmap, in_axes=(None, 0, None), out_axes=1)
-    # @partial(vmap, in_axes=(0, None, None), out_axes=0)
+    @partial(vmap, in_axes=(None, 0, None), out_axes=1)
+    @partial(vmap, in_axes=(0, None, None), out_axes=0)
+    @jit
     def I_prime_ml(n, l_vec, r_ij):
         def f(r):
             # https://mathworld.wolfram.com/ModifiedSphericalBesselFunctionoftheFirstKind.html
             def fi(r, r_ij):
-                base = (
+                return (
                     r ** (3 / 2)
                     * jnp.sqrt(sigma_a**2 * jnp.pi / (2 * r_ij))
                     * phi(n, n_max, r, r_cut, sigma_a)
                     * jnp.exp(-((r - r_ij) ** 2) / (2 * sigma_a**2))
+                    * ive(l_vec + 0.5, r * r_ij / sigma_a**2)
                 )
-
-                ive_batch = vmap(lambda l: ive(l + 0.5, r * r_ij / sigma_a**2))(l_vec)
-
-                return jnp.outer(base, ive_batch)
 
             return jnp.where(
                 r > 0,
@@ -165,6 +168,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
         return jnp.apply_along_axis(lambda y: jnp.trapz(y=y, x=x), axis=0, arr=y)
 
+    @jit
     def f_cut(r):
         return lax.cond(
             r > r_cut,
@@ -258,8 +262,6 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     u_ln = jnp.array([spherical_jn_zeros(n, l_max + 2) for n in range(n_max + 2)]).T
 
-    # spherical_jn(3,  u_ln[:,3] ) should be small
-
     def e(x):
         l, n = x
         return (
@@ -279,6 +281,7 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     @partial(vmap, in_axes=(0, None, None))
     @partial(vmap, in_axes=(None, 0, None))
+    @jit
     def f_nl(n, l, r):
         return (
             u_ln[l, n + 1]
@@ -293,6 +296,7 @@ def p_inl_sb(l_max, n_max, r_cut):
     l_vec = jnp.array(l_list)
     n_vec = jnp.arange(n_max + 1)
 
+    @jit
     def g_nl(r: Array):
 
         fnl = f_nl(n_vec, l_vec, r)
@@ -367,7 +371,7 @@ def Kernel(p1, p2, xi=2):
 
 if __name__ == "__main__":
 
-    n = 5
+    n = 20
 
     ## sp
     rng = jax.random.PRNGKey(42)
@@ -400,7 +404,7 @@ if __name__ == "__main__":
     l_max = 7
     n_max = 7
 
-    r_cut = 4
+    r_cut = 5
 
     for pp in [
         p_inl_sb(

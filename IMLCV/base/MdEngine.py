@@ -33,8 +33,8 @@ from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
 
 yaff.log.set_level(yaff.log.silent)
 
-if TYPE_CHECKING:
-    from IMLCV.base.bias import Bias, Energy, EnergyResult
+# if TYPE_CHECKING:
+from IMLCV.base.bias import Bias, Energy, EnergyResult
 
 from molmod.periodic import periodic
 from molmod.units import kjmol
@@ -239,7 +239,7 @@ class TrajectoryInfo:
             if prop is not None:
                 self.__setattr__(
                     name,
-                    np.hstack([prop, np.zeros((delta,))]),
+                    np.hstack([prop, np.zeros(delta)]),
                 )
 
     def _shrink_capacity(self):
@@ -366,6 +366,9 @@ class MDEngine(ABC):
         self.bias = bias
         self.energy = energy
 
+        self.last_bias = EnergyResult(0)
+        self.last_ener = EnergyResult(0)
+
         # self._sp = sp
         self.trajectory_info: TrajectoryInfo | None = None
 
@@ -444,7 +447,22 @@ class MDEngine(ABC):
         self.trajectory_info._shrink_capacity()
         return self.trajectory_info
 
-    def hook(self, ti: TrajectoryInfo):
+    def save_step(self, T=None, P=None, t=None, err=None):
+
+        ti = TrajectoryInfo(
+            positions=self.sp.coordinates,
+            cell=self.sp.cell,
+            e_pot=self.last_ener.energy,
+            e_pot_gpos=self.last_ener.gpos,
+            e_bias=self.last_bias.energy,
+            e_bias_gpos=self.last_bias.gpos,
+            e_pot_vtens=self.last_ener.vtens,
+            e_bias_vtens=self.last_bias.vtens,
+            T=T,
+            P=P,
+            t=t,
+            err=err,
+        )
 
         if self.step == 1:
             str = f"{ 'step': ^10s}"
@@ -488,19 +506,18 @@ class MDEngine(ABC):
 
     def get_energy(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
 
-        ener = self.energy.compute_from_system_params(
+        return self.energy.compute_from_system_params(
             gpos,
             vtens,
         )
 
-        ener_bias: EnergyResult = self.bias.compute_from_system_params(
+    def get_bias(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
+
+        return self.bias.compute_from_system_params(
             self.sp,
             gpos,
             vtens,
         )
-
-        total_energy = ener + ener_bias
-        return total_energy
 
     @property
     def yaff_system(self) -> MDEngine.YaffSys:
@@ -519,6 +536,8 @@ class MDEngine(ABC):
 
             @property
             def rvecs(self):
+                if self._ener.cell is None:
+                    return np.zeros((0, 3))
                 return np.array(self._ener.cell)
 
             @rvecs.setter
@@ -595,6 +614,8 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         self._verlet: yaff.sampling.VerletIntegrator | None = None
         self._yaff_ener: YaffEngine.YaffFF | None = None
 
+        self._verlet_initialized = False
+
         super().__init__(
             energy=energy,
             bias=bias,
@@ -602,40 +623,27 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             trajectory_file=trajectory_file,
             sp=sp,
         )
+        self.initializing = False
 
         self.additional_parts = additional_parts
 
     def __call__(self, iterative: VerletIntegrator):
 
-        # untangle biased and unbiased energy and others
-        ener_bias: EnergyResult = self.bias.compute_from_system_params(
-            SystemParams(coordinates=iterative.pos, cell=iterative.rvecs),
-            gpos=True,
-            vir=True,
-        )
+        if not self._verlet_initialized:
+            return
 
-        kwargs = dict(
-            positions=iterative.pos,
-            cell=iterative.rvecs,
-            t=iterative.time,
-            e_pot=iterative.epot - ener_bias.energy,
-            e_pot_gpos=iterative.gpos - ener_bias.gpos,
-            e_pot_vtens=iterative.vtens - ener_bias.vtens,
-            e_bias=ener_bias.energy,
-            e_bias_gpos=ener_bias.gpos,
-            e_bias_vtens=ener_bias.vtens,
-            T=iterative.temp,
-            err=iterative.cons_err,
-        )
+        kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
 
         if hasattr(iterative, "press"):
             kwargs["P"] = iterative.press
 
-        self.hook(TrajectoryInfo(**kwargs))
+        self.save_step(**kwargs)
 
     def _setup_verlet(self):
 
-        hooks = [self, VerletScreenLog(step=self.static_trajectory_info.screen_log)]
+        # hooks = [self, VerletScreenLog(step=self.static_trajectory_info.screen_log)]
+
+        hooks = [self]
 
         self._yaff_ener = YaffEngine.YaffFF(
             md_engine=self,
@@ -676,12 +684,14 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             hooks=hooks,
         )
 
+        self._verlet_initialized = True
+
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
         return super().load(file, **kwargs)
 
     def _run(self, steps):
-        if self._verlet is None:
+        if not self._verlet_initialized:
             self._setup_verlet()
         self._verlet.run(int(steps))
 
@@ -718,17 +728,25 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         def _internal_compute(self, gpos, vtens):
 
-            total_energy = self.md_engine.get_energy(
+            energy = self.md_engine.get_energy(
                 gpos is not None,
                 vtens is not None,
             )
 
-            if gpos is not None:
-                gpos[:] += np.array(total_energy.gpos)
-            if vtens is not None:
-                vtens[:] += np.array(total_energy.vtens)
+            bias = self.md_engine.get_bias(
+                gpos is not None,
+                vtens is not None,
+            )
 
-            return total_energy.energy
+            self.md_engine.last_ener = energy
+            self.md_engine.last_bias = bias
+
+            if gpos is not None:
+                gpos[:] += np.array(energy.gpos)
+            if vtens is not None:
+                vtens[:] += np.array(energy.vtens)
+
+            return energy.energy
 
 
 class PlumedEngine(YaffEngine):

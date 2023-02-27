@@ -20,6 +20,7 @@ if __name__ == "__main__":
     parser.add_argument("-r", "--rounds", type=int, default=20)
     parser.add_argument("-nu", "--n_umbrellas", type=int, default=8)
     parser.add_argument("-spb", "--samples_per_bin", type=int, default=400)
+    parser.add_argument("-cv", default=None)
     parser.add_argument(
         "-K",
         "--K_umbrellas",
@@ -89,10 +90,10 @@ if __name__ == "__main__":
         print("Loading system")
 
         if args.system == "ala":
-            engine = alanine_dipeptide_yaff()
+            engine = alanine_dipeptide_yaff(cv=args.cv)
 
         elif args.system == "CsPbI3":
-            engine = CsPbI3(unit_cells=args.n_unit_cell)
+            engine = CsPbI3(unit_cells=args.n_unit_cell, cv=args.cv)
 
         if not args.cont:
             scheme = Scheme(folder=args.folder, Engine=engine)
