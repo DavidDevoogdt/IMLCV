@@ -147,7 +147,6 @@ class SystemParams:
         i, j, k = ijk
 
         if ijk != (None, None, None):
-            i, j, k = ijk
             assert sp.cell is not None
             pos = (
                 sp.coordinates
@@ -214,19 +213,34 @@ class SystemParams:
     def get_neighbour_list(
         self,
         r_cut,
-    ) -> NeighbourList:
+    ) -> tuple[SystemParams, NeighbourList]:
 
         sp = self.canoncialize()
 
-        bounds = SystemParams._get_num_per_images(sp.cell, r_cut)
+        if sp.cell is None:
+            bounds = jnp.array([[0, 1], [0, 1], [0, 1]])
+        else:
+            bounds = SystemParams._get_num_per_images(sp.cell, r_cut)
 
-        # @jit
-        def res(center_coordinates):
-
-            func = lambda r_ij, index, i, j, k: (
+        @jit
+        def func(r_ij, index, i, j, k):
+            return (
                 jnp.linalg.norm(r_ij),
-                jnp.array([i, j, k, index]),
+                jnp.array(index),
+                jnp.array([i, j, k]),
             )
+
+        @jit
+        def func2(r_ij, index, i, j, k):
+            return (
+                jnp.linalg.norm(r_ij),
+                jnp.array(index),
+                None,
+            )
+
+        @jit
+        @partial(vmap, in_axes=(None, 0))
+        def res(sp, center_coordinates):
 
             if center_coordinates is not None:
                 sp_center = SystemParams(
@@ -236,10 +250,14 @@ class SystemParams:
                 sp_center = SystemParams(sp.coordinates, sp.cell).canoncialize(min=True)
 
             if sp_center.cell is None:
-                raise
-                return SystemParams.apply_g_inner(sp=sp_center, func=func, r_cut=r_cut)
+                _, (r, atoms, _) = SystemParams.apply_g_inner(
+                    sp=sp_center, func=func2, r_cut=r_cut
+                )
+                idx = jnp.argsort(r)
 
-            _, (r, indices) = vmap(
+                return r[idx] < r_cut, r[idx], atoms[idx], None
+
+            _, (r, atoms, indices) = vmap(
                 vmap(
                     vmap(
                         lambda i, j, k: SystemParams.apply_g_inner(
@@ -263,20 +281,42 @@ class SystemParams:
                 jnp.arange(bounds[2, 0], bounds[2, 1]),
             )
 
-            r, indices = jnp.reshape(r, (-1,)), jnp.reshape(indices, (-1, 4))
+            r, atoms, indices = (
+                jnp.reshape(r, (-1,)),
+                jnp.reshape(atoms, (-1)),
+                jnp.reshape(indices, (-1, 3)),
+            )
             idx = jnp.argsort(r)
 
-            return r[idx] < r_cut, r[idx], indices[idx, :]
+            return r[idx] < r_cut, r[idx], atoms[idx], indices[idx, :]
 
-        bools, r, ijka = vmap(res)(sp.coordinates)
-        num_neighs = int(jnp.max(jnp.sum(bools, axis=1)))
-        bools, r, ijka = (
-            bools[:, 0:num_neighs],
-            r[:, 0:num_neighs],
-            ijka[:, 0:num_neighs],
-        )
+        def _f(sp):
+            bools, r, a, ijk = res(sp, sp.coordinates)
+            num_neighs = jnp.max(jnp.sum(bools, axis=1))
 
-        return NeighbourList(sp=sp, indices=ijka, r_cut=r_cut)
+            return num_neighs, bools, r, a, ijk
+
+        if sp.batched:
+            _f = vmap(_f)
+        num_neighs, _, r, a, ijk = _f(sp)
+
+        def take(num_neighs, r, a, ijk):
+            r, a, = (
+                r[:, 0:num_neighs],
+                a[:, 0:num_neighs],
+            )
+            if ijk is not None:
+                ijk = ijk[:, 0:num_neighs]
+            return r, a, ijk
+
+        if sp.batched:
+            num_neighs = int(jnp.max(num_neighs))
+            take = vmap(take, in_axes=(None, 0, 0, 0))
+        else:
+            num_neighs = int(num_neighs)
+        r, a, ijk = take(num_neighs, r, a, ijk)
+
+        return sp, NeighbourList(indices=ijk, atom_indices=a, r_cut=r_cut)
 
     def apply_fun_neighbour(
         self,
@@ -796,49 +836,49 @@ class SystemParams:
 
 @jdc.pytree_dataclass
 class NeighbourList:
-    sp: SystemParams
-    indices: Array
-    r_cut: jnp.float_
+    r_cut: jdc.Static[jnp.float_]
+    atom_indices: Array
+    indices: Array | None = None
 
-    @partial(vmap, in_axes=(None, 0, None))
-    def _transform(self, ijka, spi):
-        (i, j, k, a) = ijka
+    def _pos_ind(self, sp: SystemParams):
+        @partial(vmap, in_axes=(0, 0, None))
+        def _transform(ijk, a, spi):
+            out = spi[a].coordinates
+            if ijk is not None:
+                (i, j, k) = ijk
+                out = out + sp.cell[0, :] * i + sp.cell[1, :] * j + sp.cell[2, :] * k
+            return out
+
+        @partial(vmap, in_axes=(0, 0, 0))
+        def _recover(center, ijk, a):
+
+            return _transform(
+                ijk,
+                a,
+                SystemParams(sp.coordinates - center, sp.cell).canoncialize(min=True),
+            )
+
         return (
-            self.sp.cell[0, :] * i
-            + self.sp.cell[1, :] * j
-            + self.sp.cell[2, :] * k
-            + spi[a].coordinates
+            _recover(sp.coordinates, self.indices, self.atom_indices),
+            self.atom_indices,
         )
-
-    @partial(vmap, in_axes=(None, 0, 0))
-    def _recover(self, center, ijka):
-
-        return self._transform(
-            ijka,
-            SystemParams(self.sp.coordinates - center, self.sp.cell).canoncialize(
-                min=True
-            ),
-        )
-
-    @property
-    def _pos_ind(self):
-        return self._recover(self.sp.coordinates, self.indices), self.indices[:, :, 3]
 
     def apply_fun_neighbour(
         self,
+        sp: SystemParams,
         r_cut=None,
         func=lambda r_ij, atom_index_j: (jnp.linalg.norm(r_ij), r_ij, atom_index_j),
         fill_value=0,
-        reduce=jnp.sum,
+        reduce=True,
         exclude_self=False,
     ):
 
         if r_cut is None:
             r_cut is self.r_cut
 
-        assert r_cut <= self.r_cut, "r_cut for this neighbourlist is to small"
+        # assert r_cut <= self.r_cut, "r_cut for this neighbourlist is to small"
 
-        pos, ind = self._pos_ind
+        pos, ind = self._pos_ind(sp)
         r = jnp.linalg.norm(pos, axis=2)
 
         bools = r**2 < self.r_cut**2
@@ -864,13 +904,14 @@ class NeighbourList:
             false_val,
         )
 
-        if reduce is not None:
-            return jax.tree_map(vmap(lambda x: reduce(x)), (bools, val))
+        if reduce:
+            return jax.tree_map(vmap(lambda x: jnp.sum(x)), (bools, val))
         else:
             return bools, val
 
     def apply_fun_neighbour_pair(
         self,
+        sp: SystemParams,
         func_single=lambda r_ij, atom_index_j: (1,),
         func_double=lambda r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k: (
             r_ij,
@@ -880,16 +921,17 @@ class NeighbourList:
         ),
         r_cut=None,
         fill_value=0,
-        reduce=jnp.sum,
+        reduce=True,
         exclude_self=True,
         unique=True,
     ):
 
-        pos, ind = self._pos_ind
+        pos, ind = self._pos_ind(sp)
         bools, data_single = self.apply_fun_neighbour(
+            sp=sp,
             func=func_single,
             r_cut=r_cut,
-            reduce=None,
+            reduce=False,
             fill_value=jnp.nan,
             exclude_self=exclude_self,
         )
@@ -919,13 +961,27 @@ class NeighbourList:
         )
 
         out_ijk_filt = jax.tree_map(
-            lambda x, y, z: jnp.where(x, y, z), bools, out_ijk, out_ijk_f
+            vmap(vmap(vmap(lambda x, y, z: jnp.where(x, y, z)))),
+            bools,
+            out_ijk,
+            out_ijk_f,
         )
 
-        if reduce is None:
-            return bools, out_ijk_filt
+        if reduce:
+            return jax.tree_map(
+                vmap(lambda x: jnp.sum(jnp.sum(x, axis=0), axis=0)),
+                (bools, out_ijk_filt),
+            )
         else:
-            return jax.tree_map(vmap(jnp.sum), (bools, out_ijk_filt))
+            return bools, out_ijk_filt
+
+    @property
+    def batched(self):
+        return len(self.atom_indices.shape) == 3
+
+    @property
+    def shape(self):
+        return self.atom_indices.shape
 
 
 @jdc.pytree_dataclass
@@ -1582,7 +1638,7 @@ class NormalizingFlow(nn.Module):
 class CvFlow:
     def __init__(
         self,
-        func: Callable[[SystemParams], CV],
+        func: Callable[[SystemParams, NeighbourList | None], CV],
         trans: CvTrans | None = None,
         # batched=False,
     ) -> None:
@@ -1591,18 +1647,27 @@ class CvFlow:
         # self.batched = batched
 
     @staticmethod
-    def from_function(f: Callable[[SystemParams], Array]) -> CvFlow:
-        def f2(sp: SystemParams):
-            return CV(cv=f(sp))
+    def from_function(
+        f: Callable[[SystemParams, NeighbourList | None], Array]
+    ) -> CvFlow:
+        def f2(
+            sp: SystemParams,
+            nl: NeighbourList | None = None,
+        ):
+            return CV(cv=f(sp, nl))
 
         return CvFlow(func=f2)
 
     @partial(jit, static_argnums=(0,))
-    def compute_cv_flow(self, x: SystemParams) -> CV:
+    def compute_cv_flow(
+        self,
+        x: SystemParams,
+        nl: NeighbourList | None = None,
+    ) -> CV:
         if x.batched:
-            return vmap(jit(self.compute_cv_flow))(x)
+            return vmap(jit(self.compute_cv_flow))(x, nl)
 
-        out = self.f0(x)
+        out = self.f0(x, nl)
 
         if self.f1 is not None:
             out, _ = self.f1.compute_cv_trans(out)
@@ -1612,9 +1677,9 @@ class CvFlow:
     def __add__(self, other):
         assert isinstance(other, CvFlow)
 
-        def f_add(x: SystemParams):
-            cv1: CV = self.compute_cv_flow(x)
-            cv2: CV = other.compute_cv_flow(x)
+        def f_add(x: SystemParams, nl: NeighbourList):
+            cv1: CV = self.compute_cv_flow(x, nl)
+            cv2: CV = other.compute_cv_flow(x, nl)
 
             return CV.combine(cv1, cv2)
 
@@ -1669,7 +1734,12 @@ class CollectiveVariable:
         self.jac = jac
 
     @partial(jit, static_argnums=(0, 2))
-    def compute_cv(self, sp: SystemParams, jacobian=False) -> tuple[CV, CV]:
+    def compute_cv(
+        self,
+        sp: SystemParams,
+        jacobian=False,
+        nl: NeighbourList | None = None,
+    ) -> tuple[CV, CV]:
         cvf = self.f.compute_cv_flow
 
         if sp.batched:
@@ -1677,8 +1747,8 @@ class CollectiveVariable:
         else:
             dcv = self.jac(cvf)
 
-        cv = cvf(sp)
-        dcv = dcv(sp) if jacobian else None
+        cv = cvf(sp, nl)
+        dcv = dcv(sp, nl) if jacobian else None
 
         assert sp.batched == cv.batched
 
@@ -1760,7 +1830,7 @@ class KerasTrans(CvTrans):
 
 
 @CvFlow.from_function
-def Volume(sp: SystemParams):
+def Volume(sp: SystemParams, _):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
     vol = jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
@@ -1769,7 +1839,7 @@ def Volume(sp: SystemParams):
 
 def distance_descriptor():
     @CvFlow.from_function
-    def h(x: SystemParams):
+    def h(x: SystemParams, _):
 
         x = x.canoncialize()
 
@@ -1795,7 +1865,7 @@ def dihedral(numbers):
     """
 
     @CvFlow.from_function
-    def f(sp: SystemParams):
+    def f(sp: SystemParams, _):
         coor = sp.coordinates
         p0 = coor[numbers[0]]
         p1 = coor[numbers[1]]
@@ -1829,15 +1899,18 @@ def sb_descriptor(
 ):
     from IMLCV.base.tools.soap_kernel import Kernel, p_i, p_inl_sb
 
-    def f(sp: SystemParams, refs=None, tril=True):
+    def f(sp: SystemParams, nl: NeighbourList, refs=None, tril=True):
         out = p_i(
             sp=sp,
+            nl=nl,
             sti=sti,
             p=p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max),
             r_cut=r_cut,
             z1=z1,
             z2=z2,
         )
+
+        assert nl is not None, "provide neighbourlist for sb describport"
 
         if refs is None:
 
@@ -1869,16 +1942,19 @@ def sb_descriptor(
 
     if references is not None:
 
-        refs = f(references, refs=None, tril=False)
+        references, nl = references.get_neighbour_list(r_cut=r_cut)
+        refs = f(references, nl, refs=None, tril=False)
 
-        autodist = f(references, refs)
+        autodist = f(references, nl, refs)
 
-        return CvFlow.from_function(
-            lambda sp: (1 - f(sp, refs)) / (1 - jnp.min(autodist, axis=1))
-        )
+        def sb_descriptor_distance(sp: SystemParams, nl: NeighbourList):
+            assert nl is not None, "provide neighbourlist for sb describport"
+            return (1 - f(sp=sp, nl=nl, refs=refs)) / (1 - jnp.min(autodist, axis=1))
+
+        return CvFlow.from_function(sb_descriptor_distance)  # type: ignore
 
     else:
-        return CvFlow.from_function(f)
+        return CvFlow.from_function(f)  # type: ignore
 
 
 ######################################
@@ -2234,9 +2310,9 @@ def test_neigh():
 
     ##method 4: with neighbourlist
 
-    nl = sp.get_neighbour_list(r_cut=r_cut)
+    sp3, nl = sp.get_neighbour_list(r_cut=r_cut)
     neigh_calc_4, r_exp_4 = nl.apply_fun_neighbour(
-        r_cut=r_cut, func=func, reduce=jnp.sum
+        sp=sp3, r_cut=r_cut, func=func, reduce=True
     )
 
     assert neigh_calc == neigh_calc_4[0], f"{neigh_calc} != {neigh_calc_4[0]}"
@@ -2288,10 +2364,15 @@ def test_neigh_pair():
         )
     )
 
-    nl = sp.get_neighbour_list(r_cut=r_cut)
+    sp3, nl = sp.get_neighbour_list(r_cut=r_cut)
 
     k3, pair_dist3 = nl.apply_fun_neighbour_pair(
-        r_cut=r_cut, func_double=func, reduce=jnp.sum, exclude_self=True, unique=True
+        sp=sp3,
+        r_cut=r_cut,
+        func_double=func,
+        reduce=True,
+        exclude_self=True,
+        unique=True,
     )
 
     assert k == k3[0]

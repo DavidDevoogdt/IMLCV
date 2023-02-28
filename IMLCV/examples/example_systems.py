@@ -54,6 +54,8 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
             ),
         )
 
+        r_cut = None
+
     elif cv == "soap_dist":
 
         sp0 = SystemParams(
@@ -116,9 +118,11 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
             cell=None,
         )
 
+        r_cut = 3 * angstrom
+
         cv0 = CollectiveVariable(
             f=sb_descriptor(
-                r_cut=7 * angstrom, sti=tic, n_max=5, l_max=5, references=sp0 + sp1
+                r_cut=r_cut, sti=tic, n_max=5, l_max=5, references=sp0 + sp1
             ),
             metric=CvMetric(
                 periodicities=[False, False],
@@ -134,6 +138,7 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
         static_trajectory_info=tic,
         bias=bias(cv0),
         trajectory_file="test.h5",
+        r_cut=r_cut,
     )
 
     return mde
@@ -303,6 +308,9 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
 
 
 if __name__ == "__main__":
+
+    # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
+    # sys.run(100)
 
     sys = alanine_dipeptide_yaff(cv="soap_dist")
     sys.run(100)

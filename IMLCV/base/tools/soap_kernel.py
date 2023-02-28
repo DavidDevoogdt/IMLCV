@@ -14,7 +14,7 @@ import scipy.special
 from jax import Array, jacfwd, jit, lax, vmap
 from scipy.spatial.transform import Rotation as R
 
-from IMLCV.base.CV import SystemParams
+from IMLCV.base.CV import NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.tools.bessel_callback import ive, spherical_jn
 
@@ -55,8 +55,9 @@ def legendre(x, n):
 
 def p_i(
     sp: SystemParams,
+    nl: NeighbourList,
     sti: StaticTrajectoryInfo | None,
-    p: Callable[[jnp.ndarray], jnp.ndarray],
+    p,
     r_cut,
     z1=None,
     z2=None,
@@ -69,20 +70,21 @@ def p_i(
     """
     # with jax.disable_jit():
 
+    # if sp.batched:
+
     if sp.batched:
         return vmap(
-            lambda x: p_i(
+            lambda x, y: p_i(
                 sp=x,
+                nl=y,
                 sti=sti,
                 p=p,
                 r_cut=r_cut,
                 z1=z1,
                 z2=z2,
             )
-        )(sp)
+        )(sp, nl)
 
-    if sp.cell is not None:
-        sp = sp.canoncialize()
 
     mask1 = None
     if z1 is not None:
@@ -96,25 +98,39 @@ def p_i(
         assert sti.atomic_numbers is not None
         mask2 = sti.atomic_numbers == z2
 
-    k, val = jit(
-        vmap(
-            lambda c: sp.apply_fun_neighbour_pairs(
-                r_cut=r_cut,
-                func=p,
-                center_coordinates=c,
-                mask1=mask1,
-                mask2=mask2,
-            )
-        )
-    )(sp.coordinates)
+    p, ps, pd = p
 
-    norms = vmap(jnp.linalg.norm)(val)
+    k0, val0 = nl.apply_fun_neighbour_pair(
+        sp=sp,
+        func_single=ps,
+        func_double=pd,
+        r_cut=r_cut,
+        fill_value=0.0,
+        reduce=jnp.sum,
+        unique=True,
+    )
+
+    # k, val = jit(
+    #     vmap(
+    #         lambda c: sp.apply_fun_neighbour_pairs(
+    #             r_cut=r_cut,
+    #             func=p,
+    #             center_coordinates=c,
+    #             mask1=mask1,
+    #             mask2=mask2,
+    #         )
+    #     )
+    # )(sp.coordinates)
+    # assert jnp.linalg.norm(k - k0) == 0
+    # assert jnp.linalg.norm(val - val0) < 1e-6
+
+    norms = vmap(jnp.linalg.norm)(val0)
 
     # jax.debug.print("k {} norms {}", k, norms)
 
     norms_inv = jnp.where(norms != 0, 1 / norms, 0.0)
 
-    return jnp.einsum("i...,i->i...", val, norms_inv)
+    return jnp.einsum("i...,i->i...", val0, norms_inv)
 
 
 @partial(vmap, in_axes=(0, None, None), out_axes=0)
@@ -219,7 +235,23 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
             "l,al,bl,l->abl", 4 * jnp.pi * (2 * l_vec + 1), a_nlj, a_nlk, b_ljk
         )
 
-    return _p_i_soap_2
+    @jit
+    def _p_i_soap_2_s(p_ij, atom_index_j):
+        r_ij = jnp.linalg.norm(p_ij)
+        return U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ij) * f_cut(r_ij)
+
+    @jit
+    def _p_i_soap_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
+
+        a_nlj = data_j
+        a_nlk = data_k
+        b_ljk = lengendre_l(l_vec, p_ij, p_ik)
+
+        return jnp.einsum(
+            "l,al,bl,l->abl", 4 * jnp.pi * (2 * l_vec + 1), a_nlj, a_nlk, b_ljk
+        )
+
+    return _p_i_soap_2, _p_i_soap_2_s, _p_i_soap_2_d
 
 
 def p_inl_sb(l_max, n_max, r_cut):
@@ -361,7 +393,46 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         return out
 
-    return _p_i_sb_2
+    # return _p_i_sb_2
+
+    @jit
+    def _p_i_sb_2_s(p_ij, atom_index_j):
+        r_ij = jnp.linalg.norm(p_ij)
+
+        a_jnl = g_nl(r_ij)
+
+        return a_jnl
+
+    @jit
+    def _p_i_sb_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
+
+        a_jnl = data_j
+        a_knl = data_k
+        b_ljk = lengendre_l(l_vec, p_ij, p_ik)
+
+        @partial(vmap, in_axes=(None, 0, None), out_axes=1)
+        @partial(vmap, in_axes=(0, None, None), out_axes=0)
+        def a_nml_l(n, l, a):
+            return lax.cond(
+                l <= n,
+                lambda: a[n - l, l],
+                lambda: jnp.zeros_like(a[0, 0]),
+            )
+
+        g_nml_l_j = a_nml_l(n_vec, l_vec, a_jnl)
+        g_nml_l_k = a_nml_l(n_vec, l_vec, a_knl)
+
+        out = jnp.einsum(
+            "l,nl,nl,l -> nl",
+            (2 * l_vec + 1) / (4 * jnp.pi),
+            g_nml_l_j,
+            g_nml_l_k,
+            b_ljk,
+        )
+
+        return out
+
+    return _p_i_sb_2, _p_i_sb_2_s, _p_i_sb_2_d
 
 
 def Kernel(p1, p2, xi=2):
@@ -406,6 +477,10 @@ if __name__ == "__main__":
 
     r_cut = 5
 
+    sp1, nl1 = sp.get_neighbour_list(r_cut=r_cut)
+    sp2, nl2 = sp2.get_neighbour_list(r_cut=r_cut)
+    sp3, nl3 = sp3.get_neighbour_list(r_cut=r_cut)
+
     for pp in [
         p_inl_sb(
             l_max=l_max,
@@ -423,33 +498,34 @@ if __name__ == "__main__":
     ]:
 
         @jit
-        def fi(r_ij, r_ik, ind_j, ind_k):
-            return jnp.exp(r_ij - r_ik)
+        def f(sp, nl):
 
-        @jit
-        def f(sp):
             return p_i(
                 sp=sp,
+                nl=nl,
                 p=pp,
                 r_cut=r_cut,
                 sti=None,
             )
 
-        a = f(sp)
+        a = f(sp1, nl1)
 
         from time import time_ns
 
         before = time_ns()
-        b = f(sp2)
+        b = f(sp2, nl2)
         after = time_ns()
-        c = f(sp3)
+        c = f(sp3, nl3)
 
         print(
             f"l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={ jnp.mean( Kernel( a,b ) ) }, <kernel(orig, rand)>= { jnp.mean( Kernel( a,c ) ) }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
         )
 
         # check the derivatives
-        c = jacfwd(f)(sp)
+        # c = jacfwd(f, argnums=0)(nl1.sp, nl1.indices, r_cut)
+
+        c = jacfwd(f)(sp1, nl1)
+
         print(
-            f"gradient shape:{c.shape} nans coor : {jnp.sum(  jnp.isnan(c.coordinates ) )} nans cell : {jnp.sum(  jnp.isnan(c.cell ) )}"
+            f"gradient shape:{c.shape} nans coor : {jnp.sum(  jnp.isnan(  c.coordinates  ) )} nans cell : {jnp.sum(  jnp.isnan(c.cell ) )}"
         )

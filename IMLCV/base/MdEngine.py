@@ -9,7 +9,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING
 
 import dill
 import h5py
@@ -26,18 +25,18 @@ import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling
 import yaff.sampling.iterative
-from IMLCV.base.CV import SystemParams
+from IMLCV.base.CV import NeighbourList, SystemParams
 from yaff.external import libplumed
 from yaff.log import log
-from yaff.sampling.verlet import VerletIntegrator, VerletScreenLog
+from yaff.sampling.verlet import VerletIntegrator
 
 yaff.log.set_level(yaff.log.silent)
 
-# if TYPE_CHECKING:
-from IMLCV.base.bias import Bias, Energy, EnergyResult
-
 from molmod.periodic import periodic
 from molmod.units import kjmol
+
+# if TYPE_CHECKING:
+from IMLCV.base.bias import Bias, Energy, EnergyResult
 
 ######################################
 #             Trajectory             #
@@ -350,6 +349,8 @@ class MDEngine(ABC):
         "energy",
         "static_trajectory_info",
         "trajectory_file",
+        "r_cut",
+        "sp",
     ]
 
     def __init__(
@@ -359,6 +360,7 @@ class MDEngine(ABC):
         static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
         sp: SystemParams | None = None,
+        r_cut: jnp.float_ | None = None,
     ) -> None:
 
         self.static_trajectory_info = static_trajectory_info
@@ -380,6 +382,8 @@ class MDEngine(ABC):
         self.time0 = time()
         self.last_ti: TrajectoryInfo | None = None
 
+        self.r_cut = r_cut
+
     @property
     def sp(self) -> SystemParams:
         return self.energy.sp
@@ -387,6 +391,13 @@ class MDEngine(ABC):
     @sp.setter
     def sp(self, sp: SystemParams):
         self.energy.sp = sp
+
+    @property
+    def nl(self) -> tuple[SystemParams, NeighbourList | None]:
+        if self.r_cut is not None:
+            return self.sp.get_neighbour_list(r_cut=self.r_cut)
+        else:
+            return self.sp, None
 
     def save(self, file):
         with open(file, "wb") as f:
@@ -513,10 +524,13 @@ class MDEngine(ABC):
 
     def get_bias(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
 
+        sp, nl = self.nl
+
         return self.bias.compute_from_system_params(
-            self.sp,
-            gpos,
-            vtens,
+            sp=sp,
+            nl=nl,
+            gpos=gpos,
+            vir=vtens,
         )
 
     @property
@@ -604,6 +618,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         energy: Energy,
         trajectory_file=None,
         sp: SystemParams | None = None,
+        r_cut: jnp.float_ | None = None,
         additional_parts=[],
     ) -> None:
 
@@ -622,6 +637,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             static_trajectory_info=static_trajectory_info,
             trajectory_file=trajectory_file,
             sp=sp,
+            r_cut=r_cut,
         )
         self.initializing = False
 

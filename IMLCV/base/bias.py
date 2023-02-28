@@ -51,11 +51,11 @@ from IMLCV.base.CV import (
     CollectiveVariable,
     CvFlow,
     CvMetric,
+    NeighbourList,
     SystemParams,
     Volume,
     dihedral,
 )
-
 
 ######################################
 #              Energy                #
@@ -507,12 +507,14 @@ class Bias(BC, ABC):
 
     @partial(jit, static_argnums=(0, 2, 3))
     def compute_from_system_params(
-        self, sp: SystemParams, gpos=False, vir=False
+        self, sp: SystemParams, gpos=False, vir=False, nl: NeighbourList | None = None
     ) -> EnergyResult:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        [cvs, jac] = self.collective_variable.compute_cv(sp=sp, jacobian=gpos or vir)
+        [cvs, jac] = self.collective_variable.compute_cv(
+            sp=sp, nl=nl, jacobian=gpos or vir
+        )
         [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
 
         e_gpos = None
@@ -1346,9 +1348,8 @@ def test_grid_bias():
 
 
 def test_combine_bias(full_name):
+    from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
     from yaff.test.common import get_alaninedipeptide_amber99ff
-    from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
-
 
     T = 300 * kelvin
 
