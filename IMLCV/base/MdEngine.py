@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import time
 
+from jax import Array
+
 import dill
 import h5py
 import jax.numpy as jnp
@@ -48,6 +50,7 @@ class StaticTrajectoryInfo:
 
     _attr = [
         "timestep",
+        "r_cut",
         "timecon_thermo",
         "T",
         "P",
@@ -59,7 +62,6 @@ class StaticTrajectoryInfo:
 
     _arr = [
         "atomic_numbers",
-        # "masses",
     ]
 
     timestep: float
@@ -67,9 +69,9 @@ class StaticTrajectoryInfo:
     T: float
     timecon_thermo: float
 
-    atomic_numbers: np.ndarray
-    # masses: np.ndarray | None = None
+    atomic_numbers: Array
 
+    r_cut: float | None = None
     P: float | None = None
     timecon_baro: float | None = None
 
@@ -97,8 +99,8 @@ class StaticTrajectoryInfo:
         if self.barostat:
             assert self.timecon_baro is not None
 
-        if self.equilibration is None:
-            self.equilibration = 200 * self.timestep
+        # if self.equilibration is None:
+        #     self.equilibration = 200 * self.timestep
 
     def _save(self, hf: h5py.File):
         for name in self._arr:
@@ -349,7 +351,6 @@ class MDEngine(ABC):
         "energy",
         "static_trajectory_info",
         "trajectory_file",
-        "r_cut",
         "sp",
     ]
 
@@ -360,7 +361,6 @@ class MDEngine(ABC):
         static_trajectory_info: StaticTrajectoryInfo,
         trajectory_file=None,
         sp: SystemParams | None = None,
-        r_cut: jnp.float_ | None = None,
     ) -> None:
 
         self.static_trajectory_info = static_trajectory_info
@@ -382,7 +382,7 @@ class MDEngine(ABC):
         self.time0 = time()
         self.last_ti: TrajectoryInfo | None = None
 
-        self.r_cut = r_cut
+        self._nl: NeighbourList | None = None
 
     @property
     def sp(self) -> SystemParams:
@@ -394,10 +394,26 @@ class MDEngine(ABC):
 
     @property
     def nl(self) -> tuple[SystemParams, NeighbourList | None]:
-        if self.r_cut is not None:
-            return self.sp.get_neighbour_list(r_cut=self.r_cut)
-        else:
+
+        if self.static_trajectory_info.r_cut is None:
             return self.sp, None
+
+        def _nl():
+            return self.sp.get_neighbour_list(
+                r_cut=self.static_trajectory_info.r_cut,
+                z_array=self.static_trajectory_info.atomic_numbers,
+            )
+
+        # if self._nl is None:
+        #     _, self._nl = _nl()
+
+        # b, sp, nl = self._nl.update(self.sp)
+
+        # if not b:
+        sp, nl = _nl()
+
+        self._nl = nl
+        return sp, nl
 
     def save(self, file):
         with open(file, "wb") as f:
@@ -618,7 +634,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         energy: Energy,
         trajectory_file=None,
         sp: SystemParams | None = None,
-        r_cut: jnp.float_ | None = None,
         additional_parts=[],
     ) -> None:
 
@@ -637,7 +652,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             static_trajectory_info=static_trajectory_info,
             trajectory_file=trajectory_file,
             sp=sp,
-            r_cut=r_cut,
         )
         self.initializing = False
 

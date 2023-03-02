@@ -90,8 +90,8 @@ class ThermoLIB:
             if cv is None:
                 cv = bias.collective_variable
             sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
-
-            cvs, _ = cv.compute_cv(sp)
+            sp, nl = sp.get_neighbour_list(r_cut=round.tic.r_cut)
+            cvs, _ = cv.compute_cv(sp=sp, nl=nl)
 
             if cvs.batch_dim <= 1:
                 print("##############bdim {cvs.batch_dim} ignored\n")

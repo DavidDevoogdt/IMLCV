@@ -10,6 +10,8 @@ from functools import partial
 from importlib import import_module
 from typing import TYPE_CHECKING
 
+from IMLCV.base.tools.tools import HashableArrayWrapper
+
 import jax
 import jax.flatten_util
 import jax.lax
@@ -96,7 +98,7 @@ class SystemParams:
 
         return SystemParams(
             coordinates=jnp.vstack([s.coordinates, o.coordinates]),
-            cell=self.cell if self.cell is None else jnp.vstack([s.cell, o.cell]),
+            cell=None if self.cell is None else jnp.vstack([s.cell, o.cell]),
         )
 
     def __str__(self):
@@ -192,6 +194,10 @@ class SystemParams:
 
     @staticmethod
     def _get_num_per_images(cell, r_cut):
+
+        if cell is None or r_cut is None:
+            return None
+
         # orthogonal distance for number of blocks
         v1, v2, v3 = cell[0, :], cell[1, :], cell[2, :]
 
@@ -206,21 +212,30 @@ class SystemParams:
         )
 
         bounds = jnp.ceil(jnp.sum(jnp.abs(jnp.linalg.inv(proj)) * r_cut, axis=1))
-        bounds = jnp.array([-bounds, bounds + 1], dtype=jnp.int32).T
 
         return bounds
 
-    def get_neighbour_list(
+    # @partial(jit, static_argnums=(1, 2, 3, 7, 8, 9))
+    def _get_neighbour_list(
         self,
         r_cut,
-    ) -> tuple[SystemParams, NeighbourList]:
+        z_array: Array | None = None,
+    ) -> tuple[SystemParams, NeighbourList | None]:
+
+        if r_cut is None:
+            return self, None
 
         sp = self.canoncialize()
 
-        if sp.cell is None:
-            bounds = jnp.array([[0, 1], [0, 1], [0, 1]])
+        if sp.cell is not None:
+
+            bnds = SystemParams._get_num_per_images(sp.cell, r_cut)
+            bx = jnp.arange(-bnds[0], bnds[0] + 1)
+            by = jnp.arange(-bnds[0], bnds[0] + 1)
+            bz = jnp.arange(-bnds[0], bnds[0] + 1)
         else:
-            bounds = SystemParams._get_num_per_images(sp.cell, r_cut)
+            bnds = None
+            # bx, by, bx = None, None, None
 
         @jit
         def func(r_ij, index, i, j, k):
@@ -238,7 +253,7 @@ class SystemParams:
                 None,
             )
 
-        @jit
+        # @jit
         @partial(vmap, in_axes=(None, 0))
         def res(sp, center_coordinates):
 
@@ -275,11 +290,7 @@ class SystemParams:
                 ),
                 in_axes=(None, None, 0),
                 out_axes=2,
-            )(
-                jnp.arange(bounds[0, 0], bounds[0, 1]),
-                jnp.arange(bounds[1, 0], bounds[1, 1]),
-                jnp.arange(bounds[2, 0], bounds[2, 1]),
-            )
+            )(bx, by, bz)
 
             r, atoms, indices = (
                 jnp.reshape(r, (-1,)),
@@ -296,10 +307,6 @@ class SystemParams:
 
             return num_neighs, bools, r, a, ijk
 
-        if sp.batched:
-            _f = vmap(_f)
-        num_neighs, _, r, a, ijk = _f(sp)
-
         def take(num_neighs, r, a, ijk):
             r, a, = (
                 r[:, 0:num_neighs],
@@ -310,13 +317,39 @@ class SystemParams:
             return r, a, ijk
 
         if sp.batched:
-            num_neighs = int(jnp.max(num_neighs))
+            _f = vmap(_f)
             take = vmap(take, in_axes=(None, 0, 0, 0))
-        else:
-            num_neighs = int(num_neighs)
+
+        nn, _, r, a, ijk = _f(sp)
+
+        if sp.batched:
+            nn = int(jnp.max(nn))  # ingore: type
+
+        # else:
+        num_neighs = nn
+
         r, a, ijk = take(num_neighs, r, a, ijk)
 
-        return sp, NeighbourList(indices=ijk, atom_indices=a, r_cut=r_cut)
+        return sp, NeighbourList(
+            r_cut=r_cut,
+            atom_indices=a,
+            ijk_indices=ijk,
+            atom_z=z_array[a],
+            nls=NeighbourListStatic(
+                bnds=HashableArrayWrapper(bnds) if bnds is not None else None,
+                num_neighs=int(num_neighs),
+                z_unique=HashableArrayWrapper(jnp.unique(z_array)),
+                z_array=HashableArrayWrapper(z_array),
+            ),
+        )
+
+    def get_neighbour_list(
+        self,
+        r_cut,
+        z_array: Array | None = None,
+    ) -> tuple[SystemParams, NeighbourList | None]:
+
+        return self._get_neighbour_list(r_cut=r_cut, z_array=z_array)
 
     def apply_fun_neighbour(
         self,
@@ -386,8 +419,8 @@ class SystemParams:
             i, farg = ifarg
 
             (i, j), farg = jax.lax.fori_loop(
-                lower=bounds[2, 0],
-                upper=bounds[2, 1],
+                lower=-bounds[2],
+                upper=bounds[2]+1,
                 body_fun=k_loop,
                 init_val=((i, j), farg),
             )
@@ -397,8 +430,8 @@ class SystemParams:
         def i_loop(i, farg):
 
             i, farg = jax.lax.fori_loop(
-                lower=bounds[1, 0],
-                upper=bounds[1, 1],
+                lower=-bounds[1],
+                upper=bounds[1]+1,
                 body_fun=j_loop,
                 init_val=(i, farg),
             )
@@ -406,8 +439,8 @@ class SystemParams:
             return farg
 
         return jax.lax.fori_loop(
-            lower=bounds[0, 0],
-            upper=bounds[0, 1],
+            lower=-bounds[0],
+            upper=bounds[0]+1,
             body_fun=i_loop,
             init_val=init_val,
         )
@@ -835,33 +868,45 @@ class SystemParams:
 
 
 @jdc.pytree_dataclass
-class NeighbourList:
-    r_cut: jdc.Static[jnp.float_]
-    atom_indices: Array
-    indices: Array | None = None
+class NeighbourListStatic:
+    bnds: jdc.Static[HashableArrayWrapper | None]
+    num_neighs: jdc.Static[int]
+    z_unique: jdc.Static[HashableArrayWrapper | None] = None
+    z_array: jdc.Static[HashableArrayWrapper | None] = None
 
-    def _pos_ind(self, sp: SystemParams):
-        @partial(vmap, in_axes=(0, 0, None))
-        def _transform(ijk, a, spi):
+
+@jdc.pytree_dataclass
+class NeighbourList:
+    r_cut: jnp.floating
+    atom_indices: Array
+    atom_z: Array
+    nls: jdc.Static[NeighbourListStatic]
+    ijk_indices: Array | None = None
+
+    def _pos(self, sp: SystemParams):
+        @partial(vmap, in_axes=(0, 0, None, None))
+        def _transform(ijk, a, spi, sp):
             out = spi[a].coordinates
             if ijk is not None:
                 (i, j, k) = ijk
                 out = out + sp.cell[0, :] * i + sp.cell[1, :] * j + sp.cell[2, :] * k
             return out
 
-        @partial(vmap, in_axes=(0, 0, 0))
-        def _recover(center, ijk, a):
+        @partial(vmap, in_axes=(0, 0, 0, None))
+        def _recover(center, ijk, a, sp):
 
             return _transform(
                 ijk,
                 a,
                 SystemParams(sp.coordinates - center, sp.cell).canoncialize(min=True),
+                sp,
             )
 
-        return (
-            _recover(sp.coordinates, self.indices, self.atom_indices),
-            self.atom_indices,
-        )
+        if sp.batched:
+            assert self.batched
+            _recover = vmap(_recover, in_axes=(0, 0, 0, 0))
+
+        return _recover(sp.coordinates, self.ijk_indices, self.atom_indices, sp)
 
     def apply_fun_neighbour(
         self,
@@ -878,36 +923,44 @@ class NeighbourList:
 
         # assert r_cut <= self.r_cut, "r_cut for this neighbourlist is to small"
 
-        pos, ind = self._pos_ind(sp)
-        r = jnp.linalg.norm(pos, axis=2)
+        pos = self._pos(sp)
+        ind = self.atom_indices
+        r = jnp.linalg.norm(pos, axis=-1)
 
         bools = r**2 < self.r_cut**2
 
         if exclude_self:
             bools = jnp.logical_and(bools, r**2 != 0.0)
 
-        true_val = vmap(vmap(func))(pos, ind)
-        false_val = jax.tree_map(
-            lambda a: jnp.zeros_like(a) + fill_value,
-            true_val,
-        )
+        def _f(bools, pos, ind):
 
-        val = vmap(
-            lambda b, x, y: jax.tree_map(
-                lambda t, f: vmap(jnp.where)(b, t, f),
-                x,
-                y,
+            true_val = vmap(vmap(func))(pos, ind)
+            false_val = jax.tree_map(
+                lambda a: jnp.zeros_like(a) + fill_value,
+                true_val,
             )
-        )(
-            bools,
-            true_val,
-            false_val,
-        )
 
-        if reduce:
-            return jax.tree_map(vmap(lambda x: jnp.sum(x)), (bools, val))
-        else:
-            return bools, val
+            val = vmap(
+                lambda b, x, y: jax.tree_map(
+                    lambda t, f: vmap(jnp.where)(b, t, f),
+                    x,
+                    y,
+                )
+            )(
+                bools,
+                true_val,
+                false_val,
+            )
+
+            if reduce:
+                return jax.tree_map(vmap(lambda x: jnp.sum(x)), (bools, val))
+            else:
+                return bools, val
+
+        if sp.batched:
+            _f = vmap(_f)
+
+        return _f(bools, pos, ind)
 
     def apply_fun_neighbour_pair(
         self,
@@ -924,9 +977,12 @@ class NeighbourList:
         reduce=True,
         exclude_self=True,
         unique=True,
+        split_z=False,
     ):
 
-        pos, ind = self._pos_ind(sp)
+        pos = self._pos(sp)
+        ind = self.atom_indices
+
         bools, data_single = self.apply_fun_neighbour(
             sp=sp,
             func=func_single,
@@ -936,44 +992,77 @@ class NeighbourList:
             exclude_self=exclude_self,
         )
 
-        out_ijk = vmap(
-            lambda x, y, z: vmap(
-                vmap(func_double, in_axes=(0, 0, 0, None, None, None)),
-                in_axes=(None, None, None, 0, 0, 0),
-            )(x, y, z, x, y, z)
-        )(pos, ind, data_single)
+        def _f(bools, pos, ind, data_single, az):
 
-        # filter bools according to r_cut
-        bools = vmap(
-            lambda b: vmap(
-                vmap(jnp.logical_and, in_axes=(0, None)),
-                in_axes=(None, 0),
-            )(b, b)
-        )(bools)
+            out_ijk = vmap(
+                lambda x, y, z: vmap(
+                    vmap(func_double, in_axes=(0, 0, 0, None, None, None)),
+                    in_axes=(None, None, None, 0, 0, 0),
+                )(x, y, z, x, y, z)
+            )(pos, ind, data_single)
 
-        #  set bools b_ijk to false
-        if unique:
-            bools = vmap(lambda b: b.at[jnp.diag_indices_from(b)].set(False))(bools)
+            # filter bools according to r_cut
+            bools = vmap(
+                lambda b: vmap(
+                    vmap(jnp.logical_and, in_axes=(0, None)),
+                    in_axes=(None, 0),
+                )(b, b)
+            )(bools)
 
-        out_ijk_f = jax.tree_map(
-            lambda o: jnp.zeros(shape=o.shape, dtype=o.dtype) + fill_value,
-            out_ijk,
-        )
+            #  set bools b_ijk to false
+            if unique:
+                bools = vmap(lambda b: b.at[jnp.diag_indices_from(b)].set(False))(bools)
 
-        out_ijk_filt = jax.tree_map(
-            vmap(vmap(vmap(lambda x, y, z: jnp.where(x, y, z)))),
-            bools,
-            out_ijk,
-            out_ijk_f,
-        )
-
-        if reduce:
-            return jax.tree_map(
-                vmap(lambda x: jnp.sum(jnp.sum(x, axis=0), axis=0)),
-                (bools, out_ijk_filt),
+            out_ijk_f = jax.tree_map(
+                lambda o: jnp.zeros(shape=o.shape, dtype=o.dtype) + fill_value,
+                out_ijk,
             )
-        else:
-            return bools, out_ijk_filt
+
+            def filt(mat, out_ijk_f, bools):
+                return jax.tree_map(
+                    lambda t, f: vmap(vmap(vmap(lambda x, y, z: jnp.where(x, y, z))))(
+                        bools, t, f
+                    ),
+                    mat,
+                    out_ijk_f,
+                )
+
+            def get(bools):
+                mat = filt(out_ijk, out_ijk_f, bools)
+
+                if reduce:
+                    return jax.tree_map(
+                        vmap(lambda x: jnp.sum(jnp.sum(x, axis=0), axis=0)),
+                        (bools, mat),
+                    )
+                else:
+                    return bools, mat
+
+            if not split_z:
+                return get(bools)
+
+            @partial(vmap, in_axes=(0, None, None))
+            @partial(vmap, in_axes=(None, 0, None))
+            def sel(u1, u2, at):
+                @partial(vmap, in_axes=(0))
+                def _b(at):
+                    bools_z1_z2 = vmap(
+                        vmap(
+                            lambda x, y: jnp.logical_and(x == u1, y == u2),
+                            in_axes=(0, None),
+                        ),
+                        in_axes=(None, 0),
+                    )(at, at)
+                    return bools_z1_z2
+
+                return get(_b(at))
+
+            return sel(self.nls.z_unique.val, self.nls.z_unique.val, az)
+
+        if sp.batched:
+            _f = vmap(_f)
+
+        return _f(bools, pos, ind, data_single, self.atom_z)
 
     @property
     def batched(self):
@@ -982,6 +1071,26 @@ class NeighbourList:
     @property
     def shape(self):
         return self.atom_indices.shape
+
+    def update(self, sp: SystemParams) -> tuple[bool, SystemParams, NeighbourList]:
+        raise
+        return sp._get_neighbour_list(
+            r_cut=self.r_cut,
+            bx=self.bx,
+            by=self.by,
+            bz=self.bz,
+            z_array=self.z_array,
+            z_unique=self.unique_z,
+            update=True,
+            num_neighs=self.num_neighs,
+        )
+
+    # def __hash__(self):
+    #     pass
+
+    # def __eq__(self, other) -> bool:
+    #     assert isinstance(other, NeighbourList)
+    #     return jnp.sum((self.z_array - other.z_array) ** 2) == 0
 
 
 @jdc.pytree_dataclass
@@ -1696,26 +1805,45 @@ class CvFlow:
         return self
 
     def find_sp(
-        self, x0: SystemParams, target: CV, maxiter=10000, tol=1e-4
+        self,
+        x0: SystemParams,
+        target: CV,
+        nl0: NeighbourList | None = None,
+        maxiter=10000,
+        tol=1e-4,
+        norm=lambda cv1, cv2: jnp.linalg.norm(cv1 - cv2),
     ) -> SystemParams:
 
-        x0_flat, f = jax.flatten_util.ravel_pytree(x0)
+        x0_flat, f = jax.flatten_util.ravel_pytree((x0, nl0))
 
+        @jit
         def loss(params):
-            sp = f(params)
-            cvi = self.compute_cv_flow(sp)
-            res = cvi.cv - target.cv
+            def _f(params):
+                a: tuple[SystemParams, NeighbourList] = f(params)
+                sp, nl = a
 
-            jax.debug.print("err^2 {}", jnp.mean(res**2) ** (0.5))
+                bool, sp, nl = nl.update(sp)
 
-            return res
+                cvi = self.compute_cv_flow(sp, nl)
+                norm = norm(cvi.cv, target.cv)
 
-        solver = jaxopt.LevenbergMarquardt(residual_fun=loss, materialize_jac=True)
+                jax.debug.print(
+                    "err^2 {}, nl update succesfull {}",
+                    norm,
+                    bool,
+                )
+
+                return norm
+
+            return _f(params), jacfwd(_f)(params)
+
+        solver = jaxopt.NonlinearCG(loss, value_and_grad=True)
+
         params_flat, state = solver.run(init_params=x0_flat)
 
-        sp0 = f(params_flat)
+        sp0, nl0 = f(params_flat)
 
-        assert (jnp.abs(self.compute_cv_flow(sp0).cv - target.cv) < tol).all()
+        assert (jnp.abs(self.compute_cv_flow(sp0, nl0).cv - target.cv) < tol).all()
 
         return sp0
 
@@ -1733,12 +1861,12 @@ class CollectiveVariable:
         self.f = f
         self.jac = jac
 
-    @partial(jit, static_argnums=(0, 2))
+    @partial(jit, static_argnums=(0, 3))
     def compute_cv(
         self,
         sp: SystemParams,
-        jacobian=False,
         nl: NeighbourList | None = None,
+        jacobian=False,
     ) -> tuple[CV, CV]:
         cvf = self.f.compute_cv_flow
 
@@ -1890,66 +2018,65 @@ def dihedral(numbers):
 
 def sb_descriptor(
     r_cut,
-    sti: StaticTrajectoryInfo,
     n_max: int,
     l_max: int,
-    z1: int | None = None,
-    z2: int | None = None,
     references: SystemParams | None = None,
+    references_nl: NeighbourList | None = None,
 ):
     from IMLCV.base.tools.soap_kernel import Kernel, p_i, p_inl_sb
 
     def f(sp: SystemParams, nl: NeighbourList, refs=None, tril=True):
+        assert nl is not None, "provide neighbourlist for sb describport"
         out = p_i(
             sp=sp,
             nl=nl,
-            sti=sti,
             p=p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max),
             r_cut=r_cut,
-            z1=z1,
-            z2=z2,
+            split_z=True,
         )
 
-        assert nl is not None, "provide neighbourlist for sb describport"
-
         if refs is None:
-
-            if tril:
-
-                # only lower triangluar values are nonzero
-                to_lower = lambda o: o[jnp.tril_indices_from(o)]
-                to_lower = vmap(to_lower)  # batch over different atoms
-
-            else:
-                to_lower = lambda x: x
-
-            if sp.batched:
-                out = jnp.reshape(vmap(to_lower)(out), (sp.shape[0], -1))
-            else:
-                out = jnp.reshape(to_lower(out), (-1))
-
             return out
+            # if tril:
+
+            #     # only lower triangluar values are nonzero
+            #     to_lower = lambda o: o[jnp.tril_indices_from(o)]
+            #     to_lower = vmap(to_lower)  # batch over different atoms
+
+            # else:
+            #     to_lower = lambda x: x
+
+            # if sp.batched:
+            #     out = jnp.reshape(vmap(to_lower)(out), (sp.shape[0], -1))
+            # else:
+            #     out = jnp.reshape(to_lower(out), (-1))
+
+            # return out
 
         else:
-            # todo: implement rematch kernel
-            fi = lambda x, y: jnp.mean(Kernel(x, jnp.reshape(y, x.shape)))
+
+            fi = lambda x, y: Kernel(x, jnp.reshape(y, x.shape))
             if sp.batched:
                 fi = vmap(fi, in_axes=(0, None))
-            if refs.ndim == 2:
-                fi = vmap(fi, in_axes=(None, 0))
 
             return fi(out, refs)
 
     if references is not None:
+        assert references_nl is not None
 
-        references, nl = references.get_neighbour_list(r_cut=r_cut)
-        refs = f(references, nl, refs=None, tril=False)
-
-        autodist = f(references, nl, refs)
+        refs = f(references, references_nl, refs=None, tril=False)
+        # autodist = f(references, references_nl, refs)
+        if not references.batched:
+            refs = jnp.array([refs])
 
         def sb_descriptor_distance(sp: SystemParams, nl: NeighbourList):
             assert nl is not None, "provide neighbourlist for sb describport"
-            return (1 - f(sp=sp, nl=nl, refs=refs)) / (1 - jnp.min(autodist, axis=1))
+
+            @partial(vmap, in_axes=(None, None, 0))
+            def _f(sp, nl, refs):
+                return f(sp=sp, nl=nl, refs=refs)
+
+            return _f(sp, nl, refs)
 
         return CvFlow.from_function(sb_descriptor_distance)  # type: ignore
 
@@ -2188,7 +2315,7 @@ def test_nf():
     ## test with distrax
 
     # https://www.tensorflow.org/probability/api_docs/python/tfp/bijectors/RealNVP
-    key_1, key_2, prng = jax.random.split(prng, 3)
+    key_1, key_2, key3, prng = jax.random.split(prng, 4)
     x2 = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
 
     chain = CvTrans.from_cv_fun(
@@ -2200,42 +2327,62 @@ def test_nf():
     test(NormalizingFlow(chain), x2, key_2)
 
 
-def test_reconstruction(flow=distance_descriptor()):
+def test_reconstruction():
+
     prng = jax.random.PRNGKey(seed=42)
-    k1, k2, prng = jax.random.split(prng, 3)
+    k1, k2, k3, prng = jax.random.split(prng, 4)
+
+    r_cut = 4
+    n = 15
 
     sp0 = SystemParams(
-        coordinates=jax.random.uniform(k1, shape=(5, 3)) * 6,
+        coordinates=jax.random.uniform(k1, shape=(n, 3)) * n,
         cell=jnp.array(
             [
-                [6.0, 0, 0],
-                [0, 6, 0],
-                [0, 0, 6],
+                [n, 0, 0],
+                [0, n, 0],
+                [0, 0, n],
             ]
         ),
     ).canoncialize()
 
+    # r_cut = 4 * angstrom
+    z_array = jax.random.randint(k2, (n,), 0, 5)
+
+    sp0, nl0 = sp0.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+
     # with jax.debug_nans():
 
-    cv0 = flow.compute_cv_flow(sp0)
+    cv = sb_descriptor(
+        r_cut=r_cut,
+        # references=sp0,
+        # references_nl=nl0,
+        n_max=5,
+        l_max=5,
+    )
+
+    cv0 = cv.compute_cv_flow(sp0, nl0)  # should be close to 1
 
     sp1 = SystemParams(
-        coordinates=jax.random.uniform(k1, shape=(5, 3)) * 6,
+        coordinates=jax.random.uniform(k1, shape=(n, 3)) * n,
         cell=jnp.array(
             [
-                [7.0, 0, 0],
-                [0, 5, 1.0],
-                [0, 0, 6],
+                [n, 0, 0],
+                [0, n, 0],
+                [0, 0, n],
             ]
-        ),
+        )
+        + jax.random.normal(k3, (3, 3)),
     )
+
+    sp1, nl1 = sp1.get_neighbour_list(r_cut=r_cut, z_array=z_array)
 
     tol = 1e-5
 
-    sp01 = flow.find_sp(x0=sp1, target=cv0, tol=tol)
+    sp01 = cv.find_sp(x0=sp1, nl0=nl1, target=cv0, tol=tol)
 
     assert (
-        jnp.abs(flow.compute_cv_flow(sp0).cv - flow.compute_cv_flow(sp01).cv) < tol
+        jnp.abs(cv.compute_cv_flow(sp0).cv - cv.compute_cv_flow(sp01).cv) < tol
     ).all()
 
     # rng = jax.random.PRNGKey(42)
@@ -2278,8 +2425,8 @@ def test_neigh():
     n = 10
 
     sp = SystemParams(
-        coordinates=jax.random.uniform(key1, (n, 3)),
-        cell=jax.random.uniform(key2, (3, 3)),
+        coordinates=jax.random.uniform(key1, (n, 3)) * 10,
+        cell=jax.random.uniform(key2, (3, 3)) * 10,
     )
 
     # should convege to 1
@@ -2319,10 +2466,20 @@ def test_neigh():
     assert jnp.abs(r_exp_4[0][0] - r_exp[0]) < 1e-9
     assert r_exp_4[1][0] - r_exp[1] == 0
 
+    # check nl update code
+
+    key1, key2, key3, rng = jax.random.split(rng, 4)
+    bool, sp4, nl4 = jit(nl.update)(
+        SystemParams(
+            sp3.coordinates + 0.1 * jax.random.normal(key1, sp3.coordinates.shape),
+            sp3.cell + 0.1 * jax.random.normal(key2, sp3.cell.shape),
+        )
+    )
+
 
 def test_neigh_pair():
     rng = jax.random.PRNGKey(42)
-    key1, key2, key3, rng = jax.random.split(rng, 4)
+    key1, key2, key3, key4, rng = jax.random.split(rng, 5)
 
     n = 15
 
@@ -2333,10 +2490,14 @@ def test_neigh_pair():
 
     # should convege to 1
     r_cut = 5
+    z_array = jax.random.randint(key4, (n,), 0, 6)
 
-    func = lambda r_ij, r_ik, atom_index_j, atom_index_k: jnp.linalg.norm(r_ij - r_ik)
-
-    k, pair_dist = sp.apply_fun_neighbour_pairs(
+    func = lambda r_ij, r_ik, atom_index_j, atom_index_k: (
+        jnp.linalg.norm(r_ij - r_ik),
+        z_array[atom_index_j],
+        z_array[atom_index_k],
+    )
+    n, (pair_dist, index_j, index_k) = sp.apply_fun_neighbour_pairs(
         r_cut=r_cut,
         center_coordinates=sp.coordinates[0],
         func=func,
@@ -2346,27 +2507,27 @@ def test_neigh_pair():
     # same up to physcial symmetries
     sp2 = get_equival_sp(sp, key3)
 
-    k2, pair_dist2 = sp2.apply_fun_neighbour_pairs(
+    k2, (pair_dist2, index_j2, index_k2) = sp2.apply_fun_neighbour_pairs(
         r_cut=r_cut,
         center_coordinates=sp2.coordinates[0],
         func=func,
         exclude_self=True,
     )
 
-    assert k == k2
+    assert n == k2
     assert jnp.abs(pair_dist - pair_dist2) < 1e-9
 
     # neighbourghlist
 
-    func = (
-        lambda r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k: jnp.linalg.norm(
-            r_ij - r_ik
-        )
+    func = lambda r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k: (
+        jnp.linalg.norm(r_ij - r_ik),
+        z_array[atom_index_j],
+        z_array[atom_index_k],
     )
 
-    sp3, nl = sp.get_neighbour_list(r_cut=r_cut)
+    sp3, nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
 
-    k3, pair_dist3 = nl.apply_fun_neighbour_pair(
+    k3, (pair_dist3, index_j3, index_k3) = nl.apply_fun_neighbour_pair(
         sp=sp3,
         r_cut=r_cut,
         func_double=func,
@@ -2375,12 +2536,49 @@ def test_neigh_pair():
         unique=True,
     )
 
-    assert k == k3[0]
+    assert n == k3[0]
     assert jnp.abs(pair_dist - pair_dist3[0]) < 1e-9
 
-    ##
+    ## tst z split, resummations should yield orriginal result
 
-    pair_dist_avg = pair_dist / k
+    k4_zz, (pair_dist4_zz, index_j4_zz, index_k4_zz) = nl.apply_fun_neighbour_pair(
+        sp=sp3,
+        r_cut=r_cut,
+        func_double=func,
+        reduce=True,
+        exclude_self=True,
+        unique=True,
+        split_z=True,
+    )
+
+    # reduce to non split version
+    k4, pair_dist4 = jax.tree_map(
+        lambda x: jnp.sum(jnp.sum(x, axis=0), axis=0), (k4_zz, pair_dist4_zz)
+    )
+
+    assert jnp.linalg.norm(k4 - k3) == 0
+    assert jnp.linalg.norm(pair_dist4[0] - pair_dist3[0]) == 0
+    assert jnp.linalg.norm(pair_dist4[1] - pair_dist3[1]) == 0
+
+    ## same but without reduction
+
+    k5_zz, (pair_dist5_zz, index_j5_zz, index_k5_zz) = nl.apply_fun_neighbour_pair(
+        sp=sp3,
+        r_cut=r_cut,
+        func_double=func,
+        reduce=False,
+        exclude_self=True,
+        unique=True,
+        split_z=True,
+    )
+
+    # test if j and k indices are correctly fragmented
+    for j, zj in enumerate(jnp.unique(z_array)):
+        for k, zk in enumerate(jnp.unique(z_array)):
+            assert (index_j5_zz[j, k, k5_zz[j, k, :]] == zj).all()
+            assert (index_k5_zz[j, k, k5_zz[j, k, :]] == zk).all()
+
+    pair_dist_avg = pair_dist / n
     # https://math.stackexchange.com/questions/167932/mean-distance-between-2-points-in-a-ball
     pair_dist_exact = 36 / 35 * r_cut
 
@@ -2459,22 +2657,9 @@ if __name__ == "__main__":
 
     from IMLCV.base.MdEngine import StaticTrajectoryInfo
 
-    # test_reconstruction(
-    #     flow=sb_descriptor(
-    #         r_cut=7,
-    #         sti=StaticTrajectoryInfo(
-    #             timestep=0,
-    #             T=300,
-    #             timecon_thermo=100 * femtosecond,
-    #             atomic_numbers=np.array(
-    #                 [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5]
-    #             ),
-    #             equilibration=0,
-    #         ),
-    #         n_max=7,
-    #         l_max=7,
-    #     )
-    # )
+    from molmod.units import femtosecond
+
+    # test_reconstruction()
     test_neigh()
     test_neigh_pair()
 

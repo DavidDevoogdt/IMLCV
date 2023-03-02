@@ -115,6 +115,7 @@ class BC:
         gpos=False,
         vir=False,
         sp: SystemParams | None = None,
+        nl: NeighbourList | None = None,
     ) -> EnergyResult:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -188,6 +189,7 @@ class Energy(BC):
         gpos=False,
         vir=False,
         sp: SystemParams | None = None,
+        nl: NeighbourList | None = None,
     ) -> EnergyResult:
         if sp is not None:
             raise NotImplementedError("untested")
@@ -917,7 +919,8 @@ class BiasMTD(Bias):
         if self.finalized:
             return
         # Compute current CV values
-        q0s = self.collective_variable.compute_cv(sp)[0].cv
+        sp, nl = sp.get_neighbour_list(md.static_trajectory_info.r_cut)
+        q0s = self.collective_variable.compute_cv(sp=sp, nl=nl)[0].cv
         K = self.K
         if self.tempering != 0.0:
             raise NotImplementedError("untested")

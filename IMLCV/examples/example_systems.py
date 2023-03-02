@@ -17,6 +17,7 @@ from IMLCV.base.CV import (
     CollectiveVariable,
     CvMetric,
     SystemParams,
+    NeighbourList,
     Volume,
     dihedral,
     sb_descriptor,
@@ -31,6 +32,11 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
 
     T = 300 * kelvin
 
+    if cv == "backbone_dihedrals":
+        r_cut = None
+    elif cv == "soap_dist":
+        r_cut = 3 * angstrom
+
     tic = StaticTrajectoryInfo(
         T=T,
         timestep=2.0 * units.femtosecond,
@@ -42,6 +48,7 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
         ),
         screen_log=1,
         equilibration=0 * units.femtosecond,
+        r_cut=r_cut,
     )
 
     if cv == "backbone_dihedrals":
@@ -53,8 +60,6 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
                 bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
             ),
         )
-
-        r_cut = None
 
     elif cv == "soap_dist":
 
@@ -118,11 +123,12 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
             cell=None,
         )
 
-        r_cut = 3 * angstrom
+        refs = sp0 + sp1
+        refs, refs_nl = refs.get_neighbour_list(r_cut=r_cut, z_array=tic.atomic_numbers)
 
         cv0 = CollectiveVariable(
             f=sb_descriptor(
-                r_cut=r_cut, sti=tic, n_max=5, l_max=5, references=sp0 + sp1
+                r_cut=r_cut, n_max=5, l_max=5, references=refs, references_nl=refs_nl
             ),
             metric=CvMetric(
                 periodicities=[False, False],
@@ -138,7 +144,6 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
         static_trajectory_info=tic,
         bias=bias(cv0),
         trajectory_file="test.h5",
-        r_cut=r_cut,
     )
 
     return mde
@@ -258,7 +263,7 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
     if cv == "cell_vec":
 
         @CvFlow.from_function
-        def f(sp: SystemParams):
+        def f(sp: SystemParams, _: NeighbourList | None):
 
             import jax.numpy as jnp
 

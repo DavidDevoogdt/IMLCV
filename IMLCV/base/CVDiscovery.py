@@ -477,7 +477,8 @@ class CVDiscovery:
                 colvar = bias.collective_variable
 
             sp0 = traj.ti.sp
-            cv0, _ = bias.collective_variable.compute_cv(sp0)
+            sp0, nl = sp0.get_neighbour_list(r_cut=round.tic.r_cut)
+            cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nl)
             if sp is None:
                 sp = sp0
                 cv = cv0
@@ -579,6 +580,8 @@ def plot_app(
 
     cv_data = []
     cv_data_mapped = []
+
+    raise "add neighlist"
 
     cvs = [old_cv, new_cv]
     for cv in cvs:

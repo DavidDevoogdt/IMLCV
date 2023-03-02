@@ -521,6 +521,8 @@ class Rounds(ABC):
         plot_tasks = []
         md_engine = MDEngine.load(common_md_name)
 
+        r_cut = md_engine.static_trajectory_info.r_cut
+
         sp: SystemParams | None = None
 
         # also get smaples form init round
@@ -550,6 +552,9 @@ class Rounds(ABC):
                 p=None,
             )
             sp = sp[indices]
+
+        # get the corresponding neighbourg list
+        sp, nl = sp.get_neighbour_list(r_cut=r_cut)  # type: ignore
 
         for i, bias in enumerate(biases):
             path_name = self.path(r=self.round, i=i)
@@ -600,12 +605,13 @@ class Rounds(ABC):
                 if st.equilibration is not None:
                     if traj.t is not None:
                         sp = sp[traj.t > st.equilibration]
+                sp, nl = sp.get_neighbour_list(r_cut=st.r_cut)
 
-                cvs, _ = bias.collective_variable.compute_cv(sp=sp)
+                cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
             if sp.shape[0] > 1:  # type: ignore
-                bs = bias.compute_from_system_params(sp).energy
+                bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
                 probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
                 probs = probs / jnp.linalg.norm(probs)
             else:

@@ -56,11 +56,10 @@ def legendre(x, n):
 def p_i(
     sp: SystemParams,
     nl: NeighbourList,
-    sti: StaticTrajectoryInfo | None,
+    # sti: StaticTrajectoryInfo,
     p,
     r_cut,
-    z1=None,
-    z2=None,
+    split_z=True,
 ):
     """
     positions: array with shape (n,3)
@@ -68,35 +67,18 @@ def p_i(
 
     calculates relative postions vectors for each position as central atom and applies the corresponding power function
     """
-    # with jax.disable_jit():
 
     # if sp.batched:
-
-    if sp.batched:
-        return vmap(
-            lambda x, y: p_i(
-                sp=x,
-                nl=y,
-                sti=sti,
-                p=p,
-                r_cut=r_cut,
-                z1=z1,
-                z2=z2,
-            )
-        )(sp, nl)
-
-
-    mask1 = None
-    if z1 is not None:
-        assert sti is not None
-        assert sti.atomic_numbers is not None
-        mask1 = sti.atomic_numbers == z1
-
-    mask2 = None
-    if z2 is not None:
-        assert sti is not None
-        assert sti.atomic_numbers is not None
-        mask2 = sti.atomic_numbers == z2
+    #     return vmap(
+    #         lambda x, y: p_i(
+    #             sp=x,
+    #             nl=y,
+    #             # sti=sti,
+    #             p=p,
+    #             r_cut=r_cut,
+    #             split_z=split_z,
+    #         )
+    #     )(sp, nl)
 
     p, ps, pd = p
 
@@ -108,29 +90,36 @@ def p_i(
         fill_value=0.0,
         reduce=jnp.sum,
         unique=True,
+        split_z=True,
     )
 
-    # k, val = jit(
+    # jax.debug.print("{}", k0)
+
+    # k0, val0 = jit(
     #     vmap(
     #         lambda c: sp.apply_fun_neighbour_pairs(
     #             r_cut=r_cut,
     #             func=p,
     #             center_coordinates=c,
-    #             mask1=mask1,
-    #             mask2=mask2,
     #         )
     #     )
     # )(sp.coordinates)
+
     # assert jnp.linalg.norm(k - k0) == 0
     # assert jnp.linalg.norm(val - val0) < 1e-6
+    # def _norm(val0):
+    def _f(val0):
+        if split_z:
+            val0 = jnp.einsum("abi...->iab...", val0)
 
-    norms = vmap(jnp.linalg.norm)(val0)
+        norms = vmap(jnp.linalg.norm)(val0)
+        norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
+        return jnp.einsum("i...,i->i...", val0, norms_inv)
 
-    # jax.debug.print("k {} norms {}", k, norms)
+    if sp.batched:
+        _f = vmap(_f)
 
-    norms_inv = jnp.where(norms != 0, 1 / norms, 0.0)
-
-    return jnp.einsum("i...,i->i...", val0, norms_inv)
+    return _f(val0)
 
 
 @partial(vmap, in_axes=(0, None, None), out_axes=0)
@@ -328,6 +317,8 @@ def p_inl_sb(l_max, n_max, r_cut):
     l_vec = jnp.array(l_list)
     n_vec = jnp.arange(n_max + 1)
 
+    nm1_vec = jnp.arange(n_max)
+
     @jit
     def g_nl(r: Array):
 
@@ -357,7 +348,7 @@ def p_inl_sb(l_max, n_max, r_cut):
                 fnl[0, :] * 0 + 1,
                 fnl[0, :],
             ),
-            xs=jnp.arange(n_max),
+            xs=nm1_vec,
         )
 
         return out
@@ -435,51 +426,145 @@ def p_inl_sb(l_max, n_max, r_cut):
     return _p_i_sb_2, _p_i_sb_2_s, _p_i_sb_2_d
 
 
-def Kernel(p1, p2, xi=2):
+def Kernel(p1, p2, xi=2, matching="REMatch"):
     """p1 and p2 should be already normalised"""
-    return jnp.diag(jnp.tensordot(p1, jnp.moveaxis(p2, 0, -1), axes=p1.ndim - 1)) ** xi
+
+    if matching == "average":
+
+        def _f(a, b):
+            return jnp.tensordot(
+                jnp.mean(a, axis=0), jnp.mean(b, axis=0), axes=a.ndim - 1
+            )
+
+    elif matching == "REMatch":
+
+        # adapted from https://singroup.github.io/dscribe/0.3.x/_modules/dscribe/kernels/rematchkernel.html
+
+        alpha = 0.1
+        threshold = 1e-6
+
+        # @jit
+        def _f(p1, p2):
+            """
+            Computes the REMatch similarity between two structures A and B.
+
+            Args:
+                localkernel(np.ndarray): NxM matrix of local similarities between
+                    structures A and B, with N and M atoms respectively.
+            Returns:
+                float: REMatch similarity between the structures A and B.
+            """
+
+            localkernel = (
+                jnp.tensordot(p1, jnp.moveaxis(p2, 0, -1), axes=p1.ndim - 1) ** xi
+            )
+
+            n, m = localkernel.shape
+            K = jnp.exp(-(1 - localkernel) / alpha)
+
+            def f(K):
+                # initialisation
+                u = jnp.ones((n,)) / n
+                v = jnp.ones((m,)) / m
+
+                en = jnp.ones((n,)) / float(n)
+                em = jnp.ones((m,)) / float(m)
+
+                def cond_fun(val):
+                    _, _, err = val
+                    return err > threshold
+
+                def loop_body(val):
+                    u_prev, v_prev, _ = val
+
+                    v = jnp.divide(em, jnp.dot(K.T, u_prev))
+                    u = jnp.divide(en, jnp.dot(K, v))
+
+                    err = jnp.sum((u - u_prev) ** 2) / jnp.sum((u) ** 2) + jnp.sum(
+                        (v - v_prev) ** 2
+                    ) / jnp.sum((v) ** 2)
+
+                    # jax.debug.print("{}", err)
+
+                    return u, v, err
+
+                u, v, err = jax.lax.while_loop(
+                    cond_fun=cond_fun, body_fun=loop_body, init_val=(u, v, 1.0)
+                )
+
+                return u, v
+
+            u, v = f(K)
+
+            # using Tr(X.T Y) = Sum[ij](Xij * Yij)
+            # P.T * C
+            # P_ij = u_i * v_j * K_ij
+            pity = jnp.multiply(jnp.multiply(K, u.reshape((-1, 1))), v)
+
+            glosim = jnp.sum(jnp.multiply(pity, localkernel))
+
+            return glosim
+
+    elif matching == "best":
+        raise
+    else:
+        raise ValueError("unknown matching procedure")
+
+    def _g(a, b):
+        return _f(a, b) / jnp.sqrt(_f(a, a) * _f(b, b))
+
+    return _g(p1, p2)
 
 
 if __name__ == "__main__":
 
-    n = 20
+    n = 15
+
+    l_max = 5
+    n_max = 5
+
+    r_cut = 6
 
     ## sp
     rng = jax.random.PRNGKey(42)
     key, rng = jax.random.split(rng)
-    pos = jax.random.uniform(key, (n, 3)) * 5
+    pos = jax.random.uniform(key, (n, 3)) * n
     key, rng = jax.random.split(rng)
-    cell = jnp.eye(3) * 7 + jax.random.normal(key, (3, 3)) * 0.5
+    cell = jnp.eye(3) * n + jax.random.normal(key, (3, 3)) * 0.5
     sp = SystemParams(coordinates=pos, cell=cell)
 
     ## sp2
     from scipy.spatial.transform import Rotation as R
 
+    key1, key2, key3, rng = jax.random.split(rng, 4)
     rot_mat = jnp.array(
-        R.random(random_state=int(jax.random.randint(key, (), 0, 100))).as_matrix()
+        R.random(random_state=int(jax.random.randint(key1, (), 0, 100))).as_matrix()
     )
     pos2 = (
         vmap(lambda a: rot_mat @ a, in_axes=0)(sp.coordinates)
-        + jax.random.normal(key, (3,)) * 5
+        + jax.random.normal(key2, (3,)) * 5
     )
     cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.cell)
-    sp2 = SystemParams(coordinates=pos2, cell=cell_r)
+    perm = jax.random.permutation(key3, n)
+
+    sp2 = SystemParams(coordinates=pos2[perm], cell=cell_r)
+
+    # raise "do permutation on p2"
 
     ## sp3
     key, rng = jax.random.split(rng)
-    pos = jax.random.uniform(key, (n, 3)) * 5
+    pos = jax.random.uniform(key, (n, 3)) * n
     key, rng = jax.random.split(rng)
-    cell = jnp.eye(3) * 7 + jax.random.normal(key, (3, 3)) * 0.5
+    cell = jnp.eye(3) * n + jax.random.normal(key, (3, 3)) * 0.5
     sp3 = SystemParams(coordinates=pos, cell=cell)
 
-    l_max = 7
-    n_max = 7
+    key, rng = jax.random.split(rng)
 
-    r_cut = 5
+    z_array = jax.random.randint(key, (n,), 0, 5)
 
-    sp1, nl1 = sp.get_neighbour_list(r_cut=r_cut)
-    sp2, nl2 = sp2.get_neighbour_list(r_cut=r_cut)
-    sp3, nl3 = sp3.get_neighbour_list(r_cut=r_cut)
+    sp1, nl1 = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+    sp2, nl2 = sp2.get_neighbour_list(r_cut=r_cut, z_array=z_array[perm])
+    sp3, nl3 = sp3.get_neighbour_list(r_cut=r_cut, z_array=z_array)
 
     for pp in [
         p_inl_sb(
@@ -497,6 +582,7 @@ if __name__ == "__main__":
         ),
     ]:
 
+        # @partial(jit, static_argnums=1)
         @jit
         def f(sp, nl):
 
@@ -505,24 +591,38 @@ if __name__ == "__main__":
                 nl=nl,
                 p=pp,
                 r_cut=r_cut,
-                sti=None,
             )
 
+            # with jax.debug_nans():
+
         a = f(sp1, nl1)
+
+        # @partial(jit, static_argnums=1)
+        @jit
+        def k(sp, nl, a):
+
+            return Kernel(a, f(sp, nl))
+
+        da = k(sp1, nl1, a)
 
         from time import time_ns
 
         before = time_ns()
-        b = f(sp2, nl2)
+        dab = k(sp2, nl2, a)
         after = time_ns()
-        c = f(sp3, nl3)
+
+        # with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
+        #     # Run the operations to be profiled
+        #     dac = k(sp3, nl3, a)
+        #     dac.block_until_ready()
+
+        dac = k(sp3, nl3, a)
 
         print(
-            f"l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={ jnp.mean( Kernel( a,b ) ) }, <kernel(orig, rand)>= { jnp.mean( Kernel( a,c ) ) }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
+            f"REMatch l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, ev6alutation time [ms] { (after-before)/ 10.0**6  }  "
         )
 
-        # check the derivatives
-        # c = jacfwd(f, argnums=0)(nl1.sp, nl1.indices, r_cut)
+        d = jacfwd(k)(sp2, nl2, a)
 
         c = jacfwd(f)(sp1, nl1)
 
