@@ -402,15 +402,16 @@ class MDEngine(ABC):
             return self.sp.get_neighbour_list(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,
+                r_skin=0.0,
             )
 
-        # if self._nl is None:
-        #     _, self._nl = _nl()
+        if self._nl is None:
+            sp, nl = _nl()
+        else:
+            b, sp, nl = self._nl.update(self.sp)  # jitted update
 
-        # b, sp, nl = self._nl.update(self.sp)
-
-        # if not b:
-        sp, nl = _nl()
+            if not b:
+                sp, nl = _nl()
 
         self._nl = nl
         return sp, nl
@@ -540,14 +541,25 @@ class MDEngine(ABC):
 
     def get_bias(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
 
-        sp, nl = self.nl
+        # from time import time_ns
 
-        return self.bias.compute_from_system_params(
+        # before = time_ns()
+        sp, nl = self.nl
+        # after = time_ns()
+
+        b = self.bias.compute_from_system_params(
             sp=sp,
             nl=nl,
             gpos=gpos,
             vir=vtens,
         )
+        # after_b = time_ns()
+
+        # print(
+        #     f"time nl {(after-before)/10**6}  [ms]   time bias {(after_b-after)/10**6} [ms]"
+        # )
+
+        return b
 
     @property
     def yaff_system(self) -> MDEngine.YaffSys:

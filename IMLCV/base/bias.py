@@ -514,27 +514,32 @@ class Bias(BC, ABC):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        [cvs, jac] = self.collective_variable.compute_cv(
-            sp=sp, nl=nl, jacobian=gpos or vir
-        )
-        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
+        @NeighbourList.batch_sp_nl
+        def _compute_from_system_params(sp, nl):
 
-        e_gpos = None
-        if gpos:
-            es = "nj,njkl->nkl"
-            if not sp.batched:
-                es = es.replace("n", "")
-            e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
+            [cvs, jac] = self.collective_variable.compute_cv(
+                sp=sp, nl=nl, jacobian=gpos or vir
+            )
+            [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
 
-        e_vir = None
-        if vir and sp.cell is not None:
-            # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
-            es = "nji,nk,nkjl->nli"
-            if not sp.batched:
-                es = es.replace("n", "")
-            e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
+            e_gpos = None
+            if gpos:
+                es = "nj,njkl->nkl"
+                if not sp.batched:
+                    es = es.replace("n", "")
+                e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
 
-        return EnergyResult(ener, e_gpos, e_vir)
+            e_vir = None
+            if vir and sp.cell is not None:
+                # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
+                es = "nji,nk,nkjl->nli"
+                if not sp.batched:
+                    es = es.replace("n", "")
+                e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
+
+            return EnergyResult(ener, e_gpos, e_vir)
+
+        return _compute_from_system_params(sp, nl)
 
     @partial(jit, static_argnums=(0, 2))
     def compute_from_cv(self, cvs: CV, diff=False) -> CV:

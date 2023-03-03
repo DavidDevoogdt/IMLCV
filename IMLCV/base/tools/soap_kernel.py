@@ -61,54 +61,21 @@ def p_i(
     r_cut,
     split_z=True,
 ):
-    """
-    positions: array with shape (n,3)
-    f: callable that converts calculates contribution for single position
+    @NeighbourList.batch_sp_nl
+    def _p_i(sp: SystemParams, nl: NeighbourList, p):
+        p, ps, pd = p
 
-    calculates relative postions vectors for each position as central atom and applies the corresponding power function
-    """
+        k0, val0 = nl.apply_fun_neighbour_pair(
+            sp=sp,
+            func_single=ps,
+            func_double=pd,
+            r_cut=r_cut,
+            fill_value=0.0,
+            reduce=jnp.sum,
+            unique=True,
+            split_z=True,
+        )
 
-    # if sp.batched:
-    #     return vmap(
-    #         lambda x, y: p_i(
-    #             sp=x,
-    #             nl=y,
-    #             # sti=sti,
-    #             p=p,
-    #             r_cut=r_cut,
-    #             split_z=split_z,
-    #         )
-    #     )(sp, nl)
-
-    p, ps, pd = p
-
-    k0, val0 = nl.apply_fun_neighbour_pair(
-        sp=sp,
-        func_single=ps,
-        func_double=pd,
-        r_cut=r_cut,
-        fill_value=0.0,
-        reduce=jnp.sum,
-        unique=True,
-        split_z=True,
-    )
-
-    # jax.debug.print("{}", k0)
-
-    # k0, val0 = jit(
-    #     vmap(
-    #         lambda c: sp.apply_fun_neighbour_pairs(
-    #             r_cut=r_cut,
-    #             func=p,
-    #             center_coordinates=c,
-    #         )
-    #     )
-    # )(sp.coordinates)
-
-    # assert jnp.linalg.norm(k - k0) == 0
-    # assert jnp.linalg.norm(val - val0) < 1e-6
-    # def _norm(val0):
-    def _f(val0):
         if split_z:
             val0 = jnp.einsum("abi...->iab...", val0)
 
@@ -116,10 +83,7 @@ def p_i(
         norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
         return jnp.einsum("i...,i->i...", val0, norms_inv)
 
-    if sp.batched:
-        _f = vmap(_f)
-
-    return _f(val0)
+    return _p_i(sp, nl, p)
 
 
 @partial(vmap, in_axes=(0, None, None), out_axes=0)
@@ -518,7 +482,7 @@ def Kernel(p1, p2, xi=2, matching="REMatch"):
 
 if __name__ == "__main__":
 
-    n = 15
+    n = 10
 
     l_max = 5
     n_max = 5
@@ -582,7 +546,6 @@ if __name__ == "__main__":
         ),
     ]:
 
-        # @partial(jit, static_argnums=1)
         @jit
         def f(sp, nl):
 
@@ -593,11 +556,8 @@ if __name__ == "__main__":
                 r_cut=r_cut,
             )
 
-            # with jax.debug_nans():
-
         a = f(sp1, nl1)
 
-        # @partial(jit, static_argnums=1)
         @jit
         def k(sp, nl, a):
 
@@ -611,21 +571,22 @@ if __name__ == "__main__":
         dab = k(sp2, nl2, a)
         after = time_ns()
 
-        # with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
-        #     # Run the operations to be profiled
-        #     dac = k(sp3, nl3, a)
-        #     dac.block_until_ready()
-
         dac = k(sp3, nl3, a)
 
         print(
-            f"REMatch l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, ev6alutation time [ms] { (after-before)/ 10.0**6  }  "
+            f"REMatch l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
         )
 
-        d = jacfwd(k)(sp2, nl2, a)
+        jk = jit(jacfwd(k))
 
-        c = jacfwd(f)(sp1, nl1)
+        jac_da = jk(sp1, nl1, a)
+
+        before = time_ns()
+        jac_dab = jk(sp2, nl2, a)
+        after = time_ns()
+
+        jac_dac = jk(sp3, nl3, a)
 
         print(
-            f"gradient shape:{c.shape} nans coor : {jnp.sum(  jnp.isnan(  c.coordinates  ) )} nans cell : {jnp.sum(  jnp.isnan(c.cell ) )}"
+            f"REMatch l_max {l_max}  n_max {l_max}  || d kernel(orig,rot)  / d sp )={ jnp.linalg.norm(jac_dab.coordinates)  },  || d kernel(orig,rand)  / d sp )= { jnp.linalg.norm(jac_dac.coordinates)  }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
         )
