@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import numpy as np
-from jax import numpy as jnp
+from jax import Array, numpy as jnp
 from scipy.interpolate import RegularGridInterpolator as _si_RegularGridInterpolator
 
 
@@ -47,7 +47,7 @@ class RegularGridInterpolator:
             if not values.shape[i] == len(p):
                 ve = f"there are {len(p)} points and {values.shape[i]} values in dimension {i}"
                 raise ValueError(ve)
-        if isinstance(points, jnp.ndarray):
+        if isinstance(points, Array):
             self.grid = points  # Do not unnecessarily copy arrays
         else:
             self.grid = tuple(jnp.asarray(p) for p in points)

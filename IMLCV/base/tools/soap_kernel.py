@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from functools import partial
 
 import jax.debug
@@ -11,73 +10,46 @@ import jax.scipy
 import jaxopt
 import matplotlib.pyplot as plt
 import scipy.special
-from jax import Array, jacfwd, jit, lax, vmap
+from jax import Array, jacfwd, jit, lax, vmap, jacrev
 from scipy.spatial.transform import Rotation as R
-
+from scipy.special import legendre as sp_legendre
 from IMLCV.base.CV import NeighbourList, SystemParams
-from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.tools.bessel_callback import ive, spherical_jn
 
 # todo: Optimizing many-body atomic descriptors for enhanced computational performance of
 # machine learning based interatomic potentials
 
 
-@jit
-def comb(n, k):
-    val = 1.0
-
-    def f(n, k):
-        return lax.fori_loop(
-            lower=1,
-            upper=k + 1,
-            body_fun=lambda k, prod: prod * (n - k + 1) / k,
-            init_val=val,
-        )
-
-    return lax.cond(
-        n - k < k,
-        lambda: f(n, n - k),
-        lambda: f(n, k),
-    )
-
-
+# @partial(jit, static_argnums=(1,))
 def legendre(x, n):
-    val = x * 0.0 + 1
+    c = jnp.array(sp_legendre(n).c)
 
-    return lax.fori_loop(
-        lower=1,
-        upper=n + 1,
-        body_fun=lambda k, sum: sum
-        + comb(n, k) * comb(n + k, k) * ((x - 1.0) / 2.0) ** k,
-        init_val=val,
-    )
+    y = jnp.zeros_like(x)
+    y, _ = lax.scan(lambda y, p: (y * x + p, None), y, c, length=n + 1)
+
+    return y
 
 
 def p_i(
     sp: SystemParams,
     nl: NeighbourList,
-    # sti: StaticTrajectoryInfo,
     p,
     r_cut,
-    split_z=True,
 ):
     @NeighbourList.batch_sp_nl
     def _p_i(sp: SystemParams, nl: NeighbourList, p):
         p, ps, pd = p
 
-        k0, val0 = nl.apply_fun_neighbour_pair(
+        _, val0 = nl.apply_fun_neighbour_pair(
             sp=sp,
             func_single=ps,
             func_double=pd,
             r_cut=r_cut,
             fill_value=0.0,
-            reduce=jnp.sum,
+            reduce="full",
             unique=True,
             split_z=True,
         )
-
-        if split_z:
-            val0 = jnp.einsum("abi...->iab...", val0)
 
         norms = vmap(jnp.linalg.norm)(val0)
         norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
@@ -86,17 +58,24 @@ def p_i(
     return _p_i(sp, nl, p)
 
 
-@partial(vmap, in_axes=(0, None, None), out_axes=0)
+# @partial(vmap, in_axes=(0, None, None), out_axes=0)
+# @partial(jit, static_argnums=(0,))
 def lengendre_l(l, pj, pk):
     # https://jax.readthedocs.io/en/latest/faq.html#gradients-contain-nan-where-using-where
 
     n = jnp.linalg.norm(pj) * jnp.linalg.norm(pk)
 
-    return jnp.where(
+    cos_ang = jnp.dot(pj, pk) * jax.lax.cond(
         n > 0,
-        legendre(jnp.dot(pj, pk) / jnp.where(n > 0, n, 1), l),
-        0.0,
+        lambda: jax.lax.cond(
+            n > 0,
+            lambda: 1 / n,
+            lambda: jnp.zeros_like(n),
+        ),
+        lambda: jnp.zeros_like(n),
     )
+
+    return legendre(cos_ang, l)
 
 
 def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
@@ -175,6 +154,12 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     U = jnp.diag(jnp.sqrt(L)) @ V.T
     U_inv_nm = jnp.linalg.pinv(U)
 
+    l_list = list(range(l_max + 1))
+
+    @jit
+    def _l(p_ij, p_ik):
+        return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
+
     @jit
     def _p_i_soap_2(p_ij, p_ik, atom_index_j, atom_index_k):
         r_ij = jnp.linalg.norm(p_ij)
@@ -182,7 +167,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
         a_nlj = U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ij) * f_cut(r_ij)
         a_nlk = U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ik) * f_cut(r_ik)
-        b_ljk = lengendre_l(l_vec, p_ij, p_ik)
+        b_ljk = _l(p_ij, p_ik)
 
         return jnp.einsum(
             "l,al,bl,l->abl", 4 * jnp.pi * (2 * l_vec + 1), a_nlj, a_nlk, b_ljk
@@ -198,7 +183,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
         a_nlj = data_j
         a_nlk = data_k
-        b_ljk = lengendre_l(l_vec, p_ij, p_ik)
+        b_ljk = _l(p_ij, p_ik)
 
         return jnp.einsum(
             "l,al,bl,l->abl", 4 * jnp.pi * (2 * l_vec + 1), a_nlj, a_nlk, b_ljk
@@ -266,8 +251,9 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     @partial(vmap, in_axes=(0, None, None))
     @partial(vmap, in_axes=(None, 0, None))
-    @jit
+    # @jit
     def f_nl(n, l, r):
+        # def f(r):
         return (
             u_ln[l, n + 1]
             / spherical_jn(l + 1, u_ln[l, n])
@@ -277,6 +263,12 @@ def p_inl_sb(l_max, n_max, r_cut):
             * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
         ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3) ** (0.5)
 
+        # return jax.lax.cond(
+        #     r == 0,
+        #     lambda: jnp.zeros_like(f(r)),
+        #     lambda: f(jax.lax.cond(r == 0, lambda: jnp.ones_like(r), lambda: r)),
+        # )
+
     l_list = list(range(l_max + 1))
     l_vec = jnp.array(l_list)
     n_vec = jnp.arange(n_max + 1)
@@ -284,6 +276,10 @@ def p_inl_sb(l_max, n_max, r_cut):
     nm1_vec = jnp.arange(n_max)
 
     @jit
+    def _l(p_ij, p_ik):
+        return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
+
+    # @jit
     def g_nl(r: Array):
 
         fnl = f_nl(n_vec, l_vec, r)
@@ -322,9 +318,16 @@ def p_inl_sb(l_max, n_max, r_cut):
         r_ij = jnp.linalg.norm(p_ij)
         r_ik = jnp.linalg.norm(p_ik)
 
-        a_jnl = g_nl(r_ij)
+        a_jnl = jax.lax.cond(
+            r_ij == 0,
+            lambda: jnp.zeros(jax.eval_shape(g_nl(r_ij))),
+            lambda: g_nl(
+                jax.lax.cond(r_ij == 0, lambda: jnp.ones_like(r_ij), lambda: r_ij)
+            ),
+        )
+
         a_knl = g_nl(r_ik)
-        b_ljk = lengendre_l(l_vec, p_ij, p_ik)
+        b_ljk = _l(p_ij, p_ik)
 
         @partial(vmap, in_axes=(None, 0, None), out_axes=1)
         @partial(vmap, in_axes=(0, None, None), out_axes=0)
@@ -354,6 +357,16 @@ def p_inl_sb(l_max, n_max, r_cut):
     def _p_i_sb_2_s(p_ij, atom_index_j):
         r_ij = jnp.linalg.norm(p_ij)
 
+        # shape = jax.eval_shape(g_nl, r_ij)
+
+        # a_jnl = jax.lax.cond(
+        #     r_ij == 0,
+        #     lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
+        #     lambda: g_nl(
+        #         jax.lax.cond(r_ij == 0, lambda: jnp.ones_like(r_ij), lambda: r_ij)
+        #     ),
+        # )
+
         a_jnl = g_nl(r_ij)
 
         return a_jnl
@@ -363,7 +376,8 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         a_jnl = data_j
         a_knl = data_k
-        b_ljk = lengendre_l(l_vec, p_ij, p_ik)
+
+        b_ljk = _l(p_ij, p_ik)
 
         @partial(vmap, in_axes=(None, 0, None), out_axes=1)
         @partial(vmap, in_axes=(0, None, None), out_axes=0)
@@ -390,82 +404,121 @@ def p_inl_sb(l_max, n_max, r_cut):
     return _p_i_sb_2, _p_i_sb_2_s, _p_i_sb_2_d
 
 
-def Kernel(p1, p2, xi=2, matching="REMatch"):
+def Kernel(p1, p2, nl1: NeighbourList, nl2: NeighbourList, matching="REMatch"):
     """p1 and p2 should be already normalised"""
 
     if matching == "average":
 
-        def _f(a, b):
-            return jnp.tensordot(
-                jnp.mean(a, axis=0), jnp.mean(b, axis=0), axes=a.ndim - 1
+        @jit
+        def _f(a, b, _nl1, _nl2):
+
+            N1 = vmap(
+                lambda z_array, z_unique: jnp.sum(z_array == z_unique),
+                in_axes=(None, 0),
+            )(_nl1.z_array, _nl1.z_unique)
+
+            N2 = vmap(
+                lambda z_array, z_unique: jnp.sum(z_array == z_unique),
+                in_axes=(None, 0),
+            )(_nl1.z_array, _nl1.z_unique)
+
+            a_sum = vmap(
+                lambda p, z_array, z_unique: jnp.einsum(
+                    "i...,i->...", p, z_array == z_unique
+                ),
+                in_axes=(None, None, 0),
+            )(a, _nl1.z_array, _nl1.z_unique)
+
+            b_sum = vmap(
+                lambda p, z_array, z_unique: jnp.einsum(
+                    "i...,i->...", p, z_array == z_unique
+                )
+                / jnp.sum(z_array == z_unique),
+                in_axes=(None, None, 0),
+            )(b, _nl2.z_array, _nl2.z_unique)
+
+            a_z = vmap(lambda a, n: a / n)(a_sum, N1)
+            b_z = vmap(lambda a, n: a / n)(b_sum, N2)
+
+            out = jnp.mean(
+                jnp.diag(
+                    jnp.tensordot(a_z, jnp.moveaxis(b_z, 0, -1), axes=a_z.ndim - 1)
+                )
+                ** 2
             )
+
+            return out
 
     elif matching == "REMatch":
 
         # adapted from https://singroup.github.io/dscribe/0.3.x/_modules/dscribe/kernels/rematchkernel.html
 
-        alpha = 0.1
-        threshold = 1e-6
+        alpha = 0.2
+        threshold = 1e-15
 
-        # @jit
-        def _f(p1, p2):
+        @jit
+        def _f(p1, p2, _nl1, _nl2):
             """
             Computes the REMatch similarity between two structures A and B.
 
             Args:
-                localkernel(np.ndarray): NxM matrix of local similarities between
+                localkernel(Array): NxM matrix of local similarities between
                     structures A and B, with N and M atoms respectively.
             Returns:
                 float: REMatch similarity between the structures A and B.
             """
 
-            localkernel = (
-                jnp.tensordot(p1, jnp.moveaxis(p2, 0, -1), axes=p1.ndim - 1) ** xi
+            local_kernel = jnp.tensordot(p1, jnp.moveaxis(p2, 0, -1), axes=p1.ndim - 1)
+
+            bools = vmap(
+                vmap(
+                    lambda a, b: a == b,
+                    in_axes=(None, 0),
+                ),
+                in_axes=(0, None),
+            )(_nl1.z_array, _nl2.z_array)
+
+            local_kernel = (
+                local_kernel * bools
+            )  # set similarity between different atom kinds to zerp
+
+            K = jnp.exp(-(1 - local_kernel) / alpha)
+
+            n, m = local_kernel.shape
+            en = jnp.ones((n,)) / float(n)
+            em = jnp.ones((m,)) / float(m)
+
+            n, m = local_kernel.shape
+            # initialisation
+            u = jnp.ones((n,)) / n
+            v = jnp.ones((m,)) / m
+
+            def cond_fun(val):
+                _, _, err = val
+                return err > threshold
+
+            def loop_body(val):
+                u_prev, v_prev, _ = val
+
+                v = jnp.divide(em, jnp.dot(K.T, u_prev))
+                u = jnp.divide(en, jnp.dot(K, v))
+
+                err = jnp.sum((u - u_prev) ** 2) / jnp.sum((u) ** 2) + jnp.sum(
+                    (v - v_prev) ** 2
+                ) / jnp.sum((v) ** 2)
+
+                return u, v, err
+
+            u, v, err = jax.lax.while_loop(
+                cond_fun=cond_fun, body_fun=loop_body, init_val=(u, v, 1.0)
             )
-
-            n, m = localkernel.shape
-            K = jnp.exp(-(1 - localkernel) / alpha)
-
-            def f(K):
-                # initialisation
-                u = jnp.ones((n,)) / n
-                v = jnp.ones((m,)) / m
-
-                en = jnp.ones((n,)) / float(n)
-                em = jnp.ones((m,)) / float(m)
-
-                def cond_fun(val):
-                    _, _, err = val
-                    return err > threshold
-
-                def loop_body(val):
-                    u_prev, v_prev, _ = val
-
-                    v = jnp.divide(em, jnp.dot(K.T, u_prev))
-                    u = jnp.divide(en, jnp.dot(K, v))
-
-                    err = jnp.sum((u - u_prev) ** 2) / jnp.sum((u) ** 2) + jnp.sum(
-                        (v - v_prev) ** 2
-                    ) / jnp.sum((v) ** 2)
-
-                    # jax.debug.print("{}", err)
-
-                    return u, v, err
-
-                u, v, err = jax.lax.while_loop(
-                    cond_fun=cond_fun, body_fun=loop_body, init_val=(u, v, 1.0)
-                )
-
-                return u, v
-
-            u, v = f(K)
 
             # using Tr(X.T Y) = Sum[ij](Xij * Yij)
             # P.T * C
             # P_ij = u_i * v_j * K_ij
             pity = jnp.multiply(jnp.multiply(K, u.reshape((-1, 1))), v)
 
-            glosim = jnp.sum(jnp.multiply(pity, localkernel))
+            glosim = jnp.sum(jnp.multiply(pity, local_kernel))
 
             return glosim
 
@@ -474,10 +527,10 @@ def Kernel(p1, p2, xi=2, matching="REMatch"):
     else:
         raise ValueError("unknown matching procedure")
 
-    def _g(a, b):
-        return _f(a, b) / jnp.sqrt(_f(a, a) * _f(b, b))
+    def _norm(a, b, nl1, nl2):
+        return _f(a, b, nl1, nl2) / jnp.sqrt(_f(a, a, nl1, nl1) * _f(b, b, nl2, nl2))
 
-    return _g(p1, p2)
+    return _norm(p1, p2, nl1, nl2)
 
 
 if __name__ == "__main__":
@@ -542,11 +595,11 @@ if __name__ == "__main__":
             r_cut=r_cut,
             sigma_a=0.5,
             r_delta=1.0,
-            num=100,
+            num=50,
         ),
     ]:
 
-        @jit
+        # @jit
         def f(sp, nl):
 
             return p_i(
@@ -559,34 +612,35 @@ if __name__ == "__main__":
         a = f(sp1, nl1)
 
         @jit
-        def k(sp, nl, a):
+        def k(sp: SystemParams, nl: NeighbourList):
+            return Kernel(a, f(sp, nl), nl1, nl, matching="average")
 
-            return Kernel(a, f(sp, nl))
-
-        da = k(sp1, nl1, a)
+        da = k(sp1, nl1)
 
         from time import time_ns
 
         before = time_ns()
-        dab = k(sp2, nl2, a)
+        dab = k(sp2, nl2)
         after = time_ns()
 
-        dac = k(sp3, nl3, a)
+        dac = k(sp3, nl3)
 
         print(
             f"REMatch l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
         )
 
-        jk = jit(jacfwd(k))
+        jk = jacfwd(k)
 
-        jac_da = jk(sp1, nl1, a)
+        # with jax.disable_jit():
+        # with jax.debug_nans():
+        jac_da = jk(sp1, nl1)
 
         before = time_ns()
-        jac_dab = jk(sp2, nl2, a)
+        jac_dab = jk(sp2, nl2)
         after = time_ns()
 
-        jac_dac = jk(sp3, nl3, a)
+        jac_dac = jk(sp3, nl3)
 
         print(
-            f"REMatch l_max {l_max}  n_max {l_max}  || d kernel(orig,rot)  / d sp )={ jnp.linalg.norm(jac_dab.coordinates)  },  || d kernel(orig,rand)  / d sp )= { jnp.linalg.norm(jac_dac.coordinates)  }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
+            f"REMatch l_max {l_max}  n_max {l_max}  || d kernel(orig,rot)  / d sp )={ jnp.linalg.norm(jac_dab.coordinates)  },  || d kernel(orig,rand)  / d sp )= { jnp.linalg.norm(jac_dac.coordinates)  }, evalutation time [ms] { (after-before)/ 10.0**6  }   "
         )

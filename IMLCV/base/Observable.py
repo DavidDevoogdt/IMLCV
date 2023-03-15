@@ -89,9 +89,24 @@ class ThermoLIB:
 
             if cv is None:
                 cv = bias.collective_variable
-            sp = trajectory.ti.sp[trajectory.ti.t > round.tic.equilibration]
-            sp, nl = sp.get_neighbour_list(r_cut=round.tic.r_cut)
-            cvs, _ = cv.compute_cv(sp=sp, nl=nl)
+
+            ti = trajectory.ti[trajectory.ti.t > round.tic.equilibration]
+
+            print(ti.t.shape)
+
+            a = ti + ti
+
+            # print(a)
+
+            if ti.cv is not None:
+                cvs = ti.CV
+
+            else:
+                sp = ti.sp
+                sp, nl = sp.get_neighbour_list(
+                    r_cut=round.tic.r_cut, z_array=round.tic.atomic_numbers
+                )
+                cvs, _ = cv.compute_cv(sp=sp, nl=nl)
 
             if cvs.batch_dim <= 1:
                 print("##############bdim {cvs.batch_dim} ignored\n")
@@ -107,6 +122,7 @@ class ThermoLIB:
             plot_app(
                 bias=self.common_bias,
                 outputs=[File(f"{directory}/combined.pdf")],
+                execution_folder=directory,
                 map=False,
                 traj=trajs_plot,
             )

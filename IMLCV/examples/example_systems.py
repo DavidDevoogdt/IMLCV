@@ -1,6 +1,7 @@
 import ase
 import ase.io
 import ase.units
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -16,8 +17,8 @@ from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import (
     CollectiveVariable,
     CvMetric,
-    SystemParams,
     NeighbourList,
+    SystemParams,
     Volume,
     dihedral,
     sb_descriptor,
@@ -35,7 +36,7 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
     if cv == "backbone_dihedrals":
         r_cut = None
     elif cv == "soap_dist":
-        r_cut = 3 * angstrom
+        r_cut = 2.5 * angstrom
 
     tic = StaticTrajectoryInfo(
         T=T,
@@ -128,13 +129,16 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
 
         cv0 = CollectiveVariable(
             f=sb_descriptor(
-                r_cut=r_cut, n_max=5, l_max=5, references=refs, references_nl=refs_nl
+                r_cut=r_cut, n_max=3, l_max=3, references=refs, references_nl=refs_nl
             ),
             metric=CvMetric(
                 periodicities=[False, False],
-                bounding_box=jnp.array([[0.0, 1.5], [0.0, 1.5]]),
+                bounding_box=jnp.array([[0.0, jnp.sqrt(2)], [0.0, jnp.sqrt(2)]]),
             ),
         )
+
+        with jax.debug_nans():
+            cv0.compute_cv(refs, refs_nl)[0]
 
     else:
         raise ValueError("unknown value for cv")
@@ -223,8 +227,10 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
         )
     fb = base / f"{x}x{y}x{z}"
 
+    from ase import Atoms
+
     assert (p := fb).exists(), f"cannot find {p}"
-    atoms = []
+    atoms: list[Atoms] = []
 
     for a in fb.glob("*.xyz"):
         atoms.append(ase.io.read(str(a)))
@@ -287,6 +293,43 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
                 bounding_box=jnp.array([[0.0, 3.0 * x], [5.5 * x, 8.0 * x]]) * angstrom,
             ),
         )
+    elif cv == "soap_dist":
+
+        r_cut = 4 * angstrom
+
+        z_arr = None
+        sp: SystemParams | None = None
+
+        for a in atoms:
+            if z_arr is None:
+                z_arr = a.get_atomic_numbers()
+                sp = SystemParams(
+                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                )
+
+            else:
+                assert (z_arr == a.get_atomic_numbers()).all()
+                sp += SystemParams(
+                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                )
+
+        assert sp.batched == True
+
+        # refs = sp0 + sp1
+        refs, refs_nl = sp.get_neighbour_list(r_cut=r_cut, z_array=jnp.array(z_arr))
+
+        cv = CollectiveVariable(
+            f=sb_descriptor(
+                r_cut=r_cut, n_max=3, l_max=3, references=refs, references_nl=refs_nl
+            ),
+            metric=CvMetric(
+                periodicities=[False] * refs.shape[0],
+                bounding_box=jnp.array([[0.0, 1.0] * refs.shape[0]]),
+            ),
+        )
+
+        assert (jnp.diag(cv.compute_cv(refs, refs_nl)[0].cv) < 1e-10).all()
+
     else:
         raise NotImplementedError(f"cv {cv} unrecognized for CsPbI3")
 
@@ -317,5 +360,8 @@ if __name__ == "__main__":
     # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
     # sys.run(100)
 
-    sys = alanine_dipeptide_yaff(cv="soap_dist")
+    # sys = alanine_dipeptide_yaff(cv="soap_dist")
+    # sys.run(100)
+
+    sys = CsPbI3(unit_cells=[2, 2, 2], cv="soap_dist")
     sys.run(100)

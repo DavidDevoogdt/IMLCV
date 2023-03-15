@@ -4,6 +4,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax import Array
 import keras
 import matplotlib.pyplot as plt
 import numpy as np
@@ -430,14 +431,14 @@ class TranformerAutoEncoder(Transformer):
 
             @partial(jit, static_argnums=(0,))
             def compute_cv_trans(self, x: CV):
-                encoded: jnp.ndarray = VAE(**self.vae_args).apply(
+                encoded: Array = VAE(**self.vae_args).apply(
                     {"params": self.params}, x.cv, method=VAE.encode
                 )[0]
                 return CV(cv=encoded)
 
         f_enc = NNtrans(state.params, vae_args)
 
-        # a: jnp.ndarray =
+        # a: Array =
 
         return f_enc.compute_cv_trans(cv), f_enc
 

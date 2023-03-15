@@ -62,6 +62,7 @@ def bash_app_python(
                 i = 0
                 while p.exists():
                     p = Path.cwd() / (f"{func.__name__}_{i:0>3}")
+                    i += 1
 
                 execution_folder = p
 

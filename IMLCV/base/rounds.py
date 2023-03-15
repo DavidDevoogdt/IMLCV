@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from filelock import FileLock
+from jax import Array
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 
@@ -43,7 +44,7 @@ class RoundInformation:
     round: int
     valid: bool
     num: int
-    num_vals: np.ndarray
+    num_vals: Array
     tic: StaticTrajectoryInfo
     folder: Path
     name_bias: str | None = None
@@ -522,39 +523,30 @@ class Rounds(ABC):
         md_engine = MDEngine.load(common_md_name)
 
         r_cut = md_engine.static_trajectory_info.r_cut
+        z_array = md_engine.static_trajectory_info.atomic_numbers
 
-        sp: SystemParams | None = None
+        # sp: SystemParams | None = None
+        tis: TrajectoryInfo | None = None
 
         # also get smaples form init round
-        for _, t in self.iter(start=0, num=2, ignore_invalid=True):
-            sp0 = t.ti.sp
-            if sp is None:
-                sp = sp0
+        for ri, ti in self.iter(start=0, num=2, ignore_invalid=True):
+            # sp0 = ti.ti.sp
+            if tis is None:
+                tis = ti.ti
             else:
-                sp += sp0
+                assert tis is not None
+                tis += ti.ti
 
-        if sp is None:  # no provious round available
-            sp = md_engine.sp
-
-        sp = sp.batch()
-
-        # todo: ofsset umbrellas based on FES
-
-        # preselect at random
-
-        if sp.shape[0] > 100:
-            KEY, k = jax.random.split(KEY, 2)
-
-            indices = jax.random.choice(
-                a=sp.shape[0],
-                shape=(100,),
-                key=k,
-                p=None,
+        if tis is None:
+            tis = TrajectoryInfo(
+                positions=md_engine.sp.coordinates, cell=md_engine.sp.cell
             )
-            sp = sp[indices]
 
-        # get the corresponding neighbourg list
-        sp, nl = sp.get_neighbour_list(r_cut=r_cut)  # type: ignore
+        #     sp = tis.sp
+        # else:  # no provious round available
+        #     sp = md_engine.sp
+
+        # sp = sp.batch()
 
         for i, bias in enumerate(biases):
             path_name = self.path(r=self.round, i=i)
@@ -601,32 +593,50 @@ class Rounds(ABC):
                 st: StaticTrajectoryInfo, traj: TrajectoryInfo, inputs=[], outputs=[]
             ):
                 bias = Bias.load(inputs[0].filepath)
-                sp = traj.sp
+
                 if st.equilibration is not None:
                     if traj.t is not None:
-                        sp = sp[traj.t > st.equilibration]
-                sp, nl = sp.get_neighbour_list(r_cut=st.r_cut)
+                        traj = traj[traj.t > st.equilibration]
 
-                cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
+                cvs = traj.CV
+                if cvs is None:
+                    sp = traj.sp
+                    sp, nl = sp.get_neighbour_list(
+                        r_cut=st.r_cut, z_array=st.atomic_numbers
+                    )
+                    cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
+
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
-            if sp.shape[0] > 1:  # type: ignore
-                bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
+            if tis.shape > 1:  # type: ignore
+                assert tis is not None
+                if tis.cv is not None:
+                    bs, _ = bias.compute_from_cv(cvs=tis.CV)
+                else:
+                    sp = tis.sp
+
+                    sp, nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                    bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
                 probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
                 probs = probs / jnp.linalg.norm(probs)
+
+                print(f" {probs.shape},  {tis._size},  {tis.CV.shape}  ")
+
+                KEY, k = jax.random.split(KEY, 2)
+
+                index = jax.random.choice(
+                    a=tis.shape,  # type: ignore
+                    key=k,
+                    p=probs,
+                )
+
+                sp0 = tis[index].sp
+
             else:
-                probs = None
-
-            KEY, k = jax.random.split(KEY, 2)
-
-            index = jax.random.choice(
-                a=sp.shape[0],  # type: ignore
-                key=k,
-                p=probs,
-            )
+                sp0 = tis.sp
 
             future = run(
-                sp=sp[index],  # type: ignore
+                sp=sp0,  # type: ignore
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),

@@ -44,6 +44,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax import Array
 from molmod import units
 from molmod.units import kelvin, kjmol
 
@@ -65,13 +66,13 @@ from IMLCV.base.CV import (
 @jax_dataclasses.pytree_dataclass
 class EnergyResult:
     energy: float
-    gpos: jnp.ndarray | None = None
-    vtens: jnp.ndarray | None = None
+    gpos: Array | None = None
+    vtens: Array | None = None
 
     def __post_init__(self):
-        if isinstance(self.gpos, np.ndarray):
+        if isinstance(self.gpos, Array):
             self.__dict__["gpos"] = jnp.array(self.gpos)
-        if isinstance(self.vtens, np.ndarray):
+        if isinstance(self.vtens, Array):
             self.__dict__["vtens"] = jnp.array(self.vtens)
 
     def __add__(self, other) -> EnergyResult:
@@ -110,16 +111,16 @@ class BC:
     def __init__(self) -> None:
         pass
 
-    def compute_from_system_params(
-        self,
-        gpos=False,
-        vir=False,
-        sp: SystemParams | None = None,
-        nl: NeighbourList | None = None,
-    ) -> EnergyResult:
-        """Computes the bias, the gradient of the bias wrt the coordinates and
-        the virial."""
-        raise NotImplementedError
+    # def compute_from_system_params(
+    #     self,
+    #     gpos=False,
+    #     vir=False,
+    #     sp: SystemParams | None = None,
+    #     nl: NeighbourList | None = None,
+    # ) -> EnergyResult:
+    #     """Computes the bias, the gradient of the bias wrt the coordinates and
+    #     the virial."""
+    #     raise NotImplementedError
 
     def save(self, filename: str | Path):
         if isinstance(filename, str):
@@ -510,7 +511,7 @@ class Bias(BC, ABC):
     @partial(jit, static_argnums=(0, 2, 3))
     def compute_from_system_params(
         self, sp: SystemParams, gpos=False, vir=False, nl: NeighbourList | None = None
-    ) -> EnergyResult:
+    ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
@@ -537,7 +538,7 @@ class Bias(BC, ABC):
                     es = es.replace("n", "")
                 e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
 
-            return EnergyResult(ener, e_gpos, e_vir)
+            return cvs, EnergyResult(ener, e_gpos, e_vir)
 
         return _compute_from_system_params(sp, nl)
 
@@ -893,7 +894,7 @@ class BiasMTD(Bias):
 
         if isinstance(sigmas, float):
             sigmas = jnp.array([sigmas])
-        if isinstance(sigmas, np.ndarray):
+        if isinstance(sigmas, Array):
             sigmas = jnp.array(sigmas)
 
         self.ncv = cvs.n
@@ -919,7 +920,7 @@ class BiasMTD(Bias):
             return
 
         assert md.trajectory_info is not None
-        sp = md.trajectory_info.last_sp
+        sp = md.sp
 
         if self.finalized:
             return
@@ -959,7 +960,7 @@ class RbfBias(Bias):
     def __init__(
         self,
         cvs: CollectiveVariable,
-        vals: jnp.ndarray,
+        vals: Array,
         cv: CV,
         start=None,
         step=None,
@@ -1308,7 +1309,7 @@ def test_virial():
 
     bias = BiasF(cvs=cv0, g=fun)
 
-    e_r: EnergyResult = bias.compute_from_system_params(
+    _, e_r = bias.compute_from_system_params(
         SystemParams(coordinates=coordinates, cell=cell), vir=True
     )
     vol = e_r.energy

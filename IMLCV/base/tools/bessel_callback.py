@@ -88,10 +88,13 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             """functions: spherical bessels"""
             # https://dlmf.nist.gov/10.51 formula 10.51.2
 
+            # double where trick
             tangents_out = jax.lax.cond(
                 v == 0,
                 lambda: -cv(v + 1, x),
-                lambda: cv(v - 1, x) - (v + 1) / x * primal_out,
+                lambda: (lambda v: cv(v - 1, x) - (v + 1) / x * primal_out)(
+                    jax.lax.cond(v == 0, lambda: jnp.ones_like(v), lambda: v)
+                ),
             )
 
         # chain rule

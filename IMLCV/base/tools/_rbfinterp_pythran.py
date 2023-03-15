@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 
 from IMLCV.base.CV import CV, CvMetric
+from jax import Array
 
 
 def linear(r):
@@ -125,7 +126,7 @@ def polynomial_matrix(x: CV, metric: CvMetric, powers):
 # pythran export _polynomial_matrix(float[:, :], int[:, :])
 def _polynomial_matrix(x: CV, powers, metric):
     """Return monomials, with exponents from `powers`, evaluated at `x`."""
-    assert isinstance(x, jnp.ndarray)
+    assert isinstance(x, Array)
 
     out = polynomial_matrix(x=x, metric=metric, powers=powers)
     return out
