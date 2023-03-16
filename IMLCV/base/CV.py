@@ -25,7 +25,7 @@ import tensorflow
 import tensorflow as tfl
 from flax import linen as nn
 from flax.linen.linear import Dense
-from jax import Array, jacfwd, jit, vmap
+from jax import Array, jacfwd, jit, vmap, jacrev
 from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
 from molmod.units import angstrom
@@ -1900,7 +1900,7 @@ class NormalizingFlow(nn.Module):
             b2 = jnp.log(
                 jnp.abs(
                     jnp.linalg.det(
-                        jacfwd(
+                        jacrev(
                             lambda x: self.nn_flow.compute_cv_trans(
                                 x, reverse=reverse, log_Jf=False
                             )[0]
@@ -1988,32 +1988,31 @@ class CvFlow:
         norm=lambda cv1, cv2, nl2: jnp.linalg.norm(cv1 - cv2),
         solver=jaxopt.GradientDescent,
     ) -> SystemParams:
-
-        # @partial(jit, static_argnums=(1, 2))
         def loss(sp, nl, norm):
-            @jit
-            def _f(sp: SystemParams, nl: NeighbourList):
-                # sp = f(sp_flat)
-                bool, sp, nl = nl.update(sp)
 
-                cvi = self.compute_cv_flow(sp, nl)
-                nn = norm(cvi.cv, target.cv, nl)
+            cvi = self.compute_cv_flow(sp, nl)
+            nn = norm(cvi.cv, target.cv, nl)
 
-                return nn, (bool, nn, sp, nl)
-
-            return _f(sp, nl), jacfwd(lambda s, n: _f(s, n)[0])(sp, nl)
+            return nn, nn
 
         _l = jit(partial(loss, norm=norm))
 
-        slvr = solver(_l, value_and_grad=True, has_aux=True, tol=tol, maxiter=10)
+        slvr = solver(
+            _l,
+            tol=tol,
+            has_aux=True,
+            maxiter=10,
+        )
         state = slvr.init_state(x0, nl=nl0)
+        r = jit(slvr.update)
 
         for _ in range(maxiter):
-            x0, state = jit(slvr.update)(x0, state, nl=nl0)
+            x0, state = r(x0, state, nl=nl0)
 
-            b, nn, x0, nl0 = state.aux
+            b, x0, nl0 = jit(nl0.update)(x0)
+            nn = state.aux
             print(
-                f"step:{state.iter_num} norm {nn:.4f} err {state.error:.4f} update nl={not b}"
+                f"step:{state.iter_num} norm {nn:.14f} err {state.error:.4f} update nl={not b}"
             )
 
             if not b:
@@ -2031,8 +2030,8 @@ class CvFlow:
 
 
 class CollectiveVariable:
-    def __init__(self, f: CvFlow, metric: CvMetric, jac=jacfwd) -> None:
-        "jac: kind of jacobian. Default is jacfwd (more efficient for tall matrices), but functions with custom jvp's only support jacrev"
+    def __init__(self, f: CvFlow, metric: CvMetric, jac=jacrev) -> None:
+        "jac: kind of jacobian. Default is jacrev (more efficient low dimensional CVs)"
 
         self.metric = metric
         self.f = f
@@ -2545,7 +2544,7 @@ def test_reconstruction():
     prng = jax.random.PRNGKey(seed=42)
 
     r_cut = 5
-    prng, sp0, nl0 = _get_sp_rand(prng=prng, n=10, r_cut=r_cut)
+    prng, sp0, nl0 = _get_sp_rand(prng=prng, n=40, r_cut=r_cut)
     k1, k2, k3, prng = jax.random.split(prng, 4)
 
     # with jax.debug_nans():
@@ -2569,8 +2568,8 @@ def test_reconstruction():
         #     1 - Kernel(cv1, cv2, nl1, nl2, matching="REMatch")
         # ),
         # solver=jaxopt.GradientDescent
-        # solver=jaxopt.NonlinearCG
-        solver=jaxopt.LBFGS,
+        solver=jaxopt.NonlinearCG
+        # solver=jaxopt.LBFGS,
         # solver=partial(jaxopt.ScipyMinimize, method="l-bfgs-b"),
     )
 

@@ -360,8 +360,8 @@ if __name__ == "__main__":
     # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
     # sys.run(100)
 
-    # sys = alanine_dipeptide_yaff(cv="soap_dist")
-    # sys.run(100)
-
-    sys = CsPbI3(unit_cells=[2, 2, 2], cv="soap_dist")
+    sys = alanine_dipeptide_yaff(cv="soap_dist")
     sys.run(100)
+
+    # sys = CsPbI3(unit_cells=[2, 2, 2], cv="soap_dist")
+    # sys.run(100)

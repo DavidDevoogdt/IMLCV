@@ -38,7 +38,7 @@ def p_i(
 ):
     @NeighbourList.batch_sp_nl
     def _p_i(sp: SystemParams, nl: NeighbourList, p):
-        p, ps, pd = p
+        ps, pd = p
 
         _, val0 = nl.apply_fun_neighbour_pair(
             sp=sp,
@@ -63,16 +63,18 @@ def p_i(
 def lengendre_l(l, pj, pk):
     # https://jax.readthedocs.io/en/latest/faq.html#gradients-contain-nan-where-using-where
 
-    n = jnp.linalg.norm(pj) * jnp.linalg.norm(pk)
+    n2 = jnp.dot(pj, pj) * jnp.dot(pk, pk)
+
+    n2s = jax.lax.cond(
+        n2 > 0,
+        lambda: n2,
+        lambda: jnp.ones_like(n2),
+    )
 
     cos_ang = jnp.dot(pj, pk) * jax.lax.cond(
-        n > 0,
-        lambda: jax.lax.cond(
-            n > 0,
-            lambda: 1 / n,
-            lambda: jnp.zeros_like(n),
-        ),
-        lambda: jnp.zeros_like(n),
+        n2 > 0,
+        lambda: 1 / n2s ** (0.5),
+        lambda: jnp.zeros_like(n2),
     )
 
     return legendre(cos_ang, l)
@@ -82,13 +84,13 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
-    @jit
+    # @jit
     def phi(n, n_max, r, r_cut, sigma_a):
         return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2))
 
     @partial(vmap, in_axes=(None, 0, None), out_axes=1)
     @partial(vmap, in_axes=(0, None, None), out_axes=0)
-    @jit
+    # @jit
     def I_prime_ml(n, l_vec, r_ij):
         def f(r):
             # https://mathworld.wolfram.com/ModifiedSphericalBesselFunctionoftheFirstKind.html
@@ -116,7 +118,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
         return jnp.apply_along_axis(lambda y: jnp.trapz(y=y, x=x), axis=0, arr=y)
 
-    @jit
+    # @jit
     def f_cut(r):
         return lax.cond(
             r > r_cut,
@@ -156,29 +158,30 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
     l_list = list(range(l_max + 1))
 
-    @jit
+    # @jit
     def _l(p_ij, p_ik):
         return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
 
-    @jit
-    def _p_i_soap_2(p_ij, p_ik, atom_index_j, atom_index_k):
-        r_ij = jnp.linalg.norm(p_ij)
-        r_ik = jnp.linalg.norm(p_ik)
-
-        a_nlj = U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ij) * f_cut(r_ij)
-        a_nlk = U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ik) * f_cut(r_ik)
-        b_ljk = _l(p_ij, p_ik)
-
-        return jnp.einsum(
-            "l,al,bl,l->abl", 4 * jnp.pi * (2 * l_vec + 1), a_nlj, a_nlk, b_ljk
-        )
-
-    @jit
-    def _p_i_soap_2_s(p_ij, atom_index_j):
-        r_ij = jnp.linalg.norm(p_ij)
+    def a_nlj(r_ij):
         return U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ij) * f_cut(r_ij)
 
-    @jit
+    # @jit
+    def _p_i_soap_2_s(p_ij, atom_index_j):
+
+        r_ij2 = jnp.dot(p_ij, p_ij)
+        r_ij2 = jax.lax.cond(r_ij2 == 0, lambda: jnp.ones_like(r_ij2), lambda: r_ij2)
+
+        shape = jax.eval_shape(a_nlj, r_ij2)
+
+        a_jnl = jax.lax.cond(
+            r_ij2 == 0,
+            lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
+            lambda: a_nlj(jnp.sqrt(r_ij2)),
+        )
+
+        return a_jnl
+
+    # @jit
     def _p_i_soap_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
 
         a_nlj = data_j
@@ -189,7 +192,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
             "l,al,bl,l->abl", 4 * jnp.pi * (2 * l_vec + 1), a_nlj, a_nlk, b_ljk
         )
 
-    return _p_i_soap_2, _p_i_soap_2_s, _p_i_soap_2_d
+    return _p_i_soap_2_s, _p_i_soap_2_d
 
 
 def p_inl_sb(l_max, n_max, r_cut):
@@ -253,21 +256,21 @@ def p_inl_sb(l_max, n_max, r_cut):
     @partial(vmap, in_axes=(None, 0, None))
     # @jit
     def f_nl(n, l, r):
-        # def f(r):
-        return (
-            u_ln[l, n + 1]
-            / spherical_jn(l + 1, u_ln[l, n])
-            * spherical_jn(l, r * u_ln[l, n] / r_cut)
-            - u_ln[l, n]
-            / spherical_jn(l + 1, u_ln[l, n + 1])
-            * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
-        ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3) ** (0.5)
+        def f(r):
+            return (
+                u_ln[l, n + 1]
+                / spherical_jn(l + 1, u_ln[l, n])
+                * spherical_jn(l, r * u_ln[l, n] / r_cut)
+                - u_ln[l, n]
+                / spherical_jn(l + 1, u_ln[l, n + 1])
+                * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
+            ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3) ** (0.5)
 
-        # return jax.lax.cond(
-        #     r == 0,
-        #     lambda: jnp.zeros_like(f(r)),
-        #     lambda: f(jax.lax.cond(r == 0, lambda: jnp.ones_like(r), lambda: r)),
-        # )
+        return jax.lax.cond(
+            r == 0,
+            lambda: jnp.zeros_like(f(r)),
+            lambda: f(jax.lax.cond(r == 0, lambda: jnp.ones_like(r), lambda: r)),
+        )
 
     l_list = list(range(l_max + 1))
     l_vec = jnp.array(l_list)
@@ -275,7 +278,7 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     nm1_vec = jnp.arange(n_max)
 
-    @jit
+    # @jit
     def _l(p_ij, p_ik):
         return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
 
@@ -313,65 +316,22 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         return out
 
-    @jit
-    def _p_i_sb_2(p_ij, p_ik, atom_index_j, atom_index_k):
-        r_ij = jnp.linalg.norm(p_ij)
-        r_ik = jnp.linalg.norm(p_ik)
+    # @jit
+    def _p_i_sb_2_s(p_ij, atom_index_j):
+        r_ij2 = jnp.dot(p_ij, p_ij)
+        r_ij2 = jax.lax.cond(r_ij2 == 0, lambda: jnp.ones_like(r_ij2), lambda: r_ij2)
+
+        shape = jax.eval_shape(g_nl, r_ij2)
 
         a_jnl = jax.lax.cond(
-            r_ij == 0,
-            lambda: jnp.zeros(jax.eval_shape(g_nl(r_ij))),
-            lambda: g_nl(
-                jax.lax.cond(r_ij == 0, lambda: jnp.ones_like(r_ij), lambda: r_ij)
-            ),
+            r_ij2 == 0,
+            lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
+            lambda: g_nl(jnp.sqrt(r_ij2)),
         )
-
-        a_knl = g_nl(r_ik)
-        b_ljk = _l(p_ij, p_ik)
-
-        @partial(vmap, in_axes=(None, 0, None), out_axes=1)
-        @partial(vmap, in_axes=(0, None, None), out_axes=0)
-        def a_nml_l(n, l, a):
-            return lax.cond(
-                l <= n,
-                lambda: a[n - l, l],
-                lambda: jnp.zeros_like(a[0, 0]),
-            )
-
-        g_nml_l_j = a_nml_l(n_vec, l_vec, a_jnl)
-        g_nml_l_k = a_nml_l(n_vec, l_vec, a_knl)
-
-        out = jnp.einsum(
-            "l,nl,nl,l -> nl",
-            (2 * l_vec + 1) / (4 * jnp.pi),
-            g_nml_l_j,
-            g_nml_l_k,
-            b_ljk,
-        )
-
-        return out
-
-    # return _p_i_sb_2
-
-    @jit
-    def _p_i_sb_2_s(p_ij, atom_index_j):
-        r_ij = jnp.linalg.norm(p_ij)
-
-        # shape = jax.eval_shape(g_nl, r_ij)
-
-        # a_jnl = jax.lax.cond(
-        #     r_ij == 0,
-        #     lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
-        #     lambda: g_nl(
-        #         jax.lax.cond(r_ij == 0, lambda: jnp.ones_like(r_ij), lambda: r_ij)
-        #     ),
-        # )
-
-        a_jnl = g_nl(r_ij)
 
         return a_jnl
 
-    @jit
+    # @jit
     def _p_i_sb_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
 
         a_jnl = data_j
@@ -401,7 +361,7 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         return out
 
-    return _p_i_sb_2, _p_i_sb_2_s, _p_i_sb_2_d
+    return _p_i_sb_2_s, _p_i_sb_2_d
 
 
 def Kernel(p1, p2, nl1: NeighbourList, nl2: NeighbourList, matching="REMatch"):
@@ -409,7 +369,7 @@ def Kernel(p1, p2, nl1: NeighbourList, nl2: NeighbourList, matching="REMatch"):
 
     if matching == "average":
 
-        @jit
+        # @jit
         def _f(a, b, _nl1, _nl2):
 
             N1 = vmap(
@@ -454,9 +414,9 @@ def Kernel(p1, p2, nl1: NeighbourList, nl2: NeighbourList, matching="REMatch"):
         # adapted from https://singroup.github.io/dscribe/0.3.x/_modules/dscribe/kernels/rematchkernel.html
 
         alpha = 0.2
-        threshold = 1e-15
+        # threshold = 1e-6
 
-        @jit
+        # @jit
         def _f(p1, p2, _nl1, _nl2):
             """
             Computes the REMatch similarity between two structures A and B.
@@ -484,40 +444,31 @@ def Kernel(p1, p2, nl1: NeighbourList, nl2: NeighbourList, matching="REMatch"):
 
             K = jnp.exp(-(1 - local_kernel) / alpha)
 
-            n, m = local_kernel.shape
-            en = jnp.ones((n,)) / float(n)
-            em = jnp.ones((m,)) / float(m)
+            # @jit
+            # def _rematch_uv(K):
+            n, m = K.shape
 
-            n, m = local_kernel.shape
-            # initialisation
-            u = jnp.ones((n,)) / n
-            v = jnp.ones((m,)) / m
+            def body(uv, K):
+                u_prev, v_prev = uv
 
-            def cond_fun(val):
-                _, _, err = val
-                return err > threshold
-
-            def loop_body(val):
-                u_prev, v_prev, _ = val
+                en = jnp.ones_like(u_prev) / n
+                em = jnp.ones_like(v_prev) / m
 
                 v = jnp.divide(em, jnp.dot(K.T, u_prev))
                 u = jnp.divide(en, jnp.dot(K, v))
 
-                err = jnp.sum((u - u_prev) ** 2) / jnp.sum((u) ** 2) + jnp.sum(
-                    (v - v_prev) ** 2
-                ) / jnp.sum((v) ** 2)
+                return (u, v)
 
-                return u, v, err
-
-            u, v, err = jax.lax.while_loop(
-                cond_fun=cond_fun, body_fun=loop_body, init_val=(u, v, 1.0)
-            )
+            # initialisation
+            u0 = jnp.ones((n,)) / n
+            v0 = jnp.ones((m,)) / m
+            solver = jaxopt.FixedPointIteration(fixed_point_fun=body, tol=1e-15)
+            (u, v), _ = solver.run((u0, v0), K)
 
             # using Tr(X.T Y) = Sum[ij](Xij * Yij)
             # P.T * C
             # P_ij = u_i * v_j * K_ij
             pity = jnp.multiply(jnp.multiply(K, u.reshape((-1, 1))), v)
-
             glosim = jnp.sum(jnp.multiply(pity, local_kernel))
 
             return glosim
@@ -535,19 +486,21 @@ def Kernel(p1, p2, nl1: NeighbourList, nl2: NeighbourList, matching="REMatch"):
 
 if __name__ == "__main__":
 
-    n = 10
+    n = 40
+    r_side = 6 * (n / 5) ** (1 / 3)
 
     l_max = 5
     n_max = 5
 
-    r_cut = 6
+    r_cut = 5
+    eps = 0.1
 
     ## sp
     rng = jax.random.PRNGKey(42)
     key, rng = jax.random.split(rng)
-    pos = jax.random.uniform(key, (n, 3)) * n
+    pos = jax.random.uniform(key, (n, 3)) * r_side
     key, rng = jax.random.split(rng)
-    cell = jnp.eye(3) * n + jax.random.normal(key, (3, 3)) * 0.5
+    cell = jnp.eye(3) * r_side + jax.random.normal(key, (3, 3)) * eps * r_side
     sp = SystemParams(coordinates=pos, cell=cell)
 
     ## sp2
@@ -559,7 +512,7 @@ if __name__ == "__main__":
     )
     pos2 = (
         vmap(lambda a: rot_mat @ a, in_axes=0)(sp.coordinates)
-        + jax.random.normal(key2, (3,)) * 5
+        + jax.random.normal(key2, (3,)) * eps * r_side
     )
     cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.cell)
     perm = jax.random.permutation(key3, n)
@@ -572,7 +525,7 @@ if __name__ == "__main__":
     key, rng = jax.random.split(rng)
     pos = jax.random.uniform(key, (n, 3)) * n
     key, rng = jax.random.split(rng)
-    cell = jnp.eye(3) * n + jax.random.normal(key, (3, 3)) * 0.5
+    cell = jnp.eye(3) * r_side + jax.random.normal(key, (3, 3)) * 0.5
     sp3 = SystemParams(coordinates=pos, cell=cell)
 
     key, rng = jax.random.split(rng)
@@ -629,10 +582,10 @@ if __name__ == "__main__":
             f"REMatch l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
         )
 
-        jk = jacfwd(k)
+        jk = jit(jacrev(k))
 
         # with jax.disable_jit():
-        # with jax.debug_nans():
+        #     with jax.debug_nans():
         jac_da = jk(sp1, nl1)
 
         before = time_ns()

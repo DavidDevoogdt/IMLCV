@@ -96,6 +96,8 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
                     jax.lax.cond(v == 0, lambda: jnp.ones_like(v), lambda: v)
                 ),
             )
+        else:
+            raise ValueError
 
         # chain rule
         if exp_scaled:
