@@ -11,17 +11,30 @@ if __name__ == "__main__":
         epilog="Question? ask David.Devoogdt@ugent.be",
     )
 
+    subparsers = parser.add_subparsers(title="system", dest="system", required=True)
+    CsPbI3 = subparsers.add_parser("CsPbI3")
+
+    CsPbI3.add_argument("--unit_cells", nargs="+", type=int)
+    CsPbI3.add_argument(
+        "--cv", type=str, choices=["cell_vec", "soap_dist"], required=True
+    )
+    CsPbI3.add_argument("--input_atoms", nargs="+", type=str, default=None)
+    CsPbI3.add_argument("--input_atoms", action="store_true")
+
+    ala = subparsers.add_parser("alanine_dipeptide")
+    ala.add_argument("--unit_cells", nargs="+", type=int)
+    ala.add_argument("--cv", type=str, choices=["backbone_dihedrals", "soap_dist"])
+    ala.add_argument("--project", action="store_true")
+
     group = parser.add_argument_group("simulation")
 
-    parser.add_argument("-s", "--system", type=str, choices=["ala", "CsPbI3"])
-    parser.add_argument("-nuc", "--n_unit_cell", nargs="+", type=int)
-    parser.add_argument("-n", "--n_steps", type=int, default=500)
-    parser.add_argument("-ni", "--n_steps_init", type=int, default=100)
-    parser.add_argument("-r", "--rounds", type=int, default=20)
-    parser.add_argument("-nu", "--n_umbrellas", type=int, default=8)
-    parser.add_argument("-spb", "--samples_per_bin", type=int, default=400)
-    parser.add_argument("-cv", default=None)
-    parser.add_argument(
+    group.add_argument("-n", "--n_steps", type=int, default=5000)
+    group.add_argument("-ni", "--n_steps_init", type=int, default=100)
+
+    group.add_argument("-r", "--rounds", type=int, default=20)
+    group.add_argument("-nu", "--n_umbrellas", type=int, default=8)
+    group.add_argument("-spb", "--samples_per_bin", type=int, default=400)
+    group.add_argument(
         "-K",
         "--K_umbrellas",
         type=float,
@@ -29,23 +42,24 @@ if __name__ == "__main__":
         help="force constant of umbrella in [kjmol]. Value is corrected by CV domain and number of umbrellas: K = k/[ (x_0-x_1)/2n  **2",
     )
 
-    parser.add_argument("-c", "--cont", action="store_true")
+    group.add_argument("-c", "--cont", action="store_true")
 
     group = parser.add_argument_group("Parsl")
 
-    parser.add_argument("--nodes", default=None, type=int)
-    parser.add_argument("-mpc", "--memory_per_core", default=None, type=int)
-    parser.add_argument("-mmpn", "--min_memery_per_node", default=None, type=int)
-    parser.add_argument(
+    group.add_argument("--nodes", default=None, type=int)
+    group.add_argument("-mpc", "--memory_per_core", default=None, type=int)
+    group.add_argument("-mmpn", "--min_memery_per_node", default=None, type=int)
+    group.add_argument(
         "-wt",
         "--walltime",
         default="48:00:00",
         type=str,
         help="walltime of the singlepoint workers",
     )
-    parser.add_argument("-f", "--folder", type=str, default=None)
 
-    parser.add_argument("-b", "--bootstrap", action="store_true")
+    group = parser.add_argument_group("General")
+    group.add_argument("-f", "--folder", type=str, default=None)
+    group.add_argument("-b", "--bootstrap", action="store_true")
 
     args = parser.parse_args()
 
@@ -61,6 +75,8 @@ if __name__ == "__main__":
         assert (
             not args.folder.exists()
         ), "this path already exists, please provide name with --folder"
+
+    # if args.sys=="CsPbI3":
 
     def app(args):
         print("loading mdoules")
@@ -93,7 +109,9 @@ if __name__ == "__main__":
             engine = alanine_dipeptide_yaff(cv=args.cv)
 
         elif args.system == "CsPbI3":
-            engine = CsPbI3(unit_cells=args.n_unit_cell, cv=args.cv)
+            engine = CsPbI3(
+                cv=args.cv, unit_cells=args.unit_cells, input_atoms=args.input_atoms
+            )
 
         if not args.cont:
             scheme = Scheme(folder=args.folder, Engine=engine)

@@ -81,7 +81,7 @@ class StaticTrajectoryInfo:
 
     @property
     def masses(self):
-        return np.array([periodic[n].mass for n in self.atomic_numbers])
+        return jnp.array([periodic[int(n)].mass for n in self.atomic_numbers])
 
     @property
     def thermostat(self):
@@ -433,10 +433,10 @@ class MDEngine(ABC):
         self.energy.sp = sp
 
     @property
-    def nl(self) -> tuple[SystemParams, NeighbourList | None]:
+    def nl(self) -> NeighbourList | None:
 
         if self.static_trajectory_info.r_cut is None:
-            return self.sp, None
+            return None
 
         def _nl():
             return self.sp.get_neighbour_list(
@@ -446,15 +446,15 @@ class MDEngine(ABC):
             )
 
         if self._nl is None:
-            sp, nl = _nl()
+            nl = _nl()
         else:
-            b, sp, nl = self._nl.update(self.sp)  # jitted update
+            b, nl = self._nl.update(self.sp)  # jitted update
 
             if not b:
-                sp, nl = _nl()
+                nl = _nl()
 
         self._nl = nl
-        return sp, nl
+        return nl
 
     def save(self, file):
         with open(file, "wb") as f:
@@ -493,10 +493,10 @@ class MDEngine(ABC):
         """
 
         print(f"running for {int(steps)} steps!")
-        try:
-            self._run(int(steps))
-        except Exception as err:
-            print(f"The calculator finished early with error {err=},{type(err)=}")
+        # try:
+        self._run(int(steps))
+        # except Exception as err:
+        #     print(f"The calculator finished early with error {err=},{type(err)=}")
 
         if self.step == 1:
             raise "the calculator crashed directly, make sure the system is correctly initialized"
@@ -539,7 +539,8 @@ class MDEngine(ABC):
             str += f"|{ 'e_bias[Kj/mol]': ^15s}"
             if ti.P is not None:
                 str += f"|{'P[bar]': ^10s}"
-            str += f"|{'T[K]': ^10s}|{'walltime[s]': ^10s}"
+            str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
+            str += f"|{'CV': ^10s}"
             print(str, sep="")
             print(f"{'='*len(str)}")
 
@@ -551,11 +552,12 @@ class MDEngine(ABC):
             assert ti.e_bias is not None
 
             str += f"|{  ti.err[0] : >10.4f}"
-            str += f"|{  ti.e_pot[0]  *kjmol : >15.4f}"
-            str += f"|{  ti.e_bias[0] *kjmol : >15.4f}"
+            str += f"|{  ti.e_pot[0]  /kjmol : >15.8f}"
+            str += f"|{  ti.e_bias[0] /kjmol : >15.8f}"
             if ti.P is not None:
                 str += f" { ti.P[0]/bar : >10.2f}"
-            str += f" { ti.T[0] : >10.2f} { time()-self.time0 : >10.2f}"
+            str += f" { ti.T[0] : >10.2f} { time()-self.time0 : >11.2f}"
+            str += f"| {ti.cv[0,:]}"
             print(str)
 
         # write step to trajectory
@@ -583,25 +585,12 @@ class MDEngine(ABC):
         self, gpos: bool = False, vtens: bool = False
     ) -> tuple[CV, EnergyResult]:
 
-        # from time import time_ns
-
-        # before = time_ns()
-        sp, nl = self.nl
-        # after = time_ns()
-
         return self.bias.compute_from_system_params(
-            sp=sp,
-            nl=nl,
+            sp=self.sp,
+            nl=self.nl,
             gpos=gpos,
             vir=vtens,
         )
-        # after_b = time_ns()
-
-        # print(
-        #     f"time nl {(after-before)/10**6}  [ms]   time bias {(after_b-after)/10**6} [ms]"
-        # )
-
-        #  b
 
     @property
     def yaff_system(self) -> MDEngine.YaffSys:
@@ -651,7 +640,7 @@ class MDEngine(ABC):
 
         @property
         def masses(self):
-            return self._tic.masses
+            return np.array(self._tic.masses)
 
         @property
         def charges(self):

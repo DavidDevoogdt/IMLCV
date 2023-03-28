@@ -4,7 +4,6 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jax import Array
 import keras
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,7 +11,7 @@ import optax
 import umap
 from flax import linen as nn
 from flax.training import train_state
-from jax import jacrev, jit, random, vmap
+from jax import Array, jacrev, jit, random, vmap
 from jax.random import PRNGKey, choice
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
@@ -28,6 +27,7 @@ from IMLCV.base.CV import (
     CvMetric,
     CvTrans,
     KerasTrans,
+    NeighbourList,
     PeriodicLayer,
     SystemParams,
     distance_descriptor,
@@ -478,7 +478,7 @@ class CVDiscovery:
                 colvar = bias.collective_variable
 
             sp0 = traj.ti.sp
-            sp0, nl = sp0.get_neighbour_list(r_cut=round.tic.r_cut)
+            nl = sp0.get_neighbour_list(r_cut=round.tic.r_cut)
             cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nl)
             if sp is None:
                 sp = sp0
@@ -567,7 +567,12 @@ class CVDiscovery:
 
 @bash_app_python(executors=["default"])
 def plot_app(
-    sps, old_cv: CollectiveVariable, new_cv: CollectiveVariable, name, outputs=[]
+    sps,
+    nl: NeighbourList,
+    old_cv: CollectiveVariable,
+    new_cv: CollectiveVariable,
+    name,
+    outputs=[],
 ):
     def color(c, per):
         c2 = (c - c.min()) / (c.max() - c.min())
@@ -582,11 +587,11 @@ def plot_app(
     cv_data = []
     cv_data_mapped = []
 
-    raise "add neighlist"
+    # raise "add neighlist"
 
     cvs = [old_cv, new_cv]
     for cv in cvs:
-        cvd, _ = cv.compute_cv(sps)
+        cvd, _ = cv.compute_cv(sps, nl)
         cvdm = vmap(cv.metric.__map)(cvd)
 
         cv_data.append(np.array(cvd))

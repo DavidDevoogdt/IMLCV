@@ -9,7 +9,6 @@ from jax import jit
 from molmod.units import kjmol, picosecond
 from parsl import File
 
-from configs.bash_app_python import bash_app_python
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
@@ -92,18 +91,12 @@ class ThermoLIB:
 
             ti = trajectory.ti[trajectory.ti.t > round.tic.equilibration]
 
-            print(ti.t.shape)
-
-            a = ti + ti
-
-            # print(a)
-
             if ti.cv is not None:
                 cvs = ti.CV
 
             else:
                 sp = ti.sp
-                sp, nl = sp.get_neighbour_list(
+                nl = sp.get_neighbour_list(
                     r_cut=round.tic.r_cut, z_array=round.tic.atomic_numbers
                 )
                 cvs, _ = cv.compute_cv(sp=sp, nl=nl)
@@ -121,8 +114,10 @@ class ThermoLIB:
         if plot:
             plot_app(
                 bias=self.common_bias,
-                outputs=[File(f"{directory}/combined.pdf")],
+                outputs=[File(f"{directory}/combined.png")],  # png because heavy file
                 execution_folder=directory,
+                stdout=f"combined.stdout",
+                stderr=f"combined.stderr",
                 map=False,
                 traj=trajs_plot,
             )
@@ -137,9 +132,9 @@ class ThermoLIB:
             cvs=trajs, bounding_box=bb, n=n, samples_per_bin=samples_per_bin
         )
 
-        histo = bash_app_python(HistogramND.from_wham, executors=["model"])(
+        # histo = bash_app_python(HistogramND.from_wham, executors=["model"])(
+        histo = HistogramND.from_wham(
             bins=bins,
-            # pinit=pinit,
             trajectories=[
                 np.array(
                     traj.cv,
@@ -151,8 +146,8 @@ class ThermoLIB:
             biasses=biases,
             temp=temp,
             verbosity="high",
-            execution_folder=directory,
-        ).result()
+            # execution_folder=directory,
+        )  # .result()
 
         fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
         fes.set_ref()
@@ -231,7 +226,7 @@ class ThermoLIB:
 
     def fes_bias(
         self,
-        plot=False,
+        plot=True,
         max_bias=None,
         fs=None,
         choice="gridbias",

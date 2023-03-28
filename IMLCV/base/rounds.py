@@ -601,7 +601,7 @@ class Rounds(ABC):
                 cvs = traj.CV
                 if cvs is None:
                     sp = traj.sp
-                    sp, nl = sp.get_neighbour_list(
+                    nl = sp.get_neighbour_list(
                         r_cut=st.r_cut, z_array=st.atomic_numbers
                     )
                     cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
@@ -615,12 +615,12 @@ class Rounds(ABC):
                 else:
                     sp = tis.sp
 
-                    sp, nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                    nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
                     bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
                 probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
                 probs = probs / jnp.linalg.norm(probs)
 
-                print(f" {probs.shape},  {tis._size},  {tis.CV.shape}  ")
+                # print(f" {probs.shape},  {tis._size},  {tis.CV.shape}  ")
 
                 KEY, k = jax.random.split(KEY, 2)
 

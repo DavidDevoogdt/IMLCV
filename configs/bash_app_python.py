@@ -70,13 +70,19 @@ def bash_app_python(
                 execution_folder = Path(execution_folder)
 
             execution_folder.mkdir(exist_ok=True)
-            file = File(str(execution_folder / "function.dill"))
+            file = File(str(execution_folder / f"{func.__name__}.dill"))
 
             future: AppFuture = fun(
                 inputs=inputs,
                 outputs=[*[File(rename(o)) for o in outputs], file],
-                stdout=str(execution_folder / ("stdout" if stdout is None else stdout)),
-                stderr=str(execution_folder / ("stderr" if stderr is None else stderr)),
+                stdout=str(
+                    execution_folder
+                    / (f"{ func.__name__}.stdout" if stdout is None else stdout)
+                ),
+                stderr=str(
+                    execution_folder
+                    / (f"{ func.__name__}.stderr" if stderr is None else stderr)
+                ),
                 *args,
                 **kwargs,
             )

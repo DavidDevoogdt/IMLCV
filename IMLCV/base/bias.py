@@ -515,7 +515,7 @@ class Bias(BC, ABC):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        @NeighbourList.batch_sp_nl
+        @NeighbourList.vmap_sp_nl
         def _compute_from_system_params(sp, nl):
 
             [cvs, jac] = self.collective_variable.compute_cv(
@@ -604,99 +604,150 @@ class Bias(BC, ABC):
     ):
         """plot bias."""
 
-        assert self.collective_variable.n == 2
+        if self.collective_variable.n == 1:
+            if bins is None:
+                [bins] = self.collective_variable.metric.grid(
+                    n=n, endpoints=True, margin=margin
+                )
 
-        if bins is None:
-            bins = self.collective_variable.metric.grid(
-                n=n, endpoints=True, margin=margin
+            if x_unit is not None:
+                if x_unit == "rad":
+                    x_unit_label = "rad"
+                    x_fact = 0
+                elif x_unit == "ang":
+                    x_unit_label = "Ang"
+                    x_fact = angstrom
+            else:
+                x_fact = 1
+                x_unit_label = "a.u."
+
+            if x_lim is None:
+                xlim = [bins.min() / x_fact, bins.max() / x_fact]
+
+            extent = [xlim[0], xlim[1]]
+
+            @jit
+            def f(point):
+                return self.compute_from_cv(
+                    CV(cv=point),
+                    diff=False,
+                )
+
+            bias, _ = jnp.apply_along_axis(f, axis=0, arr=jnp.array([bins]))
+
+            if inverted:
+                bias = -bias
+            bias -= bias[~np.isnan(bias)].min()
+
+            # plt.switch_backend("PDF")
+            fig, ax = plt.subplots()
+
+            ax.set_xlim(*extent)
+            ax.set_ylim(vmin / kjmol, vmax / kjmol)
+            p = ax.plot(bins, bias / (kjmol))
+            ax2 = ax.twinx()
+
+            ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
+            ax.set_ylabel(f"Bias [kJ/mol]]", fontsize=16)
+
+            ax.tick_params(axis="both", which="major", labelsize=18)
+            ax.tick_params(axis="both", which="minor", labelsize=16)
+
+            if traj is not None:
+
+                if not isinstance(traj, Iterable):
+                    traj = [traj]
+                for tr in traj:
+                    # trajs are ij indexed
+                    _ = ax2.hist(tr.cv, density=True, histtype="step")
+
+        elif self.collective_variable.n == 2:
+
+            if bins is None:
+                bins = self.collective_variable.metric.grid(
+                    n=n, endpoints=True, margin=margin
+                )
+            mg = np.meshgrid(*bins, indexing="xy")
+
+            if x_unit is not None:
+                if x_unit == "rad":
+                    x_unit_label = "rad"
+                    x_fact = 0
+                elif x_unit == "ang":
+                    x_unit_label = "Ang"
+                    x_fact = angstrom
+            else:
+                x_fact = 1
+                x_unit_label = "a.u."
+
+            if y_unit is not None:
+                if y_unit == "rad":
+                    y_unit_label = "rad"
+                    y_fact = 0
+                elif x_unit == "ang":
+                    y_unit_label = "Ang"
+                    y_fact = angstrom
+            else:
+                y_fact = 1
+                y_unit_label = "a.u."
+
+            if x_lim is None:
+                xlim = [mg[0].min() / x_fact, mg[0].max() / x_fact]
+            if y_lim is None:
+                ylim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
+
+            extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
+
+            @jit
+            def f(point):
+                return self.compute_from_cv(
+                    CV(cv=point),
+                    diff=False,
+                )
+
+            bias, _ = jnp.apply_along_axis(f, axis=0, arr=np.array(mg))
+
+            if inverted:
+                bias = -bias
+            bias -= bias[~np.isnan(bias)].min()
+
+            # plt.switch_backend("PDF")
+            fig, ax = plt.subplots()
+
+            p = ax.imshow(
+                bias / (kjmol),
+                cmap=plt.get_cmap("rainbow"),
+                origin="lower",
+                extent=extent,
+                vmin=vmin / kjmol,
+                vmax=vmax / kjmol,
             )
-        mg = np.meshgrid(*bins, indexing="xy")
 
-        if x_unit is not None:
-            if x_unit == "rad":
-                x_unit_label = "rad"
-                x_fact = 0
-            elif x_unit == "ang":
-                x_unit_label = "Ang"
-                x_fact = angstrom
+            ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
+            ax.set_ylabel(f"cv2 [{y_unit_label}]", fontsize=16)
+
+            ax.tick_params(axis="both", which="major", labelsize=18)
+            ax.tick_params(axis="both", which="minor", labelsize=16)
+
+            cbar = fig.colorbar(p)
+            cbar.set_label("Bias [kJ/mol]", size=18)
+
+            if traj is not None:
+
+                if not isinstance(traj, Iterable):
+                    traj = [traj]
+                for tr in traj:
+                    # trajs are ij indexed
+                    ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=3)
+
         else:
-            x_fact = 1
-            x_unit_label = "a.u."
-
-        if y_unit is not None:
-            if y_unit == "rad":
-                y_unit_label = "rad"
-                y_fact = 0
-            elif x_unit == "ang":
-                y_unit_label = "Ang"
-                y_fact = angstrom
-        else:
-            y_fact = 1
-            y_unit_label = "a.u."
-
-        if x_lim is None:
-            xlim = [mg[0].min() / x_fact, mg[0].max() / x_fact]
-        if y_lim is None:
-            ylim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
-
-        extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
-
-        @jit
-        def f(point):
-            return self.compute_from_cv(
-                CV(cv=point),
-                diff=False,
-            )
-
-        bias, _ = jnp.apply_along_axis(f, axis=0, arr=np.array(mg))
-
-        # if map is False:
-        #     mask = self.collective_variable.metric._get_mask(tol=0.01, interp_mg=mg)
-        #     bias = bias * mask
-
-        # normalise lowest point of bias
-        if inverted:
-            bias = -bias
-        bias -= bias[~np.isnan(bias)].min()
-
-        plt.switch_backend("PDF")
-        fig, ax = plt.subplots()
-
-        p = ax.imshow(
-            bias / (kjmol),
-            cmap=plt.get_cmap("rainbow"),
-            origin="lower",
-            extent=extent,
-            vmin=vmin / kjmol,
-            vmax=vmax / kjmol,
-        )
-
-        ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
-        ax.set_ylabel(f"cv2 [{y_unit_label}]", fontsize=16)
-
-        ax.tick_params(axis="both", which="major", labelsize=18)
-        ax.tick_params(axis="both", which="minor", labelsize=16)
-
-        cbar = fig.colorbar(p)
-        cbar.set_label("Bias [kJ/mol]", size=18)
-
-        if traj is not None:
-
-            if not isinstance(traj, Iterable):
-                traj = [traj]
-            for tr in traj:
-                # trajs are ij indexed
-                ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=3)
+            raise ValueError
 
         # ax.set_title(name)
         os.makedirs(os.path.dirname(name), exist_ok=True)
 
-        # plt.rcParams.update({"font.size": 22})
-
         plt.tight_layout()
         plt.savefig(name)
-        # fig.set_size_inches([12, 8])
-        # fig.savefig(name)
 
         plt.close(fig=fig)  # write out
 
@@ -718,6 +769,7 @@ def plot_app(
     y_lim=None,
     bins=None,
 ):
+
     bias.plot(
         name=outputs[0].filepath,
         n=n,
@@ -1024,17 +1076,25 @@ class GridBias(Bias):
         # extend periodically
         self.n = np.array(vals.shape)
 
-        bias = np.zeros(np.array(vals.shape) + 2) * np.nan
-        bias[1:-1, 1:-1] = vals
-
+        bias = vals
         for i, p in enumerate(self.collective_variable.metric.periodicities):
+            # extend array and fill boundary values if periodic
+            def sl(a, b):
+                out = [slice(None) for _ in range(self.collective_variable.n)]
+                out[a] = b
+
+                return tuple(out)
+
+            def get_ext(i):
+                a = np.array(bias.shape)
+                a[i] = 1
+                part = bias[sl(i, 0)].reshape(a)
+
+                return part * jnp.nan
+
+            bias = np.concatenate((get_ext(i), bias, get_ext(i)), axis=i)
+
             if p:
-
-                def sl(a, b):
-                    out = [slice(None) for _ in range(self.collective_variable.n)]
-                    out[a] = b
-
-                    return tuple(out)
 
                 bias[sl(i, 0)] = bias[sl(i, -2)]
                 bias[sl(i, -1)] = bias[sl(i, 1)]
@@ -1051,19 +1111,8 @@ class GridBias(Bias):
 
         bias[mask] = rbf(np.array([i[mask] for i in inds_pairs]).T)
 
-        rbf = scipy.interpolate.RBFInterpolator(
-            np.array([i[~mask] for i in inds_pairs]).T,
-            bias[~mask],
-        )
-
-        bias[mask] = rbf(np.array([i[mask] for i in inds_pairs]).T)
-
         self.vals = bias
         self.bounds = jnp.array(bounds)
-
-        # self.cons = jnp.min(bias[~jnp.isnan(bias)])
-
-        # self.cons = jnp.min(bias[~jnp.isnan(bias)])
 
     def _compute(self, cvs: CV, *args):
         # overview of grid points. stars are addded to allow out of bounds extension.

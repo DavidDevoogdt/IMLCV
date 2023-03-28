@@ -1,7 +1,6 @@
 import ase
 import ase.io
 import ase.units
-import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -12,42 +11,50 @@ from molmod.units import angstrom, kelvin, kjmol
 import yaff
 
 yaff.log.set_level(yaff.log.silent)
+
 from configs.config_general import ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import (
+    CV,
     CollectiveVariable,
     CvMetric,
     NeighbourList,
     SystemParams,
     Volume,
     dihedral,
+    project_distances,
     sb_descriptor,
 )
 from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
+from IMLCV.scheme import Scheme
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 # keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 
 
-def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihedrals"):
+def alanine_dipeptide_yaff(
+    bias=None, cv="backbone_dihedrals", k=5 * kjmol, project=True
+):
 
     T = 300 * kelvin
 
     if cv == "backbone_dihedrals":
         r_cut = None
     elif cv == "soap_dist":
-        r_cut = 2.5 * angstrom
+        r_cut = 3.0 * angstrom
+    else:
+        r_cut = None
 
     tic = StaticTrajectoryInfo(
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        write_step=1,
-        atomic_numbers=np.array(
+        write_step=10,
+        atomic_numbers=jnp.array(
             [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
             dtype=int,
         ),
-        screen_log=1,
+        screen_log=10,
         equilibration=0 * units.femtosecond,
         r_cut=r_cut,
     )
@@ -62,91 +69,146 @@ def alanine_dipeptide_yaff(bias=lambda cv0: NoneBias(cvs=cv0), cv="backbone_dihe
             ),
         )
 
+        sp = None
+
     elif cv == "soap_dist":
 
+        # ref pos
         sp0 = SystemParams(
             coordinates=jnp.array(
                 [
-                    [20.50227153, 27.10140184, -3.34817412],
-                    [21.0461908, 28.73129116, -4.66992425],
-                    [20.17228194, 30.57272672, -4.0893886],
-                    [20.14818037, 28.16647569, -6.52168564],
-                    [23.82704211, 28.83771713, -5.06690266],
-                    [25.21294108, 29.12963401, -3.26870028],
-                    [24.67461403, 28.29676979, -7.34257064],
-                    [23.43931697, 27.73683338, -8.56029431],
-                    [27.31917609, 28.48822462, -8.31024573],
-                    [27.18293128, 28.07572215, -10.25881302],
-                    [28.20667299, 31.17867019, -8.05517514],
-                    [28.15270379, 31.34484467, -6.10398861],
-                    [30.10577592, 31.41386418, -8.72179289],
-                    [26.78317318, 32.42531988, -8.70454539],
-                    [29.26880641, 26.51927963, -7.31688488],
-                    [31.05035494, 26.03676003, -8.61645022],
-                    [28.86765813, 25.66566859, -4.93866559],
-                    [27.55284067, 26.2896754, -3.88117847],
-                    [30.78413712, 24.1634122, -3.64298108],
-                    [32.69302594, 25.03796984, -3.87937406],
-                    [30.35952141, 24.21711956, -1.72405888],
-                    [30.56663205, 22.31834421, -4.22471714],
+                    [26.77741932, 35.69692667, 0.15117809],
+                    [26.90970015, 33.69381697, -0.30235618],
+                    [25.20894663, 32.76785116, 0.43463701],
+                    [28.66714545, 33.01351556, 0.51022606],
+                    [26.68293301, 33.05131008, -3.09915086],
+                    [25.9081453, 34.69537182, -4.55423998],
+                    [27.26874811, 30.7458442, -3.93063036],
+                    [28.21361118, 29.61200852, -2.72120563],
+                    [27.00418645, 30.06554279, -6.55734968],
+                    [25.19004937, 30.84033051, -7.14316479],
+                    [28.95060437, 31.21827573, -8.35258951],
+                    [30.78363872, 30.27341267, -8.25810321],
+                    [28.23250844, 31.12378943, -10.28011017],
+                    [29.36634412, 33.20248817, -7.95574702],
+                    [27.06087824, 27.19315907, -6.82191134],
+                    [28.38368653, 25.92704256, -5.40461674],
+                    [26.07822065, 26.26719326, -8.93840461],
+                    [25.37902198, 27.51441251, -10.22341838],
+                    [25.6624809, 23.64047394, -9.59980876],
+                    [25.83255625, 23.43260406, -11.64071298],
+                    [26.85300836, 22.29876838, -8.59825391],
+                    [23.73496024, 23.13024788, -9.07068544],
                 ]
             ),
             cell=None,
         )
 
+        sp1_a = jnp.array(
+            [
+                [23.931, 32.690, -5.643],
+                [24.239, 31.818, -3.835],
+                [22.314, 31.227, -3.153],
+                [25.100, 33.275, -2.586],
+                [25.835, 29.525, -3.858],
+                [27.425, 29.164, -2.258],
+                [25.638, 27.991, -5.861],
+                [24.292, 28.473, -7.216],
+                [27.221, 25.765, -6.438],
+                [26.509, 24.957, -8.255],
+                [29.991, 26.660, -6.699],
+                [30.753, 27.301, -4.872],
+                [30.920, 25.078, -7.447],
+                [30.233, 28.236, -8.053],
+                [26.856, 23.398, -4.858],
+                [27.483, 21.402, -5.810],
+                [25.732, 23.673, -2.608],
+                [25.785, 25.535, -1.850],
+                [25.227, 21.564, -0.916],
+                [26.860, 20.494, -0.570],
+                [24.444, 22.298, 0.859],
+                [23.648, 20.454, -1.497],
+            ]
+        )
+
+        sp1_b = jnp.array(
+            [
+                [35.704, 38.625, 1.7931],
+                [33.729, 38.815, 1.0493],
+                [33.579, 40.608, 0.0085435],
+                [32.332, 38.65, 2.5276],
+                [33.25, 36.637, -0.72336],
+                [33.164, 34.435, 0.1553],
+                [32.915, 37.228, -3.1684],
+                [32.659, 39.045, -3.7444],
+                [32.223, 35.498, -5.2083],
+                [31.92, 36.566, -6.9957],
+                [34.786, 34.127, -5.7689],
+                [35.467, 32.9, -4.2401],
+                [34.518, 32.891, -7.4366],
+                [36.197, 35.553, -6.162],
+                [29.809, 33.938, -5.0311],
+                [28.183, 34.313, -6.6841],
+                [29.38, 32.502, -3.0923],
+                [30.957, 32.54, -2.0214],
+                [27.446, 30.501, -2.9781],
+                [26.278, 30.575, -4.7043],
+                [28.288, 28.613, -2.9197],
+                [26.157, 30.858, -1.3152],
+            ]
+        )
+
         sp1 = SystemParams(
-            coordinates=jnp.array(
-                [
-                    [24.69990139, 33.84927338, 5.42635469],
-                    [26.53899516, 33.29837707, 4.70366138],
-                    [26.98863002, 31.38799068, 5.36750364],
-                    [28.07709282, 34.54155216, 5.17525499],
-                    [26.63874039, 33.52967014, 1.80371664],
-                    [25.22416562, 34.92847471, 0.66178309],
-                    [28.29460859, 32.0235449, 0.70817748],
-                    [29.42794161, 30.68295555, 1.62889435],
-                    [28.43154657, 31.97814732, -2.11177037],
-                    [26.56321828, 32.39407073, -2.96774345],
-                    [30.42354434, 34.01280049, -2.91045157],
-                    [32.40071882, 33.67656865, -2.29656292],
-                    [30.49405861, 34.4244646, -4.96722918],
-                    [30.12557626, 35.78451246, -1.60718247],
-                    [28.9822668, 29.35940349, -3.21128742],
-                    [30.54452352, 27.89097314, -2.30283724],
-                    [27.67467624, 28.86964093, -5.343489],
-                    [26.22595247, 30.16449899, -5.88131758],
-                    [27.70562333, 26.61900678, -6.88377585],
-                    [28.54046656, 25.03126151, -5.78970519],
-                    [25.69007045, 26.11709574, -7.42231063],
-                    [28.9082386, 26.94822982, -8.54864114],
-                ]
-            ),
+            coordinates=sp1_a,
             cell=None,
         )
 
         refs = sp0 + sp1
-        refs, refs_nl = refs.get_neighbour_list(r_cut=r_cut, z_array=tic.atomic_numbers)
+        refs_nl = refs.get_neighbour_list(r_cut=r_cut, z_array=tic.atomic_numbers)
 
-        cv0 = CollectiveVariable(
-            f=sb_descriptor(
-                r_cut=r_cut, n_max=3, l_max=3, references=refs, references_nl=refs_nl
-            ),
-            metric=CvMetric(
-                periodicities=[False, False],
-                bounding_box=jnp.array([[0.0, jnp.sqrt(2)], [0.0, jnp.sqrt(2)]]),
-            ),
+        sbd = sb_descriptor(
+            r_cut=r_cut, n_max=3, l_max=3, references=refs, references_nl=refs_nl
         )
 
-        with jax.debug_nans():
-            cv0.compute_cv(refs, refs_nl)[0]
+        cv_ref = sbd.compute_cv_flow(refs, refs_nl)
+
+        if project:
+            a = float(cv_ref.cv[0, 1])
+            cv0 = CollectiveVariable(
+                f=sbd * project_distances(a),
+                metric=CvMetric(
+                    periodicities=[False, False],
+                    bounding_box=jnp.array([[-0.1, 1.1], [0.0, 1.0]]),
+                ),
+            )
+
+        else:
+
+            cv0 = CollectiveVariable(
+                f=sbd,
+                metric=CvMetric(
+                    periodicities=[False, False],
+                    bounding_box=jnp.array([[0.0, 1.0], [0.0, 1.0]]),
+                ),
+            )
 
     else:
-        raise ValueError("unknown value for cv")
+        raise ValueError(
+            f"unknown value {cv} for cv choos 'soap_dist' or 'backbone_dihedrals'"
+        )
+
+    if bias is None:
+        bias = NoneBias(cvs=cv0)
+    elif bias == "harm":
+
+        bias = HarmonicBias(cvs=cv0, q0=CV(cv=jnp.array([1.0])), k=k)
+    else:
+        raise ValueError
 
     mde = YaffEngine(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         static_trajectory_info=tic,
-        bias=bias(cv0),
+        bias=bias,
         trajectory_file="test.h5",
     )
 
@@ -208,7 +270,7 @@ def mil53_yaff():
     return yaffmd
 
 
-def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
+def CsPbI3(cv, unit_cells, input_atoms=None, project=False):
 
     base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
 
@@ -232,8 +294,16 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
     assert (p := fb).exists(), f"cannot find {p}"
     atoms: list[Atoms] = []
 
-    for a in fb.glob("*.xyz"):
+    if input_atoms is None:
+        input_atoms = fb.glob("*.xyz")
+    else:
+        input_atoms = [fb / x for x in input_atoms]
+
+    for a in input_atoms:
         atoms.append(ase.io.read(str(a)))
+
+    print(f"{atoms=}")
+
     assert len(atoms) != 0, "no xyz file found"
 
     path_source = base / "Libraries"
@@ -275,7 +345,7 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
 
             assert sp.cell is not None
 
-            sp = sp.minkowski_reduce()
+            sp = sp.minkowski_reduce()[0]
 
             l = jnp.linalg.norm(sp.cell, axis=1)
             l0 = jnp.max(l)
@@ -295,43 +365,59 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
         )
     elif cv == "soap_dist":
 
-        r_cut = 4 * angstrom
+        r_cut = 5 * angstrom
 
         z_arr = None
-        sp: SystemParams | None = None
+        refs: SystemParams | None = None
 
         for a in atoms:
             if z_arr is None:
                 z_arr = a.get_atomic_numbers()
-                sp = SystemParams(
+                refs = SystemParams(
                     coordinates=a.positions * angstrom, cell=a.cell * angstrom
                 )
 
             else:
                 assert (z_arr == a.get_atomic_numbers()).all()
-                sp += SystemParams(
+                refs += SystemParams(
                     coordinates=a.positions * angstrom, cell=a.cell * angstrom
                 )
 
-        assert sp.batched == True
+        assert refs.batched == True
 
-        # refs = sp0 + sp1
-        refs, refs_nl = sp.get_neighbour_list(r_cut=r_cut, z_array=jnp.array(z_arr))
+        refs_nl = refs.get_neighbour_list(r_cut=r_cut, z_array=jnp.array(z_arr))
 
-        cv = CollectiveVariable(
-            f=sb_descriptor(
-                r_cut=r_cut, n_max=3, l_max=3, references=refs, references_nl=refs_nl
-            ),
-            metric=CvMetric(
-                periodicities=[False] * refs.shape[0],
-                bounding_box=jnp.array([[0.0, 1.0] * refs.shape[0]]),
-            ),
+        sbd = sb_descriptor(
+            r_cut=r_cut,
+            n_max=3,
+            l_max=3,
+            references=refs,
+            references_nl=refs_nl,
         )
 
-        assert (jnp.diag(cv.compute_cv(refs, refs_nl)[0].cv) < 1e-10).all()
+        cv_ref = sbd.compute_cv_flow(refs, refs_nl)
+
+        if project:
+            assert refs.shape[0] == 2, "option --project needs 2D CV (2 input_atoms)"
+            cv_ref = sbd.compute_cv_flow(refs, refs_nl)
+
+            a = float(cv_ref.cv[0, 1])
+            cv = CollectiveVariable(
+                f=sbd * project_distances(a),
+                metric=CvMetric(
+                    periodicities=[False, False],
+                    bounding_box=jnp.array([[-0.1, 1.1], [0.0, 1.0]]),
+                ),
+            )
+
+        else:
+            raise "use --project"
+
+        o = cv.compute_cv(refs, refs_nl)[0].cv
+        assert jnp.allclose(jnp.array([[1.0, 0.0], [0.0, 0.0]]) - o, 0.0)
 
     else:
-        raise NotImplementedError(f"cv {cv} unrecognized for CsPbI3")
+        raise NotImplementedError(f"cv {cv} unrecognized for CsPbI3,")
 
     bias = NoneBias(cvs=cv)
     tic = StaticTrajectoryInfo(
@@ -357,11 +443,27 @@ def CsPbI3(unit_cells: list[int] = [1], cv="cell_vec"):
 
 if __name__ == "__main__":
 
-    # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
-    # sys.run(100)
+    sys = CsPbI3(
+        unit_cells=[2, 2, 2],
+        cv="soap_dist",
+        project=True,
+        input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
+    )
 
-    sys = alanine_dipeptide_yaff(cv="soap_dist")
+    # # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
+    # sys = alanine_dipeptide_yaff(cv="soap_dist", bias=None)
+
     sys.run(100)
 
-    # sys = CsPbI3(unit_cells=[2, 2, 2], cv="soap_dist")
+    from configs.config_general import config
+
+    folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap"
+    config(path_internal=folder / "parsl")
+    s = Scheme(
+        sys,
+        folder=folder,
+    )
+
+    s.inner_loop(init=0, K=2 * kjmol, steps=2000)
+
     # sys.run(100)
