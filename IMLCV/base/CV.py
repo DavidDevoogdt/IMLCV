@@ -27,6 +27,7 @@ from flax import linen as nn
 from flax.linen.linear import Dense
 from jax import Array, jacfwd, jacrev, jit, vmap
 from jax.experimental.jax2tf import call_tf
+from jaxopt._src.linear_solve import solve_bicgstab
 from keras.api._v2 import keras as KerasAPI
 from molmod.units import angstrom
 
@@ -1085,7 +1086,9 @@ class NeighbourList:
             if nl is not None:
                 if nl.batched:
                     assert sp.batched
-                    assert nl.shape[0] == sp.shape[0]
+                    assert (
+                        nl.shape[0] == sp.shape[0]
+                    ), f"neighbourghlist and systemparams should have same shape, got {sp.shape=} {nl.shape=}"
 
                 return NeighbourList.vmap_x_nl(f)(sp, nl, *args, **kwargs)
 
@@ -1178,7 +1181,9 @@ class NeighbourList:
 
         return bools, p
 
+
     @staticmethod
+    @jit
     def match_kernel(
         p1: Array,
         p2: Array,
@@ -1239,21 +1244,24 @@ class NeighbourList:
 
                 local_kernel = _local_kernel(p1, p2, _nl1, _nl2)
 
-                @partial(vmap, in_axes=(0))
-                def _gs(local_kernel):
+                def __gs(local_kernel):
+
                     K = jnp.exp(-(1 - local_kernel) / alpha)
 
                     def body(uv, K):
                         u, _ = uv
-
+                        n, m = K.shape
                         v = (n * K.T @ u) ** (-1)
                         u = (m * K @ v) ** (-1)
 
                         return (u, v)
 
                     n, m = K.shape
-                    solver = jaxopt.AndersonAcceleration(
-                        fixed_point_fun=body, tol=1e-14
+
+                    solver = jaxopt.FixedPointIteration(
+                        fixed_point_fun=body,
+                        tol=1e-8,
+                        implicit_diff_solve=solve_bicgstab,
                     )
                     (u, v), _ = solver.run((jnp.ones((n,)) / n, jnp.ones((m,)) / m), K)
 
@@ -1261,12 +1269,22 @@ class NeighbourList:
                     P_ij = jnp.einsum("i,j,ij->ij", u, v, K)
                     # Tr(  P.T * C )
                     # using Tr(X.T Y) = Sum[ij](Xij * Yij)
-                    return jnp.einsum("ij,ij", P_ij, local_kernel)
+                    return K, u, v, jnp.einsum("ij,ij", P_ij, local_kernel)
 
-                return _gs(local_kernel)
+                # @jax.custom_jvp
+                def _gs(local_kernel):
+                    _, _, _, K_out = __gs(local_kernel)
+                    return K_out
+
+                return vmap(_gs, in_axes=(0))(local_kernel)
 
         elif matching.lower() == "best":
             raise
+        elif matching.lower() == "none":
+
+            def _f(p1, p2, nl1, nl2):
+                return jnp.tensordot(p1, p2, axes=p1.ndim)
+
         else:
             raise ValueError("unknown matching procedure")
 
@@ -1955,7 +1973,13 @@ class CvFlow:
             sp: SystemParams,
             nl: NeighbourList | None = None,
         ):
-            return CV(cv=f(sp, nl))
+
+            cv = CV(cv=f(sp, nl))
+            # assert (
+            #     len(cv.shape) == 1
+            # ), f"The CV output should have shape (n,), got shape {cv.shape} for cv function {f} "
+
+            return cv
 
         return CvFlow(func=f2)
 
@@ -1969,6 +1993,7 @@ class CvFlow:
         def _compute_cv_flow(sp, nl):
 
             out = self.f0(sp, nl)
+            # assert len(out.shape) == 1, "The CV output should have shape (n,), got "
 
             if self.f1 is not None:
                 out, _ = self.f1.compute_cv_trans(out)
@@ -2157,7 +2182,7 @@ def Volume(sp: SystemParams, _):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
     vol = jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
-    return vol
+    return jnp.array([vol])
 
 
 def distance_descriptor():
@@ -2217,6 +2242,7 @@ def sb_descriptor(
     l_max: int,
     references: SystemParams | None = None,
     references_nl: NeighbourList | None = None,
+    reduce=True,
 ):
     from IMLCV.base.tools.soap_kernel import Kernel, p_i, p_inl_sb
 
@@ -2224,12 +2250,41 @@ def sb_descriptor(
     def f(sp: SystemParams, nl: NeighbourList):
         assert nl is not None, "provide neighbourlist for sb describport"
 
-        return p_i(
+        def _reduce(a):
+
+            a = vmap(
+                vmap(
+                    vmap(
+                        lambda a: a[jnp.tril_indices_from(a)], in_axes=(0), out_axes=(0)
+                    ),
+                    in_axes=(1),
+                    out_axes=(1),
+                ),
+                in_axes=(2),
+                out_axes=(2),
+            )(
+                a
+            )  # eliminate l>n
+            a = vmap(
+                vmap(lambda a: a[jnp.triu_indices_from(a)], in_axes=(0), out_axes=(0)),
+                in_axes=(3),
+                out_axes=(2),
+            )(
+                a
+            )  # eliminate Z2>Z1
+            return a
+
+        a = p_i(
             sp=sp,
             nl=nl,
             p=p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max),
             r_cut=r_cut,
         )
+
+        if reduce:
+            a = _reduce(a)
+
+        return a
 
     if references is not None:
         assert references_nl is not None
@@ -2258,7 +2313,15 @@ def sb_descriptor(
         return CvFlow.from_function(sb_descriptor_distance2)  # type: ignore
 
     else:
+
         return CvFlow.from_function(f)  # type: ignore
+
+
+def NoneCV() -> CollectiveVariable:
+    return CollectiveVariable(
+        f=CvFlow.from_function(lambda sp, nl: jnp.array([0.0])),
+        metric=CvMetric(periodicities=[None]),
+    )
 
 
 ######################################

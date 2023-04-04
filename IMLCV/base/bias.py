@@ -196,14 +196,16 @@ class Energy(BC):
             raise NotImplementedError("untested")
             self.sp = sp
 
-        try:
-            return self._compute_coor(gpos=gpos, vir=vir)
-        except EnergyError as be:
-            raise EnergyError(
-                f"""An error occured during the nergy calculation with {self.__class__}.
-The lates coordinates were {self.sp}.                  
-raised exception from calculator:{be}"""
-            )
+        # try:
+        return self._compute_coor(gpos=gpos, vir=vir)
+
+
+#         except EnergyError as be:
+#             raise EnergyError(
+#                 f"""An error occured during the nergy calculation with {self.__class__}.
+# The lates coordinates were {self.sp}.
+# raised exception from calculator:{be}"""
+#             )
 
 
 class YaffEnergy(Energy):
@@ -811,9 +813,6 @@ class CompositeBias(Bias):
 
     def _append_bias(self, b: Bias):
 
-        if isinstance(b, NoneBias):
-            return
-
         self.biases.append(b)
 
         # self.start_list = np.append(
@@ -905,6 +904,7 @@ class HarmonicBias(Bias):
             k = jnp.zeros_like(q0.cv) + k
         else:
             assert k.shape == q0.cv.shape
+
         assert np.all(k > 0)
         self.k = jnp.array(k)
         self.q0 = q0

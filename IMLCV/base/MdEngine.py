@@ -34,7 +34,7 @@ from yaff.sampling.verlet import VerletIntegrator
 yaff.log.set_level(yaff.log.silent)
 
 from molmod.periodic import periodic
-from molmod.units import kjmol
+from molmod.units import angstrom, kjmol
 
 # if TYPE_CHECKING:
 from IMLCV.base.bias import Bias, Energy, EnergyResult
@@ -45,7 +45,7 @@ from IMLCV.base.CV import CV
 ######################################
 
 
-@dataclass(frozen=True)
+@dataclass
 class StaticTrajectoryInfo:
 
     _attr = [
@@ -58,6 +58,7 @@ class StaticTrajectoryInfo:
         "write_step",
         "equilibration",
         "screen_log",
+        "max_grad",
     ]
 
     _arr = [
@@ -78,6 +79,8 @@ class StaticTrajectoryInfo:
     write_step: int = 100
     equilibration: float | None = None
     screen_log: int = 1000
+
+    max_grad: None | float = 200 * kjmol / angstrom
 
     @property
     def masses(self):
@@ -146,36 +149,36 @@ class StaticTrajectoryInfo:
 @dataclass
 class TrajectoryInfo:
 
-    positions: Array
-    cell: Array | None = None
-    charges: Array | None = None
+    _positions: Array
+    _cell: Array | None = None
+    _charges: Array | None = None
 
-    e_pot: Array | None = None
-    e_pot_gpos: Array | None = None
-    e_pot_vtens: Array | None = None
+    _e_pot: Array | None = None
+    _e_pot_gpos: Array | None = None
+    _e_pot_vtens: Array | None = None
 
-    e_bias: Array | None = None
-    e_bias_gpos: Array | None = None
-    e_bias_vtens: Array | None = None
+    _e_bias: Array | None = None
+    _e_bias_gpos: Array | None = None
+    _e_bias_vtens: Array | None = None
 
-    cv: Array | None = None
+    _cv: Array | None = None
 
-    T: Array | None = None
-    P: Array | None = None
-    err: Array | None = None
+    _T: Array | None = None
+    _P: Array | None = None
+    _err: Array | None = None
 
-    t: Array | None = None
+    _t: Array | None = None
 
-    _items_scal = ["t", "e_pot", "e_bias", "T", "P", "err"]
+    _items_scal = ["_t", "_e_pot", "_e_bias", "_T", "_P", "_err"]
     _items_vec = [
-        "positions",
-        "cell",
-        "e_pot_gpos",
-        "e_pot_vtens",
-        "e_bias_gpos",
-        "e_bias_vtens",
-        "charges",
-        "cv",
+        "_positions",
+        "_cell",
+        "_e_pot_gpos",
+        "_e_pot_vtens",
+        "_e_bias_gpos",
+        "_e_bias_vtens",
+        "_charges",
+        "_cv",
     ]
 
     _capacity: int = -1
@@ -190,7 +193,7 @@ class TrajectoryInfo:
             self._size = 1
 
         # batch
-        if len(self.positions.shape) == 2:
+        if len(self._positions.shape) == 2:
 
             for name in [*self._items_vec, *self._items_scal]:
                 prop = self.__getattribute__(name)
@@ -198,9 +201,9 @@ class TrajectoryInfo:
                     self.__setattr__(name, np.array([prop]))
 
         # test wether cell is truly not None
-        if self.cell is not None:
-            if self.cell.shape[-2] == 0:
-                self.cell = None
+        if self._cell is not None:
+            if self._cell.shape[-2] == 0:
+                self._cell = None
 
     def __getitem__(self, slices):
         "gets slice from indices. the output is truncated to the to include only items wihtin _size"
@@ -210,28 +213,30 @@ class TrajectoryInfo:
         # print(f"ind: {ind}, cap = {jnp.sum(ind)}, t : {self.t[slices][ind].shape}")
 
         return TrajectoryInfo(
-            positions=self.positions[slices, :][ind],
-            cell=self.cell[slices, :][ind] if self.cell is not None else None,
-            charges=self.charges[slices, :][ind] if self.cell is not None else None,
-            e_pot=self.e_pot[slices][ind] if self.e_pot is not None else None,
-            e_pot_gpos=self.e_pot_gpos[slices, :][ind]
-            if self.e_pot_gpos is not None
+            _positions=self._positions[slices, :][ind],
+            _cell=self._cell[slices, :][ind] if self._cell is not None else None,
+            _charges=(self._charges[slices, :][ind] if self._cell is not None else None)
+            if self._charges is not None
             else None,
-            e_pot_vtens=self.e_pot_vtens[slices, :][ind]
-            if self.e_pot_vtens is not None
+            _e_pot=self._e_pot[slices][ind] if self._e_pot is not None else None,
+            _e_pot_gpos=self._e_pot_gpos[slices, :][ind]
+            if self._e_pot_gpos is not None
             else None,
-            e_bias=self.e_bias[slices][ind] if self.e_bias is not None else None,
-            e_bias_gpos=self.e_bias_gpos[slices, :][ind]
-            if self.e_bias_gpos is not None
+            _e_pot_vtens=self._e_pot_vtens[slices, :][ind]
+            if self._e_pot_vtens is not None
             else None,
-            e_bias_vtens=self.e_bias_vtens[slices, :][ind]
-            if self.e_bias_vtens is not None
+            _e_bias=self._e_bias[slices][ind] if self._e_bias is not None else None,
+            _e_bias_gpos=self._e_bias_gpos[slices, :][ind]
+            if self._e_bias_gpos is not None
             else None,
-            cv=self.cv[slices, :][ind] if self.cv is not None else None,
-            T=self.T[slices][ind] if self.T is not None else None,
-            P=self.P[slices][ind] if self.P is not None else None,
-            err=self.err[slices][ind] if self.err is not None else None,
-            t=self.t[slices][ind] if self.t is not None else None,
+            _e_bias_vtens=self._e_bias_vtens[slices, :][ind]
+            if self._e_bias_vtens is not None
+            else None,
+            _cv=self._cv[slices, :][ind] if self._cv is not None else None,
+            _T=self._T[slices][ind] if self._T is not None else None,
+            _P=self._P[slices][ind] if self._P is not None else None,
+            _err=self._err[slices][ind] if self._err is not None else None,
+            _t=self._t[slices][ind] if self._t is not None else None,
             _capacity=jnp.sum(ind),
             _size=jnp.sum(ind),
         )
@@ -344,19 +349,103 @@ class TrajectoryInfo:
         )
 
     @property
+    def sp(self) -> SystemParams:
+        return SystemParams(
+            coordinates=jnp.array(self._positions[0 : self._size, :]),
+            cell=jnp.array(self._cell[0 : self._size, :])
+            if self._cell is not None
+            else None,
+        )
+
+    @property
+    def positions(self) -> Array | None:
+        if self._positions is None:
+            return None
+        return self._positions[0 : self._size, :]
+
+    @property
+    def cell(self) -> Array | None:
+        if self._cell is None:
+            return None
+        return self._cell[0 : self._size, :]
+
+    @property
     def volume(self):
         if self.cell is not None:
-            return jnp.linalg.det(self.cell)
+            return jnp.linalg.det(self._cell)
         return None
 
     @property
-    def sp(self) -> SystemParams:
-        return SystemParams(
-            coordinates=jnp.array(self.positions[0 : self._size, :]),
-            cell=jnp.array(self.cell[0 : self._size, :])
-            if self.cell is not None
-            else None,
-        )
+    def charges(self) -> Array | None:
+        if self._charges is None:
+            return None
+        return self._charges[0 : self._size, :]
+
+    @property
+    def e_pot(self) -> Array | None:
+        if self._e_pot is None:
+            return None
+        return self._e_pot[0 : self._size]
+
+    @property
+    def e_pot_gpos(self) -> Array | None:
+        if self._e_pot_gpos is None:
+            return None
+        return self._e_pot_gpos[0 : self._size, :]
+
+    @property
+    def e_pot_vtens(self) -> Array | None:
+        if self._e_pot_vtens is None:
+            return None
+        return self._e_pot_vtens[0 : self._size, :]
+
+    @property
+    def e_bias(self) -> Array | None:
+        if self._e_bias is None:
+            return None
+        return self._e_bias[0 : self._size]
+
+    @property
+    def e_bias_gpos(self) -> Array | None:
+        if self._e_bias_gpos is None:
+            return None
+        return self._e_bias_gpos[0 : self._size, :]
+
+    @property
+    def e_bias_vtens(self) -> Array | None:
+        if self._e_bias_vtens is None:
+            return None
+        return self._e_bias_vtens[0 : self._size, :]
+
+    @property
+    def cv(self) -> Array | None:
+        if self._cv is None:
+            return None
+        return self._cv[0 : self._size, :]
+
+    @property
+    def T(self) -> Array | None:
+        if self._T is None:
+            return None
+        return self._T[0 : self._size]
+
+    @property
+    def P(self) -> Array | None:
+        if self._P is None:
+            return None
+        return self._P[0 : self._size]
+
+    @property
+    def err(self) -> Array | None:
+        if self._err is None:
+            return None
+        return self._err[0 : self._size]
+
+    @property
+    def t(self) -> Array | None:
+        if self._t is None:
+            return None
+        return self._t[0 : self._size]
 
     @property
     def shape(self):
@@ -364,8 +453,8 @@ class TrajectoryInfo:
 
     @property
     def CV(self) -> CV | None:
-        if self.cv is not None:
-            return CV(cv=self.cv[0 : self._size, :])
+        if self._cv is not None:
+            return CV(cv=self._cv[0 : self._size, :])
         return None
 
 
@@ -392,7 +481,7 @@ class MDEngine(ABC):
         "energy",
         "static_trajectory_info",
         "trajectory_file",
-        "sp",
+        # "sp",
     ]
 
     def __init__(
@@ -517,19 +606,19 @@ class MDEngine(ABC):
     def save_step(self, T=None, P=None, t=None, err=None):
 
         ti = TrajectoryInfo(
-            positions=self.sp.coordinates,
-            cell=self.sp.cell,
-            e_pot=self.last_ener.energy,
-            e_pot_gpos=self.last_ener.gpos,
-            e_bias=self.last_bias.energy,
-            e_bias_gpos=self.last_bias.gpos,
-            e_pot_vtens=self.last_ener.vtens,
-            e_bias_vtens=self.last_bias.vtens,
-            cv=self.last_cv.cv,
-            T=T,
-            P=P,
-            t=t,
-            err=err,
+            _positions=self.sp.coordinates,
+            _cell=self.sp.cell,
+            _e_pot=self.last_ener.energy,
+            _e_pot_gpos=self.last_ener.gpos,
+            _e_bias=self.last_bias.energy,
+            _e_bias_gpos=self.last_bias.gpos,
+            _e_pot_vtens=self.last_ener.vtens,
+            _e_bias_vtens=self.last_bias.vtens,
+            _cv=self.last_cv.cv,
+            _T=T,
+            _P=P,
+            _t=t,
+            _err=err,
         )
 
         if self.step == 1:
@@ -537,27 +626,30 @@ class MDEngine(ABC):
             str += f"|{ 'cons err': ^10s}"
             str += f"|{ 'e_pot[Kj/mol]': ^15s}"
             str += f"|{ 'e_bias[Kj/mol]': ^15s}"
-            if ti.P is not None:
+            if ti._P is not None:
                 str += f"|{'P[bar]': ^10s}"
             str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
-            str += f"|{'CV': ^10s}"
+            ss = "|\u2207\u2093U\u1D47|[Kj/\u212B]"
+            str += f"|{ ss  : ^13s}"
+            str += f"|{' CV': ^10s}"
             print(str, sep="")
             print(f"{'='*len(str)}")
 
         if self.step % self.static_trajectory_info.screen_log == 0:
             str = f"{  self.step : >10d}"
-            assert ti.err is not None
-            assert ti.T is not None
-            assert ti.e_pot is not None
-            assert ti.e_bias is not None
+            assert ti._err is not None
+            assert ti._T is not None
+            assert ti._e_pot is not None
+            assert ti._e_bias is not None
 
-            str += f"|{  ti.err[0] : >10.4f}"
-            str += f"|{  ti.e_pot[0]  /kjmol : >15.8f}"
-            str += f"|{  ti.e_bias[0] /kjmol : >15.8f}"
-            if ti.P is not None:
-                str += f" { ti.P[0]/bar : >10.2f}"
-            str += f" { ti.T[0] : >10.2f} { time()-self.time0 : >11.2f}"
-            str += f"| {ti.cv[0,:]}"
+            str += f"|{  ti._err[0] : >10.4f}"
+            str += f"|{  ti._e_pot[0]  /kjmol : >15.8f}"
+            str += f"|{  ti._e_bias[0] /kjmol : >15.8f}"
+            if ti._P is not None:
+                str += f" { ti._P[0]/bar : >10.2f}"
+            str += f" { ti._T[0] : >10.2f} { time()-self.time0 : >11.2f}"
+            str += f"|{  jnp.max(jnp.linalg.norm(ti._e_bias_gpos,axis=1) /kjmol*angstrom ) : >13.2f}"
+            str += f"| {ti._cv[0,:]}"
             print(str)
 
         # write step to trajectory
@@ -585,12 +677,30 @@ class MDEngine(ABC):
         self, gpos: bool = False, vtens: bool = False
     ) -> tuple[CV, EnergyResult]:
 
-        return self.bias.compute_from_system_params(
+        cv, ener = self.bias.compute_from_system_params(
             sp=self.sp,
             nl=self.nl,
             gpos=gpos,
             vir=vtens,
         )
+
+        if (self.static_trajectory_info.max_grad is not None) and (
+            ener.gpos is not None
+        ):
+            ns = jnp.linalg.norm(ener.gpos, axis=1)
+
+            norms = jnp.max(ns)
+
+            if (fact := norms / self.static_trajectory_info.max_grad) > 1:
+                ener = EnergyResult(
+                    ener.energy / fact,
+                    ener.gpos / fact,
+                    ener.vtens / fact if ener.vtens is not None else None,
+                )
+
+                print(f"clipped, fact={fact}")
+
+        return cv, ener
 
     @property
     def yaff_system(self) -> MDEngine.YaffSys:

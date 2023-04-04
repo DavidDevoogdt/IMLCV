@@ -89,9 +89,9 @@ class ThermoLIB:
             if cv is None:
                 cv = bias.collective_variable
 
-            ti = trajectory.ti[trajectory.ti.t > round.tic.equilibration]
+            ti = trajectory.ti[trajectory.ti._t > round.tic.equilibration]
 
-            if ti.cv is not None:
+            if ti._cv is not None:
                 cvs = ti.CV
 
             else:

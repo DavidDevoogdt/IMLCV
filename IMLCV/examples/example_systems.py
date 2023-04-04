@@ -3,44 +3,296 @@ import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
+from jax import jit, vmap
 
 # from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
+from IMLCV.base.rounds import Rounds
 
 yaff.log.set_level(yaff.log.silent)
+
+import pymanopt
 
 from configs.config_general import ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
+    CvFlow,
     CvMetric,
+    CvTrans,
     NeighbourList,
+    NoneCV,
     SystemParams,
     Volume,
     dihedral,
     project_distances,
     sb_descriptor,
 )
-from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from IMLCV.scheme import Scheme
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 # keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 
 
+def get_lda_cv(
+    refs: SystemParams,
+    num_kfda,
+    folder,
+    mde: MDEngine,
+    descriptor: CvFlow,
+    n_steps=2000,
+    n=400,
+    kernel=False,
+    harmonic=True,
+    kernel_type="rematch",
+    materialize=False,
+    shrinkage=0.0,
+    **nl_kwargs,
+) -> CollectiveVariable:
+
+    assert refs.batched and refs.shape[0] == 2, "revise code for more than 2 refs"
+
+    pre_round = Rounds(folder=folder)
+    pre_round.add_round_from_md(mde)
+
+    biases = []
+    for _ in refs:
+        biases.append(NoneBias(cvs=NoneCV()))
+
+    pre_round.run_par(biases=biases, steps=n_steps, sp0=refs)
+
+    phase_sps = []
+    phase_nls = []
+    phase_cvs = []
+
+    for ri, ti in pre_round.iter():
+        traj_info = ti.ti[:: n_steps // n]
+        spi = traj_info.sp
+        # cvi = traj_info.CV
+        nli = spi.get_neighbour_list(**nl_kwargs)
+
+        cvi = descriptor.compute_cv_flow(spi, nli)
+
+        phase_sps.append(spi)
+        phase_cvs.append(cvi)
+        phase_nls.append(nli)
+
+    if kernel:
+
+        @jit
+        def kernel_matrix(p0, p1, nl0, nl1):
+            @NeighbourList.vmap_x_nl
+            def _f(p0, nl0):
+                @NeighbourList.vmap_x_nl
+                def __f(p1, nl1):
+                    return NeighbourList.match_kernel(
+                        p0.cv, p1.cv, nl0, nl1, matching=kernel_type
+                    )
+
+                return __f(p1, nl1)
+
+            return _f(p0, nl0)
+
+        mat = []
+        for i, (cva, nla) in enumerate(zip(phase_cvs, phase_nls)):
+            mat_i = []
+            for j, (cvb, nlb) in enumerate(zip(phase_cvs, phase_nls)):
+                mat_i.append(kernel_matrix(cva, cvb, nla, nlb))
+            mat.append(jnp.array(mat_i))
+        lj = jnp.array([x.shape[0] for x in phase_cvs])
+
+        Kj_nm = jnp.concatenate(mat, axis=1)
+        Sj_n = jnp.mean(Kj_nm, axis=2)
+        S_n = vmap(lambda x: jnp.sum(x * lj), in_axes=1)(Sj_n) / sum(lj)
+        Sb = jnp.einsum(
+            "ijk,i->jk", vmap(lambda x: jnp.outer(x - S_n, x - S_n))(Sj_n), lj
+        )
+        Sw = jnp.sum(
+            vmap(
+                lambda Kj, lj: Kj
+                @ (jnp.eye(Kj.shape[1]) - jnp.ones((Kj.shape[1], Kj.shape[1])) / lj)
+                @ Kj.T
+            )(Kj_nm, lj),
+            axis=0,
+        )
+
+        if not harmonic:
+            # regularize
+            Sw = Sw + 1e-3 * jnp.eye(Sw.shape[0])
+
+        manifold = pymanopt.manifolds.stiefel.Stiefel(n=Sb.shape[0], p=num_kfda)
+
+        @pymanopt.function.jax(manifold)
+        def cost(x):
+            if harmonic:
+                return jnp.trace(x.T @ Sw @ x) / jnp.trace(x.T @ Sb @ x)
+            else:
+
+                return -jnp.trace(x.T @ Sb @ x) / (jnp.trace(x.T @ Sw @ x) + 1e-3)
+
+        optimizer = pymanopt.optimizers.TrustRegions()
+        problem = pymanopt.Problem(manifold, cost)
+        result = optimizer.run(problem)
+
+        alpha = result.point
+
+        assert jnp.allclose(alpha.T @ alpha, jnp.eye(num_kfda))
+
+        # make cv
+        x = phase_sps[0] + phase_sps[1]
+        x_nl = x.get_neighbour_list(**nl_kwargs)
+        x_cv = descriptor.compute_cv_flow(x, x_nl)
+
+        scale_factor = jnp.mean(alpha.T @ Kj_nm, axis=2).T
+
+        @CvFlow
+        def klda_cv(sp: SystemParams, nl: NeighbourList):
+            @NeighbourList.vmap_x_nl
+            def __f(cv1, nl1, cv2, nl2):
+                return NeighbourList.match_kernel(cv1.cv, cv2.cv, nl1, nl2)
+
+            cv = descriptor.compute_cv_flow(sp, nl)
+
+            lda = alpha.T @ __f(x_cv, x_nl, cv, nl)
+
+            return CV(
+                cv=(lda - scale_factor[:, 0])
+                / (scale_factor[:, 1] - scale_factor[:, 0])
+            )
+
+        # check if close to 1
+        # cvs0 = klda_cv.compute_cv_flow(phase_sps[0], phase_nls[0])
+        # cvs1 = klda_cv.compute_cv_flow(phase_sps[1], phase_nls[1])
+        cv0 = CollectiveVariable(
+            f=klda_cv,
+            metric=CvMetric(
+                periodicities=[False] * num_kfda,
+                bounding_box=jnp.repeat(jnp.array([[-0.1, 1.1]]), num_kfda, axis=0),
+            ),
+        )
+
+        return cv0
+
+    lj = jnp.array([x.shape[0] for x in phase_cvs])
+    cvs = jnp.array([cvs.cv for cvs in phase_cvs])
+
+    cvs = jnp.reshape(cvs, cvs.shape[0:2] + (-1,))
+
+    lj = jnp.array([x.shape[0] for x in phase_cvs])
+
+    mu_i = vmap(lambda x, y: jnp.sum(x, axis=0) / y, in_axes=(0, 0))(cvs, lj)
+    mu = jnp.sum(vmap(lambda x, y: x * y, in_axes=(0, 0))(mu_i, lj), axis=0) / jnp.sum(
+        lj
+    )
+
+    exclude = jnp.logical_or(*(mu_i == 0))
+
+    mu = mu[~exclude]
+    mu_i = mu_i[:, ~exclude]
+    cvs = cvs[:, :, ~exclude]
+
+    if not materialize:
+
+        W_ila = vmap(lambda cvs, mu_i: vmap(lambda cvs: cvs - mu_i)(cvs))(cvs, mu_i)
+        B_ila = vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu - mu_i))(lj, mu_i)
+    else:
+        Sigma_W2_i = vmap(
+            lambda cvs, mu_i: jnp.sum(
+                vmap(lambda cvs: jnp.einsum("i,j->ij", cvs - mu_i, cvs - mu_i))(cvs),
+                axis=0,
+            )
+        )(cvs, mu_i)
+
+        # https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8424045
+
+        Sigma_W2 = jnp.sum(Sigma_W2_i, axis=0)
+        Sigma_B2_i = vmap(
+            lambda lj, mu_i: lj * jnp.einsum("i,j->ij", mu - mu_i, mu - mu_i)
+        )(lj, mu_i)
+        Sigma_B2 = jnp.sum(Sigma_B2_i, axis=0)
+
+    manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=num_kfda)
+
+    @pymanopt.function.jax(manifold)
+    @jit
+    def cost(x):
+        if materialize:
+            a = jnp.trace(x.T @ Sigma_W2 @ x)
+            b = jnp.trace(x.T @ Sigma_B2 @ x)
+        else:
+            a = jnp.einsum("ab, ija,ijc, cb ", x, W_ila, W_ila, x)
+            b = jnp.einsum("ab, ia,ic, cb ", x, B_ila, B_ila, x)
+
+        if harmonic:
+            return ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
+        else:
+            return -((1 - shrinkage) * b + shrinkage) / (
+                (1 - shrinkage) * a + shrinkage
+            )
+
+    optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50, verbosity=2)
+    problem = pymanopt.Problem(manifold, cost)
+    result = optimizer.run(problem)
+
+    alpha = jnp.zeros((exclude.shape[0], num_kfda))
+    alpha = alpha.at[~exclude, :].set(result.point)
+
+    # alpha = result.point
+
+    # pip install pymanopt@git+https://github.com/pymanopt/pymanopt.git
+
+    # make cv
+    x = phase_sps[0] + phase_sps[1]
+    x_nl = x.get_neighbour_list(**nl_kwargs)
+    x_cv = descriptor.compute_cv_flow(x, x_nl)
+
+    scale_factor = vmap(lambda x: result.point.T @ x)(mu_i)
+
+    @CvTrans.from_cv_function
+    def _lda_cv(cv: CV, _):
+        cv_unscaled = alpha.T @ jnp.reshape(cv.cv, (-1,))
+        cv_scaled = (cv_unscaled - scale_factor[0, :]) / (
+            scale_factor[1, :] - scale_factor[0, :]
+        )
+
+        return CV(cv=cv_scaled)
+
+    cv0 = CollectiveVariable(
+        f=descriptor * _lda_cv,
+        metric=CvMetric(
+            periodicities=[False] * num_kfda,
+            bounding_box=jnp.repeat(jnp.array([[-0.1, 1.1]]), num_kfda, axis=0),
+        ),
+    )
+
+    # # # check if close to 1
+    # cvs0, _ = cv0.compute_cv(phase_sps[0], phase_nls[0])
+    # cvs1, _ = cv0.compute_cv(phase_sps[1], phase_nls[1])
+    return cv0
+
+
 def alanine_dipeptide_yaff(
-    bias=None, cv="backbone_dihedrals", k=5 * kjmol, project=True
+    bias=None,
+    cv="backbone_dihedrals",
+    k=5 * kjmol,
+    project=True,
+    num_kfda=1,
+    kernel=True,
+    harmonic=True,
+    folder=None,
+    kernel_type=None,
 ):
 
     T = 300 * kelvin
 
     if cv == "backbone_dihedrals":
         r_cut = None
-    elif cv == "soap_dist":
+    elif cv == "soap_dist" or cv == "soap_lda":
         r_cut = 3.0 * angstrom
     else:
         r_cut = None
@@ -57,6 +309,7 @@ def alanine_dipeptide_yaff(
         screen_log=10,
         equilibration=0 * units.femtosecond,
         r_cut=r_cut,
+        # max_grad=max_grad,
     )
 
     if cv == "backbone_dihedrals":
@@ -71,7 +324,7 @@ def alanine_dipeptide_yaff(
 
         sp = None
 
-    elif cv == "soap_dist":
+    elif cv == "soap_dist" or cv == "soap_lda":
 
         # ref pos
         sp0 = SystemParams(
@@ -164,33 +417,29 @@ def alanine_dipeptide_yaff(
         )
 
         refs = sp0 + sp1
-        refs_nl = refs.get_neighbour_list(r_cut=r_cut, z_array=tic.atomic_numbers)
 
-        sbd = sb_descriptor(
-            r_cut=r_cut, n_max=3, l_max=3, references=refs, references_nl=refs_nl
+        mde = YaffEngine(
+            energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
+            static_trajectory_info=tic,
+            bias=NoneBias(cvs=NoneCV()),
         )
 
-        cv_ref = sbd.compute_cv_flow(refs, refs_nl)
+        sb = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2)
 
-        if project:
-            a = float(cv_ref.cv[0, 1])
-            cv0 = CollectiveVariable(
-                f=sbd * project_distances(a),
-                metric=CvMetric(
-                    periodicities=[False, False],
-                    bounding_box=jnp.array([[-0.1, 1.1], [0.0, 1.0]]),
-                ),
-            )
-
-        else:
-
-            cv0 = CollectiveVariable(
-                f=sbd,
-                metric=CvMetric(
-                    periodicities=[False, False],
-                    bounding_box=jnp.array([[0.0, 1.0], [0.0, 1.0]]),
-                ),
-            )
+        cv0 = get_lda_cv(
+            refs,
+            num_kfda,
+            folder=folder,
+            mde=mde,
+            descriptor=sb,
+            n_steps=2000,
+            n=200,
+            kernel=kernel,
+            harmonic=harmonic,
+            r_cut=r_cut,
+            z_array=tic.atomic_numbers,
+            kernel_type=kernel_type,
+        )
 
     else:
         raise ValueError(
@@ -221,7 +470,7 @@ def mil53_yaff():
     P = 1 * units.atm
 
     def f():
-        rd = ROOT_DIR / "IMLCV" / "test" / "data" / "MIL53"
+        rd = ROOT_DIR / "IMLCV" / "examples" / "data" / "MIL53"
         system = yaff.System.from_file(str(rd / "MIL53.chk"))
         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
         return ff
@@ -239,15 +488,11 @@ def mil53_yaff():
 
     bias = HarmonicBias(
         cvs=cvs,
-        q0=np.array(
-            [1400 * angstrom**3],
-        ),
-        k=jnp.array(
-            [10 * kjmol],
-        ),
+        q0=CV(cv=jnp.array([3000 * angstrom**3])),
+        k=jnp.array([0.1 * kjmol]),
     )
 
-    print(f"{1400 * angstrom**3}")
+    bias = NoneBias(cvs=cvs)
 
     energy = YaffEnergy(f=f)
 
@@ -258,6 +503,7 @@ def mil53_yaff():
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=200.0 * units.femtosecond,
         write_step=1,
+        screen_log=1,
         atomic_numbers=energy.ff.system.numbers,
     )
 
@@ -443,22 +689,26 @@ def CsPbI3(cv, unit_cells, input_atoms=None, project=False):
 
 if __name__ == "__main__":
 
-    sys = CsPbI3(
-        unit_cells=[2, 2, 2],
-        cv="soap_dist",
-        project=True,
-        input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
-    )
+    # sys = CsPbI3(
+    #     unit_cells=[2, 2, 2],
+    #     cv="soap_dist",
+    #     project=True,
+    #     input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
+    # )
 
-    # # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
-    # sys = alanine_dipeptide_yaff(cv="soap_dist", bias=None)
+    # sys = mil53_yaff()
 
-    sys.run(100)
-
+    # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
     from configs.config_general import config
 
     folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap"
     config(path_internal=folder / "parsl")
+    sys = alanine_dipeptide_yaff(
+        cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder
+    )
+
+    sys.run(100)
+
     s = Scheme(
         sys,
         folder=folder,

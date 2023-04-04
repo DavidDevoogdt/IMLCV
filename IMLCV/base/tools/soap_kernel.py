@@ -30,14 +30,10 @@ def legendre(x, n):
     return y
 
 
-def p_i(
-    sp: SystemParams,
-    nl: NeighbourList,
-    p,
-    r_cut,
-):
+def p_i(sp: SystemParams, nl: NeighbourList, p, r_cut, reduce=True):
     @NeighbourList.vmap_sp_nl
     def _p_i(sp: SystemParams, nl: NeighbourList, p):
+
         ps, pd = p
 
         _, val0 = nl.apply_fun_neighbour_pair(
@@ -50,6 +46,8 @@ def p_i(
             unique=True,
             split_z=True,
         )
+
+        # todo: Compressing local atomic neighbourhood descriptors
 
         norms = vmap(jnp.linalg.norm)(val0)
         norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)

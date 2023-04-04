@@ -348,10 +348,10 @@ class Rounds(ABC):
         for round, trajejctory in self.iter(stop=r, num=num):
             traj = trajejctory.ti
 
-            pos_A = traj.positions / angstrom
-            pbc = traj.cell is not None
+            pos_A = traj._positions / angstrom
+            pbc = traj._cell is not None
             if pbc:
-                cell_A = traj.cell / angstrom
+                cell_A = traj._cell / angstrom
                 # vol_A3 = traj.volume / angstrom**3
                 # vtens_eV = traj.vtens / electronvolt
                 # stresses_eVA3 = vtens_eV / vol_A3
@@ -508,6 +508,7 @@ class Rounds(ABC):
         steps,
         plot=True,
         KEY=42,
+        sp0: SystemParams | None = None,
     ):
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
@@ -525,28 +526,26 @@ class Rounds(ABC):
         r_cut = md_engine.static_trajectory_info.r_cut
         z_array = md_engine.static_trajectory_info.atomic_numbers
 
-        # sp: SystemParams | None = None
-        tis: TrajectoryInfo | None = None
+        if sp0 is None:
+            tis: TrajectoryInfo | None = None
 
-        # also get smaples form init round
-        for ri, ti in self.iter(start=0, num=2, ignore_invalid=True):
-            # sp0 = ti.ti.sp
+            # also get smaples form init round
+            for ri, ti in self.iter(start=0, num=2, ignore_invalid=True):
+                # sp0 = ti.ti.sp
+                if tis is None:
+                    tis = ti.ti
+                else:
+                    assert tis is not None
+                    tis += ti.ti
+
             if tis is None:
-                tis = ti.ti
-            else:
-                assert tis is not None
-                tis += ti.ti
-
-        if tis is None:
-            tis = TrajectoryInfo(
-                positions=md_engine.sp.coordinates, cell=md_engine.sp.cell
-            )
-
-        #     sp = tis.sp
-        # else:  # no provious round available
-        #     sp = md_engine.sp
-
-        # sp = sp.batch()
+                tis = TrajectoryInfo(
+                    _positions=md_engine.sp.coordinates, _cell=md_engine.sp.cell
+                )
+        else:
+            assert sp0.shape[0] == len(
+                biases
+            ), f"The number of initials cvs provided {sp.shape[0]} does not correspond to the number of biases {len(biases)}"
 
         for i, bias in enumerate(biases):
             path_name = self.path(r=self.round, i=i)
@@ -595,8 +594,8 @@ class Rounds(ABC):
                 bias = Bias.load(inputs[0].filepath)
 
                 if st.equilibration is not None:
-                    if traj.t is not None:
-                        traj = traj[traj.t > st.equilibration]
+                    if traj._t is not None:
+                        traj = traj[traj._t > st.equilibration]
 
                 cvs = traj.CV
                 if cvs is None:
@@ -608,35 +607,45 @@ class Rounds(ABC):
 
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
-            if tis.shape > 1:  # type: ignore
-                assert tis is not None
-                if tis.cv is not None:
-                    bs, _ = bias.compute_from_cv(cvs=tis.CV)
+            if sp0 is None:
+
+                if tis.shape > 1:  # type: ignore
+                    assert tis is not None
+
+                    # compensate for bias of current simulation
+                    if tis.cv is not None:
+                        bs, _ = bias.compute_from_cv(cvs=tis.CV)
+                    else:
+                        sp = tis.sp
+
+                        nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                        bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
+
+                    # compensate for bias of previous
+                    bs += tis.e_pot
+
+                    probs = jnp.exp(
+                        -bs / (md_engine.static_trajectory_info.T * boltzmann)
+                    )
+                    probs = probs / jnp.sum(probs)
+
+                    KEY, k = jax.random.split(KEY, 2)
+
+                    index = jax.random.choice(
+                        a=tis.shape,  # type: ignore
+                        key=k,
+                        p=probs,
+                    )
+
+                    spi = tis[index].sp
+
                 else:
-                    sp = tis.sp
-
-                    nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                    bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
-                probs = jnp.exp(-bs / (md_engine.static_trajectory_info.T * boltzmann))
-                probs = probs / jnp.linalg.norm(probs)
-
-                # print(f" {probs.shape},  {tis._size},  {tis.CV.shape}  ")
-
-                KEY, k = jax.random.split(KEY, 2)
-
-                index = jax.random.choice(
-                    a=tis.shape,  # type: ignore
-                    key=k,
-                    p=probs,
-                )
-
-                sp0 = tis[index].sp
-
+                    spi = tis[0].sp
             else:
-                sp0 = tis.sp
+                spi = sp0[i]
 
             future = run(
-                sp=sp0,  # type: ignore
+                sp=spi,  # type: ignore
                 inputs=[File(common_md_name), File(b_name)],
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),

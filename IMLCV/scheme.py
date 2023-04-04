@@ -120,14 +120,21 @@ class Scheme:
         update_metric=False,
         n=4,
         samples_per_bin=500,
+        init_max_grad=None,
+        max_grad=None,
     ):
 
         if init != 0:
+
+            self.md.static_trajectory_info.max_grad = init_max_grad
             self.grid_umbrella(steps=init, n=n, k=K)
             self.rounds.invalidate_data()
+            self.md.static_trajectory_info.max_grad = max_grad
             self.rounds.add_round_from_md(self.md)
+        else:
+            self.md.static_trajectory_info.max_grad = max_grad
 
-        for r in range(rnds):
+        for _ in range(rnds):
             self.grid_umbrella(steps=steps, n=n, k=K)
 
             if update_metric:

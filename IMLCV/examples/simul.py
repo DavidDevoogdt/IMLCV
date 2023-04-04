@@ -19,11 +19,17 @@ if __name__ == "__main__":
         "--cv", type=str, choices=["cell_vec", "soap_dist"], required=True
     )
     CsPbI3.add_argument("--input_atoms", nargs="+", type=str, default=None)
-    CsPbI3.add_argument("--input_atoms", action="store_true")
+    CsPbI3.add_argument("--project", action="store_true")
 
     ala = subparsers.add_parser("alanine_dipeptide")
-    ala.add_argument("--unit_cells", nargs="+", type=int)
-    ala.add_argument("--cv", type=str, choices=["backbone_dihedrals", "soap_dist"])
+    ala.add_argument(
+        "--cv", type=str, choices=["backbone_dihedrals", "soap_dist", "soap_lda"]
+    )
+    ala.add_argument(
+        "--kernel_type", choices=["rematch", "average", "none"], default="rematch"
+    )
+    ala.add_argument("--kernel_LDA", action="store_true")
+    ala.add_argument("--arithmic", action="store_true")
     ala.add_argument("--project", action="store_true")
 
     group = parser.add_argument_group("simulation")
@@ -40,6 +46,18 @@ if __name__ == "__main__":
         type=float,
         default=2.0,
         help="force constant of umbrella in [kjmol]. Value is corrected by CV domain and number of umbrellas: K = k/[ (x_0-x_1)/2n  **2",
+    )
+    group.add_argument(
+        "--init_max_grad",
+        type=float,
+        default=150,
+        help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol/Ang",
+    )
+    group.add_argument(
+        "--max_grad",
+        type=float,
+        default=500,
+        help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol/Ang",
     )
 
     group.add_argument("-c", "--cont", action="store_true")
@@ -64,24 +82,37 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.folder is None:
-        args.folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.system
+        folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.system
     else:
-        args.folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.folder
+        folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.folder
 
     if args.cont:
         assert args.folder.exists()
         args.n_steps_init = 0
     else:
-        assert (
-            not args.folder.exists()
-        ), "this path already exists, please provide name with --folder"
+        # look for first avaialble folder
+        i = 0
+        while True:
+            p = folder.parent / (f"{folder.name}_{i:0>3}")
+            if p.exists():
+                i += 1
+            else:
+                break
 
-    # if args.sys=="CsPbI3":
+        if not p.exists():
+            p.mkdir(parents=True)
+        folder = p
+
+    args.folder = folder
+
+    print(folder / "cmd.txt")
+    with open(folder / "cmd.txt", "w") as f:
+        f.write(f"{args}")
 
     def app(args):
         print("loading mdoules")
 
-        from molmod.units import kjmol
+        from molmod.units import angstrom, kjmol
 
         from configs.config_general import config
         from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
@@ -105,8 +136,15 @@ if __name__ == "__main__":
 
         print("Loading system")
 
-        if args.system == "ala":
-            engine = alanine_dipeptide_yaff(cv=args.cv)
+        if args.system == "alanine_dipeptide":
+
+            engine = alanine_dipeptide_yaff(
+                cv=args.cv,
+                kernel=args.kernel_LDA,
+                harmonic=not args.arithmic,
+                folder=args.folder / "LDA",
+                kernel_type=args.kernel_type,
+            )
 
         elif args.system == "CsPbI3":
             engine = CsPbI3(
@@ -128,6 +166,8 @@ if __name__ == "__main__":
             init=args.n_steps_init,
             steps=args.n_steps,
             samples_per_bin=args.samples_per_bin,
+            init_max_grad=args.init_max_grad * kjmol / angstrom,
+            max_grad=args.max_grad * kjmol / angstrom,
         )
 
     if args.bootstrap:
