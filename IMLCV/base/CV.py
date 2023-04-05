@@ -1181,7 +1181,6 @@ class NeighbourList:
 
         return bools, p
 
-
     @staticmethod
     @jit
     def match_kernel(

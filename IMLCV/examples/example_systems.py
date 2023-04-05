@@ -45,8 +45,8 @@ def get_lda_cv(
     folder,
     mde: MDEngine,
     descriptor: CvFlow,
-    n_steps=2000,
-    n=400,
+    n_steps=500,
+    n=100,
     kernel=False,
     harmonic=True,
     kernel_type="rematch",
@@ -57,14 +57,17 @@ def get_lda_cv(
 
     assert refs.batched and refs.shape[0] == 2, "revise code for more than 2 refs"
 
-    pre_round = Rounds(folder=folder)
-    pre_round.add_round_from_md(mde)
+    if folder.exists():
+        pre_round = Rounds(folder=folder, new_folder=False)
+    else:
+        pre_round = Rounds(folder=folder)
+        pre_round.add_round_from_md(mde)
 
-    biases = []
-    for _ in refs:
-        biases.append(NoneBias(cvs=NoneCV()))
+        biases = []
+        for _ in refs:
+            biases.append(NoneBias(cvs=NoneCV()))
 
-    pre_round.run_par(biases=biases, steps=n_steps, sp0=refs)
+        pre_round.run_par(biases=biases, steps=n_steps, sp0=refs)
 
     phase_sps = []
     phase_nls = []
@@ -77,6 +80,10 @@ def get_lda_cv(
         nli = spi.get_neighbour_list(**nl_kwargs)
 
         cvi = descriptor.compute_cv_flow(spi, nli)
+
+        print(cvi)
+        print(nli)
+        print(spi)
 
         phase_sps.append(spi)
         phase_cvs.append(cvi)
@@ -195,6 +202,10 @@ def get_lda_cv(
     mu = mu[~exclude]
     mu_i = mu_i[:, ~exclude]
     cvs = cvs[:, :, ~exclude]
+
+    print(cvs)
+    print(mu_i)
+
 
     if not materialize:
 
@@ -516,7 +527,7 @@ def mil53_yaff():
     return yaffmd
 
 
-def CsPbI3(cv, unit_cells, input_atoms=None, project=False):
+def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_steps=500):
 
     base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
 
@@ -581,6 +592,24 @@ def CsPbI3(cv, unit_cells, input_atoms=None, project=False):
     )
 
     from IMLCV.base.CV import CvFlow
+
+    if cv == "cell_vec":
+        r_cut = None
+    else:
+        r_cut = 5 * angstrom
+
+    tic = StaticTrajectoryInfo(
+        write_step=1,
+        T=300 * units.kelvin,
+        P=1.0 * units.bar,
+        timestep=2.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+        timecon_baro=500.0 * units.femtosecond,
+        atomic_numbers=energy.atoms.get_atomic_numbers(),
+        equilibration=0 * units.femtosecond,
+        screen_log=1,
+        r_cut=r_cut,
+    )
 
     if cv == "cell_vec":
 
@@ -662,21 +691,69 @@ def CsPbI3(cv, unit_cells, input_atoms=None, project=False):
         o = cv.compute_cv(refs, refs_nl)[0].cv
         assert jnp.allclose(jnp.array([[1.0, 0.0], [0.0, 0.0]]) - o, 0.0)
 
+    elif cv == "soap_lda":
+
+        r_cut = 5 * angstrom
+
+        z_arr = None
+        refs: SystemParams | None = None
+
+        for a in atoms:
+            if z_arr is None:
+                z_arr = a.get_atomic_numbers()
+                refs = SystemParams(
+                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                )
+
+            else:
+                assert (z_arr == a.get_atomic_numbers()).all()
+                refs += SystemParams(
+                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                )
+
+        assert refs.batched == True
+
+        bias = NoneBias(cvs=NoneCV())
+        tic = StaticTrajectoryInfo(
+            write_step=1,
+            T=300 * units.kelvin,
+            P=1.0 * units.bar,
+            timestep=2.0 * units.femtosecond,
+            timecon_thermo=100.0 * units.femtosecond,
+            timecon_baro=500.0 * units.femtosecond,
+            atomic_numbers=energy.atoms.get_atomic_numbers(),
+            equilibration=0 * units.femtosecond,
+            screen_log=1,
+            r_cut=r_cut,
+        )
+
+        yaffmd = YaffEngine(
+            energy=energy,
+            bias=bias,
+            static_trajectory_info=tic,
+        )
+
+        sbd = sb_descriptor(
+            r_cut=r_cut,
+            n_max=3,
+            l_max=3,
+        )
+
+        cv = get_lda_cv(
+            refs,
+            1,
+            folder=folder,
+            mde=yaffmd,
+            descriptor=sbd,
+            n_steps=lda_steps,
+            r_cut=tic.r_cut,
+            z_array=tic.atomic_numbers,
+        )
+
     else:
         raise NotImplementedError(f"cv {cv} unrecognized for CsPbI3,")
 
     bias = NoneBias(cvs=cv)
-    tic = StaticTrajectoryInfo(
-        write_step=1,
-        T=300 * units.kelvin,
-        P=1.0 * units.bar,
-        timestep=2.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=500.0 * units.femtosecond,
-        atomic_numbers=energy.atoms.get_atomic_numbers(),
-        equilibration=0 * units.femtosecond,
-        screen_log=1,
-    )
 
     yaffmd = YaffEngine(
         energy=energy,

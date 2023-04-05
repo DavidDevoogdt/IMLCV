@@ -16,15 +16,17 @@ if __name__ == "__main__":
 
     CsPbI3.add_argument("--unit_cells", nargs="+", type=int)
     CsPbI3.add_argument(
-        "--cv", type=str, choices=["cell_vec", "soap_dist"], required=True
+        "--cv", type=str, choices=["cell_vec", "soap_dist", "soap_lda"], required=True
     )
     CsPbI3.add_argument("--input_atoms", nargs="+", type=str, default=None)
     CsPbI3.add_argument("--project", action="store_true")
+    CsPbI3.add_argument("--lda_steps", type=int, default=500)
 
     ala = subparsers.add_parser("alanine_dipeptide")
     ala.add_argument(
         "--cv", type=str, choices=["backbone_dihedrals", "soap_dist", "soap_lda"]
     )
+    ala.add_argument("--lda_steps", type=int, default=500)
     ala.add_argument(
         "--kernel_type", choices=["rematch", "average", "none"], default="rematch"
     )
@@ -87,7 +89,7 @@ if __name__ == "__main__":
         folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.folder
 
     if args.cont:
-        assert args.folder.exists()
+        assert folder.exists()
         args.n_steps_init = 0
     else:
         # look for first avaialble folder
@@ -144,11 +146,16 @@ if __name__ == "__main__":
                 harmonic=not args.arithmic,
                 folder=args.folder / "LDA",
                 kernel_type=args.kernel_type,
+                lda_steps=args.lda_steps,
             )
 
         elif args.system == "CsPbI3":
             engine = CsPbI3(
-                cv=args.cv, unit_cells=args.unit_cells, input_atoms=args.input_atoms
+                cv=args.cv,
+                unit_cells=args.unit_cells,
+                input_atoms=args.input_atoms,
+                lda_steps=args.lda_steps,
+                folder=args.folder / "LDA",
             )
 
         if not args.cont:

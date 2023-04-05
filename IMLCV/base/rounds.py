@@ -644,6 +644,9 @@ class Rounds(ABC):
             else:
                 spi = sp0[i]
 
+            spi = spi.unbatch()
+            print(f"settin {spi=}")
+
             future = run(
                 sp=spi,  # type: ignore
                 inputs=[File(common_md_name), File(b_name)],

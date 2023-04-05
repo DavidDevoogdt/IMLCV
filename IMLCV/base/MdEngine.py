@@ -482,6 +482,7 @@ class MDEngine(ABC):
         "static_trajectory_info",
         "trajectory_file",
         # "sp",
+        # "sp",
     ]
 
     def __init__(
@@ -562,8 +563,12 @@ class MDEngine(ABC):
         with open(file, "rb") as f:
             self = dill.load(f)
 
+        print(f"Loading MD engine")
         # replace and add kwargs
         for key in kwargs.keys():
+
+            print(f"setting {key}={kwargs[key]}")
+
             self.__setattr__(key, kwargs[key])
 
         return self
@@ -582,10 +587,10 @@ class MDEngine(ABC):
         """
 
         print(f"running for {int(steps)} steps!")
-        # try:
-        self._run(int(steps))
-        # except Exception as err:
-        #     print(f"The calculator finished early with error {err=},{type(err)=}")
+        try:
+            self._run(int(steps))
+        except Exception as err:
+            print(f"The calculator finished early with error {err=},{type(err)=}")
 
         if self.step == 1:
             raise "the calculator crashed directly, make sure the system is correctly initialized"
