@@ -9,7 +9,7 @@ import jax
 # from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
-
+import jax
 import yaff
 from IMLCV.base.rounds import Rounds
 
@@ -47,12 +47,12 @@ def get_lda_cv(
     mde: MDEngine,
     descriptor: CvFlow,
     n_steps=500,
-    n=100,
+    # n=400,
     kernel=False,
     harmonic=True,
     kernel_type="rematch",
     materialize=False,
-    shrinkage=0.0,
+    shrinkage=1e-3,
     **nl_kwargs,
 ) -> CollectiveVariable:
 
@@ -75,17 +75,20 @@ def get_lda_cv(
     phase_cvs = []
 
     for ri, ti in pre_round.iter():
-        traj_info = ti.ti[:: n_steps // n]
+        traj_info = ti.ti
         spi = traj_info.sp
         # cvi = traj_info.CV
         nli = spi.get_neighbour_list(**nl_kwargs)
         cvi = descriptor.compute_cv_flow(spi, nli)
 
+        normed_sorted_cvi = nli.l2_z_sort(cvi.cv, norm=True)
+
         phase_sps.append(spi)
-        phase_cvs.append(cvi)
+        phase_cvs.append(normed_sorted_cvi)
         phase_nls.append(nli)
 
     if kernel:
+        raise NotImplementedError("todo: select subset to sample kernels from")
 
         @jit
         def kernel_matrix(p0, p1, nl0, nl1):
@@ -94,7 +97,7 @@ def get_lda_cv(
                 @NeighbourList.vmap_x_nl
                 def __f(p1, nl1):
                     return NeighbourList.match_kernel(
-                        p0.cv, p1.cv, nl0, nl1, matching=kernel_type
+                        p0, p1, nl0, nl1, matching=kernel_type
                     )
 
                 return __f(p1, nl1)
@@ -182,11 +185,9 @@ def get_lda_cv(
         return cv0
 
     lj = jnp.array([x.shape[0] for x in phase_cvs])
-    cvs = jnp.array([cvs.cv for cvs in phase_cvs])
+    cvs = jnp.array([cvs for cvs in phase_cvs])
 
     cvs = jnp.reshape(cvs, cvs.shape[0:2] + (-1,))
-
-    lj = jnp.array([x.shape[0] for x in phase_cvs])
 
     mu_i = vmap(lambda x, y: jnp.sum(x, axis=0) / y, in_axes=(0, 0))(cvs, lj)
     mu = jnp.sum(vmap(lambda x, y: x * y, in_axes=(0, 0))(mu_i, lj), axis=0) / jnp.sum(
@@ -205,7 +206,7 @@ def get_lda_cv(
     if not materialize:
 
         W_ila = vmap(lambda cvs, mu_i: vmap(lambda cvs: cvs - mu_i)(cvs))(cvs, mu_i)
-        B_ila = vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu - mu_i))(lj, mu_i)
+        B_ia = vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu - mu_i))(lj, mu_i)
     else:
         Sigma_W2_i = vmap(
             lambda cvs, mu_i: jnp.sum(
@@ -222,6 +223,46 @@ def get_lda_cv(
         )(lj, mu_i)
         Sigma_B2 = jnp.sum(Sigma_B2_i, axis=0)
 
+    # make S_w low rank with implicit SVD
+
+    # manifold = pymanopt.manifolds.fixed_rank.FixedRankEmbedded(
+    #     m=mu.shape[0], n=mu.shape[0], k=300
+    # )
+
+    # @pymanopt.function.jax(manifold)
+    # @jit
+    # def cost(u, s, v):
+    #     a = jnp.einsum("ilt,ils,  jks,jkt ", W_ila, W_ila, W_ila, W_ila)
+    #     b = jnp.einsum("ilt,ils,sp,p,pt", W_ila, W_ila, u, s, v)
+    #     c = jnp.einsum("i,i", s, s)
+    #     return a - 2 * b + c
+
+    # optimizer = pymanopt.optimizers.ConjugateGradient()
+    # problem = pymanopt.Problem(manifold, cost)
+    # result = optimizer.run(problem)
+    # U_w, s_w, Vt_w = result.point
+    # # Sigma_W2 - jnp.einsum("ij,j,jk->ik",U_w,s_w,Vt_w)
+
+    # # make S_b low rank with implicit SVD
+
+    # manifold = pymanopt.manifolds.fixed_rank.FixedRankEmbedded(
+    #     m=mu.shape[0], n=mu.shape[0], k=300
+    # )
+
+    # @pymanopt.function.jax(manifold)
+    # @jit
+    # def cost(u, s, v):
+    #     a = jnp.einsum("it,is,  js,jt ", B_ia, B_ia, B_ia, B_ia)
+    #     b = jnp.einsum("it,is,sp,p,pt", B_ia, B_ia, u, s, v)
+    #     c = jnp.einsum("i,i", s, s)
+    #     return a - 2 * b + c
+
+    # optimizer = pymanopt.optimizers.ConjugateGradient()
+    # problem = pymanopt.Problem(manifold, cost)
+    # result = optimizer.run(problem)
+    # U_b, s_b, Vt_b = result.point
+    # Sigma_B2 - jnp.einsum("ij,j,jk->ik",U_b,s_b,Vt_b)
+
     manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=num_kfda)
 
     @pymanopt.function.jax(manifold)
@@ -232,7 +273,7 @@ def get_lda_cv(
             b = jnp.trace(x.T @ Sigma_B2 @ x)
         else:
             a = jnp.einsum("ab, ija,ijc, cb ", x, W_ila, W_ila, x)
-            b = jnp.einsum("ab, ia,ic, cb ", x, B_ila, B_ila, x)
+            b = jnp.einsum("ab, ia,ic, cb ", x, B_ia, B_ia, x)
 
         if harmonic:
             return ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
@@ -253,23 +294,26 @@ def get_lda_cv(
     # pip install pymanopt@git+https://github.com/pymanopt/pymanopt.git
 
     # make cv
-    x = phase_sps[0] + phase_sps[1]
-    x_nl = x.get_neighbour_list(**nl_kwargs)
-    x_cv = descriptor.compute_cv_flow(x, x_nl)
+    # x = phase_sps[0] + phase_sps[1]
+    # x_nl = x.get_neighbour_list(**nl_kwargs)
+    # x_cv = descriptor.compute_cv_flow(x, x_nl)
 
     scale_factor = vmap(lambda x: result.point.T @ x)(mu_i)
 
-    @CvTrans.from_cv_function
-    def _lda_cv(cv: CV, _):
-        cv_unscaled = alpha.T @ jnp.reshape(cv.cv, (-1,))
+    @CvFlow.from_function
+    def _lda_cv(sp: SystemParams, nl: NeighbourList):
+        cv = descriptor.compute_cv_flow(sp, nl)
+        p = nl.l2_z_sort(cv.cv, norm=True)
+
+        cv_unscaled = alpha.T @ jnp.reshape(p, (-1,))
         cv_scaled = (cv_unscaled - scale_factor[0, :]) / (
             scale_factor[1, :] - scale_factor[0, :]
         )
 
-        return CV(cv=cv_scaled)
+        return cv_scaled
 
     cv0 = CollectiveVariable(
-        f=descriptor * _lda_cv,
+        f=_lda_cv,
         metric=CvMetric(
             periodicities=[False] * num_kfda,
             bounding_box=jnp.repeat(jnp.array([[-0.1, 1.1]]), num_kfda, axis=0),
@@ -277,8 +321,8 @@ def get_lda_cv(
     )
 
     # # # check if close to 1
-    # cvs0, _ = cv0.compute_cv(phase_sps[0], phase_nls[0])
-    # cvs1, _ = cv0.compute_cv(phase_sps[1], phase_nls[1])
+    cvs0, _ = cv0.compute_cv(phase_sps[0], phase_nls[0])
+    cvs1, _ = cv0.compute_cv(phase_sps[1], phase_nls[1])
     return cv0
 
 
@@ -287,6 +331,7 @@ def alanine_dipeptide_yaff(
     cv="backbone_dihedrals",
     k=5 * kjmol,
     project=True,
+    lda_steps=500,
     num_kfda=1,
     kernel=True,
     harmonic=True,
@@ -438,10 +483,10 @@ def alanine_dipeptide_yaff(
             folder=folder,
             mde=mde,
             descriptor=sb,
-            n_steps=2000,
-            n=200,
+            # n=200,
             kernel=kernel,
             harmonic=harmonic,
+            n_steps=lda_steps,
             r_cut=r_cut,
             z_array=tic.atomic_numbers,
             kernel_type=kernel_type,
@@ -760,6 +805,16 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
 
 
 if __name__ == "__main__":
+    # sys = CsPbI3(
+    #     unit_cells=[1, 1, 1],
+    #     cv="soap_lda",
+    #     folder=ROOT_DIR
+    #     / "IMLCV"
+    #     / "examples"
+    #     / "output"
+    #     / "CsPbI3_soap_lda_1x1x1_003"
+    #     / "LDA",
+    # )
 
     # sys = CsPbI3(
     #     unit_cells=[2, 2, 2],
@@ -773,19 +828,19 @@ if __name__ == "__main__":
     # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
     from configs.config_general import config
 
-    folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap"
+    folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap3"
     config(path_internal=folder / "parsl")
     sys = alanine_dipeptide_yaff(
-        cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder
+        cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder / "LDA"
     )
 
     sys.run(100)
 
-    s = Scheme(
-        sys,
-        folder=folder,
-    )
+    # s = Scheme(
+    #     sys,
+    #     folder=folder,
+    # )
 
-    s.inner_loop(init=0, K=2 * kjmol, steps=2000)
+    # s.inner_loop(init=0, K=2 * kjmol, steps=2000)
 
     # sys.run(100)

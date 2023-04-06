@@ -52,7 +52,11 @@ if __name__ == "__main__":
     group.add_argument(
         "--init_max_grad",
         type=float,
+<<<<<<< HEAD
         default=500,
+=======
+        default=300,
+>>>>>>> a8a9b8d8e9c2dd9b5327e57abe5609e8ebe3b8ca
         help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol/Ang",
     )
     group.add_argument(
