@@ -833,16 +833,16 @@ class CompositeBias(Bias):
 
     def _compute(self, cvs, *args):
 
-        e = jnp.array(
-            [
-                self.biases[i]._compute(
-                    cvs, *args[self.args_shape[i] : self.args_shape[i + 1]]
-                )
-                for i in range(len(self.biases))
-            ]
+        return self.fun(
+            jnp.array(
+                [
+                    self.biases[i]._compute(
+                        cvs, *args[self.args_shape[i] : self.args_shape[i + 1]]
+                    )
+                    for i in range(len(self.biases))
+                ]
+            )
         )
-
-        return self.fun(e)
 
     def finalize(self):
         for b in self.biases:
@@ -869,7 +869,7 @@ class BiasF(Bias):
 
     def __init__(self, cvs: CollectiveVariable, g=None):
 
-        self.g = g if (g is not None) else lambda _: jnp.array(0.0)
+        self.g = g if (g is not None) else lambda _: jnp.zeros((cvs.n,))
         self.g = jit(self.g)
         super().__init__(cvs, start=None, step=None)
 
@@ -890,7 +890,9 @@ class NoneBias(BiasF):
 class HarmonicBias(Bias):
     """Harmonic bias potential centered arround q0 with force constant k."""
 
-    def __init__(self, cvs: CollectiveVariable, q0: CV, k):
+    def __init__(
+        self, cvs: CollectiveVariable, q0: CV, k, k_max: Array | float | None = None
+    ):
         """generate harmonic potentia;
 
         Args:
@@ -905,13 +907,46 @@ class HarmonicBias(Bias):
         else:
             assert k.shape == q0.cv.shape
 
+        if k_max is not None:
+            if isinstance(k_max, float):
+                k_max = jnp.zeros_like(q0.cv) + k_max
+            else:
+                assert k_max.shape == q0.cv.shape
+
         assert np.all(k > 0)
         self.k = jnp.array(k)
         self.q0 = q0
 
+        self.k_max = k_max
+        if k_max is not None:
+            assert np.all(k_max > 0)
+            self.r0 = k_max / k
+            self.y0 = jnp.einsum("i,i,i", k, self.r0, self.r0) / 2
+
     def _compute(self, cvs: CV, *args):
+
         r = self.collective_variable.metric.difference(cvs, self.q0)
-        return jnp.einsum("i,i,i", self.k, r, r) / 2
+
+        def parabola(r):
+            return jnp.einsum("i,i,i", self.k, r, r) / 2
+
+        if self.k_max is None:
+            return parabola(r)
+
+        return jnp.where(
+            jnp.linalg.norm(r) < self.r0,
+            parabola(r),
+            jnp.sqrt(
+                jnp.einsum(
+                    "i,i,i,i",
+                    self.k_max,
+                    self.k_max,
+                    jnp.abs(r) - self.r0,
+                    jnp.abs(r) - self.r0,
+                )
+            )
+            + self.y0,
+        )
 
     def get_args(self):
         return []

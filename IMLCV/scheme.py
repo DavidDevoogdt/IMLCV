@@ -84,7 +84,7 @@ class Scheme:
         fesBias = obs.fes_bias(**kwargs)
         self.md = self.md.new_bias(fesBias)
 
-    def grid_umbrella(self, steps=1e4, k=None, n=8):
+    def grid_umbrella(self, steps=1e4, k=None, n=8, max_grad=None):
 
         m = self.md.bias.collective_variable.metric
 
@@ -100,6 +100,7 @@ class Scheme:
                     self.md.bias.collective_variable,
                     CV(cv=jnp.array(cv)),
                     k,
+                    k_max=max_grad,
                 )
                 for cv in itertools.product(*grid)
             ],
@@ -126,16 +127,16 @@ class Scheme:
 
         if init != 0:
 
-            self.md.static_trajectory_info.max_grad = init_max_grad
-            self.grid_umbrella(steps=init, n=n, k=K)
+            # self.md.static_trajectory_info.max_grad = init_max_grad
+            self.grid_umbrella(steps=init, n=n, k=K, max_grad=init_max_grad)
             self.rounds.invalidate_data()
-            self.md.static_trajectory_info.max_grad = max_grad
+            # self.md.static_trajectory_info.max_grad = max_grad
             self.rounds.add_round_from_md(self.md)
         else:
             self.md.static_trajectory_info.max_grad = max_grad
 
         for _ in range(rnds):
-            self.grid_umbrella(steps=steps, n=n, k=K)
+            self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad)
 
             if update_metric:
                 self.new_metric(plot=True)

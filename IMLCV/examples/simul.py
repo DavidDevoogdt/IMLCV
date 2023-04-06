@@ -52,14 +52,14 @@ if __name__ == "__main__":
     group.add_argument(
         "--init_max_grad",
         type=float,
-        default=300,
-        help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol/Ang",
+        default=100,
+        help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol",
     )
     group.add_argument(
         "--max_grad",
         type=float,
-        default=500,
-        help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol/Ang",
+        default=100,
+        help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol",
     )
 
     group.add_argument("-c", "--cont", action="store_true")
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     def app(args):
         print("loading mdoules")
 
-        from molmod.units import angstrom, kjmol
+        from molmod.units import kjmol
 
         from configs.config_general import config
         from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
@@ -173,8 +173,8 @@ if __name__ == "__main__":
             init=args.n_steps_init,
             steps=args.n_steps,
             samples_per_bin=args.samples_per_bin,
-            init_max_grad=args.init_max_grad * kjmol / angstrom,
-            max_grad=args.max_grad * kjmol / angstrom,
+            init_max_grad=args.init_max_grad * kjmol,
+            max_grad=args.max_grad * kjmol,
         )
 
     if args.bootstrap:

@@ -8,7 +8,7 @@ from jax import jit, vmap
 # from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
-import jax
+
 import yaff
 from IMLCV.base.rounds import Rounds
 
@@ -23,7 +23,6 @@ from IMLCV.base.CV import (
     CollectiveVariable,
     CvFlow,
     CvMetric,
-    CvTrans,
     NeighbourList,
     NoneCV,
     SystemParams,
@@ -33,7 +32,6 @@ from IMLCV.base.CV import (
     sb_descriptor,
 )
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
-from IMLCV.scheme import Scheme
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 # keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
@@ -185,7 +183,7 @@ def get_lda_cv(
         return cv0
 
     lj = jnp.array([x.shape[0] for x in phase_cvs])
-    cvs = jnp.array([cvs for cvs in phase_cvs])
+    cvs = jnp.array(list(phase_cvs))
 
     cvs = jnp.reshape(cvs, cvs.shape[0:2] + (-1,))
 
@@ -698,7 +696,7 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
                     coordinates=a.positions * angstrom, cell=a.cell * angstrom
                 )
 
-        assert refs.batched == True
+        assert refs.batched is True
 
         refs_nl = refs.get_neighbour_list(r_cut=r_cut, z_array=jnp.array(z_arr))
 
@@ -751,7 +749,7 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
                     coordinates=a.positions * angstrom, cell=a.cell * angstrom
                 )
 
-        assert refs.batched == True
+        assert refs.batched is True
 
         bias = NoneBias(cvs=NoneCV())
         tic = StaticTrajectoryInfo(

@@ -80,7 +80,7 @@ class StaticTrajectoryInfo:
     equilibration: float | None = None
     screen_log: int = 1000
 
-    max_grad: None | float = 200 * kjmol / angstrom
+    max_grad: float | None = 200 * kjmol / angstrom
 
     @property
     def masses(self):

@@ -264,7 +264,7 @@ class SystemParams:
 
             true_val = vmap(lambda a, b: func(a, b, i, j, k))(pos, index_j)
             false_val = jax.tree_map(
-                lambda a: jnp.zeros_like(a),
+                jnp.zeros_like,
                 true_val,
             )
 
@@ -304,26 +304,24 @@ class SystemParams:
 
                 return r[idx] < r_cut + r_skin, r[idx], atoms[idx], None, center_op
 
-            _, (r, atoms, indices) = (
+            _, (r, atoms, indices) = vmap(
                 vmap(
                     vmap(
-                        vmap(
-                            lambda i, j, k: _apply_g_inner(
-                                sp=sp_center,
-                                func=func,
-                                r_cut=jnp.inf,
-                                ijk=(i, j, k),
-                                exclude_self=False,
-                            ),
-                            in_axes=(0, None, None),
-                            out_axes=0,
+                        lambda i, j, k: _apply_g_inner(
+                            sp=sp_center,
+                            func=func,
+                            r_cut=jnp.inf,
+                            ijk=(i, j, k),
+                            exclude_self=False,
                         ),
-                        in_axes=(None, 0, None),
-                        out_axes=1,
+                        in_axes=(0, None, None),
+                        out_axes=0,
                     ),
-                    in_axes=(None, None, 0),
-                    out_axes=2,
-                )
+                    in_axes=(None, 0, None),
+                    out_axes=1,
+                ),
+                in_axes=(None, None, 0),
+                out_axes=2,
             )(bx, by, bz)
 
             r, atoms, indices = (
@@ -981,9 +979,7 @@ class NeighbourList:
             def get(bools):
                 def _red(bools):
                     val = jax.tree_map(
-                        lambda t, f: vmap(
-                            vmap(vmap(lambda x, y, z: jnp.where(x, y, z)))
-                        )(bools, t, f),
+                        lambda t, f: vmap(vmap(vmap(jnp.where)))(bools, t, f),
                         out_ijk,
                         out_ijk_f,
                     )
@@ -2878,7 +2874,7 @@ def test_neigh_pair():
         assert (k1 == k2).all()
         assert (index_j1 == index_j2).all()
         assert (index_k1 == index_k2).all()
-        assert (jnp.mean(((pair_dist1 - pair_dist2) / pair_dist1) ** 2)) ** 0.5 < 1e-7
+        assert jnp.mean(((pair_dist1 - pair_dist2) / pair_dist1) ** 2) ** 0.5 < 1e-7
 
     ## test 2: z split, resummations should yield orriginal result
 
