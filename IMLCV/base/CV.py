@@ -1182,7 +1182,6 @@ class NeighbourList:
         return bools, p
 
     @staticmethod
-    @jit
     def match_kernel(
         p1: Array,
         p2: Array,
@@ -1194,7 +1193,10 @@ class NeighbourList:
 
         # assert (nl1.z_unique == nl2.z_unique).all()
 
-        b, _ = nl1.split_z((), True)
+        if matching.lower() == "rematch" or matching.lower() == "average":
+            b, _ = nl1.split_z((), True)
+        elif matching.lower() == "norm":
+            b = jnp.ones_like(nl1.z_array)
 
         def sum_a(p1, p2):
             return jnp.tensordot(p1, jnp.moveaxis(p2, 0, -1), axes=p1.ndim - 1)
@@ -1212,13 +1214,13 @@ class NeighbourList:
 
         if matching.lower() == "average":
 
-            def _f(a, b, _nl1, _nl2):
+            def _f(p1, p2, nl1, nl2, n1, n2):
                 @vmap
                 def _p(bools, vals):
                     return jnp.sum(vals, axis=0) / jnp.sum(bools, axis=0)
 
-                a_z = _p(*_nl1.split_z(a))
-                b_z = _p(*_nl2.split_z(b))
+                a_z = _p(*nl1.split_z(p1))
+                b_z = _p(*nl2.split_z(p2))
 
                 out = sum_a(a_z, b_z)
 
@@ -1230,7 +1232,7 @@ class NeighbourList:
 
             alpha = 0.2
 
-            def _f(p1, p2, _nl1, _nl2):
+            def _f(p1, p2, nl1, nl2, n1, n2):
                 """
                 Computes the REMatch similarity between two structures A and B.
 
@@ -1241,7 +1243,7 @@ class NeighbourList:
                     float: REMatch similarity between the structures A and B.
                 """
 
-                local_kernel = _local_kernel(p1, p2, _nl1, _nl2)
+                local_kernel = _local_kernel(p1, p2, nl1, nl2)
 
                 def __gs(local_kernel):
 
@@ -1277,20 +1279,34 @@ class NeighbourList:
 
                 return vmap(_gs, in_axes=(0))(local_kernel)
 
+        elif matching.lower() == "norm":
+
+            def _f(p1, p2, nl1, nl2, norm1, norm2):
+                p1 = nl1.l2_z_sort(p1, norms=norm1)
+                p2 = nl2.l2_z_sort(p2, norms=norm2)
+                return jnp.diag(sum_a(p1, p2))
+
         elif matching.lower() == "best":
             raise
         elif matching.lower() == "none":
 
-            def _f(p1, p2, nl1, nl2):
-                return jnp.tensordot(p1, p2, axes=p1.ndim)
-
+            raise
         else:
             raise ValueError("unknown matching procedure")
 
-        out = _f(p1, p2, nl1, nl2)
+        def norm_p(val0):
+            norms = vmap(jnp.linalg.norm)(val0)
+            norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
+            val0 = jnp.einsum("i...,i->i...", val0, norms_inv)
+            return val0, norms
+
+        p1, n1 = norm_p(p1)
+        p2, n2 = norm_p(p2)
+
+        out = _f(p1, p2, nl1, nl2, n1, n2)
 
         if norm:
-            n2 = _f(p2, p2, nl2, nl2) * _f(p1, p1, nl1, nl1)
+            n2 = _f(p2, p2, nl2, nl2, n2, n2) * _f(p1, p1, nl1, nl1, n1, n1)
 
             n2_safe = jnp.where(n2 == 0, 1, n2)
             ni = jnp.where(n2 == 0, 0.0, 1 / jnp.sqrt(n2_safe))
@@ -1300,6 +1316,25 @@ class NeighbourList:
         out = jnp.sum(b * out) / jnp.sum(b)
 
         return out
+
+    def l2_z_sort(self, p, norms=None, norm=False):
+
+        if self.batched:
+            return self.vmap_x_nl(
+                lambda p, nl: nl.l2_z_sort(p, norms=norms, norm=norm)
+            )(p, self)
+
+        if norms is None:
+            norms = vmap(jnp.linalg.norm)(p)
+        if norm:
+            norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
+            p = jnp.einsum("i...,i->i...", p, norms_inv)
+
+        p_n = jnp.argsort(norms)
+        p = p[p_n, :]
+        z_array = self.z_array[p_n]
+        p_z = jnp.argsort(z_array)
+        return p[p_z, :]
 
 
 @jdc.pytree_dataclass

@@ -30,12 +30,7 @@ def legendre(x, n):
     return y
 
 
-def p_i(
-    sp: SystemParams,
-    nl: NeighbourList,
-    p,
-    r_cut,
-):
+def p_i(sp: SystemParams, nl: NeighbourList, p, r_cut):
     @NeighbourList.vmap_sp_nl
     def _p_i(sp: SystemParams, nl: NeighbourList, p):
         ps, pd = p
@@ -51,9 +46,7 @@ def p_i(
             split_z=True,
         )
 
-        norms = vmap(jnp.linalg.norm)(val0)
-        norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
-        return jnp.einsum("i...,i->i...", val0, norms_inv)
+        return val0
 
     return _p_i(sp, nl, p)
 
@@ -436,67 +429,71 @@ if __name__ == "__main__":
         nl3 = sp3.get_neighbour_list(r_cut=r_cut, z_array=z_array)
         return sp1, sp2, sp3, nl1, nl2, nl3
 
-    for cell in [False, True]:
-        for pp in [
-            p_inl_sb(
-                l_max=l_max,
-                n_max=n_max,
-                r_cut=r_cut,
-            ),
-            p_innl_soap(
-                l_max=l_max,
-                n_max=n_max,
-                r_cut=r_cut,
-                sigma_a=0.5,
-                r_delta=1.0,
-                num=50,
-            ),
-        ]:
+    for matching in ["norm", "rematch", "average"]:
 
-            sp1, sp2, sp3, nl1, nl2, nl3 = get_sps(with_cell=cell)
-
-            @jit
-            def f(sp, nl):
-
-                return p_i(
-                    sp=sp,
-                    nl=nl,
-                    p=pp,
+        for cell in [False, True]:
+            for pp in [
+                p_inl_sb(
+                    l_max=l_max,
+                    n_max=n_max,
                     r_cut=r_cut,
+                ),
+                p_innl_soap(
+                    l_max=l_max,
+                    n_max=n_max,
+                    r_cut=r_cut,
+                    sigma_a=0.5,
+                    r_delta=1.0,
+                    num=50,
+                ),
+            ]:
+
+                sp1, sp2, sp3, nl1, nl2, nl3 = get_sps(with_cell=cell)
+
+                @jit
+                def f(sp, nl):
+
+                    return p_i(
+                        sp=sp,
+                        nl=nl,
+                        p=pp,
+                        r_cut=r_cut,
+                    )
+
+                p1 = f(sp1, nl1)
+
+                @jit
+                def k(sp: SystemParams, nl: NeighbourList):
+
+                    return Kernel(p1, f(sp, nl), nl1, nl, matching=matching)
+
+                da = k(sp1, nl1)
+
+                from time import time_ns
+
+                before = time_ns()
+                with jax.debug_nans():
+                    dab = k(sp2, nl2)
+                after = time_ns()
+
+                dac = k(sp3, nl3)
+
+                print(
+                    f"{matching=} {cell=} {pp=} l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
                 )
 
-            a = f(sp1, nl1)
+                jk = jit(jacrev(k))
 
-            @jit
-            def k(sp: SystemParams, nl: NeighbourList):
-                return Kernel(a, f(sp, nl), nl1, nl, matching="REMatch")
+                # with jax.disable_jit():
+                #     with jax.debug_nans():
+                jac_da = jk(sp1, nl1)
 
-            da = k(sp1, nl1)
+                before = time_ns()
+                jac_dab = jk(sp2, nl2)
+                after = time_ns()
 
-            from time import time_ns
+                jac_dac = jk(sp3, nl3)
 
-            before = time_ns()
-            dab = k(sp2, nl2)
-            after = time_ns()
-
-            dac = k(sp3, nl3)
-
-            print(
-                f"REMatch l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
-            )
-
-            jk = jit(jacrev(k))
-
-            # with jax.disable_jit():
-            #     with jax.debug_nans():
-            jac_da = jk(sp1, nl1)
-
-            before = time_ns()
-            jac_dab = jk(sp2, nl2)
-            after = time_ns()
-
-            jac_dac = jk(sp3, nl3)
-
-            print(
-                f"REMatch l_max {l_max}  n_max {l_max}  || d kernel(orig,rot)  / d sp )={ jnp.linalg.norm(jac_dab.coordinates)  },  || d kernel(orig,rand)  / d sp )= { jnp.linalg.norm(jac_dac.coordinates)  }, evalutation time [ms] { (after-before)/ 10.0**6  }   "
-            )
+                print(
+                    f"{matching}  {cell=} {pp=} l_max {l_max}  n_max {l_max}  || d kernel(orig,rot)  / d sp )={ jnp.linalg.norm(jac_dab.coordinates)  },  || d kernel(orig,rand)  / d sp )= { jnp.linalg.norm(jac_dac.coordinates)  }, evalutation time [ms] { (after-before)/ 10.0**6  }   "
+                )

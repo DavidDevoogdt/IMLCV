@@ -696,14 +696,14 @@ class MDEngine(ABC):
 
             norms = jnp.max(ns)
 
-            if (fact := norms / self.static_trajectory_info.max_grad) > 1:
-                ener = EnergyResult(
-                    ener.energy / fact,
-                    ener.gpos / fact,
-                    ener.vtens / fact if ener.vtens is not None else None,
-                )
+            # if (fact := norms / self.static_trajectory_info.max_grad) > 1:
+            #     ener = EnergyResult(
+            #         ener.energy,
+            #         ener.gpos / fact,
+            #         ener.vtens if ener.vtens is not None else None,
+            #     )
 
-                print(f"clipped, fact={fact}")
+            #     print(f"clipped, fact={fact}")
 
         return cv, ener
 
