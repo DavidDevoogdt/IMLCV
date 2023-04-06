@@ -814,7 +814,8 @@ def test_cv_discovery(
     from pathlib import Path
 
     if Path(name).exists():
-        scheme0 = Scheme.from_rounds(folder=Path(name))
+        rnds = Rounds(folder=Path(name))
+        scheme0 = Scheme.from_rounds(rnds)
 
     else:
         scheme0 = Scheme(md=md, folder=name)

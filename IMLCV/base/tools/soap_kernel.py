@@ -51,9 +51,9 @@ def p_i(
             split_z=True,
         )
 
-        norms = vmap(jnp.linalg.norm)(val0)
-        norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
-        return jnp.einsum("i...,i->i...", val0, norms_inv)
+        # norms = vmap(jnp.linalg.norm)(val0)
+        # norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
+        # return jnp.einsum("i...,i->i...", val0, norms_inv)
 
     return _p_i(sp, nl, p)
 

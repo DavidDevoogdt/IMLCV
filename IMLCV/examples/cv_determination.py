@@ -9,6 +9,7 @@ keras: KerasAPI = import_module("tensorflow.keras")
 
 from configs.config_general import ROOT_DIR, config
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
+from IMLCV.base.rounds import Rounds
 
 
 def test_cv_discovery(
@@ -18,7 +19,8 @@ def test_cv_discovery(
 ):
     from IMLCV.scheme import Scheme
 
-    scheme0 = Scheme.from_rounds(folder=name, new_folder=False)
+    rnds = Rounds(folder=name, new_folder=False)
+    scheme0 = Scheme.from_rounds(rnds)
 
     tf_kwargs = {
         "outdim": out_dim,

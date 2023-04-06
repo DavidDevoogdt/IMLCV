@@ -698,7 +698,7 @@ class MDEngine(ABC):
 
             if (fact := norms / self.static_trajectory_info.max_grad) > 1:
                 ener = EnergyResult(
-                    ener.energy / fact,
+                    ener.energy,
                     ener.gpos / fact,
                     ener.vtens / fact if ener.vtens is not None else None,
                 )

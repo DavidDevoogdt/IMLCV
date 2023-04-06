@@ -4,6 +4,7 @@ import ase.units
 import jax.numpy as jnp
 import numpy as np
 from jax import jit, vmap
+import jax
 
 # from keras.api._v2 import keras as KerasAPI
 from molmod import units
@@ -78,12 +79,7 @@ def get_lda_cv(
         spi = traj_info.sp
         # cvi = traj_info.CV
         nli = spi.get_neighbour_list(**nl_kwargs)
-
         cvi = descriptor.compute_cv_flow(spi, nli)
-
-        print(cvi)
-        print(nli)
-        print(spi)
 
         phase_sps.append(spi)
         phase_cvs.append(cvi)
@@ -142,7 +138,7 @@ def get_lda_cv(
 
                 return -jnp.trace(x.T @ Sb @ x) / (jnp.trace(x.T @ Sw @ x) + 1e-3)
 
-        optimizer = pymanopt.optimizers.TrustRegions()
+        optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50)
         problem = pymanopt.Problem(manifold, cost)
         result = optimizer.run(problem)
 
@@ -203,9 +199,8 @@ def get_lda_cv(
     mu_i = mu_i[:, ~exclude]
     cvs = cvs[:, :, ~exclude]
 
-    print(cvs)
-    print(mu_i)
-
+    # print(cvs)
+    # print(mu_i)
 
     if not materialize:
 
@@ -246,7 +241,7 @@ def get_lda_cv(
                 (1 - shrinkage) * a + shrinkage
             )
 
-    optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50, verbosity=2)
+    optimizer = pymanopt.optimizers.TrustRegions(max_iterations=100, verbosity=2)
     problem = pymanopt.Problem(manifold, cost)
     result = optimizer.run(problem)
 
