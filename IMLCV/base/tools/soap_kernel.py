@@ -46,6 +46,9 @@ def p_i(sp: SystemParams, nl: NeighbourList, p, r_cut):
             split_z=True,
         )
 
+        # norms = vmap(jnp.linalg.norm)(val0)
+        # norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
+        # return jnp.einsum("i...,i->i...", val0, norms_inv)
         return val0
 
     return _p_i(sp, nl, p)

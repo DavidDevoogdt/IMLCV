@@ -80,6 +80,13 @@ if __name__ == "__main__":
     group = parser.add_argument_group("General")
     group.add_argument("-f", "--folder", type=str, default=None)
     group.add_argument("-b", "--bootstrap", action="store_true")
+    group.add_argument(
+        "-wtb",
+        "--walltime_bootstrap",
+        default="72:00:00",
+        type=str,
+        help="walltime of the singlepoint workers",
+    )
 
     args = parser.parse_args()
 
@@ -90,7 +97,7 @@ if __name__ == "__main__":
 
     if args.cont:
         assert folder.exists()
-        args.n_steps_init = 0
+
     else:
         # look for first avaialble folder
         i = 0
@@ -101,14 +108,14 @@ if __name__ == "__main__":
             else:
                 break
 
-        if not p.exists():
-            p.mkdir(parents=True)
         folder = p
 
     args.folder = folder
 
-    print(folder / "cmd.txt")
-    with open(folder / "cmd.txt", "w") as f:
+    if not args.folder.exists():
+        args.folder.mkdir(parents=True)
+
+    with open(folder / "cmd.txt", "a") as f:
         f.write(f"{args}")
 
     def app(args):
@@ -161,9 +168,23 @@ if __name__ == "__main__":
         if not args.cont:
             scheme = Scheme(folder=args.folder, Engine=engine)
         else:
-            scheme = Scheme.from_rounds(folder=args.folder, new_folder=False)
-            scheme.FESBias(plot=True, samples_per_bin=args.samples_per_bin)
-            scheme.rounds.add_round_from_md(scheme.md)
+
+            from IMLCV.base.rounds import Rounds
+
+            rnds = Rounds(folder=args.folder, new_folder=False)
+
+            if rnds.round != -1:
+                args.n_steps_init = 0
+                scheme = Scheme.from_rounds(rounds=rnds)
+
+                scheme.FESBias(plot=True, samples_per_bin=args.samples_per_bin)
+                scheme.rounds.add_round_from_md(scheme.md)
+            else:
+                print(
+                    f"there is no round data in {args.folder} to continue form, starting from init"
+                )
+                rnds.add_round_from_md(engine)
+                scheme = Scheme.from_rounds(rounds=rnds)
 
         print("starting inner loop")
 

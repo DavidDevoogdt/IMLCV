@@ -1187,6 +1187,8 @@ class NeighbourList:
         norm=True,
     ):
 
+        # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
+
         # assert (nl1.z_unique == nl2.z_unique).all()
 
         if matching.lower() == "rematch" or matching.lower() == "average":

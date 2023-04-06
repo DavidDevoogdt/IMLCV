@@ -39,15 +39,9 @@ class Scheme:
         self.rounds.add_round_from_md(self.md)
 
     @staticmethod
-    def from_rounds(
-        folder: str | Path,
-        new_folder=True,
-        copy=True,
-    ) -> Scheme:
+    def from_rounds(rounds: Rounds) -> Scheme:
 
         self = Scheme.__new__(Scheme)
-
-        rounds = Rounds(folder, new_folder=new_folder, copy=copy)
         self.md = rounds.get_engine()
 
         self.rounds = rounds

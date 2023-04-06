@@ -3,6 +3,7 @@ from molmod.units import kjmol
 from configs.config_general import config
 from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
 from IMLCV.scheme import Scheme
+from IMLCV.base.rounds import Rounds
 
 
 def test_perov(path, steps=500, recalc=False):
@@ -19,7 +20,8 @@ def test_ala(path, recalc=False, steps=500):
     config(singlepoint_nodes=1)
 
     if path.exists() and not recalc:
-        scheme = Scheme.from_rounds(path, copy=True)
+        rnds = Rounds(folder=path, copy=True)
+        scheme = Scheme.from_rounds(rnds)
     else:
         scheme = Scheme(folder=path, Engine=alanine_dipeptide_yaff())
         scheme.inner_loop(K=5 * kjmol, n=8, init=100, steps=steps)
