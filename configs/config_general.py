@@ -4,13 +4,12 @@ import re
 from pathlib import Path
 
 import parsl
+from parsl.config import Config
 
 import configs.local_threadpool
-import configs.vsc_hortense
+from configs.hpc_ugent import config as config_ugent
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
-
-
 py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
 
@@ -23,7 +22,6 @@ def config(
     min_memery_per_node=None,
     path_internal: Path | None = None,
 ):
-
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
         return
@@ -47,20 +45,22 @@ def config(
     py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
     if env == "local":
-        config = configs.local_threadpool.get_config(path_internal, py_env)
-    elif env == "hortense":
-        config = configs.vsc_hortense.get_config(
-            path_internal,
-            py_env,
-            account="2022_069",
-            singlepoint_cores=singlepoint_nodes,
+        execs = configs.local_threadpool.get_config(path_internal, py_env)
+    elif env == "hortense" | env == "stevin":
+        execs = config_ugent(
+            env=env,
+            path_internal=path_internal,
+            singlepoint_nodes=singlepoint_nodes,
             walltime=walltime,
             bootstrap=bootstrap,
             memory_per_core=memory_per_core,
-            min_memory=min_memery_per_node,
+            min_memery_per_node=min_memery_per_node,
         )
-    elif env == "stevin":
-        raise NotImplementedError
 
-    #
+    config = Config(
+        executors=execs,
+        usage_tracking=True,
+        run_dir=str(path_internal),
+    )
+
     parsl.load(config=config)

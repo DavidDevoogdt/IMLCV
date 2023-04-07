@@ -4,7 +4,6 @@ import ase.units
 import jax.numpy as jnp
 import numpy as np
 from jax import jit, vmap
-import jax
 
 # from keras.api._v2 import keras as KerasAPI
 from molmod import units
@@ -183,7 +182,9 @@ def get_lda_cv(
         return cv0
 
     lj = jnp.array([x.shape[0] for x in phase_cvs])
-    cvs = jnp.array(list(phase_cvs))
+    lj_min = jnp.min(lj)
+    lj = jnp.full_like(lj, lj_min)
+    cvs = jnp.array([a[0:lj_min, :] for a in phase_cvs])
 
     cvs = jnp.reshape(cvs, cvs.shape[0:2] + (-1,))
 
@@ -291,11 +292,6 @@ def get_lda_cv(
 
     # pip install pymanopt@git+https://github.com/pymanopt/pymanopt.git
 
-    # make cv
-    # x = phase_sps[0] + phase_sps[1]
-    # x_nl = x.get_neighbour_list(**nl_kwargs)
-    # x_cv = descriptor.compute_cv_flow(x, x_nl)
-
     scale_factor = vmap(lambda x: result.point.T @ x)(mu_i)
 
     @CvFlow.from_function
@@ -319,8 +315,8 @@ def get_lda_cv(
     )
 
     # # # check if close to 1
-    cvs0, _ = cv0.compute_cv(phase_sps[0], phase_nls[0])
-    cvs1, _ = cv0.compute_cv(phase_sps[1], phase_nls[1])
+    # cvs0, _ = cv0.compute_cv(phase_sps[0], phase_nls[0])
+    # cvs1, _ = cv0.compute_cv(phase_sps[1], phase_nls[1])
     return cv0
 
 
@@ -759,7 +755,7 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
             timestep=2.0 * units.femtosecond,
             timecon_thermo=100.0 * units.femtosecond,
             timecon_baro=500.0 * units.femtosecond,
-            atomic_numbers=energy.atoms.get_atomic_numbers(),
+            atomic_numbers=jnp.array(energy.atoms.get_atomic_numbers()),
             equilibration=0 * units.femtosecond,
             screen_log=1,
             r_cut=r_cut,

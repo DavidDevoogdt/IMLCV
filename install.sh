@@ -28,9 +28,12 @@ pip install --upgrade tensorrt
 mamba update -y  cython
 pip  install -e  git+https://github.com/molmod/yaff.git#egg=yaff
 pip  install -e git+https://github.ugent.be/lvduyfhu/ThermoLIB#egg=thermolib
+pip  install -e  git+https://github.com/svandenhaute/psiflow.git#egg=psiflow
 pip  install -e ./
 
 mamba update  -y  ndcctools
+
+
 
 
 # pip install --upgrade tensorflow-cpu

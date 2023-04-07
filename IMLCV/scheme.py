@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import itertools
 from importlib import import_module
-from pathlib import Path
 
 import jax.numpy as jnp
 from keras.api._v2 import keras as KerasAPI
