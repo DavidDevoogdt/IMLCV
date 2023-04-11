@@ -83,9 +83,10 @@ def config(
 def get_mpi():
     env = get_platform()
     if env == "hortense":
-        mpi = "mympirun"
+        mpi = "mpirun"
     elif env == "stevin":
-        mpi = " mpirun  --mca btl ^uct --mca orte_keep_fqdn_hostnames 1  -np ${SLURM_NTASKS} --map-by ppr:${SLURM_CPUS_ON_NODE}:node:PE=1:SPAN:NOOVERSUBSCRIBE cp2k_shell.psmp"
+        # mpi = " mpirun  --mca btl ^uct --mca orte_keep_fqdn_hostnames 1  -np ${SLURM_NTASKS} --map-by ppr:${SLURM_CPUS_ON_NODE}:node:PE=1:SPAN:NOOVERSUBSCRIBE "
+        mpi = "mpirun"
     else:
         mpi = "mpirun"
 

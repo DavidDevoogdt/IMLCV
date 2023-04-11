@@ -664,8 +664,9 @@ class Rounds(ABC):
                 spi = sp0[i]
                 spi = spi.unbatch()
                 nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                cvi,bi =  bias.compute_from_system_params(sp=spi, nl=nli)
                 print(
-                    f"new point got cv={ tisi.CV}, new bias { bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} "
+                    f"new point got cv={cvi}, new bias  {bi.energy/kjmol} "
                 )
 
             future = run(

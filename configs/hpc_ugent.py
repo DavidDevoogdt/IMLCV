@@ -217,6 +217,7 @@ class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
 
 
 def get_slurm_provider(
+    env,
     label,
     path_internal: Path | str,
     cpu_cluster,
@@ -247,6 +248,12 @@ def get_slurm_provider(
     ), "open_mp_threads_per_core is not tested yet"
 
     worker_init = f"{py_env}; \n"
+    if env == "hortense":
+        worker_init += f"module load CP2K/8.2-foss-2021a \n"
+
+    elif env == "stevin":
+        worker_init += f"module load CP2K/7.1-intel-2020a \n"
+    worker_init += f"module unload SciPy-bundle Python \n"
 
     if not parsl_cores:
         if open_mp_threads_per_core is None:
@@ -391,7 +398,7 @@ def config(
             "gpu_part": gpu,
             "path_internal": path_internal,
         }
-
+    kw["env"] = env
     if bootstrap:
         execs = [
             get_slurm_provider(

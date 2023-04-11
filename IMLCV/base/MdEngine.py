@@ -589,10 +589,11 @@ class MDEngine(ABC):
         try:
             self._run(int(steps))
         except Exception as err:
+            
+            if self.step == 1:
+                raise  err
             print(f"The calculator finished early with error {err=},{type(err)=}")
 
-        if self.step == 1:
-            raise "the calculator crashed directly, make sure the system is correctly initialized"
 
         self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
