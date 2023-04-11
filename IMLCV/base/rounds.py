@@ -15,6 +15,7 @@ import numpy as np
 from filelock import FileLock
 from jax import Array
 from molmod.constants import boltzmann
+from molmod.units import kjmol
 from parsl.data_provider.files import File
 
 from configs.bash_app_python import bash_app_python
@@ -481,6 +482,12 @@ class Rounds(ABC):
 
         self._set_attr(name="valid", value=False, r=r, i=i)
 
+    def is_valid(self, r=None, i=None):
+        if r is None:
+            r = self.round
+
+        return (self.path(r=r, i=i) / "invalid").exists()
+
     def get_bias(self, r=None, i=None) -> Bias:
         if r is None:
             r = self.round
@@ -619,33 +626,49 @@ class Rounds(ABC):
                         sp = tis.sp
 
                         nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                        bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
+                        _,bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
+
+                    bs = jnp.reshape( bs,(-1)  )
 
                     # compensate for bias of previous
                     bs += tis.e_pot
+
+                    bs -= jnp.mean(bs)
+
 
                     probs = jnp.exp(
                         -bs / (md_engine.static_trajectory_info.T * boltzmann)
                     )
                     probs = probs / jnp.sum(probs)
 
-                    KEY, k = jax.random.split(KEY, 2)
+                    print(f"{probs.shape=},{tis.shape=}  ")
 
+                    KEY, k = jax.random.split(KEY, 2)
                     index = jax.random.choice(
-                        a=tis.shape,  # type: ignore
+                        a=probs.shape[0],
                         key=k,
                         p=probs,
                     )
 
-                    spi = tis[index].sp
-
                 else:
-                    spi = tis[0].sp
+                    index = 0
+
+                tisi = tis[index]
+                spi = tisi.sp
+
+                spi = spi.unbatch()
+                nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                print(
+                    f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol} and new bias { bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} "
+                )
+
             else:
                 spi = sp0[i]
-
-            spi = spi.unbatch()
-            print(f"settin {spi=}")
+                spi = spi.unbatch()
+                nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                print(
+                    f"new point got cv={ tisi.CV}, new bias { bias.compute_from_system_params(sp=spi, nl=nli).energy/kjmol} "
+                )
 
             future = run(
                 sp=spi,  # type: ignore

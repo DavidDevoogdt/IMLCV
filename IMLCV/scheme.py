@@ -119,16 +119,16 @@ class Scheme:
     ):
 
         if init != 0:
+            print(f"running init round with {init} steps")
 
-            # self.md.static_trajectory_info.max_grad = init_max_grad
             self.grid_umbrella(steps=init, n=n, k=K, max_grad=init_max_grad)
             self.rounds.invalidate_data()
-            # self.md.static_trajectory_info.max_grad = max_grad
             self.rounds.add_round_from_md(self.md)
         else:
             self.md.static_trajectory_info.max_grad = max_grad
 
         for _ in range(rnds):
+            print(f"running round with {steps} steps")
             self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad)
 
             if update_metric:

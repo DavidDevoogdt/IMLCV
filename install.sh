@@ -25,6 +25,8 @@ pip install --upgrade jax[uda11.cudnn82] jaxlib -f https://storage.googleapis.co
 pip install --upgrade tensorflow-cpu
 pip install --upgrade tensorrt
 
+pip install pymanopt@git+https://github.com/pymanopt/pymanopt.git
+
 mamba update -y  cython
 pip  install -e  git+https://github.com/molmod/yaff.git#egg=yaff
 pip  install -e git+https://github.ugent.be/lvduyfhu/ThermoLIB#egg=thermolib

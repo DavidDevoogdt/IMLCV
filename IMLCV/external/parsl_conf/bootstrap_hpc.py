@@ -3,7 +3,6 @@ import argparse
 import parsl
 
 from configs.bash_app_python import bash_app_python
-from configs.vsc_stevin import config
 
 
 def bootstrap_hpc(function):
@@ -31,7 +30,6 @@ def func(name):
     import os
     import shutil
 
-    from configs.vsc_stevin import config
     from IMLCV.base.rounds import Rounds
     from IMLCV.test.common import ase_yaff
 
@@ -51,7 +49,6 @@ def func(name):
 def f(name):
     from molmod.units import kjmol
 
-    from configs.vsc_stevin import config
     from IMLCV.test.common import ase_yaff
     from IMLCV.test.test import test_cv_discovery
 

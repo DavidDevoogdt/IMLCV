@@ -13,6 +13,26 @@ ROOT_DIR = Path(os.path.dirname(__file__)).parent
 py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
 
+def get_platform():
+
+    node = platform.node()
+    print("node")
+    if re.search("(node|login)[0-9]*.dodrio.os", node):
+        env = "hortense"
+    elif re.search(
+        "(node|gligar)[0-9]*.(gastly|accelgor|delcatty|doduo|donphan|gallade|golett|joltik|kirlia|skitty|slaking|swalot|victini).os",
+        node,
+    ):
+        env = "stevin"
+    elif node == "david-CMM":
+        env = "local"
+    else:
+        raise ValueError("unknown pc {node=}, set env")
+
+    print(env)
+    return env
+
+
 def config(
     env=None,
     singlepoint_nodes=16,
@@ -21,23 +41,15 @@ def config(
     memory_per_core=None,
     min_memery_per_node=None,
     path_internal: Path | None = None,
+    cpu_cluster=None,
+    gpu_cluster=None,
 ):
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
         return
 
     if env is None:
-        node = platform.node()
-        if re.search("(node|login)[0-9]*.dodrio.os", node):
-            env = "hortense"
-        elif node == re.search("gligar[0-9]*.gastly.os", node):
-            env = "stevin"
-        elif node == "david-CMM":
-            env = "local"
-        else:
-            raise ValueError("unknown pc, set env")
-
-    print(env)
+        env = get_platform()
 
     if path_internal is None:
         path_internal = ROOT_DIR / "IMLCV" / ".runinfo"
@@ -46,7 +58,7 @@ def config(
 
     if env == "local":
         execs = configs.local_threadpool.get_config(path_internal, py_env)
-    elif env == "hortense" | env == "stevin":
+    elif env == "hortense" or env == "stevin":
         execs = config_ugent(
             env=env,
             path_internal=path_internal,
@@ -55,6 +67,8 @@ def config(
             bootstrap=bootstrap,
             memory_per_core=memory_per_core,
             min_memery_per_node=min_memery_per_node,
+            cpu_cluster=cpu_cluster,
+            gpu_cluster=gpu_cluster,
         )
 
     config = Config(
@@ -64,3 +78,15 @@ def config(
     )
 
     parsl.load(config=config)
+
+
+def get_mpi():
+    env = get_platform()
+    if env == "hortense":
+        mpi = "mympirun"
+    elif env == "stevin":
+        mpi = " mpirun  --mca btl ^uct --mca orte_keep_fqdn_hostnames 1  -np ${SLURM_NTASKS} --map-by ppr:${SLURM_CPUS_ON_NODE}:node:PE=1:SPAN:NOOVERSUBSCRIBE cp2k_shell.psmp"
+    else:
+        mpi = "mpirun"
+
+    return mpi

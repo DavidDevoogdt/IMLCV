@@ -88,6 +88,27 @@ if __name__ == "__main__":
         help="walltime of the singlepoint workers",
     )
 
+    group.add_argument(
+        "--cpu_cluster",
+        default=None,
+        type=str,
+        help="cpu cluster to submit to",
+    )
+
+    group.add_argument(
+        "--bootstrap_cluster",
+        default=None,
+        type=str,
+        help="cpu cluster to run bootstrap job",
+    )
+
+    group.add_argument(
+        "--gpu_cluster",
+        default=None,
+        type=str,
+        help="gpu cluster to submit to",
+    )
+
     args = parser.parse_args()
 
     if args.folder is None:
@@ -141,31 +162,36 @@ if __name__ == "__main__":
             memory_per_core=args.memory_per_core,
             min_memery_per_node=args.min_memery_per_node,
             path_internal=args.folder / "parsl_info",
+            cpu_cluster=args.cpu_cluster,
+            gpu_cluster=args.gpu_cluster,
         )
 
         print("Loading system")
 
-        if args.system == "alanine_dipeptide":
+        def get_engine():
+            if args.system == "alanine_dipeptide":
 
-            engine = alanine_dipeptide_yaff(
-                cv=args.cv,
-                kernel=args.kernel_LDA,
-                harmonic=not args.arithmic,
-                folder=args.folder / "LDA",
-                kernel_type=args.kernel_type,
-                lda_steps=args.lda_steps,
-            )
+                engine = alanine_dipeptide_yaff(
+                    cv=args.cv,
+                    kernel=args.kernel_LDA,
+                    harmonic=not args.arithmic,
+                    folder=args.folder / "LDA",
+                    kernel_type=args.kernel_type,
+                    lda_steps=args.lda_steps,
+                )
 
-        elif args.system == "CsPbI3":
-            engine = CsPbI3(
-                cv=args.cv,
-                unit_cells=args.unit_cells,
-                input_atoms=args.input_atoms,
-                lda_steps=args.lda_steps,
-                folder=args.folder / "LDA",
-            )
+            elif args.system == "CsPbI3":
+                engine = CsPbI3(
+                    cv=args.cv,
+                    unit_cells=args.unit_cells,
+                    input_atoms=args.input_atoms,
+                    lda_steps=args.lda_steps,
+                    folder=args.folder / "LDA",
+                )
+            return engine
 
         if not args.cont:
+            engine = get_engine()
             scheme = Scheme(folder=args.folder, Engine=engine)
         else:
 
@@ -177,12 +203,16 @@ if __name__ == "__main__":
                 args.n_steps_init = 0
                 scheme = Scheme.from_rounds(rounds=rnds)
 
-                scheme.FESBias(plot=True, samples_per_bin=args.samples_per_bin)
+                if not scheme.rounds.is_valid():
+                    scheme.FESBias(plot=True, samples_per_bin=args.samples_per_bin)
+                else:
+                    "last round is not vallid, not constructing FES"
                 scheme.rounds.add_round_from_md(scheme.md)
             else:
                 print(
                     f"there is no round data in {args.folder} to continue form, starting from init"
                 )
+                engine = get_engine()
                 rnds.add_round_from_md(engine)
                 scheme = Scheme.from_rounds(rounds=rnds)
 
@@ -199,7 +229,13 @@ if __name__ == "__main__":
         )
 
     if args.bootstrap:
-        config(bootstrap=True, walltime=args.walltime)
+
+        if args.bootstrap_cluster is None:
+            args.bootstrap_cluster = args.cpu_cluster
+
+        config(
+            bootstrap=True, walltime=args.walltime, cpu_cluster=args.bootstrap_cluster
+        )
         bash_app_python(executors=["default"], function=app)(
             args=args,
             execution_folder=args.folder,

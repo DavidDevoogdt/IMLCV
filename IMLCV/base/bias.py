@@ -386,13 +386,22 @@ class Cp2kEnergy(AseEnergy):
         self.rp = cp2k_path
 
     def _calculator(self):
+        def relative(target: Path, origin: Path):
+            """return path of target relative to origin"""
+            try:
+                return Path(target).resolve().relative_to(Path(origin).resolve())
+            except ValueError as e:  # target does not start with origin
+                # recursion with origin (eventually origin is root so try will succeed)
+                return Path("..").joinpath(relative(target, Path(origin).parent))
+
+        rp = Path.cwd()
+        rp.mkdir(parents=True, exist_ok=True)
+        print(f"saving CP2K output in {rp}")
 
         new_dict = {}
         for key, val in self.input_kwargs.items():
-            if Path(val).exists():
-                new_dict[key] = os.path.relpath(Path(val))
-            else:
-                new_dict[key] = val
+            assert Path(val).exists()
+            new_dict[key] = relative(val, rp)
 
         with open(self.cp2k_inp) as f:
             inp = "".join(f.readlines()).format(**new_dict)
@@ -406,14 +415,7 @@ class Cp2kEnergy(AseEnergy):
             del params["directory"]
             print("ignoring directory for Cp2kEnergy")
 
-        if self.rp is None:
-            rp = Path.cwd()
-        else:
-            rp = self.rp
-
-        rp.mkdir(parents=True, exist_ok=True)
-        print(f"saving CP2K output in {rp}")
-        params["directory"] = os.path.relpath(rp)
+        params["directory"] = "."
 
         calc = CP2K(**params)
 

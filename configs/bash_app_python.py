@@ -70,19 +70,33 @@ def bash_app_python(
                 execution_folder = Path(execution_folder)
 
             execution_folder.mkdir(exist_ok=True)
-            file = File(str(execution_folder / f"{func.__name__}.dill"))
+
+            def rename_num(stdout):
+                if not stdout.exists():
+                    return str(stdout)
+                p = stdout
+                i = 0
+                while p.exists():
+                    p = stdout.parent / (f"{ stdout.name  }_{i:0>3}")
+                    i += 1
+                return str(p)
+
+            file = rename_num(execution_folder / f"{func.__name__}.dill")
+
+            stdout = rename_num(
+                execution_folder
+                / (f"{ func.__name__}.stdout" if stdout is None else stdout)
+            )
+            stderr = rename_num(
+                execution_folder
+                / (f"{ func.__name__}.stderr" if stderr is None else stderr)
+            )
 
             future: AppFuture = fun(
                 inputs=inputs,
-                outputs=[*[File(rename(o)) for o in outputs], file],
-                stdout=str(
-                    execution_folder
-                    / (f"{ func.__name__}.stdout" if stdout is None else stdout)
-                ),
-                stderr=str(
-                    execution_folder
-                    / (f"{ func.__name__}.stderr" if stderr is None else stderr)
-                ),
+                outputs=[*[File(rename(o)) for o in outputs], File(file)],
+                stdout=stdout,
+                stderr=stderr,
                 *args,
                 **kwargs,
             )

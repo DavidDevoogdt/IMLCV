@@ -10,6 +10,7 @@ from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
+from configs.config_general import get_mpi
 from IMLCV.base.rounds import Rounds
 
 yaff.log.set_level(yaff.log.silent)
@@ -620,7 +621,7 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
         atoms=atoms[0],
         input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
-        command=f"mpirun cp2k_shell.psmp",
+        command=f"export OMP_NUM_THREADS=1;{get_mpi()} cp2k_shell.psmp",
         stress_tensor=True,
         debug=False,
     )
@@ -810,23 +811,23 @@ if __name__ == "__main__":
     #     / "LDA",
     # )
 
-    # sys = CsPbI3(
-    #     unit_cells=[2, 2, 2],
-    #     cv="soap_dist",
-    #     project=True,
-    #     input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
-    # )
+    sys = CsPbI3(
+        unit_cells=[2, 2, 2],
+        cv="soap_dist",
+        project=True,
+        input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
+    )
 
     # sys = mil53_yaff()
 
     # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
-    from configs.config_general import config
+    # from configs.config_general import config
 
-    folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap3"
-    config(path_internal=folder / "parsl")
-    sys = alanine_dipeptide_yaff(
-        cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder / "LDA"
-    )
+    # folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap3"
+    # config(path_internal=folder / "parsl")
+    # sys = alanine_dipeptide_yaff(
+    #     cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder / "LDA"
+    # )
 
     sys.run(100)
 
