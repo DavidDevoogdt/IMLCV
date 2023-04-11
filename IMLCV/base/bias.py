@@ -21,12 +21,11 @@ import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
+import yaff
 from ase.calculators.cp2k import CP2K
 from jax import jit, value_and_grad, vmap
 from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
-
-import yaff
 
 yaff.log.set_level(yaff.log.silent)
 from configs.bash_app_python import bash_app_python
@@ -44,10 +43,6 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax import Array
-from molmod import units
-from molmod.units import kelvin, kjmol
-
 from IMLCV.base.CV import (
     CollectiveVariable,
     CvFlow,
@@ -57,6 +52,9 @@ from IMLCV.base.CV import (
     Volume,
     dihedral,
 )
+from jax import Array
+from molmod import units
+from molmod.units import kelvin, kjmol
 
 ######################################
 #              Energy                #

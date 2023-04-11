@@ -12,16 +12,15 @@ import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
+from configs.bash_app_python import bash_app_python
 from filelock import FileLock
+from IMLCV.base.bias import Bias, CompositeBias
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 from jax import Array
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
-
-from configs.bash_app_python import bash_app_python
-from IMLCV.base.bias import Bias, CompositeBias
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 
 # todo: invaildate with files instead of db tha gets deleted
 
@@ -626,15 +625,14 @@ class Rounds(ABC):
                         sp = tis.sp
 
                         nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                        _,bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
+                        _, bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
 
-                    bs = jnp.reshape( bs,(-1)  )
+                    bs = jnp.reshape(bs, (-1))
 
                     # compensate for bias of previous
                     bs += tis.e_pot
 
                     bs -= jnp.mean(bs)
-
 
                     probs = jnp.exp(
                         -bs / (md_engine.static_trajectory_info.T * boltzmann)
@@ -659,7 +657,7 @@ class Rounds(ABC):
                 spi = spi.unbatch()
                 nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
                 print(
-                    f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol} and new bias { bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} "
+                    f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol if tisi.e_pot is not None else None  } and new bias {  bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} "
                 )
 
             else:
@@ -667,7 +665,7 @@ class Rounds(ABC):
                 spi = spi.unbatch()
                 nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
                 print(
-                    f"new point got cv={ tisi.CV}, new bias { bias.compute_from_system_params(sp=spi, nl=nli).energy/kjmol} "
+                    f"new point got cv={ tisi.CV}, new bias { bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} "
                 )
 
             future = run(

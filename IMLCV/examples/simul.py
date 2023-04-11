@@ -1,5 +1,6 @@
 import argparse
 import os
+import shutil
 
 from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR, config
@@ -62,7 +63,7 @@ if __name__ == "__main__":
         help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol",
     )
 
-    group.add_argument("-c", "--cont", action="store_true")
+    group.add_argument("-c", "--Continue", action="store_true")
 
     group = parser.add_argument_group("Parsl")
 
@@ -116,10 +117,7 @@ if __name__ == "__main__":
     else:
         folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.folder
 
-    if args.cont:
-        assert folder.exists()
-
-    else:
+    def get_fold(folder):
         # look for first avaialble folder
         i = 0
         while True:
@@ -130,13 +128,22 @@ if __name__ == "__main__":
                 break
 
         folder = p
+        return p
 
-    args.folder = folder
+    if args.Continue:
+        assert folder.exists()
+
+        args.folder = get_fold(folder)
+        shutil.copytree(folder, args.folder)
+
+    else:
+        args.folder = get_fold(folder)
+
 
     if not args.folder.exists():
         args.folder.mkdir(parents=True)
 
-    with open(folder / "cmd.txt", "a") as f:
+    with open(args.folder / "cmd.txt", "a") as f:
         f.write(f"{args}")
 
     def app(args):
@@ -190,7 +197,7 @@ if __name__ == "__main__":
                 )
             return engine
 
-        if not args.cont:
+        if not args.Continue:
             engine = get_engine()
             scheme = Scheme(folder=args.folder, Engine=engine)
         else:
