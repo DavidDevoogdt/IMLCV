@@ -630,7 +630,7 @@ class Rounds(ABC):
                     bs = jnp.reshape(bs, (-1))
 
                     # compensate for bias of previous
-                    bs += tis.e_pot
+                    #bs += tis.e_pot
 
                     bs -= jnp.mean(bs)
 

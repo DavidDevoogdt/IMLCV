@@ -10,7 +10,7 @@ from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
-from configs.config_general import get_mpi
+from configs.config_general import get_cp2k
 from IMLCV.base.rounds import Rounds
 
 yaff.log.set_level(yaff.log.silent)
@@ -621,7 +621,6 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
         atoms=atoms[0],
         input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
-        command=f"export OMP_NUM_THREADS=1;{get_mpi()} cp2k_shell.psmp",
         stress_tensor=True,
         debug=False,
     )

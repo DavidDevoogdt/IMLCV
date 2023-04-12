@@ -1,6 +1,8 @@
 import argparse
 import os
 import shutil
+import sys
+
 
 from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR, config
@@ -144,7 +146,9 @@ if __name__ == "__main__":
         args.folder.mkdir(parents=True)
 
     with open(args.folder / "cmd.txt", "a") as f:
-        f.write(f"{args}")
+        f.write(f"raw input:  {  ' '.join(sys.argv)}\n" )
+        f.write(f"resolved args: {args} \n")
+        
 
     def app(args):
         print("loading mdoules")

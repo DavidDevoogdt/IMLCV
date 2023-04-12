@@ -80,14 +80,11 @@ def config(
     parsl.load(config=config)
 
 
-def get_mpi():
+def get_cp2k():
     env = get_platform()
     if env == "hortense":
-        mpi = "mpirun"
-    elif env == "stevin":
-        # mpi = " mpirun  --mca btl ^uct --mca orte_keep_fqdn_hostnames 1  -np ${SLURM_NTASKS} --map-by ppr:${SLURM_CPUS_ON_NODE}:node:PE=1:SPAN:NOOVERSUBSCRIBE "
-        mpi = "mpirun"
-    else:
-        mpi = "mpirun"
+        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.psmp"
+    if env == "stevin":
 
-    return mpi
+        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt "
+    raise ValueError(f"unknow {env=} for cp2k ")

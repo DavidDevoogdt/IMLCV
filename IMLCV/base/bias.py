@@ -27,8 +27,11 @@ from jax import jit, value_and_grad, vmap
 from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
 
+
+
 yaff.log.set_level(yaff.log.silent)
 from configs.bash_app_python import bash_app_python
+from configs.config_general import get_cp2k
 from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
 from IMLCV.base.tools._rbf_interp import RBFInterpolator
 from IMLCV.base.tools.tools import HashableArrayWrapper
@@ -415,6 +418,8 @@ class Cp2kEnergy(AseEnergy):
 
         params["directory"] = "."
 
+        params["command"] = get_cp2k() 
+
         calc = CP2K(**params)
 
         return calc
@@ -641,6 +646,8 @@ class Bias(BC, ABC):
                 bias = -bias
             bias -= bias[~np.isnan(bias)].min()
 
+            bias = jnp.reshape(bias,(-1,))
+
             # plt.switch_backend("PDF")
             fig, ax = plt.subplots()
 
@@ -806,12 +813,21 @@ class CompositeBias(Bias):
         for bias in biases:
             self._append_bias(bias)
 
+
+        if self.biases is None:
+            assert biases[0] is NoneBias
+            self.biases = bias[0]
+
         self.fun = fun
 
         super().__init__(collective_variable=self.collective_variable, start=0, step=1)
         self.init = True
 
     def _append_bias(self, b: Bias):
+
+
+        if b is NoneBias:
+            return
 
         self.biases.append(b)
 
@@ -836,9 +852,9 @@ class CompositeBias(Bias):
         return self.fun(
             jnp.array(
                 [
-                    self.biases[i]._compute(
+                    jnp.reshape( self.biases[i]._compute(
                         cvs, *args[self.args_shape[i] : self.args_shape[i + 1]]
-                    )
+                    ), () )
                     for i in range(len(self.biases))
                 ]
             )
@@ -869,7 +885,7 @@ class BiasF(Bias):
 
     def __init__(self, cvs: CollectiveVariable, g=None):
 
-        self.g = g if (g is not None) else lambda _: jnp.zeros((cvs.n,))
+        self.g = g if (g is not None) else lambda _: jnp.array( 0.0)
         self.g = jit(self.g)
         super().__init__(cvs, start=None, step=None)
 
