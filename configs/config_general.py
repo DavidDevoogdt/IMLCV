@@ -6,15 +6,14 @@ from pathlib import Path
 import parsl
 from parsl.config import Config
 
-import configs.local_threadpool
 from configs.hpc_ugent import config as config_ugent
+from configs.local_threadpool import get_config as get_config_local
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
 py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
 
 def get_platform():
-
     node = platform.node()
     print("node")
     if re.search("(node|login)[0-9]*.dodrio.os", node):
@@ -57,7 +56,7 @@ def config(
     py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
     if env == "local":
-        execs = configs.local_threadpool.get_config(path_internal, py_env)
+        execs = get_config_local(path_internal, py_env)
     elif env == "hortense" or env == "stevin":
         execs = config_ugent(
             env=env,
@@ -85,6 +84,5 @@ def get_cp2k():
     if env == "hortense":
         return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.psmp"
     if env == "stevin":
-
         return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt "
     raise ValueError(f"unknow {env=} for cp2k ")

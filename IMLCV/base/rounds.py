@@ -12,15 +12,16 @@ import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
-from configs.bash_app_python import bash_app_python
 from filelock import FileLock
-from IMLCV.base.bias import Bias, CompositeBias
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 from jax import Array
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
+
+from configs.bash_app_python import bash_app_python
+from IMLCV.base.bias import Bias, CompositeBias
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 
 # todo: invaildate with files instead of db tha gets deleted
 
@@ -630,7 +631,7 @@ class Rounds(ABC):
                     bs = jnp.reshape(bs, (-1))
 
                     # compensate for bias of previous
-                    #bs += tis.e_pot
+                    # bs += tis.e_pot
 
                     bs -= jnp.mean(bs)
 
@@ -664,10 +665,8 @@ class Rounds(ABC):
                 spi = sp0[i]
                 spi = spi.unbatch()
                 nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                cvi,bi =  bias.compute_from_system_params(sp=spi, nl=nli)
-                print(
-                    f"new point got cv={cvi}, new bias  {bi.energy/kjmol} "
-                )
+                cvi, bi = bias.compute_from_system_params(sp=spi, nl=nli)
+                print(f"new point got cv={cvi}, new bias  {bi.energy/kjmol} ")
 
             future = run(
                 sp=spi,  # type: ignore

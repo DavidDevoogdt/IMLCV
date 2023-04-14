@@ -21,13 +21,12 @@ import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
-import yaff
 from ase.calculators.cp2k import CP2K
 from jax import jit, value_and_grad, vmap
 from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
 
-
+import yaff
 
 yaff.log.set_level(yaff.log.silent)
 from configs.bash_app_python import bash_app_python
@@ -46,6 +45,10 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax import Array
+from molmod import units
+from molmod.units import kelvin, kjmol
+
 from IMLCV.base.CV import (
     CollectiveVariable,
     CvFlow,
@@ -55,9 +58,6 @@ from IMLCV.base.CV import (
     Volume,
     dihedral,
 )
-from jax import Array
-from molmod import units
-from molmod.units import kelvin, kjmol
 
 ######################################
 #              Energy                #
@@ -418,7 +418,7 @@ class Cp2kEnergy(AseEnergy):
 
         params["directory"] = "."
 
-        params["command"] = get_cp2k() 
+        params["command"] = get_cp2k()
 
         calc = CP2K(**params)
 
@@ -646,7 +646,7 @@ class Bias(BC, ABC):
                 bias = -bias
             bias -= bias[~np.isnan(bias)].min()
 
-            bias = jnp.reshape(bias,(-1,))
+            bias = jnp.reshape(bias, (-1,))
 
             # plt.switch_backend("PDF")
             fig, ax = plt.subplots()
@@ -813,7 +813,6 @@ class CompositeBias(Bias):
         for bias in biases:
             self._append_bias(bias)
 
-
         if self.biases is None:
             assert biases[0] is NoneBias
             self.biases = bias[0]
@@ -824,7 +823,6 @@ class CompositeBias(Bias):
         self.init = True
 
     def _append_bias(self, b: Bias):
-
 
         if b is NoneBias:
             return
@@ -852,9 +850,12 @@ class CompositeBias(Bias):
         return self.fun(
             jnp.array(
                 [
-                    jnp.reshape( self.biases[i]._compute(
-                        cvs, *args[self.args_shape[i] : self.args_shape[i + 1]]
-                    ), () )
+                    jnp.reshape(
+                        self.biases[i]._compute(
+                            cvs, *args[self.args_shape[i] : self.args_shape[i + 1]]
+                        ),
+                        (),
+                    )
                     for i in range(len(self.biases))
                 ]
             )
@@ -885,7 +886,7 @@ class BiasF(Bias):
 
     def __init__(self, cvs: CollectiveVariable, g=None):
 
-        self.g = g if (g is not None) else lambda _: jnp.array( 0.0)
+        self.g = g if (g is not None) else lambda _: jnp.array(0.0)
         self.g = jit(self.g)
         super().__init__(cvs, start=None, step=None)
 

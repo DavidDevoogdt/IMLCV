@@ -10,11 +10,11 @@ from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
 import yaff
-from configs.config_general import get_cp2k
 from IMLCV.base.rounds import Rounds
 
 yaff.log.set_level(yaff.log.silent)
 
+# keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 import pymanopt
 
 from configs.config_general import ROOT_DIR
@@ -35,8 +35,6 @@ from IMLCV.base.CV import (
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
-# keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
-
 
 def get_lda_cv(
     refs: SystemParams,
@@ -44,16 +42,16 @@ def get_lda_cv(
     folder,
     mde: MDEngine,
     descriptor: CvFlow,
-    n_steps=500,
+    n_steps=1000,
     # n=400,
     kernel=False,
     harmonic=True,
     kernel_type="rematch",
     materialize=False,
-    shrinkage=1e-3,
+    shrinkage=0,
+    num_svd=200,
     **nl_kwargs,
 ) -> CollectiveVariable:
-
     assert refs.batched and refs.shape[0] == 2, "revise code for more than 2 refs"
 
     if folder.exists():
@@ -80,6 +78,8 @@ def get_lda_cv(
         cvi = descriptor.compute_cv_flow(spi, nli)
 
         normed_sorted_cvi = nli.l2_z_sort(cvi.cv, norm=True)
+
+        from jax import jacrev
 
         phase_sps.append(spi)
         phase_cvs.append(normed_sorted_cvi)
@@ -136,7 +136,6 @@ def get_lda_cv(
             if harmonic:
                 return jnp.trace(x.T @ Sw @ x) / jnp.trace(x.T @ Sb @ x)
             else:
-
                 return -jnp.trace(x.T @ Sb @ x) / (jnp.trace(x.T @ Sw @ x) + 1e-3)
 
         optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50)
@@ -185,48 +184,70 @@ def get_lda_cv(
     lj = jnp.array([x.shape[0] for x in phase_cvs])
     lj_min = jnp.min(lj)
     lj = jnp.full_like(lj, lj_min)
-    cvs = jnp.array([a[0:lj_min, :] for a in phase_cvs])
+    cvs = jnp.vstack([a[0:lj_min, :] for a in phase_cvs])
+    nls_trimmed = [a[0:lj_min] for a in phase_nls]
+    sps_trimmed = [a[0:lj_min] for a in phase_sps]
 
-    cvs = jnp.reshape(cvs, cvs.shape[0:2] + (-1,))
+    def trunc_svd(m):
+        u, s, v = jnp.linalg.svd(m, full_matrices=False)
+
+        exlude_mask = s > 10 * jnp.max(jnp.array([u.shape[0], v.shape[1]])) * jnp.finfo(
+            cvs.dtype
+        ).eps * jnp.max(s)
+
+        def _f(u, s, v, exlude_mask, m):
+            u, s, v = u[:, exlude_mask], s[exlude_mask], v[exlude_mask, :]
+            return u, s, v, m @ v.T
+
+        if s.ndim == 1:
+            return _f(u, s, v, exlude_mask, m)
+        if s.ndim == 2:
+            exlude_mask = jnp.sum(~exlude_mask, axis=0) == 0
+
+            return vmap(_f, in_axes=(0, 0, 0, None, 0))(u, s, v, exlude_mask, m)
+
+        raise ValueError("s.ndim must be 1 or 2")
+
+    u, s, v, cvs = trunc_svd(vmap(lambda x: jnp.reshape(x, (-1)))(cvs))
+
+    # step 1
+    cvs = jnp.reshape(cvs, (len(lj), lj_min, -1))
 
     mu_i = vmap(lambda x, y: jnp.sum(x, axis=0) / y, in_axes=(0, 0))(cvs, lj)
     mu = jnp.sum(vmap(lambda x, y: x * y, in_axes=(0, 0))(mu_i, lj), axis=0) / jnp.sum(
         lj
     )
 
-    exclude = jnp.logical_or(*(mu_i == 0))
+    u_w, s_w, v_w, _ = trunc_svd(vmap(lambda cvs, mu_i: cvs - mu_i)(cvs, mu_i))
+    u_b, s_b, v_b, _ = trunc_svd(
+        vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu_i - mu))(lj, mu_i)
+    )
 
-    mu = mu[~exclude]
-    mu_i = mu_i[:, ~exclude]
-    cvs = cvs[:, :, ~exclude]
+    # if not materialize:
+    #     W_ila = vmap(lambda cvs, mu_i: vmap(lambda cvs: cvs - mu_i)(cvs))(cvs, mu_i)
+    #     B_ia = vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu - mu_i))(lj, mu_i)
+    # else:
+    #     Sigma_W2_i = vmap(
+    #         lambda cvs, mu_i: jnp.sum(
+    #             vmap(lambda cvs: jnp.einsum("i,j->ij", cvs - mu_i, cvs - mu_i))(cvs),
+    #             axis=0,
+    #         )
+    #     )(cvs, mu_i)
 
-    # print(cvs)
-    # print(mu_i)
+    #     # https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8424045
 
-    if not materialize:
-
-        W_ila = vmap(lambda cvs, mu_i: vmap(lambda cvs: cvs - mu_i)(cvs))(cvs, mu_i)
-        B_ia = vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu - mu_i))(lj, mu_i)
-    else:
-        Sigma_W2_i = vmap(
-            lambda cvs, mu_i: jnp.sum(
-                vmap(lambda cvs: jnp.einsum("i,j->ij", cvs - mu_i, cvs - mu_i))(cvs),
-                axis=0,
-            )
-        )(cvs, mu_i)
-
-        # https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8424045
-
-        Sigma_W2 = jnp.sum(Sigma_W2_i, axis=0)
-        Sigma_B2_i = vmap(
-            lambda lj, mu_i: lj * jnp.einsum("i,j->ij", mu - mu_i, mu - mu_i)
-        )(lj, mu_i)
-        Sigma_B2 = jnp.sum(Sigma_B2_i, axis=0)
+    #     Sigma_W2 = jnp.sum(Sigma_W2_i, axis=0)
+    #     Sigma_B2_i = vmap(
+    #         lambda lj, mu_i: lj * jnp.einsum("i,j->ij", mu - mu_i, mu - mu_i)
+    #     )(lj, mu_i)
+    #     Sigma_B2 = jnp.sum(Sigma_B2_i, axis=0)
 
     # make S_w low rank with implicit SVD
 
+    # num_svd = 200
+
     # manifold = pymanopt.manifolds.fixed_rank.FixedRankEmbedded(
-    #     m=mu.shape[0], n=mu.shape[0], k=300
+    #     m=mu.shape[0], n=mu.shape[0], k=num_svd
     # )
 
     # @pymanopt.function.jax(manifold)
@@ -243,10 +264,10 @@ def get_lda_cv(
     # U_w, s_w, Vt_w = result.point
     # # Sigma_W2 - jnp.einsum("ij,j,jk->ik",U_w,s_w,Vt_w)
 
-    # # make S_b low rank with implicit SVD
+    # # # make S_b low rank with implicit SVD
 
     # manifold = pymanopt.manifolds.fixed_rank.FixedRankEmbedded(
-    #     m=mu.shape[0], n=mu.shape[0], k=300
+    #     m=mu.shape[0], n=mu.shape[0], k=num_svd
     # )
 
     # @pymanopt.function.jax(manifold)
@@ -261,33 +282,95 @@ def get_lda_cv(
     # problem = pymanopt.Problem(manifold, cost)
     # result = optimizer.run(problem)
     # U_b, s_b, Vt_b = result.point
-    # Sigma_B2 - jnp.einsum("ij,j,jk->ik",U_b,s_b,Vt_b)
+    # # Sigma_B2 - jnp.einsum("ij,j,jk->ik", U_b, s_b, Vt_b)
+
+    from IMLCV.base.CV import NeighbourList
 
     manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=num_kfda)
 
-    @pymanopt.function.jax(manifold)
+    gamma = 0.1
+
     @jit
+    def f(sp, nl, W):
+        @NeighbourList.vmap_sp_nl
+        def _f(spi, nli):
+            # alpha = jnp.zeros((exclude.shape[0], num_kfda))
+            # alpha = alpha.at[~exclude, :].set(W)
+
+            dcv = jacrev(
+                lambda s, n: W.T
+                @ v.T
+                @ jnp.reshape(
+                    nli.l2_z_sort(descriptor.compute_cv_flow(s, n).cv, norm=True), (-1,)
+                )
+            )(spi, nli)
+
+            n_coor = jnp.mean(
+                jnp.linalg.norm(dcv.coordinates, axis=-1), axis=-1
+            )  # average over gradients wrt atom coordinates
+
+            if dcv.cell is not None:
+                n_cell = jnp.mean(
+                    jnp.linalg.norm(dcv.cell, axis=-1), axis=-1
+                )  # average over gradients wrt cell coordinates
+
+                return jnp.concatenate([n_coor, n_cell])
+
+            return n_coor
+
+        return jnp.mean(_f(sp, nl), axis=0)
+
+    @pymanopt.function.jax(manifold)
+    # @jit
     def cost(x):
-        if materialize:
-            a = jnp.trace(x.T @ Sigma_W2 @ x)
-            b = jnp.trace(x.T @ Sigma_B2 @ x)
-        else:
-            a = jnp.einsum("ab, ija,ijc, cb ", x, W_ila, W_ila, x)
-            b = jnp.einsum("ab, ia,ic, cb ", x, B_ia, B_ia, x)
+        # if materialize:
+        #     a = jnp.trace(x.T @ Sigma_W2 @ x)
+        #     b = jnp.trace(x.T @ Sigma_B2 @ x)
+        # else:
+        #     a = jnp.einsum("ab, ija,ijc, cb ", x, W_ila, W_ila, x)
+        #     b = jnp.einsum("ab, ia,ic, cb ", x, B_ia, B_ia, x)
+
+        a = jnp.einsum("ab, ija, ij  ,ijc, cb ", x, v_w, s_w**2, v_w, x)
+        b = jnp.einsum("ab, ja, j, jc, cb ", x, v_b, s_b**2, v_b, x)
 
         if harmonic:
-            return ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
+            out = ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
         else:
-            return -((1 - shrinkage) * b + shrinkage) / (
-                (1 - shrinkage) * a + shrinkage
-            )
+            out = -((1 - shrinkage) * b + shrinkage) / ((1 - shrinkage) * a + shrinkage)
 
-    optimizer = pymanopt.optimizers.TrustRegions(max_iterations=100, verbosity=2)
+        # if gamma != 0:
+        #     grad = []
+
+        #     for s, b in zip(sps_trimmed, nls_trimmed):
+        #         grad.append(f(s, b))
+
+        #     grad = jnp.array(grad)
+        #     reg = gamma * jnp.mean(jnp.einsum("ij,i->j", grad, lj) / jnp.sum(lj))
+
+        #     # jax.debug.print("out {} reg {}", out, reg)
+
+        #     out = out + reg
+
+        return out
+
+    # grad = []
+
+    # for s, b in zip(sps_trimmed, nls_trimmed):
+    #     grad.append(f(s, b))
+
+    # grad = jnp.array(grad)
+    # reg = gamma * jnp.mean(jnp.einsum("ij,i->j", grad, lj) / jnp.sum(lj))
+
+    optimizer = pymanopt.optimizers.ConjugateGradient(max_iterations=3000)
+
+    # optimizer = pymanopt.optimizers.TrustRegions(max_iterations=100, verbosity=2)
     problem = pymanopt.Problem(manifold, cost)
     result = optimizer.run(problem)
 
-    alpha = jnp.zeros((exclude.shape[0], num_kfda))
-    alpha = alpha.at[~exclude, :].set(result.point)
+    alpha = result.point
+
+    # alpha = jnp.zeros((exclude.shape[0], num_kfda))
+    # alpha = alpha.at[~exclude, :].set(result.point)
 
     # alpha = result.point
 
@@ -300,7 +383,7 @@ def get_lda_cv(
         cv = descriptor.compute_cv_flow(sp, nl)
         p = nl.l2_z_sort(cv.cv, norm=True)
 
-        cv_unscaled = alpha.T @ jnp.reshape(p, (-1,))
+        cv_unscaled = alpha.T @ (jnp.reshape(p, (-1,)) @ v.T)
         cv_scaled = (cv_unscaled - scale_factor[0, :]) / (
             scale_factor[1, :] - scale_factor[0, :]
         )
@@ -333,7 +416,6 @@ def alanine_dipeptide_yaff(
     folder=None,
     kernel_type=None,
 ):
-
     T = 300 * kelvin
 
     if cv == "backbone_dihedrals":
@@ -359,7 +441,6 @@ def alanine_dipeptide_yaff(
     )
 
     if cv == "backbone_dihedrals":
-
         cv0 = CollectiveVariable(
             f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
             metric=CvMetric(
@@ -371,7 +452,6 @@ def alanine_dipeptide_yaff(
         sp = None
 
     elif cv == "soap_dist" or cv == "soap_lda":
-
         # ref pos
         sp0 = SystemParams(
             coordinates=jnp.array(
@@ -495,7 +575,6 @@ def alanine_dipeptide_yaff(
     if bias is None:
         bias = NoneBias(cvs=cv0)
     elif bias == "harm":
-
         bias = HarmonicBias(cvs=cv0, q0=CV(cv=jnp.array([1.0])), k=k)
     else:
         raise ValueError
@@ -511,7 +590,6 @@ def alanine_dipeptide_yaff(
 
 
 def mil53_yaff():
-
     T = 300 * units.kelvin
     P = 1 * units.atm
 
@@ -563,7 +641,6 @@ def mil53_yaff():
 
 
 def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_steps=500):
-
     base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
 
     assert isinstance(unit_cells, list)
@@ -649,7 +726,6 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
 
         @CvFlow.from_function
         def f(sp: SystemParams, _: NeighbourList | None):
-
             import jax.numpy as jnp
 
             assert sp.cell is not None
@@ -673,7 +749,6 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
             ),
         )
     elif cv == "soap_dist":
-
         r_cut = 5 * angstrom
 
         z_arr = None
@@ -726,7 +801,6 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
         assert jnp.allclose(jnp.array([[1.0, 0.0], [0.0, 0.0]]) - o, 0.0)
 
     elif cv == "soap_lda":
-
         r_cut = 5 * angstrom
 
         z_arr = None
@@ -810,23 +884,23 @@ if __name__ == "__main__":
     #     / "LDA",
     # )
 
-    sys = CsPbI3(
-        unit_cells=[2, 2, 2],
-        cv="soap_dist",
-        project=True,
-        input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
-    )
+    # sys = CsPbI3(
+    #     unit_cells=[2, 2, 2],
+    #     cv="soap_dist",
+    #     project=True,
+    #     input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
+    # )
 
     # sys = mil53_yaff()
 
     # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
     # from configs.config_general import config
 
-    # folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap3"
+    folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap3"
     # config(path_internal=folder / "parsl")
-    # sys = alanine_dipeptide_yaff(
-    #     cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder / "LDA"
-    # )
+    sys = alanine_dipeptide_yaff(
+        cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder / "LDA"
+    )
 
     sys.run(100)
 

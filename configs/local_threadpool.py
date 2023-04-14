@@ -1,4 +1,3 @@
-from parsl.config import Config
 from parsl.executors import ThreadPoolExecutor
 
 
@@ -19,4 +18,5 @@ def get_config(path_internal, py_env):
             label="reference", max_threads=4, working_dir=str(path_internal)
         ),
     ]
-    return Config(executors, run_dir=str(path_internal), usage_tracking=True)
+
+    return executors
