@@ -163,7 +163,6 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
     # @jit
     def _p_i_soap_2_s(p_ij, atom_index_j):
-
         r_ij2 = jnp.dot(p_ij, p_ij)
         r_ij2 = jax.lax.cond(r_ij2 == 0, lambda: jnp.ones_like(r_ij2), lambda: r_ij2)
 
@@ -179,7 +178,6 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
     # @jit
     def _p_i_soap_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
-
         a_nlj = data_j
         a_nlk = data_k
         b_ljk = _l(p_ij, p_ik)
@@ -198,7 +196,6 @@ def p_inl_sb(l_max, n_max, r_cut):
     assert l_max <= n_max, "l_max should be smaller or equal to n_max"
 
     def spherical_jn_zeros(n, m):
-
         return vmap(
             lambda x: jaxopt.GradientDescent(
                 lambda x: spherical_jn(n, x) ** 2, maxiter=1000
@@ -280,7 +277,6 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     # @jit
     def g_nl(r: Array):
-
         fnl = f_nl(n_vec, l_vec, r)
 
         def body(args, n):
@@ -329,7 +325,6 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     # @jit
     def _p_i_sb_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
-
         a_jnl = data_j
         a_knl = data_k
 
@@ -365,11 +360,10 @@ def Kernel(
 ):
     return NeighbourList.match_kernel(
         p1=p1, p2=p2, nl1=nl1, nl2=nl2, matching=matching, norm=norm
-    )
+    )[0]
 
 
 if __name__ == "__main__":
-
     n = 10
     r_side = 6 * (n / 5) ** (1 / 3)
 
@@ -380,7 +374,6 @@ if __name__ == "__main__":
     eps = 0.1
 
     def get_sps(with_cell=True):
-
         ## sp
         rng = jax.random.PRNGKey(42)
         key, rng = jax.random.split(rng)
@@ -433,7 +426,6 @@ if __name__ == "__main__":
         return sp1, sp2, sp3, nl1, nl2, nl3
 
     for matching in ["norm", "rematch", "average"]:
-
         for cell in [False, True]:
             for pp in [
                 p_inl_sb(
@@ -450,12 +442,10 @@ if __name__ == "__main__":
                     num=50,
                 ),
             ]:
-
                 sp1, sp2, sp3, nl1, nl2, nl3 = get_sps(with_cell=cell)
 
                 @jit
                 def f(sp, nl):
-
                     return p_i(
                         sp=sp,
                         nl=nl,
@@ -467,7 +457,6 @@ if __name__ == "__main__":
 
                 @jit
                 def k(sp: SystemParams, nl: NeighbourList):
-
                     return Kernel(p1, f(sp, nl), nl1, nl, matching=matching)
 
                 da = k(sp1, nl1)

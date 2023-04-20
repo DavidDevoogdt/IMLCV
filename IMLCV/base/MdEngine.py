@@ -47,7 +47,6 @@ from IMLCV.base.CV import CV
 
 @dataclass
 class StaticTrajectoryInfo:
-
     _attr = [
         "timestep",
         "r_cut",
@@ -95,7 +94,6 @@ class StaticTrajectoryInfo:
         return self.P is not None
 
     def __post_init__(self):
-
         if self.thermostat:
             assert self.timecon_thermo is not None
 
@@ -141,14 +139,12 @@ class StaticTrajectoryInfo:
 
     @staticmethod
     def load(filename) -> StaticTrajectoryInfo:
-
         with h5py.File(str(filename), "r") as hf:
             return StaticTrajectoryInfo._load(hf=hf)
 
 
 @dataclass
 class TrajectoryInfo:
-
     _positions: Array
     _cell: Array | None = None
     _charges: Array | None = None
@@ -186,7 +182,6 @@ class TrajectoryInfo:
 
     # https://stackoverflow.com/questions/7133885/fastest-way-to-grow-a-numpy-numeric-array
     def __post_init__(self):
-
         if self._capacity == -1:
             self._capacity = 1
         if self._size == -1:
@@ -194,7 +189,6 @@ class TrajectoryInfo:
 
         # batch
         if len(self._positions.shape) == 2:
-
             for name in [*self._items_vec, *self._items_scal]:
                 prop = self.__getattribute__(name)
                 if prop is not None:
@@ -242,7 +236,6 @@ class TrajectoryInfo:
         )
 
     def __add__(self, ti: TrajectoryInfo):
-
         sz = ti._size
 
         while self._capacity <= self._size + ti._size:
@@ -322,7 +315,6 @@ class TrajectoryInfo:
 
     @staticmethod
     def load(filename) -> TrajectoryInfo:
-
         with h5py.File(str(filename), "r") as hf:
             return TrajectoryInfo._load(hf=hf)
 
@@ -493,7 +485,6 @@ class MDEngine(ABC):
         trajectory_file=None,
         sp: SystemParams | None = None,
     ) -> None:
-
         self.static_trajectory_info = static_trajectory_info
 
         self.bias = bias
@@ -524,7 +515,6 @@ class MDEngine(ABC):
 
     @property
     def nl(self) -> NeighbourList | None:
-
         if self.static_trajectory_info.r_cut is None:
             return None
 
@@ -559,13 +549,11 @@ class MDEngine(ABC):
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
-
         with open(file, "rb") as f:
             self = dill.load(f)
 
         print(f"Loading MD engine")
         for key in kwargs.keys():
-
             print(f"setting {key}={kwargs[key]}")
 
             self.__setattr__(key, kwargs[key])
@@ -589,7 +577,6 @@ class MDEngine(ABC):
         try:
             self._run(int(steps))
         except Exception as err:
-
             if self.step == 1:
                 raise err
             print(f"The calculator finished early with error {err=},{type(err)=}")
@@ -608,7 +595,6 @@ class MDEngine(ABC):
         return self.trajectory_info
 
     def save_step(self, T=None, P=None, t=None, err=None):
-
         ti = TrajectoryInfo(
             _positions=self.sp.coordinates,
             _cell=self.sp.cell,
@@ -671,7 +657,6 @@ class MDEngine(ABC):
         self.step += 1
 
     def get_energy(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
-
         return self.energy.compute_from_system_params(
             gpos,
             vtens,
@@ -680,7 +665,6 @@ class MDEngine(ABC):
     def get_bias(
         self, gpos: bool = False, vtens: bool = False
     ) -> tuple[CV, EnergyResult]:
-
         cv, ener = self.bias.compute_from_system_params(
             sp=self.sp,
             nl=self.nl,
@@ -793,7 +777,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         sp: SystemParams | None = None,
         additional_parts=[],
     ) -> None:
-
         yaff.log.set_level(log.silent)
         self.start = 0
         self.name = "YaffEngineIMLCV"
@@ -815,7 +798,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         self.additional_parts = additional_parts
 
     def __call__(self, iterative: VerletIntegrator):
-
         if not self._verlet_initialized:
             return
 
@@ -827,7 +809,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
         self.save_step(**kwargs)
 
     def _setup_verlet(self):
-
         # hooks = [self, VerletScreenLog(step=self.static_trajectory_info.screen_log)]
 
         hooks = [self]
@@ -850,13 +831,20 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             )
         if self.static_trajectory_info.barostat:
             hooks.append(
-                yaff.sampling.MTKBarostat(
+                yaff.sampling.LangevinBarostat(
                     self._yaff_ener,
                     self.static_trajectory_info.T,
                     self.static_trajectory_info.P,
                     timecon=self.static_trajectory_info.timecon_baro,
                     anisotropic=True,
                 )
+                # yaff.sampling.MTKBarostat(
+                #     self._yaff_ener,
+                #     self.static_trajectory_info.T,
+                #     self.static_trajectory_info.P,
+                #     timecon=self.static_trajectory_info.timecon_baro,
+                #     anisotropic=True,
+                # )
             )
 
         # plumed hook
@@ -914,7 +902,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             self.system.pos = pos
 
         def _internal_compute(self, gpos, vtens):
-
             energy = self.md_engine.get_energy(
                 gpos is not None,
                 vtens is not None,
@@ -940,7 +927,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
 
 class PlumedEngine(YaffEngine):
-
     # Energy - kJ/mol
     # Length - nanometers
     # Time - picoseconds
@@ -975,7 +961,6 @@ class PlumedEngine(YaffEngine):
         trajectory_file=None,
         sp: SystemParams | None = None,
     ) -> None:
-
         super().__init__(
             bias,
             static_trajectory_info,

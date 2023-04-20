@@ -147,7 +147,6 @@ class SystemParams:
         num_neighs: int | None = None,
         nxyz: list[int] | None = None,
     ) -> tuple[bool, NeighbourList | None]:
-
         if r_cut is None:
             return False, None
 
@@ -156,7 +155,6 @@ class SystemParams:
         b = True
 
         def _get_num_per_images(cell, r_cut):
-
             if cell is None or r_cut is None:
                 return None
 
@@ -179,9 +177,7 @@ class SystemParams:
 
         # cannot be jitted
         if sp.cell is not None:
-
             if nxyz is None:
-
                 if sp.batched:
                     nxyz = [
                         int(i)
@@ -193,7 +189,6 @@ class SystemParams:
                         ).tolist()
                     ]
                 else:
-
                     nxyz = [
                         int(i)
                         for i in _get_num_per_images(sp.cell, r_cut + r_skin).tolist()
@@ -233,7 +228,6 @@ class SystemParams:
             ijk=(None, None, None),
             exclude_self=True,
         ):
-
             i, j, k = ijk
 
             if ijk != (None, None, None):
@@ -284,7 +278,6 @@ class SystemParams:
 
         @partial(vmap, in_axes=(None, 0))
         def res(sp, center_coordinates):
-
             if center_coordinates is not None:
                 sp_center = SystemParams(sp.coordinates - center_coordinates, sp.cell)
             else:
@@ -398,7 +391,6 @@ class SystemParams:
         r_skin=0.0,
         z_array: Array | None = None,
     ) -> NeighbourList | None:
-
         b, nl = self._get_neighbour_list(
             r_cut=r_cut,
             r_skin=r_skin,
@@ -739,7 +731,6 @@ class SystemParams:
 
     @partial(jit, static_argnames=["min"])
     def canoncialize(self, min=False) -> tuple[SystemParams, Array, Array]:
-
         if self.batched:
             return vmap(lambda sp: sp.canoncialize(min=min))(self)
 
@@ -798,7 +789,6 @@ class NeighbourList:
 
         @partial(vmap, in_axes=(0, 0, 0, None, 0))
         def _recover(center_coordinates, ijk_indices, atom_indices, sp, co):
-
             sp_center = sp.coordinates - center_coordinates
             if sp.cell is not None:
                 sp_center += co @ sp.cell
@@ -846,7 +836,6 @@ class NeighbourList:
     ):
         @NeighbourList.vmap_sp_nl
         def _apply_fun_neighbour(sp: SystemParams, nl: NeighbourList):
-
             if r_cut is None:
                 r_cut is nl.r_cut
 
@@ -859,6 +848,8 @@ class NeighbourList:
             if exclude_self:
                 bools = jnp.logical_and(bools, r**2 != 0.0)
 
+            bools = jnp.logical_and(bools, ind != -1)
+
             true_val = vmap(vmap(func))(pos, ind)
             false_val = jax.tree_map(
                 lambda a: jnp.zeros_like(a) + fill_value,
@@ -867,7 +858,6 @@ class NeighbourList:
 
             def _get(bools):
                 def _red(bools):
-
                     val = vmap(
                         lambda b, x, y: jax.tree_map(
                             lambda t, f: vmap(jnp.where)(b, t, f), x, y
@@ -894,7 +884,6 @@ class NeighbourList:
 
                 @partial(vmap, in_axes=(0, None))
                 def _f(u, a):
-
                     b = vmap(
                         lambda t, f: jnp.where(a == u, t, f),
                         in_axes=(1, 1),
@@ -971,6 +960,8 @@ class NeighbourList:
             if unique:
                 bools = vmap(lambda b: b.at[jnp.diag_indices_from(b)].set(False))(bools)
 
+            # check if indices are not -1
+
             out_ijk_f = jax.tree_map(
                 lambda o: jnp.full_like(o, fill_value),
                 out_ijk,
@@ -1004,7 +995,6 @@ class NeighbourList:
 
                 @partial(vmap, in_axes=(0, None))
                 def _f(u, a):
-
                     b = vmap(
                         vmap(
                             lambda t, f: jnp.where(a == u, t, f),
@@ -1059,17 +1049,19 @@ class NeighbourList:
     def __getitem__(self, slices):
         return NeighbourList(
             r_cut=self.r_cut,
-            atom_indices=self.atom_indices[slices, :],
-            op_cell=self.op_cell,
-            op_coor=self.op_coor,
+            atom_indices=self.atom_indices[slices, :]
+            if self.atom_indices is not None
+            else None,
+            ijk_indices=self.ijk_indices[slices, :]
+            if self.ijk_indices is not None
+            else None,
+            op_cell=self.op_cell[slices, :, :] if self.op_cell is not None else None,
+            op_coor=self.op_coor[slices, :, :] if self.op_coor is not None else None,
             op_center=self.op_center[slices, :] if self.op_center is not None else None,
             z_array=self.z_array,
             z_unique=self.z_unique,
             r_skin=self.r_skin,
             sp_orig=self.sp_orig[slices],
-            ijk_indices=self.ijk_indices[slices, :]
-            if self.ijk_indices is not None
-            else None,
             nxyz=self.nxyz,
         )
 
@@ -1078,7 +1070,6 @@ class NeighbourList:
         """wrapper to vmap over neighbourlist and systemparams if needed"""
 
         def _vmap_sp_nl(sp: SystemParams, nl: NeighbourList | None, *args, **kwargs):
-
             if nl is not None:
                 if nl.batched:
                     assert sp.batched
@@ -1100,7 +1091,6 @@ class NeighbourList:
         """wrapper to vmap over neighbourlist and systemparams if needed"""
 
         def _vmap_x_nl(x, nl: NeighbourList, *args, **kwargs):
-
             assert nl is not None
 
             if nl.batched:
@@ -1138,7 +1128,6 @@ class NeighbourList:
 
     @jit
     def update(self, sp: SystemParams) -> tuple[bool, NeighbourList]:
-
         max_displacement = jnp.max(
             jnp.linalg.norm(self._pos(self.sp_orig) - self._pos(sp), axis=-1)
         )
@@ -1161,6 +1150,11 @@ class NeighbourList:
         )
 
     def split_z(self, p, sum=False):
+        if self.batched:
+            return NeighbourList.vmap_x_nl(lambda p, nl: nl.split_z(p, sum=sum))(
+                p, self
+            )
+
         p, bools = vmap(
             vmap(
                 lambda a, p, b: (
@@ -1185,11 +1179,23 @@ class NeighbourList:
         nl2: NeighbourList,
         matching="REMatch",
         norm=True,
+        alpha=0.2,
     ):
-
         # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
 
-        # assert (nl1.z_unique == nl2.z_unique).all()
+        if nl1.batched:
+            return nl1.vmap_x_nl(
+                lambda p1, nl1: NeighbourList.match_kernel(
+                    p1, p2, nl1, nl2, matching=matching, norm=norm
+                )
+            )(p1, nl1)
+
+        if nl2.batched:
+            return nl1.vmap_x_nl(
+                lambda p2, nl2: NeighbourList.match_kernel(
+                    p1, p2, nl1, nl2, matching=matching, norm=norm
+                )
+            )(p2, nl2)
 
         if matching.lower() == "rematch" or matching.lower() == "average":
             b, _ = nl1.split_z((), True)
@@ -1200,7 +1206,6 @@ class NeighbourList:
             return jnp.tensordot(p1, jnp.moveaxis(p2, 0, -1), axes=p1.ndim - 1)
 
         def _local_kernel(p1, p2, _nl1, _nl2):
-
             baz, az = _nl1.split_z(p1)
             bbz, bz = _nl2.split_z(p2)
 
@@ -1222,13 +1227,10 @@ class NeighbourList:
 
                 out = sum_a(a_z, b_z)
 
-                return jnp.diag(out)
+                return jnp.diag(out), None
 
         elif matching.lower() == "rematch":
-
             # adapted from https://singroup.github.io/dscribe/0.3.x/_modules/dscribe/kernels/rematchkernel.html
-
-            alpha = 0.2
 
             def _f(p1, p2, nl1, nl2, n1, n2):
                 """
@@ -1244,7 +1246,6 @@ class NeighbourList:
                 local_kernel = _local_kernel(p1, p2, nl1, nl2)
 
                 def __gs(local_kernel):
-
                     K = jnp.exp(-(1 - local_kernel) / alpha)
 
                     def body(uv, K):
@@ -1267,27 +1268,20 @@ class NeighbourList:
                     # P_ij = u_i * v_j * K_ij
                     P_ij = jnp.einsum("i,j,ij->ij", u, v, K)
                     # Tr(  P.T * C )
-                    # using Tr(X.T Y) = Sum[ij](Xij * Yij)
-                    return K, u, v, jnp.einsum("ij,ij", P_ij, local_kernel)
+                    return jnp.einsum("ij,ij", P_ij, local_kernel), P_ij
 
-                # @jax.custom_jvp
-                def _gs(local_kernel):
-                    _, _, _, K_out = __gs(local_kernel)
-                    return K_out
-
-                return vmap(_gs, in_axes=(0))(local_kernel)
+                return vmap(__gs, in_axes=(0))(local_kernel)
 
         elif matching.lower() == "norm":
 
             def _f(p1, p2, nl1, nl2, norm1, norm2):
                 p1 = nl1.l2_z_sort(p1, norms=norm1)
                 p2 = nl2.l2_z_sort(p2, norms=norm2)
-                return jnp.diag(sum_a(p1, p2))
+                return jnp.diag(sum_a(p1, p2)), None
 
         elif matching.lower() == "best":
             raise
         elif matching.lower() == "none":
-
             raise
         else:
             raise ValueError("unknown matching procedure")
@@ -1296,27 +1290,28 @@ class NeighbourList:
             norms = vmap(jnp.linalg.norm)(val0)
             norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
             val0 = jnp.einsum("i...,i->i...", val0, norms_inv)
-            return val0, norms
+            return val0, norms, norms_inv
 
-        p1, n1 = norm_p(p1)
-        p2, n2 = norm_p(p2)
+        p1, n1, n1i = norm_p(p1)
+        p2, n2, n2i = norm_p(p2)
 
-        out = _f(p1, p2, nl1, nl2, n1, n2)
+        out, p = _f(p1, p2, nl1, nl2, n1, n2)
 
         if norm:
-            n2 = _f(p2, p2, nl2, nl2, n2, n2) * _f(p1, p1, nl1, nl1, n1, n1)
+            n_sq = _f(p2, p2, nl2, nl2, n2, n2)[0] * _f(p1, p1, nl1, nl1, n1, n1)[0]
 
-            n2_safe = jnp.where(n2 == 0, 1, n2)
-            ni = jnp.where(n2 == 0, 0.0, 1 / jnp.sqrt(n2_safe))
+            n_sq_safe = jnp.where(n_sq == 0, 1, n_sq)
+            ni = jnp.where(n_sq == 0, 0.0, 1 / jnp.sqrt(n_sq_safe))
             out *= ni
+            # p= jnp.einsum("ijk,i,j,k->ijk", p, ni, n1i, n2i)
 
         # do final normalisation based on  number of atoms of kind Z
         out = jnp.sum(b * out) / jnp.sum(b)
+        # p = jnp.sum(vmap(jnp.multiply)(b, p), axis=0) / jnp.sum(b)
 
-        return out
+        return out, p
 
     def l2_z_sort(self, p, norms=None, norm=False):
-
         if self.batched:
             return self.vmap_x_nl(
                 lambda p, nl: nl.l2_z_sort(p, norms=norms, norm=norm)
@@ -1333,6 +1328,98 @@ class NeighbourList:
         z_array = self.z_array[p_n]
         p_z = jnp.argsort(z_array)
         return p[p_z, :]
+
+    def __add__(self, other):
+        assert isinstance(other, NeighbourList)
+
+        if self.batched and not other.batched:
+            return NeighbourList.vmap_x_nl(lambda _, self: self + other)(None, self)
+        if other.batched and not self.batched:
+            return NeighbourList.vmap_x_nl(lambda _, other: self + other)(None, other)
+
+        assert self.r_cut == other.r_cut
+        assert self.r_skin == other.r_skin
+        if self.z_array is None:  # pragma: no cover
+            assert other.z_array is None
+        else:
+            assert jnp.all(self.z_array == other.z_array)
+
+        if self.z_unique is None:
+            assert other.z_unique is None
+        else:
+            assert jnp.all(self.z_unique == other.z_unique)
+
+        if self.atom_indices is not None:
+            assert other.atom_indices is not None
+
+        if self.nxyz is None:
+            assert other.nxyz is None
+        else:
+            assert self.nxyz == other.nxyz
+
+        if self.sp_orig is None:
+            assert other.sp_orig is None
+
+        if self.ijk_indices is None:
+            assert other.ijk_indices is None
+
+        if self.op_cell is None:
+            assert other.op_cell is None
+
+        if self.op_coor is None:
+            assert other.op_coor is None
+
+        if self.op_center is None:
+            assert other.op_center is None
+
+        if self.atom_indices is not None:
+            m = jnp.max(
+                jnp.array([self.atom_indices.shape[-1], other.atom_indices.shape[-1]])
+            )
+
+            def _p(a):
+                return jnp.pad(
+                    array=a,
+                    pad_width=((0, 0), (0, m - self.atom_indices.shape[-1])),
+                    constant_values=-1,
+                )
+
+            if self.batched:
+                _p = vmap(_p, in_axes=(0,))
+
+            if self.atom_indices.shape[-1] != m:
+                sa = _p(self.atom_indices)
+            else:
+                sa = self.atom_indices
+
+            if other.atom_indices.shape[-1] != m:
+                sb = _p(other.atom_indices)
+            else:
+                sb = other.atom_indices
+
+        return NeighbourList(
+            r_cut=self.r_cut,
+            r_skin=self.r_skin,
+            atom_indices=jnp.vstack([sa, sb])
+            if self.atom_indices is not None
+            else None,
+            z_array=self.z_array,
+            z_unique=self.z_unique,
+            nxyz=self.nxyz,
+            sp_orig=self.sp_orig + other.sp_orig if self.sp_orig is not None else None,
+            ijk_indices=jnp.vstack([self.ijk_indices, other.ijk_indices])
+            if self.ijk_indices is not None
+            else None,
+            op_cell=jnp.vstack([self.op_cell, other.op_cell])
+            if self.op_cell is not None
+            else None,
+            op_coor=jnp.vstack([self.op_coor, other.op_coor])
+            if self.op_coor is not None
+            else None,
+            op_center=jnp.vstack([self.op_center, other.op_center])
+            if self.op_center is not None
+            else None,
+        )
 
 
 @jdc.pytree_dataclass
@@ -2005,7 +2092,6 @@ class CvFlow:
             sp: SystemParams,
             nl: NeighbourList | None = None,
         ):
-
             cv = CV(cv=f(sp, nl))
             # assert (
             #     len(cv.shape) == 1
@@ -2023,7 +2109,6 @@ class CvFlow:
     ) -> CV:
         @NeighbourList.vmap_sp_nl
         def _compute_cv_flow(sp, nl):
-
             out = self.f0(sp, nl)
             # assert len(out.shape) == 1, "The CV output should have shape (n,), got "
 
@@ -2067,7 +2152,6 @@ class CvFlow:
         solver=jaxopt.GradientDescent,
     ) -> SystemParams:
         def loss(sp: SystemParams, nl: NeighbourList, norm):
-
             b, nl = jit(nl.update)(sp)
             cvi = self.compute_cv_flow(sp, nl)
             nn = norm(cvi.cv, target.cv, nl, target_nl)
@@ -2220,7 +2304,6 @@ def Volume(sp: SystemParams, _):
 def distance_descriptor():
     @CvFlow.from_function
     def h(x: SystemParams, _):
-
         x = x.canoncialize()[0]
 
         n = x.shape[-2]
@@ -2275,6 +2358,7 @@ def sb_descriptor(
     references: SystemParams | None = None,
     references_nl: NeighbourList | None = None,
     reduce=True,
+    reshape=False,
 ):
     from IMLCV.base.tools.soap_kernel import Kernel, p_i, p_inl_sb
 
@@ -2283,7 +2367,6 @@ def sb_descriptor(
         assert nl is not None, "provide neighbourlist for sb describport"
 
         def _reduce(a):
-
             a = vmap(
                 vmap(
                     vmap(
@@ -2316,6 +2399,9 @@ def sb_descriptor(
         if reduce:
             a = _reduce(a)
 
+        if reshape:
+            a = jnp.reshape(a, (-1,))
+
         return a
 
     if references is not None:
@@ -2345,7 +2431,6 @@ def sb_descriptor(
         return CvFlow.from_function(sb_descriptor_distance2)  # type: ignore
 
     else:
-
         return CvFlow.from_function(f)  # type: ignore
 
 
@@ -2684,7 +2769,6 @@ def _get_equival_sp(sp, rng) -> tuple[jax.random.KeyArray, SystemParams]:
 
 
 def test_reconstruction():
-
     prng = jax.random.PRNGKey(seed=42)
 
     r_cut = 6
