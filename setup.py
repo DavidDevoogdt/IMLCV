@@ -32,5 +32,7 @@ setup(
         "filelock",
         "distrax",
         "jaxopt",
+        "ott",
+        "pymanopt",
     ],
 )

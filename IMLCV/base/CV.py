@@ -27,9 +27,11 @@ from flax import linen as nn
 from flax.linen.linear import Dense
 from jax import Array, jacfwd, jacrev, jit, vmap
 from jax.experimental.jax2tf import call_tf
-from jaxopt._src.linear_solve import solve_bicgstab
 from keras.api._v2 import keras as KerasAPI
 from molmod.units import angstrom
+from ott.geometry.pointcloud import PointCloud
+from ott.problems.linear import linear_problem
+from ott.solvers.linear import sinkhorn
 
 if TYPE_CHECKING:
     pass
@@ -142,10 +144,11 @@ class SystemParams:
         self,
         r_cut,
         r_skin: float = 0.0,
-        z_array: Array | None = None,
-        z_unique: Array | None = None,
+        z_array: tuple[int] | None = None,
+        z_unique: tuple[int] | None = None,
+        num_z_unique: tuple[int] | None = None,
         num_neighs: int | None = None,
-        nxyz: list[int] | None = None,
+        nxyz: tuple[int] | None = None,
     ) -> tuple[bool, NeighbourList | None]:
         if r_cut is None:
             return False, None
@@ -377,6 +380,7 @@ class SystemParams:
                 ijk_indices=ijk,
                 z_array=z_array,
                 z_unique=z_unique,
+                num_z_unique=num_z_unique,
                 sp_orig=self,
                 nxyz=nxyz,
                 op_cell=op_cell,
@@ -391,11 +395,20 @@ class SystemParams:
         r_skin=0.0,
         z_array: Array | None = None,
     ) -> NeighbourList | None:
+        def to_tuple(a):
+            if a is None:
+                return None
+            return tuple([int(ai) for ai in a])
+
+        zu = jnp.unique(z_array) if z_array is not None else None
+        nzu = vmap(lambda zu: jnp.sum(z_array == zu))(zu) if zu is not None else None
+
         b, nl = self._get_neighbour_list(
             r_cut=r_cut,
             r_skin=r_skin,
-            z_array=z_array,
-            z_unique=jnp.unique(z_array) if z_array is not None else None,
+            z_array=to_tuple(z_array),
+            z_unique=to_tuple(zu),
+            num_z_unique=to_tuple(nzu),
         )
         return nl
 
@@ -771,12 +784,13 @@ class NeighbourList:
     op_coor: Array | None
     op_center: Array | None
 
-    z_array: Array | None
-    z_unique: Array | None
     r_skin: jdc.Static[jnp.floating]
     sp_orig: SystemParams | None = None
     ijk_indices: Array | None = None
-    nxyz: jdc.Static[list[int] | None] = None
+    nxyz: jdc.Static[tuple[int] | None] = None
+    z_array: jdc.Static[tuple[int] | None] = None
+    z_unique: jdc.Static[tuple[int] | None] = None
+    num_z_unique: jdc.Static[tuple[int] | None] = None
 
     def _pos(self, sp_orig):
         @partial(vmap, in_axes=(0, 0, None, None))
@@ -892,7 +906,7 @@ class NeighbourList:
 
                     return _red(bools=b)
 
-                return _f(self.z_unique, self.z_array)
+                return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
 
             if not split_z:
                 return _get(bools)
@@ -908,7 +922,7 @@ class NeighbourList:
 
                 return _get(jnp.logical_and(_b(at), bools))
 
-            return sel(nl.z_unique, nl.z_array[ind])
+            return sel(jnp.array(nl.z_unique), jnp.array(nl.z_array)[ind])
 
         return _apply_fun_neighbour(sp, self)
 
@@ -1007,7 +1021,7 @@ class NeighbourList:
 
                     return _red(bools=b)
 
-                return _f(self.z_unique, self.z_array)
+                return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
 
             if not split_z:
                 return get(bools)
@@ -1030,7 +1044,11 @@ class NeighbourList:
 
                 return get(jnp.logical_and(_b(at), bools))
 
-            return sel(nl.z_unique, nl.z_unique, nl.z_array[nl.atom_indices])
+            return sel(
+                jnp.array(nl.z_unique),
+                jnp.array(nl.z_unique),
+                jnp.array(nl.z_array)[nl.atom_indices],
+            )
 
         return _apply_fun_neighbour_pair(sp, self)
 
@@ -1060,6 +1078,7 @@ class NeighbourList:
             op_center=self.op_center[slices, :] if self.op_center is not None else None,
             z_array=self.z_array,
             z_unique=self.z_unique,
+            num_z_unique=self.num_z_unique,
             r_skin=self.r_skin,
             sp_orig=self.sp_orig[slices],
             nxyz=self.nxyz,
@@ -1108,6 +1127,7 @@ class NeighbourList:
                             op_cell=op_cell,
                             op_coor=op_coor,
                             op_center=op_center,
+                            num_z_unique=nl.num_z_unique,
                         ),
                         *args,
                         **kwargs,
@@ -1132,14 +1152,15 @@ class NeighbourList:
             jnp.linalg.norm(self._pos(self.sp_orig) - self._pos(sp), axis=-1)
         )
 
-        def _f(sp):
+        def _f(sp: SystemParams):
             return sp._get_neighbour_list(
-                self.r_cut,
-                self.r_skin,
-                self.z_array,
-                self.z_unique,
-                self.num_neigh,
-                self.nxyz,
+                r_cut=self.r_cut,
+                r_skin=self.r_skin,
+                z_array=self.z_array,
+                z_unique=self.z_unique,
+                num_z_unique=self.num_z_unique,
+                num_neighs=self.num_neigh,
+                nxyz=self.nxyz,
             )
 
         return jax.lax.cond(
@@ -1149,27 +1170,17 @@ class NeighbourList:
             sp,
         )
 
-    def split_z(self, p, sum=False):
+    def split_z(self, p):
         if self.batched:
-            return NeighbourList.vmap_x_nl(lambda p, nl: nl.split_z(p, sum=sum))(
-                p, self
-            )
+            return NeighbourList.vmap_x_nl(lambda p, nl: nl.split_z(p))(p, self)
 
-        p, bools = vmap(
-            vmap(
-                lambda a, p, b: (
-                    jax.tree_map(lambda pi: pi * (a == b), tree=p),
-                    a == b,
-                ),
-                in_axes=(0, 0, None),
-            ),
-            in_axes=(None, None, 0),
-        )(self.z_array, p, self.z_unique)
+        arg_split = [
+            jnp.argsort(jnp.array(self.z_array) != zu, kind="stable")[0:nzu]
+            for zu, nzu in zip(self.z_unique, self.num_z_unique)
+        ]
+        p = [jax.tree_map(lambda pi: pi[a], tree=p) for a in arg_split]
 
-        if sum:
-            p, bools = jax.tree_map(lambda x: jnp.sum(x, axis=1), (p, bools))
-
-        return bools, p
+        return arg_split, p
 
     @staticmethod
     def match_kernel(
@@ -1179,7 +1190,8 @@ class NeighbourList:
         nl2: NeighbourList,
         matching="REMatch",
         norm=True,
-        alpha=0.2,
+        alpha=1e-2,
+        average_kernels=True,
     ):
         # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
 
@@ -1197,87 +1209,51 @@ class NeighbourList:
                 )
             )(p2, nl2)
 
-        if matching.lower() == "rematch" or matching.lower() == "average":
-            b, _ = nl1.split_z((), True)
-        elif matching.lower() == "norm":
-            b = jnp.ones_like(nl1.z_array)
-
-        def sum_a(p1, p2):
-            return jnp.tensordot(p1, jnp.moveaxis(p2, 0, -1), axes=p1.ndim - 1)
-
-        def _local_kernel(p1, p2, _nl1, _nl2):
-            baz, az = _nl1.split_z(p1)
-            bbz, bz = _nl2.split_z(p2)
-
-            @partial(vmap, in_axes=(0, 0))
-            def _f(p1, p2):
-                return sum_a(p1, p2)
-
-            return _f(az, bz)
+        # jnp.all(nl1.z_unique == nl2.z_unique)
+        # assert jnp.all(nl1.num_z_unique == nl2.num_z_unique)
+        b = nl1.num_z_unique
 
         if matching.lower() == "average":
 
-            def _f(p1, p2, nl1, nl2, n1, n2):
-                @vmap
-                def _p(bools, vals):
-                    return jnp.sum(vals, axis=0) / jnp.sum(bools, axis=0)
+            def __gs(a, b):
+                p = jnp.full((a.shape[0], b.shape[0]), 1 / (a.shape[0] * b.shape[0]))
 
-                a_z = _p(*nl1.split_z(p1))
-                b_z = _p(*nl2.split_z(p2))
-
-                out = sum_a(a_z, b_z)
-
-                return jnp.diag(out), None
+                return p
 
         elif matching.lower() == "rematch":
-            # adapted from https://singroup.github.io/dscribe/0.3.x/_modules/dscribe/kernels/rematchkernel.html
 
-            def _f(p1, p2, nl1, nl2, n1, n2):
-                """
-                Computes the REMatch similarity between two structures A and B.
+            def __gs(p1_s, p2_s):
+                n = p1_s.shape[0]
 
-                Args:
-                    localkernel(Array): NxM matrix of local similarities between
-                        structures A and B, with N and M atoms respectively.
-                Returns:
-                    float: REMatch similarity between the structures A and B.
-                """
+                geom = PointCloud(
+                    x=jnp.reshape(p1_s, (n, -1)),
+                    y=jnp.reshape(p2_s, (n, -1)),
+                    scale_cost=True,
+                    epsilon=alpha,
+                )
+                prob = linear_problem.LinearProblem(geom)
 
-                local_kernel = _local_kernel(p1, p2, nl1, nl2)
+                solver = sinkhorn.Sinkhorn()
+                out = solver(prob)
 
-                def __gs(local_kernel):
-                    K = jnp.exp(-(1 - local_kernel) / alpha)
+                P_ij = out.matrix
 
-                    def body(uv, K):
-                        u, _ = uv
-                        n, m = K.shape
-                        v = (n * K.T @ u) ** (-1)
-                        u = (m * K @ v) ** (-1)
+                # Tr(  P.T * C )
+                return P_ij
 
-                        return (u, v)
+        elif matching.lower() == "norm" or matching.lower() == "l2":
+            # def _f(p1, p2, nl1, nl2):
 
-                    n, m = K.shape
+            def __gs(p1_s, p2_s):
+                n1 = vmap(jnp.linalg.norm)(p1_s)
+                n2 = vmap(jnp.linalg.norm)(p2_s)
+                n1_ss = jnp.argsort(n1)
+                n2_ss = jnp.argsort(n2)
 
-                    solver = jaxopt.FixedPointIteration(
-                        fixed_point_fun=body,
-                        tol=1e-8,
-                        implicit_diff_solve=solve_bicgstab,
-                    )
-                    (u, v), _ = solver.run((jnp.ones((n,)) / n, jnp.ones((m,)) / m), K)
+                p = jnp.zeros((p1_s.shape[0], p2_s.shape[0]))
+                p = p.at[n1_ss, n2_ss].set(1)
 
-                    # P_ij = u_i * v_j * K_ij
-                    P_ij = jnp.einsum("i,j,ij->ij", u, v, K)
-                    # Tr(  P.T * C )
-                    return jnp.einsum("ij,ij", P_ij, local_kernel), P_ij
-
-                return vmap(__gs, in_axes=(0))(local_kernel)
-
-        elif matching.lower() == "norm":
-
-            def _f(p1, p2, nl1, nl2, norm1, norm2):
-                p1 = nl1.l2_z_sort(p1, norms=norm1)
-                p2 = nl2.l2_z_sort(p2, norms=norm2)
-                return jnp.diag(sum_a(p1, p2)), None
+                return p
 
         elif matching.lower() == "best":
             raise
@@ -1286,48 +1262,38 @@ class NeighbourList:
         else:
             raise ValueError("unknown matching procedure")
 
-        def norm_p(val0):
-            norms = vmap(jnp.linalg.norm)(val0)
-            norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
-            val0 = jnp.einsum("i...,i->i...", val0, norms_inv)
-            return val0, norms, norms_inv
+        @vmap
+        def __norm(p):
+            n1_sq = jnp.einsum("...,...->", p, p)
+            n1_sq_safe = jnp.where(n1_sq <= 1e-16, 1, n1_sq)
+            n1_i = jnp.where(n1_sq == 0, 0.0, 1 / jnp.sqrt(n1_sq_safe))
 
-        p1, n1, n1i = norm_p(p1)
-        p2, n2, n2i = norm_p(p2)
+            return p * n1_i
 
-        out, p = _f(p1, p2, nl1, nl2, n1, n2)
+        def _f(__gs, p1, p2, nl1, nl2):
+            (a1_s, p1_s), (a2_s, p2_s) = nl1.split_z(p1), nl2.split_z(p2)
 
-        if norm:
-            n_sq = _f(p2, p2, nl2, nl2, n2, n2)[0] * _f(p1, p1, nl1, nl1, n1, n1)[0]
+            P_p = jax.scipy.linalg.block_diag(*[__gs(a, b) for a, b in zip(p1_s, p2_s)])
 
-            n_sq_safe = jnp.where(n_sq == 0, 1, n_sq)
-            ni = jnp.where(n_sq == 0, 0.0, 1 / jnp.sqrt(n_sq_safe))
-            out *= ni
-            # p= jnp.einsum("ijk,i,j,k->ijk", p, ni, n1i, n2i)
+            P_p = vmap(lambda x: x / jnp.sum(x))(P_p)  # norm rows
 
-        # do final normalisation based on  number of atoms of kind Z
-        out = jnp.sum(b * out) / jnp.sum(b)
-        # p = jnp.sum(vmap(jnp.multiply)(b, p), axis=0) / jnp.sum(b)
+            if norm:
+                p1 = __norm(p1)
+                p2 = __norm(p2)
 
-        return out, p
+            a1, a2 = jnp.hstack(a1_s), jnp.hstack(a2_s)
+            a1_i = jnp.zeros_like(a1).at[a1].set(jnp.arange(a1.shape[0]))
+            a2_i = jnp.zeros_like(a2).at[a2].set(jnp.arange(a2.shape[0]))
 
-    def l2_z_sort(self, p, norms=None, norm=False):
-        if self.batched:
-            return self.vmap_x_nl(
-                lambda p, nl: nl.l2_z_sort(p, norms=norms, norm=norm)
-            )(p, self)
+            P = P_p[a1_i, :][:, a2_i]
 
-        if norms is None:
-            norms = vmap(jnp.linalg.norm)(p)
-        if norm:
-            norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
-            p = jnp.einsum("i...,i->i...", p, norms_inv)
+            return jnp.einsum("ij,i...,j...->j", P, p1, p2), P
 
-        p_n = jnp.argsort(norms)
-        p = p[p_n, :]
-        z_array = self.z_array[p_n]
-        p_z = jnp.argsort(z_array)
-        return p[p_z, :]
+        res, P = _f(__gs, p1, p2, nl1, nl2)
+        if average_kernels:
+            res = jnp.sum(res) / res.shape[0]
+
+        return res, P
 
     def __add__(self, other):
         assert isinstance(other, NeighbourList)
@@ -1371,6 +1337,11 @@ class NeighbourList:
 
         if self.op_center is None:
             assert other.op_center is None
+
+        if self.num_z_unique is None:
+            assert other.num_z_unique is None
+        else:
+            assert jnp.all(self.num_z_unique == other.num_z_unique)
 
         if self.atom_indices is not None:
             m = jnp.max(
@@ -1419,6 +1390,7 @@ class NeighbourList:
             op_center=jnp.vstack([self.op_center, other.op_center])
             if self.op_center is not None
             else None,
+            num_z_unique=self.num_z_unique,
         )
 
 

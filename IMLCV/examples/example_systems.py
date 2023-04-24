@@ -74,19 +74,31 @@ def get_lda_cv(
 
     from IMLCV.base.CV import NeighbourList
 
-    if sort == "l2":
+    @vmap
+    def __norm(p):
+        n1_sq = jnp.einsum("...,...->", p, p)
+        n1_sq_safe = jnp.where(n1_sq <= 1e-16, 1, n1_sq)
+        n1_i = jnp.where(n1_sq == 0, 0.0, 1 / jnp.sqrt(n1_sq_safe))
+
+        return p * n1_i
+
+    if kernel == True:
+        raise NotImplementedError("kernel not implemented for lda")
 
         @NeighbourList.vmap_x_nl
         def _norm(cvi, nli, _):
-            return nli.l2_z_sort(cvi, norm=True)
+            _k, _ = NeighbourList.match_kernel(
+                cvi,
+                cvi2,
+                nli,
+                nli2,
+                matching=kernel_type,
+                alpha=0.2,
+            )
 
-    elif sort == "rematch":
+            return k
 
-        def norm_p(val0):
-            norms = vmap(jnp.linalg.norm)(val0)
-            norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
-            val0 = jnp.einsum("i...,i->i...", val0, norms_inv)
-            return val0, norms, norms_inv
+    if sort == "rematch" or sort == "l2" or sort == "average":
 
         @NeighbourList.vmap_x_nl
         def _norm(cvi, nli, pi):
@@ -95,14 +107,14 @@ def get_lda_cv(
                 pi,
                 nli,
                 nli,
-                matching="rematch",
-                alpha=0.2,
+                matching=sort,
+                alpha=0.01,
             )
 
-            b_split, cvi_split = nli.split_z(cvi)
-            cvi_matched = jnp.einsum("zij,zj...->i...", P_ij, cvi_split)
+            return jnp.einsum("ij,i... ->j...", P_ij, __norm(cvi))
 
-            return norm_p(cvi_matched)[0]
+    else:
+        raise NotImplementedError("todo: implement other sorts")
 
     for ri, ti in pre_round.iter():
         traj_info = ti.ti
@@ -111,14 +123,12 @@ def get_lda_cv(
         nli = spi.get_neighbour_list(**nl_kwargs)
         cvi = descriptor.compute_cv_flow(spi, nli)
 
-        if sort == "l2":
+        if sort == "l2" or sort == "average":
             if len(norm_data) == 0:
                 norm_data.append(None)
-            normed_sorted_cvi = _norm(nli, cvi.cv, None)
 
         elif sort == "rematch":
-            pi = norm_p(jnp.average(cvi.cv, axis=0))[0]
-
+            pi = __norm(jnp.average(cvi.cv, axis=0))
             norm_data.append(pi)
 
         phase_sps.append(spi)
@@ -321,27 +331,34 @@ def get_lda_cv(
         alphas.append(alpha)
         vs.append(v)
 
-    if norm_data is not None:
-        norm_data = jnp.array(norm_data)
-    vs = jnp.array(vs)
-    scale_factors = jnp.array(scale_factors)
-    alphas = jnp.array(alphas)
+    # vs = jnp.array(vs)
+    # scale_factors = jnp.array(scale_factors)
+    # alphas = jnp.array(alphas)
 
     @CvFlow.from_function
     def _lda_cv(sp: SystemParams, nl: NeighbourList):
         cv = descriptor.compute_cv_flow(sp, nl)
 
-        p = vmap(lambda nd: _norm(cv.cv, nl, nd))(norm_data)
-
-        @vmap
-        def cvs(p, alpha, v, scale_factor):
+        # @vmap
+        def cvs(nd, p, alpha, v, scale_factor):
+            p = _norm(cv.cv, nl, nd)
             cv_unscaled = alpha.T @ (jnp.reshape(p, (-1,)) @ v.T)
             cv_scaled = (cv_unscaled - scale_factor[0, :]) / (
                 scale_factor[1, :] - scale_factor[0, :]
             )
             return cv_scaled
 
-        return jnp.mean(cvs(p, alphas, vs, scale_factors), axis=0)
+        return jnp.mean(
+            jnp.array(
+                [
+                    cvs(nd, [], alpha, v, scale_factor)
+                    for nd, alpha, v, scale_factor in zip(
+                        norm_data, alphas, vs, scale_factors
+                    )
+                ]
+            ),
+            axis=0,
+        )
 
     cv0 = CollectiveVariable(
         f=_lda_cv,
@@ -351,9 +368,9 @@ def get_lda_cv(
         ),
     )
 
-    # # # check if close to 1
-    cvs0, _ = cv0.compute_cv(phase_sps[0], phase_nls[0])
-    cvs1, _ = cv0.compute_cv(phase_sps[1], phase_nls[1])
+    # # # check if close to 0 and 1
+    # cvs0, _ = cv0.compute_cv(phase_sps[0], phase_nls[0])
+    # cvs1, _ = cv0.compute_cv(phase_sps[1], phase_nls[1])
     return cv0
 
 

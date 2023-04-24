@@ -54,13 +54,13 @@ if __name__ == "__main__":
     group.add_argument(
         "--init_max_grad",
         type=float,
-        default=100,
+        default=20,
         help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol",
     )
     group.add_argument(
         "--max_grad",
         type=float,
-        default=100,
+        default=20,
         help="max value of gradient wrt atomic positions of bias during initialisation,ink Kjmol",
     )
 

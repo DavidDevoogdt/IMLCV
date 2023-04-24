@@ -615,7 +615,6 @@ class Rounds(ABC):
                 bias.plot(name=outputs[0].filepath, traj=[cvs])
 
             if sp0 is None:
-
                 if tis.shape > 1:  # type: ignore
                     assert tis is not None
 
@@ -631,7 +630,7 @@ class Rounds(ABC):
                     bs = jnp.reshape(bs, (-1))
 
                     # compensate for bias of previous
-                    # bs += tis.e_pot
+                    bs += tis.e_pot
 
                     bs -= jnp.mean(bs)
 

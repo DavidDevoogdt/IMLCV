@@ -425,53 +425,64 @@ if __name__ == "__main__":
         nl3 = sp3.get_neighbour_list(r_cut=r_cut, z_array=z_array)
         return sp1, sp2, sp3, nl1, nl2, nl3
 
-    for matching in ["norm", "rematch", "average"]:
-        for cell in [False, True]:
-            for pp in [
-                p_inl_sb(
-                    l_max=l_max,
-                    n_max=n_max,
-                    r_cut=r_cut,
-                ),
-                p_innl_soap(
-                    l_max=l_max,
-                    n_max=n_max,
-                    r_cut=r_cut,
-                    sigma_a=0.5,
-                    r_delta=1.0,
-                    num=50,
-                ),
-            ]:
+    for matching in [
+        "average",
+        "norm",
+        "rematch",
+    ]:
+        for cell in [True, False]:
+            for pp in ["sb", "soap"]:
                 sp1, sp2, sp3, nl1, nl2, nl3 = get_sps(with_cell=cell)
 
-                @jit
+                if pp == "sb":
+                    pi = p_inl_sb(
+                        l_max=l_max,
+                        n_max=n_max,
+                        r_cut=r_cut,
+                    )
+                elif pp == "soap":
+                    pi = p_innl_soap(
+                        l_max=l_max,
+                        n_max=n_max,
+                        r_cut=r_cut,
+                        sigma_a=0.5,
+                        r_delta=1.0,
+                        num=50,
+                    )
+
+                # @jit
                 def f(sp, nl):
                     return p_i(
                         sp=sp,
                         nl=nl,
-                        p=pp,
+                        p=pi,
                         r_cut=r_cut,
                     )
 
+                # with jax.debug_nans():
                 p1 = f(sp1, nl1)
 
-                @jit
+                # @jit
                 def k(sp: SystemParams, nl: NeighbourList):
                     return Kernel(p1, f(sp, nl), nl1, nl, matching=matching)
 
+                # with jax.disable_jit():
+                #     with jax.debug_nans():
                 da = k(sp1, nl1)
 
                 from time import time_ns
 
                 before = time_ns()
-                with jax.debug_nans():
-                    dab = k(sp2, nl2)
+                # with jax.disable_jit():
+                #     with jax.debug_nans():
+                dab = k(sp2, nl2)
                 after = time_ns()
-
+                # with jax.disable_jit():
+                #     with jax.debug_nans():
                 dac = k(sp3, nl3)
 
                 print(
-                    f"{matching=} {cell=} {pp=} l_max {l_max}  n_max {l_max} <kernel(orig,rot)>={  dab  }, <kernel(orig, rand)>= { dac }, evalutation time [ms] { (after-before)/ 10.0**6  }  "
+                    f"{matching=} {cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t<kernel(orig,rot)>=\t\t{  dab :>.4f}\t<kernel(orig, rand)>=\t\t{ dac:.4f}\tevalutation time [ms] { (after-before)/ 10.0**6 :>.2f}  "
                 )
 
                 jk = jit(jacrev(k))
@@ -487,5 +498,5 @@ if __name__ == "__main__":
                 jac_dac = jk(sp3, nl3)
 
                 print(
-                    f"{matching}  {cell=} {pp=} l_max {l_max}  n_max {l_max}  || d kernel(orig,rot)  / d sp )={ jnp.linalg.norm(jac_dab.coordinates)  },  || d kernel(orig,rand)  / d sp )= { jnp.linalg.norm(jac_dac.coordinates)  }, evalutation time [ms] { (after-before)/ 10.0**6  }   "
+                    f"{matching=} {cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t||d kernel(orig,rot)/d sp)=\t{ jnp.linalg.norm(jac_dab.coordinates)  :.4f}\t||d kernel(orig,rand)/d sp)=\t{ jnp.linalg.norm(jac_dac.coordinates)  :>.4f}\tevalutation time [ms] { (after-before)/ 10.0**6  :>.2f}   "
                 )
