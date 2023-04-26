@@ -44,14 +44,6 @@ IMLCV.base.bias module
    :undoc-members:
    :show-inheritance:
 
-IMLCV.base.hwsetup module
--------------------------
-
-.. automodule:: IMLCV.base.hwsetup
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 IMLCV.base.rounds module
 ------------------------
 

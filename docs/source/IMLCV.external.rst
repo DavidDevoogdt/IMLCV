@@ -1,15 +1,6 @@
 IMLCV.external package
 ======================
 
-Subpackages
------------
-
-.. toctree::
-   :maxdepth: 4
-
-   IMLCV.external.HPC_ugent
-   IMLCV.external.parsl_conf
-
 Submodules
 ----------
 

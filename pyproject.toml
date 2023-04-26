@@ -85,10 +85,11 @@ dependencies =[
     ]
     
 
+[tool.setuptools]
+packages = ["IMLCV", "IMLCV.base","IMLCV.base.tools", "IMLCV.examples"]
 
-
-[tool.setuptools.packages.find]
-where = ["IMLCV"]
+# [tool.setuptools.packages.find]
+# where = ["IMLCV"]
 
 # [project.optional-dependencies]
 # test = [
