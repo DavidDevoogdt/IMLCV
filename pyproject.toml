@@ -1,6 +1,9 @@
 
 [build-system]
-requires = ["flit_core >=3.2,<4","numpy"]
+requires = ["flit_core >=3.2,<4",
+    "cython",
+    "numpy",
+    ]
 build-backend = "flit_core.buildapi"
 
 
@@ -11,6 +14,12 @@ classifiers = ["License :: OSI Approved :: MIT License"]
 
 
 requires-python = ">=3.9"
+
+# install_requires=[
+#     "numpy",
+#     "Cython",
+# ]
+
 dependencies =[
         "jax",
         "numpy",
