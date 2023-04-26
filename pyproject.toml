@@ -41,7 +41,7 @@
 
 
 [build-system]
-requires = ["setuptools", "numpy","cython" ]
+requires = ["setuptools", "numpy>=1.23","cython" ]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -51,7 +51,7 @@ license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
 authors = [{name = "Devoogdt", email = "david.devoogdt@ugent.be"}]
 dynamic = ["version"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 dependencies =[
         "jax",
