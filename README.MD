@@ -1,3 +1,6 @@
+[![Documentation Status](https://readthedocs.org/projects/imlcv/badge/?version=latest)](https://imlcv.readthedocs.io/en/latest/?badge=latest)
+
+
 # IMLCV
 
 iterative machine learned collective variables framework, WIP
@@ -10,11 +13,7 @@ for local and hpc installation see `install.sh` and `install_hpc.sh`
 
 # Examples
 See command line interface got to this foler in (linux) terminal, and type
-```
-source ./Miniconda3/bin/activate base
-python IMLCV/examples/simul.py -s ala
-```
-For more options, see 
+
 ```
 python IMLCV/examples/simul.py  --help
 ```
