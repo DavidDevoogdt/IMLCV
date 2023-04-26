@@ -1,20 +1,43 @@
-.. IMLCV documentation master file, created by
-   sphinx-quickstart on Wed Apr 26 17:20:53 2023.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
 
-Welcome to IMLCV's documentation!
-=================================
+
+******************************
+IMLCV
+******************************
+
+
+.. div:: sd-text-left sd-font-italic
+
+   IMLCV
+
+----
+
+
+
+
+Features
+^^^^^^^^^
+
+Installation
+^^^^^^^^^^^^
+
+.. code-block:: bash
+
+   pip install .
+
+Basic usage
+^^^^^^^^^^^^
+
+
+.. code-block:: bash
+
+
+   python IMLCV/examples/simul.py --help
+
+
+----
+
 
 .. toctree::
+   :hidden:
    :maxdepth: 2
-   :caption: Contents:
-
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   

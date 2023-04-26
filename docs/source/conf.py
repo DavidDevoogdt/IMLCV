@@ -26,8 +26,15 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.coverage",
     "sphinx.ext.napoleon",
+    "sphinx.ext.viewcode",
+    "autoapi.extension",
     "sphinx_rtd_theme",
+    "sphinx_design",
+    # "sphinx_rtd_size",
 ]
+
+
+autoapi_dirs = ["../../IMLCV"]
 
 templates_path = ["_templates"]
 exclude_patterns = []
@@ -37,22 +44,20 @@ language = "python"
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme_options = {
-    "analytics_id": "G-XXXXXXXXXX",  #  Provided by Google in your dashboard
-    "analytics_anonymize_ip": False,
-    "logo_only": False,
-    "display_version": True,
-    "prev_next_buttons_location": "bottom",
-    "style_external_links": False,
-    "vcs_pageview_mode": "",
-    "style_nav_header_background": "white",
-    # Toc options
-    "collapse_navigation": True,
-    "sticky_navigation": True,
-    "navigation_depth": 4,
-    "includehidden": True,
-    "titles_only": False,
-}
+html_theme = "sphinx_book_theme"
+html_css_files = ["css/theme.css"]
 
-html_theme = "sphinx_rtd_theme"
+html_title = ""
+
 html_static_path = ["_static"]
+
+# Theme options are theme-specific and customize the look and feel of a theme
+# further.  For a list of options available for each theme, see the
+# documentation.
+
+html_theme_options = {
+    "repository_url": "https://github.com/DavidDevoogdt/IMLCV",
+    "use_repository_button": True,  # add a 'link to repository' button
+    "use_issues_button": False,  # add an 'Open an Issue' button
+    "show_navbar_depth": 1,
+}
