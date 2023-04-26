@@ -1,62 +1,110 @@
+[tool.poetry]
+name = "IMLCV"
+version = "0.0.0"
+description = ""
+authors = ["David Devoogdt <david.devoogdt@ugnent.be>"]
+readme = "README.MD"
+packages = [{include = "IMLCV"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
 
 [build-system]
-requires = ["flit_core >=3.2,<4",
-    "cython",
-    "numpy",
-    ]
-build-backend = "flit_core.buildapi"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+jax = "*"
+numpy = "*"
+parsl = "*"
+keras = "*"
+yaff = "*"
+cloudpickle = "*"
+matplotlib = "*"
+molmod = "*"
+scipy = "*"
+tensorflow = "*"
+jax_dataclasses = "*"
+optax = "*"
+flax = "*"
+umap = "*"
+h5py = "*"
+numba = "*"
+shapely = "*"
+alphashape = "*"
+ase = "*"
+pytest = "*"
+scikit-learn = "*"
+nyx = "*"
+filelock = "*"
+distrax = "*"
+jaxopt = "*"
+ott = "*"
+pymanopt = "*"
 
 
-[project]
-name = "IMLCV"
-license = {file = "LICENSE"}
-classifiers = ["License :: OSI Approved :: MIT License"]
+
+# [build-system]
+# requires = ["flit_core >=3.2,<4","cython", "numpy"]
+# build-backend = "flit_core.buildapi"
 
 
-requires-python = ">=3.9"
+# [project]
+# name = "IMLCV"
+# license = {file = "LICENSE"}
+# classifiers = ["License :: OSI Approved :: MIT License"]
+
+
+# requires-python = ">=3.9"
 
 # install_requires=[
 #     "numpy",
 #     "Cython",
 # ]
 
-dependencies =[
-        "jax",
-        "numpy",
-        "parsl",
-        "keras",
-        "yaff",
-        "cloudpickle",
-        "matplotlib",
-        "numpy",
-        "molmod",
-        "scipy",
-        "tensorflow",
-        "jax_dataclasses",
-        "optax",
-        "flax",
-        "umap",
-        "h5py",
-        "numba",
-        "shapely",
-        "alphashape",
-        "ase",
-        "pytest",
-        "scikit-learn",
-        "nyx",
-        "filelock",
-        "distrax",
-        "jaxopt",
-        "ott",
-        "pymanopt",
-    ]
-authors = [{name = "Devoogdt", email = "david.devoogdt@ugent.be"}]
-dynamic = ["version", "description"]
-
-
-# [tool.setuptools.packages.find]
-# include = [
-#     "IMLCV",
-#     "IMLCV.base",
-#     "IMLCV.examples",
+# dependencies =[
+#         "jax",
+#         "numpy",
+#         "parsl",
+#         "keras",
+#         "yaff",
+#         "cloudpickle",
+#         "matplotlib",
+#         "numpy",
+#         "molmod",
+#         "scipy",
+#         "tensorflow",
+#         "jax_dataclasses",
+#         "optax",
+#         "flax",
+#         "umap",
+#         "h5py",
+#         "numba",
+#         "shapely",
+#         "alphashape",
+#         "ase",
+#         "pytest",
+#         "scikit-learn",
+#         "nyx",
+#         "filelock",
+#         "distrax",
+#         "jaxopt",
+#         "ott",
+#         "pymanopt",
 #     ]
+# authors = [{name = "Devoogdt", email = "david.devoogdt@ugent.be"}]
+# dynamic = ["version", "description"]
+
+# [project.optional-dependencies]
+# test = [
+#     "pytest >=2.7.3",
+#     "pytest-cov",
+# ]
+# doc = ["sphinx"]
+
+
+# # [tool.setuptools.packages.find]
+# # include = [
+# #     "IMLCV",
+# #     "IMLCV.base",
+# #     "IMLCV.examples",
+# #     ]
