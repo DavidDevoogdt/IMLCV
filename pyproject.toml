@@ -5,6 +5,8 @@ description = ""
 authors = ["David Devoogdt <david.devoogdt@ugnent.be>"]
 readme = "README.MD"
 packages = [{include = "IMLCV"}]
+repository = "https://github.com/DavidDevoogdt/IMLCV/blob/master/pyproject.toml"
+license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -39,7 +41,7 @@ pymanopt = "*"
 
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core", "numpy","cython" ]
 build-backend = "poetry.core.masonry.api"
 
 
