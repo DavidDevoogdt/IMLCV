@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import time
 
-import dill
+import cloudpickle
 import h5py
 import jax.numpy as jnp
 import numpy as np
@@ -537,8 +537,9 @@ class MDEngine(ABC):
         return nl
 
     def save(self, file):
+
         with open(file, "wb") as f:
-            dill.dump(self, f)
+            cloudpickle.dump(self, f)
 
     def __getstate__(self):
         return {key: self.__getattribute__(key) for key in MDEngine.keys}
@@ -550,7 +551,7 @@ class MDEngine(ABC):
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
         with open(file, "rb") as f:
-            self = dill.load(f)
+            self = cloudpickle.load(f)
 
         print(f"Loading MD engine")
         for key in kwargs.keys():

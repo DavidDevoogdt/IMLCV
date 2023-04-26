@@ -53,7 +53,7 @@ class RoundInformation:
 
     def get_bias(self) -> Bias:
         assert self.name_bias is not None
-        return Bias.load(self.folder / self.name_bias)
+        return Bias.load(self.folder.parent / self.name_bias)
 
     def get_engine(self) -> MDEngine:
         assert self.name_md is not None
@@ -533,17 +533,41 @@ class Rounds(ABC):
         r_cut = md_engine.static_trajectory_info.r_cut
         z_array = md_engine.static_trajectory_info.atomic_numbers
 
+        bias_prev = None
+
         if sp0 is None:
             tis: TrajectoryInfo | None = None
 
             # also get smaples form init round
             for ri, ti in self.iter(start=0, num=2, ignore_invalid=True):
+                round_bias = ri.get_bias()
+                ti_bias = ti.get_bias()
+
+                traj_info = ti.ti
+
+                if traj_info.cv is None:
+                    nl = traj_info.sp.get_neighbour_list(
+                        r_cut=ri.tic.r_cut, z_array=ri.tic.atomic_numbers
+                    )
+                    cv, _ = round_bias.collective_variable.compute_cv(traj_info.sp, nl)
+                else:
+                    cv = traj_info.CV
+
+                if ti_bias is None:
+                    epot_r_i, _ = ti_bias.compute_from_cv(cv)
+                else:
+                    epot_r_i = traj_info.e_bias
+
+                epot_r, _ = round_bias.compute_from_cv(cv)
+
                 # sp0 = ti.ti.sp
                 if tis is None:
                     tis = ti.ti
+                    bias_prev = [epot_r_i]
                 else:
                     assert tis is not None
                     tis += ti.ti
+                    bias_prev.append(epot_r_i)
 
             if tis is None:
                 tis = TrajectoryInfo(
@@ -553,6 +577,9 @@ class Rounds(ABC):
             assert sp0.shape[0] == len(
                 biases
             ), f"The number of initials cvs provided {sp.shape[0]} does not correspond to the number of biases {len(biases)}"
+
+        if bias_prev is not None:
+            bias_prev = jnp.hstack(bias_prev)
 
         for i, bias in enumerate(biases):
             path_name = self.path(r=self.round, i=i)
@@ -618,19 +645,23 @@ class Rounds(ABC):
                 if tis.shape > 1:  # type: ignore
                     assert tis is not None
 
-                    # compensate for bias of current simulation
                     if tis.cv is not None:
-                        bs, _ = bias.compute_from_cv(cvs=tis.CV)
+                        cv = tis.CV
                     else:
                         sp = tis.sp
-
                         nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                        _, bs = bias.compute_from_system_params(sp=sp, nl=nl).energy
+
+                        cv = bias.collective_variable.f.compute_cv_flow(sp=sp, nl=nl)
+                    # compensate for bias of current simulation
+                    bs, _ = b.compute_from_cv(cvs=cv)
+
+                    if bias_prev is not None:
+                        bs -= bias_prev
 
                     bs = jnp.reshape(bs, (-1))
 
-                    # compensate for bias of previous
-                    bs += tis.e_pot
+                    # # compensate for bias of previous
+                    # bs += tis.e_pot
 
                     bs -= jnp.mean(bs)
 
@@ -638,8 +669,6 @@ class Rounds(ABC):
                         -bs / (md_engine.static_trajectory_info.T * boltzmann)
                     )
                     probs = probs / jnp.sum(probs)
-
-                    print(f"{probs.shape=},{tis.shape=}  ")
 
                     KEY, k = jax.random.split(KEY, 2)
                     index = jax.random.choice(

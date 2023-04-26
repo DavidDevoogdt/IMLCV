@@ -14,7 +14,7 @@ import ase.cell
 import ase.geometry
 import ase.stress
 import ase.units
-import dill
+import cloudpickle
 import jax.numpy as jnp
 import jax.scipy as jsp
 import jax_dataclasses
@@ -130,12 +130,12 @@ class BC:
             filename.parent.mkdir(parents=True, exist_ok=True)
 
         with open(filename, "wb") as f:
-            dill.dump(self, f)
+            cloudpickle.dump(self, f)
 
     @staticmethod
     def load(filename) -> BC:
         with open(filename, "rb") as f:
-            self = dill.load(f)
+            self = cloudpickle.load(f)
         return self
 
 
@@ -239,7 +239,6 @@ class YaffEnergy(Energy):
         self.ff.update_pos(coordinates)
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
-
         gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
         vtens_out = np.zeros_like(self.ff.vtens) if vir else None
 
@@ -254,7 +253,6 @@ class YaffEnergy(Energy):
         return {"f": self.f, "sp": self.sp}
 
     def __setstate__(self, state):
-
         self.f = state["f"]
         self.ff = self.f()
         self.sp = state["sp"]
@@ -269,7 +267,6 @@ class AseEnergy(Energy):
         atoms: ase.Atoms,
         calculator: ase.calculators.calculator.Calculator | None = None,
     ):
-
         self.atoms = atoms
 
         if calculator is not None:
@@ -326,7 +323,6 @@ class AseEnergy(Energy):
         raise EnergyError("Ase failed to provide an energy\n")
 
     def __getstate__(self):
-
         extra_args = {
             "label": self.calculator.label,
         }
@@ -377,7 +373,6 @@ class Cp2kEnergy(AseEnergy):
         cp2k_path: Path | None = None,
         **kwargs,
     ):
-
         self.atoms = atoms
         self.cp2k_inp = os.path.abspath(input_file)
         self.input_kwargs = input_kwargs
@@ -522,32 +517,38 @@ class Bias(BC, ABC):
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
 
-        @NeighbourList.vmap_sp_nl
-        def _compute_from_system_params(sp, nl):
+        if sp.batched:
+            if nl is not None:
+                assert nl.batched
+                return vmap(
+                    self.compute_from_system_params, in_axes=(0, None, None, 0)
+                )(sp, gpos, vir, nl)
+            else:
+                return vmap(
+                    self.compute_from_system_params, in_axes=(0, None, None, None)
+                )(sp, gpos, vir, nl)
 
-            [cvs, jac] = self.collective_variable.compute_cv(
-                sp=sp, nl=nl, jacobian=gpos or vir
-            )
-            [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
+        [cvs, jac] = self.collective_variable.compute_cv(
+            sp=sp, nl=nl, jacobian=gpos or vir
+        )
+        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
 
-            e_gpos = None
-            if gpos:
-                es = "nj,njkl->nkl"
-                if not sp.batched:
-                    es = es.replace("n", "")
-                e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
+        e_gpos = None
+        if gpos:
+            es = "nj,njkl->nkl"
+            if not sp.batched:
+                es = es.replace("n", "")
+            e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
 
-            e_vir = None
-            if vir and sp.cell is not None:
-                # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
-                es = "nji,nk,nkjl->nli"
-                if not sp.batched:
-                    es = es.replace("n", "")
-                e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
+        e_vir = None
+        if vir and sp.cell is not None:
+            # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
+            es = "nji,nk,nkjl->nli"
+            if not sp.batched:
+                es = es.replace("n", "")
+            e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
 
-            return cvs, EnergyResult(ener, e_gpos, e_vir)
-
-        return _compute_from_system_params(sp, nl)
+        return cvs, EnergyResult(ener, e_gpos, e_vir)
 
     @partial(jit, static_argnums=(0, 2))
     def compute_from_cv(self, cvs: CV, diff=False) -> CV:
@@ -586,6 +587,13 @@ class Bias(BC, ABC):
         """
 
         self.finalized = True
+
+    # def __getstate__(self):
+    #     return self.__dict__
+
+    # def __setstate__(self, state):
+    #     self.__init__(**state)
+    #     return self
 
     @staticmethod
     def load(filename) -> Bias:
@@ -663,7 +671,6 @@ class Bias(BC, ABC):
             ax.tick_params(axis="both", which="minor", labelsize=16)
 
             if traj is not None:
-
                 if not isinstance(traj, Iterable):
                     traj = [traj]
                 for tr in traj:
@@ -671,7 +678,6 @@ class Bias(BC, ABC):
                     _ = ax2.hist(tr.cv, density=True, histtype="step")
 
         elif self.collective_variable.n == 2:
-
             if bins is None:
                 bins = self.collective_variable.metric.grid(
                     n=n, endpoints=True, margin=margin
@@ -742,7 +748,6 @@ class Bias(BC, ABC):
             cbar.set_label("Bias [kJ/mol]", size=18)
 
             if traj is not None:
-
                 if not isinstance(traj, Iterable):
                     traj = [traj]
                 for tr in traj:
@@ -778,7 +783,6 @@ def plot_app(
     y_lim=None,
     bins=None,
 ):
-
     bias.plot(
         name=outputs[0].filepath,
         n=n,
@@ -800,7 +804,6 @@ class CompositeBias(Bias):
     """Class that combines several biases in one single bias."""
 
     def __init__(self, biases: Iterable[Bias], fun=jnp.sum) -> None:
-
         self.init = True
 
         self.biases: list[Bias] = []
@@ -823,7 +826,6 @@ class CompositeBias(Bias):
         self.init = True
 
     def _append_bias(self, b: Bias):
-
         if b is NoneBias:
             return
 
@@ -846,7 +848,6 @@ class CompositeBias(Bias):
             # assert self.cvs == b.cvs, "CV should be the same"
 
     def _compute(self, cvs, *args):
-
         return self.fun(
             jnp.array(
                 [
@@ -885,9 +886,8 @@ class BiasF(Bias):
     """Bias according to CV."""
 
     def __init__(self, cvs: CollectiveVariable, g=None):
-
         self.g = g if (g is not None) else lambda _: jnp.array(0.0)
-        self.g = jit(self.g)
+        # self.g = jit(self.g) #leads to pickler issues
         super().__init__(cvs, start=None, step=None)
 
     def _compute(self, cvs):
@@ -938,24 +938,23 @@ class HarmonicBias(Bias):
         if k_max is not None:
             assert np.all(k_max > 0)
             self.r0 = k_max / k
-            self.y0 = jnp.einsum("i,i,i", k, self.r0, self.r0) / 2
+            self.y0 = jnp.einsum("i,i,i->", k, self.r0, self.r0) / 2
 
     def _compute(self, cvs: CV, *args):
-
         r = self.collective_variable.metric.difference(cvs, self.q0)
 
         def parabola(r):
-            return jnp.einsum("i,i,i", self.k, r, r) / 2
+            return jnp.einsum("i,i,i->", self.k, r, r) / 2
 
         if self.k_max is None:
             return parabola(r)
 
         return jnp.where(
-            jnp.linalg.norm(r) < self.r0,
+            jnp.linalg.norm(r / self.r0) < 1,
             parabola(r),
             jnp.sqrt(
                 jnp.einsum(
-                    "i,i,i,i",
+                    "i,i,i,i->",
                     self.k_max,
                     self.k_max,
                     jnp.abs(r) - self.r0,
@@ -1080,22 +1079,19 @@ class RbfBias(Bias):
         assert len(vals.shape) == 1
         assert cv.shape[0] == vals.shape[0]
 
-        self.rbf = jit(
-            RBFInterpolator(
-                y=cv,
-                kernel=kernel,
-                d=vals,
-                metric=cvs.metric,
-                smoothing=smoothing,
-                epsilon=epsilon,
-                degree=degree,
-            )
+        self.rbf = RBFInterpolator(
+            y=cv,
+            kernel=kernel,
+            d=vals,
+            metric=cvs.metric,
+            smoothing=smoothing,
+            epsilon=epsilon,
+            degree=degree,
         )
 
         # assert jnp.allclose(vals, self.rbf(cv), atol=1e-7)
 
     def _compute(self, cvs: CV, *args):
-
         out = self.rbf(cvs)
         if cvs.batched:
             return out
@@ -1147,7 +1143,6 @@ class GridBias(Bias):
             bias = np.concatenate((get_ext(i), bias, get_ext(i)), axis=i)
 
             if p:
-
                 bias[sl(i, 0)] = bias[sl(i, -2)]
                 bias[sl(i, -1)] = bias[sl(i, 1)]
 
@@ -1228,7 +1223,6 @@ class CvMonitor(BiasF):
         self.transitions = np.zeros((0, self.collective_variable.metric.ndim, 2))
 
     def update_bias(self, md: MDEngine):
-
         if not self._update_bias():
             return
 
@@ -1261,7 +1255,6 @@ class PlumedBias(Bias):
         fn="plumed.dat",
         fn_log="plumed.log",
     ) -> None:
-
         super().__init__(
             collective_variable,
             start=0,
@@ -1372,7 +1365,6 @@ class PlumedBias(Bias):
 
 
 def test_harmonic():
-
     cvs = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
         metric=CvMetric(
@@ -1419,7 +1411,6 @@ def test_virial():
 
 
 def test_grid_bias():
-
     # bounds = [[0, 3], [0, 3]]
     n = [4, 6]
 

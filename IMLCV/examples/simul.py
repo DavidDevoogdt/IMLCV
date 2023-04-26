@@ -7,7 +7,6 @@ from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR, config
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(
         description="CLI interface to set simulation params",
         epilog="Question? ask David.Devoogdt@ugent.be",
@@ -178,7 +177,6 @@ if __name__ == "__main__":
 
         def get_engine():
             if args.system == "alanine_dipeptide":
-
                 engine = alanine_dipeptide_yaff(
                     cv=args.cv,
                     kernel=args.kernel_LDA,
@@ -202,7 +200,6 @@ if __name__ == "__main__":
             engine = get_engine()
             scheme = Scheme(folder=args.folder, Engine=engine)
         else:
-
             from IMLCV.base.rounds import Rounds
 
             rnds = Rounds(folder=args.folder, new_folder=False)
@@ -237,7 +234,6 @@ if __name__ == "__main__":
         )
 
     if args.bootstrap:
-
         if args.bootstrap_cluster is None:
             args.bootstrap_cluster = args.cpu_cluster
 

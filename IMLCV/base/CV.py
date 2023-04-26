@@ -848,83 +848,91 @@ class NeighbourList:
         split_z=False,  #
         exclude_self=False,
     ):
-        @NeighbourList.vmap_sp_nl
-        def _apply_fun_neighbour(sp: SystemParams, nl: NeighbourList):
-            if r_cut is None:
-                r_cut is nl.r_cut
+        if sp.batched:
+            return vmap(
+                lambda nl, sp: NeighbourList.apply_fun_neighbour(
+                    self=nl,
+                    sp=sp,
+                    func=func,
+                    r_cut=r_cut,
+                    fill_value=fill_value,
+                    reduce=reduce,
+                    split_z=split_z,
+                    exclude_self=exclude_self,
+                )
+            )(self, sp)
 
-            pos = nl._pos(sp)
-            ind = nl.atom_indices
-            r = jnp.linalg.norm(pos, axis=-1)
+        if r_cut is None:
+            r_cut is self.r_cut
 
-            bools = r**2 < nl.r_cut**2
+        pos = self._pos(sp)
+        ind = self.atom_indices
+        r = jnp.linalg.norm(pos, axis=-1)
 
-            if exclude_self:
-                bools = jnp.logical_and(bools, r**2 != 0.0)
+        bools = r**2 < self.r_cut**2
 
-            bools = jnp.logical_and(bools, ind != -1)
+        if exclude_self:
+            bools = jnp.logical_and(bools, r**2 != 0.0)
 
-            true_val = vmap(vmap(func))(pos, ind)
-            false_val = jax.tree_map(
-                lambda a: jnp.zeros_like(a) + fill_value,
-                true_val,
-            )
+        bools = jnp.logical_and(bools, ind != -1)
 
-            def _get(bools):
-                def _red(bools):
-                    val = vmap(
-                        lambda b, x, y: jax.tree_map(
-                            lambda t, f: vmap(jnp.where)(b, t, f), x, y
-                        )
-                    )(bools, true_val, false_val)
+        true_val = vmap(vmap(func))(pos, ind)
+        false_val = jax.tree_map(
+            lambda a: jnp.zeros_like(a) + fill_value,
+            true_val,
+        )
 
-                    if reduce == "full":
-                        return jax.tree_map(
-                            lambda x: jnp.sum(x, axis=(1)), (bools, val)
-                        )
-                    elif reduce == "z":
-                        return jax.tree_map(
-                            lambda x: jnp.sum(x, axis=(0, 1)), (bools, val)
-                        )
-                    elif reduce == "none":
-                        return bools, val
-                    else:
-                        raise ValueError(
-                            f"unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
-                        )
+        def _get(bools):
+            def _red(bools):
+                val = vmap(
+                    lambda b, x, y: jax.tree_map(
+                        lambda t, f: vmap(jnp.where)(b, t, f), x, y
+                    )
+                )(bools, true_val, false_val)
 
-                if not reduce == "z":
-                    return _red(bools=bools)
+                if reduce == "full":
+                    return jax.tree_map(lambda x: jnp.sum(x, axis=(1)), (bools, val))
+                elif reduce == "z":
+                    return jax.tree_map(lambda x: jnp.sum(x, axis=(0, 1)), (bools, val))
+                elif reduce == "none":
+                    return bools, val
+                else:
+                    raise ValueError(
+                        f"unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
+                    )
 
-                @partial(vmap, in_axes=(0, None))
-                def _f(u, a):
-                    b = vmap(
-                        lambda t, f: jnp.where(a == u, t, f),
-                        in_axes=(1, 1),
-                        out_axes=1,
-                    )(bools, jnp.full_like(bools, False))
+            if not reduce == "z":
+                return _red(bools=bools)
 
-                    return _red(bools=b)
+            @partial(vmap, in_axes=(0, None))
+            def _f(u, a):
+                b = vmap(
+                    lambda t, f: jnp.where(a == u, t, f),
+                    in_axes=(1, 1),
+                    out_axes=1,
+                )(bools, jnp.full_like(bools, False))
 
-                return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
+                return _red(bools=b)
 
-            if not split_z:
-                return _get(bools)
+            return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
 
-            assert nl.z_array is not None, "provide z_array to neighbourlist"
+        if not split_z:
+            return _get(bools)
 
-            @partial(vmap, in_axes=(0, None), out_axes=1)
-            def sel(u1, at):
-                @vmap
-                def _b(at):
-                    bools_z1 = vmap(lambda x: x == u1)(at)
-                    return bools_z1
+        assert self.z_array is not None, "provide z_array to neighbourlist"
 
-                return _get(jnp.logical_and(_b(at), bools))
+        @partial(vmap, in_axes=(0, None), out_axes=1)
+        def sel(u1, at):
+            @vmap
+            def _b(at):
+                bools_z1 = vmap(lambda x: x == u1)(at)
+                return bools_z1
 
-            return sel(jnp.array(nl.z_unique), jnp.array(nl.z_array)[ind])
+            return _get(jnp.logical_and(_b(at), bools))
 
-        return _apply_fun_neighbour(sp, self)
+        return sel(jnp.array(self.z_unique), jnp.array(self.z_array)[ind])
+
+        # return _apply_fun_neighbour(sp, self)
 
     def apply_fun_neighbour_pair(
         self,
@@ -943,114 +951,124 @@ class NeighbourList:
         exclude_self=True,
         unique=True,
     ):
-        @NeighbourList.vmap_sp_nl
-        def _apply_fun_neighbour_pair(sp: SystemParams, nl: NeighbourList):
-            pos = nl._pos(sp)
-            ind = nl.atom_indices
+        if sp.batched:
+            return vmap(
+                lambda nl, sp: NeighbourList.apply_fun_neighbour_pair(
+                    self=nl,
+                    sp=sp,
+                    func_single=func_single,
+                    func_double=func_double,
+                    r_cut=r_cut,
+                    fill_value=fill_value,
+                    reduce=reduce,
+                    split_z=split_z,
+                    exclude_self=exclude_self,
+                    unique=unique,
+                )
+            )(self, sp)
 
-            bools, data_single = nl.apply_fun_neighbour(
-                sp=sp,
-                func=func_single,
-                r_cut=r_cut,
-                reduce="none",
-                fill_value=fill_value,
-                exclude_self=exclude_self,
-            )
+        pos = self._pos(sp)
+        ind = self.atom_indices
 
-            out_ijk = vmap(
-                lambda x, y, z: vmap(
-                    vmap(func_double, in_axes=(0, 0, 0, None, None, None)),
-                    in_axes=(None, None, None, 0, 0, 0),
-                )(x, y, z, x, y, z)
-            )(pos, ind, data_single)
+        bools, data_single = self.apply_fun_neighbour(
+            sp=sp,
+            func=func_single,
+            r_cut=r_cut,
+            reduce="none",
+            fill_value=fill_value,
+            exclude_self=exclude_self,
+        )
 
-            bools = vmap(
-                lambda b: vmap(
-                    vmap(jnp.logical_and, in_axes=(0, None)),
-                    in_axes=(None, 0),
-                )(b, b)
-            )(bools)
+        out_ijk = vmap(
+            lambda x, y, z: vmap(
+                vmap(func_double, in_axes=(0, 0, 0, None, None, None)),
+                in_axes=(None, None, None, 0, 0, 0),
+            )(x, y, z, x, y, z)
+        )(pos, ind, data_single)
 
-            if unique:
-                bools = vmap(lambda b: b.at[jnp.diag_indices_from(b)].set(False))(bools)
+        bools = vmap(
+            lambda b: vmap(
+                vmap(jnp.logical_and, in_axes=(0, None)),
+                in_axes=(None, 0),
+            )(b, b)
+        )(bools)
 
-            # check if indices are not -1
+        if unique:
+            bools = vmap(lambda b: b.at[jnp.diag_indices_from(b)].set(False))(bools)
 
-            out_ijk_f = jax.tree_map(
-                lambda o: jnp.full_like(o, fill_value),
-                out_ijk,
-            )
+        # check if indices are not -1
 
-            def get(bools):
-                def _red(bools):
-                    val = jax.tree_map(
-                        lambda t, f: vmap(vmap(vmap(jnp.where)))(bools, t, f),
-                        out_ijk,
-                        out_ijk_f,
+        out_ijk_f = jax.tree_map(
+            lambda o: jnp.full_like(o, fill_value),
+            out_ijk,
+        )
+
+        def get(bools):
+            def _red(bools):
+                val = jax.tree_map(
+                    lambda t, f: vmap(vmap(vmap(jnp.where)))(bools, t, f),
+                    out_ijk,
+                    out_ijk_f,
+                )
+
+                if reduce == "full":
+                    return jax.tree_map(lambda x: jnp.sum(x, axis=(1, 2)), (bools, val))
+                elif reduce == "z":
+                    return jax.tree_map(
+                        lambda x: jnp.sum(x, axis=(0, 1, 2)), (bools, val)
+                    )
+                elif reduce == "none":
+                    return bools, val
+                else:
+                    raise ValueError(
+                        f"unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
                     )
 
-                    if reduce == "full":
-                        return jax.tree_map(
-                            lambda x: jnp.sum(x, axis=(1, 2)), (bools, val)
-                        )
-                    elif reduce == "z":
-                        return jax.tree_map(
-                            lambda x: jnp.sum(x, axis=(0, 1, 2)), (bools, val)
-                        )
-                    elif reduce == "none":
-                        return bools, val
-                    else:
-                        raise ValueError(
-                            f"unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
-                        )
+            if not reduce == "z":
+                return _red(bools=bools)
 
-                if not reduce == "z":
-                    return _red(bools=bools)
+            @partial(vmap, in_axes=(0, None))
+            def _f(u, a):
+                b = vmap(
+                    vmap(
+                        lambda t, f: jnp.where(a == u, t, f),
+                        in_axes=(1, 1),
+                        out_axes=1,
+                    ),
+                    in_axes=(2, 2),
+                    out_axes=2,
+                )(bools, jnp.full_like(bools, False))
 
-                @partial(vmap, in_axes=(0, None))
-                def _f(u, a):
-                    b = vmap(
-                        vmap(
-                            lambda t, f: jnp.where(a == u, t, f),
-                            in_axes=(1, 1),
-                            out_axes=1,
-                        ),
-                        in_axes=(2, 2),
-                        out_axes=2,
-                    )(bools, jnp.full_like(bools, False))
+                return _red(bools=b)
 
-                    return _red(bools=b)
+            return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
 
-                return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
+        if not split_z:
+            return get(bools)
 
-            if not split_z:
-                return get(bools)
+        assert self.z_array is not None, "provide z_array to neighbourlist"
 
-            assert nl.z_array is not None, "provide z_array to neighbourlist"
+        @partial(vmap, in_axes=(None, 0, None), out_axes=2)
+        @partial(vmap, in_axes=(0, None, None), out_axes=1)
+        def sel(u1, u2, at):
+            @partial(vmap, in_axes=(0))
+            def _b(at):
+                bools_z1_z2 = vmap(
+                    vmap(
+                        lambda x, y: jnp.logical_and(x == u1, y == u2),
+                        in_axes=(0, None),
+                    ),
+                    in_axes=(None, 0),
+                )(at, at)
+                return bools_z1_z2
 
-            @partial(vmap, in_axes=(None, 0, None), out_axes=2)
-            @partial(vmap, in_axes=(0, None, None), out_axes=1)
-            def sel(u1, u2, at):
-                @partial(vmap, in_axes=(0))
-                def _b(at):
-                    bools_z1_z2 = vmap(
-                        vmap(
-                            lambda x, y: jnp.logical_and(x == u1, y == u2),
-                            in_axes=(0, None),
-                        ),
-                        in_axes=(None, 0),
-                    )(at, at)
-                    return bools_z1_z2
+            return get(jnp.logical_and(_b(at), bools))
 
-                return get(jnp.logical_and(_b(at), bools))
-
-            return sel(
-                jnp.array(nl.z_unique),
-                jnp.array(nl.z_unique),
-                jnp.array(nl.z_array)[nl.atom_indices],
-            )
-
-        return _apply_fun_neighbour_pair(sp, self)
+        return sel(
+            jnp.array(self.z_unique),
+            jnp.array(self.z_unique),
+            jnp.array(self.z_array)[self.atom_indices],
+        )
 
     @property
     def batched(self):
@@ -1084,67 +1102,70 @@ class NeighbourList:
             nxyz=self.nxyz,
         )
 
-    @staticmethod
-    def vmap_sp_nl(f):
-        """wrapper to vmap over neighbourlist and systemparams if needed"""
+    # @staticmethod
+    # def vmap_sp_nl(f):
+    #     """wrapper to vmap over neighbourlist and systemparams if needed"""
 
-        def _vmap_sp_nl(sp: SystemParams, nl: NeighbourList | None, *args, **kwargs):
-            if nl is not None:
-                if nl.batched:
-                    assert sp.batched
-                    assert (
-                        nl.shape[0] == sp.shape[0]
-                    ), f"neighbourghlist and systemparams should have same shape, got {sp.shape=} {nl.shape=}"
+    #     def _vmap_sp_nl(sp: SystemParams, nl: NeighbourList | None, *args, **kwargs):
+    #         if nl is not None:
+    #             if nl.batched:
+    #                 assert sp.batched
+    #                 assert (
+    #                     nl.shape[0] == sp.shape[0]
+    #                 ), f"neighbourghlist and systemparams should have same shape, got {sp.shape=} {nl.shape=}"
 
-                return NeighbourList.vmap_x_nl(f)(sp, nl, *args, **kwargs)
+    #             return NeighbourList.vmap_x_nl(f)(sp, nl, *args, **kwargs)
 
-            if sp.batched:
-                return vmap(f)(sp, nl, *args, **kwargs)
+    #         if sp.batched:
+    #             return vmap(f)(sp, nl, *args, **kwargs)
 
-            return f(sp, nl, *args, **kwargs)
+    #         return f(sp, nl, *args, **kwargs)
 
-        return _vmap_sp_nl
+    #     return _vmap_sp_nl
 
-    @staticmethod
-    def vmap_x_nl(f):
-        """wrapper to vmap over neighbourlist and systemparams if needed"""
+    # @staticmethod
+    # def vmap_x_nl(f):
+    #     """wrapper to vmap over neighbourlist and systemparams if needed"""
 
-        def _vmap_x_nl(x, nl: NeighbourList, *args, **kwargs):
-            assert nl is not None
+    #     def _vmap_x_nl(x, nl: NeighbourList, *args, **kwargs):
+    #         assert nl is not None
 
-            if nl.batched:
-                return vmap(
-                    lambda x, atom_indices, ijk_indices, sp_orig, op_cell, op_coor, op_center: f(
-                        x,
-                        NeighbourList(
-                            r_cut=nl.r_cut,
-                            atom_indices=atom_indices,
-                            z_array=nl.z_array,
-                            r_skin=nl.r_skin,
-                            sp_orig=sp_orig,
-                            ijk_indices=ijk_indices,
-                            z_unique=nl.z_unique,
-                            op_cell=op_cell,
-                            op_coor=op_coor,
-                            op_center=op_center,
-                            num_z_unique=nl.num_z_unique,
-                        ),
-                        *args,
-                        **kwargs,
-                    )
-                )(
-                    x,
-                    nl.atom_indices,
-                    nl.ijk_indices,
-                    nl.sp_orig,
-                    nl.op_cell,
-                    nl.op_coor,
-                    nl.op_center,
-                )
+    #         if nl.batched:
 
-            return f(x, nl, *args, **kwargs)
+    #             return vmap( f  ,in_axes=(0,0) )(x,nl,*args,**kwargs)
 
-        return _vmap_x_nl
+    #             # return vmap(
+    #             #     lambda x, atom_indices, ijk_indices, sp_orig, op_cell, op_coor, op_center: f(
+    #             #         x,
+    #             #         NeighbourList(
+    #             #             r_cut=nl.r_cut,
+    #             #             atom_indices=atom_indices,
+    #             #             z_array=nl.z_array,
+    #             #             r_skin=nl.r_skin,
+    #             #             sp_orig=sp_orig,
+    #             #             ijk_indices=ijk_indices,
+    #             #             z_unique=nl.z_unique,
+    #             #             op_cell=op_cell,
+    #             #             op_coor=op_coor,
+    #             #             op_center=op_center,
+    #             #             num_z_unique=nl.num_z_unique,
+    #             #         ),
+    #             #         *args,
+    #             #         **kwargs,
+    #             #     )
+    #             # )(
+    #             #     x,
+    #             #     nl.atom_indices,
+    #             #     nl.ijk_indices,
+    #             #     nl.sp_orig,
+    #             #     nl.op_cell,
+    #             #     nl.op_coor,
+    #             #     nl.op_center,
+    #             # )
+
+    #         return f(x, nl, *args, **kwargs)
+
+    #     return _vmap_x_nl
 
     @jit
     def update(self, sp: SystemParams) -> tuple[bool, NeighbourList]:
@@ -1172,7 +1193,9 @@ class NeighbourList:
 
     def split_z(self, p):
         if self.batched:
-            return NeighbourList.vmap_x_nl(lambda p, nl: nl.split_z(p))(p, self)
+            return vmap(NeighbourList.split_z)(self, p)
+
+            # return NeighbourList.vmap_x_nl(lambda p, nl: nl.split_z(p))(p, self)
 
         arg_split = [
             jnp.argsort(jnp.array(self.z_array) != zu, kind="stable")[0:nzu]
@@ -1196,18 +1219,44 @@ class NeighbourList:
         # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
 
         if nl1.batched:
-            return nl1.vmap_x_nl(
+            return vmap(
                 lambda p1, nl1: NeighbourList.match_kernel(
-                    p1, p2, nl1, nl2, matching=matching, norm=norm
+                    p1=p1,
+                    nl1=nl1,
+                    p2=p2,
+                    nl2=nl2,
+                    matching=matching,
+                    norm=norm,
+                    alpha=alpha,
+                    average_kernels=average_kernels,
                 )
             )(p1, nl1)
 
+            # return nl1.vmap_x_nl(
+            #     lambda p1, nl1: NeighbourList.match_kernel(
+            #         p1, p2, nl1, nl2, matching=matching, norm=norm
+            #     )
+            # )(p1, nl1)
+
         if nl2.batched:
-            return nl1.vmap_x_nl(
+            return vmap(
                 lambda p2, nl2: NeighbourList.match_kernel(
-                    p1, p2, nl1, nl2, matching=matching, norm=norm
+                    p1=p1,
+                    nl1=nl1,
+                    p2=p2,
+                    nl2=nl2,
+                    matching=matching,
+                    norm=norm,
+                    alpha=alpha,
+                    average_kernels=average_kernels,
                 )
             )(p2, nl2)
+
+            # return nl1.vmap_x_nl(
+            #     lambda p2, nl2: NeighbourList.match_kernel(
+            #         p1, p2, nl1, nl2, matching=matching, norm=norm
+            #     )
+            # )(p2, nl2)
 
         # jnp.all(nl1.z_unique == nl2.z_unique)
         # assert jnp.all(nl1.num_z_unique == nl2.num_z_unique)
@@ -1299,9 +1348,10 @@ class NeighbourList:
         assert isinstance(other, NeighbourList)
 
         if self.batched and not other.batched:
-            return NeighbourList.vmap_x_nl(lambda _, self: self + other)(None, self)
+            return vmap(lambda self: self + other)(self)
+
         if other.batched and not self.batched:
-            return NeighbourList.vmap_x_nl(lambda _, other: self + other)(None, other)
+            return vmap(lambda other: self + other)(other)
 
         assert self.r_cut == other.r_cut
         assert self.r_skin == other.r_skin
@@ -2079,17 +2129,16 @@ class CvFlow:
         x: SystemParams,
         nl: NeighbourList | None = None,
     ) -> CV:
-        @NeighbourList.vmap_sp_nl
-        def _compute_cv_flow(sp, nl):
-            out = self.f0(sp, nl)
-            # assert len(out.shape) == 1, "The CV output should have shape (n,), got "
+        if x.batched:
+            return vmap(self.compute_cv_flow)(x, nl)
 
-            if self.f1 is not None:
-                out, _ = self.f1.compute_cv_trans(out)
+        out = self.f0(x, nl)
+        if self.f1 is not None:
+            out, _ = self.f1.compute_cv_trans(out)
 
-            return out
+        return out
 
-        return _compute_cv_flow(x, nl)
+        # return _compute_cv_flow(x, nl)
 
     def __add__(self, other):
         assert isinstance(other, CvFlow)
@@ -2178,17 +2227,24 @@ class CollectiveVariable:
         nl: NeighbourList | None = None,
         jacobian=False,
     ) -> tuple[CV, CV]:
-        @NeighbourList.vmap_sp_nl
-        def _compute_cv(sp, nl):
-            cvf = self.f.compute_cv_flow
-            dcv = self.jac(cvf)
+        if sp.batched:
+            if nl is None:
+                return vmap(self.compute_cv, in_axes=(0, None, None))(
+                    sp, nl, jacobian=jacobian
+                )
+            else:
+                assert nl.batched
+                return vmap(self.compute_cv, in_axes=(0, 0, None))(
+                    sp, nl, jacobian=jacobian
+                )
 
-            cv = cvf(sp, nl)
-            dcv = dcv(sp, nl) if jacobian else None
+        cvf = self.f.compute_cv_flow
+        dcv = self.jac(cvf)
 
-            return (cv, dcv)
+        cv = cvf(sp, nl)
+        dcv = dcv(sp, nl) if jacobian else None
 
-        return _compute_cv(sp, nl)
+        return (cv, dcv)
 
     @property
     def n(self):
@@ -2334,7 +2390,7 @@ def sb_descriptor(
 ):
     from IMLCV.base.tools.soap_kernel import Kernel, p_i, p_inl_sb
 
-    @jit
+    # @jit #jit makes it not pickable
     def f(sp: SystemParams, nl: NeighbourList):
         assert nl is not None, "provide neighbourlist for sb describport"
 
@@ -2379,11 +2435,15 @@ def sb_descriptor(
     if references is not None:
         assert references_nl is not None
 
-        refs = NeighbourList.vmap_sp_nl(f)(references, references_nl)
+        refs = (f)(references, references_nl)
 
-        @NeighbourList.vmap_x_nl
+        # @NeighbourList.vmap_x_nl
+        # @partial(vmap, in_axes=(0, 0, None, None))
         def _f(refs, references_nl, val, nl):
             return Kernel(val, refs, nl, references_nl)
+
+        if references.batched:
+            _f = vmap(f, in_axes=(0, 0, None, None))
 
         _f = partial(_f, refs, references_nl)
 

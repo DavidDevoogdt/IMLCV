@@ -31,27 +31,23 @@ def legendre(x, n):
 
 
 def p_i(sp: SystemParams, nl: NeighbourList, p, r_cut):
-    @NeighbourList.vmap_sp_nl
-    def _p_i(sp: SystemParams, nl: NeighbourList, p):
-        ps, pd = p
+    if sp.batched:
+        return vmap(p_i, in_axes=(0, 0, None, None))(sp, nl, p, r_cut)
 
-        _, val0 = nl.apply_fun_neighbour_pair(
-            sp=sp,
-            func_single=ps,
-            func_double=pd,
-            r_cut=r_cut,
-            fill_value=0.0,
-            reduce="full",
-            unique=True,
-            split_z=True,
-        )
+    ps, pd = p
 
-        # norms = vmap(jnp.linalg.norm)(val0)
-        # norms_inv = jnp.where(norms != 0, 1 / norms, 1.0)
-        # return jnp.einsum("i...,i->i...", val0, norms_inv)
-        return val0
+    _, val0 = nl.apply_fun_neighbour_pair(
+        sp=sp,
+        func_single=ps,
+        func_double=pd,
+        r_cut=r_cut,
+        fill_value=0.0,
+        reduce="full",
+        unique=True,
+        split_z=True,
+    )
 
-    return _p_i(sp, nl, p)
+    return val0
 
 
 # @partial(vmap, in_axes=(0, None, None), out_axes=0)

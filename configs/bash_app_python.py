@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import dill
+import cloudpickle
 from parsl import File, bash_app, python_app
 
 
@@ -25,14 +25,12 @@ def bash_app_python(
             outputs=[],
             **kwargs,
         ):
-
             # merge in and outputs
             inputs = [*inputs, *kwargs.pop("inputs", [])]
             outputs = [*outputs, *kwargs.pop("outputs", [])]
 
             @bash_app(executors=executors)
             def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
-
                 if len(inputs) > 0:
                     kwargs["inputs"] = inputs
                 if len(outputs) > 1:
@@ -44,9 +42,9 @@ def bash_app_python(
                     os.mkdir(fold)
 
                 with open(filename, "wb+") as f:
-                    dill.dump((func, args, kwargs), f)
+                    cloudpickle.dump((func, args, kwargs), f)
 
-                return f"""python  -u { os.path.realpath( __file__ ) }  --folder {execution_folder} --file {filename}"""
+                return f"python  -u { os.path.realpath( __file__ ) }    --folder {execution_folder} --file {filename}"
 
             fun.__name__ = func.__name__
 
@@ -81,7 +79,7 @@ def bash_app_python(
                     i += 1
                 return str(p)
 
-            file = rename_num(execution_folder / f"{func.__name__}.dill")
+            file = rename_num(execution_folder / f"{func.__name__}.cloudpickle")
 
             stdout = rename_num(
                 execution_folder
@@ -104,7 +102,7 @@ def bash_app_python(
             @python_app(executors=["default"])
             def load(inputs=[], outputs=[]):
                 with open(inputs[-1].filepath, "rb") as f:
-                    result = dill.load(f)
+                    result = cloudpickle.load(f)
                 import os
                 import shutil
 
@@ -130,7 +128,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--file",
         type=str,
-        help="path to file f containing dill.dump((func, args, kwargs), f)",
+        help="path to file f containing cloudpickle.dump((func, args, kwargs), f)",
     )
     parser.add_argument("--folder", type=str, help="working directory")
     args = parser.parse_args()
@@ -144,13 +142,13 @@ if __name__ == "__main__":
     print(f"working in folder {os.getcwd()}")
 
     with open(args.file, "rb") as f:
-        func, fargs, fkwargs = dill.load(f)
+        func, fargs, fkwargs = cloudpickle.load(f)
     print("#" * 20)
 
     a = func(*fargs, **fkwargs)
 
     with open(args.file, "wb+") as f:
-        dill.dump(a, f)
+        cloudpickle.dump(a, f)
 
     print("#" * 20)
     print(f"task finished at {datetime.now():%d/%m/%Y %H:%M:%S}")

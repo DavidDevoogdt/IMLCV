@@ -1,3 +1,5 @@
+from functools import partial
+
 import ase
 import ase.io
 import ase.units
@@ -35,7 +37,10 @@ from IMLCV.base.CV import (
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
+from configs.bash_app_python import bash_app_python
 
+
+@bash_app_python(executors=["model", "reference"])
 def get_lda_cv(
     refs: SystemParams,
     num_kfda,
@@ -48,9 +53,7 @@ def get_lda_cv(
     harmonic=True,
     kernel_type="rematch",
     sort="rematch",
-    materialize=False,
     shrinkage=0,
-    num_svd=200,
     **nl_kwargs,
 ) -> CollectiveVariable:
     assert refs.batched and refs.shape[0] == 2, "revise code for more than 2 refs"
@@ -74,7 +77,7 @@ def get_lda_cv(
 
     from IMLCV.base.CV import NeighbourList
 
-    @vmap
+    # @vmap
     def __norm(p):
         n1_sq = jnp.einsum("...,...->", p, p)
         n1_sq_safe = jnp.where(n1_sq <= 1e-16, 1, n1_sq)
@@ -85,7 +88,8 @@ def get_lda_cv(
     if kernel == True:
         raise NotImplementedError("kernel not implemented for lda")
 
-        @NeighbourList.vmap_x_nl
+        # @NeighbourList.vmap_x_nl
+        @partial(vmap, in_axes=(0, 0, None))
         def _norm(cvi, nli, _):
             _k, _ = NeighbourList.match_kernel(
                 cvi,
@@ -99,8 +103,8 @@ def get_lda_cv(
             return k
 
     if sort == "rematch" or sort == "l2" or sort == "average":
+        # @NeighbourList.vmap_x_nl
 
-        @NeighbourList.vmap_x_nl
         def _norm(cvi, nli, pi):
             _k, P_ij = NeighbourList.match_kernel(
                 cvi,
@@ -121,7 +125,25 @@ def get_lda_cv(
         spi = traj_info.sp
         # cvi = traj_info.CV
         nli = spi.get_neighbour_list(**nl_kwargs)
-        cvi = descriptor.compute_cv_flow(spi, nli)
+
+        # import jax.tree_util
+        # nli_flat, nli_unflatten = jax.tree_util.tree_flatten(nli)
+        # spi_flat, spi_unflatten = jax.tree_util.tree_flatten(spi)
+        # with serial_loop("l", 100):
+        from netket.jax import vmap_chunked
+
+        # def _f(sp, nl):
+        #     return vmap(descriptor.compute_cv_flow)(sp, nl)
+        # cvi = xmap(
+        #     lambda sp, nl: _f(sp, nl),
+        #     in_axes=[{0: "left"}, {0: "left"}],
+        #     out_axes=["left", ...],
+        #     axis_resources={"left": SerialLoop(100)},
+        # )(spi, nli)
+
+        cvi = vmap_chunked(descriptor.compute_cv_flow, in_axes=(0, 0), chunk_size=500)(
+            spi, nli
+        )
 
         if sort == "l2" or sort == "average":
             if len(norm_data) == 0:
@@ -160,24 +182,18 @@ def get_lda_cv(
     scale_factors = []
 
     for nd in norm_data:
-        normed_cvs = _norm(cv, nl, nd)
+        normed_cvs = vmap(_norm, in_axes=(0, 0, None))(cv, nl, nd)
 
         if kernel:
             raise NotImplementedError("todo: select subset to sample kernels from")
 
             @jit
+            @partial(vmap, in_axes=(0, None, 0, None))
+            @partial(vmap, in_axes=(None, 0, None, 0))
             def kernel_matrix(p0, p1, nl0, nl1):
-                @NeighbourList.vmap_x_nl
-                def _f(p0, nl0):
-                    @NeighbourList.vmap_x_nl
-                    def __f(p1, nl1):
-                        return NeighbourList.match_kernel(
-                            p0, p1, nl0, nl1, matching=kernel_type
-                        )[0]
-
-                    return __f(p1, nl1)
-
-                return _f(p0, nl0)
+                return NeighbourList.match_kernel(
+                    p0, p1, nl0, nl1, matching=kernel_type
+                )[0]
 
             mat = []
             for i, (cva, nla) in enumerate(zip(phase_cvs, phase_nls)):
@@ -232,7 +248,8 @@ def get_lda_cv(
 
             @CvFlow
             def klda_cv(sp: SystemParams, nl: NeighbourList):
-                @NeighbourList.vmap_x_nl
+                # @NeighbourList.vmap_x_nl
+                @partial(vmap, in_axes=(0, 0, None, None))
                 def __f(cv1, nl1, cv2, nl2):
                     return NeighbourList.match_kernel(cv1.cv, cv2.cv, nl1, nl2)[0]
 
@@ -331,15 +348,10 @@ def get_lda_cv(
         alphas.append(alpha)
         vs.append(v)
 
-    # vs = jnp.array(vs)
-    # scale_factors = jnp.array(scale_factors)
-    # alphas = jnp.array(alphas)
-
     @CvFlow.from_function
     def _lda_cv(sp: SystemParams, nl: NeighbourList):
         cv = descriptor.compute_cv_flow(sp, nl)
 
-        # @vmap
         def cvs(nd, p, alpha, v, scale_factor):
             p = _norm(cv.cv, nl, nd)
             cv_unscaled = alpha.T @ (jnp.reshape(p, (-1,)) @ v.T)
@@ -351,7 +363,7 @@ def get_lda_cv(
         return jnp.mean(
             jnp.array(
                 [
-                    cvs(nd, [], alpha, v, scale_factor)
+                    cvs(nd, cv, alpha, v, scale_factor)
                     for nd, alpha, v, scale_factor in zip(
                         norm_data, alphas, vs, scale_factors
                     )
@@ -535,6 +547,7 @@ def alanine_dipeptide_yaff(
             r_cut=r_cut,
             z_array=tic.atomic_numbers,
             kernel_type=kernel_type,
+            execution_folder=folder,
         )
 
     else:
@@ -826,6 +839,7 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
             n_steps=lda_steps,
             r_cut=tic.r_cut,
             z_array=tic.atomic_numbers,
+            execution_folder=folder,
         )
 
     else:
