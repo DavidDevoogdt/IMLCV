@@ -1,9 +1,48 @@
 
 [build-system]
-requires = ["flit_core >=3.2,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
 
 [project]
 name = "IMLCV"
+requires-python = ">=3.9"
+dependencies =[
+        "jax",
+        "parsl",
+        "keras",
+        "yaff",
+        "cloudpickle",
+        "matplotlib",
+        "numpy",
+        "molmod",
+        "scipy",
+        "tensorflow",
+        "jax_dataclasses",
+        "optax",
+        "flax",
+        "umap",
+        "h5py",
+        "numba",
+        "shapely",
+        "alphashape",
+        "ase",
+        "pytest",
+        "scikit-learn",
+        "nyx",
+        "filelock",
+        "distrax",
+        "jaxopt",
+        "ott",
+        "pymanopt",
+    ]
 authors = [{name = "Devoogdt", email = "david.devoogdt@ugent.be"}]
 dynamic = ["version", "description"]
+
+
+[tool.setuptools.packages.find]
+include = [
+    "IMLCV",
+    "IMLCV.base",
+    "IMLCV.examples",
+    ]
