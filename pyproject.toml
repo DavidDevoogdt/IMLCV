@@ -8,11 +8,6 @@ packages = [{include = "IMLCV"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
 jax = "*"
 numpy = "*"
 parsl = "*"
@@ -41,6 +36,11 @@ jaxopt = "*"
 ott = "*"
 pymanopt = "*"
 
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
 
 # [build-system]
