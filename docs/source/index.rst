@@ -1,27 +1,16 @@
 .. IMLCV documentation master file, created by
-   sphinx-quickstart on Mon Mar 21 14:16:55 2022.
+   sphinx-quickstart on Wed Apr 26 14:41:25 2023.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
 Welcome to IMLCV's documentation!
 =================================
 
-Iterative Machine Learned Collective variables is a package to determine collective variables from enhanced MD simulations automatically.  
-
-Structure
-=========
-
-
 .. toctree::
-   :maxdepth: 4
+   :maxdepth: 2
    :caption: Contents:
 
-   rg_IMLCV
-   rg_IMLCV_base
-   rg_IMLCV_external
-   rg_IMLCV_external_HPC_ugent
-   rg_IMLCV_external_parsl_conf
-   rg_IMLCV_test
+
 
 Indices and tables
 ==================
