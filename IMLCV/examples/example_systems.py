@@ -19,6 +19,7 @@ yaff.log.set_level(yaff.log.silent)
 # keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 import pymanopt
 
+from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR
 from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import (
@@ -36,8 +37,6 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
 from yaff.test.common import get_alaninedipeptide_amber99ff
-
-from configs.bash_app_python import bash_app_python
 
 
 @bash_app_python(executors=["model", "reference"])
@@ -856,43 +855,4 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
     return yaffmd
 
 
-if __name__ == "__main__":
-    # sys = CsPbI3(
-    #     unit_cells=[1, 1, 1],
-    #     cv="soap_lda",
-    #     folder=ROOT_DIR
-    #     / "IMLCV"
-    #     / "examples"
-    #     / "output"
-    #     / "CsPbI3_soap_lda_1x1x1_003"
-    #     / "LDA",
-    # )
-
-    # sys = CsPbI3(
-    #     unit_cells=[2, 2, 2],
-    #     cv="soap_dist",
-    #     project=True,
-    #     input_atoms=["min_struc_Csdelta.xyz", "min_struc_gamma.xyz"],
-    # )
-
-    # sys = mil53_yaff()
-
-    # sys = alanine_dipeptide_yaff(cv="backbone_dihedrals")
-    # from configs.config_general import config
-
-    folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap3"
-    # config(path_internal=folder / "parsl")
-    sys = alanine_dipeptide_yaff(
-        cv="soap_lda", bias=None, kernel=False, harmonic=True, folder=folder / "LDA"
-    )
-
-    sys.run(100)
-
-    # s = Scheme(
-    #     sys,
-    #     folder=folder,
-    # )
-
-    # s.inner_loop(init=0, K=2 * kjmol, steps=2000)
-
-    # sys.run(100)
+# if __name__ == "__main__":

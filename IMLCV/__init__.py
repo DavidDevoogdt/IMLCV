@@ -1,6 +1,5 @@
 """summary IMLCV is still underdevelopement."""
 
-import functools
 import logging
 import os
 import sys
@@ -11,7 +10,6 @@ import tensorflow as tf
 
 # import tensorflow as tf
 from jax import random
-from jax.interpreters import batching
 
 import yaff
 
