@@ -68,7 +68,6 @@ def test_cv_discovery(
 
 
 if __name__ == "__main__":
-
     test_cv_discovery(
         name=ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_02", cvd="AE"
     )

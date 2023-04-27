@@ -83,7 +83,6 @@ class ThermoLIB:
         cv = None
 
         for round, trajectory in self.rounds.iter(start=start_r, num=4, stop=self.rnd):
-
             bias = trajectory.get_bias()
 
             if cv is None:
@@ -170,7 +169,6 @@ class ThermoLIB:
         cvs = None
 
         def find_monitor(bias):
-
             if isinstance(bias, CvMonitor):
                 return bias
 
@@ -204,7 +202,6 @@ class ThermoLIB:
         return cvs.metric.update_metric(transitions, fn=fn)
 
     def _FES_mg(self, cvs: list[CV], bounding_box, samples_per_bin=500, n=None):
-
         c = CV.stack(*cvs)
 
         if n is None:
@@ -263,7 +260,6 @@ class ThermoLIB:
         sigma = (sigma) / smoothing_threshold
 
         if choice == "rbf":
-
             min_err = jnp.inf
             min_eps = None
 
@@ -272,7 +268,6 @@ class ThermoLIB:
             cv: list[CV] = []
 
             for idx, cvi in grid:
-
                 if not np.isnan(fs[idx]):
                     fslist.append(fs[idx])
 
@@ -285,7 +280,6 @@ class ThermoLIB:
             bounds = jnp.array(bounds)
 
             def get_b(fact):
-
                 eps = n / (bounds[:, 1] - bounds[:, 0]) * fact
 
                 # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'

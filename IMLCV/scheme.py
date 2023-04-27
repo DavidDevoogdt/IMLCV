@@ -30,7 +30,6 @@ class Scheme:
         Engine: MDEngine,
         folder="output",
     ) -> None:
-
         self.md = Engine
         self.rounds = Rounds(
             folder=folder,
@@ -39,7 +38,6 @@ class Scheme:
 
     @staticmethod
     def from_rounds(rounds: Rounds) -> Scheme:
-
         self = Scheme.__new__(Scheme)
         self.md = rounds.get_engine()
 
@@ -78,7 +76,6 @@ class Scheme:
         self.md = self.md.new_bias(fesBias)
 
     def grid_umbrella(self, steps=1e4, k=None, n=8, max_grad=None):
-
         m = self.md.bias.collective_variable.metric
 
         grid = m.grid(n)
@@ -117,7 +114,6 @@ class Scheme:
         init_max_grad=None,
         max_grad=None,
     ):
-
         if init != 0:
             print(f"running init round with {init} steps")
 
@@ -140,7 +136,6 @@ class Scheme:
             self.rounds.add_round_from_md(self.md)
 
     def update_CV(self, cvd: CVDiscovery, samples=2e3, plot=True, **kwargs):
-
         new_cv = cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
         self.md.bias = NoneBias(new_cv)
 

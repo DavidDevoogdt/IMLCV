@@ -17,7 +17,6 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
 
     @custom_vmap
     def cv_inner(v, z):
-
         res_dtype_shape = jax.ShapeDtypeStruct(
             shape=v.shape,
             dtype=z.dtype,
@@ -33,7 +32,6 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
 
     @cv_inner.def_vmap
     def _function_vmap(axis_size, in_batched, v, x):
-
         v_batched, x_batched = in_batched
 
         if not (v_batched and x_batched):
@@ -66,7 +64,6 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
         primal_out = cv(v, x)
 
         if type == 0:
-
             """functions Jv, Yv, Hv_1,Hv_2"""
             # https://dlmf.nist.gov/10.6 formula 10.6.1
             tangents_out = jax.lax.cond(
@@ -75,7 +72,6 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
                 lambda: 0.5 * (cv(v - 1, x) - cv(v + 1, x)),
             )
         elif type == 1:
-
             """functions Kv and Iv"""
             # https://dlmf.nist.gov/10.29 formula 10.29.1
             tangents_out = jax.lax.cond(
@@ -126,7 +122,6 @@ ive = generate_bessel(scipy.special.ive, sign=+1, type=1, exp_scaled=True)
 kve = generate_bessel(scipy.special.kve, sign=-1, type=1, exp_scaled=True)
 
 if __name__ == "__main__":
-
     import matplotlib.pyplot as plt
 
     print(vmap(kve, in_axes=(0, None))(jnp.array([2, 5]), 2))
@@ -160,12 +155,10 @@ if __name__ == "__main__":
         [jv, yv, iv, kv, spherical_jn, spherical_yn, ive, kve],
         ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv", "ive", "kve"],
     ):
-
         plt.figure()
 
         x = jnp.linspace(0, 20, 1000)
         for i in range(5):
-
             y = jit(vmap(func, in_axes=(None, 0)))(i, x)
             plt.plot(x, y, label=i)
 

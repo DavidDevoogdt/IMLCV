@@ -28,7 +28,6 @@ def test_ala(path, recalc=False, steps=500):
 
 
 if __name__ == "__main__":
-
     import argparse
 
     parser = argparse.ArgumentParser(

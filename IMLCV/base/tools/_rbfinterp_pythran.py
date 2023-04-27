@@ -55,7 +55,6 @@ def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
 
 
 def cv_vals(x: CV, powers, metric: CvMetric):
-
     return (
         metric.min_cv(x.cv)
         / (metric.bounding_box[:, 1] - metric.bounding_box[:, 0])
