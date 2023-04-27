@@ -46,11 +46,11 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "IMLCV"
-# version = "0.0.0"
+version = "0.0.0"
 license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
 authors = [{name = "Devoogdt", email = "david.devoogdt@ugent.be"}]
-dynamic = ["version", "description"]
+dynamic = ["description"]
 requires-python = ">=3.10"
 
 dependencies =[
@@ -82,16 +82,16 @@ dependencies =[
         "jaxopt",
         "ott",
         "pymanopt@git+https://github.com/pymanopt/pymanopt.git",
-        "tensorrt",
+        "tensorrt"
         ]
     
 
 
 [project.optional-dependencies]
 
-thermo = [
-    "thermolib@git+https://github.ugent.be/lvduyfhu/ThermoLIB",
-    ]
+# thermo = [
+#     "thermolib@git+https://github.ugent.be/lvduyfhu/ThermoLIB",
+#     ]
 
 test = [
     "pytest >=2.7.3",
@@ -115,8 +115,8 @@ lint = [
 Documentation = "https://imlcv.readthedocs.io/en/latest/"
 Source = "https://github.com/DavidDevoogdt/IMLCV"
 
-[project.scripts]
-flit = "imlcv/examples/simul"
+# [project.scripts]
+# simul = "imlcv/examples/simul"
 
 
 # [tool.setuptools]

@@ -17,7 +17,6 @@ import yaff
 
 yaff.log.set_level(yaff.log.silent)
 
-from IMLCV.external.tf2jax import call_tf_p, loop_batcher
 
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".50"
@@ -41,4 +40,6 @@ jax.config.update("jax_platform_name", "cpu")
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "FALSE"
 # tf.config.experimental.set_visible_devices([], "GPU")
 
-batching.primitive_batchers[call_tf_p] = functools.partial(loop_batcher, call_tf_p)
+
+# from IMLCV.external.tf2jax import call_tf_p, loop_batcher
+# batching.primitive_batchers[call_tf_p] = functools.partial(loop_batcher, call_tf_p)
