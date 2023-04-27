@@ -19,16 +19,8 @@ conda create
 conda install -y python=3.10 
 conda install -y mamba
 mamba install -y pip git
+mamba install ndcctools
 
-# mamba install -y -c conda-forge tensorflow-gpu 
-pip install --upgrade jax[cuda11.cudnn82] jaxlib -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-pip install --upgrade tensorflow-cpu
-
-pip install pymanopt@git+https://github.com/pymanopt/pymanopt.git
-
-mamba update -y  cython
-pip  install -e  git+https://github.com/molmod/yaff.git#egg=yaff
-pip  install -e git+https://github.ugent.be/lvduyfhu/ThermoLIB#egg=thermolib
 pip  install -e ./
 
 
