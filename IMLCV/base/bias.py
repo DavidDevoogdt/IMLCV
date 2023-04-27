@@ -21,12 +21,11 @@ import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
+import yaff
 from ase.calculators.cp2k import CP2K
 from jax import jit, value_and_grad, vmap
 from molmod.units import angstrom, electronvolt, kjmol, nanometer, picosecond
 from parsl.data_provider.files import File
-
-import yaff
 
 yaff.log.set_level(yaff.log.silent)
 from configs.bash_app_python import bash_app_python
@@ -1449,8 +1448,9 @@ def test_grid_bias():
 
 
 def test_combine_bias(full_name):
-    from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
     from yaff.test.common import get_alaninedipeptide_amber99ff
+
+    from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
 
     T = 300 * kelvin
 

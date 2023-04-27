@@ -15,9 +15,6 @@ import h5py
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax import Array
-from molmod.units import bar
-
 import yaff.analysis.biased_sampling
 import yaff.external
 import yaff.log
@@ -26,10 +23,13 @@ import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling
 import yaff.sampling.iterative
-from IMLCV.base.CV import NeighbourList, SystemParams
+from jax import Array
+from molmod.units import bar
 from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
+
+from IMLCV.base.CV import NeighbourList, SystemParams
 
 yaff.log.set_level(yaff.log.silent)
 

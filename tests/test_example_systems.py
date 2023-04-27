@@ -1,5 +1,5 @@
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from configs.config_general import ROOT_DIR, config
+from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
 
 def test_ala():

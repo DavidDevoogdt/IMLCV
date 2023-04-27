@@ -1,6 +1,5 @@
 import functools
 
-
 import tensorflow as tf
 
 

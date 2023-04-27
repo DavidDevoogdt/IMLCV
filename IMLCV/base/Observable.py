@@ -8,13 +8,13 @@ import numpy as np
 from jax import jit
 from molmod.units import kjmol, picosecond
 from parsl import File
+from thermolib.thermodynamics.bias import BiasPotential2D
+from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
+from thermolib.thermodynamics.histogram import HistogramND
 
 from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
-from thermolib.thermodynamics.bias import BiasPotential2D
-from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
-from thermolib.thermodynamics.histogram import HistogramND
 
 
 class ThermoLIB:

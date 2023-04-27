@@ -5,19 +5,20 @@ import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
+import yaff
 from jax import jit, vmap
 
 # from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
-import yaff
 from IMLCV.base.rounds import Rounds
 
 yaff.log.set_level(yaff.log.silent)
 
 # keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 import pymanopt
+from yaff.test.common import get_alaninedipeptide_amber99ff
 
 from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR
@@ -36,7 +37,6 @@ from IMLCV.base.CV import (
     sb_descriptor,
 )
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
-from yaff.test.common import get_alaninedipeptide_amber99ff
 
 
 @bash_app_python(executors=["model", "reference"])

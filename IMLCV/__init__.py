@@ -7,11 +7,10 @@ from logging import warning
 
 import jax
 import tensorflow as tf
+import yaff
 
 # import tensorflow as tf
 from jax import random
-
-import yaff
 
 yaff.log.set_level(yaff.log.silent)
 

@@ -2,13 +2,13 @@ import functools
 
 import jax.numpy as jnp
 import numpy as np
-import tensorflow as tf
+import pytest
 from jax import jacrev, jit, vmap
 from jax.experimental import jax2tf
-from jax.experimental.jax2tf import call_tf, call_tf_p
+from jax.experimental.jax2tf import call_tf_p
 from jax.interpreters import batching
+
 from IMLCV.external.tf2jax import loop_batcher
-import pytest
 
 
 @pytest.mark.skip(reason="not supported")
