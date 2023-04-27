@@ -1,43 +1,15 @@
 name: Lint
 
-on:
-  # Trigger the workflow on push or pull request,
-  # but only for the main branch
-  push:
-    branches:
-      - main
-  # Replace pull_request with pull_request_target if you
-  # plan to use this action with forks, see the Limitations section
-  pull_request:
-    branches:
-      - main
-
-# Down scope as necessary via https://docs.github.com/en/actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
-permissions:
-  checks: write
-  contents: write
+on: [push, pull_request]
 
 jobs:
-  run-linters:
-    name: Run linters
+  lint:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out Git repository
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v3
+      - uses: actions/checkout@v3
+      - uses: psf/black@stable
         with:
-          python-version: "3.10"
-
-
-      - name: Install Python dependencies
-        run: pip install black
-
-      - name: Run linters
-        uses: wearerequired/lint-action@v2
-        with:
-          black: true
-          black_dir: "IMLCV"
-          
+          options: "--check"
+          src: "./IMLCV"
+          jupyter: true
+          version: "21.5b1"

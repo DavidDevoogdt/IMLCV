@@ -17,7 +17,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-            pip numpy cython
+            pip install numpy cython
             conda info
             pip install -e .[test]
 
