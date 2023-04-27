@@ -27,11 +27,26 @@ extensions = [
     "sphinx.ext.coverage",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
+    "sphinx_autodoc_typehints",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.mathjax",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.doctest",
     "autoapi.extension",
-    # "sphinx_rtd_theme",
     "sphinx_design",
-    # "sphinx_rtd_size",
+    "myst_parser",
 ]
+
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3/", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy-1.8.1/", None),
+    "jax": ("https://jax.readthedocs.io/en/latest/", None),
+    "ase": ("https://wiki.fysik.dtu.dk/ase/", None),
+    "yaff": ("https://molmod.github.io/yaff/", None),
+    "parsl": ("https://parsl.readthedocs.io/en/stable/reference.html", None),
+    "pymanopt": ("https://pymanopt.org/docs/stable/", None),
+}
 
 
 autoapi_dirs = ["../../IMLCV"]
@@ -47,6 +62,37 @@ language = "python"
 html_theme = "sphinx_book_theme"
 html_css_files = ["css/theme.css"]
 
+autodoc_typehints = "description"
+
+# myst_enable_extensions = [
+#     "amsmath",
+#     "colon_fence",
+#     "deflist",
+#     "dollarmath",
+#     "html_admonition",
+#     "html_image",
+#     "linkify",
+#     "replacements",
+#     "smartquotes",
+#     "substitution",
+#     "tasklist",
+# ]
+
+myst_enable_extensions = [
+    "amsmath",
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "html_admonition",
+    "html_image",
+    "replacements",
+    "smartquotes",
+    "substitution",
+    "tasklist",
+]
+
+main_doc = "index"
+
 # html_title = ""
 
 html_static_path = ["_static"]
@@ -58,6 +104,7 @@ html_static_path = ["_static"]
 html_theme_options = {
     "repository_url": "https://github.com/DavidDevoogdt/IMLCV",
     "use_repository_button": True,  # add a 'link to repository' button
-    "use_issues_button": False,  # add an 'Open an Issue' button
-    "show_navbar_depth": 1,
+    # "use_issues_button": False,  # add an 'Open an Issue' button
+    # "show_navbar_depth": 1,
+    "use_sidenotes": True,
 }

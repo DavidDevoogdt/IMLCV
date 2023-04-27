@@ -82,26 +82,11 @@ dependencies =[
         "jaxopt",
         "ott",
         "pymanopt",
+        "ndcctools",
+        "tensorrt"
     ]
     
 
 [tool.setuptools]
 packages = ["IMLCV"]
 
-# [tool.setuptools.packages.find]
-# where = ["IMLCV"]
-
-# [project.optional-dependencies]
-# test = [
-#     "pytest >=2.7.3",
-#     "pytest-cov",
-# ]
-# doc = ["sphinx"]
-
-
-# [tool.setuptools.packages.find]
-# include = [
-#     "IMLCV",
-#     "IMLCV.base",
-#     "IMLCV.examples",
-#     ]

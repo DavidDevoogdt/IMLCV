@@ -456,17 +456,7 @@ class TrajectoryInfo:
 
 
 class MDEngine(ABC):
-    """Base class for MD engine.
-
-    Args:
-        cvs: list of cvs
-        T:  temp
-        P:  press
-        ES:  enhanced sampling method, choice = "None","MTD"
-        timestep:  step verlet integrator
-        timecon_thermo: thermostat time constant
-        timecon_baro:  barostat time constant
-    """
+    """Base class for MD engine."""
 
     keys = [
         "bias",
@@ -537,7 +527,6 @@ class MDEngine(ABC):
         return nl
 
     def save(self, file):
-
         with open(file, "wb") as f:
             cloudpickle.dump(self, f)
 

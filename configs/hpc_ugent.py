@@ -6,7 +6,6 @@ from parsl.channels import LocalChannel
 from parsl.executors.base import ParslExecutor
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
-py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
 
 import logging
@@ -36,6 +35,7 @@ translate_table = {
     "RV": JobState.FAILED,  # (revoked) and
     "SE": JobState.FAILED,  # (special exit state)
 }
+
 
 # taken from psiflow
 class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
@@ -239,7 +239,11 @@ def get_slurm_provider(
     wq_timeout: int = 120,  # in seconds
     gpu_part="gpu_rome_a100",
     cpu_part="cpu_rome",
+    py_env=None,
 ):
+    if py_env is None:
+        py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
+
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
 
@@ -356,9 +360,9 @@ def config(
     path_internal: Path | None = None,
     cpu_cluster=None,
     gpu_cluster=None,
+    py_env=None,
 ):
     if env == "hortense":
-
         if cpu_cluster is not None:
             assert cpu_cluster in ["cpu_rome", "cpu_rome_512"]
         if gpu_cluster is not None:
@@ -373,7 +377,6 @@ def config(
         }
 
     elif env == "stevin":
-
         if cpu_cluster is not None:
             assert cpu_cluster in [
                 "slaking",
@@ -399,6 +402,7 @@ def config(
             "path_internal": path_internal,
         }
     kw["env"] = env
+    kw["py_env"] = py_env
     if bootstrap:
         execs = [
             get_slurm_provider(

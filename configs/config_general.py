@@ -53,10 +53,8 @@ def config(
     if path_internal is None:
         path_internal = ROOT_DIR / "IMLCV" / ".runinfo"
 
-    py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
-
     if env == "local":
-        execs = get_config_local(path_internal, py_env)
+        execs = get_config_local(path_internal)
     elif env == "hortense" or env == "stevin":
         execs = config_ugent(
             env=env,

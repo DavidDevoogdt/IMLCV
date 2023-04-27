@@ -1,4 +1,6 @@
 sphinx-book-theme
 sphinx_design
-autoapi
+sphinx-autoapi
+sphinx-autodoc-typehints
+myst-parser
 -e .

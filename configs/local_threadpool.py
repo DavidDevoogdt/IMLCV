@@ -1,7 +1,7 @@
 from parsl.executors import ThreadPoolExecutor
 
 
-def get_config(path_internal, py_env):
+def get_config(path_internal):
     executors = [
         ThreadPoolExecutor(
             label="training",
