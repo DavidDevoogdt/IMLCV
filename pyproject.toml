@@ -40,8 +40,8 @@ dependencies =[
         "distrax",
         "jaxopt",
         "ott",
-        "pymanopt@git+https://github.com/pymanopt/pymanopt.git",
-        "tensorrt"
+        "pymanopt",#@git+https://github.com/pymanopt/pymanopt.git",
+        "tensorrt",
         ]
     
 
