@@ -11,7 +11,7 @@ def io_dir(tmp_path_factory):
 
 
 def test_yaff_save_load_func(io_dir):
-    from IMLCV.examples.example_systems import alanine_dipeptide_yaff
+    from examples.example_systems import alanine_dipeptide_yaff
 
     yaffmd = alanine_dipeptide_yaff()
 

@@ -1,8 +1,8 @@
 from molmod.units import kjmol
 
 from configs.config_general import config
+from examples.example_systems import CsPbI3, alanine_dipeptide_yaff
 from IMLCV.base.rounds import Rounds
-from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
 from IMLCV.scheme import Scheme
 
 

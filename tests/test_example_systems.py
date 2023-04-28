@@ -4,9 +4,9 @@ from molmod.units import angstrom, kjmol
 from tensorflow import keras
 
 from configs.config_general import ROOT_DIR
+from examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
 from IMLCV.base.rounds import Rounds
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
 
 def test_ala():
@@ -35,7 +35,7 @@ def test_cv_discovery(
 
     # do_conf()
     if md is None:
-        from IMLCV.examples.example_systems import alanine_dipeptide_yaff
+        from examples.example_systems import alanine_dipeptide_yaff
 
         md = alanine_dipeptide_yaff()
 

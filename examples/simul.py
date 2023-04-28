@@ -152,7 +152,7 @@ if __name__ == "__main__":
         from molmod.units import kjmol
 
         from configs.config_general import config
-        from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
+        from examples.example_systems import CsPbI3, alanine_dipeptide_yaff
         from IMLCV.scheme import Scheme
 
         print("loading parsl config")

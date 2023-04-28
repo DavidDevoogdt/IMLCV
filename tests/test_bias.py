@@ -168,7 +168,7 @@ def test_combine_bias():
 
 def test_bias_save(tmpdir):
     """save and load bias to disk."""
-    from IMLCV.examples.example_systems import alanine_dipeptide_yaff
+    from examples.example_systems import alanine_dipeptide_yaff
 
     yaffmd = alanine_dipeptide_yaff(
         bias=lambda cv0: BiasMTD(
