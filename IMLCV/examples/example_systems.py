@@ -16,13 +16,15 @@ from IMLCV.base.rounds import Rounds
 
 yaff.log.set_level(yaff.log.silent)
 
+from typing import Callable
+
 # keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 import pymanopt
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR
-from IMLCV.base.bias import Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
+from IMLCV.base.bias import Bias, Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
@@ -386,7 +388,7 @@ def get_lda_cv(
 
 
 def alanine_dipeptide_yaff(
-    bias=None,
+    bias: None | Callable[[CollectiveVariable], Bias] = None,
     cv="backbone_dihedrals",
     k=5 * kjmol,
     project=True,
@@ -558,6 +560,8 @@ def alanine_dipeptide_yaff(
         bias = NoneBias(cvs=cv0)
     elif bias == "harm":
         bias = HarmonicBias(cvs=cv0, q0=CV(cv=jnp.array([1.0])), k=k)
+    elif isinstance(bias, Callable):
+        bias = bias(cv0)
     else:
         raise ValueError
 

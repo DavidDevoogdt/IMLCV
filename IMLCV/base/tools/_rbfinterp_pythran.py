@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-from jax import Array
 
 from IMLCV.base.CV import CV, CvMetric
 
@@ -10,7 +9,7 @@ def linear(r):
 
 
 def thin_plate_spline(r):
-    return jax.lax.cond(r == 0, lambda r: 0.0, lambda r: r**2 * jnp.log(r), r)
+    return jax.lax.cond(r == 0, lambda r: r, lambda r: r**2 * jnp.log(r), r)
 
 
 def cubic(r):
@@ -49,18 +48,18 @@ NAME_TO_FUNC = {
 }
 
 
+def scale(val, metric):
+    return val / (metric.bounding_box[:, 1] - metric.bounding_box[:, 0]) * 2
+
+
 def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
-    # return metric.norm(x, y, eps)
-    return jnp.linalg.norm((metric.min_cv(x.cv) - metric.min_cv(y.cv)) * eps)
+    return jnp.linalg.norm(
+        scale(metric.min_cv(x.cv) - metric.min_cv(y.cv), metric=metric) * eps
+    )
 
 
 def cv_vals(x: CV, powers, metric: CvMetric):
-    return (
-        metric.min_cv(x.cv)
-        / (metric.bounding_box[:, 1] - metric.bounding_box[:, 0])
-        * 2
-    )
-    # metric.difference( x,y  ) # metric.min_cv(x.cv)  # x.cv  # metric.min_cv(x.cv)
+    return scale(metric.min_cv(x.cv), metric=metric) ** powers
 
 
 def kernel_vector(x: CV, y: CV, metric: CvMetric, epsilon, kernel_func):
@@ -125,18 +124,12 @@ def polynomial_matrix(x: CV, metric: CvMetric, powers):
 # pythran export _polynomial_matrix(float[:, :], int[:, :])
 def _polynomial_matrix(x: CV, powers, metric):
     """Return monomials, with exponents from `powers`, evaluated at `x`."""
-    assert isinstance(x, Array)
+    assert isinstance(x, CV)
 
     out = polynomial_matrix(x=x, metric=metric, powers=powers)
     return out
 
 
-# pythran export _build_system(float[:, :],
-#                              float[:, :],
-#                              float[:],
-#                              str,
-#                              float,
-#                              int[:, :])
 def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers):
     """Build the system used to solve for the RBF interpolant coefficients.
 

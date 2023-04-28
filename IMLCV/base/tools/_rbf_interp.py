@@ -15,9 +15,10 @@ from IMLCV.base.tools._rbfinterp_pythran import (
     _build_evaluation_coefficients,
     _build_system,
     _polynomial_matrix,
+    cv_vals,
 )
 
-__all__ = ["RBFInterpolator"]
+__all__ = ["RBFInterpolator", "cv_vals"]
 
 
 # These RBFs are implemented.
@@ -77,7 +78,7 @@ def _monomial_powers(ndim, degree):
             # `mono` is a tuple of variables in the current monomial with
             # multiplicity indicating power (e.g., (0, 1, 1) represents x*y**2)
             for var in mono:
-                out.at[count, var].set(out[count, var] + 1)
+                out = out.at[count, var].set(out[count, var] + 1)
 
             count += 1
 
@@ -299,13 +300,16 @@ class RBFInterpolator:
     ):
         assert isinstance(y, CV)
         self.metric = metric
-        # y = jnp.asarray(y, dtype= jnp.float32, order="K")
-        # if y.ndim != 2:
-        #     raise ValueError("`y` must be a 2-dimensional array.")
+        y = CV(jnp.asarray(y.cv, order="K"))
 
         ny, ndim = y.shape
 
-        d_dtype = jnp.complex64 if jnp.iscomplexobj(d) else jnp.float32
+        if jnp.iscomplexobj(d):
+            raise NotImplementedError("Complex-valued data is not supported. ")
+
+        # d_dtype = jnp.complex64 if jnp.iscomplexobj(d) else jnp.float32
+        d_dtype = d.dtype
+
         d = jnp.asarray(d, dtype=d_dtype, order="K")
         if d.shape[0] != ny:
             raise ValueError(f"Expected the first axis of `d` to have length {ny}.")
@@ -315,7 +319,7 @@ class RBFInterpolator:
         # If `d` is complex, convert it to a float array with twice as many
         # columns. Otherwise, the LHS matrix would need to be converted to
         # complex and take up 2x more memory than necessary.
-        d = d.view(jnp.float32)
+        # d = d.view(jnp.float32)
 
         if jnp.isscalar(smoothing):
             smoothing = jnp.full(ny, smoothing, dtype=float)
@@ -338,8 +342,8 @@ class RBFInterpolator:
                     "`epsilon` must be specified if `kernel` is not one of "
                     f"{_SCALE_INVARIANT}."
                 )
-        # else:
-        #     epsilon = jnp.array(epsilon, dtype=jnp.float32)
+        else:
+            epsilon = jnp.array(epsilon)
 
         min_degree = _NAME_TO_MIN_DEGREE.get(kernel, -1)
         if degree is None:
@@ -397,7 +401,7 @@ class RBFInterpolator:
         self.epsilon = epsilon
         self.powers = powers
 
-    def _chunk_evaluator(self, x, y, coeffs, memory_budget=1000000):
+    def _chunk_evaluator(self, x: CV, y: CV, coeffs, memory_budget=1000000):
         """
         Evaluate the interpolation while controlling memory consumption.
         We chunk the input if we need more memory than specified.
@@ -465,9 +469,7 @@ class RBFInterpolator:
             Values of the interpolant at `x`.
 
         """
-        # x = jnp.asarray(x, dtype=float, order="K")
-        # if x.ndim != 2:
-        #     raise ValueError("`x` must be a 2-dimensional array.")
+        x = CV(jnp.asarray(x.cv, order="K"))
 
         assert isinstance(x, CV)
 
@@ -509,7 +511,7 @@ class RBFInterpolator:
             # observation points. Make the neighborhoods unique so that we only
             # compute the interpolation coefficients once for each
             # neighborhood.
-            yindices = np.sort(yindices, axis=1)
+            yindicexs = np.sort(yindices, axis=1)
             yindices, inv = np.unique(yindices, return_inverse=True, axis=0)
             # `inv` tells us which neighborhood will be used by each evaluation
             # point. Now we find which evaluation points will be using each
@@ -518,7 +520,7 @@ class RBFInterpolator:
             for i, j in enumerate(inv):
                 xindices[j].append(i)
 
-            out = jnp.empty((nx, self.d.shape[1]), dtype=float)
+            out = jnp.empty((nx, self.d.shape[1]))
             for xidx, yidx in zip(xindices, yindices):
                 # `yidx` are the indices of the observations in this
                 # neighborhood. `xidx` are the indices of the evaluation points
@@ -541,9 +543,10 @@ class RBFInterpolator:
                         xnbr, ynbr, coeffs, memory_budget=memory_budget
                     )
                 )
-        out = out.view(self.d_dtype)
+        # out = out.view(self.d_dtype)
+        # return out
 
         if isbatched:
-            return out.reshape((nx, ndim) + self.d_shape)
+            return out.reshape((nx, -1))
         else:
-            return out.reshape((ndim,) + self.d_shape)
+            return out.reshape((-1,))

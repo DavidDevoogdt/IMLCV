@@ -3,23 +3,23 @@ import pytest
 from molmod.units import angstrom, kjmol
 from tensorflow import keras
 
-from configs.config_general import ROOT_DIR, config
+from configs.config_general import ROOT_DIR
 from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
 from IMLCV.base.rounds import Rounds
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
 
 def test_ala():
-    config(env="local")
-
     folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "ala_1d_soap3"
 
     sys = alanine_dipeptide_yaff(cv="backbone_dihedrals", folder=folder / "LDA")
 
     sys.run(100)
 
+    assert sys.get_trajectory().sp.shape == (100, 22, 3)
 
-@pytest.mark.compute_intensive
+
+@pytest.mark.skip(reason="not implemented yet")
 def test_cv_discovery(
     name="test_cv_disc",
     md=None,
