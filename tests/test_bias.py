@@ -31,6 +31,8 @@ from IMLCV.base.CV import (
     dihedral,
 )
 
+from pathlib import Path
+
 ######################################
 #              test                  #
 ######################################
@@ -178,6 +180,8 @@ def test_bias_save(tmpdir):
         )
     )
     yaffmd.run(int(1e3))
+
+    tmpdir = Path(tmpdir)
 
     yaffmd.bias.save(tmpdir / "bias_test_2.xyz")
     bias = Bias.load(tmpdir / "bias_test_2.xyz")
