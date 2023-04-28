@@ -26,5 +26,4 @@ jobs:
         run: |
           pip install pytest pytest-cov
           pytest tests  -m "not compute_intensive" --doctest-modules --cov=IMLCV --cov-report=xml 
-          ls
-          coveralls -f coverage.xml
+          coveralls
