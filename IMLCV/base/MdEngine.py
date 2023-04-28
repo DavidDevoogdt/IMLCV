@@ -14,7 +14,6 @@ import cloudpickle
 import h5py
 import jax.numpy as jnp
 import numpy as np
-import pytest
 import yaff.analysis.biased_sampling
 import yaff.external
 import yaff.log
@@ -961,34 +960,3 @@ class PlumedEngine(YaffEngine):
                 libplumed.ForcePartPlumed(timestep=static_trajectory_info.timestep)
             ],
         )
-
-
-######################################
-#              test                  #
-######################################
-
-
-def test_yaff_save_load_func(full_name):
-    from IMLCV.examples.example_systems import alanine_dipeptide_yaff
-
-    yaffmd = alanine_dipeptide_yaff()
-
-    yaffmd.run(int(761))
-
-    yaffmd.save("output/yaff_save.d")
-    yeet = MDEngine.load("output/yaff_save.d")
-
-    sp1 = yaffmd.sp
-    sp2 = yeet.sp
-
-    assert pytest.approx(sp1.coordinates) == sp2.coordinates
-    assert pytest.approx(sp1.cell) == sp2.cell
-    assert (
-        pytest.approx(yaffmd.energy.compute_from_system_params(sp1).energy, abs=1e-6)
-        == yeet.energy.compute_from_system_params(sp2).energy
-    )
-
-
-if __name__ == "__main__":
-    with tempfile.TemporaryDirectory() as tmp:
-        test_yaff_save_load_func(full_name=f"{tmp}/load_save.h5")

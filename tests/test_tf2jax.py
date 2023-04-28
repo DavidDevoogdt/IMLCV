@@ -7,7 +7,6 @@ def test_call_tf_batcher():
 
     import jax.numpy as jnp
     import numpy as np
-
     from jax import jacrev, jit, vmap
     from jax.experimental import jax2tf
     from jax.experimental.jax2tf import call_tf_p

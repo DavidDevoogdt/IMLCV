@@ -17,7 +17,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-            pip install numpy cython
+            pip install numpy cython coveralls
             conda info
             pip install -e .[test]
 
@@ -25,4 +25,6 @@ jobs:
       - name: Test with pytest
         run: |
           pip install pytest pytest-cov
-          pytest tests --doctest-modules --junitxml=junit/test-results.xml --cov=com --cov-report=xml --cov-report=html
+          pytest tests  -m "not compute_intensive" --doctest-modules --cov=IMLCV --cov-report=xml 
+          ls
+          coveralls -f coverage.xml
