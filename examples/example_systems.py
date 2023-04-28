@@ -569,7 +569,6 @@ def alanine_dipeptide_yaff(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         static_trajectory_info=tic,
         bias=bias,
-        trajectory_file="test.h5",
     )
 
     return mde

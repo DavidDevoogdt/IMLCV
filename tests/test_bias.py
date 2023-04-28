@@ -4,6 +4,8 @@ import yaff
 
 yaff.log.set_level(yaff.log.silent)
 
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -30,8 +32,6 @@ from IMLCV.base.CV import (
     Volume,
     dihedral,
 )
-
-from pathlib import Path
 
 ######################################
 #              test                  #

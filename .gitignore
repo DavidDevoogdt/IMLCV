@@ -68,7 +68,7 @@ IMLCV/base/tools/.mypy_cache/*
 IMLCV/test/wandb/*
 wandb/*
 nohup.out
-IMLCV/examples/output/*
+examples/output/*
 
 
 **/.mypy_cache/*
@@ -80,3 +80,4 @@ workdir/*
 IMLCV/examples/data/CsPbI_3/2x2x2/Application_form_Tier-1_Compute_2023_final.docx
 
 build/*
+
