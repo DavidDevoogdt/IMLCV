@@ -1,18 +1,20 @@
-import functools
-
-import jax.numpy as jnp
-import numpy as np
 import pytest
-from jax import jacrev, jit, vmap
-from jax.experimental import jax2tf
-from jax.experimental.jax2tf import call_tf_p
-from jax.interpreters import batching
-
-from IMLCV.external.tf2jax import loop_batcher
 
 
 @pytest.mark.skip(reason="not supported")
 def test_call_tf_batcher():
+    import functools
+
+    import jax.numpy as jnp
+    import numpy as np
+
+    from jax import jacrev, jit, vmap
+    from jax.experimental import jax2tf
+    from jax.experimental.jax2tf import call_tf_p
+    from jax.interpreters import batching
+
+    from IMLCV.external.tf2jax import loop_batcher
+
     @jit
     def f(x):
         return jnp.array([jnp.sum(x * x), jnp.product(x)])

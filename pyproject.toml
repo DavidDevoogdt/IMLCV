@@ -39,7 +39,7 @@ dependencies =[
         "filelock",
         "distrax",
         "jaxopt",
-        "ott",
+        "ott-jax",
         "pymanopt",#@git+https://github.com/pymanopt/pymanopt.git",
         "tensorrt",
         ]
