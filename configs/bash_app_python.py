@@ -6,12 +6,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from parsl.dataflow.dflow import AppFuture
 import cloudpickle
 from parsl import File, bash_app, python_app
-
-
-from filelock import Timeout, FileLock
+from parsl.dataflow.dflow import AppFuture
 
 
 # @typeguard.typechecked
@@ -45,7 +42,7 @@ def bash_app_python(
                 fold = os.path.dirname(filename_in)
                 if not os.path.exists(fold):
                     os.mkdir(fold)
-                    
+
                 with open(filename_in, "wb+") as f:
                     cloudpickle.dump((func, args, kwargs), f)
 
@@ -72,34 +69,60 @@ def bash_app_python(
 
             execution_folder.mkdir(exist_ok=True)
 
-            def rename_num(stdout,i):
+            def rename_num(stdout, i):
                 return stdout.parent / (f"{ stdout.name  }_{i:0>3}")
 
             def find_num(stdout):
-
                 p = stdout
                 i = 0
                 while p.exists():
-                    p = rename_num( stdout, i)
+                    p = rename_num(stdout, i)
                     i += 1
-                return str(p),i
+                return str(p), i
 
-            with FileLock(execution_folder / f"{func.__name__}.lock", timeout=100, thread_local=False):
+            fl = execution_folder / f"{func.__name__}.lock"
 
-                lock,i =  find_num(execution_folder / f"bash_app_lock")
-                with open(lock, "w") as f:
-                    pass
+            # with FileLock(
+            #     fl,
+            #     timeout=100,
+            #     thread_local=False,
+            # ):
 
-            file_in =  str(rename_num( execution_folder / f"{func.__name__}_.inp.cloudpickle" ,i ))
-            file_out = str(rename_num(execution_folder / f"{func.__name__}.outp.cloudpickle",i))
+            if fl.exists():
+                with open(fl) as f:
+                    i = int(f.readline()) + 1
+            else:
+                i = 0
 
-            stdout = str(rename_num( execution_folder/ f"{ func.__name__}.stdout" if stdout is None else stdout,i ))
-            stderr = str(rename_num(execution_folder / (f"{ func.__name__}.stderr" if stderr is None else stderr),i  ))
+            with open(fl, "w+") as f:
+                f.write(f"{i}")
 
-            print(f"{stdout} {stderr} {file_in}")
+            # lock, i = find_num(execution_folder / f"bash_app_lock")
+            # with open(lock, "w") as f:
+            #     pass
 
-            print(inputs)
-            print(outputs)
+            file_in = str(
+                rename_num(execution_folder / f"{func.__name__}_.inp.cloudpickle", i)
+            )
+            file_out = str(
+                rename_num(execution_folder / f"{func.__name__}.outp.cloudpickle", i)
+            )
+
+            stdout = str(
+                rename_num(
+                    execution_folder / f"{ func.__name__}.stdout"
+                    if stdout is None
+                    else stdout,
+                    i,
+                )
+            )
+            stderr = str(
+                rename_num(
+                    execution_folder
+                    / (f"{ func.__name__}.stderr" if stderr is None else stderr),
+                    i,
+                )
+            )
 
             future: AppFuture = fun(
                 inputs=[*inputs, File(file_in)],
@@ -166,7 +189,6 @@ if __name__ == "__main__":
 
     with open(args.file_out, "wb+") as f:
         cloudpickle.dump(a, f)
-
 
     os.remove(args.file_in)
 

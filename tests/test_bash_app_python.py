@@ -1,6 +1,5 @@
-from configs.config_general import config
-import pytest
 from configs.bash_app_python import bash_app_python
+from configs.config_general import config
 
 
 @bash_app_python
@@ -26,5 +25,5 @@ def test_parallel(tmp_path):
     assert res == [0, 1, 2, 3, 4]
 
 
-if __name__ == "__main__":
-    test_parallel("./tmp")
+# if __name__ == "__main__":
+#     test_parallel("./tmp")
