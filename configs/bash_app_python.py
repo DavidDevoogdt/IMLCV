@@ -72,21 +72,8 @@ def bash_app_python(
             def rename_num(stdout, i):
                 return stdout.parent / (f"{ stdout.name  }_{i:0>3}")
 
-            def find_num(stdout):
-                p = stdout
-                i = 0
-                while p.exists():
-                    p = rename_num(stdout, i)
-                    i += 1
-                return str(p), i
 
             fl = execution_folder / f"{func.__name__}.lock"
-
-            # with FileLock(
-            #     fl,
-            #     timeout=100,
-            #     thread_local=False,
-            # ):
 
             if fl.exists():
                 with open(fl) as f:
@@ -96,10 +83,6 @@ def bash_app_python(
 
             with open(fl, "w+") as f:
                 f.write(f"{i}")
-
-            # lock, i = find_num(execution_folder / f"bash_app_lock")
-            # with open(lock, "w") as f:
-            #     pass
 
             file_in = str(
                 rename_num(execution_folder / f"{func.__name__}_.inp.cloudpickle", i)
@@ -112,14 +95,14 @@ def bash_app_python(
                 rename_num(
                     execution_folder / f"{ func.__name__}.stdout"
                     if stdout is None
-                    else stdout,
+                    else Path(stdout),
                     i,
                 )
             )
             stderr = str(
                 rename_num(
                     execution_folder
-                    / (f"{ func.__name__}.stderr" if stderr is None else stderr),
+                    / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
                     i,
                 )
             )
