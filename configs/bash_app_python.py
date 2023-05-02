@@ -70,8 +70,10 @@ def bash_app_python(
             execution_folder.mkdir(exist_ok=True)
 
             def rename_num(stdout, i):
-                return stdout.parent / (f"{ stdout.name  }_{i:0>3}")
-
+                
+                stem = stdout.name.split(".")
+                stem[0] = f"{stem[0]}_{i:0>3}"
+                return stdout.parent /  ".".join(stem)
 
             fl = execution_folder / f"{func.__name__}.lock"
 
@@ -85,7 +87,7 @@ def bash_app_python(
                 f.write(f"{i}")
 
             file_in = str(
-                rename_num(execution_folder / f"{func.__name__}_.inp.cloudpickle", i)
+                rename_num(execution_folder / f"{func.__name__}.inp.cloudpickle", i)
             )
             file_out = str(
                 rename_num(execution_folder / f"{func.__name__}.outp.cloudpickle", i)
