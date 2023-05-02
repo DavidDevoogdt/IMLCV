@@ -1344,13 +1344,3 @@ class PlumedBias(Bias):
         energy = np.zeros((1,))
         self.plumed.cmd("getBias", energy)
         return energy[0]
-
-
-# if __name__ == "__main__":
-#     test_harmonic()
-#     test_virial()
-#     test_grid_bias()
-#     test_virial()
-#     with tempfile.TemporaryDirectory() as tmp:
-#         test_combine_bias(full_name=f"{tmp}/combine.h5")
-#         test_bias_save(full_name=f"{tmp}/bias_save.h5")

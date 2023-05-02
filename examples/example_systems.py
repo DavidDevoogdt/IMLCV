@@ -113,7 +113,7 @@ def get_lda_cv(
                 nli,
                 nli,
                 matching=sort,
-                alpha=0.01,
+                alpha=1e-3,
             )
 
             return jnp.einsum("ij,i... ->j...", P_ij, __norm(cvi))

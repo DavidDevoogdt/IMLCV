@@ -844,6 +844,17 @@ class NeighbourList:
             self.op_center,
         )
 
+    @partial(
+        jit,
+        static_argnames=[
+            "r_cut",
+            "func",
+            "fill_value",
+            "reduce",
+            "split_z",
+            "exclude_self",
+        ],
+    )
     def apply_fun_neighbour(
         self,
         sp: SystemParams,
@@ -940,6 +951,19 @@ class NeighbourList:
 
         # return _apply_fun_neighbour(sp, self)
 
+    @partial(
+        jit,
+        static_argnames=[
+            "func_single",
+            "func_double",
+            "r_cut",
+            "fill_value",
+            "reduce",
+            "split_z",
+            "exclude_self",
+            "unique",
+        ],
+    )
     def apply_fun_neighbour_pair(
         self,
         sp: SystemParams,
@@ -1212,15 +1236,16 @@ class NeighbourList:
         return arg_split, p
 
     @staticmethod
+    @partial(jit, static_argnums=(4, 5))
     def match_kernel(
         p1: Array,
         p2: Array,
         nl1: NeighbourList,
         nl2: NeighbourList,
         matching="REMatch",
-        norm=True,
-        alpha=1e-2,
-        average_kernels=True,
+        # norm=True,
+        alpha=1e-3,
+        # average_kernels=True,
     ):
         # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
 
@@ -1232,17 +1257,11 @@ class NeighbourList:
                     p2=p2,
                     nl2=nl2,
                     matching=matching,
-                    norm=norm,
+                    # norm=norm,
                     alpha=alpha,
-                    average_kernels=average_kernels,
+                    # average_kernels=average_kernels,
                 )
             )(p1, nl1)
-
-            # return nl1.vmap_x_nl(
-            #     lambda p1, nl1: NeighbourList.match_kernel(
-            #         p1, p2, nl1, nl2, matching=matching, norm=norm
-            #     )
-            # )(p1, nl1)
 
         if nl2.batched:
             return vmap(
@@ -1252,17 +1271,11 @@ class NeighbourList:
                     p2=p2,
                     nl2=nl2,
                     matching=matching,
-                    norm=norm,
+                    # norm=norm,
                     alpha=alpha,
-                    average_kernels=average_kernels,
+                    # average_kernels=average_kernels,
                 )
             )(p2, nl2)
-
-            # return nl1.vmap_x_nl(
-            #     lambda p2, nl2: NeighbourList.match_kernel(
-            #         p1, p2, nl1, nl2, matching=matching, norm=norm
-            #     )
-            # )(p2, nl2)
 
         # jnp.all(nl1.z_unique == nl2.z_unique)
         # assert jnp.all(nl1.num_z_unique == nl2.num_z_unique)
@@ -1270,20 +1283,22 @@ class NeighbourList:
 
         if matching.lower() == "average":
 
-            def __gs(a, b):
-                p = jnp.full((a.shape[0], b.shape[0]), 1 / (a.shape[0] * b.shape[0]))
+            @jit
+            def __gs(a, b, *_):
+                p = jnp.full((a.shape[0], b.shape[0]), 1 / (a.shape[0]))
 
                 return p
 
         elif matching.lower() == "rematch":
 
-            def __gs(p1_s, p2_s):
+            @jit
+            def __gs(p1_s, p2_s, *_):
                 n = p1_s.shape[0]
 
                 geom = PointCloud(
                     x=jnp.reshape(p1_s, (n, -1)),
                     y=jnp.reshape(p2_s, (n, -1)),
-                    scale_cost=True,
+                    # scale_cost=True, leads to problems if x==y
                     epsilon=alpha,
                 )
                 prob = linear_problem.LinearProblem(geom)
@@ -1299,11 +1314,12 @@ class NeighbourList:
         elif matching.lower() == "norm" or matching.lower() == "l2":
             # def _f(p1, p2, nl1, nl2):
 
-            def __gs(p1_s, p2_s):
-                n1 = vmap(jnp.linalg.norm)(p1_s)
-                n2 = vmap(jnp.linalg.norm)(p2_s)
-                n1_ss = jnp.argsort(n1)
-                n2_ss = jnp.argsort(n2)
+            @jit
+            def __gs(p1_s, p2_s, n1_s, n2_s):
+                # n1 = vmap(jnp.linalg.norm)(p1_s)
+                # n2 = vmap(jnp.linalg.norm)(p2_s)
+                n1_ss = jnp.argsort(n1_s)  # jnp.sum(n1_s, axis=(1, 2)))
+                n2_ss = jnp.argsort(n2_s)  # jnp.sum(n2_s, axis=(1, 2)))
 
                 p = jnp.zeros((p1_s.shape[0], p2_s.shape[0]))
                 p = p.at[n1_ss, n2_ss].set(1)
@@ -1318,23 +1334,31 @@ class NeighbourList:
             raise ValueError("unknown matching procedure")
 
         @vmap
+        @jit
         def __norm(p):
             n1_sq = jnp.einsum("...,...->", p, p)
             n1_sq_safe = jnp.where(n1_sq <= 1e-16, 1, n1_sq)
-            n1_i = jnp.where(n1_sq == 0, 0.0, 1 / jnp.sqrt(n1_sq_safe))
 
-            return p * n1_i
+            mask = n1_sq == 0
 
+            n1_i = jnp.where(mask, 0.0, 1 / jnp.sqrt(n1_sq_safe))
+
+            return p * n1_i, n1_sq, ~mask
+
+        @partial(jit, static_argnums=(0,))
         def _f(__gs, p1, p2, nl1, nl2):
-            (a1_s, p1_s), (a2_s, p2_s) = nl1.split_z(p1), nl2.split_z(p2)
+            # if norm:
+            p1, n1_sq, m1 = __norm(p1)
+            p2, n2_sq, m2 = __norm(p2)
 
-            P_p = jax.scipy.linalg.block_diag(*[__gs(a, b) for a, b in zip(p1_s, p2_s)])
+            a1_s, z1 = nl1.split_z((p1, n1_sq))
+            a2_s, z2 = nl2.split_z((p2, n2_sq))
+
+            P_p = jax.scipy.linalg.block_diag(
+                *[__gs(a, b, an, bn) for (a, an), (b, bn) in zip(z1, z2)]
+            )
 
             P_p = vmap(lambda x: x / jnp.sum(x))(P_p)  # norm rows
-
-            if norm:
-                p1 = __norm(p1)
-                p2 = __norm(p2)
 
             a1, a2 = jnp.hstack(a1_s), jnp.hstack(a2_s)
             a1_i = jnp.zeros_like(a1).at[a1].set(jnp.arange(a1.shape[0]))
@@ -1342,11 +1366,19 @@ class NeighbourList:
 
             P = P_p[a1_i, :][:, a2_i]
 
-            return jnp.einsum("ij,i...,j...->j", P, p1, p2), P
+            out = jnp.einsum("ij,i...,j...->", P, p1, p2)
 
-        res, P = _f(__gs, p1, p2, nl1, nl2)
-        if average_kernels:
-            res = jnp.sum(res) / res.shape[0]
+            return out, P, jnp.sum(m1)
+
+        res, P, n = _f(__gs, p1, p2, nl1, nl2)
+
+        if matching == "average":
+            # if norm:
+            res /= jnp.sqrt(_f(__gs, p1, p1, nl1, nl1)[0]) * jnp.sqrt(
+                _f(__gs, p2, p2, nl2, nl2)[0]
+            )
+        else:
+            res /= n
 
         return res, P
 

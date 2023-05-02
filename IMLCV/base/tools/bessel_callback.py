@@ -2,7 +2,7 @@ import jax.lax
 import jax.numpy as jnp
 import numpy as onp
 import scipy.special
-from jax import custom_jvp, grad, jit, pure_callback, vmap
+from jax import custom_jvp, pure_callback
 from jax.custom_batching import custom_vmap
 
 # see https://github.com/google/jax/issues/11002
@@ -69,7 +69,10 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             tangents_out = jax.lax.cond(
                 v == 0,
                 lambda: -cv(v + 1, x),
+                # lambda:jax.lax.cond( jnp.abs(x)>=1e-2,
+                # lambda: cv(v - 1, x) -  (v/x) *  primal_out ,
                 lambda: 0.5 * (cv(v - 1, x) - cv(v + 1, x)),
+                # )
             )
         elif type == 1:
             """functions Kv and Iv"""
@@ -77,7 +80,7 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             tangents_out = jax.lax.cond(
                 v == 0,
                 lambda: sign * cv(v + 1, x),
-                lambda: 0.5 * (cv(v - 1, x) + cv(v + 1, x)),
+                lambda: 0.5 * (sign * cv(v - 1, x) + sign * cv(v + 1, x)),
             )
 
         elif type == 2:
@@ -88,9 +91,10 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             tangents_out = jax.lax.cond(
                 v == 0,
                 lambda: -cv(v + 1, x),
-                lambda: (lambda v: cv(v - 1, x) - (v + 1) / x * primal_out)(
-                    jax.lax.cond(v == 0, lambda: jnp.ones_like(v), lambda: v)
-                ),
+                # lambda: (lambda v: cv(v - 1, x) - (v + 1) / x * primal_out)(
+                #     jax.lax.cond(v == 0, lambda: jnp.ones_like(v), lambda: v)
+                # ),
+                lambda: (v * cv(v - 1, x) - (v + 1) * cv(v + 1, x)) / (2 * v + 1),
             )
         else:
             raise ValueError
@@ -120,66 +124,3 @@ spherical_yn = generate_bessel(scipy.special.spherical_yn, type=2)
 
 ive = generate_bessel(scipy.special.ive, sign=+1, type=1, exp_scaled=True)
 kve = generate_bessel(scipy.special.kve, sign=-1, type=1, exp_scaled=True)
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    print(vmap(kve, in_axes=(0, None))(jnp.array([2, 5]), 2))
-    print(vmap(kve, in_axes=(None, 0))(2, jnp.array([2, 5])))
-    print(
-        vmap(vmap(kve, in_axes=(0, None)), in_axes=(None, 0))(
-            jnp.array([2, 5]), jnp.array([2, 5])
-        )
-    )
-    print(
-        jit(
-            vmap(
-                vmap(vmap(kve, in_axes=(0, None)), in_axes=(0, None)), in_axes=(None, 0)
-            )
-        )(
-            jnp.array(
-                [
-                    [2, 5],
-                    [2, 5],
-                ]
-            ),
-            jnp.array(
-                [2, 5],
-            ),
-        )
-    )
-
-    # a = jax.grad(lambda z: jv(2.0, z))(jnp.array(5.0))
-
-    for func, name in zip(
-        [jv, yv, iv, kv, spherical_jn, spherical_yn, ive, kve],
-        ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv", "ive", "kve"],
-    ):
-        plt.figure()
-
-        x = jnp.linspace(0, 20, 1000)
-        for i in range(5):
-            y = jit(vmap(func, in_axes=(None, 0)))(i, x)
-            plt.plot(x, y, label=i)
-
-        plt.ylim([-1.1, 1.1])
-        plt.title(name)
-        plt.legend()
-
-        plt.draw()
-        plt.pause(0.001)
-
-    # sanity chekc to see wither ive and kve behave correctly
-
-    k1e = lambda x: kve(1, x)
-    k1e2 = lambda x: kv(1, x) * jnp.exp(x)
-
-    x = jnp.linspace(1, 5, 1000)
-    assert jnp.linalg.norm(vmap(k1e)(x) - vmap(k1e2)(x)) < 1e-5
-    assert jnp.linalg.norm(vmap(grad(k1e))(x) - vmap(grad(k1e2))(x)) < 1e-5
-
-    i1e = lambda x: ive(1, x)
-    i1e2 = lambda x: iv(1, x) * jnp.exp(-jnp.abs(x))
-
-    assert jnp.linalg.norm(vmap(i1e)(x) - vmap(i1e2)(x)) < 1e-5
-    assert jnp.linalg.norm(vmap(grad(i1e))(x) - vmap(grad(i1e2))(x)) < 1e-5
