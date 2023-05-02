@@ -1,8 +1,7 @@
 import os
 
+import jax
 import pytest
-
-from configs.config_general import config
 
 if os.getenv("_PYTEST_RAISE", "0") != "0":
 
@@ -15,4 +14,7 @@ if os.getenv("_PYTEST_RAISE", "0") != "0":
         raise excinfo.value
 
 
-config(env="local")
+jax.config.update("jax_enable_x64", True)
+
+# cpu based
+jax.config.update("jax_platform_name", "cpu")

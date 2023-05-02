@@ -70,10 +70,9 @@ def bash_app_python(
             execution_folder.mkdir(exist_ok=True)
 
             def rename_num(stdout, i):
-                
                 stem = stdout.name.split(".")
                 stem[0] = f"{stem[0]}_{i:0>3}"
-                return stdout.parent /  ".".join(stem)
+                return stdout.parent / ".".join(stem)
 
             fl = execution_folder / f"{func.__name__}.lock"
 

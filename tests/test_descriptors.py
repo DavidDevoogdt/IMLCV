@@ -5,22 +5,24 @@ import jax.numpy as jnp
 import jax.numpy.linalg
 import jax.random
 import jax.scipy
-import pytest
-from jax import jacrev, jit, vmap
-
-import IMLCV
-from IMLCV.base.CV import NeighbourList, SystemParams
-from IMLCV.base.tools.soap_kernel import Kernel, p_i, p_inl_sb, p_innl_soap
-
-
-import jax.lax
-import jax.numpy as jnp
 import numpy as onp
+import pytest
 import scipy.special
-from jax import custom_jvp, grad, jit, pure_callback, vmap,jacfwd
-from jax.custom_batching import custom_vmap
+from jax import grad, jacrev, jit, vmap
 
-from IMLCV.base.tools.bessel_callback import jv, yv, iv, kv, spherical_jn, spherical_yn, ive, kve
+from IMLCV.base.CV import NeighbourList, SystemParams
+from IMLCV.tools.bessel_callback import (
+    iv,
+    ive,
+    jv,
+    kv,
+    kve,
+    spherical_jn,
+    spherical_yn,
+    yv,
+)
+from IMLCV.tools.soap_kernel import Kernel, p_i, p_inl_sb, p_innl_soap
+
 
 def get_sps(
     r_side,
@@ -184,13 +186,30 @@ def test_SOAP(cell, matching, pp):
 
 
 def test_bessel():
-  
-    for func, name,sp,dsp,wz in zip(
+    for func, name, sp, dsp, wz in zip(
         [jv, yv, iv, kv, spherical_jn, spherical_yn, ive, kve],
         ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv", "ive", "kve"],
-        [  scipy.special.jv, scipy.special.yv, scipy.special.iv, scipy.special.kv, scipy.special.spherical_jn, scipy.special.spherical_yn, scipy.special.ive, scipy.special.kve],
-        [  scipy.special.jvp, scipy.special.yvp, scipy.special.ivp, scipy.special.kvp, lambda x,y: scipy.special.spherical_jn(x,y,derivative=True  ), lambda x,y: scipy.special.spherical_yn(x,y,derivative=True  ), None,None],
-        [  1,0,1,0,0,0, None,None]
+        [
+            scipy.special.jv,
+            scipy.special.yv,
+            scipy.special.iv,
+            scipy.special.kv,
+            scipy.special.spherical_jn,
+            scipy.special.spherical_yn,
+            scipy.special.ive,
+            scipy.special.kve,
+        ],
+        [
+            scipy.special.jvp,
+            scipy.special.yvp,
+            scipy.special.ivp,
+            scipy.special.kvp,
+            lambda x, y: scipy.special.spherical_jn(x, y, derivative=True),
+            lambda x, y: scipy.special.spherical_yn(x, y, derivative=True),
+            None,
+            None,
+        ],
+        [1, 0, 1, 0, 0, 0, None, None],
     ):
         # try to vmap and jit
         _ = vmap(func, in_axes=(0, None))(jnp.array([2, 5]), 2)
@@ -203,26 +222,26 @@ def test_bessel():
             vmap(vmap(func, in_axes=(0, None)), in_axes=(0, None)), in_axes=(None, 0)
         )(jnp.array([[2, 5], [2, 5]]), jnp.array([2, 5]))
 
-        if wz==1:
+        if wz == 1:
             x = jnp.linspace(0, 20, 1000)
         else:
             x = jnp.linspace(1e-5, 20, 1000)
-        v= jnp.arange(0, 5)
-        y = vmap(vmap(func,in_axes=(0,None)),in_axes=(None,0))(v,x )
-        y2 = jnp.array([sp( vi,  onp.array(x) ) for vi in v] ).T
-        assert jnp.allclose( y,y2,atol=1e-5) 
+        v = jnp.arange(0, 5)
+        y = vmap(vmap(func, in_axes=(0, None)), in_axes=(None, 0))(v, x)
+        y2 = jnp.array([sp(vi, onp.array(x)) for vi in v]).T
+        assert jnp.allclose(y, y2, atol=1e-5)
 
         if dsp is not None:
-
             # with jax.disable_jit():
-            dy =   vmap(vmap(  grad(func, argnums=1),in_axes=(0,None)),in_axes=(None,0)) (v,x )
+            dy = vmap(
+                vmap(grad(func, argnums=1), in_axes=(0, None)), in_axes=(None, 0)
+            )(v, x)
 
-            dy2 = jnp.array([dsp( vi,  onp.array(x)  ) for vi in v] ).T
+            dy2 = jnp.array([dsp(vi, onp.array(x)) for vi in v]).T
 
-            mask = jnp.logical_or(jnp.isnan(dy2) , jnp.isinf(dy2))
+            mask = jnp.logical_or(jnp.isnan(dy2), jnp.isinf(dy2))
 
-            assert jnp.allclose( dy[~mask],dy2[~mask],atol=1e-5,equal_nan=True )
-        
+            assert jnp.allclose(dy[~mask], dy2[~mask], atol=1e-5, equal_nan=True)
 
     # sanity chekc to see wither ive and kve behave correctly
 

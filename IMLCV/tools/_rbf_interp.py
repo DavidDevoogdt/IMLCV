@@ -11,7 +11,7 @@ from scipy.spatial import KDTree
 from scipy.special import comb
 
 from IMLCV.base.CV import CV, CvMetric  # type: ignore[attr-defined]
-from IMLCV.base.tools._rbfinterp_pythran import (
+from IMLCV.tools._rbfinterp_pythran import (
     _build_evaluation_coefficients,
     _build_system,
     _polynomial_matrix,

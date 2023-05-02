@@ -14,7 +14,7 @@ from jax import Array, jit, lax, vmap
 from scipy.special import legendre as sp_legendre
 
 from IMLCV.base.CV import NeighbourList, SystemParams
-from IMLCV.base.tools.bessel_callback import ive, spherical_jn
+from IMLCV.tools.bessel_callback import ive, spherical_jn
 
 # todo: Optimizing many-body atomic descriptors for enhanced computational performance of
 # machine learning based interatomic potentials

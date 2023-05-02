@@ -14,12 +14,15 @@ source Miniconda3/bin/activate
 eval "$(conda shell.bash hook)"
 
 
-conda create  
+conda create  -y -n IMLCV_env
 
-conda install -y python=3.10 
+
+
+conda install -y python=3.10  pip
 conda install -y mamba
-mamba install -y pip git
-mamba install ndcctools
+
+pip install cython numpy
+mamba install -y ndcctools
 
 pip  install -e ./
 

@@ -24,21 +24,26 @@ from yaff.test.common import get_alaninedipeptide_amber99ff
 
 from configs.bash_app_python import bash_app_python
 from configs.config_general import ROOT_DIR
-from IMLCV.base.bias import Bias, Cp2kEnergy, HarmonicBias, NoneBias, YaffEnergy
+from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
     CvFlow,
     CvMetric,
     NeighbourList,
-    NoneCV,
     SystemParams,
+)
+from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo
+from IMLCV.implementations.bias import HarmonicBias
+from IMLCV.implementations.CV import (
+    NoneCV,
     Volume,
     dihedral,
     project_distances,
     sb_descriptor,
 )
-from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, YaffEngine
+from IMLCV.implementations.energy import Cp2kEnergy, YaffEnergy
+from IMLCV.implementations.MdEngine import YaffEngine
 
 
 @bash_app_python(executors=["model", "reference"])

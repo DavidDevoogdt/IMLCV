@@ -27,13 +27,11 @@ from IMLCV.base.CV import (
     CV,
     CvFunInput,
     CvTrans,
-    DistraxRealNVP,
     NeighbourList,
     NormalizingFlow,
-    RealNVP,
     SystemParams,
-    sb_descriptor,
 )
+from IMLCV.implementations.CV import DistraxRealNVP, RealNVP, sb_descriptor
 
 ######################################
 #           Test                     #
@@ -215,7 +213,7 @@ def test_reconstruction():
 
     tol = 1e-6
 
-    from IMLCV.base.tools.soap_kernel import Kernel
+    from IMLCV.tools.soap_kernel import Kernel
 
     sp01 = cv.find_sp(
         x0=sp1,

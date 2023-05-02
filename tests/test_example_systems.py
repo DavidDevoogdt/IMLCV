@@ -5,8 +5,9 @@ from tensorflow import keras
 
 from configs.config_general import ROOT_DIR
 from examples.example_systems import alanine_dipeptide_yaff
-from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
+from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder
 from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.CvDiscovery import TranformerUMAP
 
 
 def test_ala():

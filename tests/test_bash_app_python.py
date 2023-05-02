@@ -25,5 +25,5 @@ def test_parallel(tmp_path):
     assert res == [0, 1, 2, 3, 4]
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     test_parallel("tmp")

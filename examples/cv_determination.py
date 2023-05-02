@@ -8,8 +8,9 @@ keras: KerasAPI = import_module("tensorflow.keras")
 
 
 from configs.config_general import ROOT_DIR, config
-from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder, TranformerUMAP
+from IMLCV.base.CVDiscovery import CVDiscovery, TranformerAutoEncoder
 from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.CvDiscovery import TranformerUMAP
 
 
 def test_cv_discovery(

@@ -10,6 +10,7 @@ license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: MIT License"]
 authors = [{name = "Devoogdt", email = "david.devoogdt@ugent.be"}]
 dynamic = ["description"]
+readme = "README.MD"
 requires-python = ">=3.10"
 
 dependencies =[
@@ -40,7 +41,7 @@ dependencies =[
         "distrax",
         "jaxopt",
         "ott-jax",
-        "pymanopt",#@git+https://github.com/pymanopt/pymanopt.git",
+        "pymanopt@git+https://github.com/pymanopt/pymanopt.git",
         "tensorrt",
         ]
     
@@ -48,14 +49,22 @@ dependencies =[
 
 [project.optional-dependencies]
 
-# thermo = [
-#     "thermolib@git+https://github.ugent.be/lvduyfhu/ThermoLIB",
-#     ]
+thermo = [
+    "thermolib@git+https://github.ugent.be/lvduyfhu/ThermoLIB",
+    ]
 
 test = [
     "pytest >=2.7.3",
     "pytest-cov",
 ]
+
+lint = [
+    "mypy",
+    "black",
+    "isort",
+    "shed",
+    ]
+
 doc = [
     "sphinx",
     "sphinx-book-theme",
@@ -65,10 +74,6 @@ doc = [
     "myst-parser",
     ]
 
-lint = [
-  "shed",
-  "mypy"
-]    
 
 [project.urls]
 Documentation = "https://imlcv.readthedocs.io/en/latest/"

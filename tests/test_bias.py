@@ -13,15 +13,7 @@ import pytest
 from molmod import units
 from molmod.units import kelvin
 
-from IMLCV.base.bias import (
-    Bias,
-    BiasF,
-    BiasMTD,
-    CompositeBias,
-    HarmonicBias,
-    RbfBias,
-    YaffEnergy,
-)
+from IMLCV.base.bias import Bias, BiasF, CompositeBias
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
@@ -29,9 +21,10 @@ from IMLCV.base.CV import (
     CvMetric,
     CvTrans,
     SystemParams,
-    Volume,
-    dihedral,
 )
+from IMLCV.implementations.bias import BiasMTD, HarmonicBias, RbfBias
+from IMLCV.implementations.CV import Volume, dihedral
+from IMLCV.implementations.energy import YaffEnergy
 
 ######################################
 #              test                  #
@@ -125,7 +118,8 @@ def test_grid_bias(kernel):
 def test_combine_bias():
     from yaff.test.common import get_alaninedipeptide_amber99ff
 
-    from IMLCV.base.MdEngine import StaticTrajectoryInfo, YaffEngine
+    from IMLCV.base.MdEngine import StaticTrajectoryInfo
+    from IMLCV.implementations.MdEngine import YaffEngine
 
     T = 300 * kelvin
 
