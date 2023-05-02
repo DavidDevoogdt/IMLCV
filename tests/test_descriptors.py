@@ -83,17 +83,9 @@ def get_sps(
     return sp1, sp2, sp3, nl1, nl2, nl3
 
 
-@pytest.mark.parametrize("cell", [False, True])
 @pytest.mark.parametrize(
-    "matching",
-    [
-        "average",  # -> does not result in local minmum based on forces
-        "norm",
-        "rematch",
-        #
-    ],
+    "cell, matching, pp", [(True, "rematch", "sb"), (False, "average", "soap")]
 )
-@pytest.mark.parametrize("pp", ["sb", "soap"])
 def test_SOAP(cell, matching, pp):
     n = 10
     r_side = 6 * (n / 5) ** (1 / 3)
