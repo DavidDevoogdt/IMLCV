@@ -6,8 +6,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from parsl.dataflow.dflow import AppFuture
 import cloudpickle
 from parsl import File, bash_app, python_app
+
+
+from filelock import Timeout, FileLock
 
 
 # @typeguard.typechecked
@@ -31,24 +35,23 @@ def bash_app_python(
 
             @bash_app(executors=executors)
             def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
-                if len(inputs) > 0:
-                    kwargs["inputs"] = inputs
+                if len(inputs) > 1:
+                    kwargs["inputs"] = inputs[:-1]
                 if len(outputs) > 1:
                     kwargs["outputs"] = outputs[:-1]
 
-                filename = outputs[-1].filepath
-                fold = os.path.dirname(filename)
+                filename_in = inputs[-1].filepath
+                filename_out = outputs[-1].filepath
+                fold = os.path.dirname(filename_in)
                 if not os.path.exists(fold):
                     os.mkdir(fold)
-
-                with open(filename, "wb+") as f:
+                    
+                with open(filename_in, "wb+") as f:
                     cloudpickle.dump((func, args, kwargs), f)
 
-                return f"python  -u { os.path.realpath( __file__ ) }    --folder {execution_folder} --file {filename}"
+                return f"python  -u { os.path.realpath( __file__ ) }    --folder {execution_folder} --file_in {  os.path.relpath(filename_in,execution_folder)  }  --file_out  {  os.path.relpath(filename_out,execution_folder)  }"
 
             fun.__name__ = func.__name__
-
-            from parsl.dataflow.dflow import AppFuture
 
             def rename(name):
                 path, name = os.path.split(name.filepath)
@@ -69,30 +72,38 @@ def bash_app_python(
 
             execution_folder.mkdir(exist_ok=True)
 
-            def rename_num(stdout):
-                if not stdout.exists():
-                    return str(stdout)
+            def rename_num(stdout,i):
+                return stdout.parent / (f"{ stdout.name  }_{i:0>3}")
+
+            def find_num(stdout):
+
                 p = stdout
                 i = 0
                 while p.exists():
-                    p = stdout.parent / (f"{ stdout.name  }_{i:0>3}")
+                    p = rename_num( stdout, i)
                     i += 1
-                return str(p)
+                return str(p),i
 
-            file = rename_num(execution_folder / f"{func.__name__}.cloudpickle")
+            with FileLock(execution_folder / f"{func.__name__}.lock", timeout=100, thread_local=False):
 
-            stdout = rename_num(
-                execution_folder
-                / (f"{ func.__name__}.stdout" if stdout is None else stdout)
-            )
-            stderr = rename_num(
-                execution_folder
-                / (f"{ func.__name__}.stderr" if stderr is None else stderr)
-            )
+                lock,i =  find_num(execution_folder / f"bash_app_lock")
+                with open(lock, "w") as f:
+                    pass
+
+            file_in =  str(rename_num( execution_folder / f"{func.__name__}_.inp.cloudpickle" ,i ))
+            file_out = str(rename_num(execution_folder / f"{func.__name__}.outp.cloudpickle",i))
+
+            stdout = str(rename_num( execution_folder/ f"{ func.__name__}.stdout" if stdout is None else stdout,i ))
+            stderr = str(rename_num(execution_folder / (f"{ func.__name__}.stderr" if stderr is None else stderr),i  ))
+
+            print(f"{stdout} {stderr} {file_in}")
+
+            print(inputs)
+            print(outputs)
 
             future: AppFuture = fun(
-                inputs=inputs,
-                outputs=[*[File(rename(o)) for o in outputs], File(file)],
+                inputs=[*inputs, File(file_in)],
+                outputs=[*[File(rename(o)) for o in outputs], File(file_out)],
                 stdout=stdout,
                 stderr=stderr,
                 *args,
@@ -126,7 +137,13 @@ if __name__ == "__main__":
         description="Execute python function in a bash app"
     )
     parser.add_argument(
-        "--file",
+        "--file_in",
+        type=str,
+        help="path to file f containing cloudpickle.dump((func, args, kwargs), f)",
+    )
+
+    parser.add_argument(
+        "--file_out",
         type=str,
         help="path to file f containing cloudpickle.dump((func, args, kwargs), f)",
     )
@@ -141,14 +158,17 @@ if __name__ == "__main__":
 
     print(f"working in folder {os.getcwd()}")
 
-    with open(args.file, "rb") as f:
+    with open(args.file_in, "rb") as f:
         func, fargs, fkwargs = cloudpickle.load(f)
     print("#" * 20)
 
     a = func(*fargs, **fkwargs)
 
-    with open(args.file, "wb+") as f:
+    with open(args.file_out, "wb+") as f:
         cloudpickle.dump(a, f)
+
+
+    os.remove(args.file_in)
 
     print("#" * 20)
     print(f"task finished at {datetime.now():%d/%m/%Y %H:%M:%S}")
