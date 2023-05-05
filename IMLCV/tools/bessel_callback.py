@@ -65,7 +65,7 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
 
         v_safe = jax.lax.cond(
             v == 0,
-            lambda: 1,
+            lambda: jnp.ones_like(v),
             lambda: v,
         )
 

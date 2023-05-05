@@ -1248,7 +1248,7 @@ class NeighbourList:
 
         #     return P
 
-        @partial(jax.jit, static_argnums=(4))
+        # @partial(jax.jit, static_argnums=(4))
         def _f(p1, p2, b1, b2, matching):
             # if norm:
 
@@ -1257,8 +1257,8 @@ class NeighbourList:
 
             if matching == "average":
                 P12 = jnp.einsum("ni,nj->ij", b1, b2)
-                P11 = P12
-                P22 = P12
+                P11 = jnp.einsum("ni,nj->ij", b1, b1)
+                P22 = jnp.einsum("ni,nj->ij", b2, b2)
 
             elif matching == "norm":
                 raise

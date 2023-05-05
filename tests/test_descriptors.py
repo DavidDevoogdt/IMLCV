@@ -144,7 +144,7 @@ def test_SOAP(cell, matching, pp):
             matching=matching,
             alpha=alpha,
             jit=False,
-        )
+        )[0]
 
     da = k(sp1, nl1).block_until_ready()
 
@@ -157,13 +157,13 @@ def test_SOAP(cell, matching, pp):
 
     assert jnp.abs(da) < 1e-3
     assert jnp.abs(dab) < 1e-3
-    # assert jnp.abs(dac) < 0.8
+    assert jnp.abs(dac) > 1e-3
 
     print(
         f"{matching=}\t{cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t<kernel(orig,rot)>=\t\t{  dab :>.4f}\t<kernel(orig, rand)>=\t\t{ dac:.4f}\tevalutation time f [ms] { (after_f-before_f)/ 10.0**6 :>.2f}  k [ms] { (after-before)/ 10.0**6 :>.2f} "
     )
 
-    # @jit
+    @jit
     def jk(sp, nl):
         _jk = jacrev(k)(sp, nl)
         return jnp.mean(jnp.linalg.norm(_jk.coordinates)), jnp.mean(
@@ -178,14 +178,15 @@ def test_SOAP(cell, matching, pp):
 
     jac_dac_coor, jac_dac_cell = jk(sp3, nl3)
 
-    assert jnp.abs(jac_da_coor) < 10
-    assert jnp.abs(jac_dab_coor) < 10
-    assert jnp.abs(jac_dac_coor) < 10
+    if matching == "rematch":
+        assert jnp.abs(jac_da_coor) < 1e-3
+        assert jnp.abs(jac_dab_coor) < 1e-3
+        assert jnp.abs(jac_dac_coor) > 1e-3
 
-    if cell:
-        assert jnp.abs(jac_da_cell) < 10
-        assert jnp.abs(jac_dab_cell) < 10
-        assert jnp.abs(jac_dac_cell) < 10
+        if cell:
+            assert jnp.abs(jac_da_cell) < 1e-3
+            assert jnp.abs(jac_dab_cell) < 1e-3
+            assert jnp.abs(jac_dac_cell) > 1e-3
 
     print(
         f"\t\t\t\t\t\t\t\t\t\t||d kernel(orig,rot)/d sp)=\t{ jac_dab_coor  :.4f}\t||d kernel(orig,rand)/d sp)=\t{jac_dac_coor  :>.4f}\tevalutation time [ms] { (after-before)/ 10.0**6  :>.2f}   "

@@ -1,6 +1,7 @@
+from mpi4py import MPI
+
 from configs.bash_app_python import bash_app_python
 from configs.config_general import config
-from mpi4py import MPI
 
 
 def test_parallel(tmp_path):

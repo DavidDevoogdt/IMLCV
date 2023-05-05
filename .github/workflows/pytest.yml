@@ -18,10 +18,13 @@ jobs:
       - name: Install Python dependencies
         run: |
             pip install numpy cython
+            git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
             conda info
+            conda install -y mpi4py
             pip install -e .[test]
+        env:
+          UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
 
-   
       - name: Test with pytest
         run: |
           pip install pytest pytest-cov
