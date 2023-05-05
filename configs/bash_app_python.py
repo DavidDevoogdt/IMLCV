@@ -15,6 +15,7 @@ from parsl.dataflow.dflow import AppFuture
 def bash_app_python(
     function=None,
     executors="all",
+    precommand="",  # command to run before the python command
 ):
     def decorator(func):
         def wrapper(
@@ -43,10 +44,10 @@ def bash_app_python(
                 if not os.path.exists(fold):
                     os.mkdir(fold)
 
-                with open(filename_in, "wb+") as f:
+                with open(filename_in, "rb+") as f:
                     cloudpickle.dump((func, args, kwargs), f)
 
-                return f"python  -u { os.path.realpath( __file__ ) }    --folder {execution_folder} --file_in {  os.path.relpath(filename_in,execution_folder)  }  --file_out  {  os.path.relpath(filename_out,execution_folder)  }"
+                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder {execution_folder} --file_in {  os.path.relpath(filename_in,execution_folder)  }  --file_out  {  os.path.relpath(filename_out,execution_folder)  }"
 
             fun.__name__ = func.__name__
 
@@ -69,50 +70,46 @@ def bash_app_python(
 
             execution_folder.mkdir(exist_ok=True)
 
-            def rename_num(stdout, i):
-                stem = stdout.name.split(".")
+            def rename_num(name, i):
+                stem = name.name.split(".")
                 stem[0] = f"{stem[0]}_{i:0>3}"
-                return stdout.parent / ".".join(stem)
+                return name.parent / ".".join(stem)
 
-            fl = execution_folder / f"{func.__name__}.lock"
-
-            if fl.exists():
-                with open(fl) as f:
-                    i = int(f.readline()) + 1
-            else:
+            def find_num(name):
                 i = 0
+                while rename_num(name, i).exists():
+                    i += 1
+                return i, rename_num(name, i)
 
-            with open(fl, "w+") as f:
-                f.write(f"{i}")
+            _, lockfile = find_num(execution_folder / f"{func.__name__}.lock")
 
-            file_in = str(
-                rename_num(execution_folder / f"{func.__name__}.inp.cloudpickle", i)
-            )
-            file_out = str(
-                rename_num(execution_folder / f"{func.__name__}.outp.cloudpickle", i)
+            with open(lockfile, "w+"):
+                pass
+
+            i, file_in = find_num(execution_folder / f"{func.__name__}.inp.cloudpickle")
+            with open(file_in, "w+"):
+                pass
+
+            file_out = rename_num(
+                execution_folder / f"{func.__name__}.outp.cloudpickle", i
             )
 
-            stdout = str(
-                rename_num(
-                    execution_folder / f"{ func.__name__}.stdout"
-                    if stdout is None
-                    else Path(stdout),
-                    i,
-                )
+            i, stdout = find_num(
+                execution_folder
+                / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout))
             )
-            stderr = str(
-                rename_num(
-                    execution_folder
-                    / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
-                    i,
-                )
+
+            stderr = rename_num(
+                execution_folder
+                / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
+                i,
             )
 
             future: AppFuture = fun(
-                inputs=[*inputs, File(file_in)],
-                outputs=[*[File(rename(o)) for o in outputs], File(file_out)],
-                stdout=stdout,
-                stderr=stderr,
+                inputs=[*inputs, File(str(file_in))],
+                outputs=[*[File(rename(o)) for o in outputs], File(str(file_out))],
+                stdout=str(stdout),
+                stderr=str(stderr),
                 *args,
                 **kwargs,
             )
@@ -127,6 +124,9 @@ def bash_app_python(
                 os.remove(inputs[-1].filepath)
                 for i, o in zip(inputs[:-1], outputs):
                     shutil.move(i.filepath, o.filepath)
+
+                # transfer complete,remove lock file
+                os.remove(str(lockfile))
 
                 return result
 
@@ -156,26 +156,57 @@ if __name__ == "__main__":
     )
     parser.add_argument("--folder", type=str, help="working directory")
     args = parser.parse_args()
-
-    print("#" * 20)
-    print(f"got input {sys.argv}")
-    print(f"task started at {datetime.now():%d/%m/%Y %H:%M:%S }")
-
     os.chdir(args.folder)
 
-    print(f"working in folder {os.getcwd()}")
+    rank = 0
+    use_mpi = False
 
-    with open(args.file_in, "rb") as f:
-        func, fargs, fkwargs = cloudpickle.load(f)
-    print("#" * 20)
+    try:
+        from mpi4py import MPI
+
+        MPI.pickle.__init__(cloudpickle.dumps, cloudpickle.loads)
+
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        num_ranks = comm.Get_size()
+
+        if num_ranks > 1:
+            use_mpi = True
+    except:
+        pass
+
+    if rank == 0:
+        print("#" * 20)
+        print(f"got input {sys.argv}")
+        print(f"task started at {datetime.now():%d/%m/%Y %H:%M:%S }")
+        print(f"working in folder {os.getcwd()}")
+        if use_mpi:
+            print(f"using mpi with {num_ranks} ranks")
+
+        with open(args.file_in, "rb") as f:
+            func, fargs, fkwargs = cloudpickle.load(f)
+        print("#" * 20)
+    else:
+        func = None
+        fargs = None
+        fkwargs = None
+
+    if use_mpi:
+        func = comm.bcast(func, root=0)
+        fargs = comm.bcast(fargs, root=0)
+        fkwargs = comm.bcast(fkwargs, root=0)
 
     a = func(*fargs, **fkwargs)
 
-    with open(args.file_out, "wb+") as f:
-        cloudpickle.dump(a, f)
+    if use_mpi:
+        a = comm.gather(a, root=0)
 
-    os.remove(args.file_in)
+    if rank == 0:
+        with open(args.file_out, "wb+") as f:
+            cloudpickle.dump(a, f)
 
-    print("#" * 20)
-    print(f"task finished at {datetime.now():%d/%m/%Y %H:%M:%S}")
-    print("#" * 20)
+        os.remove(args.file_in)
+
+        print("#" * 20)
+        print(f"task finished at {datetime.now():%d/%m/%Y %H:%M:%S}")
+        print("#" * 20)

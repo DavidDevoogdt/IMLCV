@@ -702,8 +702,6 @@ class Rounds(ABC):
                 outputs=[File(b_name_new), File(traj_name)],
                 steps=int(steps),
                 execution_folder=path_name,
-                stdout="md.stdout",
-                stderr="md.stderr",
             )
 
             if plot:
@@ -715,8 +713,6 @@ class Rounds(ABC):
                     inputs=[future.outputs[0]],
                     outputs=[File(plot_file)],
                     execution_folder=path_name,
-                    stdout="plot.stdout",
-                    stderr="plot.stderr",
                 )
 
                 plot_tasks.append(plot_fut)
