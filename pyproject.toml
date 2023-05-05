@@ -1,83 +1,81 @@
 
 [build-system]
-requires = ["flit_core >=3.2,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
-[project]
-name = "IMLCV"
-version = "0.0.0"
-license = {file = "LICENSE"}
-classifiers = ["License :: OSI Approved :: MIT License"]
-authors = [{name = "Devoogdt", email = "david.devoogdt@ugent.be"}]
-dynamic = ["description"]
+
+
+[tool.poetry]
+name = "imlcv"
+version = "0.1.0"
+description = ""
+authors = ["David Devoogdt <david.devoogdt@gmail.com>"]
+license = "MIT"
 readme = "README.MD"
-requires-python = ">=3.10"
 
-dependencies =[
-        "jax",
-        "numpy",
-        "parsl",
-        "keras",
-        "yaff@git+https://github.com/molmod/yaff.git",
-        "cloudpickle",
-        "matplotlib",
-        "numpy",
-        "molmod",
-        "scipy",
-        "tensorflow",
-        "jax_dataclasses",
-        "optax",
-        "flax",
-        "umap",
-        "h5py",
-        "numba",
-        "shapely",
-        "alphashape",
-        "ase",
-        "pytest",
-        "scikit-learn",
-        "nyx",
-        "filelock",
-        "distrax",
-        "jaxopt",
-        "ott-jax",
-        "pymanopt", # @git+https://github.com/pymanopt/pymanopt.git"
-        "tensorrt",
-        ]
-    
+documentation = "https://imlcv.readthedocs.io/en/main/"
+repository = "https://github.com/DavidDevoogdt/IMLCV"
 
 
-[project.optional-dependencies]
-
-thermo = [
-    "thermolib@git+https://github.ugent.be/lvduyfhu/ThermoLIB",
-    ]
-
-test = [
-    "pytest >=2.7.3",
-    "pytest-cov",
+packages = [
+    { include = "IMLCV" },
+    { include = "configs/*" },
 ]
 
-lint = [
-    "mypy",
-    "black",
-    "isort",
-    "shed",
-    ]
 
-doc = [
-    "sphinx",
-    "sphinx-book-theme",
-    "sphinx_design",
-    "sphinx-autoapi",
-    "sphinx-autodoc-typehints",
-    "myst-parser",
-    ]
+[tool.poetry.dependencies]
+jax = "*"
+numpy = "*"
+parsl = "*"
+keras = "*"
+yaff = {git = "https://github.com/molmod/yaff.git" }
+cloudpickle = "*"
+matplotlib = "*"
+molmod = "*"
+scipy = "*"
+tensorflow = "*"
+jax_dataclasses = "*"
+optax = "*"
+flax = "*"
+umap = "*"
+h5py = "*"
+numba = "*"
+shapely = "*"
+alphashape = "*"
+ase = "*"
+pytest = "*"
+scikit-learn = "*"
+nyx = "*"
+filelock = "*"
+distrax = "*"
+jaxopt = "*"
+ott-jax = "*"
+pymanopt = {git = "https://github.com/pymanopt/pymanopt.git"}
+tensorrt = "*"
+thermolib = {git = "https://github.ugent.be/lvduyfhu/ThermoLIB", branch = "david"}
+netket = "*"
 
 
-[project.urls]
-Documentation = "https://imlcv.readthedocs.io/en/latest/"
-Source = "https://github.com/DavidDevoogdt/IMLCV"
+[tool.poetry.group.test.dependencies]
+
+pytest = "*"
+pytest-cov = "*"
+
+[tool.poetry.group.devel.dependencies]
+
+mypy = "*"
+black = "*"
+isort = "*"
+flake8 = "*"
+shed = "*"
+
+sphinx = "*"
+sphinx-book-theme = "*"
+sphinx_design = "*"
+sphinx-autoapi = "*"
+sphinx-autodoc-typehints = "*"
+myst-parser = "*"
+
 
 
 
