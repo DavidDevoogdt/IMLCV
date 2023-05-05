@@ -560,12 +560,16 @@ class MDEngine(ABC):
         """
 
         print(f"running for {int(steps)} steps!")
-        try:
-            self._run(int(steps))
-        except Exception as err:
-            if self.step == 1:
-                raise err
-            print(f"The calculator finished early with error {err=},{type(err)=}")
+        # try:
+
+        # with jax.debug_nans():
+        #     with jax.disable_jit():
+        # try:
+        self._run(int(steps))
+        # except Exception as err:
+        #     if self.step == 1:
+        #         raise err
+        #     print(f"The calculator finished early with error {err=},{type(err)=}")
 
         self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
@@ -651,6 +655,8 @@ class MDEngine(ABC):
     def get_bias(
         self, gpos: bool = False, vtens: bool = False
     ) -> tuple[CV, EnergyResult]:
+        # with jax.disable_jit()
+        # with jax.debug_nans():
         cv, ener = self.bias.compute_from_system_params(
             sp=self.sp,
             nl=self.nl,
@@ -658,21 +664,30 @@ class MDEngine(ABC):
             vir=vtens,
         )
 
-        if (self.static_trajectory_info.max_grad is not None) and (
-            ener.gpos is not None
-        ):
-            ns = jnp.linalg.norm(ener.gpos, axis=1)
+        # if jnp.any(jnp.isnan(ener.gpos)):
+        #     import jax
 
-            norms = jnp.max(ns)
+        #     with jax.disable_jit():
+        #         with jax.debug_nans():
+        #             cv, ener = self.bias.compute_from_system_params(
+        #                 sp=self.sp, nl=self.nl, gpos=gpos, vir=vtens, jit=False
+        #             )
 
-            # if (fact := norms / self.static_trajectory_info.max_grad) > 1:
-            #     ener = EnergyResult(
-            #         ener.energy,
-            #         ener.gpos / fact,
-            #         ener.vtens if ener.vtens is not None else None,
-            #     )
+        # if (self.static_trajectory_info.max_grad is not None) and (
+        #     ener.gpos is not None
+        # ):
+        #     ns = jnp.linalg.norm(ener.gpos, axis=1)
 
-            #     print(f"clipped, fact={fact}")
+        #     norms = jnp.max(ns)
+
+        # if (fact := norms / self.static_trajectory_info.max_grad) > 1:
+        #     ener = EnergyResult(
+        #         ener.energy,
+        #         ener.gpos / fact,
+        #         ener.vtens if ener.vtens is not None else None,
+        #     )
+
+        #     print(f"clipped, fact={fact}")
 
         return cv, ener
 

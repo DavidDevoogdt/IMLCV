@@ -63,6 +63,12 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
         dv, dx = tangents
         primal_out = cv(v, x)
 
+        v_safe = jax.lax.cond(
+            v == 0,
+            lambda: 1,
+            lambda: v,
+        )
+
         if type == 0:
             """functions Jv, Yv, Hv_1,Hv_2"""
             # https://dlmf.nist.gov/10.6 formula 10.6.1
@@ -71,7 +77,7 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
                 lambda: -cv(v + 1, x),
                 # lambda:jax.lax.cond( jnp.abs(x)>=1e-2,
                 # lambda: cv(v - 1, x) -  (v/x) *  primal_out ,
-                lambda: 0.5 * (cv(v - 1, x) - cv(v + 1, x)),
+                lambda: 0.5 * (cv(v_safe - 1, x) - cv(v_safe + 1, x)),
                 # )
             )
         elif type == 1:
@@ -80,7 +86,7 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             tangents_out = jax.lax.cond(
                 v == 0,
                 lambda: sign * cv(v + 1, x),
-                lambda: 0.5 * (sign * cv(v - 1, x) + sign * cv(v + 1, x)),
+                lambda: 0.5 * (sign * cv(v_safe - 1, x) + sign * cv(v_safe + 1, x)),
             )
 
         elif type == 2:
@@ -94,7 +100,8 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
                 # lambda: (lambda v: cv(v - 1, x) - (v + 1) / x * primal_out)(
                 #     jax.lax.cond(v == 0, lambda: jnp.ones_like(v), lambda: v)
                 # ),
-                lambda: (v * cv(v - 1, x) - (v + 1) * cv(v + 1, x)) / (2 * v + 1),
+                lambda: (v * cv(v_safe - 1, x) - (v_safe + 1) * cv(v_safe + 1, x))
+                / (2 * v_safe + 1),
             )
         else:
             raise ValueError

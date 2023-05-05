@@ -322,7 +322,7 @@ def test_neigh():
         split_z=True,
     )
 
-    _, s6_z = nl.split_z(s6)
+    _, s6_z = nl.nl_split_z(s6)
     a, bc = tuple(
         zip(*jax.tree_map(lambda x: jnp.sum(x, axis=(0, -1)), s6_z))
     )  # sum over z and over neighbours

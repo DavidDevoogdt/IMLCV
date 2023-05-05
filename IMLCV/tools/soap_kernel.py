@@ -30,7 +30,7 @@ def legendre(x, n):
     return y
 
 
-@partial(jit, static_argnums=(2, 3))
+# @partial(jit, static_argnums=(2, 3))
 def p_i(sp: SystemParams, nl: NeighbourList, p, r_cut):
     if sp.batched:
         return vmap(p_i, in_axes=(0, 0, None, None))(sp, nl, p, r_cut)
@@ -256,11 +256,12 @@ def p_inl_sb(l_max, n_max, r_cut):
                 * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
             ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3) ** (0.5)
 
-        return jax.lax.cond(
-            r == 0,
-            lambda: jnp.zeros_like(f(r)),
-            lambda: f(jax.lax.cond(r == 0, lambda: jnp.ones_like(r), lambda: r)),
-        )
+        # return jax.lax.cond(
+        #     r == 0,
+        #     lambda: jnp.zeros_like(f(r)),
+        #     lambda: f(jax.lax.cond(r == 0, lambda: jnp.ones_like(r), lambda: r)),
+        # )
+        return f(r)
 
     l_list = list(range(l_max + 1))
     l_vec = jnp.array(l_list)
@@ -307,15 +308,17 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     @jit
     def _p_i_sb_2_s(p_ij, atom_index_j):
-        r_ij2 = jnp.dot(p_ij, p_ij)
-        r_ij2 = jax.lax.cond(r_ij2 == 0, lambda: jnp.ones_like(r_ij2), lambda: r_ij2)
+        r_ij_sq = jnp.dot(p_ij, p_ij)
+        r_ij_sq_safe = jax.lax.cond(
+            r_ij_sq == 0, lambda: jnp.ones_like(r_ij_sq), lambda: r_ij_sq
+        )
 
-        shape = jax.eval_shape(g_nl, r_ij2)
+        shape = jax.eval_shape(g_nl, r_ij_sq)
 
         a_jnl = jax.lax.cond(
-            r_ij2 == 0,
+            r_ij_sq == 0,
             lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
-            lambda: g_nl(jnp.sqrt(r_ij2)),
+            lambda: g_nl(jnp.sqrt(r_ij_sq_safe)),
         )
 
         return a_jnl
@@ -350,17 +353,3 @@ def p_inl_sb(l_max, n_max, r_cut):
         return out
 
     return _p_i_sb_2_s, _p_i_sb_2_d
-
-
-@partial(jit, static_argnums=(4, 5))
-def Kernel(
-    p1,
-    p2,
-    nl1: NeighbourList,
-    nl2: NeighbourList,
-    matching="REMatch",
-    alpha=None,
-):
-    return NeighbourList.match_kernel(
-        p1=p1, p2=p2, nl1=nl1, nl2=nl2, matching=matching, alpha=alpha
-    )[0]

@@ -1,3 +1,5 @@
+from time import time_ns
+
 import jax.debug
 import jax.dtypes
 import jax.lax
@@ -21,7 +23,7 @@ from IMLCV.tools.bessel_callback import (
     spherical_yn,
     yv,
 )
-from IMLCV.tools.soap_kernel import Kernel, p_i, p_inl_sb, p_innl_soap
+from IMLCV.tools.soap_kernel import p_i, p_inl_sb, p_innl_soap
 
 
 def get_sps(
@@ -126,29 +128,42 @@ def test_SOAP(cell, matching, pp):
 
     p1 = f(sp1, nl1)
 
-    @jit
+    before_f = time_ns()
+    p2 = f(sp2, nl2).block_until_ready()
+    after_f = time_ns()
+
+    p3 = f(sp3, nl3)
+
+    # @jit
     def k(sp: SystemParams, nl: NeighbourList):
-        return Kernel(p1, f(sp, nl), nl1, nl, matching=matching, alpha=alpha)
+        return NeighbourList.match_kernel(
+            p1=p1,
+            p2=f(sp, nl),
+            nl1=nl1,
+            nl2=nl,
+            matching=matching,
+            alpha=alpha,
+            jit=False,
+        )
 
     da = k(sp1, nl1).block_until_ready()
-
-    from time import time_ns
 
     before = time_ns()
     dab = k(sp2, nl2).block_until_ready()
     after = time_ns()
 
+    # with jax.profiler.trace("tmp/jax-trace"):
     dac = k(sp3, nl3)
 
-    assert jnp.abs(da - 1) < 1e-3
-    assert jnp.abs(dab - 1) < 1e-3
+    assert jnp.abs(da) < 1e-3
+    assert jnp.abs(dab) < 1e-3
     # assert jnp.abs(dac) < 0.8
 
     print(
-        f"{matching=}\t{cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t<kernel(orig,rot)>=\t\t{  dab :>.4f}\t<kernel(orig, rand)>=\t\t{ dac:.4f}\tevalutation time [ms] { (after-before)/ 10.0**6 :>.2f}  "
+        f"{matching=}\t{cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t<kernel(orig,rot)>=\t\t{  dab :>.4f}\t<kernel(orig, rand)>=\t\t{ dac:.4f}\tevalutation time f [ms] { (after_f-before_f)/ 10.0**6 :>.2f}  k [ms] { (after-before)/ 10.0**6 :>.2f} "
     )
 
-    @jit
+    # @jit
     def jk(sp, nl):
         _jk = jacrev(k)(sp, nl)
         return jnp.mean(jnp.linalg.norm(_jk.coordinates)), jnp.mean(

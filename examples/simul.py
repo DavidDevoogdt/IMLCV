@@ -2,9 +2,10 @@ import argparse
 import os
 import shutil
 import sys
+from pathlib import Path
 
 from configs.bash_app_python import bash_app_python
-from configs.config_general import ROOT_DIR, config
+from configs.config_general import config
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -112,10 +113,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    this_path = Path(__file__).resolve().parent
+
     if args.folder is None:
-        folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.system
+        folder = this_path / "output" / args.system
     else:
-        folder = ROOT_DIR / "IMLCV" / "examples" / "output" / args.folder
+        folder = this_path / "output" / args.folder
 
     def get_fold(folder):
         # look for first avaialble folder
@@ -147,12 +150,12 @@ if __name__ == "__main__":
         f.write(f"resolved args: {args} \n")
 
     def app(args):
-        print("loading mdoules")
-
+        from example_systems import CsPbI3, alanine_dipeptide_yaff
         from molmod.units import kjmol
 
         from configs.config_general import config
-        from examples.example_systems import CsPbI3, alanine_dipeptide_yaff
+
+        # from examples.example_systems import CsPbI3, alanine_dipeptide_yaff
         from IMLCV.scheme import Scheme
 
         print("loading parsl config")
@@ -243,8 +246,8 @@ if __name__ == "__main__":
         bash_app_python(executors=["default"], function=app)(
             args=args,
             execution_folder=args.folder,
-            stdout="IMLCV.stdout",
-            stderr="IMLCV.stderr",
+            # stdout="IMLCV.stdout",
+            # stderr="IMLCV.stderr",
         ).result()
     else:
         os.environ["XLA_FLAGS"] = (

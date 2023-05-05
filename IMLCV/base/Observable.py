@@ -12,9 +12,10 @@ from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
 
-from IMLCV.base.bias import Bias, CompositeBias, CvMonitor, GridBias, RbfBias, plot_app
+from IMLCV.base.bias import Bias, CompositeBias, plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.bias import GridBias, RbfBias
 
 
 class ThermoLIB:
@@ -243,7 +244,7 @@ class ThermoLIB:
         # fes is in 'xy'- indexing convention, convert to ij
         fs = np.transpose(fes.fs)
 
-        mask = ~jnp.isnan(fs)
+        mask = ~np.isnan(fs)
 
         # invert to use as bias
         if max_bias is not None:

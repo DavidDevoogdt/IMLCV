@@ -7,12 +7,13 @@ import jax.numpy as jnp
 from keras.api._v2 import keras as KerasAPI
 from molmod.constants import boltzmann
 
-from IMLCV.base.bias import BiasMTD, CompositeBias, HarmonicBias, NoneBias
+from IMLCV.base.bias import CompositeBias, NoneBias
 from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import ThermoLIB
 from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.bias import BiasMTD, HarmonicBias
 
 keras: KerasAPI = import_module("tensorflow.keras")
 
