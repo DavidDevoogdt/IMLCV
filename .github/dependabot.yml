@@ -9,7 +9,7 @@ registries:
     type: git
     url: github.ugent.be
     username: ddvoogdt
-    password: ${{secrets.GITHUB_UGENT}}
+    password: ${{secrets.UGENT_USER_PASSWORD}}
 updates:
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
