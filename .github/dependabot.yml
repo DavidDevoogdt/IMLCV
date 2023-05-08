@@ -18,6 +18,7 @@ updates:
       interval: "weekly"
   - package-ecosystem: "pip" # See documentation for possible values
     directory: "/" # Location of package manifests
+    insecure-external-code-execution: allow
     registries: 
       - ugent-pip
     schedule:
