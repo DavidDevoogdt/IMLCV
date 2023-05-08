@@ -14,3 +14,9 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    registries:
+      github-octocat:
+        type: git
+        url: https://github.ugent.be
+        username: x-access-token
+        password: ${{secrets.GITHUB_UGENT}}
