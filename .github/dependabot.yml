@@ -7,10 +7,9 @@ version: 2
 registries: 
   ugent-pip:
     type: git
-    url: https://github.ugent.be
+    url: github.ugent.be
     username: ddvoogdt
     password: ${{secrets.GITHUB_UGENT}}
-
 updates:
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
@@ -19,7 +18,9 @@ updates:
       interval: "weekly"
   - package-ecosystem: "pip" # See documentation for possible values
     directory: "/" # Location of package manifests
+    registries: 
+      - ugent-pip
     schedule:
       interval: "weekly"
-    registries: ugent-pip
+
 
