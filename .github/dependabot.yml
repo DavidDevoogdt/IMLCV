@@ -23,5 +23,7 @@ updates:
       - ugent-pip
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "yaff"
 
 
