@@ -4,6 +4,13 @@
 # https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
 
 version: 2
+registries: 
+  ugent-pip:
+    type: git
+    url: https://github.ugent.be
+    username: ddvoogdt
+    password: ${{secrets.GITHUB_UGENT}}
+
 updates:
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
@@ -14,9 +21,5 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
-registries:
-  github-octocat:
-    type: git
-    url: https://github.ugent.be
-    username: x-access-token
-    password: ${{secrets.GITHUB_UGENT}}
+    registries: ugent-pip
+
