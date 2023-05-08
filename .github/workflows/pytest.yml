@@ -21,8 +21,7 @@ jobs:
         run: |
             pip install numpy cython
             git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
-            pip install poetry
-            poetry install --with devel,test
+            pip install -e .[test]
         env:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
 

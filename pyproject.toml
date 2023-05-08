@@ -43,7 +43,6 @@ numba = "*"
 shapely = "*"
 alphashape = "*"
 ase = "*"
-pytest = "*"
 scikit-learn = "*"
 nyx = "*"
 filelock = "*"
@@ -56,28 +55,31 @@ thermolib = {git = "https://github.ugent.be/lvduyfhu/ThermoLIB", branch = "david
 netket = "*"
 
 
-[tool.poetry.group.test.dependencies]
+# [tool.poetry.group.test.dependencies]
 
-pytest = "*"
-pytest-cov = "*"
-mpi4py = "*"
+pytest = { version = "*", optional = true }
+pytest-cov ={version = "*", optional = true }
+mpi4py ={ version = "*", optional = true }
 
-[tool.poetry.group.devel.dependencies]
+mypy = { version = "*", optional = true }
+black = { version = "*", optional = true }
+isort = { version = "*", optional = true }
+flake8 = { version = "*", optional = true }
+shed = { version = "*", optional = true }
 
-mypy = "*"
-black = "*"
-isort = "*"
-flake8 = "*"
-shed = "*"
-
-sphinx = "*"
-sphinx-book-theme = "*"
-sphinx_design = "*"
-sphinx-autoapi = "*"
-sphinx-autodoc-typehints = "*"
-myst-parser = "*"
+sphinx = { version = "*", optional = true }
+sphinx-book-theme = { version = "*", optional = true }
+sphinx_design = { version = "*", optional = true }
+sphinx-autoapi = { version = "*", optional = true }
+sphinx-autodoc-typehints = { version = "*", optional = true }
+myst-parser = { version = "*", optional = true }
 
 
+[tool.poetry.extras]
+
+test = [ "pytest","pytest-cov","mpi4py"  ] 
+docs = [ "sphinx", "sphinx-book-theme", "sphinx_design", "sphinx-autoapi", "sphinx-autodoc-typehints", "myst-parser" ]
+lint = [ "mypy", "black", "isort", "flake8", "shed" ]
 
 
 [tool.pytest.ini_options]
