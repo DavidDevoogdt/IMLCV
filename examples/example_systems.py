@@ -4,8 +4,6 @@ import ase.units
 import jax.numpy as jnp
 import numpy as np
 import yaff
-
-# from keras.api._v2 import keras as KerasAPI
 from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
 
@@ -15,7 +13,6 @@ yaff.log.set_level(yaff.log.silent)
 
 from typing import Callable
 
-# keras: KerasAPI = import_module("tensorflow.keras")  # type: ignore
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 from configs.config_general import ROOT_DIR
@@ -517,6 +514,3 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
     )
 
     return yaffmd
-
-
-# if __name__ == "__main__":

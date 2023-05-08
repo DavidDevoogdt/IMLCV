@@ -17,14 +17,12 @@ from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
 
-from IMLCV.base.CV import SystemParams
-
-yaff.log.set_level(yaff.log.silent)
-
-
 # if TYPE_CHECKING:
 from IMLCV.base.bias import Bias, Energy
+from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo
+
+# yaff.log.set_level(yaff.log.silent)
 
 
 class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
@@ -33,6 +31,8 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     Args:
         ff (yaff.pes.ForceField)
     """
+
+    yaff.log.set_level(yaff.log.silent)
 
     def __init__(
         self,

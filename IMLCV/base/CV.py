@@ -6,7 +6,6 @@ from collections.abc import Callable
 
 # from IMLCV.base.CV import CV, CvTrans
 from functools import partial
-from importlib import import_module
 from typing import TYPE_CHECKING
 
 import jax
@@ -22,8 +21,8 @@ import jaxopt.objective
 import numpy as np
 from flax import linen as nn
 from jax import Array, jacfwd, jacrev, jit, vmap
-from keras.api._v2 import keras as KerasAPI
 from molmod.units import angstrom
+from netket.jax import vmap_chunked
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
 from ott.solvers.linear import sinkhorn
@@ -31,7 +30,6 @@ from ott.solvers.linear import sinkhorn
 if TYPE_CHECKING:
     pass
 
-keras: KerasAPI = import_module("tensorflow.keras")
 
 import dataclasses
 
@@ -1712,11 +1710,11 @@ class CvMetric:
 
     @partial(jit, static_argnums=(0, 2))
     def periodic_wrap(self, x: CV, min=False) -> CV:
-        out = CV(cv=self.__periodic_wrap(self.__map(x.cv), min=min), mapped=True)
+        out = CV(cv=self.__periodic_wrap(self.map(x.cv), min=min), mapped=True)
 
         if x.mapped:
             return out
-        return self.__unmap(out)
+        return self.unmap(out)
 
     @partial(jit, static_argnums=(0))
     def difference(self, x1: CV, x2: CV) -> Array:
@@ -1728,10 +1726,10 @@ class CvMetric:
         )
 
     def min_cv(self, cv: Array):
-        mapped = self.__map(cv, displace=False)
+        mapped = self.map(cv, displace=False)
         wrapped = self.__periodic_wrap(mapped, min=True)
 
-        return self.__unmap(
+        return self.unmap(
             wrapped,
             displace=False,
         )
@@ -1750,7 +1748,7 @@ class CvMetric:
         return jnp.where(self.periodicities, coor, xs)
 
     @partial(jit, static_argnums=(0, 2))
-    def __map(self, x: Array, displace=True) -> Array:
+    def map(self, x: Array, displace=True) -> Array:
         """transform CVs to lie in unit square."""
 
         if displace:
@@ -1761,7 +1759,7 @@ class CvMetric:
         return y
 
     @partial(jit, static_argnums=(0, 2))
-    def __unmap(self, x: Array, displace=True) -> Array:
+    def unmap(self, x: Array, displace=True) -> Array:
         """transform CVs to lie in unit square."""
 
         y = x * (self.bounding_box[:, 1] - self.bounding_box[:, 0])
@@ -1990,14 +1988,14 @@ class CvTrans:
     trans: list[CvFunBase]
 
     @staticmethod
-    def from_array_function(f: Callable[[Array], Array]):
+    def from_array_function(f: Callable[[Array, None], Array]):
         def f2(x: CV, cond: CV | None = None):
             assert cond is None, "implement this"
 
             if x.batched:
-                out = vmap(f)(x.cv)
+                out = vmap(f)(x.cv, None)
             else:
-                out = f(x.cv)
+                out = f(x.cv, None)
 
             return CV(cv=out)
 
@@ -2120,10 +2118,16 @@ class CvFlow:
         return CvFlow(func=f2)
 
     def compute_cv_flow(
-        self, x: SystemParams, nl: NeighbourList | None = None, jit=True
+        self,
+        x: SystemParams,
+        nl: NeighbourList | None = None,
+        jit=True,
+        chunk_size: int | None = None,
     ) -> CV:
         if x.batched:
-            return vmap(self.compute_cv_flow)(x, nl)
+            return vmap_chunked(
+                self.compute_cv_flow, in_axes=(0, 0, None, None), chunk_size=chunk_size
+            )(x, nl, jit, chunk_size)
 
         def _compute_cv_flow(x, nl):
             out = self.f0(x, nl)
@@ -2235,13 +2239,13 @@ class CollectiveVariable:
     ) -> tuple[CV, CV]:
         if sp.batched:
             if nl is None:
-                return vmap(self.compute_cv, in_axes=(0, None, None))(
-                    sp, nl, jacobian=jacobian
+                return vmap(self.compute_cv, in_axes=(0, None, None, None))(
+                    sp, nl, jacobian, jit
                 )
             else:
                 assert nl.batched
-                return vmap(self.compute_cv, in_axes=(0, 0, None))(
-                    sp, nl, jacobian=jacobian
+                return vmap(self.compute_cv, in_axes=(0, 0, None, None))(
+                    sp, nl, jacobian, jit
                 )
 
         if jit:

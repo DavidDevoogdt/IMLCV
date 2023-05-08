@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import yaff
-
-yaff.log.set_level(yaff.log.silent)
-
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -12,6 +8,7 @@ import pytest
 from molmod import units
 from molmod.units import kelvin
 
+from configs.config_general import ROOT_DIR, config
 from IMLCV.base.bias import Bias, BiasF, CompositeBias
 from IMLCV.base.CV import (
     CV,
@@ -21,6 +18,7 @@ from IMLCV.base.CV import (
     CvTrans,
     SystemParams,
 )
+from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.bias import BiasMTD, HarmonicBias, RbfBias
 from IMLCV.implementations.CV import Volume, dihedral
 from IMLCV.implementations.energy import YaffEnergy
@@ -188,3 +186,33 @@ def test_bias_save(tmpdir):
 
     assert pytest.approx(b) == b2
     assert pytest.approx(db.cv) == db2.cv
+
+
+def test_FES_bias(tmpdir):
+    import zipfile
+
+    folder = tmpdir / "alanine_dipeptide"
+
+    with zipfile.ZipFile(
+        ROOT_DIR / "tests" / "data" / "alanine_dipeptide.zip", "r"
+    ) as zip_ref:
+        zip_ref.extractall(tmpdir)
+
+    from IMLCV.scheme import Scheme
+
+    rnds = Rounds(folder=folder, new_folder=False)
+    scheme0 = Scheme.from_rounds(rnds)
+
+    config()
+
+    scheme0.FESBias(plot=True)
+
+    sp = scheme0.md.sp
+    nl = sp.get_neighbour_list(
+        scheme0.md.static_trajectory_info.r_cut,
+        z_array=scheme0.md.static_trajectory_info.atomic_numbers,
+    )
+
+    cv, energy_result = scheme0.md.bias.compute_from_system_params(sp, nl)
+    assert jnp.allclose(cv.cv, jnp.array([-2.85656026, 2.79090329]))
+    assert jnp.allclose(energy_result.energy, 0.00765493)

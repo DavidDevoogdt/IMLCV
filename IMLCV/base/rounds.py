@@ -134,11 +134,11 @@ class Rounds(ABC):
 
     @property
     def h5file_name(self):
-        return self.full_path(self.path() / "results.h5")
+        return self.full_path("results.h5")
 
     @property
     def h5filelock_name(self):
-        return self.full_path(self.path() / "results.h5.lock")
+        return self.full_path("results.h5.lock")
 
     def full_path(self, name) -> str:
         return str(self.folder / Path(name))

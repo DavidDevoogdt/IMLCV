@@ -15,7 +15,7 @@ def get_config(path_internal):
             label="model", max_threads=4, working_dir=str(path_internal)
         ),
         ThreadPoolExecutor(
-            label="reference", max_threads=2, working_dir=str(path_internal)
+            label="reference", max_threads=4, working_dir=str(path_internal)
         ),
     ]
 

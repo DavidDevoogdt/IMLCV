@@ -17,18 +17,23 @@ documentation = "https://imlcv.readthedocs.io/en/main/"
 repository = "https://github.com/DavidDevoogdt/IMLCV"
 
 
+
+
 packages = [
     { include = "IMLCV" },
     { include = "configs/*" },
+    { include = "examples/*" },
 ]
 
 
 [tool.poetry.dependencies]
+python = "^3.7"
+
 jax = "*"
 numpy = "*"
 parsl = "*"
 keras = "*"
-yaff = {git = "https://github.com/molmod/yaff.git" }
+# yaff = {git = "https://github.com/molmod/yaff.git" }
 cloudpickle = "*"
 matplotlib = "*"
 molmod = "*"
@@ -36,7 +41,7 @@ scipy = "*"
 jax_dataclasses = "*"
 optax = "*"
 flax = "*"
-umap = "*"
+umap-learn = "*"
 h5py = "*"
 numba = "*"
 shapely = "*"
@@ -59,6 +64,7 @@ tensorrt = { version = "*", optional = true }
 pytest = { version = "*", optional = true }
 pytest-cov ={version = "*", optional = true }
 mpi4py ={ version = "*", optional = true }
+# zipfile ={ version = "*", optional = true }
 
 mypy = { version = "*", optional = true }
 black = { version = "*", optional = true }
@@ -86,3 +92,7 @@ filterwarnings = [
     "ignore",
     "default:::mymodule",
 ]
+
+[tool.dephell.main]
+from = {format = "poetry", path = "pyproject.toml"}
+to = {format = "setuppy", path = "setup.py"}

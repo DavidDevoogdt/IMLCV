@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import itertools
-from importlib import import_module
 
 import jax.numpy as jnp
-from keras.api._v2 import keras as KerasAPI
 from molmod.constants import boltzmann
 
 from IMLCV.base.bias import CompositeBias, NoneBias
@@ -14,8 +12,6 @@ from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import ThermoLIB
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.bias import BiasMTD, HarmonicBias
-
-keras: KerasAPI = import_module("tensorflow.keras")
 
 
 class Scheme:
@@ -136,8 +132,12 @@ class Scheme:
 
             self.rounds.add_round_from_md(self.md)
 
-    def update_CV(self, cvd: CVDiscovery, samples=2e3, plot=True, **kwargs):
-        new_cv = cvd.compute(self.rounds, samples=samples, plot=plot, **kwargs)
+    def update_CV(
+        self, cvd: CVDiscovery, chunk_size=None, samples=2e3, plot=True, **kwargs
+    ):
+        new_cv = cvd.compute(
+            self.rounds, samples=samples, plot=plot, chunk_size=chunk_size, **kwargs
+        )
         self.md.bias = NoneBias(new_cv)
 
         self.rounds.add_round(self.md.static_trajectory_info)

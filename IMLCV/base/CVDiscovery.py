@@ -1,15 +1,9 @@
 import itertools
-import os
-from functools import partial
 
-import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-import optax
-from flax import linen as nn
-from flax.training import train_state
-from jax import Array, jacrev, jit, random, vmap
+from jax import jacrev, vmap
 from jax.random import PRNGKey, choice
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
@@ -30,6 +24,8 @@ from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import distance_descriptor, sb_descriptor, scale_cv_trans
 
 plt.rcParams["text.usetex"] = True
+
+from pathlib import Path
 
 
 class Transformer:
@@ -63,14 +59,16 @@ class Transformer:
     def pre_fit(
         self,
         z: SystemParams,
+        nl: NeighbourList | None,
+        chunk_size=None,
         scale=True,
     ) -> tuple[CV, CvFlow]:
         f = self.descriptor
-        x = f.compute_cv_flow(z)
+        x = f.compute_cv_flow(z, nl, chunk_size=chunk_size)
 
         if scale:
             g = scale_cv_trans(x)
-            x = g.compute_cv_trans(x)
+            x, _ = g.compute_cv_trans(x)
 
             f = f * g
 
@@ -79,13 +77,19 @@ class Transformer:
     def fit(
         self,
         sp: SystemParams,
-        # indices,
+        nl: NeighbourList | None,
+        chunk_size=None,
         prescale=True,
         postscale=True,
         *fit_args,
         **fit_kwargs,
-    ) -> CollectiveVariable:
-        x, f = self.pre_fit(sp, scale=prescale)
+    ) -> tuple[CV, CollectiveVariable]:
+        x, f = self.pre_fit(
+            sp,
+            nl,
+            scale=prescale,
+            chunk_size=chunk_size,
+        )
         y, g = self._fit(
             x,
             # indices,
@@ -100,12 +104,11 @@ class Transformer:
             jac=jacrev,
         )
 
-        return cv
+        return z, cv
 
     def _fit(
         self,
         x: CV,
-        # indices,
         **kwargs,
     ) -> tuple[CV, CvFlow]:
         raise NotImplementedError
@@ -114,172 +117,7 @@ class Transformer:
         if not scale:
             return y, CvTrans.from_cv_function(lambda x, y: x)
         h = scale_cv_trans(y)
-        return h.compute_cv_trans(y), h
-
-
-class TranformerAutoEncoder(Transformer):
-    def _fit(
-        self,
-        cv,
-        indices,
-        nunits=250,
-        nlayers=3,
-        lr=1e-4,
-        num_epochs=100,
-        batch_size=32,
-        **kwargs,
-    ):
-        # import wandb
-
-        # wandb.init(
-        #     project="TranformerAutoEncode",
-        #     config={
-        #         "cv": cv,
-        #         "nunits": nunits,
-        #         "nlayers": nlayers,
-        #         "lr": lr,
-        #         "num_epochs": num_epochs,
-        #         "batch_size": batch_size,
-        #         "outdim": self.outdim,
-        #         **self.fit_kwargs,
-        #         **kwargs,
-        #     },
-        # )
-
-        rng = random.PRNGKey(0)
-
-        dim = cv.shape[1]
-
-        vae_args = {
-            "latents": self.outdim,
-            "layers": nlayers,
-            "nunits": nunits,
-            "dim": dim,
-        }
-
-        @jax.vmap
-        def kl_divergence(mean, logvar):
-            return -0.5 * jnp.sum(1 + logvar - jnp.square(mean) - jnp.exp(logvar))
-
-        @jax.vmap
-        def mean_Squared_error(x1, x2):
-            return 0.5 * jnp.linalg.norm(x1 - x2) ** 2
-
-        def compute_metrics(recon_x, x, mean, logvar):
-            bce_loss = mean_Squared_error(recon_x, x).mean()
-            kld_loss = 0.01 * kl_divergence(mean, logvar).mean()
-            return {"bce": bce_loss, "kld": kld_loss, "loss": bce_loss + kld_loss}
-
-        # @jax.vmap
-        # def binary_cross_entropy_with_logits(logits, labels):
-        #     logits = nn.log_sigmoid(logits)
-        #     return -jnp.sum(
-        #         labels * logits + (1.0 - labels) * jnp.log(-jnp.expm1(logits))
-        #     )
-
-        @jax.jit
-        def train_step(state: optax.TraceState, batch, z_rng):
-            def loss_fn(params):
-                recon_x, mean, logvar = VAE(**vae_args).apply(
-                    {"params": params}, batch, z_rng
-                )
-
-                bce_loss = mean_Squared_error(recon_x, batch).mean()
-                # bce_loss = mean_Squared_error(recon_x, batch)
-                kld_loss = kl_divergence(mean, logvar).mean()
-                loss = bce_loss + kld_loss
-                return loss
-
-            grads = jax.grad(loss_fn)(state.params)
-
-            return state.apply_gradients(grads=grads)
-
-        @jax.jit
-        def eval(params, x, z_rng):
-            def eval_model(vae):
-                recon_x, mean, logvar = vae(x, z_rng)
-                comparison = jnp.stack([x, recon_x])
-
-                metrics = compute_metrics(recon_x, x, mean, logvar)
-                return metrics, comparison
-
-            return nn.apply(eval_model, VAE(**vae_args))({"params": params})
-
-        # Test encoder implementation
-        # Random key for initialization
-        key, rng = jax.random.split(rng, 2)
-
-        init_data = jax.random.normal(key, (batch_size, dim), jnp.float32)
-
-        key, rng = jax.random.split(rng, 2)
-
-        state = train_state.TrainState.create(
-            apply_fn=VAE(**vae_args).apply,
-            params=VAE(**vae_args).init(key, init_data, rng)["params"],
-            tx=optax.adam(lr),
-        )
-
-        rng, z_key, eval_rng = random.split(rng, 3)
-        z = random.normal(z_key, (64, self.outdim))
-
-        rng, key = random.split(rng, 2)
-
-        x = cv.cv
-        x = random.permutation(key, x)
-
-        split = x.shape[0] // 10
-
-        x_train = x[0:-split, :]
-        x_test = x[-split:, :]
-
-        steps_per_epoch = x_train.shape[0] // batch_size
-
-        for epoch in range(num_epochs):
-            rng, key = random.split(rng)
-            indices = jax.random.choice(
-                key=key,
-                a=int(x.shape[0]),
-                shape=(steps_per_epoch, batch_size),
-                replace=False,
-            )
-
-            for n, index in enumerate(indices):
-                rng, key = random.split(rng)
-                state = train_step(state, x_train[index, :], key)
-
-                if n % 5000:
-                    metrics, comparison = eval(state.params, x_test, eval_rng)
-                    # wandb.log(
-                    #     {
-                    #         "loss": metrics["loss"],
-                    #         "kld": metrics["kld"],
-                    #         "distance": metrics["bce"],
-                    #     }
-                    # )
-
-                    print(
-                        "eval epoch: {}, loss: {:.4f}, BCE: {:.4f}, KLD: {:.4f}".format(
-                            epoch + 1, metrics["loss"], metrics["bce"], metrics["kld"]
-                        )
-                    )
-
-        class NNtrans(CvTrans):
-            def __init__(self, params, vae_args) -> None:
-                self.params = params
-                self.vae_args = vae_args
-
-            @partial(jit, static_argnums=(0,))
-            def compute_cv_trans(self, x: CV):
-                encoded: Array = VAE(**self.vae_args).apply(
-                    {"params": self.params}, x.cv, method=VAE.encode
-                )[0]
-                return CV(cv=encoded)
-
-        f_enc = NNtrans(state.params, vae_args)
-
-        # a: Array =
-
-        return f_enc.compute_cv_trans(cv), f_enc
+        return h.compute_cv_trans(y)[0], h
 
 
 class CVDiscovery:
@@ -290,14 +128,12 @@ class CVDiscovery:
         self.transformer = transformer
 
     def _get_data(
-        self, rounds: Rounds, num=4, out=1e4
-    ) -> tuple[
-        SystemParams,
-        CV,
-        #    jax.Array,
-        CollectiveVariable,
-        StaticTrajectoryInfo,
-    ]:
+        self,
+        rounds: Rounds,
+        num=4,
+        out=1e4,
+        chunk_size=None,
+    ) -> tuple[SystemParams, CV, CollectiveVariable, StaticTrajectoryInfo,]:
         weights = []
 
         colvar: CollectiveVariable | None = None
@@ -317,8 +153,14 @@ class CVDiscovery:
                 colvar = bias.collective_variable
 
             sp0 = traj.ti.sp
-            nl = sp0.get_neighbour_list(r_cut=round.tic.r_cut)
-            cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nl)
+
+            if traj.ti.cv is not None:
+                cv0 = traj.ti.CV
+            else:
+                nl0 = sp0.get_neighbour_list(
+                    r_cut=round.tic.r_cut, z_array=round.tic.atomic_numbers
+                )
+                cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nl0)
             if sp is None:
                 sp = sp0
                 cv = cv0
@@ -365,38 +207,45 @@ class CVDiscovery:
         num_rounds=4,
         samples=3e3,
         plot=True,
+        r_cut=None,
+        chunk_size=None,
         name=None,
         **kwargs,
     ) -> CollectiveVariable:
         (
             sps,
             _,
-            # indices,
             cv_old,
             sti,
-        ) = self._get_data(num=num_rounds, out=samples, rounds=rounds)
+        ) = self._get_data(
+            num=num_rounds,
+            out=samples,
+            rounds=rounds,
+            chunk_size=chunk_size,
+        )
 
-        new_cv = self.transformer.fit(
+        nls = sps.get_neighbour_list(r_cut=r_cut, z_array=sti.atomic_numbers)
+
+        cvs_new, new_cv = self.transformer.fit(
             sps,
-            # indices,
+            nls,
             sti=sti,
+            chunk_size=chunk_size,
             **kwargs,
         )
 
         if plot:
-            base_name = f"{rounds.folder}/round_{rounds.round}/cvdicovery"
+            ind = np.random.choice(
+                a=sps.shape[0], size=min(3000, sps.shape[0]), replace=False
+            )
 
             fut = plot_app(
-                name=base_name,
+                name="cvdiscovery",
                 old_cv=cv_old,
                 new_cv=new_cv,
-                sps=sps[
-                    np.random.choice(
-                        a=sps.shape[0], size=min(3000, sps.shape[0]), replace=False
-                    )
-                ],
-                stdout=f"{base_name}.stdout",
-                stderr=f"{base_name}.stderr",
+                sps=sps[ind],
+                nl=nls[ind] if nls is not None else None,
+                execution_folder=f"{rounds.folder}/round_{rounds.round}",
             )
 
             fut.result()
@@ -430,8 +279,8 @@ def plot_app(
 
     cvs = [old_cv, new_cv]
     for cv in cvs:
-        cvd, _ = cv.compute_cv(sps, nl)
-        cvdm = vmap(cv.metric.__map)(cvd)
+        cvd = cv.compute_cv(sps, nl)[0].cv
+        cvdm = vmap(cv.metric.map)(cvd)
 
         cv_data.append(np.array(cvd))
         cv_data_mapped.append(np.array(cvdm))
@@ -584,8 +433,11 @@ def plot_app(
 
             # fig.set_size_inches([10, 16])
 
-            n = f"{name}_{ 'mapped' if z==1 else ''}_{'old_new' if i == 0 else 'new_old'}.pdf"
-            os.makedirs(os.path.dirname(n), exist_ok=True)
+            n = Path(
+                f"{name}_{ 'mapped' if z==1 else ''}_{'old_new' if i == 0 else 'new_old'}.pdf"
+            )
+
+            n.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(n)
 
-            outputs.append(File(n))
+            outputs.append(File(str(n)))

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from importlib import import_module
 from typing import TYPE_CHECKING
 
 import jax
@@ -13,12 +12,10 @@ import jax.scipy.optimize
 import jaxopt
 import jaxopt.objective
 from jax import vmap
-from keras.api._v2 import keras as KerasAPI
 
 if TYPE_CHECKING:
     pass
 
-keras: KerasAPI = import_module("tensorflow.keras")
 
 import jax.numpy as jnp
 import pytest
@@ -115,8 +112,6 @@ def test_nf():
     )
 
     ## test with distrax
-
-    # https://www.tensorflow.org/probability/api_docs/python/tfp/bijectors/RealNVP
     key_1, key_2, key3, prng = jax.random.split(prng, 4)
     x2 = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
 
