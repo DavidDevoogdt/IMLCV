@@ -50,7 +50,7 @@ filelock = "*"
 distrax = "*"
 jaxopt = "*"
 ott-jax = "*"
-pymanopt = {git = "https://github.com/pymanopt/pymanopt.git", branch = "master"}
+pymanopt = "^2.1.1"
 tensorrt = "*"
 thermolib = {git = "https://github.ugent.be/lvduyfhu/ThermoLIB", branch = "david"}
 netket = "*"
