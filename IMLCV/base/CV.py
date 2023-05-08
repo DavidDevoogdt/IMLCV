@@ -885,6 +885,9 @@ class NeighbourList:
 
         bools = jnp.logical_and(bools, ind != -1)
 
+        if func is None:
+            return bools, None
+
         true_val = vmap(vmap(func))(pos, ind)
         false_val = jax.tree_map(
             lambda a: jnp.zeros_like(a) + fill_value,
@@ -959,8 +962,8 @@ class NeighbourList:
     def apply_fun_neighbour_pair(
         self,
         sp: SystemParams,
-        func_single,
         func_double,
+        func_single=None,
         r_cut=None,
         fill_value=0,
         reduce="full",  # or 'z' or 'none'
@@ -1957,7 +1960,7 @@ class CvFunDistrax(nn.Module, CvFunBase):
     def setup(self):
         """setups self.bijector"""
 
-    @partial(jit, static_argnums=(0, 4, 5))
+    # @partial(jit, static_argnums=(0, 4, 5))
     def _calc(self, x: CV, *y: CV, reverse=False, log_det=False) -> CV:
         z = CV.combine(*y, x).cv
 

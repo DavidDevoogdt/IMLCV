@@ -322,7 +322,7 @@ def test_neigh():
         split_z=True,
     )
 
-    _, s6_z = nl.nl_split_z(s6)
+    _, _, s6_z = nl.nl_split_z(s6)
     a, bc = tuple(
         zip(*jax.tree_map(lambda x: jnp.sum(x, axis=(0, -1)), s6_z))
     )  # sum over z and over neighbours
@@ -355,7 +355,7 @@ def test_neigh_pair():
     z_array = nl.z_array
 
     # neighbourghlist
-    func = lambda r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k: (
+    func_double = lambda r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k: (
         jnp.linalg.norm(r_ij - r_ik),
         jnp.array(z_array)[atom_index_j],
         jnp.array(z_array)[atom_index_k],
@@ -365,7 +365,7 @@ def test_neigh_pair():
     s1 = nl.apply_fun_neighbour_pair(
         sp=sp,
         r_cut=r_cut,
-        func_double=func,
+        func_double=func_double,
         exclude_self=True,
         unique=True,
     )
@@ -398,7 +398,7 @@ def test_neigh_pair():
     s2 = nl.apply_fun_neighbour_pair(
         sp=sp,
         r_cut=r_cut,
-        func_double=func,
+        func_double=func_double,
         exclude_self=True,
         unique=True,
         split_z=True,
@@ -413,7 +413,7 @@ def test_neigh_pair():
     k5_zz, (pair_dist5_zz, index_j5_zz, index_k5_zz) = nl.apply_fun_neighbour_pair(
         sp=sp,
         r_cut=r_cut,
-        func_double=func,
+        func_double=func_double,
         reduce="none",
         exclude_self=True,
         unique=True,
@@ -431,7 +431,7 @@ def test_neigh_pair():
     k6_zz, (pair_dist6_zz, index_j6_zz, index_k6_zz) = nl.apply_fun_neighbour_pair(
         sp=sp,
         r_cut=r_cut,
-        func_double=func,
+        func_double=func_double,
         reduce="z",
         exclude_self=True,
         unique=True,

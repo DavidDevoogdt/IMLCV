@@ -155,8 +155,12 @@ class BiasMTD(Bias):
         if self.finalized:
             return
         # Compute current CV values
-        sp, nl = sp.get_neighbour_list(md.static_trajectory_info.r_cut)
+        nl = sp.get_neighbour_list(
+            md.static_trajectory_info.r_cut,
+            z_array=md.static_trajectory_info.atomic_numbers,
+        )
         q0s = self.collective_variable.compute_cv(sp=sp, nl=nl)[0].cv
+
         K = self.K
         if self.tempering != 0.0:
             raise NotImplementedError("untested")

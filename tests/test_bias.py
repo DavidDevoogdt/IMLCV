@@ -6,7 +6,6 @@ yaff.log.set_level(yaff.log.silent)
 
 from pathlib import Path
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -108,10 +107,10 @@ def test_grid_bias(kernel):
 
     val, _ = f.compute_cv_trans(center_cvs)
 
-    with jax.disable_jit():
-        bias = RbfBias(cvs=cv, cv=center_cvs, vals=val, kernel=kernel)
+    # with jax.disable_jit():
+    bias = RbfBias(cvs=cv, cv=center_cvs, vals=val, kernel=kernel)
 
-        val2, _ = bias.compute_from_cv(center_cvs)
+    val2, _ = bias.compute_from_cv(center_cvs)
     assert np.allclose(val, val2)
 
 

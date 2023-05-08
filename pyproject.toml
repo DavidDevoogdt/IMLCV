@@ -33,7 +33,6 @@ cloudpickle = "*"
 matplotlib = "*"
 molmod = "*"
 scipy = "*"
-tensorflow = "*"
 jax_dataclasses = "*"
 optax = "*"
 flax = "*"
@@ -50,11 +49,11 @@ distrax = "*"
 jaxopt = "*"
 ott-jax = "*"
 pymanopt = "^2.1.1"
-tensorrt = "*"
 thermolib = {git = "https://github.ugent.be/lvduyfhu/ThermoLIB", branch = "david"}
 netket = "*"
 
-
+tensorflow = { version = "*", optional = true }
+tensorrt = { version = "*", optional = true }
 # [tool.poetry.group.test.dependencies]
 
 pytest = { version = "*", optional = true }
@@ -80,7 +79,7 @@ myst-parser = { version = "*", optional = true }
 test = [ "pytest","pytest-cov","mpi4py"  ] 
 docs = [ "sphinx", "sphinx-book-theme", "sphinx_design", "sphinx-autoapi", "sphinx-autodoc-typehints", "myst-parser" ]
 lint = [ "mypy", "black", "isort", "flake8", "shed" ]
-
+tensorflow = [ "tensorflow","tensorrt" ]
 
 [tool.pytest.ini_options]
 filterwarnings = [
