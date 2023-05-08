@@ -14,6 +14,16 @@ build:
     pre_install:
     - pip install numpy cython
     - git config --global url."https://${UGENT_USER_PWD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
+    post_create_environment:
+      # Install poetry
+      # https://python-poetry.org/docs/#installing-manually
+      - pip install poetry
+      # Tell poetry to not use a virtual environment
+      - poetry config virtualenvs.create false
+    post_install:
+      # Install dependencies with 'docs' dependency group
+      # https://python-poetry.org/docs/managing-dependencies/#dependency-groups
+      - poetry install --with devel
 
 
 # Build documentation in the docs/ directory with Sphinx
@@ -24,7 +34,7 @@ sphinx:
 # formats:
 #    - pdf
 
-# Optionally declare the Python requirements required to build your docs
-python:
-   install:
-   - requirements: docs/source/requirements.txt
+# # Optionally declare the Python requirements required to build your docs
+# python:
+#    install:
+#    - requirements: docs/source/requirements.txt
