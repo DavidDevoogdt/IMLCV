@@ -60,6 +60,7 @@ netket = "*"
 
 pytest = "*"
 pytest-cov = "*"
+mpi4py = "*"
 
 [tool.poetry.group.devel.dependencies]
 
