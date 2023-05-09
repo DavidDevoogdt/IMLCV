@@ -1,84 +1,60 @@
-.vscode*
-
-# Binary files
-*.pyc
+# Temporary and binary files
+*~
+*.py[cod]
 *.so
-*.h5
-ext.c
-*.gz
-*.bz2
+*.cfg
+!.isort.cfg
+!setup.cfg
+*.orig
+*.log
+*.pot
+__pycache__/*
+.cache/*
+.*.swp
+*/.ipynb_checkpoints/*
+.DS_Store
 
+# Project files
+.ropeproject
+.project
+.pydevproject
+.settings
+.idea
+.vscode
+tags
 
-# compiled stuff
-__pycache__
-IMLCV.egg-info
-.ipynb_checkpoints
+# Package files
+*.egg
+*.eggs/
+.installed.cfg
+*.egg-info
 
-#plumed stuff
+# Unittest and coverage
+htmlcov/*
+.coverage
+.coverage.*
+.tox
+junit*.xml
+coverage.xml
+.pytest_cache/
 
-*.HILLS
-*.COLVAR
-*.plumed.log
-COLVAR
-HILLS
-plumed.log
-
-#sphinx
-
-docs/build*
-docs/source/rg_*
-
-#files from examples
-IMLCV/test/output/*
-IMLCV/test/cython/build/temp.linux-x86_64-3.8/cpickle.o
-
-
-.mongodb/*
-.log/*
-my_fworker.yaml
-.gitignore
-my_qadapter.yaml
-my_launchpad.yaml
-
-
-Miniconda3/*
-Miniconda3.sh
-
-
-IMLCV/.parsl_scripts/*
-IMLCV/.runinfo/*
-IMLCV/logs/*
-IMLCV/test/.bash_python_app/*
-
-
-.pip_cache/*
-IMLCV/test/.CP2K/*
-IMLCV/.ase_calculators/*
-IMLCV/.bash_python_app/*
-.venv/*
-build/lib/IMLCV/*
-python_lib/*
-IMLCV/bash_python_app/*
-output/test_cv_disc_perov/round_0/*
-venv_test/*
-nohup.out
-Miniconda3_plumed/*
-Miniconda3_plumed/pkgs/*
-IMLCV/base/tools/.mypy_cache/*
-IMLCV/test/wandb/*
-wandb/*
-nohup.out
-examples/output/*
-
-
-**/.mypy_cache/*
-
-src/*
-scaling.png
-profile.py
-workdir/*
-IMLCV/examples/data/CsPbI_3/2x2x2/Application_form_Tier-1_Compute_2023_final.docx
-
+# Build and docs folder/files
 build/*
+dist/*
+sdist/*
+docs/api/*
+docs/_rst/*
+docs/_build/*
+cover/*
+MANIFEST
 
+# Per-project virtualenvs
+.venv*/
+.conda*/
+.python-version
+
+
+# large folders
+dist/*
 tmp/*
+examples/output/*

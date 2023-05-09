@@ -1,3 +1,0 @@
-# Philosphy 
-
-todo
