@@ -5,7 +5,8 @@ Currently, the MD is done with YAFF/OpenMM
 from __future__ import annotations
 
 import tempfile
-from abc import ABC, abstractmethod
+from abc import ABC
+from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
@@ -17,24 +18,25 @@ import numpy as np
 import yaff.analysis.biased_sampling
 import yaff.external
 import yaff.log
-import yaff.pes
 import yaff.pes.bias
 import yaff.pes.ext
-import yaff.sampling
 import yaff.sampling.iterative
+from IMLCV.base.bias import Bias
+from IMLCV.base.bias import Energy
+from IMLCV.base.bias import EnergyResult
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import SystemParams
 from jax import Array
+from molmod.periodic import periodic
+from molmod.units import angstrom
 from molmod.units import bar
-
-from IMLCV.base.CV import NeighbourList, SystemParams
+from molmod.units import kjmol
 
 yaff.log.set_level(yaff.log.silent)
 
-from molmod.periodic import periodic
-from molmod.units import angstrom, kjmol
 
 # if TYPE_CHECKING:
-from IMLCV.base.bias import Bias, Energy, EnergyResult
-from IMLCV.base.CV import CV
 
 ######################################
 #             Trajectory             #
@@ -209,19 +211,11 @@ class TrajectoryInfo:
             if self._charges is not None
             else None,
             _e_pot=self._e_pot[slices][ind] if self._e_pot is not None else None,
-            _e_pot_gpos=self._e_pot_gpos[slices, :][ind]
-            if self._e_pot_gpos is not None
-            else None,
-            _e_pot_vtens=self._e_pot_vtens[slices, :][ind]
-            if self._e_pot_vtens is not None
-            else None,
+            _e_pot_gpos=self._e_pot_gpos[slices, :][ind] if self._e_pot_gpos is not None else None,
+            _e_pot_vtens=self._e_pot_vtens[slices, :][ind] if self._e_pot_vtens is not None else None,
             _e_bias=self._e_bias[slices][ind] if self._e_bias is not None else None,
-            _e_bias_gpos=self._e_bias_gpos[slices, :][ind]
-            if self._e_bias_gpos is not None
-            else None,
-            _e_bias_vtens=self._e_bias_vtens[slices, :][ind]
-            if self._e_bias_vtens is not None
-            else None,
+            _e_bias_gpos=self._e_bias_gpos[slices, :][ind] if self._e_bias_gpos is not None else None,
+            _e_bias_vtens=self._e_bias_vtens[slices, :][ind] if self._e_bias_vtens is not None else None,
             _cv=self._cv[slices, :][ind] if self._cv is not None else None,
             _T=self._T[slices][ind] if self._T is not None else None,
             _P=self._P[slices][ind] if self._P is not None else None,
@@ -319,8 +313,6 @@ class TrajectoryInfo:
         props = {}
         attrs = {}
 
-        tic = None
-
         for key, val in hf.items():
             # if key == "static_info":
             #     tic = StaticTrajectoryInfo._load(hf[key])
@@ -340,9 +332,7 @@ class TrajectoryInfo:
     def sp(self) -> SystemParams:
         return SystemParams(
             coordinates=jnp.array(self._positions[0 : self._size, :]),
-            cell=jnp.array(self._cell[0 : self._size, :])
-            if self._cell is not None
-            else None,
+            cell=jnp.array(self._cell[0 : self._size, :]) if self._cell is not None else None,
         )
 
     @property
@@ -538,7 +528,7 @@ class MDEngine(ABC):
         with open(file, "rb") as f:
             self = cloudpickle.load(f)
 
-        print(f"Loading MD engine")
+        print("Loading MD engine")
         for key in kwargs.keys():
             print(f"setting {key}={kwargs[key]}")
 
@@ -653,7 +643,9 @@ class MDEngine(ABC):
         )
 
     def get_bias(
-        self, gpos: bool = False, vtens: bool = False
+        self,
+        gpos: bool = False,
+        vtens: bool = False,
     ) -> tuple[CV, EnergyResult]:
         # with jax.disable_jit()
         # with jax.debug_nans():

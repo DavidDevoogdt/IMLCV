@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import pytest
+from IMLCV.scheme import Scheme
 from molmod.units import kjmol
 
 from configs.config_general import config
-from examples.example_systems import CsPbI3, alanine_dipeptide_yaff
-from IMLCV.scheme import Scheme
+from examples.example_systems import alanine_dipeptide_yaff
+from examples.example_systems import CsPbI3
 
 
 @pytest.mark.skip(reason="run on HPC")
@@ -17,6 +20,7 @@ def test_perov(tmpdir, steps=500, recalc=False):
     scheme.inner_loop(K=1 * kjmol, n=2, init=100, steps=steps)
 
 
+@pytest.mark.skip(reason="run on HPC")
 def test_ala(tmpdir, steps=1000):
     config()
 

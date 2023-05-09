@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from mpi4py import MPI
 
 from configs.bash_app_python import bash_app_python
@@ -32,7 +34,7 @@ def _f_MPI(i, inputs=[], outputs=[]):
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
-    num_ranks = comm.Get_size()
+    # num_ranks = comm.Get_size()
 
     print(f"i: {i}")
 

@@ -1,12 +1,4 @@
-import jax
-import jax.numpy as jnp
-
-# import keras
-import matplotlib.pyplot as plt
-from flax import linen as nn
-from jax import random
-
-plt.rcParams["text.usetex"] = True
+from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
@@ -14,10 +6,16 @@ import matplotlib.pyplot as plt
 import optax
 from flax import linen as nn
 from flax.training import train_state
-from jax import Array, random
-
-from IMLCV.base.CV import CV, CvFun, CvTrans
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvFun
+from IMLCV.base.CV import CvTrans
 from IMLCV.base.CVDiscovery import Transformer
+from jax import Array
+from jax import random
+
+# import keras
+
+plt.rcParams["text.usetex"] = True
 
 
 class Encoder(nn.Module):
@@ -169,7 +167,9 @@ class TranformerAutoEncoder(Transformer):
         def train_step(state: optax.TraceState, batch, z_rng):
             def loss_fn(params):
                 recon_x, mean, logvar = VAE(**vae_args).apply(
-                    {"params": params}, batch, z_rng
+                    {"params": params},
+                    batch,
+                    z_rng,
                 )
 
                 bce_loss = mean_Squared_error(recon_x, batch).mean()
@@ -207,10 +207,7 @@ class TranformerAutoEncoder(Transformer):
             tx=optax.adam(lr),
         )
 
-        rng, z_key, eval_rng = random.split(rng, 3)
-        z = random.normal(z_key, (64, self.outdim))
-
-        rng, key = random.split(rng, 2)
+        rng, key, eval_rng = random.split(rng, 3)
 
         x = cv.cv
         x = random.permutation(key, x)
@@ -247,8 +244,11 @@ class TranformerAutoEncoder(Transformer):
 
                     print(
                         "eval epoch: {}, loss: {:.4f}, BCE: {:.4f}, KLD: {:.4f}".format(
-                            epoch + 1, metrics["loss"], metrics["bce"], metrics["kld"]
-                        )
+                            epoch + 1,
+                            metrics["loss"],
+                            metrics["bce"],
+                            metrics["kld"],
+                        ),
                     )
 
             # @partial(jit, static_argnums=(0,))
@@ -256,7 +256,9 @@ class TranformerAutoEncoder(Transformer):
         def forward(x: CV, *y):
             assert y == (None,)
             encoded: Array = VAE(**vae_args).apply(
-                {"params": state.params}, x.cv, method=VAE.encode
+                {"params": state.params},
+                x.cv,
+                method=VAE.encode,
             )
             return CV(cv=encoded)
 

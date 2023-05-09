@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 
 import tensorflow as tf
@@ -50,5 +52,5 @@ def loop_batcher(prim, args, dims, **params):
         raise NotImplementedError
 
     # execute with given arguments
-    ret = call_tf(par_fun)(batch_args, static_args)
+    ret = call_tf(par_fun)(batch_args, static_args)  # noqa: F821
     return (ret, (0,) * len(ret))

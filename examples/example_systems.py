@@ -1,35 +1,40 @@
-import ase
+from __future__ import annotations
+
+from typing import Callable
+
 import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
 import yaff
-from molmod import units
-from molmod.units import angstrom, kelvin, kjmol
-
+from IMLCV.base.bias import Bias
+from IMLCV.base.bias import NoneBias
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvMetric
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.rounds import Rounds
-
-yaff.log.set_level(yaff.log.silent)
-
-from typing import Callable
-
+from IMLCV.implementations.bias import HarmonicBias
+from IMLCV.implementations.CV import dihedral
+from IMLCV.implementations.CV import get_lda_cv
+from IMLCV.implementations.CV import NoneCV
+from IMLCV.implementations.CV import project_distances
+from IMLCV.implementations.CV import sb_descriptor
+from IMLCV.implementations.CV import Volume
+from IMLCV.implementations.energy import Cp2kEnergy
+from IMLCV.implementations.energy import YaffEnergy
+from IMLCV.implementations.MdEngine import YaffEngine
+from molmod import units
+from molmod.units import angstrom
+from molmod.units import kelvin
+from molmod.units import kjmol
 from yaff.test.common import get_alaninedipeptide_amber99ff
 
 from configs.config_general import ROOT_DIR
-from IMLCV.base.bias import Bias, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams
-from IMLCV.base.MdEngine import StaticTrajectoryInfo
-from IMLCV.implementations.bias import HarmonicBias
-from IMLCV.implementations.CV import (
-    NoneCV,
-    Volume,
-    dihedral,
-    get_lda_cv,
-    project_distances,
-    sb_descriptor,
-)
-from IMLCV.implementations.energy import Cp2kEnergy, YaffEnergy
-from IMLCV.implementations.MdEngine import YaffEngine
+
+yaff.log.set_level(yaff.log.silent)
 
 
 def alanine_dipeptide_yaff(
@@ -78,7 +83,7 @@ def alanine_dipeptide_yaff(
             ),
         )
 
-        sp = None
+        # sp = None
 
     elif cv == "soap_dist" or cv == "soap_lda":
         # ref pos
@@ -107,7 +112,7 @@ def alanine_dipeptide_yaff(
                     [25.83255625, 23.43260406, -11.64071298],
                     [26.85300836, 22.29876838, -8.59825391],
                     [23.73496024, 23.13024788, -9.07068544],
-                ]
+                ],
             ),
             cell=None,
         )
@@ -136,35 +141,35 @@ def alanine_dipeptide_yaff(
                 [26.860, 20.494, -0.570],
                 [24.444, 22.298, 0.859],
                 [23.648, 20.454, -1.497],
-            ]
+            ],
         )
 
-        sp1_b = jnp.array(
-            [
-                [35.704, 38.625, 1.7931],
-                [33.729, 38.815, 1.0493],
-                [33.579, 40.608, 0.0085435],
-                [32.332, 38.65, 2.5276],
-                [33.25, 36.637, -0.72336],
-                [33.164, 34.435, 0.1553],
-                [32.915, 37.228, -3.1684],
-                [32.659, 39.045, -3.7444],
-                [32.223, 35.498, -5.2083],
-                [31.92, 36.566, -6.9957],
-                [34.786, 34.127, -5.7689],
-                [35.467, 32.9, -4.2401],
-                [34.518, 32.891, -7.4366],
-                [36.197, 35.553, -6.162],
-                [29.809, 33.938, -5.0311],
-                [28.183, 34.313, -6.6841],
-                [29.38, 32.502, -3.0923],
-                [30.957, 32.54, -2.0214],
-                [27.446, 30.501, -2.9781],
-                [26.278, 30.575, -4.7043],
-                [28.288, 28.613, -2.9197],
-                [26.157, 30.858, -1.3152],
-            ]
-        )
+        # sp1_b = jnp.array(
+        #     [
+        #         [35.704, 38.625, 1.7931],
+        #         [33.729, 38.815, 1.0493],
+        #         [33.579, 40.608, 0.0085435],
+        #         [32.332, 38.65, 2.5276],
+        #         [33.25, 36.637, -0.72336],
+        #         [33.164, 34.435, 0.1553],
+        #         [32.915, 37.228, -3.1684],
+        #         [32.659, 39.045, -3.7444],
+        #         [32.223, 35.498, -5.2083],
+        #         [31.92, 36.566, -6.9957],
+        #         [34.786, 34.127, -5.7689],
+        #         [35.467, 32.9, -4.2401],
+        #         [34.518, 32.891, -7.4366],
+        #         [36.197, 35.553, -6.162],
+        #         [29.809, 33.938, -5.0311],
+        #         [28.183, 34.313, -6.6841],
+        #         [29.38, 32.502, -3.0923],
+        #         [30.957, 32.54, -2.0214],
+        #         [27.446, 30.501, -2.9781],
+        #         [26.278, 30.575, -4.7043],
+        #         [28.288, 28.613, -2.9197],
+        #         [26.157, 30.858, -1.3152],
+        #     ],
+        # )
 
         sp1 = SystemParams(
             coordinates=sp1_a,
@@ -212,7 +217,7 @@ def alanine_dipeptide_yaff(
 
     else:
         raise ValueError(
-            f"unknown value {cv} for cv choos 'soap_dist' or 'backbone_dihedrals'"
+            f"unknown value {cv} for cv choos 'soap_dist' or 'backbone_dihedrals'",
         )
 
     if bias is None:
@@ -298,7 +303,7 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
         z = n
     else:
         raise ValueError(
-            f"provided unit cell {unit_cells}, please provide 1 or 3 arguments "
+            f"provided unit cell {unit_cells}, please provide 1 or 3 arguments ",
         )
     fb = base / f"{x}x{y}x{z}"
 
@@ -402,13 +407,15 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
             if z_arr is None:
                 z_arr = a.get_atomic_numbers()
                 refs = SystemParams(
-                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                    coordinates=a.positions * angstrom,
+                    cell=a.cell * angstrom,
                 )
 
             else:
                 assert (z_arr == a.get_atomic_numbers()).all()
                 refs += SystemParams(
-                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                    coordinates=a.positions * angstrom,
+                    cell=a.cell * angstrom,
                 )
 
         assert refs.batched is True
@@ -454,13 +461,15 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
             if z_arr is None:
                 z_arr = a.get_atomic_numbers()
                 refs = SystemParams(
-                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                    coordinates=a.positions * angstrom,
+                    cell=a.cell * angstrom,
                 )
 
             else:
                 assert (z_arr == a.get_atomic_numbers()).all()
                 refs += SystemParams(
-                    coordinates=a.positions * angstrom, cell=a.cell * angstrom
+                    coordinates=a.positions * angstrom,
+                    cell=a.cell * angstrom,
                 )
 
         assert refs.batched is True

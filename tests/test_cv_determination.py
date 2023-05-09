@@ -1,15 +1,18 @@
+from __future__ import annotations
+
 from importlib import import_module
 from pathlib import Path
 
 import jax.numpy as jnp
 import pytest
-from molmod.units import angstrom
-
-from configs.config_general import ROOT_DIR, config
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder
 from IMLCV.implementations.tensorflow.CvDiscovery import TranformerUMAP
+from molmod.units import angstrom
+
+from configs.config_general import config
+from configs.config_general import ROOT_DIR
 
 try:
     pass
@@ -34,7 +37,8 @@ def test_cv_discovery(
     import zipfile
 
     with zipfile.ZipFile(
-        ROOT_DIR / "tests" / "data" / "alanine_dipeptide.zip", "r"
+        ROOT_DIR / "tests" / "data" / "alanine_dipeptide.zip",
+        "r",
     ) as zip_ref:
         zip_ref.extractall(tmpdir)
 
@@ -99,7 +103,8 @@ def test_cv_discovery(
 
     sp = scheme0.md.sp
     nl = scheme0.md.sp.get_neighbour_list(
-        r_cut=r_cut, z_array=scheme0.md.static_trajectory_info.atomic_numbers
+        r_cut=r_cut,
+        z_array=scheme0.md.static_trajectory_info.atomic_numbers,
     )
 
     cv, dcv = b.collective_variable.compute_cv(sp, nl, jacobian=True)

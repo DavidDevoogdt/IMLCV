@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 
 import numpy as np
-from jax import Array, numpy as jnp
+from jax import Array
+from jax import numpy as jnp
 from scipy.interpolate import RegularGridInterpolator as _si_RegularGridInterpolator
 
 
@@ -11,7 +13,12 @@ class RegularGridInterpolator:
     # implementation by Johannes Buchner
 
     def __init__(
-        self, points, values, method="linear", bounds_error=False, fill_value=jnp.nan
+        self,
+        points,
+        values,
+        method="linear",
+        bounds_error=False,
+        fill_value=jnp.nan,
     ):
         if method not in ("linear", "nearest"):
             raise ValueError(f"method {method!r} is not defined")
@@ -30,11 +37,12 @@ class RegularGridInterpolator:
         if fill_value is not None:
             fill_value_dtype = np.asarray(fill_value).dtype
             if hasattr(values, "dtype") and not np.can_cast(
-                fill_value_dtype, values.dtype, casting="same_kind"
+                fill_value_dtype,
+                values.dtype,
+                casting="same_kind",
             ):
                 raise ValueError(
-                    "fill_value must be either 'None' or "
-                    "of a type compatible with values"
+                    "fill_value must be either 'None' or " "of a type compatible with values",
                 )
 
         for i, p in enumerate(points):
@@ -64,7 +72,7 @@ class RegularGridInterpolator:
             raise ValueError(
                 "the requested sample points xi have dimension"
                 f" {xi.shape[1]}, but this RegularGridInterpolator has"
-                f" dimension {ndim}"
+                f" dimension {ndim}",
             )
 
         xi_shape = xi.shape
@@ -74,7 +82,8 @@ class RegularGridInterpolator:
             for i, p in enumerate(xi.T):
                 p = xi[..., i]
                 if not np.logical_and(
-                    np.all(self.grid[i][0] <= p), np.all(p <= self.grid[i][-1])
+                    np.all(self.grid[i][0] <= p),
+                    np.all(p <= self.grid[i][-1]),
                 ):
                     ve = f"one of the requested xi is out of bounds in dimension {i}"
                     raise ValueError(ve)
@@ -113,9 +122,7 @@ class RegularGridInterpolator:
         return values
 
     def _evaluate_nearest(self, indices, norm_distances):
-        idx_res = [
-            jnp.where(yi <= 0.5, i, i + 1) for i, yi in zip(indices, norm_distances)
-        ]
+        idx_res = [jnp.where(yi <= 0.5, i, i + 1) for i, yi in zip(indices, norm_distances)]
         return self.values[tuple(idx_res)]
 
     def _find_indices(self, xi):

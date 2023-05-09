@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import jax.lax
 import jax.numpy as jnp
 import numpy as onp
 import scipy.special
-from jax import custom_jvp, pure_callback
+from jax import custom_jvp
+from jax import pure_callback
 from jax.custom_batching import custom_vmap
 
 # see https://github.com/google/jax/issues/11002
@@ -100,8 +103,7 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
                 # lambda: (lambda v: cv(v - 1, x) - (v + 1) / x * primal_out)(
                 #     jax.lax.cond(v == 0, lambda: jnp.ones_like(v), lambda: v)
                 # ),
-                lambda: (v * cv(v_safe - 1, x) - (v_safe + 1) * cv(v_safe + 1, x))
-                / (2 * v_safe + 1),
+                lambda: (v * cv(v_safe - 1, x) - (v_safe + 1) * cv(v_safe + 1, x)) / (2 * v_safe + 1),
             )
         else:
             raise ValueError

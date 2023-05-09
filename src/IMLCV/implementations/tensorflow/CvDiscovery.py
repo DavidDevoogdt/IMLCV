@@ -1,15 +1,16 @@
-import jax.numpy as jnp
+from __future__ import annotations
 
-# import keras
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import umap
-
 from IMLCV.base.CV import CvTrans
-from IMLCV.implementations.tensorflow.CV import KerasFunBase, PeriodicLayer
+from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.implementations.tensorflow.CV import KerasFunBase
+from IMLCV.implementations.tensorflow.CV import PeriodicLayer
+
+# import keras
 
 plt.rcParams["text.usetex"] = True
-
-from IMLCV.base.CVDiscovery import Transformer
 
 
 class TranformerUMAP(Transformer):
@@ -59,12 +60,9 @@ class TranformerUMAP(Transformer):
                 decoder = keras.Sequential(
                     [
                         keras.layers.InputLayer(input_shape=(self.outdim)),
-                        *[
-                            keras.layers.Dense(units=nunits, activation=act)
-                            for _ in range(nlayers)
-                        ],
+                        *[keras.layers.Dense(units=nunits, activation=act) for _ in range(nlayers)],
                         keras.layers.Dense(units=jnp.prod(jnp.array(x.shape[1:]))),
-                    ]
+                    ],
                 )
                 kwargs["decoder"] = decoder
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 import shutil
@@ -18,7 +20,10 @@ if __name__ == "__main__":
 
     CsPbI3.add_argument("--unit_cells", nargs="+", type=int)
     CsPbI3.add_argument(
-        "--cv", type=str, choices=["cell_vec", "soap_dist", "soap_lda"], required=True
+        "--cv",
+        type=str,
+        choices=["cell_vec", "soap_dist", "soap_lda"],
+        required=True,
     )
     CsPbI3.add_argument("--input_atoms", nargs="+", type=str, default=None)
     CsPbI3.add_argument("--project", action="store_true")
@@ -26,11 +31,15 @@ if __name__ == "__main__":
 
     ala = subparsers.add_parser("alanine_dipeptide")
     ala.add_argument(
-        "--cv", type=str, choices=["backbone_dihedrals", "soap_dist", "soap_lda"]
+        "--cv",
+        type=str,
+        choices=["backbone_dihedrals", "soap_dist", "soap_lda"],
     )
     ala.add_argument("--lda_steps", type=int, default=500)
     ala.add_argument(
-        "--kernel_type", choices=["rematch", "average", "none"], default="rematch"
+        "--kernel_type",
+        choices=["rematch", "average", "none"],
+        default="rematch",
     )
     ala.add_argument("--kernel_LDA", action="store_true")
     ala.add_argument("--arithmic", action="store_true")
@@ -218,7 +227,7 @@ if __name__ == "__main__":
                 scheme.rounds.add_round_from_md(scheme.md)
             else:
                 print(
-                    f"there is no round data in {args.folder} to continue form, starting from init"
+                    f"there is no round data in {args.folder} to continue form, starting from init",
                 )
                 engine = get_engine()
                 rnds.add_round_from_md(engine)
@@ -241,7 +250,9 @@ if __name__ == "__main__":
             args.bootstrap_cluster = args.cpu_cluster
 
         config(
-            bootstrap=True, walltime=args.walltime, cpu_cluster=args.bootstrap_cluster
+            bootstrap=True,
+            walltime=args.walltime,
+            cpu_cluster=args.bootstrap_cluster,
         )
         bash_app_python(executors=["default"], function=app)(
             args=args,
@@ -250,8 +261,6 @@ if __name__ == "__main__":
             # stderr="IMLCV.stderr",
         ).result()
     else:
-        os.environ["XLA_FLAGS"] = (
-            "--xla_cpu_multi_thread_eigen=false " "intra_op_parallelism_threads=1"
-        )
+        os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parallelism_threads=1"
 
         app(args=args)

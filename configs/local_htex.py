@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import SingleNodeLauncher

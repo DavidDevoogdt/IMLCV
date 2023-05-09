@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import partial
 
 import jax.debug
@@ -10,11 +12,15 @@ import jax.scipy
 import jaxopt
 import matplotlib.pyplot as plt
 import scipy.special
-from jax import Array, jit, lax, vmap
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import SystemParams
+from IMLCV.tools.bessel_callback import ive
+from IMLCV.tools.bessel_callback import spherical_jn
+from jax import Array
+from jax import jit
+from jax import lax
+from jax import vmap
 from scipy.special import legendre as sp_legendre
-
-from IMLCV.base.CV import NeighbourList, SystemParams
-from IMLCV.tools.bessel_callback import ive, spherical_jn
 
 # todo: Optimizing many-body atomic descriptors for enhanced computational performance of
 # machine learning based interatomic potentials
@@ -125,11 +131,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
     def S_nm(ind):
         def g(r):
-            return (
-                phi(ind[0], n_max, r, r_cut, sigma_a)
-                * phi(ind[1], n_max, r, r_cut, sigma_a)
-                * r**2
-            )
+            return phi(ind[0], n_max, r, r_cut, sigma_a) * phi(ind[1], n_max, r, r_cut, sigma_a) * r**2
 
         x = jnp.linspace(0, r_cut, num=num)
         y = g(x)
@@ -180,7 +182,11 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
         b_ljk = _l(p_ij, p_ik)
 
         return jnp.einsum(
-            "l,al,bl,l->abl", 4 * jnp.pi * (2 * l_vec + 1), a_nlj, a_nlk, b_ljk
+            "l,al,bl,l->abl",
+            4 * jnp.pi * (2 * l_vec + 1),
+            a_nlj,
+            a_nlk,
+            b_ljk,
         )
 
     return _p_i_soap_2_s, _p_i_soap_2_d
@@ -195,23 +201,22 @@ def p_inl_sb(l_max, n_max, r_cut):
     def spherical_jn_zeros(n, m):
         return vmap(
             lambda x: jaxopt.GradientDescent(
-                lambda x: spherical_jn(n, x) ** 2, maxiter=1000
+                lambda x: spherical_jn(n, x) ** 2,
+                maxiter=1000,
             )
             .run(x)
-            .params
+            .params,
         )(
             jnp.array(
-                (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
-            )
+                (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2,
+            ),
         )
 
     def show_spherical_jn_zeros(n, m, ngrid=100):
         """Graphical test for the above function"""
 
         zeros = spherical_jn_zeros(n, m)
-        zeros_guess = (
-            scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)
-        ) / 2
+        zeros_guess = (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
 
         x = jnp.linspace(0, jnp.max(zeros), num=1000)
         y = spherical_jn(n, x)
@@ -230,10 +235,7 @@ def p_inl_sb(l_max, n_max, r_cut):
         return (
             u_ln[l, n - 1] ** 2
             * u_ln[l, n + 1] ** 2
-            / (
-                (u_ln[l, n - 1] ** 2 + u_ln[l, n] ** 2)
-                * (u_ln[l, n + 1] ** 2 + u_ln[l, n] ** 2)
-            )
+            / ((u_ln[l, n - 1] ** 2 + u_ln[l, n] ** 2) * (u_ln[l, n + 1] ** 2 + u_ln[l, n] ** 2))
         )
 
     e_nl = jnp.apply_along_axis(
@@ -248,19 +250,10 @@ def p_inl_sb(l_max, n_max, r_cut):
     def f_nl(n, l, r):
         def f(r):
             return (
-                u_ln[l, n + 1]
-                / spherical_jn(l + 1, u_ln[l, n])
-                * spherical_jn(l, r * u_ln[l, n] / r_cut)
-                - u_ln[l, n]
-                / spherical_jn(l + 1, u_ln[l, n + 1])
-                * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
+                u_ln[l, n + 1] / spherical_jn(l + 1, u_ln[l, n]) * spherical_jn(l, r * u_ln[l, n] / r_cut)
+                - u_ln[l, n] / spherical_jn(l + 1, u_ln[l, n + 1]) * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
             ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3) ** (0.5)
 
-        # return jax.lax.cond(
-        #     r == 0,
-        #     lambda: jnp.zeros_like(f(r)),
-        #     lambda: f(jax.lax.cond(r == 0, lambda: jnp.ones_like(r), lambda: r)),
-        # )
         return f(r)
 
     l_list = list(range(l_max + 1))
@@ -282,11 +275,7 @@ def p_inl_sb(l_max, n_max, r_cut):
                 d_xlm, g_xlm = args
 
                 d_xl = 1 - e_nl[n, l_vec] / d_xlm
-                g_xl = (
-                    1
-                    / jnp.sqrt(d_xl)
-                    * (fnl[n, :] + jnp.sqrt(e_nl[n, l_vec] / d_xlm) * g_xlm)
-                )
+                g_xl = 1 / jnp.sqrt(d_xl) * (fnl[n, :] + jnp.sqrt(e_nl[n, l_vec] / d_xlm) * g_xlm)
 
                 return (d_xl, g_xl), g_xl
 
@@ -310,7 +299,9 @@ def p_inl_sb(l_max, n_max, r_cut):
     def _p_i_sb_2_s(p_ij, atom_index_j):
         r_ij_sq = jnp.dot(p_ij, p_ij)
         r_ij_sq_safe = jax.lax.cond(
-            r_ij_sq == 0, lambda: jnp.ones_like(r_ij_sq), lambda: r_ij_sq
+            r_ij_sq == 0,
+            lambda: jnp.ones_like(r_ij_sq),
+            lambda: r_ij_sq,
         )
 
         shape = jax.eval_shape(g_nl, r_ij_sq)

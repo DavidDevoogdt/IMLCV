@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
-
-from IMLCV.base.CV import CV, CvMetric
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvMetric
 
 
 def linear(r):
@@ -54,7 +56,7 @@ def scale(val, metric):
 
 def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
     return jnp.linalg.norm(
-        scale(metric.min_cv(x.cv) - metric.min_cv(y.cv), metric=metric) * eps
+        scale(metric.min_cv(x.cv) - metric.min_cv(y.cv), metric=metric) * eps,
     )
 
 
@@ -65,7 +67,9 @@ def cv_vals(x: CV, powers, metric: CvMetric):
 def kernel_vector(x: CV, y: CV, metric: CvMetric, epsilon, kernel_func):
     """Evaluate RBFs, with centers at `y`, at the point `x`."""
 
-    f0 = lambda y: kernel_func(cv_norm(x, y, metric, epsilon))
+    def f0(y):
+        return kernel_func(cv_norm(x, y, metric, epsilon))
+
     f1 = jax.vmap(f0)
 
     out0 = f1(y)
@@ -76,9 +80,12 @@ def kernel_vector(x: CV, y: CV, metric: CvMetric, epsilon, kernel_func):
 def polynomial_vector(x: CV, powers, metric: CvMetric):
     """Evaluate monomials, with exponents from `powers`, at the point `x`."""
 
-    g = lambda x, powers: cv_vals(x, powers, metric=metric)
+    def g(x, powers):
+        return cv_vals(x, powers, metric=metric)
 
-    f0 = lambda powers: jnp.prod(g(x, powers))
+    def f0(powers):
+        return jnp.prod(g(x, powers))
+
     f1 = jax.vmap(f0)
     out0 = f1(powers)
 
@@ -88,7 +95,9 @@ def polynomial_vector(x: CV, powers, metric: CvMetric):
 def kernel_matrix(x: CV, metric: CvMetric, eps, kernel_func):
     """Evaluate RBFs, with centers at `x`, at `x`."""
 
-    f00 = lambda x, y: cv_norm(x, y, metric, eps)
+    def f00(x, y):
+        return cv_norm(x, y, metric, eps)
+
     f10 = jax.vmap(f00, in_axes=(0, None), out_axes=0)
     f11 = jax.vmap(f10, in_axes=(None, 0), out_axes=1)
 
@@ -101,9 +110,12 @@ def kernel_matrix(x: CV, metric: CvMetric, eps, kernel_func):
 def polynomial_matrix(x: CV, metric: CvMetric, powers):
     """Evaluate monomials, with exponents from `powers`, at `x`."""
 
-    g = lambda x, powers: cv_vals(x, powers, metric=metric)
+    def g(x, powers):
+        return cv_vals(x, powers, metric=metric)
 
-    f00 = lambda x, powers: jnp.prod(g(x, powers))
+    def f00(x, powers):
+        return jnp.prod(g(x, powers))
+
     f10 = jax.vmap(f00, in_axes=(0, None), out_axes=0)
     f11 = jax.vmap(f10, in_axes=(None, 0), out_axes=1)
 
@@ -160,7 +172,7 @@ def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers
         Domain scaling used to create the polynomial matrix.
 
     """
-    p = d.shape[0]
+    # p = d.shape[0]
     s = d.shape[1]
     r = powers.shape[0]
     kernel_func = NAME_TO_FUNC[kernel]
@@ -197,7 +209,12 @@ def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers
 #                          float[:],
 #                          float[:])
 def _build_evaluation_coefficients(
-    x: CV, y: CV, metric: CvMetric, kernel, epsilon, powers
+    x: CV,
+    y: CV,
+    metric: CvMetric,
+    kernel,
+    epsilon,
+    powers,
 ):
     """Construct the coefficients needed to evaluate
     the RBF.
@@ -226,10 +243,14 @@ def _build_evaluation_coefficients(
     """
     kernel_func = NAME_TO_FUNC[kernel]
 
-    kv = lambda x: kernel_vector(x, y, metric, epsilon, kernel_func)
+    def kv(x):
+        return kernel_vector(x, y, metric, epsilon, kernel_func)
+
     kv0 = jax.vmap(kv)(x)
 
-    pv = lambda x: polynomial_vector(x, powers, metric=metric)
+    def pv(x):
+        return polynomial_vector(x, powers, metric=metric)
+
     pv0 = jax.vmap(pv)(x)
 
     vec0 = jnp.hstack([kv0, pv0])

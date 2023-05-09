@@ -1,9 +1,9 @@
 &FORCE_EVAL
-  
+
   ! ********************************************
   ! DFT parameters
   ! ********************************************
-  
+
    &DFT
      BASIS_SET_FILE_NAME  {BASIS_SET_FILE_NAME}
      POTENTIAL_FILE_NAME  {POTENTIAL_FILE_NAME}
@@ -35,7 +35,7 @@
      &END QS
 
      &MGRID
-       CUTOFF [Ry]  400 
+       CUTOFF [Ry]  400
        COMMENSURATE TRUE
        NGRIDS  5
      &END MGRID
@@ -68,20 +68,20 @@
 
    &SUBSYS
      &KIND                         Cs
-       ELEMENT                     Cs  
+       ELEMENT                     Cs
        BASIS_SET                   TZVP-MOLOPT-SR-GTH
        POTENTIAL                   GTH-PBE-q9
-     &END KIND 
+     &END KIND
      &KIND                         Pb
-       ELEMENT                     Pb 
+       ELEMENT                     Pb
        BASIS_SET                   TZVP-MOLOPT-SR-GTH
        POTENTIAL                   GTH-PBE-q4
-     &END KIND 
+     &END KIND
      &KIND                         I
-       ELEMENT                     I  
+       ELEMENT                     I
        BASIS_SET                   TZVP-MOLOPT-SR-GTH
        POTENTIAL                   GTH-PBE-q7
-     &END KIND 
+     &END KIND
    &END SUBSYS
 
    &PRINT

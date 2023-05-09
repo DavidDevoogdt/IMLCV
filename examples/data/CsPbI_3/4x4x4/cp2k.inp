@@ -5,7 +5,7 @@
 ! ***** **    ** ** **
 !  **** **  *******  **
 !
-! Input reference manual: http://manual.cp2k.org/trunk/index.html 
+! Input reference manual: http://manual.cp2k.org/trunk/index.html
 !
 ! Comments can be introduced after a explanation mark.
 !
@@ -15,8 +15,8 @@
 ! ********************************************
 !&GLOBAL
 !  PROJECT       md
-!  RUN_TYPE      MD 
-!  PRINT_LEVEL   LOW                
+!  RUN_TYPE      MD
+!  PRINT_LEVEL   LOW
 !&END GLOBAL
 
 
@@ -31,7 +31,7 @@
 !  &MD
 !    ENSEMBLE                      NPT_F
 !    STEPS                         10000000
-!    TIMESTEP                      2    
+!    TIMESTEP                      2
 !    TEMPERATURE                   300
 !    STEP_START_VAL 0
 !    &THERMOSTAT
@@ -45,14 +45,14 @@
 !    &END THERMOSTAT
 !    &BAROSTAT
 !      PRESSURE [MPa]  0.1
-!      TIMECON  500                     
+!      TIMECON  500
 !      &THERMOSTAT
 !        TYPE  SAME_AS_PARTICLE
 !      &END THERMOSTAT
 !    &END BAROSTAT
 !  &END MD
 !  &PRINT
-!     &TRAJECTORY  
+!     &TRAJECTORY
 !       FORMAT  XMOL
 !       &EACH
 !         MD  1
@@ -108,25 +108,25 @@
 
 
     &KIND                         Cs
-      ELEMENT                     Cs  
+      ELEMENT                     Cs
       BASIS_SET                   TZVP-MOLOPT-SR-GTH
       POTENTIAL                   GTH-PBE-q9
-    &END KIND 
+    &END KIND
     &KIND                         Pb
-      ELEMENT                     Pb 
+      ELEMENT                     Pb
       BASIS_SET                   TZVP-MOLOPT-SR-GTH
       POTENTIAL                   GTH-PBE-q4
-    &END KIND 
+    &END KIND
     &KIND                         I
-      ELEMENT                     I  
+      ELEMENT                     I
       BASIS_SET                   TZVP-MOLOPT-SR-GTH
       POTENTIAL                   GTH-PBE-q7
-    &END KIND 
+    &END KIND
 
   &END SUBSYS
 
-  
-  
+
+
 ! ********************************************
 ! DFT parameters
 ! ********************************************
@@ -135,7 +135,7 @@
 
 
   &DFT
-    CHARGE       0                          
+    CHARGE       0
     MULTIPLICITY 1
     BASIS_SET_FILE_NAME {BASIS_SET_FILE_NAME}
     POTENTIAL_FILE_NAME {POTENTIAL_FILE_NAME}
@@ -143,21 +143,21 @@
     &QS
       METHOD GPW
     &END QS
-    
+
     &MGRID
-      CUTOFF [Ry]  400         
-      COMMENSURATE TRUE                     
+      CUTOFF [Ry]  400
+      COMMENSURATE TRUE
       NGRIDS 5
     &END MGRID
 
 
-    
+
 ! ********************************************
 ! Exchange and Correlation functional
 ! ********************************************
-    &XC                                     
+    &XC
       &XC_FUNCTIONAL               PBE                 #Still wrong functional!!!!!!!!!!
-      &END XC_FUNCTIONAL 
+      &END XC_FUNCTIONAL
 
       &VDW_POTENTIAL
         DISPERSION_FUNCTIONAL PAIR_POTENTIAL
@@ -186,15 +186,15 @@
     &END SCF
 
   &END DFT
-  
+
 !**********
 ! set by ASE
-!**********  
+!**********
 !    &CELL
-!      A [angstrom]      25.538027      0.556076      0.211255 
-!      B [angstrom]      -0.955573      25.326923      -0.147644 
-!      C [angstrom]      0.207483      -0.152052      25.452899 
-!      PERIODIC                    XYZ          
+!      A [angstrom]      25.538027      0.556076      0.211255
+!      B [angstrom]      -0.955573      25.326923      -0.147644
+!      C [angstrom]      0.207483      -0.152052      25.452899
+!      PERIODIC                    XYZ
 !    &END CELL
 !    &TOPOLOGY
 !      COORDINATE XYZ

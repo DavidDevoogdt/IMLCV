@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 import numpy as np
@@ -20,7 +22,7 @@ arr = np.array(
         [32, 30, 1204.64, 3619.80],
         [48, 30, 1000.00, 2832.09],
         [64, 30, 915.22, 2606.41],
-    ]
+    ],
 ).T
 
 
@@ -39,7 +41,7 @@ c1 = "b"
 c2 = "r"
 c3 = "g"
 
-####make ax
+# make ax
 fig, ax1 = plt.subplots()
 fig.subplots_adjust(right=0.75)
 
@@ -47,7 +49,7 @@ ax2 = ax1.twinx()
 ax3 = ax1.twinx()
 ax2.spines.right.set_position(("axes", 1.2))
 
-### ax 1
+# ax 1
 (p1,) = ax1.plot(cores, scaling, "b--x")
 ax1.set_xscale("log")
 ax1.set_xticks(cores)
@@ -62,7 +64,7 @@ ax1.set_ylim([0, 1.5])
 ax1.axhline(y=1.0, color="b", linestyle=":")
 
 ax1.tick_params(axis="y", labelcolor=p1.get_color())
-### ax 2
+# ax 2
 
 (p2,) = ax2.plot(
     cores,
@@ -73,7 +75,7 @@ ax2.set_ylabel("speedup factor", color=c2)
 ax2.axhline(y=1.0, color="r", linestyle=":")
 ax2.tick_params(axis="y", labelcolor=p2.get_color())
 ax2.set_ylim([0, 8])
-### ax 3
+# ax 3
 (p3,) = ax3.plot(
     cores,
     time_single,

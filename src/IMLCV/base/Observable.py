@@ -5,17 +5,20 @@ from functools import partial
 
 import jax.numpy as jnp
 import numpy as np
+from IMLCV.base.bias import Bias
+from IMLCV.base.bias import CompositeBias
+from IMLCV.base.bias import plot_app
+from IMLCV.base.CV import CV
+from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.bias import GridBias
+from IMLCV.implementations.bias import RbfBias
 from jax import jit
-from molmod.units import kjmol, picosecond
+from molmod.units import kjmol
+from molmod.units import picosecond
 from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
-
-from IMLCV.base.bias import Bias, CompositeBias, plot_app
-from IMLCV.base.CV import CV
-from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.bias import GridBias, RbfBias
 
 
 class ThermoLIB:
@@ -80,7 +83,6 @@ class ThermoLIB:
         trajs_plot = []
         biases = []
 
-        time = 0
         cv = None
 
         for round, trajectory in self.rounds.iter(start=start_r, num=4, stop=self.rnd):
@@ -97,7 +99,8 @@ class ThermoLIB:
             else:
                 sp = ti.sp
                 nl = sp.get_neighbour_list(
-                    r_cut=round.tic.r_cut, z_array=round.tic.atomic_numbers
+                    r_cut=round.tic.r_cut,
+                    z_array=round.tic.atomic_numbers,
                 )
                 cvs, _ = cv.compute_cv(sp=sp, nl=nl)
 
@@ -116,8 +119,8 @@ class ThermoLIB:
                 bias=self.common_bias,
                 outputs=[File(f"{directory}/combined.png")],  # png because heavy file
                 execution_folder=directory,
-                stdout=f"combined.stdout",
-                stderr=f"combined.stderr",
+                stdout="combined.stdout",
+                stderr="combined.stderr",
                 map=False,
                 traj=trajs_plot,
             )
@@ -129,7 +132,10 @@ class ThermoLIB:
             bb = self.cvs.metric.bounding_box
 
         bounds, bins = self._FES_mg(
-            cvs=trajs, bounding_box=bb, n=n, samples_per_bin=samples_per_bin
+            cvs=trajs,
+            bounding_box=bb,
+            n=n,
+            samples_per_bin=samples_per_bin,
         )
 
         # histo = bash_app_python(HistogramND.from_wham, executors=["model"])(
@@ -166,41 +172,31 @@ class ThermoLIB:
     def new_metric(self, plot=False, r=None):
         assert isinstance(self.rounds, Rounds)
 
-        trans = []
-        cvs = None
+        # trans = []
+        # cvs = None
 
-        def find_monitor(bias):
-            if isinstance(bias, CvMonitor):
-                return bias
+        raise NotImplementedError
 
-            if isinstance(bias, CompositeBias):
-                for b in bias.biases:
-                    ret = find_monitor(b)
-                    if ret is not None:
-                        return ret
+        # for run_data in self.rounds.iter(num=1, stop=r):
+        #     bias = Bias.load(run_data["attr"]["name_bias"])
+        #     if cvs is None:
+        #         cvs = bias.collective_variable
 
-            return None
+        #     monitor = find_monitor(bias)
+        #     assert monitor is not None
 
-        for run_data in self.rounds.iter(num=1, stop=r):
-            bias = Bias.load(run_data["attr"]["name_bias"])
-            if cvs is None:
-                cvs = bias.collective_variable
+        #     trans.append(monitor.transitions)
 
-            monitor = find_monitor(bias)
-            assert monitor is not None
+        #     # this data should not be used anymore
+        # self.rounds.invalidate_data(r=r)
 
-            trans.append(monitor.transitions)
+        # transitions = jnp.vstack(trans)
+        # if plot:
+        #     fn = f"{self.folder}/round_{self.rnd}/"
+        # else:
+        #     fn = None
 
-            # this data should not be used anymore
-        self.rounds.invalidate_data(r=r)
-
-        transitions = jnp.vstack(trans)
-        if plot:
-            fn = f"{self.folder}/round_{self.rnd}/"
-        else:
-            fn = None
-
-        return cvs.metric.update_metric(transitions, fn=fn)
+        # return cvs.metric.update_metric(transitions, fn=fn)
 
     def _FES_mg(self, cvs: list[CV], bounding_box, samples_per_bin=500, n=None):
         c = CV.stack(*cvs)
@@ -215,10 +211,7 @@ class ThermoLIB:
         else:
             bounds = bounding_box
 
-        bins = [
-            np.linspace(mini, maxi, n, endpoint=True, dtype=np.double)
-            for mini, maxi in bounds
-        ]
+        bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounds]
 
         return bounds, bins
 
@@ -238,7 +231,9 @@ class ThermoLIB:
     ):
         if fs is None:
             fes, grid, bounds = self.fes_nd_thermolib(
-                plot=plot, start_r=start_r, samples_per_bin=samples_per_bin
+                plot=plot,
+                start_r=start_r,
+                samples_per_bin=samples_per_bin,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij
@@ -261,9 +256,6 @@ class ThermoLIB:
         sigma = (sigma) / smoothing_threshold
 
         if choice == "rbf":
-            min_err = jnp.inf
-            min_eps = None
-
             fslist = []
             smoothing_list = []
             cv: list[CV] = []
@@ -310,8 +302,8 @@ class ThermoLIB:
                 bias=fesBias,
                 outputs=[
                     File(
-                        f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.pdf"
-                    )
+                        f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.pdf",
+                    ),
                 ],
                 inverted=True,
                 execution_folder=self.folder,

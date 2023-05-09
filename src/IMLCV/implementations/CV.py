@@ -1,26 +1,24 @@
 from __future__ import annotations
 
 import dataclasses
-
-# from IMLCV.base.CV import CV, CvTrans
 from functools import partial
 from typing import TYPE_CHECKING
 
-# import numpy as np
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.linear import Dense
-from jax import jit, vmap
+from jax import jit
+from jax import vmap
+
+# from IMLCV.base.CV import CV, CvTrans
+# import numpy as np
 
 if TYPE_CHECKING:
     pass
 
-import dataclasses
 
 import distrax
-import jax.numpy as jnp
 import numba
-import numpy as np
 
 from configs.bash_app_python import bash_app_python
 from IMLCV.base.CV import (
@@ -58,7 +56,8 @@ def distance_descriptor():
         n = x.shape[-2]
 
         out = vmap(vmap(x.min_distance, in_axes=(0, None)), in_axes=(None, 0))(
-            jnp.arange(n), jnp.arange(n)
+            jnp.arange(n),
+            jnp.arange(n),
         )
 
         return out[jnp.triu_indices_from(out, k=1)]
@@ -131,14 +130,14 @@ def sb_descriptor(
                 in_axes=(2),
                 out_axes=(2),
             )(
-                a
+                a,
             )  # eliminate l>n
             a = vmap(
                 vmap(_triu, in_axes=(0), out_axes=(0)),
                 in_axes=(3),
                 out_axes=(2),
             )(
-                a
+                a,
             )  # eliminate Z2>Z1
             return a
 
@@ -160,34 +159,34 @@ def sb_descriptor(
     if references is not None:
         raise NotImplementedError("adapt for divergences")
 
-        assert references_nl is not None
+        # assert references_nl is not None
 
-        refs = (f)(references, references_nl)
+        # refs = (f)(references, references_nl)
 
-        # @NeighbourList.vmap_x_nl
-        # @partial(vmap, in_axes=(0, 0, None, None))
-        def _f(refs, references_nl, val, nl):
-            return NeighbourList.match_kernel(val, refs, nl, references_nl)
+        # # @NeighbourList.vmap_x_nl
+        # # @partial(vmap, in_axes=(0, 0, None, None))
+        # def _f(refs, references_nl, val, nl):
+        #     return NeighbourList.match_kernel(val, refs, nl, references_nl)
 
-        if references.batched:
-            _f = vmap(f, in_axes=(0, 0, None, None))
+        # if references.batched:
+        #     _f = vmap(f, in_axes=(0, 0, None, None))
 
-        _f = partial(_f, refs, references_nl)
+        # _f = partial(_f, refs, references_nl)
 
-        # @jit
-        def sb_descriptor_distance2(sp: SystemParams, nl: NeighbourList):
-            assert nl is not None, "provide neighbourlist for sb describport"
+        # # @jit
+        # def sb_descriptor_distance2(sp: SystemParams, nl: NeighbourList):
+        #     assert nl is not None, "provide neighbourlist for sb describport"
 
-            val = f(sp=sp, nl=nl)
-            com = _f(val, nl)
+        #     val = f(sp=sp, nl=nl)
+        #     com = _f(val, nl)
 
-            y2 = 1 - com
-            y2_safe = jnp.where(y2 <= 0, jnp.ones_like(y2), y2)
-            y = jnp.where(y2 <= 0, 0.0, jnp.sqrt(y2_safe))
+        #     y2 = 1 - com
+        #     y2_safe = jnp.where(y2 <= 0, jnp.ones_like(y2), y2)
+        #     y = jnp.where(y2 <= 0, 0.0, jnp.sqrt(y2_safe))
 
-            return jnp.ravel(y)
+        #     return jnp.ravel(y)
 
-        return CvFlow.from_function(sb_descriptor_distance2)  # type: ignore
+        # return CvFlow.from_function(sb_descriptor_distance2)  # type: ignore
 
     else:
         return CvFlow.from_function(f)  # type: ignore
@@ -220,7 +219,7 @@ def get_lda_cv(
         import pymanopt
     except ImportError:
         raise ImportError(
-            "pymanopt not installed, please install it to use LDA collective variable"
+            "pymanopt not installed, please install it to use LDA collective variable",
         )
 
     @bash_app_python(executors=["model", "reference"])
@@ -257,7 +256,7 @@ def get_lda_cv(
 
             return p * n1_i
 
-        if kernel == True:
+        if kernel:
             raise NotImplementedError("kernel not implemented for lda")
 
         if sort == "rematch" or sort == "l2" or sort == "average":
@@ -306,7 +305,9 @@ def get_lda_cv(
             # )(spi, nli)
 
             cvi = vmap_chunked(
-                descriptor.compute_cv_flow, in_axes=(0, 0), chunk_size=500
+                descriptor.compute_cv_flow,
+                in_axes=(0, 0),
+                chunk_size=500,
             )(spi, nli)
 
             if sort == "l2" or sort == "average":
@@ -351,105 +352,107 @@ def get_lda_cv(
             if kernel:
                 raise NotImplementedError("todo: select subset to sample kernels from")
 
-                @jit
-                @partial(vmap, in_axes=(0, None, 0, None))
-                @partial(vmap, in_axes=(None, 0, None, 0))
-                def kernel_matrix(p0, p1, nl0, nl1):
-                    return NeighbourList.match_kernel(
-                        p0, p1, nl0, nl1, matching=kernel_type
-                    )[0]
+                # @jit
+                # @partial(vmap, in_axes=(0, None, 0, None))
+                # @partial(vmap, in_axes=(None, 0, None, 0))
+                # def kernel_matrix(p0, p1, nl0, nl1):
+                #     return NeighbourList.match_kernel(
+                #         p0,
+                #         p1,
+                #         nl0,
+                #         nl1,
+                #         matching=kernel_type,
+                #     )[0]
 
-                mat = []
-                for i, (cva, nla) in enumerate(zip(phase_cvs, phase_nls)):
-                    mat_i = []
-                    for j, (cvb, nlb) in enumerate(zip(phase_cvs, phase_nls)):
-                        mat_i.append(kernel_matrix(cva, cvb, nla, nlb))
-                    mat.append(jnp.array(mat_i))
-                lj = jnp.array([x.shape[0] for x in phase_cvs])
+                # mat = []
+                # for i, (cva, nla) in enumerate(zip(phase_cvs, phase_nls)):
+                #     mat_i = []
+                #     for j, (cvb, nlb) in enumerate(zip(phase_cvs, phase_nls)):
+                #         mat_i.append(kernel_matrix(cva, cvb, nla, nlb))
+                #     mat.append(jnp.array(mat_i))
+                # lj = jnp.array([x.shape[0] for x in phase_cvs])
 
-                Kj_nm = jnp.concatenate(mat, axis=1)
-                Sj_n = jnp.mean(Kj_nm, axis=2)
-                S_n = vmap(lambda x: jnp.sum(x * lj), in_axes=1)(Sj_n) / sum(lj)
-                Sb = jnp.einsum(
-                    "ijk,i->jk", vmap(lambda x: jnp.outer(x - S_n, x - S_n))(Sj_n), lj
-                )
-                Sw = jnp.sum(
-                    vmap(
-                        lambda Kj, lj: Kj
-                        @ (
-                            jnp.eye(Kj.shape[1])
-                            - jnp.ones((Kj.shape[1], Kj.shape[1])) / lj
-                        )
-                        @ Kj.T
-                    )(Kj_nm, lj),
-                    axis=0,
-                )
+                # Kj_nm = jnp.concatenate(mat, axis=1)
+                # Sj_n = jnp.mean(Kj_nm, axis=2)
+                # S_n = vmap(lambda x: jnp.sum(x * lj), in_axes=1)(Sj_n) / sum(lj)
+                # Sb = jnp.einsum(
+                #     "ijk,i->jk",
+                #     vmap(lambda x: jnp.outer(x - S_n, x - S_n))(Sj_n),
+                #     lj,
+                # )
+                # Sw = jnp.sum(
+                #     vmap(
+                #         lambda Kj, lj: Kj @ (jnp.eye(Kj.shape[1]) - jnp.ones((Kj.shape[1], Kj.shape[1])) / lj) @ Kj.T,
+                #     )(Kj_nm, lj),
+                #     axis=0,
+                # )
 
-                if not harmonic:
-                    # regularize
-                    Sw = Sw + 1e-3 * jnp.eye(Sw.shape[0])
+                # if not harmonic:
+                #     # regularize
+                #     Sw = Sw + 1e-3 * jnp.eye(Sw.shape[0])
 
-                manifold = pymanopt.manifolds.stiefel.Stiefel(n=Sb.shape[0], p=num_kfda)
+                # manifold = pymanopt.manifolds.stiefel.Stiefel(n=Sb.shape[0], p=num_kfda)
 
-                @pymanopt.function.jax(manifold)
-                def cost(x):
-                    if harmonic:
-                        return jnp.trace(x.T @ Sw @ x) / jnp.trace(x.T @ Sb @ x)
-                    else:
-                        return -jnp.trace(x.T @ Sb @ x) / (
-                            jnp.trace(x.T @ Sw @ x) + 1e-3
-                        )
+                # @pymanopt.function.jax(manifold)
+                # def cost(x):
+                #     if harmonic:
+                #         return jnp.trace(x.T @ Sw @ x) / jnp.trace(x.T @ Sb @ x)
+                #     else:
+                #         return -jnp.trace(x.T @ Sb @ x) / (jnp.trace(x.T @ Sw @ x) + 1e-3)
 
-                optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50)
-                problem = pymanopt.Problem(manifold, cost)
-                result = optimizer.run(problem)
+                # optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50)
+                # problem = pymanopt.Problem(manifold, cost)
+                # result = optimizer.run(problem)
 
-                alpha = result.point
+                # alpha = result.point
 
-                assert jnp.allclose(alpha.T @ alpha, jnp.eye(num_kfda))
+                # assert jnp.allclose(alpha.T @ alpha, jnp.eye(num_kfda))
 
-                # make cv
-                x = phase_sps[0] + phase_sps[1]
-                x_nl = x.get_neighbour_list(**nl_kwargs)
-                x_cv = descriptor.compute_cv_flow(x, x_nl)
+                # # make cv
+                # x = phase_sps[0] + phase_sps[1]
+                # x_nl = x.get_neighbour_list(**nl_kwargs)
+                # x_cv = descriptor.compute_cv_flow(x, x_nl)
 
-                scale_factor = jnp.mean(alpha.T @ Kj_nm, axis=2).T
+                # scale_factor = jnp.mean(alpha.T @ Kj_nm, axis=2).T
 
-                @CvFlow
-                def klda_cv(sp: SystemParams, nl: NeighbourList):
-                    # @NeighbourList.vmap_x_nl
-                    @partial(vmap, in_axes=(0, 0, None, None))
-                    def __f(cv1, nl1, cv2, nl2):
-                        return NeighbourList.match_kernel(cv1.cv, cv2.cv, nl1, nl2)[0]
+                # @CvFlow
+                # def klda_cv(sp: SystemParams, nl: NeighbourList):
+                #     # @NeighbourList.vmap_x_nl
+                #     @partial(vmap, in_axes=(0, 0, None, None))
+                #     def __f(cv1, nl1, cv2, nl2):
+                #         return NeighbourList.match_kernel(cv1.cv, cv2.cv, nl1, nl2)[0]
 
-                    cv = descriptor.compute_cv_flow(sp, nl)
+                #     cv = descriptor.compute_cv_flow(sp, nl)
 
-                    lda = alpha.T @ __f(x_cv, x_nl, cv, nl)
+                #     lda = alpha.T @ __f(x_cv, x_nl, cv, nl)
 
-                    return CV(
-                        cv=(lda - scale_factor[:, 0])
-                        / (scale_factor[:, 1] - scale_factor[:, 0])
-                    )
+                #     return CV(
+                #         cv=(lda - scale_factor[:, 0]) / (scale_factor[:, 1] - scale_factor[:, 0]),
+                #     )
 
-                # check if close to 1
-                # cvs0 = klda_cv.compute_cv_flow(phase_sps[0], phase_nls[0])
-                # cvs1 = klda_cv.compute_cv_flow(phase_sps[1], phase_nls[1])
-                cv0 = CollectiveVariable(
-                    f=klda_cv,
-                    metric=CvMetric(
-                        periodicities=[False] * num_kfda,
-                        bounding_box=jnp.repeat(
-                            jnp.array([[-0.1, 1.1]]), num_kfda, axis=0
-                        ),
-                    ),
-                )
+                # # check if close to 1
+                # # cvs0 = klda_cv.compute_cv_flow(phase_sps[0], phase_nls[0])
+                # # cvs1 = klda_cv.compute_cv_flow(phase_sps[1], phase_nls[1])
+                # cv = CollectiveVariable(
+                #     f=klda_cv,
+                #     metric=CvMetric(
+                #         periodicities=[False] * num_kfda,
+                #         bounding_box=jnp.repeat(
+                #             jnp.array([[-0.1, 1.1]]),
+                #             num_kfda,
+                #             axis=0,
+                #         ),
+                #     ),
+                # )
 
             def trunc_svd(m):
                 u, s, v = jnp.linalg.svd(m, full_matrices=False)
 
                 include_mask = s > 10 * jnp.max(
-                    jnp.array([u.shape[-2], v.shape[-1]])
-                ) * jnp.finfo(normed_cvs.dtype).eps * jnp.max(s)
+                    jnp.array([u.shape[-2], v.shape[-1]]),
+                ) * jnp.finfo(
+                    normed_cvs.dtype,
+                ).eps * jnp.max(s)
 
                 def _f(u, s, v, include_mask, m):
                     u, s, v = u[:, include_mask], s[include_mask], v[include_mask, :]
@@ -461,30 +464,36 @@ def get_lda_cv(
                     include_mask = jnp.sum(~include_mask, axis=0) == 0
 
                     return vmap(_f, in_axes=(0, 0, 0, None, 0))(
-                        u, s, v, include_mask, m
+                        u,
+                        s,
+                        v,
+                        include_mask,
+                        m,
                     )
 
                 raise ValueError("s.ndim must be 1 or 2")
 
             u, s, v, normed_cvs, include_mask = trunc_svd(
-                vmap(lambda x: jnp.reshape(x, (-1)))(normed_cvs)
+                vmap(lambda x: jnp.reshape(x, (-1)))(normed_cvs),
             )
 
             # step 1
             normed_cvs = jnp.reshape(normed_cvs, (len(lj), lj_min, -1))
 
             mu_i = vmap(lambda x, y: jnp.sum(x, axis=0) / y, in_axes=(0, 0))(
-                normed_cvs, lj
+                normed_cvs,
+                lj,
             )
             mu = jnp.sum(
-                vmap(lambda x, y: x * y, in_axes=(0, 0))(mu_i, lj), axis=0
+                vmap(lambda x, y: x * y, in_axes=(0, 0))(mu_i, lj),
+                axis=0,
             ) / jnp.sum(lj)
 
             u_w, s_w, v_w, _, _ = trunc_svd(
-                vmap(lambda cvs, mu_i: cvs - mu_i)(normed_cvs, mu_i)
+                vmap(lambda cvs, mu_i: cvs - mu_i)(normed_cvs, mu_i),
             )
             u_b, s_b, v_b, _, _ = trunc_svd(
-                vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu_i - mu))(lj, mu_i)
+                vmap(lambda lj, mu_i: jnp.sqrt(lj) * (mu_i - mu))(lj, mu_i),
             )
 
             manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=num_kfda)
@@ -497,13 +506,9 @@ def get_lda_cv(
                 b = jnp.einsum("ab, ja, j, jc, cb ", x, v_b, s_b**2, v_b, x)
 
                 if harmonic:
-                    out = ((1 - shrinkage) * a + shrinkage) / (
-                        (1 - shrinkage) * b + shrinkage
-                    )
+                    out = ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
                 else:
-                    out = -((1 - shrinkage) * b + shrinkage) / (
-                        (1 - shrinkage) * a + shrinkage
-                    )
+                    out = -((1 - shrinkage) * b + shrinkage) / ((1 - shrinkage) * a + shrinkage)
 
                 return out
 
@@ -530,9 +535,7 @@ def get_lda_cv(
             def cvs(nd, p, alpha, v, scale_factor):
                 p = _norm(cv.cv, nl, nd)
                 cv_unscaled = alpha.T @ (jnp.reshape(p, (-1,)) @ v.T)
-                cv_scaled = (cv_unscaled - scale_factor[0, :]) / (
-                    scale_factor[1, :] - scale_factor[0, :]
-                )
+                cv_scaled = (cv_unscaled - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :])
                 return cv_scaled
 
             return jnp.mean(
@@ -540,9 +543,12 @@ def get_lda_cv(
                     [
                         cvs(nd, cv, alpha, v, scale_factor)
                         for nd, alpha, v, scale_factor in zip(
-                            norm_data, alphas, vs, scale_factors
+                            norm_data,
+                            alphas,
+                            vs,
+                            scale_factors,
                         )
-                    ]
+                    ],
                 ),
                 axis=0,
             )
@@ -609,7 +615,7 @@ def rotate_2d(alpha):
     def f(cv: CV, _):
         return (
             jnp.array(
-                [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]]
+                [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]],
             )
             @ cv
         )
@@ -702,7 +708,7 @@ class DistraxRealNVP(CvFunDistrax):
             tfp.bijectors.RealNVP(
                 fraction_masked=0.5,
                 shift_and_log_scale_fn=self.shift_and_scale,
-            )
+            ),
         )
 
     def shift_and_scale(self, x0, input_depth, **condition_kwargs):
@@ -718,7 +724,7 @@ class MetricUMAP(CvMetric):
     def __init__(self, periodicities, bounding_box=None) -> None:
         super().__init__(periodicities=periodicities, bounding_box=bounding_box)
 
-        bb = np.array(self.bounding_box)
+        # bb = np.array(self.bounding_box)
         per = np.array(self.periodicities)
 
         # @numba.njit

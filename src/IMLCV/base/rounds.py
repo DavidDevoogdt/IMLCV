@@ -13,15 +13,18 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from filelock import FileLock
+from IMLCV.base.bias import Bias
+from IMLCV.base.bias import CompositeBias
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import MDEngine
+from IMLCV.base.MdEngine import StaticTrajectoryInfo
+from IMLCV.base.MdEngine import TrajectoryInfo
 from jax import Array
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
 
 from configs.bash_app_python import bash_app_python
-from IMLCV.base.bias import Bias, CompositeBias
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo, TrajectoryInfo
 
 # todo: invaildate with files instead of db tha gets deleted
 
@@ -62,7 +65,10 @@ class RoundInformation:
 
 class Rounds(ABC):
     def __init__(
-        self, folder: str | Path = "output", copy=True, new_folder=True
+        self,
+        folder: str | Path = "output",
+        copy=True,
+        new_folder=True,
     ) -> None:
         """
         this class saves all relevant info in a hdf5 container. It is build as follows:
@@ -163,7 +169,7 @@ class Rounds(ABC):
         from ase.io.extxyz import write_extxyz
 
         for i, (atoms, round, trajejctory) in enumerate(
-            self.iter_ase_atoms(r=r, num=num)
+            self.iter_ase_atoms(r=r, num=num),
         ):
             with open(
                 self.path(r=round.round, i=trajejctory.num) / "trajectory.xyz",
@@ -187,7 +193,7 @@ class Rounds(ABC):
             if r not in f.keys():
                 attr = {}
                 sti = StaticTrajectoryInfo.load(
-                    filename=self.path(r=r) / "static_trajectory_info.h5"
+                    filename=self.path(r=r) / "static_trajectory_info.h5",
                 )
 
                 if (p := (self.path(r) / "bias")).exists():
@@ -396,7 +402,11 @@ class Rounds(ABC):
             f.flush()
 
         return TrajectoryInformation(
-            ti=ti, **r_attr, round=r, num=i, folder=self.folder
+            ti=ti,
+            **r_attr,
+            round=r,
+            num=i,
+            folder=self.folder,
         )
 
     def round_information(self, r: int | None = None) -> RoundInformation:
@@ -547,7 +557,8 @@ class Rounds(ABC):
 
                 if traj_info.cv is None:
                     nl = traj_info.sp.get_neighbour_list(
-                        r_cut=ri.tic.r_cut, z_array=ri.tic.atomic_numbers
+                        r_cut=ri.tic.r_cut,
+                        z_array=ri.tic.atomic_numbers,
                     )
                     cv, _ = round_bias.collective_variable.compute_cv(traj_info.sp, nl)
                 else:
@@ -571,12 +582,13 @@ class Rounds(ABC):
 
             if tis is None:
                 tis = TrajectoryInfo(
-                    _positions=md_engine.sp.coordinates, _cell=md_engine.sp.cell
+                    _positions=md_engine.sp.coordinates,
+                    _cell=md_engine.sp.cell,
                 )
         else:
             assert sp0.shape[0] == len(
-                biases
-            ), f"The number of initials cvs provided {sp.shape[0]} does not correspond to the number of biases {len(biases)}"
+                biases,
+            ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
 
         if bias_prev is not None:
             bias_prev = jnp.hstack(bias_prev)
@@ -623,7 +635,10 @@ class Rounds(ABC):
 
             @bash_app_python(executors=["default"])
             def plot_app(
-                st: StaticTrajectoryInfo, traj: TrajectoryInfo, inputs=[], outputs=[]
+                st: StaticTrajectoryInfo,
+                traj: TrajectoryInfo,
+                inputs=[],
+                outputs=[],
             ):
                 bias = Bias.load(inputs[0].filepath)
 
@@ -635,7 +650,8 @@ class Rounds(ABC):
                 if cvs is None:
                     sp = traj.sp
                     nl = sp.get_neighbour_list(
-                        r_cut=st.r_cut, z_array=st.atomic_numbers
+                        r_cut=st.r_cut,
+                        z_array=st.atomic_numbers,
                     )
                     cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
 
@@ -666,7 +682,7 @@ class Rounds(ABC):
                     bs -= jnp.mean(bs)
 
                     probs = jnp.exp(
-                        -bs / (md_engine.static_trajectory_info.T * boltzmann)
+                        -bs / (md_engine.static_trajectory_info.T * boltzmann),
                     )
                     probs = probs / jnp.sum(probs)
 
@@ -686,7 +702,7 @@ class Rounds(ABC):
                 spi = spi.unbatch()
                 nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
                 print(
-                    f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol if tisi.e_pot is not None else None  } and new bias {  bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} "
+                    f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol if tisi.e_pot is not None else None  } and new bias {  bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} ",
                 )
 
             else:

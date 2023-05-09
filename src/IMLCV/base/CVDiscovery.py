@@ -1,31 +1,34 @@
+from __future__ import annotations
+
 import itertools
+from pathlib import Path
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-from jax import jacrev, vmap
-from jax.random import PRNGKey, choice
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvFlow
+from IMLCV.base.CV import CvMetric
+from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import StaticTrajectoryInfo
+from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.CV import distance_descriptor
+from IMLCV.implementations.CV import sb_descriptor
+from IMLCV.implementations.CV import scale_cv_trans
+from jax import jacrev
+from jax import vmap
+from jax.random import choice
+from jax.random import PRNGKey
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
 from parsl.data_provider.files import File
 
 from configs.bash_app_python import bash_app_python
-from IMLCV.base.CV import (
-    CV,
-    CollectiveVariable,
-    CvFlow,
-    CvMetric,
-    CvTrans,
-    NeighbourList,
-    SystemParams,
-)
-from IMLCV.base.MdEngine import StaticTrajectoryInfo
-from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.CV import distance_descriptor, sb_descriptor, scale_cv_trans
 
 plt.rcParams["text.usetex"] = True
-
-from pathlib import Path
 
 
 class Transformer:
@@ -133,7 +136,7 @@ class CVDiscovery:
         num=4,
         out=1e4,
         chunk_size=None,
-    ) -> tuple[SystemParams, CV, CollectiveVariable, StaticTrajectoryInfo,]:
+    ) -> tuple[SystemParams, CV, CollectiveVariable, StaticTrajectoryInfo]:
         weights = []
 
         colvar: CollectiveVariable | None = None
@@ -158,7 +161,8 @@ class CVDiscovery:
                 cv0 = traj.ti.CV
             else:
                 nl0 = sp0.get_neighbour_list(
-                    r_cut=round.tic.r_cut, z_array=round.tic.atomic_numbers
+                    r_cut=round.tic.r_cut,
+                    z_array=round.tic.atomic_numbers,
                 )
                 cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nl0)
             if sp is None:
@@ -236,7 +240,9 @@ class CVDiscovery:
 
         if plot:
             ind = np.random.choice(
-                a=sps.shape[0], size=min(3000, sps.shape[0]), replace=False
+                a=sps.shape[0],
+                size=min(3000, sps.shape[0]),
+                replace=False,
             )
 
             fut = plot_app(
@@ -324,7 +330,8 @@ def plot_app(
                     print(f"cc={cc}")
 
                     col = color(
-                        data[i][:, inpair[cc]], cvs[i].metric.periodicities[inpair[cc]]
+                        data[i][:, inpair[cc]],
+                        cvs[i].metric.periodicities[inpair[cc]],
                     )
 
                     if outdim == 2:
@@ -434,7 +441,7 @@ def plot_app(
             # fig.set_size_inches([10, 16])
 
             n = Path(
-                f"{name}_{ 'mapped' if z==1 else ''}_{'old_new' if i == 0 else 'new_old'}.pdf"
+                f"{name}_{ 'mapped' if z==1 else ''}_{'old_new' if i == 0 else 'new_old'}.pdf",
             )
 
             n.parent.mkdir(parents=True, exist_ok=True)

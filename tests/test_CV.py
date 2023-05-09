@@ -2,22 +2,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import jax
 import jax.flatten_util
 import jax.lax
-
-# import numpy as np
 import jax.numpy as jnp
 import jax.scipy.optimize
-import jaxopt
 import jaxopt.objective
 from jax import vmap
+
+# import numpy as np
 
 if TYPE_CHECKING:
     pass
 
 
-import jax.numpy as jnp
 import pytest
 
 from IMLCV.base.CV import (
@@ -85,47 +82,49 @@ def test_nf():
             RealNVP(
                 features=features,
                 cv_input=CvFunInput(input=input, conditioners=cond),
-            )
+            ),
         )
         return chain
 
     features = 5
 
     prng = jax.random.PRNGKey(seed=42)
-    ##test 0
+    # test 0
 
     key_1, key_2, prng = jax.random.split(prng, 3)
     x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
 
     test(NormalizingFlow(flow=get_chain(input=0, cond=[1])), x, key_2)
 
-    ##test 1
+    # test 1
 
     key_1, key_2, prng = jax.random.split(prng, 3)
     x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
     test(
         NormalizingFlow(
-            flow=get_chain(input=0, cond=[1]) * get_chain(input=1, cond=[0])
+            flow=get_chain(input=0, cond=[1]) * get_chain(input=1, cond=[0]),
         ),
         x,
         key_2,
     )
 
-    ## test with distrax
+    # test with distrax
     key_1, key_2, key3, prng = jax.random.split(prng, 4)
     x2 = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
 
     chain = CvTrans.from_cv_fun(
         DistraxRealNVP(
             latent_dim=5,
-        )
+        ),
     )
 
     test(NormalizingFlow(chain), x2, key_2)
 
 
 def _get_sp_rand(
-    prng, n=15, r_cut=3
+    prng,
+    n=15,
+    r_cut=3,
 ) -> tuple[jax.random.KeyArray, SystemParams, NeighbourList]:
     k1, k2, k3, prng = jax.random.split(prng, 4)
 
@@ -138,7 +137,7 @@ def _get_sp_rand(
                 [n, 0, 0],
                 [0, n, 0],
                 [0, 0, n],
-            ]
+            ],
         )
         * 1.0,
     ).canoncialize()
@@ -152,13 +151,15 @@ def _get_sp_rand(
 
 
 def _permute_sp_rand(
-    prng, sp0, nl0, eps
+    prng,
+    sp0,
+    nl0,
+    eps,
 ) -> tuple[jax.random.KeyArray, SystemParams, NeighbourList]:
     k1, k2, k3, prng = jax.random.split(prng, 4)
 
     sp1 = SystemParams(
-        coordinates=sp0.coordinates
-        + jax.random.uniform(k1, shape=sp0.coordinates.shape) * eps,
+        coordinates=sp0.coordinates + jax.random.uniform(k1, shape=sp0.coordinates.shape) * eps,
         cell=sp0.cell + jax.random.normal(k3, (3, 3)) * eps,
     )
 
@@ -173,12 +174,9 @@ def _get_equival_sp(sp, rng) -> tuple[jax.random.KeyArray, SystemParams]:
     key, rng = jax.random.split(rng)
 
     rot_mat = jnp.array(
-        R.random(random_state=int(jax.random.randint(key, (), 0, 100))).as_matrix()
+        R.random(random_state=int(jax.random.randint(key, (), 0, 100))).as_matrix(),
     )
-    pos2 = (
-        vmap(lambda a: rot_mat @ a, in_axes=0)(sp.coordinates)
-        + jax.random.normal(key, (3,)) * 5
-    )
+    pos2 = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.coordinates) + jax.random.normal(key, (3,)) * 5
     cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.cell)
     sp2 = SystemParams(coordinates=pos2, cell=cell_r)
     return rng, sp2
@@ -217,10 +215,10 @@ def test_reconstruction():
         target_nl=nl0,
         tol=tol,
         norm=lambda cv1, cv2, nl1, nl2: jnp.sqrt(
-            1 - Kernel(cv1, cv2, nl1, nl2, matching="average")
+            1 - Kernel(cv1, cv2, nl1, nl2, matching="average"),
         ),
         # solver=jaxopt.GradientDescent
-        solver=jaxopt.GradientDescent
+        solver=jaxopt.GradientDescent,
         # solver=jaxopt.LBFGS,
         # solver=partial(jaxopt.ScipyMinimize, method="l-bfgs-b"),
     )
@@ -246,19 +244,20 @@ def test_neigh():
 
     rng, sp, nl = _get_sp_rand(prng=rng, n=n, r_cut=r_cut)
 
-    func = lambda r_ij, index: (jnp.linalg.norm(r_ij), index)
+    def func(r_ij, index):
+        return (jnp.linalg.norm(r_ij), index)
 
     s1 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func=func)
     neigh_calc, (r_calc, index_calc) = s1
 
-    ## campare agains mathematical predictions for uniform fille sphere
+    # campare agains mathematical predictions for uniform fille sphere
     neigh_exp = n / jnp.abs(jnp.linalg.det(sp.cell)) * (4 / 3 * jnp.pi * r_cut**3)
     r_exp = 0.75 * r_cut
     print(
-        f"err neigh density {jnp.abs(  (jnp.mean(neigh_calc) - neigh_exp) /neigh_exp)}"
+        f"err neigh density {jnp.abs(  (jnp.mean(neigh_calc) - neigh_exp) /neigh_exp)}",
     )
     print(
-        f"err neigh density {jnp.abs(  (jnp.mean(r_calc/neigh_calc) - r_exp) /r_exp)}"
+        f"err neigh density {jnp.abs(  (jnp.mean(r_calc/neigh_calc) - r_exp) /r_exp)}",
     )
 
     def _comp(s1, s2):
@@ -269,7 +268,7 @@ def test_neigh():
         assert jnp.sqrt(jnp.mean((r_calc2 - r_calc1) ** 2 / r_calc2**2)) < 1e-7
         assert (index_calc1 - index_calc2 == 0).all()
 
-    ##test 2: campare equivalent sp
+    # test 2: campare equivalent sp
     rng, sp2 = _get_equival_sp(sp, rng)
     nl2 = sp2.get_neighbour_list(r_cut=nl.r_cut, z_array=nl.z_array)
 
@@ -277,13 +276,13 @@ def test_neigh():
 
     _comp(s1, s2)
 
-    ##test 3: with neighbourlist, split z
+    # test 3: with neighbourlist, split z
 
     s3 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func=func, split_z=True)
     s3_u = jax.tree_map(lambda x: jnp.sum(x, axis=1), s3)  # resum over z axis
     _comp(s1, s3_u)
 
-    ##method 6: with neighbourlist, no reduction
+    # method 6: with neighbourlist, no reduction
 
     s4 = nl.apply_fun_neighbour(
         sp=sp,
@@ -297,7 +296,7 @@ def test_neigh():
 
     # split to ge tz components
 
-    ##method 7: with neighbourlist, sort_z_self
+    # method 7: with neighbourlist, sort_z_self
 
     s5 = nl.apply_fun_neighbour(
         sp=sp,
@@ -307,7 +306,7 @@ def test_neigh():
         split_z=True,
     )
 
-    ##method 7: with neighbourlist, sort_z_self
+    # method 7: with neighbourlist, sort_z_self
 
     s6 = nl.apply_fun_neighbour(
         sp=sp,
@@ -319,7 +318,7 @@ def test_neigh():
 
     _, _, s6_z = nl.nl_split_z(s6)
     a, bc = tuple(
-        zip(*jax.tree_map(lambda x: jnp.sum(x, axis=(0, -1)), s6_z))
+        zip(*jax.tree_map(lambda x: jnp.sum(x, axis=(0, -1)), s6_z)),
     )  # sum over z and over neighbours
     b, c = tuple(zip(*bc))
 
@@ -350,11 +349,12 @@ def test_neigh_pair():
     z_array = nl.z_array
 
     # neighbourghlist
-    func_double = lambda r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k: (
-        jnp.linalg.norm(r_ij - r_ik),
-        jnp.array(z_array)[atom_index_j],
-        jnp.array(z_array)[atom_index_k],
-    )
+    def func_double(r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k):
+        return (
+            jnp.linalg.norm(r_ij - r_ik),
+            jnp.array(z_array)[atom_index_j],
+            jnp.array(z_array)[atom_index_k],
+        )
 
     nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
     s1 = nl.apply_fun_neighbour_pair(
@@ -374,7 +374,7 @@ def test_neigh_pair():
     )  # https://math.stackexchange.com/questions/167932/mean-distance-between-2-points-in-a-ball
 
     print(
-        f"err neigh density {jnp.abs( ( jnp.mean(pair_dist_avg) -pair_dist_exact)/pair_dist_exact  )}"
+        f"err neigh density {jnp.abs( ( jnp.mean(pair_dist_avg) -pair_dist_exact)/pair_dist_exact  )}",
     )
 
     #####
@@ -388,7 +388,7 @@ def test_neigh_pair():
         assert (index_k1 == index_k2).all()
         assert jnp.mean(((pair_dist1 - pair_dist2) / pair_dist1) ** 2) ** 0.5 < 1e-7
 
-    ## test 2: z split, resummations should yield orriginal result
+    # test 2: z split, resummations should yield orriginal result
 
     s2 = nl.apply_fun_neighbour_pair(
         sp=sp,
@@ -403,7 +403,7 @@ def test_neigh_pair():
     s2_u = jax.tree_map(lambda x: jnp.sum(jnp.sum(x, axis=2), axis=1), s2)
     _comp(s1, s2_u)
 
-    ## same but without reduction
+    # same but without reduction
 
     k5_zz, (pair_dist5_zz, index_j5_zz, index_k5_zz) = nl.apply_fun_neighbour_pair(
         sp=sp,
@@ -421,7 +421,7 @@ def test_neigh_pair():
             assert (index_j5_zz[:, j, k, :][k5_zz[:, j, k, :]] == zj).all()
             assert (index_k5_zz[:, j, k, :][k5_zz[:, j, k, :]] == zk).all()
 
-    ## same but with reduction per z
+    # same but with reduction per z
 
     k6_zz, (pair_dist6_zz, index_j6_zz, index_k6_zz) = nl.apply_fun_neighbour_pair(
         sp=sp,
@@ -445,7 +445,7 @@ def test_minkowski_reduce():
                 [2, 0, 0],
                 [6, 1, 0],
                 [8, 9, 1],
-            ]
+            ],
         ),
     ).minkowski_reduce()[0]
 
@@ -473,9 +473,7 @@ def test_canoncicalize():
         cell2 = cell2.at[i, :].set(new_combo @ cell2)
 
     k1, prng = jax.random.split(prng, 2)
-    coordinates2 = (
-        coordinates + jax.random.randint(k1, (3,), minval=-3, maxval=3) @ cell
-    )
+    coordinates2 = coordinates + jax.random.randint(k1, (3,), minval=-3, maxval=3) @ cell
 
     sp0 = SystemParams(cell=cell, coordinates=coordinates)
     sp1 = SystemParams(cell=cell2, coordinates=coordinates2)

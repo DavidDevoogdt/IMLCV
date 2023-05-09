@@ -1,4 +1,7 @@
-from typing import Generic, TypeVar
+from __future__ import annotations
+
+from typing import Generic
+from typing import TypeVar
 
 T = TypeVar("T")  # Declare type variable
 

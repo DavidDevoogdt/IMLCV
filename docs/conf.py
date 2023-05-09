@@ -6,10 +6,11 @@
 #
 # All configuration values have a default; values that are commented out
 # serve to show the default.
+from __future__ import annotations
 
 import os
-import sys
 import shutil
+import sys
 
 # -- Path setup --------------------------------------------------------------
 
@@ -52,7 +53,7 @@ try:
 
     apidoc.main(args)
 except Exception as e:
-    print("Running `sphinx-apidoc` failed!\n{}".format(e))
+    print(f"Running `sphinx-apidoc` failed!\n{e}")
 
 # -- General configuration ---------------------------------------------------
 
@@ -72,13 +73,35 @@ extensions = [
     "sphinx.ext.ifconfig",
     "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
+    "sphinx_autodoc_typehints",
+    "autoapi.extension",
+    "sphinx_design",
+    "myst_parser",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
 
+
+# Enable markdown
+extensions.append("myst_parser")
+
+# Configure MyST-Parser
+myst_enable_extensions = [
+    "amsmath",
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "html_image",
+    # 'linkify',
+    "replacements",
+    "smartquotes",
+    "substitution",
+    "tasklist",
+]
+
 # The suffix of source filenames.
-source_suffix = ".rst"
+source_suffix = [".rst", ".md"]
 
 # The encoding of source files.
 # source_encoding = 'utf-8-sig'
@@ -153,14 +176,23 @@ todo_emit_warnings = True
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "alabaster"
+# html_theme = "alabaster"
+html_theme = "sphinx_book_theme"
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
+# html_theme_options = {
+#     "sidebar_width": "300px",
+#     "page_width": "1200px",
+# }
+
 html_theme_options = {
-    "sidebar_width": "300px",
-    "page_width": "1200px"
+    "repository_url": "https://github.com/DavidDevoogdt/IMLCV",
+    "use_repository_button": True,  # add a 'link to repository' button
+    # "use_issues_button": False,  # add an 'Open an Issue' button
+    # "show_navbar_depth": 1,
+    "use_sidenotes": True,
 }
 
 # Add any paths that contain custom themes here, relative to this directory.
@@ -236,17 +268,17 @@ htmlhelp_basename = "IMLCV-doc"
 
 latex_elements = {
     # The paper size ("letterpaper" or "a4paper").
-    # "papersize": "letterpaper",
+    "papersize": "letterpaper",
     # The font size ("10pt", "11pt" or "12pt").
-    # "pointsize": "10pt",
+    "pointsize": "10pt",
     # Additional stuff for the LaTeX preamble.
-    # "preamble": "",
+    "preamble": "",
 }
 
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).
 latex_documents = [
-    ("index", "user_guide.tex", "IMLCV Documentation", "David Devoogdt", "manual")
+    ("index", "user_guide.tex", "IMLCV Documentation", "David Devoogdt", "manual"),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -269,6 +301,10 @@ latex_documents = [
 # If false, no module index is generated.
 # latex_domain_indices = True
 
+
+autoapi_dirs = ["../src"]
+
+
 # -- External mapping --------------------------------------------------------
 python_version = ".".join(map(str, sys.version_info[0:2]))
 intersphinx_mapping = {
@@ -281,6 +317,11 @@ intersphinx_mapping = {
     "scipy": ("https://docs.scipy.org/doc/scipy/reference", None),
     "setuptools": ("https://setuptools.pypa.io/en/stable/", None),
     "pyscaffold": ("https://pyscaffold.org/en/stable", None),
+    "jax": ("https://jax.readthedocs.io/en/latest/", None),
+    "ase": ("https://wiki.fysik.dtu.dk/ase/", None),
+    "yaff": ("https://molmod.github.io/yaff/", None),
+    "parsl": ("https://parsl.readthedocs.io/en/stable/", None),
+    "pymanopt": ("https://pymanopt.org/docs/stable/", None),
 }
 
 print(f"loading configurations for {project} {version} ...", file=sys.stderr)

@@ -1,23 +1,23 @@
-import os
-from pathlib import Path
-
-from parsl import HighThroughputExecutor, WorkQueueExecutor
-from parsl.channels import LocalChannel
-from parsl.executors.base import ParslExecutor
-
-ROOT_DIR = Path(os.path.dirname(__file__)).parent
-
+from __future__ import annotations
 
 import logging
 import math
 import os
 import time
+from pathlib import Path
 
 import parsl.providers.slurm.slurm
+from parsl import HighThroughputExecutor
+from parsl import WorkQueueExecutor
 from parsl.channels import LocalChannel
-from parsl.providers.base import JobState, JobStatus
+from parsl.executors.base import ParslExecutor
+from parsl.providers.base import JobState
+from parsl.providers.base import JobStatus
 from parsl.providers.slurm.template import template_string
 from parsl.utils import wtime_to_minutes
+
+ROOT_DIR = Path(os.path.dirname(__file__)).parent
+
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +101,17 @@ class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
 
         # Wrap the command
         job_config["user_script"] = self.launcher(
-            command, tasks_per_node, self.nodes_per_block
+            command,
+            tasks_per_node,
+            self.nodes_per_block,
         )
 
         self._write_submit_script(template_string, script_path, job_name, job_config)
 
         if self.move_files:
             channel_script_path = self.channel.push_file(
-                script_path, self.channel.script_dir
+                script_path,
+                self.channel.script_dir,
             )
         else:
             channel_script_path = script_path
@@ -148,14 +151,15 @@ class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
               [status...] : Status list of all jobs
         """
         job_id_list = ",".join(
-            [jid for jid, job in self.resources.items() if not job["status"].terminal]
+            [jid for jid, job in self.resources.items() if not job["status"].terminal],
         )
         if not job_id_list:
             logger.debug("No active jobs, skipping status update")
             return
 
         cmd = "squeue --clusters={1} --noheader --format='%i %t' --job '{0}'".format(
-            job_id_list, self.cluster
+            job_id_list,
+            self.cluster,
         )
         logger.debug("Executing %s", cmd)
         retcode, stdout, stderr = self.execute_wait(cmd)
@@ -179,8 +183,10 @@ class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
             status = translate_table.get(slurm_state, JobState.UNKNOWN)
             logger.debug(
                 "Updating job {} with slurm status {} to parsl state {!s}".format(
-                    job_id, slurm_state, status
-                )
+                    job_id,
+                    slurm_state,
+                    status,
+                ),
             )
             self.resources[job_id]["status"] = JobStatus(status)
             jobs_missing.remove(job_id)
@@ -201,13 +207,13 @@ class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
 
         job_id_list = " ".join(job_ids)
         retcode, stdout, stderr = self.execute_wait(
-            f"scancel --clusters={self.cluster} {job_id_list}"
+            f"scancel --clusters={self.cluster} {job_id_list}",
         )
         rets = None
         if retcode == 0:
             for jid in job_ids:
                 self.resources[jid]["status"] = JobStatus(
-                    JobState.CANCELLED
+                    JobState.CANCELLED,
                 )  # Setting state to cancelled
             rets = [True for i in job_ids]
         else:
@@ -247,17 +253,15 @@ def get_slurm_provider(
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
 
-    assert (
-        open_mp_threads_per_core is None
-    ), "open_mp_threads_per_core is not tested yet"
+    assert open_mp_threads_per_core is None, "open_mp_threads_per_core is not tested yet"
 
     worker_init = f"{py_env}; \n"
     if env == "hortense":
-        worker_init += f"module load CP2K/8.2-foss-2021a \n"
+        worker_init += "module load CP2K/8.2-foss-2021a \n"
 
     elif env == "stevin":
-        worker_init += f"module load CP2K/7.1-foss-2020a \n"
-    worker_init += f"module unload SciPy-bundle Python \n"
+        worker_init += "module load CP2K/7.1-foss-2020a \n"
+    worker_init += "module unload SciPy-bundle Python \n"
 
     if not parsl_cores:
         if open_mp_threads_per_core is None:
@@ -281,10 +285,6 @@ def get_slurm_provider(
         else:
             if mem < total_cores * memory_per_core:
                 mem = total_cores * memory_per_core
-
-    #  mem_per_nod = mem
-
-    mem_per_node = mem
 
     vsc_kwargs = {
         "cluster": cpu_cluster if not gpu else gpu_cluster,
@@ -416,7 +416,7 @@ def config(
                 parsl_cores=True,
                 mem=10,
                 walltime="72:00:00",
-            )
+            ),
         ]
 
     else:

@@ -5,23 +5,27 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from IMLCV.base.bias import Bias
+from IMLCV.base.bias import BiasF
+from IMLCV.base.bias import CompositeBias
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvFlow
+from IMLCV.base.CV import CvMetric
+from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.bias import BiasMTD
+from IMLCV.implementations.bias import HarmonicBias
+from IMLCV.implementations.bias import RbfBias
+from IMLCV.implementations.CV import dihedral
+from IMLCV.implementations.CV import Volume
+from IMLCV.implementations.energy import YaffEnergy
 from molmod import units
 from molmod.units import kelvin
 
-from configs.config_general import ROOT_DIR, config
-from IMLCV.base.bias import Bias, BiasF, CompositeBias
-from IMLCV.base.CV import (
-    CV,
-    CollectiveVariable,
-    CvFlow,
-    CvMetric,
-    CvTrans,
-    SystemParams,
-)
-from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.bias import BiasMTD, HarmonicBias, RbfBias
-from IMLCV.implementations.CV import Volume, dihedral
-from IMLCV.implementations.energy import YaffEnergy
+from configs.config_general import config
+from configs.config_general import ROOT_DIR
 
 ######################################
 #              test                  #
@@ -32,7 +36,8 @@ def test_harmonic():
     cvs = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
         metric=CvMetric(
-            periodicities=[True, True], bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]]
+            periodicities=[True, True],
+            bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]],
         ),
     )
 
@@ -67,7 +72,8 @@ def test_virial():
     bias = BiasF(cvs=cv0, g=fun)
 
     _, e_r = bias.compute_from_system_params(
-        SystemParams(coordinates=coordinates, cell=cell), vir=True
+        SystemParams(coordinates=coordinates, cell=cell),
+        vir=True,
     )
     vol = e_r.energy
     vir = e_r.vtens
@@ -94,9 +100,7 @@ def test_grid_bias(kernel):
         return cv.cv[0] ** 3 + cv.cv[1]
 
     # reevaluation of thermolib histo
-    bin_centers1, bin_centers2 = 0.5 * (bins[0][:-1] + bins[0][1:]), 0.5 * (
-        bins[1][:-1] + bins[1][1:]
-    )
+    bin_centers1, bin_centers2 = 0.5 * (bins[0][:-1] + bins[0][1:]), 0.5 * (bins[1][:-1] + bins[1][1:])
     xc, yc = np.meshgrid(bin_centers1, bin_centers2, indexing="ij")
     xcf = np.reshape(xc, (-1))
     ycf = np.reshape(yc, (-1))
@@ -129,10 +133,18 @@ def test_combine_bias():
     )
 
     bias1 = BiasMTD(
-        cvs=cv0, K=2.0 * units.kjmol, sigmas=np.array([0.35, 0.35]), start=25, step=500
+        cvs=cv0,
+        K=2.0 * units.kjmol,
+        sigmas=np.array([0.35, 0.35]),
+        start=25,
+        step=500,
     )
     bias2 = BiasMTD(
-        cvs=cv0, K=0.5 * units.kjmol, sigmas=np.array([0.1, 0.1]), start=50, step=250
+        cvs=cv0,
+        K=0.5 * units.kjmol,
+        sigmas=np.array([0.1, 0.1]),
+        start=50,
+        step=250,
     )
 
     bias = CompositeBias(biases=[bias1, bias2])
@@ -168,7 +180,7 @@ def test_bias_save(tmpdir):
             sigmas=np.array([0.35, 0.35]),
             start=25,
             step=500,
-        )
+        ),
     )
     yaffmd.run(int(1e3))
 
@@ -194,7 +206,8 @@ def test_FES_bias(tmpdir):
     folder = tmpdir / "alanine_dipeptide"
 
     with zipfile.ZipFile(
-        ROOT_DIR / "tests" / "data" / "alanine_dipeptide.zip", "r"
+        ROOT_DIR / "tests" / "data" / "alanine_dipeptide.zip",
+        "r",
     ) as zip_ref:
         zip_ref.extractall(tmpdir)
 

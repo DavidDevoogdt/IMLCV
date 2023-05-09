@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import tempfile
-
-# from IMLCV.base.CV import CV, CvTrans
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-# import numpy as np
 import numpy as np
+import tensorflow as tfl
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvFunBase
 from jax.experimental.jax2tf import call_tf
+
+# from IMLCV.base.CV import CV, CvTrans
+# import numpy as np
 
 if TYPE_CHECKING:
     pass
@@ -16,11 +19,6 @@ if TYPE_CHECKING:
 from keras.api._v2 import keras as KerasAPI
 
 keras: KerasAPI = import_module("tensorflow.keras")
-
-import numpy as np
-import tensorflow as tfl
-
-from IMLCV.base.CV import CV, CvFunBase
 
 
 class PeriodicLayer(keras.layers.Layer):
@@ -36,9 +34,7 @@ class PeriodicLayer(keras.layers.Layer):
         # maps to periodic box
         bbox = self.bbox
 
-        inputs_mod = (
-            tfl.math.mod(inputs - bbox[:, 0], bbox[:, 1] - bbox[:, 0]) + bbox[:, 0]
-        )
+        inputs_mod = tfl.math.mod(inputs - bbox[:, 0], bbox[:, 1] - bbox[:, 0]) + bbox[:, 0]
         return tfl.where(self.periodicity, inputs_mod, inputs)
 
     def metric(self, r):
@@ -55,7 +51,7 @@ class PeriodicLayer(keras.layers.Layer):
             {
                 "bbox": np.array(self.bbox),
                 "periodicity": self.periodicity,
-            }
+            },
         )
         return config
 
@@ -66,7 +62,7 @@ class KerasFunBase(CvFunBase):
 
     def _calc(self, x: CV, *conditioners: CV, reverse=False) -> CV:
         assert len(conditioners) == 0
-        assert reverse == False
+        assert not reverse
 
         return call_tf(self.encoder.call)(x.cv)
 

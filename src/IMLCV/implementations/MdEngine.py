@@ -8,19 +8,19 @@ import numpy as np
 import yaff.analysis.biased_sampling
 import yaff.external
 import yaff.log
-import yaff.pes
 import yaff.pes.bias
 import yaff.pes.ext
-import yaff.sampling
 import yaff.sampling.iterative
+from IMLCV.base.bias import Bias
+from IMLCV.base.bias import Energy
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import MDEngine
+from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
 
 # if TYPE_CHECKING:
-from IMLCV.base.bias import Bias, Energy
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import MDEngine, StaticTrajectoryInfo
 
 # yaff.log.set_level(yaff.log.silent)
 
@@ -93,7 +93,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 yaff.sampling.LangevinThermostat(
                     self.static_trajectory_info.T,
                     timecon=self.static_trajectory_info.timecon_thermo,
-                )
+                ),
             )
         if self.static_trajectory_info.barostat:
             hooks.append(
@@ -103,7 +103,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                     self.static_trajectory_info.P,
                     timecon=self.static_trajectory_info.timecon_baro,
                     anisotropic=True,
-                )
+                ),
                 # yaff.sampling.MTKBarostat(
                 #     self._yaff_ener,
                 #     self.static_trajectory_info.T,
@@ -208,7 +208,7 @@ class PlumedEngine(YaffEngine):
     LOAD FILE=libpybias.so
 
     dist: DISTANCE ATOMS=1,2
-    
+
 
     rc: PYTHONCV ATOMS=1,4,3 IMPORT=curvature FUNCTION=r
 
@@ -234,6 +234,6 @@ class PlumedEngine(YaffEngine):
             trajectory_file,
             sp,
             additional_parts=[
-                libplumed.ForcePartPlumed(timestep=static_trajectory_info.timestep)
+                libplumed.ForcePartPlumed(timestep=static_trajectory_info.timestep),
             ],
         )

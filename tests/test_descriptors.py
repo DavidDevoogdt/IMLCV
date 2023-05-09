@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from time import time_ns
 
 import jax.debug
@@ -10,20 +12,23 @@ import jax.scipy
 import numpy as onp
 import pytest
 import scipy.special
-from jax import grad, jacrev, jit, vmap
-
-from IMLCV.base.CV import NeighbourList, SystemParams
-from IMLCV.tools.bessel_callback import (
-    iv,
-    ive,
-    jv,
-    kv,
-    kve,
-    spherical_jn,
-    spherical_yn,
-    yv,
-)
-from IMLCV.tools.soap_kernel import p_i, p_inl_sb, p_innl_soap
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import SystemParams
+from IMLCV.tools.bessel_callback import iv
+from IMLCV.tools.bessel_callback import ive
+from IMLCV.tools.bessel_callback import jv
+from IMLCV.tools.bessel_callback import kv
+from IMLCV.tools.bessel_callback import kve
+from IMLCV.tools.bessel_callback import spherical_jn
+from IMLCV.tools.bessel_callback import spherical_yn
+from IMLCV.tools.bessel_callback import yv
+from IMLCV.tools.soap_kernel import p_i
+from IMLCV.tools.soap_kernel import p_inl_sb
+from IMLCV.tools.soap_kernel import p_innl_soap
+from jax import grad
+from jax import jacrev
+from jax import jit
+from jax import vmap
 
 
 def get_sps(
@@ -33,7 +38,7 @@ def get_sps(
     n,
     with_cell=True,
 ):
-    ## sp
+    # sp
     rng = jax.random.PRNGKey(42)
     key, rng = jax.random.split(rng)
     pos = jax.random.uniform(key, (n, 3)) * r_side
@@ -44,17 +49,14 @@ def get_sps(
         cell = None
     sp1 = SystemParams(coordinates=pos, cell=cell)
 
-    ## sp2
+    # sp2
     from scipy.spatial.transform import Rotation as R
 
     key1, key2, key3, rng = jax.random.split(rng, 4)
     rot_mat = jnp.array(
-        R.random(random_state=int(jax.random.randint(key1, (), 0, 100))).as_matrix()
+        R.random(random_state=int(jax.random.randint(key1, (), 0, 100))).as_matrix(),
     )
-    pos2 = (
-        vmap(lambda a: rot_mat @ a, in_axes=0)(sp1.coordinates)
-        + jax.random.normal(key2, (3,)) * eps * r_side
-    )
+    pos2 = vmap(lambda a: rot_mat @ a, in_axes=0)(sp1.coordinates) + jax.random.normal(key2, (3,)) * eps * r_side
     if with_cell:
         cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp1.cell)
     else:
@@ -65,7 +67,7 @@ def get_sps(
 
     # raise "do permutation on p2"
 
-    ## sp3
+    # sp3
     key, rng = jax.random.split(rng)
     pos = jax.random.uniform(key, (n, 3)) * n
     key, rng = jax.random.split(rng)
@@ -86,7 +88,8 @@ def get_sps(
 
 
 @pytest.mark.parametrize(
-    "cell, matching, pp", [(True, "rematch", "sb"), (False, "average", "soap")]
+    "cell, matching, pp",
+    [(True, "rematch", "sb"), (False, "average", "soap")],
 )
 def test_SOAP(cell, matching, pp):
     n = 10
@@ -129,10 +132,10 @@ def test_SOAP(cell, matching, pp):
     p1 = f(sp1, nl1)
 
     before_f = time_ns()
-    p2 = f(sp2, nl2).block_until_ready()
+    _ = f(sp2, nl2).block_until_ready()
     after_f = time_ns()
 
-    p3 = f(sp3, nl3)
+    # p3 = f(sp3, nl3)
 
     # @jit
     def k(sp: SystemParams, nl: NeighbourList):
@@ -160,14 +163,14 @@ def test_SOAP(cell, matching, pp):
     assert jnp.abs(dac) > 1e-3
 
     print(
-        f"{matching=}\t{cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t<kernel(orig,rot)>=\t\t{  dab :>.4f}\t<kernel(orig, rand)>=\t\t{ dac:.4f}\tevalutation time f [ms] { (after_f-before_f)/ 10.0**6 :>.2f}  k [ms] { (after-before)/ 10.0**6 :>.2f} "
+        f"{matching=}\t{cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t<kernel(orig,rot)>=\t\t{  dab :>.4f}\t<kernel(orig, rand)>=\t\t{ dac:.4f}\tevalutation time f [ms] { (after_f-before_f)/ 10.0**6 :>.2f}  k [ms] { (after-before)/ 10.0**6 :>.2f} ",
     )
 
     @jit
     def jk(sp, nl):
         _jk = jacrev(k)(sp, nl)
         return jnp.mean(jnp.linalg.norm(_jk.coordinates)), jnp.mean(
-            jnp.linalg.norm(_jk.coordinates) if _jk.cell is not None else 0.0
+            jnp.linalg.norm(_jk.coordinates) if _jk.cell is not None else 0.0,
         )
 
     jac_da_coor, jac_da_cell = jk(sp1, nl1)
@@ -189,7 +192,7 @@ def test_SOAP(cell, matching, pp):
             assert jnp.abs(jac_dac_cell) > 1e-3
 
     print(
-        f"\t\t\t\t\t\t\t\t\t\t||d kernel(orig,rot)/d sp)=\t{ jac_dab_coor  :.4f}\t||d kernel(orig,rand)/d sp)=\t{jac_dac_coor  :>.4f}\tevalutation time [ms] { (after-before)/ 10.0**6  :>.2f}   "
+        f"\t\t\t\t\t\t\t\t\t\t||d kernel(orig,rot)/d sp)=\t{ jac_dab_coor  :.4f}\t||d kernel(orig,rand)/d sp)=\t{jac_dac_coor  :>.4f}\tevalutation time [ms] { (after-before)/ 10.0**6  :>.2f}   ",
     )
 
 
@@ -223,11 +226,13 @@ def test_bessel():
         _ = vmap(func, in_axes=(0, None))(jnp.array([2, 5]), 2)
         _ = vmap(func, in_axes=(None, 0))(2, jnp.array([2, 5]))
         _ = vmap(vmap(func, in_axes=(0, None)), in_axes=(None, 0))(
-            jnp.array([2, 5]), jnp.array([2, 5])
+            jnp.array([2, 5]),
+            jnp.array([2, 5]),
         )
 
         _ = vmap(
-            vmap(vmap(func, in_axes=(0, None)), in_axes=(0, None)), in_axes=(None, 0)
+            vmap(vmap(func, in_axes=(0, None)), in_axes=(0, None)),
+            in_axes=(None, 0),
         )(jnp.array([[2, 5], [2, 5]]), jnp.array([2, 5]))
 
         if wz == 1:
@@ -242,7 +247,8 @@ def test_bessel():
         if dsp is not None:
             # with jax.disable_jit():
             dy = vmap(
-                vmap(grad(func, argnums=1), in_axes=(0, None)), in_axes=(None, 0)
+                vmap(grad(func, argnums=1), in_axes=(0, None)),
+                in_axes=(None, 0),
             )(v, x)
 
             dy2 = jnp.array([dsp(vi, onp.array(x)) for vi in v]).T
@@ -253,15 +259,21 @@ def test_bessel():
 
     # sanity chekc to see wither ive and kve behave correctly
 
-    k1e = lambda x: kve(1, x)
-    k1e2 = lambda x: kv(1, x) * jnp.exp(x)
+    def k1e(x):
+        return kve(1, x)
+
+    def k1e2(x):
+        return kv(1, x) * jnp.exp(x)
 
     x = jnp.linspace(1, 5, 1000)
     assert jnp.linalg.norm(vmap(k1e)(x) - vmap(k1e2)(x)) < 1e-5
     assert jnp.linalg.norm(vmap(grad(k1e))(x) - vmap(grad(k1e2))(x)) < 1e-5
 
-    i1e = lambda x: ive(1, x)
-    i1e2 = lambda x: iv(1, x) * jnp.exp(-jnp.abs(x))
+    def i1e(x):
+        return ive(1, x)
+
+    def i1e2(x):
+        return iv(1, x) * jnp.exp(-jnp.abs(x))
 
     assert jnp.linalg.norm(vmap(i1e)(x) - vmap(i1e2)(x)) < 1e-5
     assert jnp.linalg.norm(vmap(grad(i1e))(x) - vmap(grad(i1e2))(x)) < 1e-5

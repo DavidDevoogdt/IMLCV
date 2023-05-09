@@ -3,15 +3,16 @@ from __future__ import annotations
 import itertools
 
 import jax.numpy as jnp
-from molmod.constants import boltzmann
-
-from IMLCV.base.bias import CompositeBias, NoneBias
+from IMLCV.base.bias import CompositeBias
+from IMLCV.base.bias import NoneBias
 from IMLCV.base.CV import CV
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import ThermoLIB
 from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.bias import BiasMTD, HarmonicBias
+from IMLCV.implementations.bias import BiasMTD
+from IMLCV.implementations.bias import HarmonicBias
+from molmod.constants import boltzmann
 
 
 class Scheme:
@@ -49,15 +50,18 @@ class Scheme:
 
         if sigmas is None:
             sigmas = (
-                self.md.bias.collective_variable.metric[:, 1]
-                - self.md.bias.collective_variable.metric[:, 0]
+                self.md.bias.collective_variable.metric[:, 1] - self.md.bias.collective_variable.metric[:, 0]
             ) / 20
 
         if K is None:
             K = 1.0 * self.md.T * boltzmann
 
         biasmtd = BiasMTD(
-            self.md.bias.collective_variable, K, sigmas, start=start, step=step
+            self.md.bias.collective_variable,
+            K,
+            sigmas,
+            start=start,
+            step=step,
         )
         bias = CompositeBias([self.md.bias, biasmtd])
 
@@ -133,10 +137,19 @@ class Scheme:
             self.rounds.add_round_from_md(self.md)
 
     def update_CV(
-        self, cvd: CVDiscovery, chunk_size=None, samples=2e3, plot=True, **kwargs
+        self,
+        cvd: CVDiscovery,
+        chunk_size=None,
+        samples=2e3,
+        plot=True,
+        **kwargs,
     ):
         new_cv = cvd.compute(
-            self.rounds, samples=samples, plot=plot, chunk_size=chunk_size, **kwargs
+            self.rounds,
+            samples=samples,
+            plot=plot,
+            chunk_size=chunk_size,
+            **kwargs,
         )
         self.md.bias = NoneBias(new_cv)
 

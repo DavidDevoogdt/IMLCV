@@ -1,39 +1,40 @@
 from __future__ import annotations
 
 import os
-from abc import ABC, abstractmethod
+from abc import ABC
+from abc import abstractmethod
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cloudpickle
+import jax
 import jax.numpy as jnp
 import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
 import yaff
-from jax import jit, value_and_grad, vmap
-from molmod.units import angstrom, electronvolt, kjmol
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import SystemParams
+from IMLCV.tools.tools import HashableArrayWrapper
+from jax import Array
+from jax import jit
+from jax import value_and_grad
+from jax import vmap
+from molmod.units import angstrom
+from molmod.units import electronvolt
+from molmod.units import kjmol
 from parsl.data_provider.files import File
 
-yaff.log.set_level(yaff.log.silent)
 from configs.bash_app_python import bash_app_python
-from IMLCV.base.CV import CV, CollectiveVariable, SystemParams
-from IMLCV.tools.tools import HashableArrayWrapper
+
+yaff.log.set_level(yaff.log.silent)
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine
 
-import os
-from pathlib import Path
-
-import jax
-import jax.numpy as jnp
-import numpy as np
-from jax import Array
-from molmod.units import kjmol
-
-from IMLCV.base.CV import CollectiveVariable, NeighbourList, SystemParams
 
 ######################################
 #              Energy                #
@@ -194,7 +195,10 @@ class Bias(BC, ABC):
     """base class for biased MD runs."""
 
     def __init__(
-        self, collective_variable: CollectiveVariable, start=None, step=None
+        self,
+        collective_variable: CollectiveVariable,
+        start=None,
+        step=None,
     ) -> None:
         """args:
         cvs: collective variables
@@ -251,15 +255,20 @@ class Bias(BC, ABC):
             if nl is not None:
                 assert nl.batched
                 return vmap(
-                    self.compute_from_system_params, in_axes=(0, None, None, 0)
+                    self.compute_from_system_params,
+                    in_axes=(0, None, None, 0),
                 )(sp, gpos, vir, nl)
             else:
                 return vmap(
-                    self.compute_from_system_params, in_axes=(0, None, None, None)
+                    self.compute_from_system_params,
+                    in_axes=(0, None, None, None),
                 )(sp, gpos, vir, nl)
 
         [cvs, jac] = self.collective_variable.compute_cv(
-            sp=sp, nl=nl, jacobian=gpos or vir, jit=jit
+            sp=sp,
+            nl=nl,
+            jacobian=gpos or vir,
+            jit=jit,
         )
         [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir), jit=jit)
 
@@ -301,7 +310,8 @@ class Bias(BC, ABC):
 
             if jit:
                 return jax.jit(self._compute, static_argnums=static_array_argnums)(
-                    x, *args
+                    x,
+                    *args,
                 )
             else:
                 return self._compute(x, *args)
@@ -369,7 +379,9 @@ class Bias(BC, ABC):
         if self.collective_variable.n == 1:
             if bins is None:
                 [bins] = self.collective_variable.metric.grid(
-                    n=n, endpoints=True, margin=margin
+                    n=n,
+                    endpoints=True,
+                    margin=margin,
                 )
 
             if x_unit is not None:
@@ -412,7 +424,7 @@ class Bias(BC, ABC):
             ax2 = ax.twinx()
 
             ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
-            ax.set_ylabel(f"Bias [kJ/mol]]", fontsize=16)
+            ax.set_ylabel("Bias [kJ/mol]]", fontsize=16)
 
             ax.tick_params(axis="both", which="major", labelsize=18)
             ax.tick_params(axis="both", which="minor", labelsize=16)
@@ -427,7 +439,9 @@ class Bias(BC, ABC):
         elif self.collective_variable.n == 2:
             if bins is None:
                 bins = self.collective_variable.metric.grid(
-                    n=n, endpoints=True, margin=margin
+                    n=n,
+                    endpoints=True,
+                    margin=margin,
                 )
             mg = np.meshgrid(*bins, indexing="xy")
 
@@ -585,7 +599,8 @@ class CompositeBias(Bias):
         #     self.step_list, b.step if (b.step is not None) else -1
         # )
         self.args_shape = np.append(
-            self.args_shape, len(b.get_args()) + self.args_shape[-1]
+            self.args_shape,
+            len(b.get_args()) + self.args_shape[-1],
         )
 
         if self.collective_variable is None:
@@ -600,13 +615,14 @@ class CompositeBias(Bias):
                 [
                     jnp.reshape(
                         self.biases[i]._compute(
-                            cvs, *args[self.args_shape[i] : self.args_shape[i + 1]]
+                            cvs,
+                            *args[self.args_shape[i] : self.args_shape[i + 1]],
                         ),
                         (),
                     )
                     for i in range(len(self.biases))
-                ]
-            )
+                ],
+            ),
         )
 
     def finalize(self):

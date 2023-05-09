@@ -1,4 +1,5 @@
 # this is a helper function to perform md simulations. Executed by parsl on HPC infrastructure, but
+from __future__ import annotations
 
 import argparse
 import os
@@ -7,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 import cloudpickle
-from parsl import File, bash_app, python_app
+from parsl import bash_app
+from parsl import File
+from parsl import python_app
 from parsl.dataflow.dflow import AppFuture
 
 
@@ -91,17 +94,16 @@ def bash_app_python(
                 pass
 
             file_out = rename_num(
-                execution_folder / f"{func.__name__}.outp.cloudpickle", i
+                execution_folder / f"{func.__name__}.outp.cloudpickle",
+                i,
             )
 
             i, stdout = find_num(
-                execution_folder
-                / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout))
+                execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)),
             )
 
             stderr = rename_num(
-                execution_folder
-                / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
+                execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
                 i,
             )
 
@@ -141,7 +143,7 @@ def bash_app_python(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Execute python function in a bash app"
+        description="Execute python function in a bash app",
     )
     parser.add_argument(
         "--file_in",
@@ -172,7 +174,7 @@ if __name__ == "__main__":
 
         if num_ranks > 1:
             use_mpi = True
-    except:
+    except ImportError:
         pass
 
     if rank == 0:

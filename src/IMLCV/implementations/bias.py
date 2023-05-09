@@ -8,22 +8,20 @@ import jax.scipy as jsp
 import numpy as np
 import scipy
 import yaff
-from molmod.units import kjmol, nanometer, picosecond
+from IMLCV.base.bias import Bias
+from IMLCV.base.bias import CompositeBias
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
+from IMLCV.tools._rbf_interp import RBFInterpolator
+from jax import Array
+from molmod.units import kjmol
+from molmod.units import nanometer
+from molmod.units import picosecond
 
 yaff.log.set_level(yaff.log.silent)
-from IMLCV.base.CV import CV, CollectiveVariable
-from IMLCV.tools._rbf_interp import RBFInterpolator
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine
-
-import jax.numpy as jnp
-import numpy as np
-from jax import Array
-from molmod.units import kjmol
-
-from IMLCV.base.bias import Bias, CompositeBias
-from IMLCV.base.CV import CollectiveVariable
 
 
 class MinBias(CompositeBias):
@@ -35,7 +33,11 @@ class HarmonicBias(Bias):
     """Harmonic bias potential centered arround q0 with force constant k."""
 
     def __init__(
-        self, cvs: CollectiveVariable, q0: CV, k, k_max: Array | float | None = None
+        self,
+        cvs: CollectiveVariable,
+        q0: CV,
+        k,
+        k_max: Array | float | None = None,
     ):
         """generate harmonic potentia;
 
@@ -86,7 +88,7 @@ class HarmonicBias(Bias):
                     self.k_max,
                     jnp.abs(r) - self.r0,
                     jnp.abs(r) - self.r0,
-                )
+                ),
             )
             + self.y0,
         )
@@ -107,7 +109,13 @@ class BiasMTD(Bias):
     """
 
     def __init__(
-        self, cvs: CollectiveVariable, K, sigmas, tempering=0.0, start=None, step=None
+        self,
+        cvs: CollectiveVariable,
+        K,
+        sigmas,
+        tempering=0.0,
+        start=None,
+        step=None,
     ):
         """_summary_
 
@@ -321,7 +329,8 @@ class GridBias(Bias):
         # scale to array size and offset extra row
         coords = coords * (self.n - 1) + 1
 
-        return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)  # type: ignore
+        # type: ignore
+        return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)
 
     def get_args(self):
         return []
@@ -384,8 +393,8 @@ class PlumedBias(Bias):
         # Try to load the plumed Python wrapper, quit if not possible
         try:
             from plumed import Plumed
-        except:
-            raise ImportError
+        except ImportError as e:
+            raise e
 
         self.plumed = Plumed(kernel=self.kernel)
         # Conversion between PLUMED internal units and YAFF internal units

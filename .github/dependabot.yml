@@ -4,7 +4,7 @@
 # https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
 
 version: 2
-registries: 
+registries:
   ugent-pip:
     type: git
     url: github.ugent.be
@@ -19,11 +19,9 @@ updates:
   - package-ecosystem: "pip" # See documentation for possible values
     directory: "/" # Location of package manifests
     insecure-external-code-execution: allow
-    registries: 
+    registries:
       - ugent-pip
     schedule:
       interval: "weekly"
     ignore:
       - dependency-name: "yaff"
-
-

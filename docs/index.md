@@ -4,7 +4,7 @@
 # IMLCV
 
 
-Welcome to the documentation of IMLCV package. 
+Welcome to the documentation of IMLCV package.
 
 ```{admonition} Warning
 :class: warning
@@ -31,7 +31,7 @@ for more details, see [philosophy](philosophy) page.
 ##  Installation
 
 
-On a local machine, you can just use 
+On a local machine, you can just use
 
 
 ```

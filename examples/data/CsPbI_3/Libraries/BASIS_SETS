@@ -2083,7 +2083,7 @@ LI 6-31++Gxx 6-31++G**
   1  0  1  1  1  1
           0.03596200          1.00000000          1.00000000
   1  0  1  1  1  1
-          0.0074000           1.0000000           1.0000000        
+          0.0074000           1.0000000           1.0000000
   1  2  2  1  1
           0.20000000          1.00000000
 # BERYLLIUM   (10s,4p) -> [3s,2p]
@@ -2125,7 +2125,7 @@ B  6-31++Gxx 6-31++G**
   1  0  1  1  1  1
           0.12675120          1.00000000          1.00000000
   1  0  1  1  1  1
-          0.0315000           1.0000000           1.0000000 
+          0.0315000           1.0000000           1.0000000
   1  2  2  1  1
           0.60000000          1.00000000
 # CARBON      (10s,4p) -> [3s,2p]
@@ -30461,7 +30461,7 @@ Kr Ahlrichs-def2-QZVP
 # can be derived by optimising highly contracted family basis sets, including diffuse exponents, on molecular systems.
 # Typically, these basis sets outperform split valence basis sets of similar size. For small gas-phase systems (including QMMM)
 # or large systems (thousands of atoms) their cost is moderate, whereas the diffuse nature of the basis set increases the computational
-# for medium size condensed phase systems. 
+# for medium size condensed phase systems.
 #
 # This file contains the molecularly optimised basis sets for the elements H , C , N , O , F , Si , P , S , Cl
 # as discussed in the paper (SZV-MOLOPT-GTH, DZVP-MOLOPT-GTH, TZVP-MOLOPT-GTH, TZV2P-MOLOPT-GTH, TZV2PX-MOLOPT-GTH).
@@ -33474,7 +33474,7 @@ At TZV2P-MOLOPT-SR-GTH
       0.15037925 -0.14089717  0.73372006  0.35600454 -0.64962149  0.42074094 -0.63217711 -0.48766996  0.52693162
       0.05991359 -0.20466317 -0.16178426  0.87932094  0.24804345  0.90034398  0.34817770 -0.31883338  0.63162122
 
-# The following MOLOPT basis sets were optimised for the new GTH-PBE pseudopotentials of lanthanides produced by Dr Matthias Krack. 
+# The following MOLOPT basis sets were optimised for the new GTH-PBE pseudopotentials of lanthanides produced by Dr Matthias Krack.
 
 Ce SZV-MOLOPT-SR-GTH
  1
@@ -34165,4 +34165,3 @@ Lu TZV2P-MOLOPT-SR-GTH
       0.45284112 -0.77810846 -0.12446298 -0.28065623  0.54395445 -0.16857383  0.65906012 -0.15139647 -0.34568651 -0.66492423  0.42065692 -0.77748191  0.15412337 -0.02905348  0.64495604 -0.17189773
       0.15924896  0.44235621  0.04769733 -0.87126887  0.18610643  0.61950713  0.04607868 -0.77893292  0.55091644  0.07939086  0.80863371 -0.32387503  0.70184418 -0.13246778  0.76294761  0.19376827
       0.05080410  0.01298916  0.94685386  0.12118774  0.29731040  0.76148241  0.18971105  0.60517963  0.74074771 -0.49484137 -0.40994519  0.50783879  0.63803249 -0.26012253 -0.03467788  0.95524692
-

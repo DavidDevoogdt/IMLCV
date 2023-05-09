@@ -1,22 +1,22 @@
 """Module for RBF interpolation."""
+from __future__ import annotations
+
 import warnings
 from itertools import combinations_with_replacement
 
-import jax.numpy as np
 import jax.numpy as jnp
+import jax.numpy as np
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvMetric
+from IMLCV.tools._rbfinterp_pythran import _build_evaluation_coefficients
+from IMLCV.tools._rbfinterp_pythran import _build_system
+from IMLCV.tools._rbfinterp_pythran import _polynomial_matrix
+from IMLCV.tools._rbfinterp_pythran import cv_vals
 from jax import Array
 from numpy.linalg import LinAlgError
 from scipy.linalg.lapack import dgesv
 from scipy.spatial import KDTree
 from scipy.special import comb
-
-from IMLCV.base.CV import CV, CvMetric  # type: ignore[attr-defined]
-from IMLCV.tools._rbfinterp_pythran import (
-    _build_evaluation_coefficients,
-    _build_system,
-    _polynomial_matrix,
-    cv_vals,
-)
 
 __all__ = ["RBFInterpolator", "cv_vals"]
 
@@ -86,7 +86,13 @@ def _monomial_powers(ndim, degree):
 
 
 def _build_and_solve_system(
-    y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers
+    y: CV,
+    metric: CvMetric,
+    d,
+    smoothing,
+    kernel,
+    epsilon,
+    powers,
 ):
     """Build and solve the RBF interpolation system of equations.
 
@@ -327,7 +333,7 @@ class RBFInterpolator:
             smoothing = jnp.asarray(smoothing, dtype=float, order="K")
             if smoothing.shape != (ny,):
                 raise ValueError(
-                    "Expected `smoothing` to be a scalar or have shape " f"({ny},)."
+                    "Expected `smoothing` to be a scalar or have shape " f"({ny},).",
                 )
 
         kernel = kernel.lower()
@@ -339,8 +345,7 @@ class RBFInterpolator:
                 epsilon = 1.0
             else:
                 raise ValueError(
-                    "`epsilon` must be specified if `kernel` is not one of "
-                    f"{_SCALE_INVARIANT}."
+                    "`epsilon` must be specified if `kernel` is not one of " f"{_SCALE_INVARIANT}.",
                 )
         else:
             epsilon = jnp.array(epsilon)
@@ -376,12 +381,18 @@ class RBFInterpolator:
         if powers.shape[0] > nobs:
             raise ValueError(
                 f"At least {powers.shape[0]} data points are required when "
-                f"`degree` is {degree} and the number of dimensions is {ndim}."
+                f"`degree` is {degree} and the number of dimensions is {ndim}.",
             )
 
         if neighbors is None:
             coeffs = _build_and_solve_system(
-                y, metric, d, smoothing, kernel, epsilon, powers
+                y,
+                metric,
+                d,
+                smoothing,
+                kernel,
+                epsilon,
+                powers,
             )
 
             # Make these attributes private since they do not always exist.
@@ -450,7 +461,12 @@ class RBFInterpolator:
                 out = out.at[i : i + chunksize, :].set(jnp.dot(vec, coeffs))
         else:
             vec = _build_evaluation_coefficients(
-                x, y, self.metric, self.kernel, self.epsilon, self.powers
+                x,
+                y,
+                self.metric,
+                self.kernel,
+                self.epsilon,
+                self.powers,
             )
             out = jnp.dot(vec, coeffs)
         return out
@@ -482,7 +498,7 @@ class RBFInterpolator:
 
         if ndim != self.y.shape[1]:
             raise ValueError(
-                "Expected the second axis of `x` to have length " f"{self.y.shape[1]}."
+                "Expected the second axis of `x` to have length " f"{self.y.shape[1]}.",
             )
 
         # Our memory budget for storing RBF coefficients is
@@ -511,7 +527,7 @@ class RBFInterpolator:
             # observation points. Make the neighborhoods unique so that we only
             # compute the interpolation coefficients once for each
             # neighborhood.
-            yindicexs = np.sort(yindices, axis=1)
+            # yindicexs = np.sort(yindices, axis=1)
             yindices, inv = np.unique(yindices, return_inverse=True, axis=0)
             # `inv` tells us which neighborhood will be used by each evaluation
             # point. Now we find which evaluation points will be using each
@@ -540,8 +556,11 @@ class RBFInterpolator:
                 )
                 out = out.at[xidx].set(
                     self._chunk_evaluator(
-                        xnbr, ynbr, coeffs, memory_budget=memory_budget
-                    )
+                        xnbr,
+                        ynbr,
+                        coeffs,
+                        memory_budget=memory_budget,
+                    ),
                 )
         # out = out.view(self.d_dtype)
         # return out

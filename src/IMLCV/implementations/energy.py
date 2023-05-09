@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import ase
 import ase.calculators.calculator
 import ase.cell
 import ase.geometry
@@ -14,20 +13,19 @@ import ase.units
 import numpy as np
 import yaff
 from ase.calculators.cp2k import CP2K
-from molmod.units import angstrom, electronvolt
+from IMLCV.base.bias import Energy
+from IMLCV.base.bias import EnergyError
+from IMLCV.base.bias import EnergyResult
+from molmod.units import angstrom
+from molmod.units import electronvolt
+
+from configs.config_general import get_cp2k
 
 yaff.log.set_level(yaff.log.silent)
-from configs.config_general import get_cp2k
 
 if TYPE_CHECKING:
     pass
 
-import os
-from pathlib import Path
-
-import numpy as np
-
-from IMLCV.base.bias import Energy, EnergyError, EnergyResult
 
 #         except EnergyError as be:
 #             raise EnergyError(
@@ -45,9 +43,7 @@ class YaffEnergy(Energy):
 
     @property
     def cell(self):
-        out = self.ff.system.cell.rvecs[
-            :
-        ]  # empty cell represented as array with shape (0,3)
+        out = self.ff.system.cell.rvecs[:]  # empty cell represented as array with shape (0,3)
         if out.size == 0:
             return None
         return out
@@ -125,7 +121,7 @@ class AseEnergy(Energy):
 
         try:
             energy = self.atoms.get_potential_energy() * electronvolt
-        except:
+        except BaseException:
             self._handle_exception()
 
         gpos_out = None
@@ -214,7 +210,7 @@ class Cp2kEnergy(AseEnergy):
             """return path of target relative to origin"""
             try:
                 return Path(target).resolve().relative_to(Path(origin).resolve())
-            except ValueError as e:  # target does not start with origin
+            except ValueError:  # target does not start with origin
                 # recursion with origin (eventually origin is root so try will succeed)
                 return Path("..").joinpath(relative(target, Path(origin).parent))
 
@@ -258,7 +254,7 @@ class Cp2kEnergy(AseEnergy):
         file = "\n".join(lines[-out:])
 
         raise EnergyError(
-            f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is { file}"
+            f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is { file}",
         )
 
     def __getstate__(self):
