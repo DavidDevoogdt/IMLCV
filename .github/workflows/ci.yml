@@ -79,8 +79,7 @@ jobs:
       - name: Run tests
         run: >-
           git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/";
-          pipx run --python '${{ steps.setup-python.outputs.python-path }}';
-          tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}'
+          pipx run --python '${{ steps.setup-python.outputs.python-path }}' tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}'
           -- -rFEx --durations 10 --color yes  # pytest args
         env:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
