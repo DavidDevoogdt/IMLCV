@@ -15,6 +15,7 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.rounds import Rounds
+from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.CV import distance_descriptor
 from IMLCV.implementations.CV import sb_descriptor
 from IMLCV.implementations.CV import scale_cv_trans
@@ -25,8 +26,6 @@ from jax.random import PRNGKey
 from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
 from parsl.data_provider.files import File
-
-from configs.bash_app_python import bash_app_python
 
 plt.rcParams["text.usetex"] = True
 

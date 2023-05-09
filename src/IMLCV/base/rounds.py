@@ -19,12 +19,11 @@ from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.MdEngine import TrajectoryInfo
+from IMLCV.configs.bash_app_python import bash_app_python
 from jax import Array
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
-
-from configs.bash_app_python import bash_app_python
 
 # todo: invaildate with files instead of db tha gets deleted
 

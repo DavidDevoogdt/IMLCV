@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 import distrax
 import numba
 
-from configs.bash_app_python import bash_app_python
+from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,

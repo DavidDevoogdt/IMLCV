@@ -57,4 +57,4 @@ MANIFEST
 # large folders
 dist/*
 tmp/*
-examples/output/*
+src/IMLCV/examples/output/*

@@ -6,8 +6,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from configs.bash_app_python import bash_app_python
-from configs.config_general import config
+from IMLCV.configs.bash_app_python import bash_app_python
+from IMLCV.configs.config_general import config
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -162,9 +162,9 @@ if __name__ == "__main__":
         from example_systems import CsPbI3, alanine_dipeptide_yaff
         from molmod.units import kjmol
 
-        from configs.config_general import config
+        from IMLCV.configs.config_general import config
 
-        # from examples.example_systems import CsPbI3, alanine_dipeptide_yaff
+        # from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
         from IMLCV.scheme import Scheme
 
         print("loading parsl config")

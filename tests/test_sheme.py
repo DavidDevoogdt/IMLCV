@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from IMLCV.configs.config_general import config
+from IMLCV.examples.example_systems import alanine_dipeptide_yaff
+from IMLCV.examples.example_systems import CsPbI3
 from IMLCV.scheme import Scheme
 from molmod.units import kjmol
-
-from configs.config_general import config
-from examples.example_systems import alanine_dipeptide_yaff
-from examples.example_systems import CsPbI3
 
 
 @pytest.mark.skip(reason="run on HPC")

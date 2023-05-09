@@ -15,6 +15,8 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
+from IMLCV.configs.config_general import config
+from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import BiasMTD
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.bias import RbfBias
@@ -23,9 +25,6 @@ from IMLCV.implementations.CV import Volume
 from IMLCV.implementations.energy import YaffEnergy
 from molmod import units
 from molmod.units import kelvin
-
-from configs.config_general import config
-from configs.config_general import ROOT_DIR
 
 ######################################
 #              test                  #
@@ -171,7 +170,7 @@ def test_combine_bias():
 
 def test_bias_save(tmpdir):
     """save and load bias to disk."""
-    from examples.example_systems import alanine_dipeptide_yaff
+    from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
     yaffmd = alanine_dipeptide_yaff(
         bias=lambda cv0: BiasMTD(
@@ -206,7 +205,7 @@ def test_FES_bias(tmpdir):
     folder = tmpdir / "alanine_dipeptide"
 
     with zipfile.ZipFile(
-        ROOT_DIR / "tests" / "data" / "alanine_dipeptide.zip",
+        ROOT_DIR / "data" / "alanine_dipeptide.zip",
         "r",
     ) as zip_ref:
         zip_ref.extractall(tmpdir)

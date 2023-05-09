@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import argparse
 
-from configs.bash_app_python import bash_app_python
-from configs.config_general import config
-from configs.config_general import ROOT_DIR
+from IMLCV.configs.bash_app_python import bash_app_python
+from IMLCV.configs.config_general import config
+from IMLCV.configs.config_general import ROOT_DIR
 
 
 @bash_app_python(executors=["default"])
 def f(args):
-    from configs.config_general import config
+    from IMLCV.configs.config_general import config
     from IMLCV.base.rounds import Rounds
 
     config()

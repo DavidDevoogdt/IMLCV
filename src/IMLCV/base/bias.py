@@ -18,6 +18,7 @@ from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
+from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.tools.tools import HashableArrayWrapper
 from jax import Array
 from jax import jit
@@ -27,8 +28,6 @@ from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
 from parsl.data_provider.files import File
-
-from configs.bash_app_python import bash_app_python
 
 yaff.log.set_level(yaff.log.silent)
 

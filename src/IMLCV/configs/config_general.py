@@ -6,10 +6,9 @@ import re
 from pathlib import Path
 
 import parsl
+from IMLCV.configs.hpc_ugent import config as config_ugent
+from IMLCV.configs.local_threadpool import get_config as get_config_local
 from parsl.config import Config
-
-from configs.hpc_ugent import config as config_ugent
-from configs.local_threadpool import get_config as get_config_local
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
 py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"

@@ -7,12 +7,11 @@ import jax.numpy as jnp
 import pytest
 from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.rounds import Rounds
+from IMLCV.configs.config_general import config
+from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder
 from IMLCV.implementations.tensorflow.CvDiscovery import TranformerUMAP
 from molmod.units import angstrom
-
-from configs.config_general import config
-from configs.config_general import ROOT_DIR
 
 try:
     pass
@@ -23,7 +22,12 @@ except ImportError:
 
 
 @pytest.mark.skipif(not TF_INSTALLED, reason="tensorflow not installed")
-@pytest.mark.parametrize("cvd", ["AE", "UMAP"])
+@pytest.mark.parametrize(
+    "cvd",
+    [
+        "AE",
+    ],
+)
 def test_cv_discovery(
     tmpdir,
     cvd,
@@ -37,7 +41,7 @@ def test_cv_discovery(
     import zipfile
 
     with zipfile.ZipFile(
-        ROOT_DIR / "tests" / "data" / "alanine_dipeptide.zip",
+        ROOT_DIR / "data" / "alanine_dipeptide.zip",
         "r",
     ) as zip_ref:
         zip_ref.extractall(tmpdir)

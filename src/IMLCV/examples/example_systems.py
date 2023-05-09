@@ -16,6 +16,7 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
 from IMLCV.base.rounds import Rounds
+from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import dihedral
 from IMLCV.implementations.CV import get_lda_cv
@@ -31,8 +32,6 @@ from molmod.units import angstrom
 from molmod.units import kelvin
 from molmod.units import kjmol
 from yaff.test.common import get_alaninedipeptide_amber99ff
-
-from configs.config_general import ROOT_DIR
 
 yaff.log.set_level(yaff.log.silent)
 
@@ -243,7 +242,7 @@ def mil53_yaff():
     P = 1 * units.atm
 
     def f():
-        rd = ROOT_DIR / "IMLCV" / "examples" / "data" / "MIL53"
+        rd = ROOT_DIR / "IMLCV" / "data" / "MIL53"
         system = yaff.System.from_file(str(rd / "MIL53.chk"))
         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
         return ff
@@ -290,7 +289,7 @@ def mil53_yaff():
 
 
 def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_steps=500):
-    base = ROOT_DIR / "IMLCV" / "examples" / "data" / "CsPbI_3"
+    base = ROOT_DIR / "IMLCV" / "data" / "CsPbI_3"
 
     assert isinstance(unit_cells, list)
 
