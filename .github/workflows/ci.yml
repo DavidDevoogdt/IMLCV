@@ -85,11 +85,12 @@ jobs:
           git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
           git config --global core.longpaths true
           pip install tox setuptools setuptools_scm wheel Cython Numpy
+          pip install '${{ needs.prepare.outputs.wheel-distribution }}'
         env:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
       - name: Run tests
         run: >-
-          tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}' -- -rFEx --durations 10 --color yes  # pytest args
+          tox -- -rFEx --durations 10 --color yes  # pytest args
       - name: Generate coverage report
         run: pipx run coverage lcov -o coverage.lcov
       - name: Upload partial coverage report
