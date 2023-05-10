@@ -90,7 +90,7 @@ jobs:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
       - name: Run tests
         run: >-
-          tox -- -rFEx --durations 10 --color yes  # pytest args
+          pytest -rFEx --durations 10 --color yes  # pytest args
       - name: Generate coverage report
         run: pipx run coverage lcov -o coverage.lcov
       - name: Upload partial coverage report
