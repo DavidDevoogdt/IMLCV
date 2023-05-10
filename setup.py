@@ -6,8 +6,6 @@
     PyScaffold helps you to put up the scaffold of your new Python project.
     Learn more under: https://pyscaffold.org/
 """
-from __future__ import annotations
-
 from setuptools import setup
 
 if __name__ == "__main__":

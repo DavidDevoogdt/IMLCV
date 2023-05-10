@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import config
 from mpi4py import MPI

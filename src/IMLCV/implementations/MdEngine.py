@@ -2,8 +2,6 @@
 
 Currently, the MD is done with YAFF/OpenMM
 """
-from __future__ import annotations
-
 import numpy as np
 import yaff.analysis.biased_sampling
 import yaff.external

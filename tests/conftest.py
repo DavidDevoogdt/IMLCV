@@ -7,8 +7,6 @@
     - https://docs.pytest.org/en/stable/writing_plugins.html
 """
 # import pytest
-from __future__ import annotations
-
 import os
 
 import jax

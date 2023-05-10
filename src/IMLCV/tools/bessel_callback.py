@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import jax.lax
 import jax.numpy as jnp
 import numpy as onp

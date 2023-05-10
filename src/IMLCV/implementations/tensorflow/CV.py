@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import tempfile
 from importlib import import_module
 from typing import TYPE_CHECKING

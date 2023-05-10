@@ -18,8 +18,8 @@ repos:
     rev: v3.9.0
     hooks:
     -   id: reorder-python-imports
-        exclude: ^(pre_commit/resources/|testing/resources/python3_hooks_repo/)
-        args: [--py38-plus, --add-import, 'from __future__ import annotations']
+        # exclude: ^(pre_commit/resources/|testing/resources/python3_hooks_repo/)
+        args: [--py37-plus]
 -   repo: https://github.com/asottile/add-trailing-comma
     rev: v2.4.0
     hooks:
@@ -29,7 +29,7 @@ repos:
     rev: v3.4.0
     hooks:
     -   id: pyupgrade
-        args: [--py38-plus]
+        args: [--py37-plus]
 # -   repo: https://github.com/pre-commit/mirrors-autopep8
 #     rev: v2.0.2
 #     hooks:

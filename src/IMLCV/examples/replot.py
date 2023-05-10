@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 
 from IMLCV.configs.bash_app_python import bash_app_python

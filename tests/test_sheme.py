@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 from IMLCV.configs.config_general import config
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
