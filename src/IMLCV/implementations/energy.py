@@ -1,7 +1,6 @@
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import ase.calculators.calculator
 import ase.cell
@@ -19,17 +18,6 @@ from molmod.units import angstrom
 from molmod.units import electronvolt
 
 yaff.log.set_level(yaff.log.silent)
-
-if TYPE_CHECKING:
-    pass
-
-
-#         except EnergyError as be:
-#             raise EnergyError(
-#                 f"""An error occured during the nergy calculation with {self.__class__}.
-# The lates coordinates were {self.sp}.
-# raised exception from calculator:{be}"""
-#             )
 
 
 class YaffEnergy(Energy):

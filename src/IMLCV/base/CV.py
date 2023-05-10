@@ -4,8 +4,8 @@ import dataclasses
 from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING
 
+import distrax
 import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
@@ -24,15 +24,6 @@ from netket.jax import vmap_chunked
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
 from ott.solvers.linear import sinkhorn
-
-# from IMLCV.base.CV import CV, CvTrans
-# import numpy as np
-
-if TYPE_CHECKING:
-    pass
-
-
-import distrax
 
 ######################################
 #        Data types                  #

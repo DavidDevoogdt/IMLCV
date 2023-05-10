@@ -1,5 +1,4 @@
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 import jax.scipy as jsp
@@ -10,6 +9,7 @@ from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
+from IMLCV.base.MdEngine import MDEngine
 from IMLCV.tools._rbf_interp import RBFInterpolator
 from jax import Array
 from molmod.units import kjmol
@@ -17,9 +17,6 @@ from molmod.units import nanometer
 from molmod.units import picosecond
 
 yaff.log.set_level(yaff.log.silent)
-
-if TYPE_CHECKING:
-    from IMLCV.base.MdEngine import MDEngine
 
 
 class MinBias(CompositeBias):

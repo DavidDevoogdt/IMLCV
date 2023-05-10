@@ -1,37 +1,24 @@
 import dataclasses
-from functools import partial
-from typing import TYPE_CHECKING
-
-import jax.numpy as jnp
-import numpy as np
-from flax.linen.linear import Dense
-from jax import jit
-from jax import vmap
-
-# from IMLCV.base.CV import CV, CvTrans
-# import numpy as np
-
-if TYPE_CHECKING:
-    pass
-
 
 import distrax
+import jax.numpy as jnp
 import numba
-
-from IMLCV.configs.bash_app_python import bash_app_python
-from IMLCV.base.CV import (
-    CV,
-    CollectiveVariable,
-    CvFlow,
-    CvFunDistrax,
-    CvFunInput,
-    CvFunNn,
-    CvMetric,
-    CvTrans,
-    NeighbourList,
-    SystemParams,
-)
+import numpy as np
+from flax.linen.linear import Dense
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvFlow
+from IMLCV.base.CV import CvFunDistrax
+from IMLCV.base.CV import CvFunInput
+from IMLCV.base.CV import CvFunNn
+from IMLCV.base.CV import CvMetric
+from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
+from IMLCV.configs.bash_app_python import bash_app_python
+from jax import jit
+from jax import vmap
 
 ######################################
 #       CV transformations           #

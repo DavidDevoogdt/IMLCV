@@ -1,19 +1,11 @@
 import tempfile
 from importlib import import_module
-from typing import TYPE_CHECKING
 
 import numpy as np
 import tensorflow as tfl
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFunBase
 from jax.experimental.jax2tf import call_tf
-
-# from IMLCV.base.CV import CV, CvTrans
-# import numpy as np
-
-if TYPE_CHECKING:
-    pass
-
 from keras.api._v2 import keras as KerasAPI
 
 keras: KerasAPI = import_module("tensorflow.keras")

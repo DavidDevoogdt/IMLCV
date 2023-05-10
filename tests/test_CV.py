@@ -1,29 +1,19 @@
-from typing import TYPE_CHECKING
-
 import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
 import jax.scipy.optimize
 import jaxopt.objective
-from jax import vmap
-
-# import numpy as np
-
-if TYPE_CHECKING:
-    pass
-
-
 import pytest
-
-from IMLCV.base.CV import (
-    CV,
-    CvFunInput,
-    CvTrans,
-    NeighbourList,
-    NormalizingFlow,
-    SystemParams,
-)
-from IMLCV.implementations.CV import DistraxRealNVP, RealNVP, sb_descriptor
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvFunInput
+from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import NormalizingFlow
+from IMLCV.base.CV import SystemParams
+from IMLCV.implementations.CV import DistraxRealNVP
+from IMLCV.implementations.CV import RealNVP
+from IMLCV.implementations.CV import sb_descriptor
+from jax import vmap
 
 ######################################
 #           Test                     #

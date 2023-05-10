@@ -36,8 +36,6 @@ from molmod.units import kjmol
 yaff.log.set_level(yaff.log.silent)
 
 
-# if TYPE_CHECKING:
-
 ######################################
 #             Trajectory             #
 ######################################

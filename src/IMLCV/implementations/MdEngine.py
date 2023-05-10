@@ -18,10 +18,6 @@ from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
 
-# if TYPE_CHECKING:
-
-# yaff.log.set_level(yaff.log.silent)
-
 
 class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     """MD engine with YAFF as backend.
