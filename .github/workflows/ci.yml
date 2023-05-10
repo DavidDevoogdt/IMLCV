@@ -84,6 +84,7 @@ jobs:
         run: |
           git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
           git config --global core.longpaths true
+          sudo apt-get install python3-scipy #needed for scipy
           pip install tox setuptools setuptools_scm wheel Cython Numpy
           pip install '${{ needs.prepare.outputs.wheel-distribution }}'
         env:
