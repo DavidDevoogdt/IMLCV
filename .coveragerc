@@ -1,9 +1,10 @@
 # .coveragerc to control coverage.py
 [run]
 branch = True
-source = IMLCV
+source =
+    IMLCV
 # omit = bad_file.py
-disable_warnings = couldnt-parse
+
 
 
 [paths]
