@@ -20,12 +20,7 @@ except ImportError:
 
 
 @pytest.mark.skipif(not TF_INSTALLED, reason="tensorflow not installed")
-@pytest.mark.parametrize(
-    "cvd",
-    [
-        "AE",
-    ],
-)
+@pytest.mark.parametrize("cvd", ["AE"])
 def test_cv_discovery(
     tmpdir,
     cvd,
@@ -121,5 +116,4 @@ def test_cv_discovery(
 
 
 if __name__ == "__main__":
-    # test_cv_discovery(tmpdir="tmp", cvd="UMAP")
-    test_cv_discovery(tmpdir=Path("tmp"), cvd="AE")
+    test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")

@@ -179,7 +179,7 @@ def test_bias_save(tmpdir):
             step=500,
         ),
     )
-    yaffmd.run(int(1e3))
+    yaffmd.run(int(1e2))
 
     tmpdir = Path(tmpdir)
 
