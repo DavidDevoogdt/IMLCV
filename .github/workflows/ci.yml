@@ -89,7 +89,7 @@ jobs:
         env:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
       - name: Generate coverage report
-        run: pipx run coverage lcov -o coverage.lcov
+        run: pipx run coverage lcov -o coverage.lcov -i
       - name: Upload partial coverage report
         uses: coverallsapp/github-action@master
         with:
