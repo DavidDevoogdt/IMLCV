@@ -3,6 +3,8 @@
 branch = True
 source = IMLCV
 # omit = bad_file.py
+disable_warnings = couldnt-parse
+
 
 [paths]
 source =
