@@ -25,8 +25,6 @@ from matplotlib import gridspec
 from matplotlib.colors import hsv_to_rgb
 from parsl.data_provider.files import File
 
-plt.rcParams["text.usetex"] = True
-
 
 class Transformer:
     def __init__(
@@ -259,7 +257,7 @@ class CVDiscovery:
         old_cv: CollectiveVariable,
         new_cv: CollectiveVariable,
         name,
-        outputs=[],
+        labels=None,
     ):
         def color(c, per):
             c2 = (c - c.min()) / (c.max() - c.min())
@@ -289,7 +287,10 @@ class CVDiscovery:
             # plot setting
             kwargs = {"s": 0.2}
 
-            labels = [[r"$\Phi$", r"$\Psi$"], ["umap 1", "umap 2", "umap 3"]]
+            if labels is None:
+                labels = [["cv in 1", "cv in 2", "cv in 3"], ["cv out 1", "cv out 2", "cv out 3"]]
+
+            # labels = [[r"$\Phi$", r"$\Psi$"], ["umap 1", "umap 2", "umap 3"]]
             for [i, j] in [[0, 1], [1, 0]]:  # order
                 indim = cvs[i].n
                 outdim = cvs[j].n
@@ -339,6 +340,7 @@ class CVDiscovery:
 
                         print(f"scatter={cc}")
                         l.scatter(*[data[i][:, l] for l in inpair], c=col, **kwargs)
+
                         l.set_xlabel(labels[i][inpair[0]])
                         l.set_ylabel(labels[i][inpair[1]])
 
@@ -440,4 +442,4 @@ class CVDiscovery:
                 n.parent.mkdir(parents=True, exist_ok=True)
                 fig.savefig(n)
 
-                outputs.append(File(str(n)))
+                # outputs.append(File(str(n)))

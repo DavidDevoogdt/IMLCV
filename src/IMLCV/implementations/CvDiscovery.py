@@ -11,10 +11,6 @@ from IMLCV.base.CVDiscovery import Transformer
 from jax import Array
 from jax import random
 
-# import keras
-
-plt.rcParams["text.usetex"] = True
-
 
 class Encoder(nn.Module):
     latents: int

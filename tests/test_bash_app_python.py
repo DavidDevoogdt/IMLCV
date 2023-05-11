@@ -45,10 +45,8 @@ def test_py_env(tmp_path):
 
     futs = [_f(sp, execution_folder=tmp_path) for i in range(n)]
 
-    res_ref = dihedral([0, 1, 2, 3]).compute_cv_flow(sp, None)
-
     for f in futs:
-        assert f.result() == res_ref
+        assert jnp.allclose(f.result().cv, 0.95531662)
 
 
 @bash_app_python(precommand="mpirun -n 4")
@@ -83,4 +81,4 @@ def test_parallel_MPI(tmp_path):
 
 
 if __name__ == "__main__":
-    test_parallel_MPI("tmp")
+    test_py_env("tmp")

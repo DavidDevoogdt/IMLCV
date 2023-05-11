@@ -6,10 +6,6 @@ from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.tensorflow.CV import KerasFunBase
 from IMLCV.implementations.tensorflow.CV import PeriodicLayer
 
-# import keras
-
-plt.rcParams["text.usetex"] = True
-
 
 class TranformerUMAP(Transformer):
     def _fit(
