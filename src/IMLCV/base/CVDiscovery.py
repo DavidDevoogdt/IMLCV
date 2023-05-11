@@ -242,206 +242,202 @@ class CVDiscovery:
                 replace=False,
             )
 
-            fut = plot_app(
-                name="cvdiscovery",
+            CVDiscovery.plot_app(
+                name=str(rounds.folder / f"round_{rounds.round}" / "cvdiscovery"),
                 old_cv=cv_old,
                 new_cv=new_cv,
                 sps=sps[ind],
                 nl=nls[ind] if nls is not None else None,
-                execution_folder=f"{rounds.folder}/round_{rounds.round}",
             )
-
-            fut.result()
 
         return new_cv
 
+    @staticmethod
+    def plot_app(
+        sps: SystemParams,
+        nl: NeighbourList,
+        old_cv: CollectiveVariable,
+        new_cv: CollectiveVariable,
+        name,
+        outputs=[],
+    ):
+        def color(c, per):
+            c2 = (c - c.min()) / (c.max() - c.min())
+            if not per:
+                c2 *= 330.0 / 360.0
 
-@bash_app_python(executors=["default"])
-def plot_app(
-    sps,
-    nl: NeighbourList,
-    old_cv: CollectiveVariable,
-    new_cv: CollectiveVariable,
-    name,
-    outputs=[],
-):
-    def color(c, per):
-        c2 = (c - c.min()) / (c.max() - c.min())
-        if not per:
-            c2 *= 330.0 / 360.0
+            col = np.ones((len(c), 3))
+            col[:, 0] = c2
 
-        col = np.ones((len(c), 3))
-        col[:, 0] = c2
+            return hsv_to_rgb(col)
 
-        return hsv_to_rgb(col)
+        cv_data = []
+        cv_data_mapped = []
 
-    cv_data = []
-    cv_data_mapped = []
+        # raise "add neighlist"
 
-    # raise "add neighlist"
+        cvs = [old_cv, new_cv]
+        for cv in cvs:
+            cvd = cv.compute_cv(sps, nl)[0].cv
+            cvdm = vmap(cv.metric.map)(cvd)
 
-    cvs = [old_cv, new_cv]
-    for cv in cvs:
-        cvd = cv.compute_cv(sps, nl)[0].cv
-        cvdm = vmap(cv.metric.map)(cvd)
+            cv_data.append(np.array(cvd))
+            cv_data_mapped.append(np.array(cvdm))
 
-        cv_data.append(np.array(cvd))
-        cv_data_mapped.append(np.array(cvdm))
+        # for z, data in enumerate([cv_data, cv_data_mapped]):
+        for z, data in enumerate([cv_data]):
+            # plot setting
+            kwargs = {"s": 0.2}
 
-    # for z, data in enumerate([cv_data, cv_data_mapped]):
-    for z, data in enumerate([cv_data]):
-        # plot setting
-        kwargs = {"s": 0.2}
+            labels = [[r"$\Phi$", r"$\Psi$"], ["umap 1", "umap 2", "umap 3"]]
+            for [i, j] in [[0, 1], [1, 0]]:  # order
+                indim = cvs[i].n
+                outdim = cvs[j].n
 
-        labels = [[r"$\Phi$", r"$\Psi$"], ["umap 1", "umap 2", "umap 3"]]
-        for [i, j] in [[0, 1], [1, 0]]:  # order
-            indim = cvs[i].n
-            outdim = cvs[j].n
+                if outdim == 2:
+                    proj = None
+                    wr = 1
+                elif outdim == 3:
+                    proj = "3d"
+                    wr = 1
+                else:
+                    raise NotImplementedError
 
-            if outdim == 2:
-                proj = None
-                wr = 1
-            elif outdim == 3:
-                proj = "3d"
-                wr = 1
-            else:
-                raise NotImplementedError
+                indim_pairs = list(itertools.combinations(range(indim), r=2))
+                print(indim_pairs)
 
-            indim_pairs = list(itertools.combinations(range(indim), r=2))
-            print(indim_pairs)
+                fig = plt.figure()
 
-            fig = plt.figure()
-
-            if outdim == 2:
-                spec = gridspec.GridSpec(
-                    nrows=len(indim_pairs) * 2,
-                    ncols=2,
-                    width_ratios=[1, wr],
-                    wspace=0.5,
-                )
-            elif outdim == 3:
-                spec = gridspec.GridSpec(nrows=len(indim_pairs) * 2, ncols=3)
-
-            for id, inpair in enumerate(indim_pairs):
-                for cc in range(2):
-                    print(f"cc={cc}")
-
-                    col = color(
-                        data[i][:, inpair[cc]],
-                        cvs[i].metric.periodicities[inpair[cc]],
+                if outdim == 2:
+                    spec = gridspec.GridSpec(
+                        nrows=len(indim_pairs) * 2,
+                        ncols=2,
+                        width_ratios=[1, wr],
+                        wspace=0.5,
                     )
+                elif outdim == 3:
+                    spec = gridspec.GridSpec(nrows=len(indim_pairs) * 2, ncols=3)
 
-                    if outdim == 2:
-                        l = fig.add_subplot(spec[id * 2 + cc, 0])
-                        r = fig.add_subplot(spec[id * 2 + cc, 1], projection=proj)
-                    elif outdim == 3:
-                        l = fig.add_subplot(spec[id * 2 + cc, 0])
-                        r = [
-                            fig.add_subplot(spec[id * 3 + cc, 1], projection=proj),
-                            fig.add_subplot(spec[id * 3 + cc, 2], projection=proj),
-                        ]
+                for id, inpair in enumerate(indim_pairs):
+                    for cc in range(2):
+                        print(f"cc={cc}")
 
-                    print(f"scatter={cc}")
-                    l.scatter(*[data[i][:, l] for l in inpair], c=col, **kwargs)
-                    l.set_xlabel(labels[i][inpair[0]])
-                    l.set_ylabel(labels[i][inpair[1]])
+                        col = color(
+                            data[i][:, inpair[cc]],
+                            cvs[i].metric.periodicities[inpair[cc]],
+                        )
 
-                    if outdim == 2:
-                        print("plot r 2d")
-                        r.scatter(*[data[j][:, l] for l in range(2)], c=col, **kwargs)
-                        r.set_xlabel(labels[j][0])
-                        r.set_ylabel(labels[j][1])
+                        if outdim == 2:
+                            l = fig.add_subplot(spec[id * 2 + cc, 0])
+                            r = fig.add_subplot(spec[id * 2 + cc, 1], projection=proj)
+                        elif outdim == 3:
+                            l = fig.add_subplot(spec[id * 2 + cc, 0])
+                            r = [
+                                fig.add_subplot(spec[id * 3 + cc, 1], projection=proj),
+                                fig.add_subplot(spec[id * 3 + cc, 2], projection=proj),
+                            ]
 
-                    elif outdim == 3:
-                        print("plot r 3d")
+                        print(f"scatter={cc}")
+                        l.scatter(*[data[i][:, l] for l in inpair], c=col, **kwargs)
+                        l.set_xlabel(labels[i][inpair[0]])
+                        l.set_ylabel(labels[i][inpair[1]])
 
-                        def plot3d(data, ax, colors=None, labels=labels[j], mode=0):
-                            ax.set_xlabel(labels[0])
-                            ax.set_ylabel(labels[1])
-                            ax.set_zlabel(labels[2])
+                        if outdim == 2:
+                            print("plot r 2d")
+                            r.scatter(*[data[j][:, l] for l in range(2)], c=col, **kwargs)
+                            r.set_xlabel(labels[j][0])
+                            r.set_ylabel(labels[j][1])
 
-                            if mode == 0:
-                                ax.scatter(
-                                    data[:, 0],
-                                    data[:, 1],
-                                    data[:, 2],
-                                    **kwargs,
-                                    c=colors,
-                                    zorder=1,
-                                )
+                        elif outdim == 3:
+                            print("plot r 3d")
 
-                                for a, b, z in [[0, 1, "z"], [0, 2, "y"], [1, 2, "x"]]:
-                                    Z, X, Y = np.histogram2d(data[:, a], data[:, b])
+                            def plot3d(data, ax, colors=None, labels=labels[j], mode=0):
+                                ax.set_xlabel(labels[0])
+                                ax.set_ylabel(labels[1])
+                                ax.set_zlabel(labels[2])
 
-                                    X = (X[1:] + X[:-1]) / 2
-                                    Y = (Y[1:] + Y[:-1]) / 2
+                                if mode == 0:
+                                    ax.scatter(
+                                        data[:, 0],
+                                        data[:, 1],
+                                        data[:, 2],
+                                        **kwargs,
+                                        c=colors,
+                                        zorder=1,
+                                    )
 
-                                    X, Y = np.meshgrid(X, Y)
+                                    for a, b, z in [[0, 1, "z"], [0, 2, "y"], [1, 2, "x"]]:
+                                        Z, X, Y = np.histogram2d(data[:, a], data[:, b])
 
-                                    Z = (Z - Z.min()) / (Z.max() - Z.min())
+                                        X = (X[1:] + X[:-1]) / 2
+                                        Y = (Y[1:] + Y[:-1]) / 2
 
-                                    kw = {
-                                        "facecolors": plt.cm.Greys(Z),
-                                        "shade": True,
-                                        "alpha": 1.0,
-                                        "zorder": 0,
-                                    }
+                                        X, Y = np.meshgrid(X, Y)
 
-                                    # im = NonUniformImage(ax, interpolation='bilinear')
+                                        Z = (Z - Z.min()) / (Z.max() - Z.min())
 
-                                    zz = np.zeros(X.shape) - 0.1
-                                    # zz = - Z
+                                        kw = {
+                                            "facecolors": plt.cm.Greys(Z),
+                                            "shade": True,
+                                            "alpha": 1.0,
+                                            "zorder": 0,
+                                        }
 
-                                    if z == "z":
-                                        ax.plot_surface(X, Y, zz, **kw)
-                                    elif z == "y":
-                                        ax.plot_surface(X, zz, Y, **kw)
-                                    else:
-                                        ax.plot_surface(zz, X, Y, **kw)
+                                        # im = NonUniformImage(ax, interpolation='bilinear')
 
-                            else:
-                                zz = np.zeros(data[:, 0].shape)
-                                for z in ["x", "y", "z"]:
-                                    if z == "z":
-                                        ax.scatter(
-                                            data[:, 0],
-                                            data[:, 1],
-                                            zz,
-                                            **kwargs,
-                                            zorder=1,
-                                            c=colors,
-                                        )
-                                    elif z == "y":
-                                        ax.scatter(
-                                            data[:, 0],
-                                            zz,
-                                            data[:, 2],
-                                            **kwargs,
-                                            zorder=1,
-                                            c=colors,
-                                        )
-                                    else:
-                                        ax.scatter(
-                                            zz,
-                                            data[:, 1],
-                                            data[:, 2],
-                                            **kwargs,
-                                            zorder=1,
-                                            c=colors,
-                                        )
+                                        zz = np.zeros(X.shape) - 0.1
+                                        # zz = - Z
 
-                            ax.view_init(elev=20, azim=45)
+                                        if z == "z":
+                                            ax.plot_surface(X, Y, zz, **kw)
+                                        elif z == "y":
+                                            ax.plot_surface(X, zz, Y, **kw)
+                                        else:
+                                            ax.plot_surface(zz, X, Y, **kw)
 
-                        plot3d(data=data[j], colors=col, ax=r[0], mode=0)
-                        plot3d(data=data[j], colors=col, ax=r[1], mode=1)
+                                else:
+                                    zz = np.zeros(data[:, 0].shape)
+                                    for z in ["x", "y", "z"]:
+                                        if z == "z":
+                                            ax.scatter(
+                                                data[:, 0],
+                                                data[:, 1],
+                                                zz,
+                                                **kwargs,
+                                                zorder=1,
+                                                c=colors,
+                                            )
+                                        elif z == "y":
+                                            ax.scatter(
+                                                data[:, 0],
+                                                zz,
+                                                data[:, 2],
+                                                **kwargs,
+                                                zorder=1,
+                                                c=colors,
+                                            )
+                                        else:
+                                            ax.scatter(
+                                                zz,
+                                                data[:, 1],
+                                                data[:, 2],
+                                                **kwargs,
+                                                zorder=1,
+                                                c=colors,
+                                            )
 
-            # fig.set_size_inches([10, 16])
+                                ax.view_init(elev=20, azim=45)
 
-            n = Path(
-                f"{name}_{ 'mapped' if z==1 else ''}_{'old_new' if i == 0 else 'new_old'}.pdf",
-            )
+                            plot3d(data=data[j], colors=col, ax=r[0], mode=0)
+                            plot3d(data=data[j], colors=col, ax=r[1], mode=1)
 
-            n.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(n)
+                # fig.set_size_inches([10, 16])
 
-            outputs.append(File(str(n)))
+                n = Path(
+                    f"{name}_{ 'mapped' if z==1 else ''}_{'old_new' if i == 0 else 'new_old'}.pdf",
+                )
+
+                n.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(n)
+
+                outputs.append(File(str(n)))
