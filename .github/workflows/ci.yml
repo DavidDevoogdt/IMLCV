@@ -79,6 +79,8 @@ jobs:
         uses: mpi4py/setup-mpi@v1
         with:
           mpi: openmpi
+      - name: install latex
+        run: sudo apt-get install -y texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra
       - name: Run tests
         run: |
           git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
