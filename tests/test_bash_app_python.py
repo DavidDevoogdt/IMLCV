@@ -1,5 +1,9 @@
+import jax.numpy as jnp
+from IMLCV.base.CV import CvFlow
+from IMLCV.base.CV import SystemParams
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import config
+from IMLCV.implementations.CV import dihedral
 from mpi4py import MPI
 
 
@@ -9,6 +13,8 @@ def test_parallel(tmp_path):
     @bash_app_python
     def _f(i, inputs=[], outputs=[]):
         from time import sleep
+
+        from IMLCV.implementations.CV import dihedral
 
         print(f"i: {i}")
 
@@ -23,6 +29,26 @@ def test_parallel(tmp_path):
     res = [f.result() for f in futs]
 
     assert res == [0, 1, 2, 3, 4]
+
+
+def test_py_env(tmp_path):
+    config(env="local", path_internal=tmp_path)
+
+    @bash_app_python
+    def _f(sp, inputs=[], outputs=[]):
+        d_flow: CvFlow = dihedral([0, 1, 2, 3])
+
+        return d_flow.compute_cv_flow(sp, None)
+
+    n = 5
+    sp = SystemParams(coordinates=jnp.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]), cell=None)
+
+    futs = [_f(sp, execution_folder=tmp_path) for i in range(n)]
+
+    res_ref = dihedral([0, 1, 2, 3]).compute_cv_flow(sp, None)
+
+    for f in futs:
+        assert f.result() == res_ref
 
 
 @bash_app_python(precommand="mpirun -n 4")

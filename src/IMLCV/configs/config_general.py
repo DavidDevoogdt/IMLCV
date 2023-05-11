@@ -9,7 +9,8 @@ from IMLCV.configs.local_threadpool import get_config as get_config_local
 from parsl.config import Config
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
-py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
+# py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
+py_env = " which python"
 
 
 def get_platform():

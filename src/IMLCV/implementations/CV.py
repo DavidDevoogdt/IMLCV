@@ -17,6 +17,7 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.bash_app_python import bash_app_python
+from jax import Array
 from jax import jit
 from jax import vmap
 
@@ -52,7 +53,7 @@ def distance_descriptor():
     return h
 
 
-def dihedral(numbers):
+def dihedral(numbers: list[int] | Array):
     """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
     angle-from-four-points-in-cartesian- coordinates-in-python.
 
