@@ -11,7 +11,7 @@
 <!-- [![PyTest](https://github.com/DavidDevoogdt/IMLCV/actions/workflows/pytest.yml/badge.svg)](https://github.com/DavidDevoogdt/IMLCV/actions/workflows/pytest.yml) -->
 
 
-[![Project generated with PyScaffold](https://img.shields.io/badge/-PyScaffold-005CA0?logo=pyscaffold)](https://pyscaffold.org/)
+<!-- [![Project generated with PyScaffold](https://img.shields.io/badge/-PyScaffold-005CA0?logo=pyscaffold)](https://pyscaffold.org/)
  -->
 
 [![Documentation Status](https://readthedocs.org/projects/imlcv/badge/?version=main)](https://imlcv.readthedocs.io/en/main/?badge=main)
