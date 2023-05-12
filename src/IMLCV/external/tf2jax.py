@@ -1,6 +1,7 @@
 import functools
 
 import tensorflow as tf
+from jax.experimental.jax2tf import call_tf
 
 
 def loop_batcher(prim, args, dims, **params):

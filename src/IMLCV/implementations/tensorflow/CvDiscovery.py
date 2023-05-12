@@ -1,6 +1,8 @@
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import umap
+from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.tensorflow.CV import KerasFunBase
@@ -10,7 +12,7 @@ from IMLCV.implementations.tensorflow.CV import PeriodicLayer
 class TranformerUMAP(Transformer):
     def _fit(
         self,
-        x,
+        x: CV,
         decoder=False,
         nunits=256,
         nlayers=3,
@@ -48,6 +50,7 @@ class TranformerUMAP(Transformer):
                 layers.append(pl)
 
             encoder = keras.Sequential(layers)
+
             kwargs["encoder"] = encoder
 
             if decoder:
@@ -64,9 +67,9 @@ class TranformerUMAP(Transformer):
         else:
             reducer = umap.UMAP(**kwargs)
 
-        reducer.fit(x)
+        reducer.fit(x.cv)
 
         assert parametric
+        f = CvTrans(trans=[KerasFunBase(reducer)])
 
-        f = CvTrans(trans=[KerasFunBase(reducer.encoder)])
         return f.compute_cv_trans(x)[0], f

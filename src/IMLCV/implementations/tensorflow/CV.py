@@ -1,6 +1,9 @@
 import tempfile
 from importlib import import_module
+from typing import Any
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import tensorflow as tfl
 from IMLCV.base.CV import CV
@@ -47,14 +50,27 @@ class PeriodicLayer(keras.layers.Layer):
 
 
 class KerasFunBase(CvFunBase):
-    def __init__(self, encoder) -> None:
-        self.encoder = encoder
+    def __init__(self, reducer) -> None:
+        self.reducer = reducer
 
     def _calc(self, x: CV, *conditioners: CV, reverse=False) -> CV:
         assert len(conditioners) == 0
         assert not reverse
 
-        return call_tf(self.encoder.call)(x.cv)
+        batched = x.batched
+        if not batched:
+            y = x.cv.reshape((1, -1))
+        else:
+            y = x.cv
+
+        def tf_fun(y):
+            return call_tf(self.reducer.encoder.call, has_side_effects=False)(y)
+
+        out = tf_fun(y)
+        if not batched:
+            out = out.reshape((-1,))
+
+        return CV(cv=out, _combine_dims=x._combine_dims, _stack_dims=x._stack_dims)
 
     def __getstate__(self):
         # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model

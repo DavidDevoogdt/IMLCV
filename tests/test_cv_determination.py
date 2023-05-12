@@ -1,6 +1,8 @@
+import shutil
 from importlib import import_module
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import pytest
 from IMLCV.base.CVDiscovery import CVDiscovery
@@ -11,16 +13,15 @@ from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder
 from IMLCV.implementations.tensorflow.CvDiscovery import TranformerUMAP
 from molmod.units import angstrom
 
-try:
-    pass
 
+try:
     TF_INSTALLED = True
 except ImportError:
     TF_INSTALLED = False
 
 
 @pytest.mark.skipif(not TF_INSTALLED, reason="tensorflow not installed")
-@pytest.mark.parametrize("cvd", ["AE"])
+@pytest.mark.parametrize("cvd", ["AE", "UMAP"])
 def test_cv_discovery(
     tmpdir,
     cvd,
@@ -78,6 +79,7 @@ def test_cv_discovery(
             parametric_reconstruction=True,
             parametric_reconstruction_loss_fcn=keras.losses.MSE,
             decoder=True,
+            jac=jax.jacrev,  # calltf only supports jacrev, fixed with custom loop batchter  # https://github.com/google/jax/issues/14150
         )
     else:
         raise ValueError
@@ -116,4 +118,5 @@ def test_cv_discovery(
 
 
 if __name__ == "__main__":
+    shutil.rmtree("tmp", ignore_errors=True)
     test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")

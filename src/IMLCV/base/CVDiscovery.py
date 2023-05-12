@@ -79,6 +79,7 @@ class Transformer:
         chunk_size=None,
         prescale=True,
         postscale=True,
+        jac=jacrev,
         *fit_args,
         **fit_kwargs,
     ) -> tuple[CV, CollectiveVariable]:
@@ -99,7 +100,7 @@ class Transformer:
         cv = CollectiveVariable(
             f=f * g * h,
             metric=CvMetric(periodicities=self.periodicity),
-            jac=jacrev,
+            jac=jac,
         )
 
         return z, cv
@@ -154,6 +155,7 @@ class CVDiscovery:
 
             if traj.ti.cv is not None:
                 cv0 = traj.ti.CV
+                assert cv0 is not None
             else:
                 nl0 = sp0.get_neighbour_list(
                     r_cut=round.tic.r_cut,
@@ -228,7 +230,7 @@ class CVDiscovery:
         cvs_new, new_cv = self.transformer.fit(
             sps,
             nls,
-            sti=sti,
+            # sti=sti,
             chunk_size=chunk_size,
             **kwargs,
         )
@@ -236,7 +238,7 @@ class CVDiscovery:
         if plot:
             ind = np.random.choice(
                 a=sps.shape[0],
-                size=min(3000, sps.shape[0]),
+                size=min(1000, sps.shape[0]),
                 replace=False,
             )
 
@@ -246,6 +248,7 @@ class CVDiscovery:
                 new_cv=new_cv,
                 sps=sps[ind],
                 nl=nls[ind] if nls is not None else None,
+                chunk_size=chunk_size,
             )
 
         return new_cv
@@ -258,6 +261,7 @@ class CVDiscovery:
         new_cv: CollectiveVariable,
         name,
         labels=None,
+        chunk_size: int | None = None,
     ):
         def color(c, per):
             c2 = (c - c.min()) / (c.max() - c.min())
@@ -276,7 +280,7 @@ class CVDiscovery:
 
         cvs = [old_cv, new_cv]
         for cv in cvs:
-            cvd = cv.compute_cv(sps, nl)[0].cv
+            cvd = cv.compute_cv(sps, nl, chunk_size=chunk_size)[0].cv
             cvdm = vmap(cv.metric.map)(cvd)
 
             cv_data.append(np.array(cvd))

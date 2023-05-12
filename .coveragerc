@@ -3,7 +3,9 @@
 branch = True
 source =
     IMLCV
-# omit = bad_file.py
+omit =
+    IMLCV/examples/*
+    IMLCV/configs/*
 
 
 

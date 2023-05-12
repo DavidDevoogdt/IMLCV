@@ -2218,7 +2218,7 @@ class CollectiveVariable:
 
     @partial(jit, static_argnums=(0,))
     def _jit_df(self, sp, nl):
-        return self.jac(self._jit_f)(sp, nl)
+        return self.jac(self.f.compute_cv_flow)(sp, nl)
 
     # @partial(jit, static_argnums=(0, 3))
     def compute_cv(
@@ -2227,22 +2227,25 @@ class CollectiveVariable:
         nl: NeighbourList | None = None,
         jacobian=False,
         jit=True,
+        chunk_size: int | None = None,
     ) -> tuple[CV, CV]:
         if sp.batched:
             if nl is None:
-                return vmap(self.compute_cv, in_axes=(0, None, None, None))(
+                return vmap_chunked(self.compute_cv, in_axes=(0, None, None, None, None), chunk_size=chunk_size)(
                     sp,
                     nl,
                     jacobian,
                     jit,
+                    chunk_size,
                 )
             else:
                 assert nl.batched
-                return vmap(self.compute_cv, in_axes=(0, 0, None, None))(
+                return vmap_chunked(self.compute_cv, in_axes=(0, 0, None, None, None), chunk_size=chunk_size)(
                     sp,
                     nl,
                     jacobian,
                     jit,
+                    chunk_size,
                 )
 
         if jit:
