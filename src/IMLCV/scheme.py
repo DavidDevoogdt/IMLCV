@@ -114,6 +114,7 @@ class Scheme:
         samples_per_bin=500,
         init_max_grad=None,
         max_grad=None,
+        plot=True,
     ):
         if init != 0:
             print(f"running init round with {init} steps")
@@ -129,10 +130,10 @@ class Scheme:
             self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad)
 
             if update_metric:
-                self.new_metric(plot=True)
+                self.new_metric(plot=plot)
                 update_metric = False
             else:
-                self.FESBias(plot=True, samples_per_bin=samples_per_bin)
+                self.FESBias(plot=plot, samples_per_bin=samples_per_bin)
 
             self.rounds.add_round_from_md(self.md)
 
