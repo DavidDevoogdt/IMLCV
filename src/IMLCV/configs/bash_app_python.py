@@ -32,26 +32,6 @@ def bash_app_python(
             inputs = [*inputs, *kwargs.pop("inputs", [])]
             outputs = [*outputs, *kwargs.pop("outputs", [])]
 
-            @bash_app(executors=executors)
-            def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
-                if len(inputs) > 1:
-                    kwargs["inputs"] = inputs[:-1]
-                if len(outputs) > 1:
-                    kwargs["outputs"] = outputs[:-1]
-
-                filename_in = inputs[-1].filepath
-                filename_out = outputs[-1].filepath
-                fold = os.path.dirname(filename_in)
-                if not os.path.exists(fold):
-                    os.mkdir(fold)
-
-                with open(filename_in, "rb+") as f:
-                    cloudpickle.dump((func, args, kwargs), f)
-
-                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder {execution_folder} --file_in {  os.path.relpath(filename_in,execution_folder)  }  --file_out  {  os.path.relpath(filename_out,execution_folder)  }"
-
-            fun.__name__ = func.__name__
-
             def rename(name):
                 path, name = os.path.split(name.filepath)
                 return os.path.join(path, f"bash_app_{name}")
@@ -105,8 +85,36 @@ def bash_app_python(
                 i,
             )
 
-            future: AppFuture = fun(
-                inputs=[*inputs, File(str(file_in))],
+            if not execution_folder.exists():
+                execution_folder.mkdir(exist_ok=True, parents=True)
+
+            def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
+                from pathlib import Path
+
+                from parsl import File
+
+                execution_folder = Path(inputs[-1].filepath)
+
+                outputs = [str(os.path.relpath(i.filepath, execution_folder)) for i in outputs]
+                inputs = [str(os.path.relpath(o.filepath, execution_folder)) for o in inputs[:-1]]
+
+                file_in = inputs[-1]
+                file_out = outputs[-1]
+
+                if len(inputs) > 1:
+                    kwargs["inputs"] = [File(i) for i in inputs[:-1]]
+                if len(outputs) > 1:
+                    kwargs["outputs"] = [File(o) for o in outputs[:-1]]
+
+                with open(execution_folder / file_in, "rb+") as f:
+                    cloudpickle.dump((func, args, kwargs), f)
+
+                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }"
+
+            fun.__name__ = func.__name__
+
+            future: AppFuture = bash_app(function=fun, executors=executors)(
+                inputs=[*inputs, File(str(file_in)), File(str(execution_folder))],
                 outputs=[*[File(rename(o)) for o in outputs], File(str(file_out))],
                 stdout=str(stdout),
                 stderr=str(stderr),
@@ -114,7 +122,6 @@ def bash_app_python(
                 **kwargs,
             )
 
-            @python_app(executors=["default"])
             def load(inputs=[], outputs=[]):
                 with open(inputs[-1].filepath, "rb") as f:
                     result = cloudpickle.load(f)
@@ -130,7 +137,12 @@ def bash_app_python(
 
                 return result
 
-            return load(inputs=future.outputs, outputs=outputs)
+            load.__name__ = f"{func.__name__}_load"
+
+            return python_app(load, executors=["default"])(
+                inputs=future.outputs,
+                outputs=outputs,
+            )
 
         return wrapper
 
