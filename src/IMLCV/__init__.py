@@ -22,7 +22,6 @@ import os
 import sys
 from logging import warning
 
-
 import jax
 from jax import random
 

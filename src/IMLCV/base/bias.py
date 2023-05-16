@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Iterable
@@ -517,8 +516,7 @@ class Bias(BC, ABC):
         else:
             raise ValueError
 
-        # ax.set_title(name)
-        os.makedirs(os.path.dirname(name), exist_ok=True)
+        Path(name).parent.mkdir(parents=True, exist_ok=True)
 
         plt.tight_layout()
         plt.savefig(name)

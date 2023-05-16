@@ -13,11 +13,9 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
-from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import dihedral
-from IMLCV.implementations.CV import get_lda_cv
 from IMLCV.implementations.CV import NoneCV
 from IMLCV.implementations.CV import project_distances
 from IMLCV.implementations.CV import sb_descriptor
@@ -83,134 +81,7 @@ def alanine_dipeptide_yaff(
         # sp = None
 
     elif cv == "soap_dist" or cv == "soap_lda":
-        # ref pos
-        sp0 = SystemParams(
-            coordinates=jnp.array(
-                [
-                    [26.77741932, 35.69692667, 0.15117809],
-                    [26.90970015, 33.69381697, -0.30235618],
-                    [25.20894663, 32.76785116, 0.43463701],
-                    [28.66714545, 33.01351556, 0.51022606],
-                    [26.68293301, 33.05131008, -3.09915086],
-                    [25.9081453, 34.69537182, -4.55423998],
-                    [27.26874811, 30.7458442, -3.93063036],
-                    [28.21361118, 29.61200852, -2.72120563],
-                    [27.00418645, 30.06554279, -6.55734968],
-                    [25.19004937, 30.84033051, -7.14316479],
-                    [28.95060437, 31.21827573, -8.35258951],
-                    [30.78363872, 30.27341267, -8.25810321],
-                    [28.23250844, 31.12378943, -10.28011017],
-                    [29.36634412, 33.20248817, -7.95574702],
-                    [27.06087824, 27.19315907, -6.82191134],
-                    [28.38368653, 25.92704256, -5.40461674],
-                    [26.07822065, 26.26719326, -8.93840461],
-                    [25.37902198, 27.51441251, -10.22341838],
-                    [25.6624809, 23.64047394, -9.59980876],
-                    [25.83255625, 23.43260406, -11.64071298],
-                    [26.85300836, 22.29876838, -8.59825391],
-                    [23.73496024, 23.13024788, -9.07068544],
-                ],
-            ),
-            cell=None,
-        )
-
-        sp1_a = jnp.array(
-            [
-                [23.931, 32.690, -5.643],
-                [24.239, 31.818, -3.835],
-                [22.314, 31.227, -3.153],
-                [25.100, 33.275, -2.586],
-                [25.835, 29.525, -3.858],
-                [27.425, 29.164, -2.258],
-                [25.638, 27.991, -5.861],
-                [24.292, 28.473, -7.216],
-                [27.221, 25.765, -6.438],
-                [26.509, 24.957, -8.255],
-                [29.991, 26.660, -6.699],
-                [30.753, 27.301, -4.872],
-                [30.920, 25.078, -7.447],
-                [30.233, 28.236, -8.053],
-                [26.856, 23.398, -4.858],
-                [27.483, 21.402, -5.810],
-                [25.732, 23.673, -2.608],
-                [25.785, 25.535, -1.850],
-                [25.227, 21.564, -0.916],
-                [26.860, 20.494, -0.570],
-                [24.444, 22.298, 0.859],
-                [23.648, 20.454, -1.497],
-            ],
-        )
-
-        # sp1_b = jnp.array(
-        #     [
-        #         [35.704, 38.625, 1.7931],
-        #         [33.729, 38.815, 1.0493],
-        #         [33.579, 40.608, 0.0085435],
-        #         [32.332, 38.65, 2.5276],
-        #         [33.25, 36.637, -0.72336],
-        #         [33.164, 34.435, 0.1553],
-        #         [32.915, 37.228, -3.1684],
-        #         [32.659, 39.045, -3.7444],
-        #         [32.223, 35.498, -5.2083],
-        #         [31.92, 36.566, -6.9957],
-        #         [34.786, 34.127, -5.7689],
-        #         [35.467, 32.9, -4.2401],
-        #         [34.518, 32.891, -7.4366],
-        #         [36.197, 35.553, -6.162],
-        #         [29.809, 33.938, -5.0311],
-        #         [28.183, 34.313, -6.6841],
-        #         [29.38, 32.502, -3.0923],
-        #         [30.957, 32.54, -2.0214],
-        #         [27.446, 30.501, -2.9781],
-        #         [26.278, 30.575, -4.7043],
-        #         [28.288, 28.613, -2.9197],
-        #         [26.157, 30.858, -1.3152],
-        #     ],
-        # )
-
-        sp1 = SystemParams(
-            coordinates=sp1_a,
-            cell=None,
-        )
-
-        refs = sp0 + sp1
-
-        mde = YaffEngine(
-            energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
-            static_trajectory_info=tic,
-            bias=NoneBias(cvs=NoneCV()),
-        )
-
-        sb = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2)
-
-        needs_sim = True
-
-        if folder.exists():
-            pre_round = Rounds(folder=folder, new_folder=False)
-            needs_sim = pre_round.round != -1
-        else:
-            pre_round = Rounds(folder=folder)
-        if needs_sim:
-            pre_round.add_round_from_md(mde)
-
-            biases = []
-            for _ in refs:
-                biases.append(NoneBias(cvs=NoneCV()))
-
-            pre_round.run_par(biases=biases, steps=lda_steps, sp0=refs)
-
-        cv0 = get_lda_cv(
-            num_kfda,
-            folder=folder,
-            descriptor=sb,
-            kernel=kernel,
-            harmonic=harmonic,
-            r_cut=r_cut,
-            z_array=tic.atomic_numbers,
-            kernel_type=kernel_type,
-            execution_folder=folder.parent if folder is not None else None,
-            alpha_rematch=alpha_rematch,
-        )
+        raise NotImplementedError("todo couple CV discovery")
 
     else:
         raise ValueError(
@@ -449,64 +320,55 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
         assert jnp.allclose(jnp.array([[1.0, 0.0], [0.0, 0.0]]) - o, 0.0)
 
     elif cv == "soap_lda":
-        r_cut = 5 * angstrom
+        # r_cut = 5 * angstrom
 
-        z_arr = None
-        refs: SystemParams | None = None
+        # z_arr = None
+        # refs: SystemParams | None = None
 
-        for a in atoms:
-            if z_arr is None:
-                z_arr = a.get_atomic_numbers()
-                refs = SystemParams(
-                    coordinates=a.positions * angstrom,
-                    cell=a.cell * angstrom,
-                )
+        # for a in atoms:
+        #     if z_arr is None:
+        #         z_arr = a.get_atomic_numbers()
+        #         refs = SystemParams(
+        #             coordinates=a.positions * angstrom,
+        #             cell=a.cell * angstrom,
+        #         )
 
-            else:
-                assert (z_arr == a.get_atomic_numbers()).all()
-                refs += SystemParams(
-                    coordinates=a.positions * angstrom,
-                    cell=a.cell * angstrom,
-                )
+        #     else:
+        #         assert (z_arr == a.get_atomic_numbers()).all()
+        #         refs += SystemParams(
+        #             coordinates=a.positions * angstrom,
+        #             cell=a.cell * angstrom,
+        #         )
 
-        assert refs.batched is True
+        # assert refs.batched is True
 
-        bias = NoneBias(cvs=NoneCV())
-        tic = StaticTrajectoryInfo(
-            write_step=1,
-            T=300 * units.kelvin,
-            P=1.0 * units.bar,
-            timestep=2.0 * units.femtosecond,
-            timecon_thermo=100.0 * units.femtosecond,
-            timecon_baro=500.0 * units.femtosecond,
-            atomic_numbers=jnp.array(energy.atoms.get_atomic_numbers()),
-            equilibration=0 * units.femtosecond,
-            screen_log=1,
-            r_cut=r_cut,
-        )
+        # bias = NoneBias(cvs=NoneCV())
+        # tic = StaticTrajectoryInfo(
+        #     write_step=1,
+        #     T=300 * units.kelvin,
+        #     P=1.0 * units.bar,
+        #     timestep=2.0 * units.femtosecond,
+        #     timecon_thermo=100.0 * units.femtosecond,
+        #     timecon_baro=500.0 * units.femtosecond,
+        #     atomic_numbers=jnp.array(energy.atoms.get_atomic_numbers()),
+        #     equilibration=0 * units.femtosecond,
+        #     screen_log=1,
+        #     r_cut=r_cut,
+        # )
 
-        yaffmd = YaffEngine(
-            energy=energy,
-            bias=bias,
-            static_trajectory_info=tic,
-        )
+        # yaffmd = YaffEngine(
+        #     energy=energy,
+        #     bias=bias,
+        #     static_trajectory_info=tic,
+        # )
 
-        sbd = sb_descriptor(
-            r_cut=r_cut,
-            n_max=3,
-            l_max=3,
-        )
+        # sbd = sb_descriptor(
+        #     r_cut=r_cut,
+        #     n_max=3,
+        #     l_max=3,
+        # )
 
-        cv = get_lda_cv(
-            1,
-            folder=folder,
-            mde=yaffmd,
-            descriptor=sbd,
-            n_steps=lda_steps,
-            r_cut=tic.r_cut,
-            z_array=tic.atomic_numbers,
-            execution_folder=folder,
-        )
+        raise NotImplementedError("todo")
 
     else:
         raise NotImplementedError(f"cv {cv} unrecognized for CsPbI3,")

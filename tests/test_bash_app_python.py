@@ -14,8 +14,6 @@ def test_parallel(tmp_path):
     def _f(i, inputs=[], outputs=[]):
         from time import sleep
 
-        from IMLCV.implementations.CV import dihedral
-
         print(f"i: {i}")
 
         sleep(2)
@@ -41,7 +39,10 @@ def test_py_env(tmp_path):
         return d_flow.compute_cv_flow(sp, None)
 
     n = 5
-    sp = SystemParams(coordinates=jnp.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]), cell=None)
+    sp = SystemParams(
+        coordinates=jnp.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+        cell=None,
+    )
 
     futs = [_f(sp, execution_folder=tmp_path) for i in range(n)]
 

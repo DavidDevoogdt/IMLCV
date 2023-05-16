@@ -7,8 +7,8 @@ from IMLCV.configs.config_general import ROOT_DIR
 
 @bash_app_python(executors=["default"])
 def f(args):
-    from IMLCV.configs.config_general import config
     from IMLCV.base.rounds import Rounds
+    from IMLCV.configs.config_general import config
 
     config()
     rounds = Rounds(folder=args.folder, new_folder=False)

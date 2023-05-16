@@ -13,6 +13,7 @@ import numpy as np
 from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
+from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.MdEngine import StaticTrajectoryInfo
@@ -143,10 +144,10 @@ class Rounds(ABC):
     def h5filelock_name(self):
         return self.full_path("results.h5.lock")
 
-    def full_path(self, name) -> str:
-        return str(self.folder / Path(name))
+    def full_path(self, name: str | Path) -> str:
+        return str((self.folder / name).resolve())
 
-    def rel_path(self, name):
+    def rel_path(self, name: str | Path):
         return str(Path(name).relative_to(self.folder))
 
     def path(self, r=None, i=None) -> Path:
@@ -495,6 +496,10 @@ class Rounds(ABC):
 
         return (self.path(r=r, i=i) / "invalid").exists()
 
+    def get_collective_variable(self) -> CollectiveVariable:
+        bias = self.get_bias()
+        return bias.collective_variable
+
     def get_bias(self, r=None, i=None) -> Bias:
         if r is None:
             r = self.round
@@ -601,11 +606,11 @@ class Rounds(ABC):
             else:
                 b = CompositeBias([Bias.load(common_bias_name), bias])
 
-            b_name = self.full_path(path_name / "bias")
-            b_name_new = self.full_path(path_name / "bias_new")
+            b_name = path_name / "bias"
+            b_name_new = path_name / "bias_new"
             b.save(b_name)
 
-            traj_name = self.full_path(path_name / "trajectory_info.h5")
+            traj_name = path_name / "trajectory_info.h5"
 
             @bash_app_python(executors=["reference"])
             def run(
@@ -711,20 +716,20 @@ class Rounds(ABC):
 
             future = run(
                 sp=spi,  # type: ignore
-                inputs=[File(common_md_name), File(b_name)],
-                outputs=[File(b_name_new), File(traj_name)],
+                inputs=[File(common_md_name), File(str(b_name))],
+                outputs=[File(str(b_name_new)), File(str(traj_name))],
                 steps=int(steps),
                 execution_folder=path_name,
             )
 
             if plot:
-                plot_file = self.full_path(path_name / "plot.pdf")
+                plot_file = path_name / "plot.pdf"
 
                 plot_fut = plot_app(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
-                    outputs=[File(plot_file)],
+                    outputs=[File(str(plot_file))],
                     execution_folder=path_name,
                 )
 

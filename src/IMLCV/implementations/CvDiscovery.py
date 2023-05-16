@@ -1,15 +1,21 @@
+from functools import partial
+
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import optax
 from flax import linen as nn
 from flax.training import train_state
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFun
 from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.implementations.CV import get_sinkhorn_divergence
+from IMLCV.implementations.CV import trunc_svd
 from jax import Array
+from jax import jit
 from jax import random
+from jax import vmap
 
 
 class Encoder(nn.Module):
@@ -101,7 +107,8 @@ class VAE(nn.Module):
 class TranformerAutoEncoder(Transformer):
     def _fit(
         self,
-        cv,
+        cv: list[CV],
+        nl: list[NeighbourList] | None,
         nunits=250,
         nlayers=3,
         lr=1e-4,
@@ -125,6 +132,8 @@ class TranformerAutoEncoder(Transformer):
         #         **kwargs,
         #     },
         # )
+
+        cv = CV.stack(*cv)
 
         rng = random.PRNGKey(0)
 
@@ -259,3 +268,132 @@ class TranformerAutoEncoder(Transformer):
         f_enc = CvTrans(trans=[CvFun(forward=forward)])
 
         return f_enc.compute_cv_trans(cv)[0], f_enc
+
+
+class TransoformerLDA(Transformer):
+    def _fit(
+        self,
+        cv_list: list[CV],
+        nl_list: list[NeighbourList] | None,
+        kernel=False,
+        harmonic=True,
+        sort="rematch",
+        shrinkage=0,
+        alpha_rematch=1e-1,
+        max_iterations=50,
+        **kwargs,
+    ):
+        try:
+            import pymanopt
+        except ImportError:
+            raise ImportError(
+                "pymanopt not installed, please install it to use LDA collective variable",
+            )
+
+        assert isinstance(cv_list, list)
+
+        from IMLCV.base.CV import NeighbourList
+
+        # @vmap
+
+        if kernel:
+            raise NotImplementedError("kernel not implemented for lda")
+
+        if sort == "l2" or sort == "average":
+            norm_data = [get_sinkhorn_divergence(None, None, sort=sort, alpha_rematch=alpha_rematch)]
+        elif sort == "rematch":
+            norm_data = []
+            assert nl_list is not None, "Neigbourlist required for rematch"
+            for cvi, nli in zip(cv_list, nl_list):
+                norm_data.append(
+                    get_sinkhorn_divergence(
+                        nli=nli[0],
+                        pi=jnp.average(cvi.cv, axis=0),
+                        sort=sort,
+                        alpha_rematch=alpha_rematch,
+                    ),
+                )
+        else:
+            raise NotImplementedError
+
+        cv = CV.stack(*cv_list)
+        nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
+
+        hs = []
+
+        cv_out = []
+
+        for nd in norm_data:
+            cv_i, _ = jax.jit(nd.compute_cv_trans)(cv, nl)
+            cv_i, _f = trunc_svd(cv_i)
+            normed_cv_u = CV.unstack(cv_i)
+
+            mu_i = [jnp.mean(x.cv, axis=0) for x in normed_cv_u]
+            mu = jnp.einsum(
+                "i,ij->j",
+                jnp.array(cv.stack_dims) / jnp.sum(jnp.array(cv.stack_dims)),
+                jnp.array(mu_i),
+            )
+
+            correlation_w = CV.stack(*[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)])
+            correlation_b = CV.stack(*[cv_i - mu for cv_i in normed_cv_u])
+
+            manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=self.outdim)
+
+            @pymanopt.function.jax(manifold)
+            @jit
+            def cost(x):
+                a = jnp.einsum("ab, ia,ic, cb ", x, correlation_w.cv, correlation_w.cv, x)
+                b = jnp.einsum("ab, ja, jc, cb ", x, correlation_b.cv, correlation_b.cv, x)
+
+                if harmonic:
+                    out = ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
+                else:
+                    out = -((1 - shrinkage) * b + shrinkage) / ((1 - shrinkage) * a + shrinkage)
+
+                return out
+
+            optimizer = pymanopt.optimizers.TrustRegions(max_iterations=max_iterations)
+
+            problem = pymanopt.Problem(manifold, cost)
+            result = optimizer.run(problem)
+
+            alpha = result.point
+
+            scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
+
+            def scale_trans(cv: CV, nl: NeighbourList | None, _, alpha=alpha, scale_factor=scale_factor):
+                return CV(
+                    (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
+                    _stack_dims=cv._stack_dims,
+                    _combine_dims=cv._combine_dims,
+                    atomic=cv.atomic,
+                    mapped=cv.mapped,
+                )
+
+            _g = CvTrans.from_cv_function(partial(scale_trans, alpha=alpha, scale_factor=scale_factor))
+
+            cv_i = _g.compute_cv_trans(cv_i, nl)[0]
+
+            cv_out.append(cv_i)
+            hs.append(nd * _f * _g)
+
+        # take average over both alignments
+        @CvTrans.from_cv_function
+        def average(cv: CV, nl: NeighbourList | None, _):
+            cvs = cv.split(cv.stack_dims)
+
+            return CV(
+                jnp.mean(jnp.stack([cvi.cv for cvi in cvs]), axis=0),
+                _stack_dims=cvs[0]._stack_dims,
+                _combine_dims=cvs[0]._combine_dims,
+                atomic=cvs[0].atomic,
+                mapped=cvs[0].mapped,
+            )
+
+        lda_cv = CvTrans.stack(*hs) * average
+        cv_out = average.compute_cv_trans(CV.combine(*cv_out), nl)[0]
+
+        # assert jnp.allclose(cv_out.cv, jax.jit(lda_cv.compute_cv_trans)(cv, nl)[0].cv)
+
+        return cv_out, lda_cv

@@ -2,7 +2,6 @@ import pytest
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import config
 from IMLCV.configs.config_general import ROOT_DIR
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.examples.example_systems import CsPbI3
 from IMLCV.scheme import Scheme
 from molmod.units import kjmol

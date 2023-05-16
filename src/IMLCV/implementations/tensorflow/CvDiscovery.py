@@ -1,9 +1,8 @@
-import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import umap
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.tensorflow.CV import KerasFunBase
 from IMLCV.implementations.tensorflow.CV import PeriodicLayer
@@ -12,7 +11,8 @@ from IMLCV.implementations.tensorflow.CV import PeriodicLayer
 class TranformerUMAP(Transformer):
     def _fit(
         self,
-        x: CV,
+        x: list[CV],
+        nl: list[NeighbourList] | None = None,
         decoder=False,
         nunits=256,
         nlayers=3,
@@ -20,6 +20,8 @@ class TranformerUMAP(Transformer):
         metric=None,
         **kwargs,
     ):
+        x = CV.stack(*x)
+
         dims = x.shape[1:]
 
         kwargs["n_components"] = self.outdim

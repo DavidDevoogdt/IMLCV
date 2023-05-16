@@ -4,7 +4,6 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
-from IMLCV.base.bias import CompositeBias
 from IMLCV.base.bias import plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
