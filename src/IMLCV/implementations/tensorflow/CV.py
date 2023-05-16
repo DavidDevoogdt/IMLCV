@@ -1,9 +1,6 @@
 import tempfile
 from importlib import import_module
-from typing import Any
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 import tensorflow as tfl
 from IMLCV.base.CV import CV

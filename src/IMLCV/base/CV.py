@@ -41,7 +41,7 @@ class SystemParams:
         if isinstance(self.cell, Array):
             self.__dict__["cell"] = jnp.array(self.cell)
 
-    def __getitem__(self, slices):
+    def __getitem__(self, slices) -> SystemParams:
         return SystemParams(
             coordinates=self.coordinates[slices],
             cell=(self.cell[slices] if self.cell is not None else None),
@@ -825,17 +825,6 @@ class NeighbourList:
             self.op_center,
         )
 
-    # @partial(
-    #     jit,
-    #     static_argnames=[
-    #         "r_cut",
-    #         "func",
-    #         "fill_value",
-    #         "reduce",
-    #         "split_z",
-    #         "exclude_self",
-    #     ],
-    # )
     def apply_fun_neighbour(
         self,
         sp: SystemParams,
@@ -937,19 +926,6 @@ class NeighbourList:
 
         # return _apply_fun_neighbour(sp, self)
 
-    # @partial(
-    #     jit,
-    #     static_argnames=[
-    #         "func_single",
-    #         "func_double",
-    #         "r_cut",
-    #         "fill_value",
-    #         "reduce",
-    #         "split_z",
-    #         "exclude_self",
-    #         "unique",
-    #     ],
-    # )
     def apply_fun_neighbour_pair(
         self,
         sp: SystemParams,
@@ -1409,16 +1385,24 @@ class NeighbourList:
             num_z_unique=self.num_z_unique,
         )
 
+    @staticmethod
+    def stack(*nls: NeighbourList) -> NeighbourList:
+        return sum(nls[1:], nls[0])
+
 
 @jdc.pytree_dataclass
 class CV:
     cv: Array
     mapped: jdc.Static[bool] = False
+    atomic: jdc.Static[bool] = False
     _combine_dims: jdc.Static[list | None] = None
     _stack_dims: jdc.Static[list | None] = None
 
     @property
     def batched(self):
+        if self.atomic:
+            return len(self.cv.shape) == 3
+
         return len(self.cv.shape) == 2
 
     @property
@@ -1455,35 +1439,61 @@ class CV:
 
     def __add__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(cv=self.cv + other)
+
+        return CV(
+            cv=self.cv + other,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     def __radd__(self, other) -> CV:
         return other + self
 
     def __sub__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(cv=self.cv - other)
+        return CV(
+            cv=self.cv - other,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     def __rsub__(self, other) -> CV:
         return other - self
 
     def __mul__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(cv=self.cv * other)
+        return CV(
+            cv=self.cv * other,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     def __rmul__(self, other) -> CV:
         return other * self
 
     def __matmul__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(cv=self.cv @ other)
+        return CV(
+            cv=self.cv @ other,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     def __rmatmul__(self, other) -> CV:
         return other @ self
 
     def __div__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(cv=self.cv / other)
+        return CV(
+            cv=self.cv / other,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     def __rdiv__(self, other) -> CV:
         return other / self
@@ -1491,7 +1501,13 @@ class CV:
     def batch(self) -> CV:
         if self.batched:
             return self
-        return CV(cv=jnp.array([self.cv]), mapped=self.mapped)
+        return CV(
+            cv=jnp.array([self.cv]),
+            mapped=self.mapped,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     def __iter__(self):
         if not self.batched:
@@ -1504,16 +1520,33 @@ class CV:
 
     def __getitem__(self, idx):
         assert self.batched
-        return CV(cv=self.cv[idx, :], mapped=self.mapped)
+        return CV(
+            cv=self.cv[idx, :],
+            mapped=self.mapped,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     def unbatch(self) -> CV:
         if not self.batched:
             return self
         assert self.cv.shape[0] == 1
-        return CV(cv=self.cv[0, :], mapped=self.mapped)
+        return CV(
+            cv=self.cv[0, :],
+            mapped=self.mapped,
+            atomic=self.atomic,
+            _stack_dims=self._stack_dims,
+            _combine_dims=self._combine_dims,
+        )
 
     @staticmethod
     def stack(*cvs: CV) -> CV:
+        """stacks a list of CVs into a single CV. The dimenisions are stored such that it can later be unstacked into separated CVs. The CVs are stacked over the batch dimension"""
+
+        assert len(cvs) != 0
+        atomic = cvs[0].atomic
+
         in_dims = None
         mapped = None
 
@@ -1521,6 +1554,8 @@ class CV:
         stack_dims = []
 
         for cv in cvs:
+            assert atomic == cv.atomic
+
             assert isinstance(cv, CV)
             if in_dims is None:
                 in_dims = cv._combine_dims
@@ -1538,6 +1573,7 @@ class CV:
             cv=jnp.vstack(cv_arr),
             _combine_dims=in_dims,
             _stack_dims=stack_dims,
+            atomic=atomic,
         )
 
     def unstack(self) -> list[CV]:
@@ -1550,6 +1586,7 @@ class CV:
                     cv=self.cv[i : i + j, :],
                     mapped=self.mapped,
                     _combine_dims=self._combine_dims,
+                    atomic=self.atomic,
                 ),
             ]
             i += j
@@ -1557,8 +1594,9 @@ class CV:
 
     def split(self, flatten=False) -> list[CV]:
         """inverse operation of combine"""
+
         if self._combine_dims is None:
-            return [CV(cv=self.cv, mapped=self.mapped)]
+            return [CV(cv=self.cv, mapped=self.mapped, atomic=self.atomic)]
 
         def broaden_tree(subtree):
             if isinstance(subtree, int):
@@ -1588,34 +1626,32 @@ class CV:
                     axis=-1,
                 ),
                 _combine_dims=out_dim[i] if isinstance(out_dim[i], list) else None,
+                _stack_dims=self._stack_dims,
+                atomic=self.atomic,
             )
             for i, (s, e) in enumerate(zip(start, sz))
         ]
 
     @staticmethod
     def combine(*cvs: CV, flatten=False) -> CV:
-        """merges a list of CVs into a single CV. The dimenisions are stored such that it can later be split into separated CVs"""
+        """merges a list of CVs into a single CV. The dimenisions are stored such that it can later be split into separated CVs. The CVs are combined over the last dimension"""
 
         out_cv: list[Array] = []
         out_dim: list[int] = []
 
-        mapped = None
-        batched = None
-        bdim = None
+        mapped = cvs[0].mapped
+        batched = cvs[0].batched
+        atomic = cvs[0].atomic
+        bdim = cvs[0].batch_dim
+
+        stack_dims = cvs[0].stack_dims
 
         assert len(cvs) != 0
         if len(cvs) == 1:
             return cvs[0]
 
-        def inner(cv: CV) -> tuple[list[Array], list[int]]:
-            nonlocal mapped
-            nonlocal batched
-            nonlocal bdim
-
-            if mapped is None:
-                mapped = cv.mapped
-            else:
-                assert mapped == cv.mapped
+        def _inner(cv: CV, batched, mapped, atomic, bdim, stack_dims) -> tuple[list[Array], list[int]]:
+            assert mapped == cv.mapped
 
             if batched is None:
                 batched = cv.batched
@@ -1625,6 +1661,13 @@ class CV:
                 assert batched == cv.batched
                 if batched:
                     assert bdim == cv.batch_dim
+
+            if atomic is None:
+                atomic = cv.atomic
+            else:
+                assert atomic == cv.atomic
+
+            assert stack_dims == cv.stack_dims
 
             def simple(cv: CV):
                 return [cv.cv], [cv.combine_dims]
@@ -1639,7 +1682,7 @@ class CV:
                     if ii._combine_dims is None:
                         a, b = simple(ii)
                     else:
-                        a, b = a, b = inner(ii)
+                        a, b = a, b = _inner(ii, batched, mapped, atomic, bdim)
 
                     cvi += a
                     dimi += b
@@ -1650,12 +1693,12 @@ class CV:
             return cvi, dimi
 
         for cv in cvs:
-            a, b = inner(cv)
+            a, b = _inner(cv, batched, mapped, atomic, bdim, stack_dims)
             out_cv += a
             out_dim += b
 
         # type: ignore
-        return CV(cv=jnp.hstack(out_cv), mapped=mapped, _combine_dims=out_dim)
+        return CV(cv=jnp.hstack(out_cv), mapped=mapped, _combine_dims=out_dim, _stack_dims=stack_dims, atomic=atomic)
 
 
 class CvMetric:
@@ -1830,16 +1873,16 @@ class CvFunBase:
     _: dataclasses.KW_ONLY
     cv_input: CvFunInput | None = None
 
-    def calc(self, x: CV, reverse=False, log_det=False) -> tuple[CV, Array | None]:
+    def calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False) -> tuple[CV, Array | None]:
         if self.cv_input is not None:
             y, cond = self.cv_input.split(x)
         else:
             y, cond = x, []
 
         if log_det:
-            out, log_det = self._log_Jf(y, *cond, reverse=reverse)
+            out, log_det = self._log_Jf(y, nl, reverse=reverse, *cond)
         else:
-            out, log_det = self._calc(y, *cond, reverse=reverse), None
+            out, log_det = self._calc(y, nl, reverse=reverse, *cond), None
 
         if self.cv_input:
             out = self.cv_input.combine(x, out)
@@ -1847,19 +1890,26 @@ class CvFunBase:
         return out, log_det
 
     @abstractmethod
-    def _calc(self, x: CV, *conditioners: CV, reverse=False) -> CV:
+    def _calc(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        *conditioners: CV,
+    ) -> CV:
         pass
 
     def _log_Jf(
         self,
         x: CV,
-        *conditioners: CV,
+        nl: NeighbourList | None,
         reverse=False,
+        *conditioners: CV,
     ) -> tuple[CV, Array | None]:
         """naive automated implementation, overrride this"""
 
         def f(x):
-            return self._calc(x, *conditioners, reverse=reverse)
+            return self._calc(x, nl, reverse, *conditioners)
 
         a = f(x)
         b = jacfwd(f)(x)
@@ -1870,11 +1920,10 @@ class CvFunBase:
 
 @dataclasses.dataclass(kw_only=True)
 class CvFun(CvFunBase):
-    forward: Callable[[CV, CV | None], CV] | None = None
-    backward: Callable[[CV, CV | None], CV] | None = None
+    forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
+    backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
 
-    # @partial(jit, static_argnums=(0,3))
-    def _calc(self, x: CV, *conditioners: CV, reverse=False) -> CV:
+    def _calc(self, x: CV, nl: NeighbourList | None, reverse=False, *conditioners: CV) -> CV:
         if len(conditioners) == 0:
             c = None
         else:
@@ -1882,10 +1931,10 @@ class CvFun(CvFunBase):
 
         if reverse:
             assert self.backward is not None
-            return self.backward(x, c)
+            return self.backward(x, nl, c)
         else:
             assert self.forward is not None
-            return self.forward(x, c)
+            return self.forward(x, nl, c)
 
 
 class CvFunNn(nn.Module, CvFunBase):
@@ -1896,18 +1945,24 @@ class CvFunNn(nn.Module, CvFunBase):
         pass
 
     # @partial(jit, static_argnums=(0,3))
-    def _calc(self, x: CV, *y: CV, reverse=False) -> CV:
+    def _calc(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        *y: CV,
+    ) -> CV:
         if reverse:
-            return self.backward(x, *y)
+            return self.backward(x, nl, *y)
         else:
-            return self.forward(x, *y)
+            return self.forward(x, nl, *y)
 
     @abstractmethod
-    def forward(self, x: CV, *y: CV) -> CV:
+    def forward(self, x: CV, nl: NeighbourList | None, *y: CV) -> CV:
         pass
 
     @abstractmethod
-    def backward(self, x: CV, *y: CV) -> CV:
+    def backward(self, x: CV, nl: NeighbourList | None, *y: CV) -> CV:
         pass
 
 
@@ -1942,22 +1997,66 @@ class CvFunDistrax(nn.Module, CvFunBase):
         """setups self.bijector"""
 
     # @partial(jit, static_argnums=(0, 4, 5))
-    def _calc(self, x: CV, *y: CV, reverse=False, log_det=False) -> CV:
+    def _calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False, *y: CV) -> CV:
         z = CV.combine(*y, x).cv
+
+        assert nl is None, "not implemented"
 
         if reverse:
             assert self.bijector is not None
-            return CV(self.bijector.inverse(z))
+            return CV(self.bijector.inverse(z), atomic=x.atomic)
         else:
             assert self.bijector is not None
-            return CV(self.bijector.forward(z))
+            return CV(self.bijector.forward(z), atomic=x.atomic)
 
-    def _log_Jf(self, x: CV, *y: CV, reverse=False) -> tuple[CV, Array | None]:
+    def _log_Jf(self, x: CV, nl: NeighbourList | None, reverse=False, *y: CV) -> tuple[CV, Array | None]:
         """naive implementation, overrride this"""
+        assert nl is None, "not implemented"
         assert self.bijector is not None
         f = self.bijector.inverse_and_log_det if reverse else self.bijector.forward_and_log_det
         z, jac = f(CV.combine(*y, x).cv)
-        return CV(cv=z), jac
+        return CV(cv=z, atomic=x.atomic), jac
+
+
+@dataclasses.dataclass(kw_only=True)
+class CombinedCvFun(CvFunBase):
+    classes: list[list[CvFunBase]]
+
+    def calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False) -> tuple[CV, Array | None]:
+        assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
+
+        out_x = []
+        out_log_det = []
+
+        for cl, xi in zip(self.classes, x.split()):
+            ordered = reversed(cl) if reverse else cl
+
+            if log_det:
+                log_det = jnp.array(0.0)
+            else:
+                log_det = None
+
+            for tr in ordered:
+                xi, log_det_i = tr.calc(x=xi, nl=nl, reverse=reverse, log_det=log_det)
+                if log_det:
+                    assert log_det_i is not None
+                    log_det += log_det_i
+
+            out_x.append(xi)
+            out_log_det.append(log_det)
+
+        return CV.combine(*out_x), jnp.sum(jnp.array(out_log_det))
+
+    def _log_Jf(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        *conditioners: CV,
+    ) -> tuple[CV, Array | None]:
+        """naive automated implementation, overrride this"""
+
+        raise NotImplementedError("untested")
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -1967,31 +2066,31 @@ class CvTrans:
     trans: list[CvFunBase]
 
     @staticmethod
-    def from_array_function(f: Callable[[Array, None], Array]):
-        def f2(x: CV, cond: CV | None = None):
+    def from_array_function(f: Callable[[Array, NeighbourList | None, None], Array]):
+        def f2(x: CV, nl: NeighbourList | None, cond: CV | None = None):
             assert cond is None, "implement this"
 
             if x.batched:
-                out = vmap(f)(x.cv, None)
+                out = vmap(f)(x.cv, nl, None)
             else:
-                out = f(x.cv, None)
+                out = f(x.cv, nl, None)
 
-            return CV(cv=out)
+            return CV(cv=out, atomic=x.atomic)
 
         return CvTrans.from_cv_function(f=f2)
 
     @staticmethod
-    def from_cv_function(f: Callable[[CV, CV | None], CV]) -> CvTrans:
+    def from_cv_function(f: Callable[[CV, NeighbourList | None, CV | None], CV]) -> CvTrans:
         return CvTrans.from_cv_fun(proto=CvFun(forward=f))
 
     @staticmethod
     def from_cv_fun(proto: CvFunBase):
         return CvTrans(trans=[proto])
 
-    # @partial(jit, static_argnums=(0, 2, 3))
     def compute_cv_trans(
         self,
         x: CV,
+        nl: NeighbourList | None = None,
         reverse=False,
         log_Jf=False,
     ) -> tuple[CV, Array | None]:
@@ -2000,7 +2099,7 @@ class CvTrans:
         arg: CV
         """
         if x.batched:
-            return vmap(lambda x: self.compute_cv_trans(x, reverse, log_Jf))(x)
+            return vmap(lambda x, nl: self.compute_cv_trans(x, nl, reverse, log_Jf))(x, nl)
 
         ordered = reversed(self.trans) if reverse else self.trans
 
@@ -2010,7 +2109,7 @@ class CvTrans:
             log_det = None
 
         for tr in ordered:
-            x, log_det_i = tr.calc(x=x, reverse=reverse, log_det=log_Jf)
+            x, log_det_i = tr.calc(x=x, nl=nl, reverse=reverse, log_det=log_Jf)
             if log_Jf:
                 assert log_det_i is not None
                 log_det += log_det_i
@@ -2019,6 +2118,25 @@ class CvTrans:
     def __mul__(self, other):
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
         return CvTrans(trans=[*self.trans, *other.trans])
+
+    def __add__(self, other: CvTrans) -> CvTrans:
+        assert isinstance(other, CvTrans), "can only add CvTrans object"
+
+        @CvTrans.from_cv_function
+        def double(x: CV, nl: NeighbourList | None, _):
+            return CV.combine(x, x)
+
+        return double * CvTrans(trans=[CombinedCvFun(classes=[self.trans, other.trans])])
+
+    @staticmethod
+    def stack(*cv_trans: CvTrans):
+        n = len(cv_trans)
+
+        @CvTrans.from_cv_function
+        def duplicate(x: CV, nl: NeighbourList | None, _):
+            return CV.combine(*[x] * n)
+
+        return duplicate * CvTrans(trans=[CombinedCvFun(classes=[cvt.trans for cvt in cv_trans])])
 
 
 class CvTransNN(nn.Module, CvTrans):
@@ -2031,10 +2149,11 @@ class CvTransNN(nn.Module, CvTrans):
     def compute_cv_trans(
         self,
         x: CV,
+        nl: NeighbourList | None,
         reverse=False,
         log_Jf=False,
     ) -> tuple[CV, Array | None]:
-        return super().compute_cv_trans(x, reverse, log_Jf)
+        return super().compute_cv_trans(x, nl, reverse, log_Jf)
 
     @nn.nowrap
     def __mul__(self, other):
@@ -2054,8 +2173,8 @@ class NormalizingFlow(nn.Module):
             self.nn_flow = self.flow
 
     # @partial(jit, static_argnums=(0, 2, 3))
-    def calc(self, x: CV, reverse: bool, test_log_det=False):
-        a, b = self.nn_flow.compute_cv_trans(x, reverse=reverse, log_Jf=True)
+    def calc(self, x: CV, nl: NeighbourList | None, reverse: bool, test_log_det=False):
+        a, b = self.nn_flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
 
         if test_log_det:
             b2 = jnp.log(
@@ -2064,6 +2183,7 @@ class NormalizingFlow(nn.Module):
                         jacrev(
                             lambda x: self.nn_flow.compute_cv_trans(
                                 x,
+                                nl,
                                 reverse=reverse,
                                 log_Jf=False,
                             )[0],
@@ -2088,14 +2208,12 @@ class CvFlow:
         # self.batched = batched
 
     @staticmethod
-    def from_function(
-        f: Callable[[SystemParams, NeighbourList | None], Array],
-    ) -> CvFlow:
+    def from_function(f: Callable[[SystemParams, NeighbourList | None], Array], atomic=False) -> CvFlow:
         def f2(
             sp: SystemParams,
             nl: NeighbourList | None = None,
         ):
-            cv = CV(cv=f(sp, nl))
+            cv = CV(cv=f(sp, nl), atomic=atomic)
             # assert (
             #     len(cv.shape) == 1
             # ), f"The CV output should have shape (n,), got shape {cv.shape} for cv function {f} "
@@ -2121,7 +2239,7 @@ class CvFlow:
         def _compute_cv_flow(x, nl):
             out = self.f0(x, nl)
             if self.f1 is not None:
-                out, _ = self.f1.compute_cv_trans(out)
+                out, _ = self.f1.compute_cv_trans(out, nl)
 
             return out
 
@@ -2231,7 +2349,11 @@ class CollectiveVariable:
     ) -> tuple[CV, CV]:
         if sp.batched:
             if nl is None:
-                return vmap_chunked(self.compute_cv, in_axes=(0, None, None, None, None), chunk_size=chunk_size)(
+                return vmap_chunked(
+                    self.compute_cv,
+                    in_axes=(0, None, None, None, None),
+                    chunk_size=chunk_size,
+                )(
                     sp,
                     nl,
                     jacobian,
@@ -2240,7 +2362,11 @@ class CollectiveVariable:
                 )
             else:
                 assert nl.batched
-                return vmap_chunked(self.compute_cv, in_axes=(0, 0, None, None, None), chunk_size=chunk_size)(
+                return vmap_chunked(
+                    self.compute_cv,
+                    in_axes=(0, 0, None, None, None),
+                    chunk_size=chunk_size,
+                )(
                     sp,
                     nl,
                     jacobian,
