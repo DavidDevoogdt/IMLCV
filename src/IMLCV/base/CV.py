@@ -2005,20 +2005,12 @@ class CvFunDistrax(nn.Module, CvFunBase):
         log_det=False,
         conditioners: list[CV] | None = None,
     ) -> CV:
-        z = CV.combine(*conditioners, x).cv
+        if conditioners is not None:
+            z = CV.combine(*conditioners, x).cv
+        else:
+            z = x.cv
 
         assert nl is None, "not implemented"
-
-        @CvTrans.from_cv_function
-        def un_atomize(x: CV, nl, _):
-            if x.atomic:
-                x = CV(
-                    cv=jnp.reshape(x.cv, (-1,)),
-                    atomic=False,
-                    _combine_dims=x._combine_dims,
-                    _stack_dims=x._stack_dims,
-                )
-            return x
 
         if reverse:
             assert self.bijector is not None
@@ -2037,8 +2029,13 @@ class CvFunDistrax(nn.Module, CvFunBase):
         """naive implementation, overrride this"""
         assert nl is None, "not implemented"
         assert self.bijector is not None
+        if conditioners is not None:
+            z = CV.combine(*conditioners, x).cv
+        else:
+            z = x.cv
+
         f = self.bijector.inverse_and_log_det if reverse else self.bijector.forward_and_log_det
-        z, jac = f(CV.combine(*conditioners, x).cv)
+        z, jac = f(z)
         return CV(cv=z, atomic=x.atomic), jac
 
 
