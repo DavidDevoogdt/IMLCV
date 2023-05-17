@@ -9,7 +9,6 @@ from IMLCV.configs.local_threadpool import get_config as get_config_local
 from parsl.config import Config
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
-# py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 py_env = " which python"
 
 
@@ -51,7 +50,7 @@ def config(
         env = get_platform()
 
     if path_internal is None:
-        path_internal = ROOT_DIR / "IMLCV" / ".runinfo"
+        path_internal = ROOT_DIR / ".runinfo"
 
     if env == "local":
         execs = get_config_local(path_internal)

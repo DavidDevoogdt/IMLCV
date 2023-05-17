@@ -331,23 +331,6 @@ class GridBias(Bias):
         return []
 
 
-class GridBiasNd(Bias):
-    # inspiration fromhttps://github.com/stanbiryukov/Nyx/tree/main/nyx/jax
-
-    def __init__(
-        self,
-        collective_variable: CollectiveVariable,
-        vals,
-        bounds=None,
-        start=None,
-        step=None,
-    ) -> None:
-        super().__init__(collective_variable, start, step)
-
-    def _compute(self, cvs, *args):
-        return super()._compute(cvs, *args)
-
-
 class PlumedBias(Bias):
     def __init__(
         self,

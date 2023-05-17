@@ -78,7 +78,7 @@ def test_virial():
 
 
 @pytest.mark.parametrize("kernel", ["linear", "thin_plate_spline"])
-def test_grid_bias(kernel):
+def test_RBF_bias(kernel):
     # bounds = [[0, 3], [0, 3]]
     n = 5
 
@@ -197,7 +197,8 @@ def test_bias_save(tmpdir):
     assert pytest.approx(db.cv) == db2.cv
 
 
-def test_FES_bias(tmpdir):
+@pytest.mark.parametrize("choice,er", [["gridbias", 0.00765493], ["rbf", -0.00080173]])
+def test_FES_bias(tmpdir, choice, er):
     import zipfile
 
     folder = tmpdir / "alanine_dipeptide"
@@ -215,7 +216,10 @@ def test_FES_bias(tmpdir):
 
     config()
 
-    scheme0.FESBias(plot=True)
+    scheme0.FESBias(
+        plot=False,
+        choice=choice,
+    )
 
     sp = scheme0.md.sp
     nl = sp.get_neighbour_list(
@@ -225,4 +229,4 @@ def test_FES_bias(tmpdir):
 
     cv, energy_result = scheme0.md.bias.compute_from_system_params(sp, nl)
     assert jnp.allclose(cv.cv, jnp.array([-2.85656026, 2.79090329]))
-    assert jnp.allclose(energy_result.energy, 0.00765493)
+    assert jnp.allclose(energy_result.energy, er)

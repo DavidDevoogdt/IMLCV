@@ -221,7 +221,7 @@ class ThermoLIB:
         n=None,
         start_r=0,
         rbf_kernel="thin_plate_spline",
-        rbf_degree=-1,
+        rbf_degree=None,
         smoothing_threshold=5 * kjmol,
         samples_per_bin=500,
         **plot_kwargs,
@@ -270,7 +270,7 @@ class ThermoLIB:
             bounds = jnp.array(bounds)
 
             def get_b(fact):
-                eps = n / (bounds[:, 1] - bounds[:, 0]) * fact
+                eps = fs.shape[0] / (bounds[:, 1] - bounds[:, 0]) * fact
 
                 # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
 
