@@ -45,12 +45,13 @@ def test_cv_split_combine():
 
 def test_nf():
     def test(mf, x, k2):
-        var_a = mf.init(k2, x, False, method=NormalizingFlow.calc)
+        var_a = mf.init(k2, x=x, nl=None, reverse=False, method=NormalizingFlow.calc)
 
         y, Jy = mf.apply(
             variables=var_a,
             method=NormalizingFlow.calc,
             x=x,
+            nl=None,
             test_log_det=True,
             reverse=False,
         )
@@ -58,6 +59,7 @@ def test_nf():
             variables=var_a,
             method=NormalizingFlow.calc,
             x=y,
+            nl=None,
             test_log_det=True,
             reverse=True,
         )

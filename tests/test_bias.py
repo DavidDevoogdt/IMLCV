@@ -93,7 +93,7 @@ def test_grid_bias(kernel):
     bins = cv.metric.grid(n=n)
 
     @CvTrans.from_cv_function
-    def f(cv: CV, _):
+    def f(cv: CV, _nl, _cond):
         return cv.cv[0] ** 3 + cv.cv[1]
 
     # reevaluation of thermolib histo

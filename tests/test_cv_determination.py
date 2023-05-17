@@ -101,7 +101,7 @@ def test_cv_discovery(
         kwargs = dict(
             n_neighbors=40,
             min_dist=0.8,
-            nunits=200,
+            nunits=50,
             nlayers=2,
             metric="l2",
             densmap=True,

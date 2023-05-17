@@ -352,6 +352,18 @@ def get_sinkhorn_divergence(
     return CvTrans.from_cv_function(partial(sinkhorn_divergence, pi=pi, nli=nli))
 
 
+@CvTrans.from_cv_function
+def un_atomize(x: CV, nl, _):
+    if x.atomic:
+        x = CV(
+            cv=jnp.reshape(x.cv, (-1,)),
+            atomic=False,
+            _combine_dims=x._combine_dims,
+            _stack_dims=x._stack_dims,
+        )
+    return x
+
+
 ######################################
 #           CV Fun                   #
 ######################################
@@ -368,12 +380,12 @@ class RealNVP(CvFunNn):
         self.s = Dense(features=self.features)
         self.t = Dense(features=self.features)
 
-    def forward(self, x: CV, nl: NeighbourList | None, *cond: CV):
-        y = CV.combine(*cond).cv
+    def forward(self, x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None):
+        y = CV.combine(*conditioners).cv
         return CV(cv=x.cv * self.s(y) + self.t(y))
 
-    def backward(self, z: CV, nl: NeighbourList | None, *cond: CV):
-        y = CV.combine(*cond).cv
+    def backward(self, z: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None):
+        y = CV.combine(*conditioners).cv
         return CV(cv=(z.cv - self.t(y)) / self.s(y))
 
 

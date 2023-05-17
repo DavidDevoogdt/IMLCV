@@ -4,6 +4,7 @@ from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.implementations.CV import un_atomize
 from IMLCV.implementations.tensorflow.CV import KerasFunBase
 from IMLCV.implementations.tensorflow.CV import PeriodicLayer
 
@@ -21,6 +22,8 @@ class TranformerUMAP(Transformer):
         **kwargs,
     ):
         x = CV.stack(*x)
+
+        x = un_atomize.compute_cv_trans(x, None)[0]
 
         dims = x.shape[1:]
 
@@ -74,4 +77,4 @@ class TranformerUMAP(Transformer):
         assert parametric
         f = CvTrans(trans=[KerasFunBase(reducer)])
 
-        return f.compute_cv_trans(x)[0], f
+        return f.compute_cv_trans(x)[0], un_atomize * f

@@ -1877,12 +1877,12 @@ class CvFunBase:
         if self.cv_input is not None:
             y, cond = self.cv_input.split(x)
         else:
-            y, cond = x, []
+            y, cond = x, None
 
         if log_det:
-            out, log_det = self._log_Jf(y, nl, reverse=reverse, *cond)
+            out, log_det = self._log_Jf(y, nl, reverse=reverse, conditioners=cond)
         else:
-            out, log_det = self._calc(y, nl, reverse=reverse, *cond), None
+            out, log_det = self._calc(y, nl, reverse=reverse, conditioners=cond), None
 
         if self.cv_input:
             out = self.cv_input.combine(x, out)
@@ -1895,7 +1895,7 @@ class CvFunBase:
         x: CV,
         nl: NeighbourList | None,
         reverse=False,
-        *conditioners: CV,
+        conditioners: list[CV] | None = None,
     ) -> CV:
         pass
 
@@ -1904,12 +1904,12 @@ class CvFunBase:
         x: CV,
         nl: NeighbourList | None,
         reverse=False,
-        *conditioners: CV,
+        conditioners: list[CV] | None = None,
     ) -> tuple[CV, Array | None]:
         """naive automated implementation, overrride this"""
 
         def f(x):
-            return self._calc(x, nl, reverse, *conditioners)
+            return self._calc(x, nl, reverse, conditioners)
 
         a = f(x)
         b = jacfwd(f)(x)
@@ -1923,8 +1923,8 @@ class CvFun(CvFunBase):
     forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
     backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
 
-    def _calc(self, x: CV, nl: NeighbourList | None, reverse=False, *conditioners: CV) -> CV:
-        if len(conditioners) == 0:
+    def _calc(self, x: CV, nl: NeighbourList | None, reverse=False, conditioners: list[CV] | None = None) -> CV:
+        if conditioners is None:
             c = None
         else:
             c = CV.combine(*conditioners)
@@ -1950,19 +1950,19 @@ class CvFunNn(nn.Module, CvFunBase):
         x: CV,
         nl: NeighbourList | None,
         reverse=False,
-        *y: CV,
+        conditioners: list[CV] | None = None,
     ) -> CV:
         if reverse:
-            return self.backward(x, nl, *y)
+            return self.backward(x, nl, conditioners)
         else:
-            return self.forward(x, nl, *y)
+            return self.forward(x, nl, conditioners)
 
     @abstractmethod
-    def forward(self, x: CV, nl: NeighbourList | None, *y: CV) -> CV:
+    def forward(self, x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None) -> CV:
         pass
 
     @abstractmethod
-    def backward(self, x: CV, nl: NeighbourList | None, *y: CV) -> CV:
+    def backward(self, x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None) -> CV:
         pass
 
 
@@ -1997,10 +1997,28 @@ class CvFunDistrax(nn.Module, CvFunBase):
         """setups self.bijector"""
 
     # @partial(jit, static_argnums=(0, 4, 5))
-    def _calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False, *y: CV) -> CV:
-        z = CV.combine(*y, x).cv
+    def _calc(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        log_det=False,
+        conditioners: list[CV] | None = None,
+    ) -> CV:
+        z = CV.combine(*conditioners, x).cv
 
         assert nl is None, "not implemented"
+
+        @CvTrans.from_cv_function
+        def un_atomize(x: CV, nl, _):
+            if x.atomic:
+                x = CV(
+                    cv=jnp.reshape(x.cv, (-1,)),
+                    atomic=False,
+                    _combine_dims=x._combine_dims,
+                    _stack_dims=x._stack_dims,
+                )
+            return x
 
         if reverse:
             assert self.bijector is not None
@@ -2009,12 +2027,18 @@ class CvFunDistrax(nn.Module, CvFunBase):
             assert self.bijector is not None
             return CV(self.bijector.forward(z), atomic=x.atomic)
 
-    def _log_Jf(self, x: CV, nl: NeighbourList | None, reverse=False, *y: CV) -> tuple[CV, Array | None]:
+    def _log_Jf(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        conditioners: list[CV] | None = None,
+    ) -> tuple[CV, Array | None]:
         """naive implementation, overrride this"""
         assert nl is None, "not implemented"
         assert self.bijector is not None
         f = self.bijector.inverse_and_log_det if reverse else self.bijector.forward_and_log_det
-        z, jac = f(CV.combine(*y, x).cv)
+        z, jac = f(CV.combine(*conditioners, x).cv)
         return CV(cv=z, atomic=x.atomic), jac
 
 
@@ -2052,7 +2076,7 @@ class CombinedCvFun(CvFunBase):
         x: CV,
         nl: NeighbourList | None,
         reverse=False,
-        *conditioners: CV,
+        conditioners: list[CV] | None = None,
     ) -> tuple[CV, Array | None]:
         """naive automated implementation, overrride this"""
 
@@ -2067,8 +2091,8 @@ class CvTrans:
 
     @staticmethod
     def from_array_function(f: Callable[[Array, NeighbourList | None, None], Array]):
-        def f2(x: CV, nl: NeighbourList | None, cond: CV | None = None):
-            assert cond is None, "implement this"
+        def f2(x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None):
+            assert conditioners is None, "implement this"
 
             if x.batched:
                 out = vmap(f)(x.cv, nl, None)

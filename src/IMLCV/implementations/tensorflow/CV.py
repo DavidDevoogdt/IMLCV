@@ -5,6 +5,7 @@ import numpy as np
 import tensorflow as tfl
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFunBase
+from IMLCV.base.CV import NeighbourList
 from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
 
@@ -50,8 +51,8 @@ class KerasFunBase(CvFunBase):
     def __init__(self, reducer) -> None:
         self.reducer = reducer
 
-    def _calc(self, x: CV, *conditioners: CV, reverse=False) -> CV:
-        assert len(conditioners) == 0
+    def _calc(self, x: CV, nl: NeighbourList, reverse=False, conditioners: list[CV] | None = None) -> CV:
+        assert conditioners is None
         assert not reverse
 
         batched = x.batched

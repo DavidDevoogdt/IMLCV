@@ -12,6 +12,7 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import trunc_svd
+from IMLCV.implementations.CV import un_atomize
 from jax import Array
 from jax import jit
 from jax import random
@@ -134,6 +135,7 @@ class TranformerAutoEncoder(Transformer):
         # )
 
         cv = CV.stack(*cv)
+        cv = un_atomize.compute_cv_trans(cv, None)[0]
 
         rng = random.PRNGKey(0)
 
@@ -256,8 +258,8 @@ class TranformerAutoEncoder(Transformer):
 
             # @partial(jit, static_argnums=(0,))
 
-        def forward(x: CV, *y):
-            assert y == (None,)
+        def forward(x: CV, nl, y: list[CV] | None = None):
+            assert y is None
             encoded: Array = VAE(**vae_args).apply(
                 {"params": state.params},
                 x.cv,
@@ -267,7 +269,7 @@ class TranformerAutoEncoder(Transformer):
 
         f_enc = CvTrans(trans=[CvFun(forward=forward)])
 
-        return f_enc.compute_cv_trans(cv)[0], f_enc
+        return f_enc.compute_cv_trans(cv)[0], un_atomize * f_enc
 
 
 class TransoformerLDA(Transformer):
