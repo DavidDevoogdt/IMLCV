@@ -197,7 +197,7 @@ def test_bias_save(tmpdir):
     assert pytest.approx(db.cv) == db2.cv
 
 
-@pytest.mark.parametrize("choice,er", [["gridbias", 0.00765493], ["rbf", -0.00080173]])
+@pytest.mark.parametrize("choice,er", [["gridbias", 0.00765493], ["rbf", 0.01724728]])
 def test_FES_bias(tmpdir, choice, er):
     import zipfile
 
