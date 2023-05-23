@@ -7,6 +7,7 @@ from IMLCV.base.bias import Bias
 from IMLCV.base.bias import plot_app
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
+from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.bias import GridBias
 from IMLCV.implementations.bias import RbfBias
 from jax import jit
@@ -28,10 +29,10 @@ class ThermoLIB:
         self.rounds = rounds
         if rnd is None:
             rnd = rounds.round
+
         self.rnd = rnd
         self.common_bias = self.rounds.get_bias(r=self.rnd)
         self.cvs = self.rounds.get_bias(r=self.rnd).collective_variable
-        self.folder = rounds.folder
 
     def fes_nd_thermolib(
         self,
@@ -72,7 +73,7 @@ class ThermoLIB:
 
         temp = self.rounds.T
 
-        directory = f"{self.folder}/round_{self.rnd}"
+        directory = self.rounds.path(c=self.rounds.cv, r=self.rnd)
 
         rnd = self.rnd
 
@@ -135,8 +136,8 @@ class ThermoLIB:
             samples_per_bin=samples_per_bin,
         )
 
-        # histo = bash_app_python(HistogramND.from_wham, executors=["model"])(
-        histo = HistogramND.from_wham(
+        histo = bash_app_python(HistogramND.from_wham, executors=["model"])(
+            # histo = HistogramND.from_wham(
             bins=bins,
             trajectories=[
                 np.array(
@@ -149,8 +150,8 @@ class ThermoLIB:
             biasses=biases,
             temp=temp,
             verbosity="high",
-            # execution_folder=directory,
-        )  # .result()
+            execution_folder=directory,
+        ).result()
 
         fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
         fes.set_ref()
@@ -295,27 +296,34 @@ class ThermoLIB:
             raise ValueError
 
         if plot:
-            plot_app(
-                bias=fesBias,
-                outputs=[
-                    File(
-                        f"{self.folder}/FES_thermolib_{self.rnd}_inverted_{choice}.pdf",
-                    ),
-                ],
-                inverted=True,
-                execution_folder=self.folder,
-                stdout=f"FES_thermolib_{self.rnd}_inverted_{choice}.stdout",
-                stderr=f"FES_thermolib_{self.rnd}_inverted_{choice}.stderr",
-                **plot_kwargs,
+            fold = str(self.rounds.path(c=self.rounds.cv))
+
+            pf = []
+
+            pf.append(
+                plot_app(
+                    bias=fesBias,
+                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                    inverted=True,
+                    execution_folder=fold,
+                    stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
+                    stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
+                    **plot_kwargs,
+                ),
             )
 
-            plot_app(
-                bias=fesBias,
-                outputs=[File(f"{self.folder}/FES_bias_{self.rnd}_{choice}.pdf")],
-                execution_folder=self.folder,
-                stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
-                stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
-                **plot_kwargs,
+            pf.append(
+                plot_app(
+                    bias=fesBias,
+                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.pdf")],
+                    execution_folder=fold,
+                    stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
+                    stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
+                    **plot_kwargs,
+                ),
             )
+
+            for f in pf:
+                f.result()
 
         return fesBias

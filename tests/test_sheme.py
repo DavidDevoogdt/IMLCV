@@ -6,6 +6,8 @@ from IMLCV.examples.example_systems import CsPbI3
 from IMLCV.scheme import Scheme
 from molmod.units import kjmol
 
+from .test_cv_determination import get_rounds_ala
+
 
 @pytest.mark.skip(reason="run on HPC")
 def test_perov(tmpdir, steps=500, recalc=False):
@@ -16,21 +18,10 @@ def test_perov(tmpdir, steps=500, recalc=False):
 
 
 # @pytest.mark.skip(reason="run on HPC")
-def test_ala(tmpdir, steps=10):
+def test_ala(tmpdir, steps=100):
     # tmpdir = Path("tmp")
-    folder = tmpdir / "alanine_dipeptide"
 
-    import zipfile
-
-    with zipfile.ZipFile(
-        ROOT_DIR / "data" / "alanine_dipeptide.zip",
-        "r",
-    ) as zip_ref:
-        zip_ref.extractall(tmpdir)
-
-    from IMLCV.scheme import Scheme
-
-    rnds = Rounds(folder=folder, new_folder=False)
+    rnds = get_rounds_ala(tmpdir)
     scheme0 = Scheme.from_rounds(rnds)
 
     config()
@@ -41,3 +32,7 @@ def test_ala(tmpdir, steps=10):
 
     for r, t in scheme0.rounds.iter(num=1):
         assert t.ti.CV.shape == (steps, 2)
+
+
+if __name__ == "__main__":
+    test_ala("tmp")

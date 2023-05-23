@@ -13,7 +13,7 @@ from IMLCV.base.bias import Bias
 from IMLCV.base.bias import Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.MdEngine import StaticTrajectoryInfo
+from IMLCV.base.MdEngine import StaticMdInfo
 from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
@@ -31,7 +31,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     def __init__(
         self,
         bias: Bias,
-        static_trajectory_info: StaticTrajectoryInfo,
+        static_trajectory_info: StaticMdInfo,
         energy: Energy,
         trajectory_file=None,
         sp: SystemParams | None = None,
@@ -216,7 +216,7 @@ class PlumedEngine(YaffEngine):
     def __init__(
         self,
         bias: Bias,
-        static_trajectory_info: StaticTrajectoryInfo,
+        static_trajectory_info: StaticMdInfo,
         energy: Energy,
         trajectory_file=None,
         sp: SystemParams | None = None,

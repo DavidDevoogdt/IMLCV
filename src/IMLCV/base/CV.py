@@ -4,7 +4,9 @@ import dataclasses
 from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 
+import cloudpickle
 import distrax
 import jax.flatten_util
 import jax.lax
@@ -1134,18 +1136,15 @@ class NeighbourList:
         return jnp.array(bool_masks), arg_split, p
 
     @staticmethod
-    # @partial(jit, static_argnums=(4, 5, 6, 7))
+    @partial(jit, static_argnames=["matching", "alpha", "mode"])
     def match_kernel(
         p1: Array,
         p2: Array,
         nl1: NeighbourList,
         nl2: NeighbourList,
         matching="REMatch",
-        # norm=True,
         alpha=1e-2,
         mode="divergence",
-        # average_kernels=True,
-        jit=True,
     ):
         # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
 
@@ -1177,10 +1176,6 @@ class NeighbourList:
                 ),
             )(p2, nl2)
 
-        # jnp.all(nl1.z_unique == nl2.z_unique)
-        # assert jnp.all(nl1.num_z_unique == nl2.num_z_unique)
-        # b = nl1.num_z_unique
-
         @vmap
         def __norm(p):
             n1_sq = jnp.einsum("...,...->", p, p)
@@ -1198,21 +1193,6 @@ class NeighbourList:
         b1, a1_s, z1 = nl1.nl_split_z((p1, n1_sq))
         b2, a2_s, z2 = nl2.nl_split_z((p2, n2_sq))
 
-        # @jax.jit
-        # def split_and_rearrange(f, z1, z2, a1_s, a2_s):
-        #     P_p = jax.scipy.linalg.block_diag(
-        #         *[f(a, b, an, bn) for (a, an), (b, bn) in zip(z1, z2)]
-        #     )
-
-        #     a1, a2 = jnp.hstack(a1_s), jnp.hstack(a2_s)
-        #     a1_i = jnp.zeros_like(a1).at[a1].set(jnp.arange(a1.shape[0]))
-        #     a2_i = jnp.zeros_like(a2).at[a2].set(jnp.arange(a2.shape[0]))
-
-        #     P = P_p[a1_i, :][:, a2_i]
-
-        #     return P
-
-        # @partial(jax.jit, static_argnums=(4))
         def _f(p1, p2, b1, b2, matching):
             # if norm:
 
@@ -1227,16 +1207,6 @@ class NeighbourList:
             elif matching == "norm":
                 raise
 
-                # def __gs(p1_s, p2_s, n1_s, n2_s):
-                #     n1_ss = jnp.argsort(n1_s)
-                #     n2_ss = jnp.argsort(n2_s)
-
-                #     p = jnp.zeros((p1_s.shape[0], p2_s.shape[0]))
-                #     p = p.at[n1_ss, n2_ss].set(1)
-
-                #     return p
-
-                # P12 = split_and_rearrange(__gs, z1, z2, a1_s, a2_s)
             else:
 
                 @jax.jit
@@ -2243,31 +2213,25 @@ class CvFlow:
 
         return CvFlow(func=f2)
 
+    @partial(jax.jit, static_argnames=["self", "chunk_size"])
     def compute_cv_flow(
         self,
         x: SystemParams,
         nl: NeighbourList | None = None,
-        jit=True,
         chunk_size: int | None = None,
     ) -> CV:
         if x.batched:
             return vmap_chunked(
                 self.compute_cv_flow,
-                in_axes=(0, 0, None, None),
+                in_axes=(0, 0, None),
                 chunk_size=chunk_size,
-            )(x, nl, jit, chunk_size)
+            )(x, nl, chunk_size)
 
-        def _compute_cv_flow(x, nl):
-            out = self.f0(x, nl)
-            if self.f1 is not None:
-                out, _ = self.f1.compute_cv_trans(out, nl)
+        out = self.f0(x, nl)
+        if self.f1 is not None:
+            out, _ = self.f1.compute_cv_trans(out, nl)
 
-            return out
-
-        if jit:
-            _compute_cv_flow = jax.jit(_compute_cv_flow)
-
-        return _compute_cv_flow(x, nl)
+        return out
 
     def __add__(self, other):
         assert isinstance(other, CvFlow)
@@ -2359,51 +2323,60 @@ class CollectiveVariable:
     def _jit_df(self, sp, nl):
         return self.jac(self.f.compute_cv_flow)(sp, nl)
 
-    # @partial(jit, static_argnums=(0, 3))
+    @partial(jax.jit, static_argnames=["self", "chunk_size", "jacobian"])
     def compute_cv(
         self,
         sp: SystemParams,
         nl: NeighbourList | None = None,
         jacobian=False,
-        jit=True,
         chunk_size: int | None = None,
     ) -> tuple[CV, CV]:
         if sp.batched:
             if nl is None:
                 return vmap_chunked(
                     self.compute_cv,
-                    in_axes=(0, None, None, None, None),
+                    in_axes=(0, None, None, None),
                     chunk_size=chunk_size,
                 )(
                     sp,
                     nl,
                     jacobian,
-                    jit,
                     chunk_size,
                 )
             else:
                 assert nl.batched
                 return vmap_chunked(
                     self.compute_cv,
-                    in_axes=(0, 0, None, None, None),
+                    in_axes=(0, 0, None, None),
                     chunk_size=chunk_size,
                 )(
                     sp,
                     nl,
                     jacobian,
-                    jit,
                     chunk_size,
                 )
 
-        if jit:
-            cv = self._jit_f(sp, nl)
-            dcv = self._jit_df(sp, nl) if jacobian else None
-        else:
-            cv = self.f.compute_cv_flow(sp, nl, jit=False)
-            dcv = self.jac(self.f.compute_cv_flow)(sp, nl, jit=False) if jacobian else None
-
+        cv = self._jit_f(sp, nl)
+        dcv = self._jit_df(sp, nl) if jacobian else None
         return (cv, dcv)
 
     @property
     def n(self):
         return self.metric.ndim
+
+    def save(self, file):
+        with open(file, "wb") as f:
+            cloudpickle.dump(self, f)
+
+    @staticmethod
+    def load(file, **kwargs) -> CollectiveVariable:
+        with open(file, "rb") as f:
+            self = cloudpickle.load(f)
+
+        print("Loading MD engine")
+        for key in kwargs.keys():
+            print(f"setting {key}={kwargs[key]}")
+
+            self.__setattr__(key, kwargs[key])
+
+        return self

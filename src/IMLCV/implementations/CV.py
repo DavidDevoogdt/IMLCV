@@ -87,43 +87,40 @@ def sb_descriptor(
     r_cut,
     n_max: int,
     l_max: int,
-    references: SystemParams | None = None,
-    references_nl: NeighbourList | None = None,
     reduce=True,
-    reshape=False,
+    reshape=True,
 ):
     from IMLCV.tools.soap_kernel import p_i, p_inl_sb
 
-    # @jit #jit makes it not pickable
+    def _reduce_sb(a):
+        def _tril(a):
+            return a[jnp.tril_indices_from(a)]
+
+        def _triu(a):
+            return a[jnp.triu_indices_from(a)]
+
+        a = vmap(
+            vmap(
+                vmap(_tril, in_axes=(0), out_axes=(0)),
+                in_axes=(1),
+                out_axes=(1),
+            ),
+            in_axes=(2),
+            out_axes=(2),
+        )(
+            a,
+        )  # eliminate l>n
+        a = vmap(
+            vmap(_triu, in_axes=(0), out_axes=(0)),
+            in_axes=(3),
+            out_axes=(2),
+        )(
+            a,
+        )  # eliminate Z2>Z1
+        return a
+
     def f(sp: SystemParams, nl: NeighbourList):
         assert nl is not None, "provide neighbourlist for sb describport"
-
-        def _reduce(a):
-            def _tril(a):
-                return a[jnp.tril_indices_from(a)]
-
-            def _triu(a):
-                return a[jnp.triu_indices_from(a)]
-
-            a = vmap(
-                vmap(
-                    vmap(_tril, in_axes=(0), out_axes=(0)),
-                    in_axes=(1),
-                    out_axes=(1),
-                ),
-                in_axes=(2),
-                out_axes=(2),
-            )(
-                a,
-            )  # eliminate l>n
-            a = vmap(
-                vmap(_triu, in_axes=(0), out_axes=(0)),
-                in_axes=(3),
-                out_axes=(2),
-            )(
-                a,
-            )  # eliminate Z2>Z1
-            return a
 
         a = p_i(
             sp=sp,
@@ -133,46 +130,13 @@ def sb_descriptor(
         )
 
         if reduce:
-            a = _reduce(a)
+            a = _reduce_sb(a)
 
         if reshape:
             a = jnp.reshape(a, (a.shape[0], -1))
 
         return a
 
-    if references is not None:
-        raise NotImplementedError("adapt for divergences")
-
-        # assert references_nl is not None
-
-        # refs = (f)(references, references_nl)
-
-        # # @NeighbourList.vmap_x_nl
-        # # @partial(vmap, in_axes=(0, 0, None, None))
-        # def _f(refs, references_nl, val, nl):
-        #     return NeighbourList.match_kernel(val, refs, nl, references_nl)
-
-        # if references.batched:
-        #     _f = vmap(f, in_axes=(0, 0, None, None))
-
-        # _f = partial(_f, refs, references_nl)
-
-        # # @jit
-        # def sb_descriptor_distance2(sp: SystemParams, nl: NeighbourList):
-        #     assert nl is not None, "provide neighbourlist for sb describport"
-
-        #     val = f(sp=sp, nl=nl)
-        #     com = _f(val, nl)
-
-        #     y2 = 1 - com
-        #     y2_safe = jnp.where(y2 <= 0, jnp.ones_like(y2), y2)
-        #     y = jnp.where(y2 <= 0, 0.0, jnp.sqrt(y2_safe))
-
-        #     return jnp.ravel(y)
-
-        # return CvFlow.from_function(sb_descriptor_distance2)  # type: ignore
-
-    # else:
     return CvFlow.from_function(f, atomic=True)  # type: ignore
 
 
@@ -186,21 +150,6 @@ def NoneCV() -> CollectiveVariable:
 ######################################
 #           CV trans                 #
 ######################################
-
-
-# class MeshGrid(CvTrans):
-#     def __init__(self, meshgrid) -> None:
-#         self.map_meshgrids = meshgrid
-#         super().__init__(f)
-
-#     def _f(self, x: CV):
-#         #  if self.map_meshgrids is not None:
-#         y = x.cv
-
-#         y = y * (jnp.array(self.map_meshgrids[0].shape) - 1)
-#         y = jnp.array(
-#             [jsp.ndimage.map_coordinates(wp, y, order=1) for wp in self.map_meshgrids]
-#         )
 
 
 def rotate_2d(alpha):
@@ -362,6 +311,23 @@ def un_atomize(x: CV, nl, _):
             _stack_dims=x._stack_dims,
         )
     return x
+
+
+def stack_reduce(op=jnp.mean):
+    # take average over both alignments
+    @CvTrans.from_cv_function
+    def _stack_reduce(cv: CV, nl: NeighbourList | None, _):
+        cvs = cv.split(cv.stack_dims)
+
+        return CV(
+            op(jnp.stack([cvi.cv for cvi in cvs]), axis=0),
+            _stack_dims=cvs[0]._stack_dims,
+            _combine_dims=cvs[0]._combine_dims,
+            atomic=cvs[0].atomic,
+            mapped=cvs[0].mapped,
+        )
+
+    return _stack_reduce
 
 
 ######################################

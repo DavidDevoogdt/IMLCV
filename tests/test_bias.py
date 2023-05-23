@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -116,7 +117,7 @@ def test_RBF_bias(kernel):
 def test_combine_bias():
     from yaff.test.common import get_alaninedipeptide_amber99ff
 
-    from IMLCV.base.MdEngine import StaticTrajectoryInfo
+    from IMLCV.base.MdEngine import StaticMdInfo
     from IMLCV.implementations.MdEngine import YaffEngine
 
     T = 300 * kelvin
@@ -146,7 +147,7 @@ def test_combine_bias():
 
     bias = CompositeBias(biases=[bias1, bias2])
 
-    stic = StaticTrajectoryInfo(
+    stic = StaticMdInfo(
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
@@ -179,6 +180,7 @@ def test_bias_save(tmpdir):
             step=500,
         ),
     )
+
     yaffmd.run(int(1e2))
 
     tmpdir = Path(tmpdir)
@@ -197,7 +199,7 @@ def test_bias_save(tmpdir):
     assert pytest.approx(db.cv) == db2.cv
 
 
-@pytest.mark.parametrize("choice,er", [["gridbias", 0.00765493], ["rbf", 0.01724728]])
+@pytest.mark.parametrize("choice,er", [["gridbias", 0.02389234], ["rbf", 0.02729024]])
 def test_FES_bias(tmpdir, choice, er):
     import zipfile
 
@@ -207,7 +209,7 @@ def test_FES_bias(tmpdir, choice, er):
         ROOT_DIR / "data" / "alanine_dipeptide.zip",
         "r",
     ) as zip_ref:
-        zip_ref.extractall(tmpdir)
+        zip_ref.extractall(folder)
 
     from IMLCV.scheme import Scheme
 
@@ -230,3 +232,7 @@ def test_FES_bias(tmpdir, choice, er):
     cv, energy_result = scheme0.md.bias.compute_from_system_params(sp, nl)
     assert jnp.allclose(cv.cv, jnp.array([-2.85656026, 2.79090329]))
     assert jnp.allclose(energy_result.energy, er)
+
+
+if __name__ == "__main__":
+    test_bias_save("tmp")

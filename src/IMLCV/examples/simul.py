@@ -157,7 +157,7 @@ if __name__ == "__main__":
         f.write(f"resolved args: {args} \n")
 
     def app(args):
-        from example_systems import CsPbI3, alanine_dipeptide_yaff
+        from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
         from molmod.units import kjmol
 
         from IMLCV.configs.config_general import config
@@ -255,8 +255,6 @@ if __name__ == "__main__":
         bash_app_python(executors=["default"], function=app)(
             args=args,
             execution_folder=args.folder,
-            # stdout="IMLCV.stdout",
-            # stderr="IMLCV.stderr",
         ).result()
     else:
         os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parallelism_threads=1"

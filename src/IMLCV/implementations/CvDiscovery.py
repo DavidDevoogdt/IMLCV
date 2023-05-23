@@ -11,6 +11,7 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.CV import get_sinkhorn_divergence
+from IMLCV.implementations.CV import stack_reduce
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -380,21 +381,8 @@ class TransoformerLDA(Transformer):
             cv_out.append(cv_i)
             hs.append(nd * _f * _g)
 
-        # take average over both alignments
-        @CvTrans.from_cv_function
-        def average(cv: CV, nl: NeighbourList | None, _):
-            cvs = cv.split(cv.stack_dims)
-
-            return CV(
-                jnp.mean(jnp.stack([cvi.cv for cvi in cvs]), axis=0),
-                _stack_dims=cvs[0]._stack_dims,
-                _combine_dims=cvs[0]._combine_dims,
-                atomic=cvs[0].atomic,
-                mapped=cvs[0].mapped,
-            )
-
-        lda_cv = CvTrans.stack(*hs) * average
-        cv_out = average.compute_cv_trans(CV.combine(*cv_out), nl)[0]
+        lda_cv = CvTrans.stack(*hs) * stack_reduce()
+        cv_out = stack_reduce().compute_cv_trans(CV.combine(*cv_out), nl)[0]
 
         # assert jnp.allclose(cv_out.cv, jax.jit(lda_cv.compute_cv_trans)(cv, nl)[0].cv)
 

@@ -13,6 +13,7 @@ from time import time
 
 import cloudpickle
 import h5py
+import jax
 import jax.numpy as jnp
 import numpy as np
 import yaff.analysis.biased_sampling
@@ -42,7 +43,7 @@ yaff.log.set_level(yaff.log.silent)
 
 
 @dataclass
-class StaticTrajectoryInfo:
+class StaticMdInfo:
     _attr = [
         "timestep",
         "r_cut",
@@ -121,7 +122,7 @@ class StaticTrajectoryInfo:
             self._save(hf=hf)
 
     @staticmethod
-    def _load(hf: h5py.File) -> StaticTrajectoryInfo:
+    def _load(hf: h5py.File) -> StaticMdInfo:
         props_static = {}
         attrs_static = {}
 
@@ -131,12 +132,12 @@ class StaticTrajectoryInfo:
         for key, val in hf.attrs.items():
             attrs_static[key] = val
 
-        return StaticTrajectoryInfo(**attrs_static, **props_static)
+        return StaticMdInfo(**attrs_static, **props_static)
 
     @staticmethod
-    def load(filename) -> StaticTrajectoryInfo:
+    def load(filename) -> StaticMdInfo:
         with h5py.File(str(filename), "r") as hf:
-            return StaticTrajectoryInfo._load(hf=hf)
+            return StaticMdInfo._load(hf=hf)
 
 
 @dataclass
@@ -455,7 +456,7 @@ class MDEngine(ABC):
         self,
         bias: Bias,
         energy: Energy,
-        static_trajectory_info: StaticTrajectoryInfo,
+        static_trajectory_info: StaticMdInfo,
         trajectory_file=None,
         sp: SystemParams | None = None,
     ) -> None:
@@ -548,16 +549,13 @@ class MDEngine(ABC):
         """
 
         print(f"running for {int(steps)} steps!")
-        # try:
 
-        # with jax.debug_nans():
-        #     with jax.disable_jit():
-        # try:
-        self._run(int(steps))
-        # except Exception as err:
-        #     if self.step == 1:
-        #         raise err
-        #     print(f"The calculator finished early with error {err=},{type(err)=}")
+        try:
+            self._run(int(steps))
+        except Exception as err:
+            if self.step == 1:
+                raise err
+            print(f"The calculator finished early with error {err=},{type(err)=}")
 
         self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
@@ -645,39 +643,12 @@ class MDEngine(ABC):
         gpos: bool = False,
         vtens: bool = False,
     ) -> tuple[CV, EnergyResult]:
-        # with jax.disable_jit()
-        # with jax.debug_nans():
         cv, ener = self.bias.compute_from_system_params(
             sp=self.sp,
             nl=self.nl,
             gpos=gpos,
             vir=vtens,
         )
-
-        # if jnp.any(jnp.isnan(ener.gpos)):
-        #     import jax
-
-        #     with jax.disable_jit():
-        #         with jax.debug_nans():
-        #             cv, ener = self.bias.compute_from_system_params(
-        #                 sp=self.sp, nl=self.nl, gpos=gpos, vir=vtens, jit=False
-        #             )
-
-        # if (self.static_trajectory_info.max_grad is not None) and (
-        #     ener.gpos is not None
-        # ):
-        #     ns = jnp.linalg.norm(ener.gpos, axis=1)
-
-        #     norms = jnp.max(ns)
-
-        # if (fact := norms / self.static_trajectory_info.max_grad) > 1:
-        #     ener = EnergyResult(
-        #         ener.energy,
-        #         ener.gpos / fact,
-        #         ener.vtens if ener.vtens is not None else None,
-        #     )
-
-        #     print(f"clipped, fact={fact}")
 
         return cv, ener
 
@@ -690,7 +661,7 @@ class MDEngine(ABC):
     @dataclass
     class YaffSys:
         _ener: Energy
-        _tic: StaticTrajectoryInfo
+        _tic: StaticMdInfo
 
         @dataclass
         class YaffCell:

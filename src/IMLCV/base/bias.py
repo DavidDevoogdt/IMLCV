@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Iterable
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -238,13 +239,13 @@ class Bias(BC, ABC):
         return False
 
     # @partial(jit, static_argnums=(0, 2, 3))
+    @partial(jax.jit, static_argnames=["self", "gpos", "vir"])
     def compute_from_system_params(
         self,
         sp: SystemParams,
         gpos=False,
         vir=False,
         nl: NeighbourList | None = None,
-        jit=True,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -266,35 +267,29 @@ class Bias(BC, ABC):
             sp=sp,
             nl=nl,
             jacobian=gpos or vir,
-            jit=jit,
         )
-        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir), jit=jit)
+        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
 
-        def _resum(sp, jac, de):
-            e_gpos = None
-            if gpos:
-                es = "nj,njkl->nkl"
-                if not sp.batched:
-                    es = es.replace("n", "")
-                e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
+        # def _resum(sp, jac, de):
+        e_gpos = None
+        if gpos:
+            es = "nj,njkl->nkl"
+            if not sp.batched:
+                es = es.replace("n", "")
+            e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
 
-            e_vir = None
-            if vir and sp.cell is not None:
-                # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
-                es = "nji,nk,nkjl->nli"
-                if not sp.batched:
-                    es = es.replace("n", "")
-                e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
+        e_vir = None
+        if vir and sp.cell is not None:
+            # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
+            es = "nji,nk,nkjl->nli"
+            if not sp.batched:
+                es = es.replace("n", "")
+            e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
 
-            return EnergyResult(ener, e_gpos, e_vir)
+        return cvs, EnergyResult(ener, e_gpos, e_vir)
 
-        if jit:
-            _resum = jax.jit(_resum)
-
-        return cvs, _resum(sp, jac, de)
-
-    # @partial(jit, static_argnums=(0, 2))
-    def compute_from_cv(self, cvs: CV, diff=False, jit=True) -> CV:
+    @partial(jax.jit, static_argnames=["self", "diff"])
+    def compute_from_cv(self, cvs: CV, diff=False) -> CV:
         """compute the energy and derivative.
 
         If map==False, the cvs are assumed to be already mapped
@@ -306,22 +301,17 @@ class Bias(BC, ABC):
             args = [HashableArrayWrapper(a) for a in self.get_args()]
             static_array_argnums = tuple(i + 1 for i in range(len(args)))
 
-            if jit:
-                return jax.jit(self._compute, static_argnums=static_array_argnums)(
-                    x,
-                    *args,
-                )
-            else:
-                return self._compute(x, *args)
+            # if jit:
+            return jax.jit(self._compute, static_argnums=static_array_argnums)(
+                x,
+                *args,
+            )
 
         def f1(x):
             return value_and_grad(f0)(x) if diff else (f0(x), None)
 
         def f2(cvs):
             return vmap(f1)(cvs) if cvs.batched else f1(cvs)
-
-        if jit:
-            f2 = jax.jit(f2)
 
         return f2(cvs)
 

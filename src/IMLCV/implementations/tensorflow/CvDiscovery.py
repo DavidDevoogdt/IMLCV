@@ -75,6 +75,6 @@ class TranformerUMAP(Transformer):
         reducer.fit(x.cv)
 
         assert parametric
-        f = CvTrans(trans=[KerasFunBase(reducer)])
+        f = CvTrans(trans=[KerasFunBase(reducer.encoder, reducer.decoder)])
 
         return f.compute_cv_trans(x)[0], un_atomize * f

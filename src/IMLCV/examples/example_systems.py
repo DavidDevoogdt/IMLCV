@@ -12,7 +12,7 @@ from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import StaticTrajectoryInfo
+from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import dihedral
@@ -31,30 +31,13 @@ from yaff.test.common import get_alaninedipeptide_amber99ff
 
 yaff.log.set_level(yaff.log.silent)
 
+DATA_ROOT = ROOT_DIR / "IMLCV" / "data"
 
-def alanine_dipeptide_yaff(
-    bias: None | Callable[[CollectiveVariable], Bias] = None,
-    cv="backbone_dihedrals",
-    k=5 * kjmol,
-    project=True,
-    lda_steps=500,
-    num_kfda=1,
-    kernel=True,
-    harmonic=True,
-    folder=None,
-    kernel_type=None,
-    alpha_rematch=1e-1,
-):
+
+def alanine_dipeptide_yaff(cv="backbone_dihedrals", bias: Callable[[CollectiveVariable], Bias] | None = None):
     T = 300 * kelvin
 
-    if cv == "backbone_dihedrals":
-        r_cut = None
-    elif cv == "soap_dist" or cv == "soap_lda":
-        r_cut = 3.0 * angstrom
-    else:
-        r_cut = None
-
-    tic = StaticTrajectoryInfo(
+    tic = StaticMdInfo(
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
@@ -65,8 +48,7 @@ def alanine_dipeptide_yaff(
         ),
         screen_log=10,
         equilibration=0 * units.femtosecond,
-        r_cut=r_cut,
-        # max_grad=max_grad,
+        r_cut=None,
     )
 
     if cv == "backbone_dihedrals":
@@ -78,32 +60,89 @@ def alanine_dipeptide_yaff(
             ),
         )
 
-        # sp = None
-
-    elif cv == "soap_dist" or cv == "soap_lda":
-        raise NotImplementedError("todo couple CV discovery")
-
+    elif cv is None:
+        cv0 = NoneCV()
     else:
         raise ValueError(
             f"unknown value {cv} for cv choos 'soap_dist' or 'backbone_dihedrals'",
         )
 
     if bias is None:
-        bias = NoneBias(cvs=cv0)
-    elif bias == "harm":
-        bias = HarmonicBias(cvs=cv0, q0=CV(cv=jnp.array([1.0])), k=k)
-    elif isinstance(bias, Callable):
-        bias = bias(cv0)
+        bias_cv0 = NoneBias(cvs=cv0)
     else:
-        raise ValueError
+        bias_cv0 = bias(cv0)
 
     mde = YaffEngine(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         static_trajectory_info=tic,
-        bias=bias,
+        bias=bias_cv0,
     )
 
     return mde
+
+
+def alanine_dipeptide_refs():
+    sp0 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [26.77741932, 35.69692667, 0.15117809],
+                [26.90970015, 33.69381697, -0.30235618],
+                [25.20894663, 32.76785116, 0.43463701],
+                [28.66714545, 33.01351556, 0.51022606],
+                [26.68293301, 33.05131008, -3.09915086],
+                [25.9081453, 34.69537182, -4.55423998],
+                [27.26874811, 30.7458442, -3.93063036],
+                [28.21361118, 29.61200852, -2.72120563],
+                [27.00418645, 30.06554279, -6.55734968],
+                [25.19004937, 30.84033051, -7.14316479],
+                [28.95060437, 31.21827573, -8.35258951],
+                [30.78363872, 30.27341267, -8.25810321],
+                [28.23250844, 31.12378943, -10.28011017],
+                [29.36634412, 33.20248817, -7.95574702],
+                [27.06087824, 27.19315907, -6.82191134],
+                [28.38368653, 25.92704256, -5.40461674],
+                [26.07822065, 26.26719326, -8.93840461],
+                [25.37902198, 27.51441251, -10.22341838],
+                [25.6624809, 23.64047394, -9.59980876],
+                [25.83255625, 23.43260406, -11.64071298],
+                [26.85300836, 22.29876838, -8.59825391],
+                [23.73496024, 23.13024788, -9.07068544],
+            ],
+        ),
+        cell=None,
+    )
+
+    sp1 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [23.931, 32.690, -5.643],
+                [24.239, 31.818, -3.835],
+                [22.314, 31.227, -3.153],
+                [25.100, 33.275, -2.586],
+                [25.835, 29.525, -3.858],
+                [27.425, 29.164, -2.258],
+                [25.638, 27.991, -5.861],
+                [24.292, 28.473, -7.216],
+                [27.221, 25.765, -6.438],
+                [26.509, 24.957, -8.255],
+                [29.991, 26.660, -6.699],
+                [30.753, 27.301, -4.872],
+                [30.920, 25.078, -7.447],
+                [30.233, 28.236, -8.053],
+                [26.856, 23.398, -4.858],
+                [27.483, 21.402, -5.810],
+                [25.732, 23.673, -2.608],
+                [25.785, 25.535, -1.850],
+                [25.227, 21.564, -0.916],
+                [26.860, 20.494, -0.570],
+                [24.444, 22.298, 0.859],
+                [23.648, 20.454, -1.497],
+            ],
+        ),
+        cell=None,
+    )
+
+    return sp0 + sp1
 
 
 def mil53_yaff():
@@ -137,7 +176,7 @@ def mil53_yaff():
 
     energy = YaffEnergy(f=f)
 
-    st = StaticTrajectoryInfo(
+    st = StaticMdInfo(
         T=T,
         P=P,
         timestep=1.0 * units.femtosecond,
@@ -157,9 +196,7 @@ def mil53_yaff():
     return yaffmd
 
 
-def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_steps=500):
-    base = ROOT_DIR / "IMLCV" / "data" / "CsPbI_3"
-
+def CsPbI3(cv, unit_cells):
     assert isinstance(unit_cells, list)
 
     if len(unit_cells) == 3:
@@ -173,26 +210,10 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
         raise ValueError(
             f"provided unit cell {unit_cells}, please provide 1 or 3 arguments ",
         )
-    fb = base / f"{x}x{y}x{z}"
 
-    from ase import Atoms
+    fb = DATA_ROOT / "CsPbI_3" / f"{x}x{y}x{z}"
 
-    assert (p := fb).exists(), f"cannot find {p}"
-    atoms: list[Atoms] = []
-
-    if input_atoms is None:
-        input_atoms = fb.glob("*.xyz")
-    else:
-        input_atoms = [fb / x for x in input_atoms]
-
-    for a in input_atoms:
-        atoms.append(ase.io.read(str(a)))
-
-    print(f"{atoms=}")
-
-    assert len(atoms) != 0, "no xyz file found"
-
-    path_source = base / "Libraries"
+    path_source = DATA_ROOT / "CsPbI_3" / "Libraries"
 
     assert (p := path_source).exists(), f"cannot find {p}"
 
@@ -212,7 +233,7 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
     }
 
     energy = Cp2kEnergy(
-        atoms=atoms[0],
+        atoms=CsPbI3_refs(x, y, z)[0],
         input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
         stress_tensor=True,
@@ -221,12 +242,9 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
 
     from IMLCV.base.CV import CvFlow
 
-    if cv == "cell_vec":
-        r_cut = None
-    else:
-        r_cut = 5 * angstrom
+    r_cut = 5 * angstrom
 
-    tic = StaticTrajectoryInfo(
+    tic = StaticMdInfo(
         write_step=1,
         T=300 * units.kelvin,
         P=1.0 * units.bar,
@@ -265,113 +283,11 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
                 bounding_box=jnp.array([[0.0, 3.0 * x], [5.5 * x, 8.0 * x]]) * angstrom,
             ),
         )
-    elif cv == "soap_dist":
-        r_cut = 5 * angstrom
 
-        z_arr = None
-        refs: SystemParams | None = None
-
-        for a in atoms:
-            if z_arr is None:
-                z_arr = a.get_atomic_numbers()
-                refs = SystemParams(
-                    coordinates=a.positions * angstrom,
-                    cell=a.cell * angstrom,
-                )
-
-            else:
-                assert (z_arr == a.get_atomic_numbers()).all()
-                refs += SystemParams(
-                    coordinates=a.positions * angstrom,
-                    cell=a.cell * angstrom,
-                )
-
-        assert refs.batched is True
-
-        refs_nl = refs.get_neighbour_list(r_cut=r_cut, z_array=jnp.array(z_arr))
-
-        sbd = sb_descriptor(
-            r_cut=r_cut,
-            n_max=3,
-            l_max=3,
-            references=refs,
-            references_nl=refs_nl,
-        )
-
-        cv_ref = sbd.compute_cv_flow(refs, refs_nl)
-
-        if project:
-            assert refs.shape[0] == 2, "option --project needs 2D CV (2 input_atoms)"
-            cv_ref = sbd.compute_cv_flow(refs, refs_nl)
-
-            a = float(cv_ref.cv[0, 1])
-            cv = CollectiveVariable(
-                f=sbd * project_distances(a),
-                metric=CvMetric(
-                    periodicities=[False, False],
-                    bounding_box=jnp.array([[-0.1, 1.1], [0.0, 1.0]]),
-                ),
-            )
-
-        else:
-            raise "use --project"
-
-        o = cv.compute_cv(refs, refs_nl)[0].cv
-        assert jnp.allclose(jnp.array([[1.0, 0.0], [0.0, 0.0]]) - o, 0.0)
-
-    elif cv == "soap_lda":
-        # r_cut = 5 * angstrom
-
-        # z_arr = None
-        # refs: SystemParams | None = None
-
-        # for a in atoms:
-        #     if z_arr is None:
-        #         z_arr = a.get_atomic_numbers()
-        #         refs = SystemParams(
-        #             coordinates=a.positions * angstrom,
-        #             cell=a.cell * angstrom,
-        #         )
-
-        #     else:
-        #         assert (z_arr == a.get_atomic_numbers()).all()
-        #         refs += SystemParams(
-        #             coordinates=a.positions * angstrom,
-        #             cell=a.cell * angstrom,
-        #         )
-
-        # assert refs.batched is True
-
-        # bias = NoneBias(cvs=NoneCV())
-        # tic = StaticTrajectoryInfo(
-        #     write_step=1,
-        #     T=300 * units.kelvin,
-        #     P=1.0 * units.bar,
-        #     timestep=2.0 * units.femtosecond,
-        #     timecon_thermo=100.0 * units.femtosecond,
-        #     timecon_baro=500.0 * units.femtosecond,
-        #     atomic_numbers=jnp.array(energy.atoms.get_atomic_numbers()),
-        #     equilibration=0 * units.femtosecond,
-        #     screen_log=1,
-        #     r_cut=r_cut,
-        # )
-
-        # yaffmd = YaffEngine(
-        #     energy=energy,
-        #     bias=bias,
-        #     static_trajectory_info=tic,
-        # )
-
-        # sbd = sb_descriptor(
-        #     r_cut=r_cut,
-        #     n_max=3,
-        #     l_max=3,
-        # )
-
-        raise NotImplementedError("todo")
-
+    elif cv is None:
+        cv = NoneCV()
     else:
-        raise NotImplementedError(f"cv {cv} unrecognized for CsPbI3,")
+        raise ValueError(f"unknown value {cv} for cv choose 'cell_vec'")
 
     bias = NoneBias(cvs=cv)
 
@@ -382,3 +298,38 @@ def CsPbI3(cv, unit_cells, folder=None, input_atoms=None, project=True, lda_step
     )
 
     return yaffmd
+
+
+def CsPbI3_refs(x, y, z):
+    fb = DATA_ROOT / "CsPbI_3" / f"{x}x{y}x{z}"
+
+    from ase import Atoms
+
+    assert (p := fb).exists(), f"cannot find {p}"
+    atoms: list[Atoms] = []
+
+    input_atoms = fb.glob("*.xyz")
+
+    for a in input_atoms:
+        atoms.append(ase.io.read(str(a)))
+
+    assert len(atoms) != 0, "no xyz file found"
+    z_arr = None
+    refs: SystemParams | None = None
+
+    for a in atoms:
+        if z_arr is None:
+            z_arr = a.get_atomic_numbers()
+            refs = SystemParams(
+                coordinates=a.positions * angstrom,
+                cell=a.cell * angstrom,
+            )
+
+        else:
+            assert (z_arr == a.get_atomic_numbers()).all()
+            refs += SystemParams(
+                coordinates=a.positions * angstrom,
+                cell=a.cell * angstrom,
+            )
+
+    return refs

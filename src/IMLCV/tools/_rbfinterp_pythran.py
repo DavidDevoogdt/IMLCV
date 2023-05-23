@@ -120,18 +120,6 @@ def polynomial_matrix(x: CV, metric: CvMetric, powers):
     return f11(x, powers)
 
 
-# # pythran export _kernel_matrix(float[:, :], str)
-# def _kernel_matrix(x: CV, metric: Metric, eps, kernel):
-#     """Return RBFs, with centers at `x`, evaluated at `x`."""
-#     assert isinstance(x, CV)
-
-#     out = jnp.empty((x.shape[0], x.shape[0]), dtype=float)
-#     kernel_func = NAME_TO_FUNC[kernel]
-#     out = kernel_matrix(x, metric, eps, kernel_func)
-#     return out
-
-
-# pythran export _polynomial_matrix(float[:, :], int[:, :])
 def _polynomial_matrix(x: CV, powers, metric):
     """Return monomials, with exponents from `powers`, evaluated at `x`."""
     assert isinstance(x, CV)
@@ -175,18 +163,6 @@ def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers
     r = powers.shape[0]
     kernel_func = NAME_TO_FUNC[kernel]
 
-    # yval = cv_vals(y, metric=metric)
-
-    # Shift and scale the polynomial domain to be between -1 and 1
-    # mins = jnp.min(yval, axis=0)
-    # maxs = jnp.max(yval, axis=0)
-    # shift = (maxs + mins) / 2
-    # scale = (maxs - mins) / 2
-    # The scale may be zero if there is a single point or all the points have
-    # the same value for some dimension. Avoid division by zero by replacing
-    # zeros with ones.
-    # scale = scale.at[scale == 0.0].set(1.0)
-
     # Transpose to make the array fortran contiguous. This is required for
     # dgesv to not make a copy of lhs.
     K = kernel_matrix(y, metric, epsilon, kernel_func) + jnp.diag(smoothing)
@@ -199,13 +175,6 @@ def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers
     return lhs, rhs
 
 
-# pythran export _build_evaluation_coefficients(float[:, :],
-#                          float[:, :],
-#                          str,
-#                          float,
-#                          int[:, :],
-#                          float[:],
-#                          float[:])
 def _build_evaluation_coefficients(
     x: CV,
     y: CV,

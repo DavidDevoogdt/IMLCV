@@ -32,6 +32,7 @@ class Scheme:
         self.rounds = Rounds(
             folder=folder,
         )
+        self.rounds.add_cv_from_cv(self.md.bias.collective_variable)
         self.rounds.add_round_from_md(self.md)
 
     @staticmethod
@@ -76,7 +77,7 @@ class Scheme:
         fesBias = obs.fes_bias(**kwargs)
         self.md = self.md.new_bias(fesBias)
 
-    def grid_umbrella(self, steps=1e4, k=None, n=8, max_grad=None):
+    def grid_umbrella(self, steps=1e4, k=None, n=8, max_grad=None, plot=True):
         m = self.md.bias.collective_variable.metric
 
         grid = m.grid(n)
@@ -96,6 +97,7 @@ class Scheme:
                 for cv in itertools.product(*grid)
             ],
             steps=steps,
+            plot=plot,
         )
 
     def new_metric(self, plot=False, r=None):
@@ -119,7 +121,7 @@ class Scheme:
         if init != 0:
             print(f"running init round with {init} steps")
 
-            self.grid_umbrella(steps=init, n=n, k=K, max_grad=init_max_grad)
+            self.grid_umbrella(steps=init, n=n, k=K, max_grad=init_max_grad, plot=plot)
             self.rounds.invalidate_data()
             self.rounds.add_round_from_md(self.md)
         else:
@@ -127,7 +129,7 @@ class Scheme:
 
         for _ in range(rnds):
             print(f"running round with {steps} steps")
-            self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad)
+            self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad, plot=plot)
 
             if update_metric:
                 self.new_metric(plot=plot)
@@ -154,7 +156,7 @@ class Scheme:
         )
         self.md.bias = NoneBias(new_cv)
 
-        self.rounds.add_round(self.md.static_trajectory_info)
+        self.rounds.add_cv_from_cv(new_cv)
 
     def save(self, filename):
         raise NotImplementedError

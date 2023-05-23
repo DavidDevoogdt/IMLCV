@@ -11,7 +11,7 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import StaticTrajectoryInfo
+from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import distance_descriptor
 from IMLCV.implementations.CV import sb_descriptor
@@ -148,11 +148,11 @@ class CVDiscovery:
         out=-1,
         split_data=False,
         new_r_cut=None,
-    ) -> tuple[list[SystemParams], list[NeighbourList] | None, CollectiveVariable, StaticTrajectoryInfo]:
+    ) -> tuple[list[SystemParams], list[NeighbourList] | None, CollectiveVariable, StaticMdInfo]:
         weights = []
 
         colvar = rounds.get_collective_variable()
-        sti: StaticTrajectoryInfo | None = None
+        sti: StaticMdInfo | None = None
         sp: list[SystemParams] = []
         nl: list[NeighbourList] | None = [] if new_r_cut is not None else None
 
@@ -253,7 +253,7 @@ class CVDiscovery:
         self,
         rounds: Rounds,
         num_rounds=4,
-        samples=3e3,
+        samples=1e4,
         plot=True,
         new_r_cut=None,
         chunk_size=None,
@@ -272,7 +272,6 @@ class CVDiscovery:
         cvs_new, new_cv = self.transformer.fit(
             sp_list,
             nl_list,
-            # sti=sti,
             chunk_size=chunk_size,
             **kwargs,
         )

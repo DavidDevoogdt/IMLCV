@@ -13,8 +13,6 @@ keras: KerasAPI = import_module("tensorflow.keras")
 
 
 class PeriodicLayer(keras.layers.Layer):
-    import tensorflow as tfl
-
     def __init__(self, bbox, periodicity, **kwargs):
         super().__init__(**kwargs)
 
@@ -48,8 +46,9 @@ class PeriodicLayer(keras.layers.Layer):
 
 
 class KerasFunBase(CvFunBase):
-    def __init__(self, reducer) -> None:
-        self.reducer = reducer
+    def __init__(self, forward: tfl.Module, backward: tfl.Module | None) -> None:
+        self.fwd = forward
+        self.bwd = backward
 
     def _calc(self, x: CV, nl: NeighbourList, reverse=False, conditioners: list[CV] | None = None) -> CV:
         assert conditioners is None
@@ -61,10 +60,13 @@ class KerasFunBase(CvFunBase):
         else:
             y = x.cv
 
-        def tf_fun(y):
-            return call_tf(self.reducer.encoder.call, has_side_effects=False)(y)
+        if reverse:
+            assert self.bwd is not None, "No backward model defined"
+            out = call_tf(self.bwd.call, has_side_effects=False)(y)
+        else:
+            assert self.fwd is not None
+            out = call_tf(self.fwd.call, has_side_effects=False)(y)
 
-        out = tf_fun(y)
         if not batched:
             out = out.reshape((-1,))
 
@@ -73,25 +75,38 @@ class KerasFunBase(CvFunBase):
     def __getstate__(self):
         # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model
 
-        try:
-            import tensorflow as tf
-        except ImportError:
-            raise ImportError("tensorflow not installed, cannot pickle keras model")
-
-        model_str = ""
+        fwd_str = ""
         with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
-            tf.keras.models.save_model(self.encoder, fd.name, overwrite=True)
-            model_str = fd.read()
-        d = {"model_str": model_str}
+            tfl.keras.models.save_model(self.fwd, fd.name, overwrite=True)
+            fwd_str = fd.read()
+        d = {"fwd_str": fwd_str}
+
+        if self.bwd is not None:
+            bwd_str = ""
+            with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+                tfl.keras.models.save_model(self.bwd, fd.name, overwrite=True)
+                bwd_str = fd.read()
+            d["bwd_str"] = bwd_str
+
         return d
 
     def __setstate__(self, state):
         with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
-            fd.write(state["model_str"])
+            fd.write(state["fwd_str"])
             fd.flush()
 
             custom_objects = {"PeriodicLayer": PeriodicLayer}
             with keras.utils.custom_object_scope(custom_objects):
-                model = keras.models.load_model(fd.name)
+                fwd = keras.models.load_model(fd.name)
+        self.fwd = fwd
 
-        self.encoder = model
+        if (bwd_str := state.get("bwd_str", None)) is not None:
+            with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+                fd.write(bwd_str)
+                fd.flush()
+
+                custom_objects = {"PeriodicLayer": PeriodicLayer}
+                with keras.utils.custom_object_scope(custom_objects):
+                    bwd = keras.models.load_model(fd.name)
+
+            self.bwd = bwd
