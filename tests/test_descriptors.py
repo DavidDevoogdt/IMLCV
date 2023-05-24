@@ -10,8 +10,13 @@ import jax.scipy
 import numpy as onp
 import pytest
 import scipy.special
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
+from IMLCV.implementations.CV import get_sinkhorn_divergence
+from IMLCV.implementations.CV import sb_descriptor
+from IMLCV.implementations.CV import soap_descriptor
 from IMLCV.tools.bessel_callback import iv
 from IMLCV.tools.bessel_callback import ive
 from IMLCV.tools.bessel_callback import jv
@@ -89,109 +94,61 @@ def get_sps(
     "cell, matching, pp",
     [(True, "rematch", "sb"), (False, "average", "soap")],
 )
-def test_SOAP(cell, matching, pp):
+def test_SOAP_SB_sinkhorn(cell, matching, pp):
     n = 10
     r_side = 6 * (n / 5) ** (1 / 3)
 
-    l_max = 3
-    n_max = 3
+    l_max = 2
+    n_max = 2
 
     r_cut = 5
     eps = 0.2
-    alpha = 1e-2
+    alpha = 1e-1
 
     sp1, sp2, sp3, nl1, nl2, nl3 = get_sps(r_side, r_cut, eps, n, with_cell=cell)
 
     if pp == "sb":
-        pi = p_inl_sb(
+        desc = sb_descriptor(
             l_max=l_max,
             n_max=n_max,
             r_cut=r_cut,
         )
     elif pp == "soap":
-        pi = p_innl_soap(
+        desc = soap_descriptor(
             l_max=l_max,
             n_max=n_max,
             r_cut=r_cut,
-            sigma_a=0.5,
+            sigma_a=1.0,
             r_delta=1.0,
             num=50,
         )
 
-    @jit
-    def f(sp, nl):
-        return p_i(
-            sp=sp,
-            nl=nl,
-            p=pi,
-            r_cut=r_cut,
-        )
-
-    p1 = f(sp1, nl1)
-
-    before_f = time_ns()
-    _ = f(sp2, nl2).block_until_ready()
-    after_f = time_ns()
-
-    # p3 = f(sp3, nl3)
-
-    # @jit
-    def k(sp: SystemParams, nl: NeighbourList):
-        return NeighbourList.match_kernel(
-            p1=p1,
-            p2=f(sp, nl),
-            nl1=nl1,
-            nl2=nl,
-            matching=matching,
-            alpha=alpha,
-            jit=False,
-        )[0]
-
-    da = k(sp1, nl1).block_until_ready()
-
-    before = time_ns()
-    dab = k(sp2, nl2).block_until_ready()
-    after = time_ns()
-
-    # with jax.profiler.trace("tmp/jax-trace"):
-    dac = k(sp3, nl3)
-
-    assert jnp.abs(da) < 1e-3
-    assert jnp.abs(dab) < 1e-3
-    assert jnp.abs(dac) > 1e-3
-
-    print(
-        f"{matching=}\t{cell=} {pp=}\tl_max {l_max}\tn_max {l_max}\t<kernel(orig,rot)>=\t\t{  dab :>.4f}\t<kernel(orig, rand)>=\t\t{ dac:.4f}\tevalutation time f [ms] { (after_f-before_f)/ 10.0**6 :>.2f}  k [ms] { (after-before)/ 10.0**6 :>.2f} ",
+    p1 = desc.compute_cv_flow(sp1, nl1)
+    cv = CollectiveVariable(
+        f=desc * get_sinkhorn_divergence(nli=nl1, pi=p1, sort=matching, alpha_rematch=alpha, output="scalar"),
+        metric=None,
+        jac=jax.jacrev,
     )
 
-    @jit
-    def jk(sp, nl):
-        _jk = jacrev(k)(sp, nl)
-        return jnp.mean(jnp.linalg.norm(_jk.coordinates)), jnp.mean(
-            jnp.linalg.norm(_jk.coordinates) if _jk.cell is not None else 0.0,
-        )
+    # n.b. each function jit compiles again bc shape nl constants/ shape are different.
+    x1, dx1 = cv.compute_cv(sp1, nl1, jacobian=True)
+    x3, dx3 = cv.compute_cv(sp3, nl3, jacobian=True)
+    x2, dx2 = cv.compute_cv(sp2, nl2, jacobian=True)
 
-    jac_da_coor, jac_da_cell = jk(sp1, nl1)
+    assert jnp.allclose(x1.cv, 0)
+    assert jnp.allclose(x2.cv, 0)
 
-    before = time_ns()
-    jac_dab_coor, jac_dab_cell = jk(sp2, nl2)
-    after = time_ns()
+    assert jnp.allclose(dx1.cv.coordinates, 0, atol=1e-5)
+    assert jnp.allclose(dx2.cv.coordinates, 0, atol=1e-5)
 
-    jac_dac_coor, jac_dac_cell = jk(sp3, nl3)
+    if cell:
+        assert jnp.allclose(dx1.cv.cell, 0, atol=1e-5)
+        assert jnp.allclose(dx2.cv.cell, 0, atol=1e-5)
 
-    if matching == "rematch":
-        assert jnp.abs(jac_da_coor) < 1e-3
-        assert jnp.abs(jac_dab_coor) < 1e-3
-        assert jnp.abs(jac_dac_coor) > 1e-3
-
-        if cell:
-            assert jnp.abs(jac_da_cell) < 1e-3
-            assert jnp.abs(jac_dab_cell) < 1e-3
-            assert jnp.abs(jac_dac_cell) > 1e-3
-
-    print(
-        f"\t\t\t\t\t\t\t\t\t\t||d kernel(orig,rot)/d sp)=\t{ jac_dab_coor  :.4f}\t||d kernel(orig,rand)/d sp)=\t{jac_dac_coor  :>.4f}\tevalutation time [ms] { (after-before)/ 10.0**6  :>.2f}   ",
-    )
+    assert x3.cv > 1e-3
+    assert 1e-3 < jnp.mean(jnp.linalg.norm(dx3.cv.coordinates, axis=1)) < 1
+    if cell:
+        assert 1e-3 < jnp.mean(jnp.linalg.norm(dx3.cv.cell, axis=1)) < 1
 
 
 def test_bessel():
@@ -275,3 +232,7 @@ def test_bessel():
 
     assert jnp.linalg.norm(vmap(i1e)(x) - vmap(i1e2)(x)) < 1e-5
     assert jnp.linalg.norm(vmap(grad(i1e))(x) - vmap(grad(i1e2))(x)) < 1e-5
+
+
+if __name__ == "__main__":
+    test_SOAP_SB_sinkhorn(cell=True, matching="average", pp="soap")

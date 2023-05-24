@@ -1,3 +1,6 @@
+import zipfile
+from pathlib import Path
+
 import pytest
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import config
@@ -5,8 +8,6 @@ from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import CsPbI3
 from IMLCV.scheme import Scheme
 from molmod.units import kjmol
-
-from .test_cv_determination import get_rounds_ala
 
 
 @pytest.mark.skip(reason="run on HPC")
@@ -19,9 +20,13 @@ def test_perov(tmpdir, steps=500, recalc=False):
 
 # @pytest.mark.skip(reason="run on HPC")
 def test_ala(tmpdir, steps=100):
-    # tmpdir = Path("tmp")
+    assert (p := ROOT_DIR / "data" / "alanine_dipeptide.zip").exists()
+    folder = Path(tmpdir) / "alanine_dipeptide"
 
-    rnds = get_rounds_ala(tmpdir)
+    with zipfile.ZipFile(p, "r") as zip_ref:
+        zip_ref.extractall(folder)
+
+    rnds = Rounds(folder=folder, new_folder=False)
     scheme0 = Scheme.from_rounds(rnds)
 
     config()

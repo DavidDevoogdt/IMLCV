@@ -28,7 +28,7 @@ except ImportError:
 
 
 def get_rounds_ala(tmpdir) -> Rounds:
-    loops = 3
+    loops = 2
     steps = 1000
     folder = tmpdir / "alanine_dipeptide"
 
@@ -207,5 +207,8 @@ def test_LDA_CV(tmpdir, out_dim=3, r_cut=3 * angstrom):
 
 if __name__ == "__main__":
     shutil.rmtree("tmp", ignore_errors=True)
-    test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
-    # test_LDA_CV(tmpdir=Path("tmp"))
+    # (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
+    # (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
+
+    # test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
+    test_LDA_CV(tmpdir=Path("tmp"))

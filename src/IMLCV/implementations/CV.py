@@ -2,6 +2,7 @@ import dataclasses
 from functools import partial
 
 import distrax
+import jax
 import jax.numpy as jnp
 import numba
 import numpy as np
@@ -89,7 +90,7 @@ def sb_descriptor(
     l_max: int,
     reduce=True,
     reshape=True,
-):
+) -> CvFlow:
     from IMLCV.tools.soap_kernel import p_i, p_inl_sb
 
     def _reduce_sb(a):
@@ -119,13 +120,63 @@ def sb_descriptor(
         )  # eliminate Z2>Z1
         return a
 
+    p = p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max)
+
     def f(sp: SystemParams, nl: NeighbourList):
         assert nl is not None, "provide neighbourlist for sb describport"
 
         a = p_i(
             sp=sp,
             nl=nl,
-            p=p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max),
+            p=p,
+            r_cut=r_cut,
+        )
+
+        if reduce:
+            a = _reduce_sb(a)
+
+        if reshape:
+            a = jnp.reshape(a, (a.shape[0], -1))
+
+        return a
+
+    return CvFlow.from_function(f, atomic=True)  # type: ignore
+
+
+def soap_descriptor(
+    r_cut,
+    n_max: int,
+    l_max: int,
+    sigma_a: float,
+    r_delta: float,
+    reduce=True,
+    reshape=True,
+    num=50,
+) -> CvFlow:
+    from IMLCV.tools.soap_kernel import p_i, p_innl_soap
+
+    def _reduce_sb(a):
+        def _triu(a):
+            return a[jnp.triu_indices_from(a)]
+
+        a = vmap(
+            vmap(_triu, in_axes=(0), out_axes=(0)),
+            in_axes=(3),
+            out_axes=(2),
+        )(
+            a,
+        )  # eliminate Z2>Z1
+        return a
+
+    p = p_innl_soap(r_cut=r_cut, n_max=n_max, l_max=l_max, sigma_a=sigma_a, r_delta=r_delta, num=num)
+
+    def f(sp: SystemParams, nl: NeighbourList):
+        assert nl is not None, "provide neighbourlist for soap describport"
+
+        a = p_i(
+            sp=sp,
+            nl=nl,
+            p=p,
             r_cut=r_cut,
         )
 
@@ -249,10 +300,15 @@ def trunc_svd(m: CV) -> tuple[CV, CvTrans]:
 
 def get_sinkhorn_divergence(
     nli: NeighbourList | None,
-    pi: Array | None,
+    pi: Array | CV | None,
     sort="rematch",
     alpha_rematch=0.1,
+    output="tensor",
 ):
+    if isinstance(pi, CV):
+        assert pi.atomic, "pi must be atomic"
+        pi = pi.cv
+
     def __norm(p):
         n1_sq = jnp.einsum("...,...->", p, p)
         n1_sq_safe = jnp.where(n1_sq <= 1e-16, 1, n1_sq)
@@ -268,6 +324,8 @@ def get_sinkhorn_divergence(
         _,
         nli: NeighbourList | None,
         pi: Array | None,
+        sort="rematch",
+        alpha_rematch=0.1,
     ):
         assert nl is not None, "Neigbourlist required for rematch"
 
@@ -287,18 +345,27 @@ def get_sinkhorn_divergence(
 
         cvn = __norm(cv.cv)
 
+        if output == "tensor":
+            sig = "ij,i...,j...->j..."
+        elif output == "vector":
+            sig = "ij,i...,j...->j"
+        elif output == "scalar":
+            sig = "ij,i...,j...->"
+        else:
+            raise ValueError(f"output must be vector or scalar, not {output}")
+
+        out = jnp.einsum(sig, P11, cvn, cvn) + jnp.einsum(sig, P22, pi, pi) - 2 * jnp.einsum(sig, P12, cvn, pi)
+
         return CV(
-            cv=(
-                0.5 * jnp.einsum("ij,i...,j...->j...", P11, cvn, cvn)
-                + 0.5 * jnp.einsum("ij,i...,j...->j...", P22, pi, pi)
-                - jnp.einsum("ij,i...,j...->j...", P12, cvn, pi)
-            ),
+            cv=out,
             _stack_dims=cv._stack_dims,
             _combine_dims=cv._combine_dims,
-            atomic=cv.atomic,
+            atomic=output != "scalar",
         )
 
-    return CvTrans.from_cv_function(partial(sinkhorn_divergence, pi=pi, nli=nli))
+    return CvTrans.from_cv_function(
+        partial(sinkhorn_divergence, pi=pi, nli=nli, sort=sort, alpha_rematch=alpha_rematch),
+    )
 
 
 @CvTrans.from_cv_function
