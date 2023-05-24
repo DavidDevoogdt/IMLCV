@@ -268,7 +268,7 @@ class TranformerAutoEncoder(Transformer):
             )
             return CV(cv=encoded)
 
-        f_enc = CvTrans(trans=[CvFun(forward=forward)])
+        f_enc = CvTrans(trans=(CvFun(forward=forward),))
 
         return f_enc.compute_cv_trans(cv)[0], un_atomize * f_enc
 

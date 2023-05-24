@@ -1838,9 +1838,7 @@ class CvFunInput:
         return CV.combine(*cvs)
 
 
-@dataclasses.dataclass(kw_only=True)
-class CvFunBase:
-    _: dataclasses.KW_ONLY
+class _CvFunBase:
     cv_input: CvFunInput | None = None
 
     def calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False) -> tuple[CV, Array | None]:
@@ -1888,7 +1886,17 @@ class CvFunBase:
         return a, log_det
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass(kw_only=True, frozen=True)
+class CvFunBase(_CvFunBase):
+    cv_input: CvFunInput | None = None
+
+
+@dataclasses.dataclass(kw_only=True, frozen=False)
+class CvFunBase_unfrozen(_CvFunBase):
+    cv_input: CvFunInput | None = None
+
+
+@dataclasses.dataclass(kw_only=True, frozen=True)
 class CvFun(CvFunBase):
     forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
     backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
@@ -1907,7 +1915,7 @@ class CvFun(CvFunBase):
             return self.forward(x, nl, c)
 
 
-class CvFunNn(nn.Module, CvFunBase):
+class CvFunNn(nn.Module, CvFunBase_unfrozen):
     """used to instantiate flax linen CvTrans"""
 
     @abstractmethod
@@ -1936,7 +1944,7 @@ class CvFunNn(nn.Module, CvFunBase):
         pass
 
 
-class CvFunDistrax(nn.Module, CvFunBase):
+class CvFunDistrax(nn.Module, CvFunBase_unfrozen):
     """
     creates bijective CV function based on a distrax flow. The seup function should initialize the bijector
 
@@ -2009,9 +2017,9 @@ class CvFunDistrax(nn.Module, CvFunBase):
         return CV(cv=z, atomic=x.atomic), jac
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass(kw_only=True, frozen=True)
 class CombinedCvFun(CvFunBase):
-    classes: list[list[CvFunBase]]
+    classes: tuple[tuple[CvFunBase]]
 
     def calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False) -> tuple[CV, Array | None]:
         assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
@@ -2050,11 +2058,10 @@ class CombinedCvFun(CvFunBase):
         raise NotImplementedError("untested")
 
 
-@dataclasses.dataclass(kw_only=True)
-class CvTrans:
+class _CvTrans:
     """f can either be a single CV tranformation or a list of transformations"""
 
-    trans: list[CvFunBase]
+    trans: tuple[CvFunBase]
 
     @staticmethod
     def from_array_function(f: Callable[[Array, NeighbourList | None, None], Array]):
@@ -2076,7 +2083,7 @@ class CvTrans:
 
     @staticmethod
     def from_cv_fun(proto: CvFunBase):
-        return CvTrans(trans=[proto])
+        return CvTrans(trans=(proto,))
 
     def compute_cv_trans(
         self,
@@ -2108,7 +2115,12 @@ class CvTrans:
 
     def __mul__(self, other):
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
-        return CvTrans(trans=[*self.trans, *other.trans])
+        return CvTrans(
+            trans=(
+                *self.trans,
+                *other.trans,
+            ),
+        )
 
     def __add__(self, other: CvTrans) -> CvTrans:
         assert isinstance(other, CvTrans), "can only add CvTrans object"
@@ -2117,7 +2129,7 @@ class CvTrans:
         def double(x: CV, nl: NeighbourList | None, _):
             return CV.combine(x, x)
 
-        return double * CvTrans(trans=[CombinedCvFun(classes=[self.trans, other.trans])])
+        return double * CvTrans(trans=(CombinedCvFun(classes=(self.trans, other.trans)),))
 
     @staticmethod
     def stack(*cv_trans: CvTrans):
@@ -2127,11 +2139,21 @@ class CvTrans:
         def duplicate(x: CV, nl: NeighbourList | None, _):
             return CV.combine(*[x] * n)
 
-        return duplicate * CvTrans(trans=[CombinedCvFun(classes=[cvt.trans for cvt in cv_trans])])
+        return duplicate * CvTrans(trans=tuple([CombinedCvFun(classes=tuple([cvt.trans for cvt in cv_trans]))]))
 
 
-class CvTransNN(nn.Module, CvTrans):
-    trans: list[CvFunBase]
+@dataclasses.dataclass(kw_only=True, frozen=True)
+class CvTrans(_CvTrans):
+    trans: tuple[CvFunBase]
+
+
+@dataclasses.dataclass(kw_only=True, frozen=False)
+class CvTrans_unfrozen(_CvTrans):
+    trans: tuple[CvFunBase]
+
+
+class CvTransNN(nn.Module, CvTrans_unfrozen):
+    trans: tuple[CvFunBase]
 
     def setup(self) -> None:
         pass
@@ -2149,7 +2171,7 @@ class CvTransNN(nn.Module, CvTrans):
     @nn.nowrap
     def __mul__(self, other):
         assert isinstance(other, CvTrans | CvTransNN)
-        return CvTransNN(trans=[s + o for s, o in zip(self.trans, other.trans)])
+        return CvTransNN(trans=tuple([s + o for s, o in zip(self.trans, other.trans)]))
 
 
 class NormalizingFlow(nn.Module):
@@ -2187,16 +2209,10 @@ class NormalizingFlow(nn.Module):
         return a, b
 
 
+@dataclasses.dataclass(frozen=True, eq=True)
 class CvFlow:
-    def __init__(
-        self,
-        func: Callable[[SystemParams, NeighbourList | None], CV],
-        trans: CvTrans | None = None,
-        # batched=False,
-    ) -> None:
-        self.f0 = func
-        self.f1 = trans
-        # self.batched = batched
+    func: Callable[[SystemParams, NeighbourList | None], CV]
+    trans: CvTrans | None = None
 
     @staticmethod
     def from_function(f: Callable[[SystemParams, NeighbourList | None], Array], atomic=False) -> CvFlow:
@@ -2227,13 +2243,13 @@ class CvFlow:
                 chunk_size=chunk_size,
             )(x, nl, chunk_size)
 
-        out = self.f0(x, nl)
-        if self.f1 is not None:
-            out, _ = self.f1.compute_cv_trans(out, nl)
+        out = self.func(x, nl)
+        if self.trans is not None:
+            out, _ = self.trans.compute_cv_trans(out, nl)
 
         return out
 
-    def __add__(self, other):
+    def __add__(self, other) -> CvFlow:
         assert isinstance(other, CvFlow)
 
         def f_add(x: SystemParams, nl: NeighbourList):
@@ -2244,15 +2260,15 @@ class CvFlow:
 
         return CvFlow(func=f_add)
 
-    def __mul__(self, other):
+    def __mul__(self, other) -> CvFlow:
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
 
-        if self.f1 is None:
-            self.f1 = other
+        if self.trans is None:
+            trans = other
         else:
-            self.f1 *= other
+            trans = self.trans * other
 
-        return self
+        return CvFlow(func=self.func, trans=trans)
 
     def find_sp(
         self,
@@ -2315,14 +2331,6 @@ class CollectiveVariable:
         self.f = f
         self.jac = jac
 
-    @partial(jit, static_argnums=(0,))
-    def _jit_f(self, sp, nl):
-        return self.f.compute_cv_flow(sp, nl)
-
-    @partial(jit, static_argnums=(0,))
-    def _jit_df(self, sp, nl):
-        return self.jac(self.f.compute_cv_flow)(sp, nl)
-
     @partial(jax.jit, static_argnames=["self", "chunk_size", "jacobian"])
     def compute_cv(
         self,
@@ -2356,8 +2364,8 @@ class CollectiveVariable:
                     chunk_size,
                 )
 
-        cv = self._jit_f(sp, nl)
-        dcv = self._jit_df(sp, nl) if jacobian else None
+        cv = self.f.compute_cv_flow(sp, nl)
+        dcv = self.jac(self.f.compute_cv_flow)(sp, nl) if jacobian else None
         return (cv, dcv)
 
     @property
