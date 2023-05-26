@@ -19,6 +19,7 @@ class TranformerUMAP(Transformer):
         nlayers=3,
         parametric=True,
         metric=None,
+        chunk_size=None,
         **kwargs,
     ):
         x = CV.stack(*x)
@@ -75,6 +76,6 @@ class TranformerUMAP(Transformer):
         reducer.fit(x.cv)
 
         assert parametric
-        f = CvTrans(trans=[KerasFunBase(reducer.encoder, reducer.decoder)])
+        f = CvTrans(trans=(KerasFunBase(reducer.encoder, reducer.decoder),))
 
         return f.compute_cv_trans(x)[0], un_atomize * f

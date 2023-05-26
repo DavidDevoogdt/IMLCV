@@ -145,6 +145,7 @@ class Scheme:
         chunk_size=None,
         samples=2e3,
         plot=True,
+        new_r_cut=None,
         **kwargs,
     ):
         new_cv = cvd.compute(
@@ -152,11 +153,16 @@ class Scheme:
             samples=samples,
             plot=plot,
             chunk_size=chunk_size,
+            new_r_cut=new_r_cut,
             **kwargs,
         )
-        self.md.bias = NoneBias(new_cv)
 
+        # update state
+
+        self.md.bias = NoneBias(new_cv)
         self.rounds.add_cv_from_cv(new_cv)
+        self.md.static_trajectory_info.r_cut = new_r_cut
+        self.rounds.add_round_from_md(self.md)
 
     def save(self, filename):
         raise NotImplementedError

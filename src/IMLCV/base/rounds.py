@@ -397,7 +397,7 @@ class Rounds(ABC):
             c = self.cv
 
         if stop is None:
-            stop = self.round
+            stop = self._get_attr(c=c, name="num") - 1
 
         if start is None:
             start = 0

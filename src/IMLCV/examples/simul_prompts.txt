@@ -1,7 +1,0 @@
-#tier 1
-
-#2x2x2
-python IMLCV/examples/simul.py --walltime 04:00:00  -n 500 -ni 200  -nu 4 --nodes 16  --folder CsPbI3_soap_2x2x2_008  --bootstrap CsPbI3  --unit_cells 2 --cv soap_dist --input_atoms min_struc_Csdelta.xyz min_struc_gamma.xyz --project
-
-#1x1x1
-python IMLCV/examples/simul.py --walltime 24:00:00  --cpu_cluster victini -n 1000 -ni 1000  -nu 16 --nodes 8 --init_max_grad 50 --max_grad 50 --folder CsPbI3_soap_lda_1_r1 -c --bootstrap CsPbI3  --unit_cells 1 --cv soap_lda --lda_steps 500

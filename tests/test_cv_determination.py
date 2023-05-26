@@ -13,13 +13,13 @@ from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import alanine_dipeptide_refs
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 from IMLCV.implementations.CV import NoneCV
+from IMLCV.implementations.CV import sb_descriptor
 from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder
 from IMLCV.implementations.CvDiscovery import TransoformerLDA
 from IMLCV.implementations.tensorflow.CvDiscovery import TranformerUMAP
 from IMLCV.scheme import Scheme
 from molmod.units import angstrom
 from molmod.units import kjmol
-
 
 try:
     TF_INSTALLED = True
@@ -116,23 +116,14 @@ def test_cv_discovery(
 
     r_cut = 3 * angstrom
 
-    tf_kwargs = {
-        "outdim": out_dim,
-        "descriptor": "sb",
-        "descriptor_kwargs": {
-            "r_cut": r_cut,
-            "n_max": 2,
-            "l_max": 2,
-            "reshape": True,
-        },
-    }
+    descriptor = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2, reshape=True)
 
     if cvd == "AE":
-        tf = TranformerAutoEncoder(**tf_kwargs)
+        tf = TranformerAutoEncoder(outdim=out_dim, descriptor=descriptor)
 
         kwargs = {"num_epochs": 20}
     elif cvd == "UMAP":
-        tf = TranformerUMAP(**tf_kwargs)
+        tf = TranformerUMAP(outdim=out_dim, descriptor=descriptor)
 
         from keras.api._v2 import keras as KerasAPI
 
@@ -170,7 +161,7 @@ def test_cv_discovery(
     _cv_discovery_asserts(scheme0, out_dim, r_cut)
 
 
-def test_LDA_CV(tmpdir, out_dim=3, r_cut=3 * angstrom):
+def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
     config()
 
     folder = tmpdir / "alanine_dipeptide_LDA"
@@ -179,27 +170,20 @@ def test_LDA_CV(tmpdir, out_dim=3, r_cut=3 * angstrom):
 
     scheme0 = Scheme.from_rounds(rnds)
 
-    tf_kwargs = {
-        "outdim": out_dim,
-        "descriptor": "sb",
-        "descriptor_kwargs": {
-            "r_cut": r_cut,
-            "n_max": 2,
-            "l_max": 2,
-            "reshape": True,
-        },
-    }
+    descriptor = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2, reshape=True)
 
-    tf = TransoformerLDA(**tf_kwargs)
+    tf = TransoformerLDA(outdim=out_dim, descriptor=descriptor)
 
     scheme0.update_CV(
-        samples=1e3,
+        samples=5e2,
         split_data=True,
         cvd=CVDiscovery(transformer=tf),
         new_r_cut=r_cut,
-        chunk_size=1000,
-        max_iterations=10,
-        plot=False,
+        chunk_size=200,
+        max_iterations=20,
+        alpha_rematch=1e-1,
+        sort="rematch",
+        plot=True,
     )
 
     _cv_discovery_asserts(scheme0, out_dim, r_cut)

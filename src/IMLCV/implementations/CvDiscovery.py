@@ -12,12 +12,10 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import stack_reduce
-from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
-from jax import jit
 from jax import random
-from jax import vmap
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 
 
 class Encoder(nn.Module):
@@ -116,6 +114,7 @@ class TranformerAutoEncoder(Transformer):
         lr=1e-4,
         num_epochs=100,
         batch_size=32,
+        chunk_size=None,
         **kwargs,
     ):
         # import wandb
@@ -281,9 +280,10 @@ class TransoformerLDA(Transformer):
         kernel=False,
         harmonic=True,
         sort="rematch",
-        shrinkage=0,
         alpha_rematch=1e-1,
-        max_iterations=50,
+        optimizer=None,
+        chunck_size=None,
+        solver="eigen",
         **kwargs,
     ):
         try:
@@ -294,8 +294,9 @@ class TransoformerLDA(Transformer):
             )
 
         assert isinstance(cv_list, list)
-
-        from IMLCV.base.CV import NeighbourList
+        if optimizer is None:
+            # optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50)
+            optimizer = pymanopt.optimizers.ConjugateGradient()
 
         # @vmap
 
@@ -326,64 +327,134 @@ class TransoformerLDA(Transformer):
 
         cv_out = []
 
+        labels = []
+        for i, ni in enumerate(cv._stack_dims):
+            labels.append(jnp.full(ni, i))
+
+        labels = jnp.hstack(labels)
+
         for nd in norm_data:
-            cv_i, _ = jax.jit(nd.compute_cv_trans)(cv, nl)
-            cv_i, _f = trunc_svd(cv_i)
-            normed_cv_u = CV.unstack(cv_i)
+            cv_i, _ = nd.compute_cv_trans(cv, nl, chunck_size=chunck_size)
+            cv_i, _ = un_atomize.compute_cv_trans(cv_i)
 
-            mu_i = [jnp.mean(x.cv, axis=0) for x in normed_cv_u]
-            mu = jnp.einsum(
-                "i,ij->j",
-                jnp.array(cv.stack_dims) / jnp.sum(jnp.array(cv.stack_dims)),
-                jnp.array(mu_i),
-            )
+            alpha = LDA(n_components=self.outdim, solver=solver, shrinkage="auto").fit(cv_i.cv, labels)
 
-            correlation_w = CV.stack(*[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)])
-            correlation_b = CV.stack(*[cv_i - mu for cv_i in normed_cv_u])
+            if solver == "eigen":
 
-            manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=self.outdim)
+                def f(cv, scalings):
+                    return cv @ scalings
 
-            @pymanopt.function.jax(manifold)
-            @jit
-            def cost(x):
-                a = jnp.einsum("ab, ia,ic, cb ", x, correlation_w.cv, correlation_w.cv, x)
-                b = jnp.einsum("ab, ja, jc, cb ", x, correlation_b.cv, correlation_b.cv, x)
+                f = partial(f, scalings=jnp.array(alpha.scalings_)[:, : self.outdim])
 
-                if harmonic:
-                    out = ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
-                else:
-                    out = -((1 - shrinkage) * b + shrinkage) / ((1 - shrinkage) * a + shrinkage)
+            elif solver == "svd":
 
-                return out
+                def f(cv, scalings, xbar):
+                    return (cv - xbar) @ scalings
 
-            optimizer = pymanopt.optimizers.TrustRegions(max_iterations=max_iterations)
+                f = partial(f, scalings=jnp.array(alpha.scalings_), xbar=jnp.array(alpha.xbar_))
 
-            problem = pymanopt.Problem(manifold, cost)
-            result = optimizer.run(problem)
+            else:
+                raise NotImplementedError
 
-            alpha = result.point
-
-            scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
-
-            def scale_trans(cv: CV, nl: NeighbourList | None, _, alpha=alpha, scale_factor=scale_factor):
+            def LDA_trans(cv: CV, nl: NeighbourList | None, _, f):
                 return CV(
-                    (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
+                    cv=f(cv.cv),
                     _stack_dims=cv._stack_dims,
                     _combine_dims=cv._combine_dims,
                     atomic=cv.atomic,
                     mapped=cv.mapped,
                 )
 
-            _g = CvTrans.from_cv_function(partial(scale_trans, alpha=alpha, scale_factor=scale_factor))
+            lda_cv = CvTrans.from_cv_function(partial(LDA_trans, f=f))
+            cv_i, _ = lda_cv.compute_cv_trans(cv_i)
 
-            cv_i = _g.compute_cv_trans(cv_i, nl)[0]
+            cvs = CV.unstack(cv_i)
+
+            mean = []
+            for i, cvs_i in enumerate(cvs):
+                mean.append(jnp.mean(cvs_i.cv, axis=0))
+            mean = jnp.array(mean)
+
+            assert self.outdim == 1
+
+            def LDA_rescale(cv: CV, nl: NeighbourList | None, _, mean):
+                return CV(
+                    cv=(cv.cv - mean[0]) / (mean[1] - mean[0]),
+                    _stack_dims=cv._stack_dims,
+                    _combine_dims=cv._combine_dims,
+                    atomic=cv.atomic,
+                    mapped=cv.mapped,
+                )
+
+            lda_rescale = CvTrans.from_cv_function(partial(LDA_rescale, mean=mean))
+            cv_i, _ = lda_rescale.compute_cv_trans(cv_i)
 
             cv_out.append(cv_i)
-            hs.append(nd * _f * _g)
+            hs.append(nd * un_atomize * lda_cv * lda_rescale)
 
-        lda_cv = CvTrans.stack(*hs) * stack_reduce()
-        cv_out = stack_reduce().compute_cv_trans(CV.combine(*cv_out), nl)[0]
+            # cv_i, _f = trunc_svd(cv_i)
+            # normed_cv_u = CV.unstack(cv_i)
 
-        # assert jnp.allclose(cv_out.cv, jax.jit(lda_cv.compute_cv_trans)(cv, nl)[0].cv)
+            # mu_i = [jnp.mean(x.cv, axis=0) for x in normed_cv_u]
+            # mu = jnp.einsum(
+            #     "i,ij->j",
+            #     jnp.array(cv.stack_dims) / jnp.sum(jnp.array(cv.stack_dims)),
+            #     jnp.array(mu_i),
+            # )
 
-        return cv_out, lda_cv
+            # obersevations_within = CV.stack(*[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)])
+            # observations_between = CV.stack(*[cv_i - mu for cv_i in normed_cv_u])
+
+            # cov_w = LedoitWolf(assume_centered=True).fit(obersevations_within.cv).covariance_
+            # cov_b = LedoitWolf(assume_centered=True).fit(observations_between.cv).covariance_
+
+            # manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=self.outdim)
+
+            # @pymanopt.function.jax(manifold)
+            # @jit
+            # def cost(x):
+            #     # a = jnp.einsum("ab, ia,ic, cb ", x, correlation_w.cv, correlation_w.cv, x) / (x.shape[0] - 1)
+            #     # b = jnp.einsum("ab, ja, jc, cb ", x, correlation_b.cv, correlation_b.cv, x) / (x.shape[0] - 1)
+
+            #     # if harmonic:
+            #     #     out = ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
+            #     # else:
+            #     #     out = -((1 - shrinkage) * b + shrinkage) / ((1 - shrinkage) * a + shrinkage)
+
+            #     a = jnp.trace(x.T @ cov_w @ x)
+            #     b = jnp.trace(x.T @ cov_b @ x)
+
+            #     if harmonic:
+            #         out = a / b
+            #     else:
+            #         out = -(b / a)
+
+            #     return out
+
+            # problem = pymanopt.Problem(manifold, cost)
+            # result = optimizer.run(problem)
+
+            # alpha = result.point
+
+            # scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
+
+            # def scale_trans(cv: CV, nl: NeighbourList | None, _, alpha=alpha, scale_factor=scale_factor):
+            #     return CV(
+            #         (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
+            #         _stack_dims=cv._stack_dims,
+            #         _combine_dims=cv._combine_dims,
+            #         atomic=cv.atomic,
+            #         mapped=cv.mapped,
+            #     )
+
+            # _g = CvTrans.from_cv_function(partial(scale_trans, alpha=alpha, scale_factor=scale_factor))
+
+            # cv_i = _g.compute_cv_trans(cv_i, nl)[0]
+
+            # cv_out.append(cv_i)
+            # hs.append(nd * _f * _g)
+
+        stacked_trans = CvTrans.stack(*hs) * stack_reduce()
+        cv_stacked = stack_reduce().compute_cv_trans(CV.combine(*cv_out), nl)[0]
+
+        return cv_stacked, stacked_trans

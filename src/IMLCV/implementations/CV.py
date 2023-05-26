@@ -316,7 +316,8 @@ def get_sinkhorn_divergence(
 
         return p * n1_i
 
-    pi = __norm(pi)
+    if pi is not None:
+        pi = __norm(pi)
 
     def sinkhorn_divergence(
         cv: CV,

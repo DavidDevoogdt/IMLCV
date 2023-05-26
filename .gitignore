@@ -58,3 +58,4 @@ MANIFEST
 dist/*
 tmp/*
 src/IMLCV/examples/output/*
+notebooks/alanine_dipeptide_LDA/*

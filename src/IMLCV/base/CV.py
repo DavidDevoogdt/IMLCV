@@ -1144,7 +1144,6 @@ class NeighbourList:
         nl2: NeighbourList,
         matching="REMatch",
         alpha=1e-2,
-        mode="divergence",
     ):
         # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
 
@@ -1156,9 +1155,7 @@ class NeighbourList:
                     p2=p2,
                     nl2=nl2,
                     matching=matching,
-                    # norm=norm,
                     alpha=alpha,
-                    # average_kernels=average_kernels,
                 ),
             )(p1, nl1)
 
@@ -1170,9 +1167,7 @@ class NeighbourList:
                     p2=p2,
                     nl2=nl2,
                     matching=matching,
-                    # norm=norm,
                     alpha=alpha,
-                    # average_kernels=average_kernels,
                 ),
             )(p2, nl2)
 
@@ -1208,8 +1203,7 @@ class NeighbourList:
                 raise
 
             else:
-
-                @jax.jit
+                # @jax.jit
                 def __gs_mask(p1, p2, m1, m2):
                     n = p1.shape[0]
 
@@ -1253,14 +1247,11 @@ class NeighbourList:
                     b2,
                 )
 
-            if mode == "divergence":
-                res = (
-                    0.5 * jnp.einsum("ij,i...,j...->", P11, p1, p1)
-                    + 0.5 * jnp.einsum("ij,i...,j...->", P22, p2, p2)
-                    - jnp.einsum("ij,i...,j...->", P12, p1, p2)
-                )
-            else:
-                raise ValueError(f"unknown value {mode} for mode argument")
+            res = (
+                jnp.einsum("ij,i...,j...->", P11, p1, p1)
+                + jnp.einsum("ij,i...,j...->", P22, p2, p2)
+                - 2 * jnp.einsum("ij,i...,j...->", P12, p1, p2)
+            )
 
             return res, (P11, P12, P22)
 
@@ -2085,19 +2076,26 @@ class _CvTrans:
     def from_cv_fun(proto: CvFunBase):
         return CvTrans(trans=(proto,))
 
+    @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunck_size"))
     def compute_cv_trans(
         self,
         x: CV,
         nl: NeighbourList | None = None,
         reverse=False,
         log_Jf=False,
+        chunck_size=None,
     ) -> tuple[CV, Array | None]:
         """
         result is always batched
         arg: CV
         """
         if x.batched:
-            return vmap(lambda x, nl: self.compute_cv_trans(x, nl, reverse, log_Jf))(x, nl)
+            return vmap_chunked(self.compute_cv_trans, in_axes=(0, 0, None, None), chunk_size=chunck_size)(
+                x,
+                nl,
+                reverse,
+                log_Jf,
+            )
 
         ordered = reversed(self.trans) if reverse else self.trans
 
@@ -2185,7 +2183,7 @@ class NormalizingFlow(nn.Module):
         else:
             self.nn_flow = self.flow
 
-    # @partial(jit, static_argnums=(0, 2, 3))
+    @partial(jit, static_argnames=("self", "reverse", "test_log_det"))
     def calc(self, x: CV, nl: NeighbourList | None, reverse: bool, test_log_det=False):
         a, b = self.nn_flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
 
