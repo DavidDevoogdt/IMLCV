@@ -13,7 +13,6 @@ from time import time
 
 import cloudpickle
 import h5py
-import jax
 import jax.numpy as jnp
 import numpy as np
 import yaff.analysis.biased_sampling

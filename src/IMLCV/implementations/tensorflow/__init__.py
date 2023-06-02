@@ -1,5 +1,20 @@
 try:
+    import logging
+
     import tensorflow as tf
+
+    tf.get_logger().setLevel("ERROR")
+
+    logging.getLogger("tensorflow").addFilter(
+        logging.Filter(
+            "Compiled the loaded model, but the compiled metrics have yet to be built.",
+        ),
+    )
+    logging.getLogger("tensorflow").addFilter(
+        logging.Filter(
+            "No training configuration found in the save file, so the model was *not* compiled. Compile it manually.",
+        ),
+    )
 
     # tf.keras.backend.set_floatx("float64")
     # Disable all GPUS

@@ -39,3 +39,10 @@ jax.config.update("jax_enable_x64", True)
 
 # cpu based
 jax.config.update("jax_platform_name", "cpu")
+
+
+logging.getLogger("absl").addFilter(
+    logging.Filter(
+        "call_tf works best with a TensorFlow function that does not capture variables or tensors from the context.",
+    ),
+)

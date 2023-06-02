@@ -1,4 +1,3 @@
-import itertools
 from pathlib import Path
 from typing import Iterator
 
@@ -100,7 +99,9 @@ class Transformer:
             f=f * g * h,
             metric=CvMetric(
                 periodicities=self.periodicity,
-                bounding_box=jnp.vstack([jnp.min(z.cv, axis=0), jnp.max(z.cv, axis=0)]).T,
+                bounding_box=jnp.vstack(
+                    [jnp.min(z.cv, axis=0), jnp.max(z.cv, axis=0)],
+                ).T,
             ),
             jac=jac,
         )
@@ -139,6 +140,8 @@ class CVDiscovery:
         split_data=False,
         new_r_cut=None,
         cv_round=None,
+        filter_bias=True,
+        filter_energy=True,
     ) -> tuple[list[SystemParams], list[NeighbourList] | None, CollectiveVariable, StaticMdInfo]:
         weights = []
 
@@ -161,29 +164,43 @@ class CVDiscovery:
                 else None
             )
 
-            if (b0 := traj.ti.e_bias) is None:
-                # map cvs
-                bias = traj.get_bias()
+            e = None
 
-                if new_r_cut != round.tic.r_cut:
-                    nlr = (
-                        sp0.get_neighbour_list(
-                            r_cut=round.tic.r_cut,
-                            z_array=round.tic.atomic_numbers,
+            if filter_bias:
+                if (b0 := traj.ti.e_bias) is None:
+                    # map cvs
+                    bias = traj.get_bias()
+
+                    if new_r_cut != round.tic.r_cut:
+                        nlr = (
+                            sp0.get_neighbour_list(
+                                r_cut=round.tic.r_cut,
+                                z_array=round.tic.atomic_numbers,
+                            )
+                            if round.tic.r_cut is not None
+                            else None
                         )
-                        if round.tic.r_cut is not None
-                        else None
-                    )
+                    else:
+                        nlr = nl0
+
+                    if (cv0 := traj.ti.CV) is None:
+                        if colvar is None:
+                            colvar = bias.collective_variable
+
+                        cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
+
+                    b0, _ = bias.compute_from_cv(cvs=cv0)
+
+                e = b0
+
+            if filter_energy:
+                if (e0 := traj.ti.e_pot) is None:
+                    raise ValueError("e_pot is None")
+
+                if e is None:
+                    e = e0
                 else:
-                    nlr = nl0
-
-                if (cv0 := traj.ti.CV) is None:
-                    if colvar is None:
-                        colvar = bias.collective_variable
-
-                    cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
-
-                b0, _ = bias.compute_from_cv(cvs=cv0)
+                    e = e + e0
 
             sp.append(sp0)
             if nl is not None:
@@ -191,7 +208,7 @@ class CVDiscovery:
                 nl.append(nl0)
 
             beta = 1 / round.tic.T
-            weight = jnp.exp(beta * b0)
+            weight = jnp.exp(-beta * e)
             weights.append(weight)
 
         assert sti is not None
@@ -206,7 +223,7 @@ class CVDiscovery:
                 key=key,
                 a=probs.shape[0],
                 shape=(int(out),),
-                # p=probs,
+                p=probs,
                 replace=False,
             )
 
@@ -233,17 +250,33 @@ class CVDiscovery:
 
             key, indices = choose(key, probs)
 
+            indices = jnp.sort(indices)
+
+            count = 0
+
+            sp_trimmed = []
+            nl_trimmed = [] if nl is not None else None
+
+            for sp_n, nl_n in zip(sp, nl):
+                n_i = sp_n.shape[0]
+
+                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)]
+                sp_trimmed.append(sp_n[index])
+                if nl is not None:
+                    nl_trimmed.append(nl_n[index])
+                count += n_i
+
             if len(sp) >= 1:
-                out_sp.append(sum(sp[1:], sp[0])[indices])
+                out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
                 if nl is not None:
                     assert out_nl is not None
-                    out_nl.append(sum(nl[1:], nl[0])[indices])
+                    out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
 
             else:
-                out_sp.append(sp[0][indices])
+                out_sp.append(sp_trimmed[0][indices])
                 if nl is not None:
                     assert out_nl is not None
-                    out_nl.append(nl[0][indices])
+                    out_nl.append(nl_trimmed[0][indices])
 
         return (out_sp, out_nl, colvar, sti)
 
@@ -302,7 +335,7 @@ class CVDiscovery:
         nl: NeighbourList,
         old_cv: CollectiveVariable,
         new_cv: CollectiveVariable,
-        name,
+        name: str | Path,
         labels=None,
         chunk_size: int | None = None,
     ):
@@ -336,7 +369,11 @@ class CVDiscovery:
 
                 fig = plt.figure()
 
-                for in_out_color, ls, rs in CVDiscovery._grid_spec_iterator(fig=fig, indim=indim, outdim=outdim):
+                for in_out_color, ls, rs in CVDiscovery._grid_spec_iterator(
+                    fig=fig,
+                    indim=indim,
+                    outdim=outdim,
+                ):
                     if in_out_color == 0:
                         dim = indim
                         color_data = data[0]
@@ -393,12 +430,14 @@ class CVDiscovery:
                     do_plot(indim, 0, ls)
                     do_plot(outdim, 1, rs)
 
-                n = Path(
-                    f"{name}_{ 'mapped' if z==1 else ''}.pdf",
-                )
+                name = Path(name)
+                if name.suffix != ".pdf":
+                    name = Path(
+                        f"{name}.pdf",
+                    )
 
-                n.parent.mkdir(parents=True, exist_ok=True)
-                fig.savefig(n)
+                name.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(name)
 
     @staticmethod
     def _grid_spec_iterator(
@@ -434,7 +473,12 @@ class CVDiscovery:
 
     @staticmethod
     def _plot_2d(fig: Figure, grid: gridspec, data, colors, labels, **scatter_kwargs):
-        gs = grid.subgridspec(ncols=2, nrows=2, width_ratios=[4, 1], height_ratios=[1, 4])
+        gs = grid.subgridspec(
+            ncols=2,
+            nrows=2,
+            width_ratios=[4, 1],
+            height_ratios=[1, 4],
+        )
         ax = fig.add_subplot(gs[1, 0])
         ax_histx = fig.add_subplot(gs[0, 0])
         ax_histy = fig.add_subplot(gs[1, 1])
@@ -452,7 +496,12 @@ class CVDiscovery:
 
     @staticmethod
     def _plot_3d(fig: Figure, grid: gridspec, data, colors, labels, **scatter_kwargs):
-        gs = grid.subgridspec(ncols=2, nrows=1, width_ratios=[1, 1], height_ratios=[1, 1])
+        gs = grid.subgridspec(
+            ncols=2,
+            nrows=1,
+            width_ratios=[1, 1],
+            height_ratios=[1],
+        )
 
         # ?https://matplotlib.org/3.2.1/gallery/axisartist/demo_floating_axes.html
 
@@ -467,7 +516,7 @@ class CVDiscovery:
             ax.view_init(elev=20, azim=45)
 
         # create  3d scatter plot with 2D histogram on side
-        ax[0].scatter(
+        ax0.scatter(
             data[:, 0],
             data[:, 1],
             data[:, 2],
@@ -497,20 +546,20 @@ class CVDiscovery:
                 "zorder": 0,
             }
 
-            zz = np.zeros(X.shape) - 0.1
+            zz = np.zeros(X.shape) - 1.1
 
             if z == "z":
-                ax[0].plot_surface(X, Y, zz, **kw)
+                ax0.plot_surface(X, Y, zz, **kw)
             elif z == "y":
-                ax[0].plot_surface(X, zz, Y, **kw)
+                ax0.plot_surface(X, zz, Y, **kw)
             else:
-                ax[0].plot_surface(zz, X, Y, **kw)
+                ax0.plot_surface(zz, X, Y, **kw)
 
         # scatter 2d projections
         zz = np.zeros(data[:, 0].shape)
         for z in ["x", "y", "z"]:
             if z == "z":
-                ax[1].scatter(
+                ax1.scatter(
                     data[:, 0],
                     data[:, 1],
                     zz,
@@ -519,7 +568,7 @@ class CVDiscovery:
                     c=colors,
                 )
             elif z == "y":
-                ax[1].scatter(
+                ax1.scatter(
                     data[:, 0],
                     zz,
                     data[:, 2],
@@ -528,7 +577,7 @@ class CVDiscovery:
                     c=colors,
                 )
             else:
-                ax[1].scatter(
+                ax1.scatter(
                     zz,
                     data[:, 1],
                     data[:, 2],

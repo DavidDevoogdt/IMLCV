@@ -304,7 +304,14 @@ class TransoformerLDA(Transformer):
             raise NotImplementedError("kernel not implemented for lda")
 
         if sort == "l2" or sort == "average":
-            norm_data = [get_sinkhorn_divergence(None, None, sort=sort, alpha_rematch=alpha_rematch)]
+            norm_data = [
+                get_sinkhorn_divergence(
+                    None,
+                    None,
+                    sort=sort,
+                    alpha_rematch=alpha_rematch,
+                ),
+            ]
         elif sort == "rematch":
             norm_data = []
             assert nl_list is not None, "Neigbourlist required for rematch"
@@ -337,7 +344,10 @@ class TransoformerLDA(Transformer):
             cv_i, _ = nd.compute_cv_trans(cv, nl, chunck_size=chunck_size)
             cv_i, _ = un_atomize.compute_cv_trans(cv_i)
 
-            alpha = LDA(n_components=self.outdim, solver=solver, shrinkage="auto").fit(cv_i.cv, labels)
+            alpha = LDA(n_components=self.outdim, solver=solver, shrinkage="auto").fit(
+                cv_i.cv,
+                labels,
+            )
 
             if solver == "eigen":
 
@@ -351,7 +361,11 @@ class TransoformerLDA(Transformer):
                 def f(cv, scalings, xbar):
                     return (cv - xbar) @ scalings
 
-                f = partial(f, scalings=jnp.array(alpha.scalings_), xbar=jnp.array(alpha.xbar_))
+                f = partial(
+                    f,
+                    scalings=jnp.array(alpha.scalings_),
+                    xbar=jnp.array(alpha.xbar_),
+                )
 
             else:
                 raise NotImplementedError

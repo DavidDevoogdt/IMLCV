@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import plot_app
+from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.bash_app_python import bash_app_python
@@ -25,19 +26,23 @@ class ThermoLIB:
 
     time_per_bin = 2 * picosecond
 
-    def __init__(self, rounds: Rounds, rnd=None) -> None:
+    def __init__(self, rounds: Rounds, rnd=None, cv: CollectiveVariable | None = None) -> None:
         self.rounds = rounds
         if rnd is None:
             rnd = rounds.round
 
         self.rnd = rnd
         self.common_bias = self.rounds.get_bias(r=self.rnd)
-        self.cvs = self.rounds.get_bias(r=self.rnd).collective_variable
+
+        if cv is None:
+            self.collective_variable = self.rounds.get_bias(r=self.rnd).collective_variable
+        else:
+            self.collective_variable = cv
 
     def fes_nd_thermolib(
         self,
         plot=True,
-        n=None,
+        num_rnds=4,
         start_r=0,
         update_bounding_box=False,
         samples_per_bin=500,
@@ -81,13 +86,12 @@ class ThermoLIB:
         trajs_plot = []
         biases = []
 
-        cv = None
-
-        for round, trajectory in self.rounds.iter(start=start_r, num=4, stop=self.rnd):
+        for round, trajectory in self.rounds.iter(
+            start=start_r,
+            num=num_rnds,
+            stop=self.rnd,
+        ):
             bias = trajectory.get_bias()
-
-            if cv is None:
-                cv = bias.collective_variable
 
             ti = trajectory.ti[trajectory.ti._t > round.tic.equilibration]
 
@@ -100,7 +104,7 @@ class ThermoLIB:
                     r_cut=round.tic.r_cut,
                     z_array=round.tic.atomic_numbers,
                 )
-                cvs, _ = cv.compute_cv(sp=sp, nl=nl)
+                cvs, _ = self.collective_variable.compute_cv(sp=sp, nl=nl)
 
             if cvs.batch_dim <= 1:
                 print("##############bdim {cvs.batch_dim} ignored\n")
@@ -127,12 +131,12 @@ class ThermoLIB:
         if update_bounding_box:
             bb = None
         else:
-            bb = self.cvs.metric.bounding_box
+            bb = self.collective_variable.metric.bounding_box
 
         bounds, bins = self._FES_mg(
             cvs=trajs,
             bounding_box=bb,
-            n=n,
+            n=None,
             samples_per_bin=samples_per_bin,
         )
 
@@ -219,7 +223,7 @@ class ThermoLIB:
         max_bias=None,
         fs=None,
         choice="gridbias",
-        n=None,
+        num_rnds=4,
         start_r=0,
         rbf_kernel="thin_plate_spline",
         rbf_degree=None,
@@ -232,6 +236,7 @@ class ThermoLIB:
                 plot=plot,
                 start_r=start_r,
                 samples_per_bin=samples_per_bin,
+                num_rnds=num_rnds,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij
@@ -276,7 +281,7 @@ class ThermoLIB:
                 # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
 
                 fesBias = RbfBias(
-                    cvs=self.cvs,
+                    cvs=self.collective_variable,
                     vals=fslist,
                     cv=cv,
                     # kernel="linear",
@@ -290,7 +295,7 @@ class ThermoLIB:
             fesBias = get_b(1.0)
 
         elif choice == "gridbias":
-            fesBias = GridBias(cvs=self.cvs, vals=fs, bounds=bounds)
+            fesBias = GridBias(cvs=self.collective_variable, vals=fs, bounds=bounds)
 
         else:
             raise ValueError

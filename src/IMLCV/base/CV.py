@@ -4,7 +4,6 @@ import dataclasses
 from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
-from pathlib import Path
 
 import cloudpickle
 import distrax
@@ -1611,7 +1610,14 @@ class CV:
         if len(cvs) == 1:
             return cvs[0]
 
-        def _inner(cv: CV, batched, mapped, atomic, bdim, stack_dims) -> tuple[list[Array], list[int]]:
+        def _inner(
+            cv: CV,
+            batched,
+            mapped,
+            atomic,
+            bdim,
+            stack_dims,
+        ) -> tuple[list[Array], list[int]]:
             assert mapped == cv.mapped
 
             if batched is None:
@@ -1659,7 +1665,13 @@ class CV:
             out_dim += b
 
         # type: ignore
-        return CV(cv=jnp.hstack(out_cv), mapped=mapped, _combine_dims=out_dim, _stack_dims=stack_dims, atomic=atomic)
+        return CV(
+            cv=jnp.hstack(out_cv),
+            mapped=mapped,
+            _combine_dims=out_dim,
+            _stack_dims=stack_dims,
+            atomic=atomic,
+        )
 
 
 class CvMetric:
@@ -1809,10 +1821,10 @@ class CvMetric:
 ######################################
 
 
-@dataclasses.dataclass(kw_only=True)
+@dataclasses.dataclass(kw_only=True, frozen=True)
 class CvFunInput:
     input: int
-    conditioners: list[int] | None = None
+    conditioners: tuple[int] | None = None
 
     def split(self, x: CV):
         cvs = x.split()
@@ -1832,7 +1844,13 @@ class CvFunInput:
 class _CvFunBase:
     cv_input: CvFunInput | None = None
 
-    def calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False) -> tuple[CV, Array | None]:
+    def calc(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        log_det=False,
+    ) -> tuple[CV, Array | None]:
         if self.cv_input is not None:
             y, cond = self.cv_input.split(x)
         else:
@@ -1892,7 +1910,13 @@ class CvFun(CvFunBase):
     forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
     backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
 
-    def _calc(self, x: CV, nl: NeighbourList | None, reverse=False, conditioners: list[CV] | None = None) -> CV:
+    def _calc(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        conditioners: list[CV] | None = None,
+    ) -> CV:
         if conditioners is None:
             c = None
         else:
@@ -1927,11 +1951,21 @@ class CvFunNn(nn.Module, CvFunBase_unfrozen):
             return self.forward(x, nl, conditioners)
 
     @abstractmethod
-    def forward(self, x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None) -> CV:
+    def forward(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        conditioners: list[CV] | None = None,
+    ) -> CV:
         pass
 
     @abstractmethod
-    def backward(self, x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None) -> CV:
+    def backward(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        conditioners: list[CV] | None = None,
+    ) -> CV:
         pass
 
 
@@ -2012,7 +2046,13 @@ class CvFunDistrax(nn.Module, CvFunBase_unfrozen):
 class CombinedCvFun(CvFunBase):
     classes: tuple[tuple[CvFunBase]]
 
-    def calc(self, x: CV, nl: NeighbourList | None, reverse=False, log_det=False) -> tuple[CV, Array | None]:
+    def calc(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        log_det=False,
+    ) -> tuple[CV, Array | None]:
         assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
 
         out_x = []
@@ -2069,14 +2109,17 @@ class _CvTrans:
         return CvTrans.from_cv_function(f=f2)
 
     @staticmethod
-    def from_cv_function(f: Callable[[CV, NeighbourList | None, CV | None], CV]) -> CvTrans:
+    def from_cv_function(
+        f: Callable[[CV, NeighbourList | None, CV | None], CV],
+    ) -> CvTrans:
         return CvTrans.from_cv_fun(proto=CvFun(forward=f))
 
     @staticmethod
     def from_cv_fun(proto: CvFunBase):
+        if isinstance(proto, nn.Module):
+            CvTransNN(trans=(proto,))
         return CvTrans(trans=(proto,))
 
-    @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunck_size"))
     def compute_cv_trans(
         self,
         x: CV,
@@ -2090,7 +2133,11 @@ class _CvTrans:
         arg: CV
         """
         if x.batched:
-            return vmap_chunked(self.compute_cv_trans, in_axes=(0, 0, None, None), chunk_size=chunck_size)(
+            return vmap_chunked(
+                self.compute_cv_trans,
+                in_axes=(0, 0, None, None),
+                chunk_size=chunck_size,
+            )(
                 x,
                 nl,
                 reverse,
@@ -2127,7 +2174,9 @@ class _CvTrans:
         def double(x: CV, nl: NeighbourList | None, _):
             return CV.combine(x, x)
 
-        return double * CvTrans(trans=(CombinedCvFun(classes=(self.trans, other.trans)),))
+        return double * CvTrans(
+            trans=(CombinedCvFun(classes=(self.trans, other.trans)),),
+        )
 
     @staticmethod
     def stack(*cv_trans: CvTrans):
@@ -2137,20 +2186,33 @@ class _CvTrans:
         def duplicate(x: CV, nl: NeighbourList | None, _):
             return CV.combine(*[x] * n)
 
-        return duplicate * CvTrans(trans=tuple([CombinedCvFun(classes=tuple([cvt.trans for cvt in cv_trans]))]))
+        return duplicate * CvTrans(
+            trans=tuple([CombinedCvFun(classes=tuple([cvt.trans for cvt in cv_trans]))]),
+        )
 
 
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class CvTrans(_CvTrans):
     trans: tuple[CvFunBase]
 
+    @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunck_size"))
+    def compute_cv_trans(
+        self,
+        x: CV,
+        nl: NeighbourList | None = None,
+        reverse=False,
+        log_Jf=False,
+        chunck_size=None,
+    ) -> tuple[CV, Array | None]:
+        """
+        result is always batched
+        arg: CV
+        """
 
-@dataclasses.dataclass(kw_only=True, frozen=False)
-class CvTrans_unfrozen(_CvTrans):
-    trans: tuple[CvFunBase]
+        return super().compute_cv_trans(x=x, nl=nl, reverse=reverse, log_Jf=log_Jf, chunck_size=chunck_size)
 
 
-class CvTransNN(nn.Module, CvTrans_unfrozen):
+class CvTransNN(nn.Module, _CvTrans):
     trans: tuple[CvFunBase]
 
     def setup(self) -> None:
@@ -2175,7 +2237,7 @@ class CvTransNN(nn.Module, CvTrans_unfrozen):
 class NormalizingFlow(nn.Module):
     """normalizing flow. _ProtoCvTransNN are stored separately because they need to be initialized by this module in setup"""
 
-    flow: CvTransNN | CvTransNN
+    flow: CvTransNN
 
     def setup(self) -> None:
         if isinstance(self.flow, CvTrans):
@@ -2183,26 +2245,8 @@ class NormalizingFlow(nn.Module):
         else:
             self.nn_flow = self.flow
 
-    @partial(jit, static_argnames=("self", "reverse", "test_log_det"))
     def calc(self, x: CV, nl: NeighbourList | None, reverse: bool, test_log_det=False):
         a, b = self.nn_flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
-
-        if test_log_det:
-            b2 = jnp.log(
-                jnp.abs(
-                    jnp.linalg.det(
-                        jacrev(
-                            lambda x: self.nn_flow.compute_cv_trans(
-                                x,
-                                nl,
-                                reverse=reverse,
-                                log_Jf=False,
-                            )[0],
-                        )(x).cv.cv,
-                    ),
-                ),
-            )
-            assert jnp.abs(b - b2) < 1e-5
 
         return a, b
 
@@ -2213,7 +2257,10 @@ class CvFlow:
     trans: CvTrans | None = None
 
     @staticmethod
-    def from_function(f: Callable[[SystemParams, NeighbourList | None], Array], atomic=False) -> CvFlow:
+    def from_function(
+        f: Callable[[SystemParams, NeighbourList | None], Array],
+        atomic=False,
+    ) -> CvFlow:
         def f2(
             sp: SystemParams,
             nl: NeighbourList | None = None,

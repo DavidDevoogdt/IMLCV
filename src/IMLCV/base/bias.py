@@ -27,6 +27,7 @@ from jax import vmap
 from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
+from netket.jax import vmap_chunked
 from parsl.data_provider.files import File
 
 yaff.log.set_level(yaff.log.silent)
@@ -239,13 +240,14 @@ class Bias(BC, ABC):
         return False
 
     # @partial(jit, static_argnums=(0, 2, 3))
-    @partial(jax.jit, static_argnames=["self", "gpos", "vir"])
+    @partial(jax.jit, static_argnames=["self", "gpos", "vir", "chunk_size"])
     def compute_from_system_params(
         self,
         sp: SystemParams,
         gpos=False,
         vir=False,
         nl: NeighbourList | None = None,
+        chunk_size: int | None = None,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -253,12 +255,13 @@ class Bias(BC, ABC):
         if sp.batched:
             if nl is not None:
                 assert nl.batched
-                return vmap(
+                return vmap_chunked(
                     self.compute_from_system_params,
                     in_axes=(0, None, None, 0),
+                    chunk_size=chunk_size,
                 )(sp, gpos, vir, nl)
             else:
-                return vmap(
+                return vmap_chunked(
                     self.compute_from_system_params,
                     in_axes=(0, None, None, None),
                 )(sp, gpos, vir, nl)
@@ -343,7 +346,6 @@ class Bias(BC, ABC):
     @staticmethod
     def load(filename) -> Bias:
         bias = BC.load(filename=filename)
-        assert isinstance(bias, Bias)
         return bias
 
     def plot(
@@ -462,7 +464,6 @@ class Bias(BC, ABC):
 
             extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
-            @jit
             def f(point):
                 return self.compute_from_cv(
                     CV(cv=point),

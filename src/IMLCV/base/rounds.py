@@ -164,7 +164,13 @@ class Rounds(ABC):
     def load(folder: str | Path, copy=False):
         return Rounds(folder=folder, copy=copy)
 
-    def write_xyz(self, c: int | None = None, r: int | None = None, num: int = 1, repeat=None):
+    def write_xyz(
+        self,
+        c: int | None = None,
+        r: int | None = None,
+        num: int = 1,
+        repeat=None,
+    ):
         from ase.io.extxyz import write_extxyz
 
         if c is None:
@@ -347,7 +353,15 @@ class Rounds(ABC):
 
         self.add_round(attr=attr, stic=md.static_trajectory_info, r=r, c=c)
 
-    def add_md(self, i, d: TrajectoryInfo, attrs=None, bias: str | None = None, r=None, c=None):
+    def add_md(
+        self,
+        i,
+        d: TrajectoryInfo,
+        attrs=None,
+        bias: str | None = None,
+        r=None,
+        c=None,
+    ):
         if c is None:
             c = self.cv
 
@@ -378,7 +392,10 @@ class Rounds(ABC):
                     f[f"{c}/{r}/{i}"].attrs[key] = val
 
             f[f"{c}/{r}"].attrs["num"] += 1
-            f[f"{c}/{r}"].attrs["num_vals"] = np.append(f[f"{c}/{r}"].attrs["num_vals"], int(i))
+            f[f"{c}/{r}"].attrs["num_vals"] = np.append(
+                f[f"{c}/{r}"].attrs["num_vals"],
+                int(i),
+            )
 
             self.h5file.flush()
 
@@ -462,7 +479,12 @@ class Rounds(ABC):
 
             yield atoms, round, trajejctory
 
-    def get_trajectory_information(self, r: int, i: int, c: int | None = None) -> TrajectoryInformation:
+    def get_trajectory_information(
+        self,
+        r: int,
+        i: int,
+        c: int | None = None,
+    ) -> TrajectoryInformation:
         if c is None:
             c = self.cv
 
@@ -483,7 +505,11 @@ class Rounds(ABC):
             folder=self.folder,
         )
 
-    def round_information(self, c: int | None = None, r: int | None = None) -> RoundInformation:
+    def round_information(
+        self,
+        c: int | None = None,
+        r: int | None = None,
+    ) -> RoundInformation:
         if c is None:
             c = self.cv
 
@@ -642,8 +668,12 @@ class Rounds(ABC):
 
         with self.lock:
             f = self.h5file
-            common_bias_name = self.full_path(f[f"{self.cv}/{self.round}"].attrs["name_bias"])
-            common_md_name = self.full_path(f[f"{self.cv}/{self.round}"].attrs["name_md"])
+            common_bias_name = self.full_path(
+                f[f"{self.cv}/{self.round}"].attrs["name_bias"],
+            )
+            common_md_name = self.full_path(
+                f[f"{self.cv}/{self.round}"].attrs["name_md"],
+            )
         from parsl.dataflow.dflow import AppFuture
 
         tasks: list[tuple[int, AppFuture]] | None = None

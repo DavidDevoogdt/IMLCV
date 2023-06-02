@@ -47,8 +47,8 @@ def loop_batcher(prim, args, dims, **params):
             elems=batch_args,
         )
 
-    if len(batch_args) != 1:
-        raise NotImplementedError
+    # if len(batch_args) != 1:
+    #     raise NotImplementedError
 
     # execute with given arguments
     ret = call_tf(par_fun)(batch_args, static_args)  # noqa: F821

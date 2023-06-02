@@ -17,8 +17,6 @@ from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import dihedral
 from IMLCV.implementations.CV import NoneCV
-from IMLCV.implementations.CV import project_distances
-from IMLCV.implementations.CV import sb_descriptor
 from IMLCV.implementations.CV import Volume
 from IMLCV.implementations.energy import Cp2kEnergy
 from IMLCV.implementations.energy import YaffEnergy
@@ -34,7 +32,10 @@ yaff.log.set_level(yaff.log.silent)
 DATA_ROOT = ROOT_DIR / "IMLCV" / "data"
 
 
-def alanine_dipeptide_yaff(cv="backbone_dihedrals", bias: Callable[[CollectiveVariable], Bias] | None = None):
+def alanine_dipeptide_yaff(
+    cv="backbone_dihedrals",
+    bias: Callable[[CollectiveVariable], Bias] | None = None,
+):
     T = 300 * kelvin
 
     tic = StaticMdInfo(

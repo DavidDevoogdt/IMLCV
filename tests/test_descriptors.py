@@ -1,5 +1,3 @@
-from time import time_ns
-
 import jax.debug
 import jax.dtypes
 import jax.lax
@@ -11,8 +9,6 @@ import numpy as onp
 import pytest
 import scipy.special
 from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CvFlow
-from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import sb_descriptor
@@ -25,12 +21,7 @@ from IMLCV.tools.bessel_callback import kve
 from IMLCV.tools.bessel_callback import spherical_jn
 from IMLCV.tools.bessel_callback import spherical_yn
 from IMLCV.tools.bessel_callback import yv
-from IMLCV.tools.soap_kernel import p_i
-from IMLCV.tools.soap_kernel import p_inl_sb
-from IMLCV.tools.soap_kernel import p_innl_soap
 from jax import grad
-from jax import jacrev
-from jax import jit
 from jax import vmap
 
 
@@ -125,7 +116,14 @@ def test_SOAP_SB_sinkhorn(cell, matching, pp):
 
     p1 = desc.compute_cv_flow(sp1, nl1)
     cv = CollectiveVariable(
-        f=desc * get_sinkhorn_divergence(nli=nl1, pi=p1, sort=matching, alpha_rematch=alpha, output="scalar"),
+        f=desc
+        * get_sinkhorn_divergence(
+            nli=nl1,
+            pi=p1,
+            sort=matching,
+            alpha_rematch=alpha,
+            output="scalar",
+        ),
         metric=None,
         jac=jax.jacrev,
     )

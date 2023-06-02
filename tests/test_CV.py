@@ -84,7 +84,7 @@ def test_nf():
     key_1, key_2, prng = jax.random.split(prng, 3)
     x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
 
-    test(NormalizingFlow(flow=get_chain(input=0, cond=[1])), x, key_2)
+    test(NormalizingFlow(flow=get_chain(input=0, cond=(1,))), x, key_2)
 
     # test 1
 
@@ -92,7 +92,7 @@ def test_nf():
     x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
     test(
         NormalizingFlow(
-            flow=get_chain(input=0, cond=[1]) * get_chain(input=1, cond=[0]),
+            flow=get_chain(input=0, cond=(1,)) * get_chain(input=1, cond=(0,)),
         ),
         x,
         key_2,
@@ -109,6 +109,22 @@ def test_nf():
     )
 
     test(NormalizingFlow(chain), x2, key_2)
+
+    # b2 = jnp.log(
+    #     jnp.abs(
+    #         jnp.linalg.det(
+    #             jacrev(
+    #                 lambda x: self.nn_flow.compute_cv_trans(
+    #                     x,
+    #                     nl,
+    #                     reverse=reverse,
+    #                     log_Jf=False,
+    #                 )[0],
+    #             )(x).cv.cv,
+    #         ),
+    #     ),
+    # )
+    # assert jnp.abs(b - b2) < 1e-5
 
 
 def _get_sp_rand(

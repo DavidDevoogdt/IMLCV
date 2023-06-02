@@ -50,7 +50,13 @@ class KerasFunBase(CvFunBase):
         self.fwd = forward
         self.bwd = backward
 
-    def _calc(self, x: CV, nl: NeighbourList, reverse=False, conditioners: list[CV] | None = None) -> CV:
+    def _calc(
+        self,
+        x: CV,
+        nl: NeighbourList,
+        reverse=False,
+        conditioners: list[CV] | None = None,
+    ) -> CV:
         assert conditioners is None
         assert not reverse
 

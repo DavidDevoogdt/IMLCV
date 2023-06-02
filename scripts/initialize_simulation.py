@@ -157,10 +157,10 @@ if __name__ == "__main__":
         f.write(f"resolved args: {args} \n")
 
     def app(args):
-        from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
         from molmod.units import kjmol
 
         from IMLCV.configs.config_general import config
+        from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
 
         # from IMLCV.examples.example_systems import CsPbI3, alanine_dipeptide_yaff
         from IMLCV.scheme import Scheme

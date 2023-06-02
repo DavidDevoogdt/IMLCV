@@ -45,7 +45,14 @@ def get_rounds_ala(tmpdir) -> Rounds:
         mde = alanine_dipeptide_yaff()
 
         scheme = Scheme(folder=folder, Engine=mde)
-        scheme.inner_loop(K=2 * kjmol, rnds=loops, n=4, init=500, steps=steps, plot=False)
+        scheme.inner_loop(
+            K=2 * kjmol,
+            rnds=loops,
+            n=4,
+            init=500,
+            steps=steps,
+            plot=False,
+        )
         rnds = scheme.rounds
         shutil.make_archive(p.parent / p.stem, "zip", folder)
 
@@ -194,5 +201,5 @@ if __name__ == "__main__":
     # (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
     # (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
 
-    # test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
-    test_LDA_CV(tmpdir=Path("tmp"))
+    test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
+    # test_LDA_CV(tmpdir=Path("tmp"))
