@@ -362,9 +362,19 @@ def config(
 ):
     if env == "hortense":
         if cpu_cluster is not None:
-            assert cpu_cluster in ["cpu_milan", "cpu_rome", "cpu_rome_512", "cpu_rome_all", "debug_rome"]
+            assert cpu_cluster in [
+                "cpu_milan",
+                "cpu_rome",
+                "cpu_rome_512",
+                "cpu_rome_all",
+                "debug_rome",
+            ]
         if gpu_cluster is not None:
-            assert gpu_cluster in ["gpu_rome_a100", "gpu_rome_a100_401", "gpu_rome_a100_80"]
+            assert gpu_cluster in [
+                "gpu_rome_a100",
+                "gpu_rome_a100_401",
+                "gpu_rome_a100_80",
+            ]
 
         kw = {
             "cpu_cluster": "dodrio",

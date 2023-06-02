@@ -34,6 +34,7 @@ def get_platform():
 def config(
     env=None,
     singlepoint_nodes=16,
+    local_ref_threads=4,
     walltime="48:00:00",
     bootstrap=False,
     memory_per_core=None,
@@ -41,6 +42,7 @@ def config(
     path_internal: Path | None = None,
     cpu_cluster=None,
     gpu_cluster=None,
+    initialize_logging=True,
 ):
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
@@ -53,7 +55,7 @@ def config(
         path_internal = ROOT_DIR / ".runinfo"
 
     if env == "local":
-        execs = get_config_local(path_internal)
+        execs = get_config_local(path_internal, ref_threads=local_ref_threads)
     elif env == "hortense" or env == "stevin":
         execs = config_ugent(
             env=env,
@@ -71,6 +73,7 @@ def config(
         executors=execs,
         usage_tracking=True,
         run_dir=str(path_internal),
+        initialize_logging=initialize_logging,
     )
 
     parsl.load(config=config)

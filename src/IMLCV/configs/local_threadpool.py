@@ -1,7 +1,7 @@
 from parsl.executors import ThreadPoolExecutor
 
 
-def get_config(path_internal):
+def get_config(path_internal, ref_threads=2):
     executors = [
         ThreadPoolExecutor(
             label="training",
@@ -20,7 +20,7 @@ def get_config(path_internal):
         ),
         ThreadPoolExecutor(
             label="reference",
-            max_threads=4,
+            max_threads=ref_threads,
             working_dir=str(path_internal),
         ),
     ]
