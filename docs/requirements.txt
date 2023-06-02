@@ -5,6 +5,7 @@
 myst-parser
 nbsphinx
 nbsphinx-link
+pandoc
 sphinx
 sphinx-autoapi
 sphinx-autodoc-typehints

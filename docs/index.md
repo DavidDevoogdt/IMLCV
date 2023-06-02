@@ -62,10 +62,10 @@ Installation
 Getting started
 Examples <notebook_link>
 
-Contributions & Help <contributing>
+<!-- Contributions & Help <contributing> -->
 License <license>
 Authors <authors>
-Changelog <changelog>
-Module Reference <api/modules>
+<!-- Changelog <changelog> -->
+<!-- Module Reference <api/modules> -->
 
 ```

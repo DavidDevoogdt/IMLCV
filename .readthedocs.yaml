@@ -20,6 +20,8 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.10"
+  apt_packages:
+    - pandoc
   jobs:
     pre_install:
       - git config --global url."https://${UGENT_USER_PWD}@github.ugent.be/".insteadOf "https://github.ugent.be/"

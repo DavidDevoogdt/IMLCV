@@ -273,6 +273,7 @@ class Scheme:
                     bias=self.rounds.rel_path(round_path / "bias"),
                     r=0,
                 )
+            self.rounds.add_round_from_md(self.md)
 
     def save(self, filename):
         raise NotImplementedError
