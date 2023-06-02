@@ -4,6 +4,7 @@
 # sphinx>=3.2.1
 myst-parser
 nbsphinx
+nbsphinx-link
 sphinx
 sphinx-autoapi
 sphinx-autodoc-typehints

@@ -60,7 +60,7 @@ maxdepth: 2
 
 Installation
 Getting started
-Examples <notebooks>
+Examples <notebook_link>
 
 Contributions & Help <contributing>
 License <license>

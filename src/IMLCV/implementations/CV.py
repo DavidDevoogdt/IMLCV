@@ -2,7 +2,6 @@ import dataclasses
 from functools import partial
 
 import distrax
-import jax
 import jax.numpy as jnp
 import numba
 import numpy as np
@@ -168,7 +167,14 @@ def soap_descriptor(
         )  # eliminate Z2>Z1
         return a
 
-    p = p_innl_soap(r_cut=r_cut, n_max=n_max, l_max=l_max, sigma_a=sigma_a, r_delta=r_delta, num=num)
+    p = p_innl_soap(
+        r_cut=r_cut,
+        n_max=n_max,
+        l_max=l_max,
+        sigma_a=sigma_a,
+        r_delta=r_delta,
+        num=num,
+    )
 
     def f(sp: SystemParams, nl: NeighbourList):
         assert nl is not None, "provide neighbourlist for soap describport"
@@ -293,7 +299,12 @@ def trunc_svd(m: CV) -> tuple[CV, CvTrans]:
             def _f(x, v):
                 return jnp.einsum("i,ji->j", x, v)
 
-        return CV(cv=_f(x.cv, v), _stack_dims=x._stack_dims, _combine_dims=x._combine_dims, atomic=False)
+        return CV(
+            cv=_f(x.cv, v),
+            _stack_dims=x._stack_dims,
+            _combine_dims=x._combine_dims,
+            atomic=False,
+        )
 
     return f.compute_cv_trans(m)[0], f
 
@@ -365,7 +376,13 @@ def get_sinkhorn_divergence(
         )
 
     return CvTrans.from_cv_function(
-        partial(sinkhorn_divergence, pi=pi, nli=nli, sort=sort, alpha_rematch=alpha_rematch),
+        partial(
+            sinkhorn_divergence,
+            pi=pi,
+            nli=nli,
+            sort=sort,
+            alpha_rematch=alpha_rematch,
+        ),
     )
 
 
@@ -398,6 +415,70 @@ def stack_reduce(op=jnp.mean):
     return _stack_reduce
 
 
+def affine_2d(old: Array, new: Array | None = None):
+    """old: set of coordinates in the original space, new: set of coordinates in the new space"""
+
+    # source:https://github.com/opencv/opencv/blob/11b020b9f9e111bddd40bffe3b1759aa02d966f0/modules/imgproc/src/imgwarp.cpp#L3001
+
+    # /* Calculates coefficients of perspective transformation
+    #  * which maps (xi,yi) to (ui,vi), (i=1,2,3,4):
+    #  *
+    #  *      c00*xi + c01*yi + c02
+    #  * ui = ---------------------
+    #  *      c20*xi + c21*yi + c22
+    #  *
+    #  *      c10*xi + c11*yi + c12
+    #  * vi = ---------------------
+    #  *      c20*xi + c21*yi + c22
+    #  *
+    #  * Coefficients are calculated by solving linear system:
+    #  * / x0 y0  1  0  0  0 -x0*u0 -y0*u0 \ /c00\ /u0\
+    #  * | x1 y1  1  0  0  0 -x1*u1 -y1*u1 | |c01| |u1|
+    #  * | x2 y2  1  0  0  0 -x2*u2 -y2*u2 | |c02| |u2|
+    #  * | x3 y3  1  0  0  0 -x3*u3 -y3*u3 |.|c10|=|u3|,
+    #  * |  0  0  0 x0 y0  1 -x0*v0 -y0*v0 | |c11| |v0|
+    #  * |  0  0  0 x1 y1  1 -x1*v1 -y1*v1 | |c12| |v1|
+    #  * |  0  0  0 x2 y2  1 -x2*v2 -y2*v2 | |c20| |v2|
+    #  * \  0  0  0 x3 y3  1 -x3*v3 -y3*v3 / \c21/ \v3/
+    #  *
+    #  * where:
+    #  *   cij - matrix coefficients, c22 = 1
+    #  */
+
+    A = jnp.array(
+        [
+            [old[0, 0], old[0, 1], 1, 0, 0, 0, -old[0, 0] * new[0, 0], -old[0, 1] * new[0, 0]],
+            [old[1, 0], old[1, 1], 1, 0, 0, 0, -old[1, 0] * new[1, 0], -old[1, 1] * new[1, 0]],
+            [old[2, 0], old[2, 1], 1, 0, 0, 0, -old[2, 0] * new[2, 0], -old[2, 1] * new[2, 0]],
+            [old[3, 0], old[3, 1], 1, 0, 0, 0, -old[3, 0] * new[3, 0], -old[3, 1] * new[3, 0]],
+            [0, 0, 0, old[0, 0], old[0, 1], 1, -old[0, 0] * new[0, 1], -old[0, 1] * new[0, 1]],
+            [0, 0, 0, old[1, 0], old[1, 1], 1, -old[1, 0] * new[1, 1], -old[1, 1] * new[1, 1]],
+            [0, 0, 0, old[2, 0], old[2, 1], 1, -old[2, 0] * new[2, 1], -old[2, 1] * new[2, 1]],
+            [0, 0, 0, old[3, 0], old[3, 1], 1, -old[3, 0] * new[3, 1], -old[3, 1] * new[3, 1]],
+        ],
+    )
+
+    X = jnp.array([new[0, 0], new[1, 0], new[2, 0], new[3, 0], new[0, 1], new[1, 1], new[2, 1], new[3, 1]])
+
+    C = jnp.linalg.solve(A, X)
+
+    @CvTrans.from_cv_function
+    def affine_trans(x: CV, *_):
+        assert x.dim == 2
+
+        u = (C[0] * x.cv[0] + C[1] * x.cv[1] + C[2]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
+        v = (C[3] * x.cv[0] + C[4] * x.cv[1] + C[5]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
+        return CV(
+            cv=jnp.array([u, v]),
+            mapped=x.mapped,
+            _combine_dims=x._combine_dims,
+            _stack_dims=x._stack_dims,
+            atomic=x.atomic,
+        )
+
+    return affine_trans
+
+
 ######################################
 #           CV Fun                   #
 ######################################
@@ -414,11 +495,21 @@ class RealNVP(CvFunNn):
         self.s = Dense(features=self.features)
         self.t = Dense(features=self.features)
 
-    def forward(self, x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None):
+    def forward(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        conditioners: list[CV] | None = None,
+    ):
         y = CV.combine(*conditioners).cv
         return CV(cv=x.cv * self.s(y) + self.t(y))
 
-    def backward(self, z: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None):
+    def backward(
+        self,
+        z: CV,
+        nl: NeighbourList | None,
+        conditioners: list[CV] | None = None,
+    ):
         y = CV.combine(*conditioners).cv
         return CV(cv=(z.cv - self.t(y)) / self.s(y))
 
