@@ -246,18 +246,19 @@ def project_distances(a):
     return project_distances
 
 
-def scale_cv_trans(array: CV):
+def scale_cv_trans(array: CV, lower=0, upper=1):
     "axis 0 is batch axis"
     maxi = jnp.max(array.cv, axis=0)
     mini = jnp.min(array.cv, axis=0)
-    diff = (maxi - mini) / 2
+
+    diff = maxi - mini
     diff = jnp.where(diff == 0, 1, diff)
 
     # mask = jnp.abs(diff) > 1e-6
 
     @CvTrans.from_array_function
     def f0(x, *_):
-        return (x - (mini + maxi) / 2) / diff
+        return ((x - mini) / diff) * (upper - lower) + lower
 
     return f0
 
@@ -346,7 +347,7 @@ def get_sinkhorn_divergence(
         if nli is None:
             nli = nl
 
-        _, (P11, P12, P22) = NeighbourList.match_kernel(
+        _, (P11, P12, P22) = NeighbourList.sinkhorn_divergence(
             cv.cv,
             pi,
             nl,

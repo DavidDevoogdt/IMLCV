@@ -528,7 +528,7 @@ class MDEngine(ABC):
 
         print("Loading MD engine")
         for key in kwargs.keys():
-            print(f"setting {key}={kwargs[key]}")
+            # print(f"setting {key}={kwargs[key]}")
 
             self.__setattr__(key, kwargs[key])
 
@@ -633,8 +633,8 @@ class MDEngine(ABC):
 
     def get_energy(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
         return self.energy.compute_from_system_params(
-            gpos,
-            vtens,
+            gpos=gpos,
+            vir=vtens,
         )
 
     def get_bias(

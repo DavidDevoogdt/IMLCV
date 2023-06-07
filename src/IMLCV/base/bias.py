@@ -244,9 +244,9 @@ class Bias(BC, ABC):
     def compute_from_system_params(
         self,
         sp: SystemParams,
+        nl: NeighbourList | None = None,
         gpos=False,
         vir=False,
-        nl: NeighbourList | None = None,
         chunk_size: int | None = None,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
@@ -257,14 +257,14 @@ class Bias(BC, ABC):
                 assert nl.batched
                 return vmap_chunked(
                     self.compute_from_system_params,
-                    in_axes=(0, None, None, 0),
+                    in_axes=(0, 0, None, None),
                     chunk_size=chunk_size,
-                )(sp, gpos, vir, nl)
+                )(sp, nl, gpos, vir)
             else:
                 return vmap_chunked(
                     self.compute_from_system_params,
                     in_axes=(0, None, None, None),
-                )(sp, gpos, vir, nl)
+                )(sp, nl, gpos, vir, nl)
 
         [cvs, jac] = self.collective_variable.compute_cv(
             sp=sp,

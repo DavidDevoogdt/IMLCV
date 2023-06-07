@@ -103,7 +103,7 @@ class Scheme:
             k = 2 * self.md.static_trajectory_info.T * boltzmann
         k /= ((m.bounding_box[:, 1] - m.bounding_box[:, 0]) / 2) ** 2
         if scale_n:
-            k /= n**2
+            k *= n**2
 
         self.rounds.run_par(
             [
@@ -136,7 +136,7 @@ class Scheme:
         init_max_grad=None,
         max_grad=None,
         plot=True,
-        choice="grid_bias",
+        choice="rbf",
         fes_bias_rnds=4,
     ):
         if init != 0:
@@ -185,33 +185,54 @@ class Scheme:
         self.md.static_trajectory_info.r_cut = new_r_cut
         self.rounds.add_round_from_md(self.md)
 
-    def transform_CV(self, cv_trans: CvTrans, copy_samples=True, plot=True, num_copy=2, chunk_size=None):
+    def transform_CV(
+        self,
+        cv_trans: CvTrans,
+        copy_samples=True,
+        plot=True,
+        num_copy=2,
+        chunk_size=None,
+        kernel="thin_plate_spline",
+    ):
         original_collective_variable = self.md.bias.collective_variable
 
-        grid = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.1)
-        grid = jnp.reshape(jnp.array(jnp.meshgrid(*grid)), (len(grid), -1)).T
-        cv = CV(cv=grid)
+        def cv_grid(margin):
+            # take reasonable margin
+            grid = original_collective_variable.metric.grid(n=50, endpoints=True, margin=margin)
+            grid = jnp.reshape(jnp.array(jnp.meshgrid(*grid)), (len(grid), -1)).T
+            cv = CV(cv=grid)
+            return cv
 
         @jax.vmap
         def f(cv):
             bias_inter, _ = self.md.bias.compute_from_cv(cv)
             v, log_jac = cv_trans.compute_cv_trans(cv, log_Jf=True)
 
-            return bias_inter, cv, v, log_jac
+            return bias_inter, v, log_jac
 
-        bias_inter, cv, v, log_jac = f(cv)
+        cv_orig = cv_grid(margin=0.4)
+        bias_inter, cv_new, log_jac = f(cv_orig)
 
         FES_offset = -boltzmann * self.md.static_trajectory_info.T * log_jac
+
+        # determine metrix based on no margin extension
+        cv_grid_strict = cv_grid(margin=0)
 
         new_collective_variable = CollectiveVariable(
             f=original_collective_variable.f * cv_trans,
             metric=CvMetric(
-                periodicities=[False] * v.shape[1],
-                bounding_box=jnp.array([jnp.min(cv.cv, axis=0), jnp.max(cv.cv, axis=0)]).T,
+                periodicities=[False] * cv_new.shape[1],
+                bounding_box=jnp.array([jnp.min(cv_grid_strict.cv, axis=0), jnp.max(cv_grid_strict.cv, axis=0)]).T,
             ),
         )
 
-        self.md.bias = RbfBias(cvs=new_collective_variable, cv=v, vals=FES_offset + bias_inter, kernel="linear")
+        fes_offset_bias = RbfBias(cvs=new_collective_variable, cv=cv_new, vals=FES_offset, kernel=kernel)
+        self.md.bias = RbfBias(
+            cvs=new_collective_variable,
+            cv=cv_new,
+            vals=FES_offset + bias_inter,
+            kernel="thin_plate_spline",
+        )
 
         self.rounds.add_cv_from_cv(new_collective_variable)
         self.rounds.add_round_from_md(self.md)
@@ -220,59 +241,10 @@ class Scheme:
             self.md.bias.plot(name=self.rounds.path(self.rounds.cv) / "transformed_bias.pdf")
             self.md.bias.plot(name=self.rounds.path(self.rounds.cv) / "transformed_bias_inverted.pdf", inverted=True)
 
+            fes_offset_bias.plot(name=self.rounds.path(self.rounds.cv) / "fes_offset_bias.pdf", inverted=True)
+
         if copy_samples:
-            fes_offset_bias = RbfBias(cvs=new_collective_variable, cv=v, vals=FES_offset, kernel="linear")
-
-            for ri, ti in self.rounds.iter(c=self.rounds.cv - 1, num=num_copy):
-                i = ti.num
-                round_path = self.rounds.path(c=self.rounds.cv, r=0, i=i)
-                round_path.mkdir(parents=True, exist_ok=True)
-
-                bias = CompositeBias(biases=[ti.get_bias(), fes_offset_bias])
-                bias.save(round_path / "bias")
-
-                traj_info = ti.ti
-
-                sys_params: SystemParams = traj_info.sp
-                nl = sys_params.get_neighbour_list(r_cut=ri.tic.r_cut, z_array=ri.tic.atomic_numbers)
-                new_cv, energy_result = fes_offset_bias.compute_from_system_params(
-                    sp=sys_params,
-                    nl=nl,
-                    gpos=True,
-                    vir=True,
-                    chunk_size=chunk_size,
-                )
-                energy_result: EnergyResult
-                new_cv: CV
-
-                new_traj_info = TrajectoryInfo(
-                    _positions=traj_info.positions,
-                    _cell=traj_info.cell,
-                    _charges=traj_info.charges,
-                    _e_pot=traj_info.e_pot,
-                    _e_pot_gpos=traj_info.e_pot_gpos,
-                    _e_pot_vtens=traj_info.e_pot_vtens,
-                    _e_bias=traj_info.e_bias + energy_result.energy,
-                    _e_bias_gpos=traj_info.e_bias_gpos + energy_result.gpos if energy_result.gpos is not None else None,
-                    _e_bias_vtens=traj_info.e_bias_vtens + energy_result.vtens
-                    if energy_result.vtens is not None
-                    else None,
-                    _cv=new_cv.cv,
-                    _T=traj_info._T,
-                    _P=traj_info._P,
-                    _err=traj_info._err,
-                    _t=traj_info._t,
-                    _capacity=traj_info._capacity,
-                    _size=traj_info._size,
-                )
-
-                self.rounds.add_md(
-                    i=i,
-                    d=new_traj_info,
-                    attrs=None,
-                    bias=self.rounds.rel_path(round_path / "bias"),
-                    r=0,
-                )
+            self.rounds.copy_from_previous_round(cv_trans=cv_trans, chunk_size=chunk_size, num_copy=num_copy)
             self.rounds.add_round_from_md(self.md)
 
     def save(self, filename):

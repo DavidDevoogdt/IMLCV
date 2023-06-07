@@ -1135,20 +1135,21 @@ class NeighbourList:
         return jnp.array(bool_masks), arg_split, p
 
     @staticmethod
-    @partial(jit, static_argnames=["matching", "alpha", "mode"])
-    def match_kernel(
+    @partial(jit, static_argnames=["matching", "alpha", "mode", "chunk_size"])
+    def sinkhorn_divergence(
         p1: Array,
         p2: Array,
         nl1: NeighbourList,
         nl2: NeighbourList,
         matching="REMatch",
         alpha=1e-2,
+        chunk_size=None,
     ):
         # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
 
         if nl1.batched:
-            return vmap(
-                lambda p1, nl1: NeighbourList.match_kernel(
+            return vmap_chunked(
+                lambda p1, nl1: NeighbourList.sinkhorn_divergence(
                     p1=p1,
                     nl1=nl1,
                     p2=p2,
@@ -1156,11 +1157,13 @@ class NeighbourList:
                     matching=matching,
                     alpha=alpha,
                 ),
+                chunk_size=chunk_size,
+                in_axes=(0, 0),
             )(p1, nl1)
 
         if nl2.batched:
-            return vmap(
-                lambda p2, nl2: NeighbourList.match_kernel(
+            return vmap_chunked(
+                lambda p2, nl2: NeighbourList.sinkhorn_divergence(
                     p1=p1,
                     nl1=nl1,
                     p2=p2,
@@ -1168,6 +1171,8 @@ class NeighbourList:
                     matching=matching,
                     alpha=alpha,
                 ),
+                chunk_size=chunk_size,
+                in_axes=(0, 0),
             )(p2, nl2)
 
         @vmap
@@ -2120,6 +2125,7 @@ class _CvTrans:
             CvTransNN(trans=(proto,))
         return CvTrans(trans=(proto,))
 
+    # @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunck_size"))
     def compute_cv_trans(
         self,
         x: CV,
@@ -2226,7 +2232,12 @@ class CvTransNN(nn.Module, _CvTrans):
         reverse=False,
         log_Jf=False,
     ) -> tuple[CV, Array | None]:
-        return super().compute_cv_trans(x, nl, reverse, log_Jf)
+        return jax.jit(super().compute_cv_trans, static_argnames=("reverse", "log_Jf"))(
+            x=x,
+            nl=nl,
+            reverse=reverse,
+            log_Jf=log_Jf,
+        )
 
     @nn.nowrap
     def __mul__(self, other):
@@ -2290,7 +2301,7 @@ class CvFlow:
 
         out = self.func(x, nl)
         if self.trans is not None:
-            out, _ = self.trans.compute_cv_trans(out, nl)
+            out, _ = self.trans.compute_cv_trans(x=out, nl=nl)
 
         return out
 

@@ -69,7 +69,7 @@ def test_virial():
     bias = BiasF(cvs=cv0, g=fun)
 
     _, e_r = bias.compute_from_system_params(
-        SystemParams(coordinates=coordinates, cell=cell),
+        sp=SystemParams(coordinates=coordinates, cell=cell),
         vir=True,
     )
     vol = e_r.energy

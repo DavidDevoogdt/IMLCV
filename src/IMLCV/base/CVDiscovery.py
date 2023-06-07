@@ -58,7 +58,7 @@ class Transformer:
             x.append(f.compute_cv_flow(zi, nli, chunk_size=chunk_size))
 
         if scale:
-            g = scale_cv_trans(CV.stack(*x))
+            g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
             x = [g.compute_cv_trans(xi)[0] for xi in x]
 
             f = f * g
@@ -140,15 +140,16 @@ class CVDiscovery:
         split_data=False,
         new_r_cut=None,
         cv_round=None,
-        filter_bias=True,
-        filter_energy=True,
-    ) -> tuple[list[SystemParams], list[NeighbourList] | None, CollectiveVariable, StaticMdInfo]:
+        filter_bias=False,
+        filter_energy=False,
+    ) -> tuple[list[SystemParams], list[NeighbourList] | None, CollectiveVariable, StaticMdInfo, list[CV]]:
         weights = []
 
         colvar = rounds.get_collective_variable()
         sti: StaticMdInfo | None = None
         sp: list[SystemParams] = []
         nl: list[NeighbourList] | None = [] if new_r_cut is not None else None
+        cv: list[CV] = []
 
         for round, traj in rounds.iter(stop=None, num=num, c=cv_round):
             if sti is None:
@@ -164,30 +165,31 @@ class CVDiscovery:
                 else None
             )
 
+            if (cv0 := traj.ti.CV) is None:
+                bias = traj.get_bias()
+                if colvar is None:
+                    colvar = bias.collective_variable
+
+                if new_r_cut != round.tic.r_cut:
+                    nlr = (
+                        sp0.get_neighbour_list(
+                            r_cut=round.tic.r_cut,
+                            z_array=round.tic.atomic_numbers,
+                        )
+                        if round.tic.r_cut is not None
+                        else None
+                    )
+                else:
+                    nlr = nl0
+
+                cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
+
             e = None
 
             if filter_bias:
                 if (b0 := traj.ti.e_bias) is None:
                     # map cvs
                     bias = traj.get_bias()
-
-                    if new_r_cut != round.tic.r_cut:
-                        nlr = (
-                            sp0.get_neighbour_list(
-                                r_cut=round.tic.r_cut,
-                                z_array=round.tic.atomic_numbers,
-                            )
-                            if round.tic.r_cut is not None
-                            else None
-                        )
-                    else:
-                        nlr = nl0
-
-                    if (cv0 := traj.ti.CV) is None:
-                        if colvar is None:
-                            colvar = bias.collective_variable
-
-                        cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
 
                     b0, _ = bias.compute_from_cv(cvs=cv0)
 
@@ -206,25 +208,32 @@ class CVDiscovery:
             if nl is not None:
                 assert nl0 is not None
                 nl.append(nl0)
+            cv.append(cv0)
 
-            beta = 1 / round.tic.T
-            weight = jnp.exp(-beta * e)
-            weights.append(weight)
+            if e is None:
+                weights.append(None)
+            else:
+                beta = 1 / round.tic.T
+                weight = jnp.exp(-beta * e)
+                weights.append(weight)
 
         assert sti is not None
         assert len(sp) != 0
         if nl is not None:
             assert len(nl) == len(sp)
 
-        def choose(key, probs: Array):
+        def choose(key, probs: Array, len: int):
+            if len is None:
+                len = probs.shape[0]
+
             key, key_return = split(key, 2)
 
             indices = choice(
                 key=key,
-                a=probs.shape[0],
+                a=len,
                 shape=(int(out),),
                 p=probs,
-                replace=False,
+                replace=True,
             )
 
             return key_return, indices
@@ -233,22 +242,30 @@ class CVDiscovery:
 
         out_sp: list[SystemParams] = []
         out_nl: list[NeighbourList] | None = [] if nl is not None else None
+        out_cv: list[CV] = []
 
         if split_data:
             for n, wi in enumerate(weights):
-                probs = wi / jnp.sum(wi)
+                if wi is None:
+                    probs = None
+                else:
+                    probs = wi / jnp.sum(wi)
                 key, indices = choose(key, probs)
 
                 out_sp.append(sp[n][indices])
                 if nl is not None:
                     assert out_nl is not None
                     out_nl.append(nl[n][indices])
+                out_cv.append(cv[n][indices])
 
         else:
-            probs = jnp.hstack(weights)
-            probs = probs / jnp.sum(probs)
+            if weights[0] is None:
+                probs = None
+            else:
+                probs = jnp.hstack(weights)
+                probs = probs / jnp.sum(probs)
 
-            key, indices = choose(key, probs)
+            key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
 
             indices = jnp.sort(indices)
 
@@ -256,14 +273,16 @@ class CVDiscovery:
 
             sp_trimmed = []
             nl_trimmed = [] if nl is not None else None
+            cv_trimmed = []
 
-            for sp_n, nl_n in zip(sp, nl):
+            for sp_n, nl_n, cv_n in zip(sp, nl, cv):
                 n_i = sp_n.shape[0]
 
-                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)]
+                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
                 sp_trimmed.append(sp_n[index])
                 if nl is not None:
                     nl_trimmed.append(nl_n[index])
+                cv_trimmed.append(cv_n[index])
                 count += n_i
 
             if len(sp) >= 1:
@@ -271,14 +290,16 @@ class CVDiscovery:
                 if nl is not None:
                     assert out_nl is not None
                     out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
+                out_cv.append(CV.stack(*cv_trimmed))
 
             else:
                 out_sp.append(sp_trimmed[0][indices])
                 if nl is not None:
                     assert out_nl is not None
                     out_nl.append(nl_trimmed[0][indices])
+                out_cv.append(cv_trimmed[0][indices])
 
-        return (out_sp, out_nl, colvar, sti)
+        return (out_sp, out_nl, colvar, sti, out_cv)
 
     def compute(
         self,
@@ -292,7 +313,7 @@ class CVDiscovery:
         name=None,
         **kwargs,
     ) -> CollectiveVariable:
-        (sp_list, nl_list, cv_old, sti) = self.data_loader(
+        (sp_list, nl_list, old_collective_variable, sti, cvs_old) = self.data_loader(
             num=num_rounds,
             out=samples,
             rounds=rounds,
@@ -300,19 +321,21 @@ class CVDiscovery:
             split_data=split_data,
         )
 
-        cvs_new, new_cv = self.transformer.fit(
+        cvs_new, new_collective_variable = self.transformer.fit(
             sp_list,
             nl_list,
             chunk_size=chunk_size,
             **kwargs,
         )
 
+        # todo: use cv data instead of reaculating
+
         if plot:
             sp = sum(sp_list[1:], sp_list[0])
             nl = sum(nl_list[1:], nl_list[0]) if nl_list is not None else None
             ind = np.random.choice(
                 a=sp.shape[0],
-                size=min(1000, sp.shape[0]),
+                size=min(1e4, sp.shape[0]),
                 replace=False,
             )
 
@@ -320,14 +343,16 @@ class CVDiscovery:
 
             CVDiscovery.plot_app(
                 name=str(folder / "cvdiscovery"),
-                old_cv=cv_old,
-                new_cv=new_cv,
+                old_cv=old_collective_variable,
+                new_cv=new_collective_variable,
                 sps=sp[ind],
                 nl=nl[ind] if nl is not None else None,
                 chunk_size=chunk_size,
+                cv_data_old=CV.stack(*cvs_old)[ind],
+                cv_data_new=cvs_new[ind],
             )
 
-        return new_cv
+        return new_collective_variable
 
     @staticmethod
     def plot_app(
@@ -338,106 +363,107 @@ class CVDiscovery:
         name: str | Path,
         labels=None,
         chunk_size: int | None = None,
+        cv_data_old: CV | None = None,
+        cv_data_new: CV | None = None,
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
-        cv_data = []
-        cv_data_mapped = []
+        cv_data: list[CV] = []
 
-        # collect the cvs if not provided
         cvs = [old_cv, new_cv]
-        for cv in cvs:
-            cvd = cv.compute_cv(sps, nl, chunk_size=chunk_size)[0].cv
-            cvdm = vmap(cv.metric.map)(cvd)
+        if cv_data_old is None:
+            cv_data.append(old_cv.compute_cv(sps, nl, chunk_size=chunk_size)[0])
+        else:
+            cv_data.append(cv_data_old)
 
-            cv_data.append(np.array(cvd))
-            cv_data_mapped.append(np.array(cvdm))
+        if cv_data_new is None:
+            cv_data.append(new_cv.compute_cv(sps, nl, chunk_size=chunk_size)[0])
+        else:
+            cv_data.append(cv_data_new)
 
-        # for z, data in enumerate([cv_data, cv_data_mapped]):
-        for z, data in enumerate([cv_data]):
-            # plot setting
-            kwargs = {"s": 0.2}
+        # plot setting
+        kwargs = {"s": 0.2}
 
-            if labels is None:
-                labels = [
-                    ["cv in 1", "cv in 2", "cv in 3"],
-                    ["cv out 1", "cv out 2", "cv out 3"],
-                ]
+        if labels is None:
+            labels = [
+                ["cv in 1", "cv in 2", "cv in 3"],
+                ["cv out 1", "cv out 2", "cv out 3"],
+            ]
 
-                indim = cvs[0].n
-                outdim = cvs[1].n
+            indim = cvs[0].n
+            outdim = cvs[1].n
 
-                fig = plt.figure()
+            fig = plt.figure()
 
-                for in_out_color, ls, rs in CVDiscovery._grid_spec_iterator(
-                    fig=fig,
-                    indim=indim,
-                    outdim=outdim,
-                ):
-                    if in_out_color == 0:
-                        dim = indim
-                        color_data = data[0]
-                    else:
-                        dim = outdim
-                        color_data = data[1]
+            for in_out_color, ls, rs in CVDiscovery._grid_spec_iterator(
+                fig=fig,
+                indim=indim,
+                outdim=outdim,
+            ):
+                if in_out_color == 0:
+                    dim = indim
+                    color_data = cv_data[0].cv
+                else:
+                    dim = outdim
+                    color_data = cv_data[1].cv
 
-                    max_val = jnp.max(color_data, axis=0)
-                    min_val = jnp.min(color_data, axis=0)
+                max_val = jnp.max(color_data, axis=0)
+                min_val = jnp.min(color_data, axis=0)
 
-                    data_col = (color_data - min_val) / (max_val - min_val)
+                data_col = (color_data - min_val) / (max_val - min_val)
 
-                    # https://www.hsluv.org/
-                    # hue 0-360 sat 0-100 lighness 0-1000
+                # https://www.hsluv.org/
+                # hue 0-360 sat 0-100 lighness 0-1000
 
-                    if dim == 1:  # skip luminance and set to 0.5. green/red = blue/yellow
-                        lab = jnp.ones((data_col.shape[0], 3))
-                        lab = lab.at[:, 0].set(data_col[:, 0] * 360)
-                        lab = lab.at[:, 1].set(75)
-                        lab = lab.at[:, 2].set(40)
+                if dim == 1:  # skip luminance and set to 0.5. green/red = blue/yellow
+                    lab = jnp.ones((data_col.shape[0], 3))
+                    lab = lab.at[:, 0].set(data_col[:, 0] * 360)
+                    lab = lab.at[:, 1].set(75)
+                    lab = lab.at[:, 2].set(40)
 
-                    if dim == 2:
-                        lab = jnp.ones((data_col.shape[0], 3))
-                        lab = lab.at[:, 0].set(data_col[:, 0] * 360)
-                        lab = lab.at[:, 1].set(75)
-                        lab = lab.at[:, 2].set(data_col[:, 1] * 100)
+                if dim == 2:
+                    lab = jnp.ones((data_col.shape[0], 3))
+                    lab = lab.at[:, 0].set(data_col[:, 0] * 360)
+                    lab = lab.at[:, 1].set(75)
+                    lab = lab.at[:, 2].set(data_col[:, 1] * 100)
 
-                    if dim == 3:
-                        lab = jnp.ones((data_col.shape[0], 3))
-                        lab = lab.at[:, 0].set(data_col[:, 0] * 360)
-                        lab = lab.at[:, 1].set(data_col[:, 1] * 100)
-                        lab = lab.at[:, 2].set(data_col[:, 2] * 100)
+                if dim == 3:
+                    lab = jnp.ones((data_col.shape[0], 3))
+                    lab = lab.at[:, 0].set(data_col[:, 0] * 360)
+                    lab = lab.at[:, 1].set(data_col[:, 1] * 100)
+                    lab = lab.at[:, 2].set(data_col[:, 2] * 100)
 
-                    rgb = []
+                rgb = []
 
-                    for s in lab:
-                        rgb.append(hsluv_to_rgb(s))
+                for s in lab:
+                    rgb.append(hsluv_to_rgb(s))
 
-                    rgb = jnp.array(rgb)
+                rgb = jnp.array(rgb)
 
-                    def do_plot(dim, in_out, axes):
-                        data_proc = data[in_out]
-                        if dim == 1:
-                            data_proc = jnp.hstack([data_proc, rgb[:, [0]]])
+                def do_plot(dim, in_out, axes):
+                    data_proc = cv_data[in_out].cv
+                    if dim == 1:
+                        data_proc = jnp.hstack([data_proc, rgb[:, [0]]])
 
-                            f = CVDiscovery._plot_1d
-                        elif dim == 2:
-                            f = CVDiscovery._plot_2d
-                        elif dim == 3:
-                            f = CVDiscovery._plot_3d
+                        f = CVDiscovery._plot_1d
+                    elif dim == 2:
+                        f = CVDiscovery._plot_2d
+                    elif dim == 3:
+                        f = CVDiscovery._plot_3d
 
-                        f(fig, axes, data_proc, rgb, labels[0][0:dim], **kwargs)
+                    f(fig, axes, data_proc, rgb, labels[0][0:dim], **kwargs)
 
-                    do_plot(indim, 0, ls)
-                    do_plot(outdim, 1, rs)
+                do_plot(indim, 0, ls)
+                do_plot(outdim, 1, rs)
 
-                name = Path(name)
-                if name.suffix != ".pdf":
-                    name = Path(
-                        f"{name}.pdf",
-                    )
+            name = Path(name)
+            if name.suffix != ".pdf":
+                name = Path(
+                    f"{name}.pdf",
+                )
 
-                name.parent.mkdir(parents=True, exist_ok=True)
-                fig.savefig(name)
+            name.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(name)
 
     @staticmethod
     def _grid_spec_iterator(

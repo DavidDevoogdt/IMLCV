@@ -59,3 +59,4 @@ dist/*
 tmp/*
 src/IMLCV/examples/output/*
 notebooks/alanine_dipeptide_LDA/*
+notebooks/alanine_dipeptide_LDA_2/*

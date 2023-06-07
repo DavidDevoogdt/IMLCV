@@ -14,6 +14,7 @@ from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.MdEngine import StaticMdInfo
@@ -23,8 +24,6 @@ from jax import Array
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
-
-# todo: invaildate with files instead of db tha gets deleted
 
 
 @dataclass
@@ -248,7 +247,7 @@ class Rounds(ABC):
                     elif (p := (md_i / "bias")).exists():
                         bias = self.rel_path(p)
 
-                    attr = None
+                    attr = {}
 
                     if (p := (md_i / "invalid")).exists():
                         attr["valid"] = False
@@ -437,6 +436,56 @@ class Rounds(ABC):
 
                 yield _r, _r_i
 
+    def copy_from_previous_round(self, num_copy=2, cv_trans: None | CvTrans = None, chunk_size=None):
+        current_round = self.round_information()
+        bias = self.get_bias()
+
+        # TODO: tranform biasses probabilitically or with jacobian determinant
+
+        for round_info, trajectory_info in self.iter(c=self.cv - 1, num=num_copy):
+            i = trajectory_info.num
+            round_path = self.path(c=self.cv, r=0, i=i)
+            round_path.mkdir(parents=True, exist_ok=True)
+
+            sp = trajectory_info.ti.sp
+            nl = sp.get_neighbour_list(r_cut=current_round.tic.r_cut, z_array=current_round.tic.atomic_numbers)
+
+            if cv_trans is not None:
+                new_cv, _ = cv_trans.compute_cv_trans(x=trajectory_info.ti.CV, nl=nl, chunk_size=chunk_size)
+            else:
+                new_cv, _ = self.get_collective_variable().compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)
+
+            bias.save(round_path / "bias")
+            traj_info = trajectory_info.ti
+
+            new_traj_info = TrajectoryInfo(
+                _positions=traj_info.positions,
+                _cell=traj_info.cell,
+                _charges=traj_info.charges,
+                _e_pot=traj_info.e_pot,
+                _e_pot_gpos=traj_info.e_pot_gpos,
+                _e_pot_vtens=traj_info.e_pot_vtens,
+                _e_bias=None,
+                _e_bias_gpos=None,
+                _e_bias_vtens=None,
+                _cv=new_cv.cv,
+                _T=traj_info._T,
+                _P=traj_info._P,
+                _err=traj_info._err,
+                _t=traj_info._t,
+                _capacity=traj_info._capacity,
+                _size=traj_info._size,
+            )
+
+            self.add_md(
+                i=i,
+                d=new_traj_info,
+                attrs=None,
+                bias=self.rel_path(round_path / "bias"),
+            )
+
+            self.invalidate_data(c=self.cv, r=self.round, i=i)
+
     def iter_ase_atoms(self, r: int | None = None, num: int = 3):
         from molmod import angstrom
 
@@ -610,6 +659,9 @@ class Rounds(ABC):
             r = self.round
 
         if not (p := self.path(c=c, r=r, i=i) / "invalid").exists():
+            if not p.parent.exists():
+                p.parent.mkdir(parents=True)
+
             with open(p, "w+"):
                 pass
 
@@ -662,6 +714,8 @@ class Rounds(ABC):
         plot=True,
         KEY=42,
         sp0: SystemParams | None = None,
+        filter_e_pot=True,
+        correct_previous_bias=False,
     ):
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
@@ -709,16 +763,21 @@ class Rounds(ABC):
                 else:
                     epot_r_i = traj_info.e_bias
 
-                epot_r, _ = round_bias.compute_from_cv(cv)
+                # epot_r, _ = round_bias.compute_from_cv(cv)
 
                 # sp0 = ti.ti.sp
                 if tis is None:
                     tis = ti.ti
-                    bias_prev = [epot_r_i]
+                    if epot_r_i is not None:
+                        bias_prev = [epot_r_i]
                 else:
                     assert tis is not None
                     tis += ti.ti
-                    bias_prev.append(epot_r_i)
+
+                    if epot_r_i is not None:
+                        bias_prev.append(epot_r_i)
+                    else:
+                        assert bias_prev is None
 
             if tis is None:
                 tis = TrajectoryInfo(
@@ -811,13 +870,14 @@ class Rounds(ABC):
                     # compensate for bias of current simulation
                     bs, _ = b.compute_from_cv(cvs=cv)
 
-                    if bias_prev is not None:
+                    if bias_prev is not None and correct_previous_bias:
                         bs -= bias_prev
 
                     bs = jnp.reshape(bs, (-1))
 
                     # # compensate for bias of previous
-                    # bs += tis.e_pot
+                    if filter_e_pot:
+                        bs += tis.e_pot
 
                     bs -= jnp.mean(bs)
 
@@ -840,17 +900,17 @@ class Rounds(ABC):
                 spi = tisi.sp
 
                 spi = spi.unbatch()
-                nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                print(
-                    f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol if tisi.e_pot is not None else None  } and new bias {  bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} ",
-                )
+                # nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                # print(
+                #     f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol if tisi.e_pot is not None else None  } and new bias {  bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} ",
+                # )
 
             else:
                 spi = sp0[i]
                 spi = spi.unbatch()
-                nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                cvi, bi = bias.compute_from_system_params(sp=spi, nl=nli)
-                print(f"new point got cv={cvi}, new bias  {bi.energy/kjmol} ")
+                # nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+                # cvi, bi = bias.compute_from_system_params(sp=spi, nl=nli)
+                # print(f"new point got cv={cvi}, new bias  {bi.energy/kjmol} ")
 
             future = run(
                 sp=spi,  # type: ignore

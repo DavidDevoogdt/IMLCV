@@ -208,6 +208,8 @@ if __name__ == "__main__":
         fargs = comm.bcast(fargs, root=0)
         fkwargs = comm.bcast(fkwargs, root=0)
 
+    import jax
+
     a = func(*fargs, **fkwargs)
 
     if use_mpi:
