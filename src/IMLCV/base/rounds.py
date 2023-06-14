@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import shutil
 from abc import ABC
@@ -14,13 +16,18 @@ from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.MdEngine import TrajectoryInfo
 from IMLCV.configs.bash_app_python import bash_app_python
 from jax import Array
+from jax.random import choice
+from jax.random import PRNGKey
+from jax.random import split
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 from parsl.data_provider.files import File
@@ -299,7 +306,7 @@ class Rounds(ABC):
             c = self.cv
 
         if r is None:
-            r = self.round + 1
+            r = self.get_round(c=c) + 1
 
         if attr is None:
             attr = {}
@@ -330,9 +337,17 @@ class Rounds(ABC):
 
             self.h5file.flush()
 
-    def add_round_from_md(self, md: MDEngine):
-        r = self.round + 1
-        c = self.cv
+    def add_round_from_md(self, md: MDEngine, cv: int | None = None, r: int | None = None):
+        if cv is None:
+            c = self.cv
+        else:
+            c = cv
+
+        if r is None:
+            r = self._get_attr(c=c, name="num")
+
+        # r = self.round + 1
+
         assert c != -1, "run add_cv first"
 
         directory = self.path(c=c, r=r)
@@ -365,7 +380,7 @@ class Rounds(ABC):
             c = self.cv
 
         if r is None:
-            r = self.round
+            r = self.get_round(c=c)
 
         with self.lock:
             f = self.h5file
@@ -408,6 +423,7 @@ class Rounds(ABC):
         num=3,
         ignore_invalid=False,
         c=None,
+        md_trajs: list[int] | None = None,
     ) -> Iterable[tuple[RoundInformation, TrajectoryInformation]]:
         if c is None:
             c = self.cv
@@ -418,13 +434,21 @@ class Rounds(ABC):
         if start is None:
             start = 0
 
+        if md_trajs is not None:
+            assert num == 1
+
         for r0 in range(max(stop - (num - 1), start), stop + 1):
             _r = self.round_information(c=c, r=r0)
 
             if not _r.valid and not ignore_invalid:
                 continue
 
-            for i in _r.num_vals:
+            if md_trajs is not None:
+                rn = list(set(md_trajs).intersection(set(_r.num_vals)))
+            else:
+                rn = _r.num_vals
+
+            for i in rn:
                 _r_i = self.get_trajectory_information(c=c, r=r0, i=i)
 
                 if not _r_i.valid and not ignore_invalid:
@@ -436,27 +460,315 @@ class Rounds(ABC):
 
                 yield _r, _r_i
 
-    def copy_from_previous_round(self, num_copy=2, cv_trans: None | CvTrans = None, chunk_size=None):
+    @dataclass()
+    class data_loader_output:
+        sp: list[SystemParams]
+        nl: list[NeighbourList] | None
+        cv: list[CV]
+        sti: StaticMdInfo
+        cv: list[CV]
+        ti: list[TrajectoryInfo]
+        collective_variable: CollectiveVariable
+
+        def __iter__(self):
+            for spi, nli, cvi, ti in zip(self.sp, self.nl, self.cv, self.ti):
+                yield Rounds.data_loader_output(
+                    sp=[spi],
+                    nl=[nli],
+                    cv=[cvi],
+                    ti=[ti],
+                    sti=self.sti,
+                    collective_variable=self.collective_variable,
+                )
+
+        def __add__(self, other):
+            assert isinstance(other, Rounds.data_loader_output)
+            return Rounds.data_loader_output(
+                sp=[*self.sp, *other.sp],
+                nl=[*self.nl, *other.nl] if self.nl is not None else None,
+                cv=[*self.cv, *other.cv],
+                ti=[*self.ti, *other.ti],
+                sti=self.sti,
+                collective_variable=self.collective_variable,
+            )
+
+    def data_loader(
+        self,
+        num=4,
+        out=-1,
+        split_data=False,
+        new_r_cut=None,
+        cv_round=None,
+        filter_bias=False,
+        filter_energy=False,
+        ignore_invalid=True,
+        energy_threshold=None,
+        md_trajs: list[int] | None = None,
+        start: int | None = None,
+        stop: int | None = None,
+    ) -> data_loader_output:
+        weights = []
+
+        colvar = self.get_collective_variable()
+        sti: StaticMdInfo | None = None
+        sp: list[SystemParams] = []
+        nl: list[NeighbourList] | None = [] if new_r_cut is not None else None
+        cv: list[CV] = []
+        ti: list[TrajectoryInfo] = []
+
+        min_energy = None
+
+        for round, traj in self.iter(
+            start=start,
+            stop=stop,
+            num=num,
+            c=cv_round,
+            ignore_invalid=ignore_invalid,
+            md_trajs=md_trajs,
+        ):
+            if sti is None:
+                sti = round.tic
+
+            ti.append(traj.ti)
+
+            sp0 = traj.ti.sp
+            nl0 = (
+                sp0.get_neighbour_list(
+                    r_cut=new_r_cut,
+                    z_array=round.tic.atomic_numbers,
+                )
+                if new_r_cut is not None
+                else None
+            )
+
+            if (cv0 := traj.ti.CV) is None:
+                bias = traj.get_bias()
+                if colvar is None:
+                    colvar = bias.collective_variable
+
+                if new_r_cut != round.tic.r_cut:
+                    nlr = (
+                        sp0.get_neighbour_list(
+                            r_cut=round.tic.r_cut,
+                            z_array=round.tic.atomic_numbers,
+                        )
+                        if round.tic.r_cut is not None
+                        else None
+                    )
+                else:
+                    nlr = nl0
+
+                cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
+
+            e = None
+
+            if filter_bias:
+                if (b0 := traj.ti.e_bias) is None:
+                    # map cvs
+                    bias = traj.get_bias()
+
+                    b0, _ = bias.compute_from_cv(cvs=cv0)
+
+                e = b0
+
+            if filter_energy:
+                if (e0 := traj.ti.e_pot) is None:
+                    raise ValueError("e_pot is None")
+
+                if e is None:
+                    e = e0
+                else:
+                    e = e + e0
+
+            if energy_threshold is not None:
+                if (e0 := traj.ti.e_pot) is None:
+                    raise ValueError("e_pot is None")
+
+                if min_energy is None:
+                    min_energy = e0.min()
+                else:
+                    min_energy = min(min_energy, e0.min())
+
+            sp.append(sp0)
+            if nl is not None:
+                assert nl0 is not None
+                nl.append(nl0)
+            cv.append(cv0)
+
+            if e is None:
+                weights.append(None)
+            else:
+                beta = 1 / (round.tic.T * boltzmann)
+                weight = jnp.exp(-beta * e)
+                weights.append(weight)
+
+        assert sti is not None
+        assert len(sp) != 0
+        if nl is not None:
+            assert len(nl) == len(sp)
+
+        def choose(key, probs: Array, len: int):
+            if len is None:
+                len = probs.shape[0]
+
+            key, key_return = split(key, 2)
+
+            indices = choice(
+                key=key,
+                a=len,
+                shape=(int(out),),
+                p=probs,
+                replace=out > len,
+            )
+
+            return key_return, indices
+
+        key = PRNGKey(0)
+
+        if energy_threshold is not None:
+            for n in range(len(sp)):
+                indices = jnp.where(ti[n].e_pot - min_energy < energy_threshold)[0]
+
+                sp[n] = sp[n][indices]
+                if nl is not None:
+                    nl[n] = nl[n][indices]
+                cv[n] = cv[n][indices]
+                ti[n] = ti[n][indices]
+
+        out_sp: list[SystemParams] = []
+        out_nl: list[NeighbourList] | None = [] if nl is not None else None
+        out_cv: list[CV] = []
+        out_ti = []
+
+        if split_data:
+            for n, wi in enumerate(weights):
+                if wi is None:
+                    probs = None
+                else:
+                    probs = wi / jnp.sum(wi)
+                key, indices = choose(key, probs, len=sp[n].shape[0])
+
+                out_sp.append(sp[n][indices])
+                if nl is not None:
+                    assert out_nl is not None
+                    out_nl.append(nl[n][indices])
+                out_cv.append(cv[n][indices])
+
+                out_ti.append(ti[n][indices])
+
+        else:
+            if weights[0] is None:
+                probs = None
+            else:
+                probs = jnp.hstack(weights)
+                probs = probs / jnp.sum(probs)
+
+            key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
+
+            indices = jnp.sort(indices)
+
+            count = 0
+
+            sp_trimmed = []
+            nl_trimmed = [] if nl is not None else None
+            cv_trimmed = []
+            ti_trimmed = []
+
+            for n, (sp_n, nl_n, cv_n, ti_n) in enumerate(zip(sp, nl, cv, ti)):
+                n_i = sp_n.shape[0]
+
+                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
+                sp_trimmed.append(sp_n[index])
+                if nl is not None:
+                    nl_trimmed.append(nl_n[index])
+                cv_trimmed.append(cv_n[index])
+                ti_trimmed.append(ti_n[index])
+
+                count += n_i
+
+            # if len(sp) >= 1:
+            out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
+
+            if nl_trimmed is not None:
+                assert out_nl is not None
+                out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
+                del nl_trimmed
+            out_cv.append(CV.stack(*cv_trimmed))
+
+            out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
+
+            # else:
+            #     out_sp.append(sp_trimmed[0][indices])
+            #     if nl is not None:
+            #         assert out_nl is not None
+            #         out_nl.append(nl_trimmed[0][indices])
+            #     out_cv.append(cv_trimmed[0][indices])
+            #     out_ti.append(ti_trimmed[0][indices])
+
+        return Rounds.data_loader_output(
+            sp=out_sp,
+            nl=out_nl,
+            cv=out_cv,
+            ti=out_ti,
+            sti=sti,
+            collective_variable=colvar,
+        )
+
+    def copy_from_previous_round(
+        self,
+        num_copy=2,
+        out=-1,
+        cv_trans: None | CvTrans = None,
+        chunk_size=None,
+        filter_bias=True,
+        filter_energy=True,
+        split_data=True,
+        md_trajs: list[int] | None = None,
+        dlo: Rounds.data_loader_output | None = None,
+        new_cvs: list[CV] | None = None,
+        invalidate: bool = True,
+    ):
         current_round = self.round_information()
         bias = self.get_bias()
 
-        # TODO: tranform biasses probabilitically or with jacobian determinant
+        if dlo is None:
+            dlo = self.data_loader(
+                num=num_copy,
+                out=out,
+                filter_bias=filter_bias,
+                filter_energy=filter_energy,
+                split_data=split_data,
+                new_r_cut=current_round.tic.r_cut,
+                cv_round=self.cv - 1,
+                md_trajs=md_trajs,
+            )
 
-        for round_info, trajectory_info in self.iter(c=self.cv - 1, num=num_copy):
-            i = trajectory_info.num
+        if new_cvs is None:
+            new_cvs = []
+            for i, (sp, nl, cv, traj_info) in enumerate(zip(dlo.sp, dlo.nl, dlo.cv, dlo.ti)):
+                # # TODO: tranform biasses probabilitically or with jacobian determinant
+                sp: SystemParams
+                nl: NeighbourList
+                cv: CV
+                traj_info: TrajectoryInfo
+
+                if cv_trans is not None:
+                    new_cvs.append(cv_trans.compute_cv_trans(x=cv, nl=nl, chunk_size=chunk_size)[0])
+                else:
+                    new_cvs.append(self.get_collective_variable().compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)[0])
+
+        for i, (sp, nl, cv, traj_info, new_cv) in enumerate(zip(dlo.sp, dlo.nl, dlo.cv, dlo.ti, new_cvs)):
+            # # TODO: tranform biasses probabilitically or with jacobian determinant
+            sp: SystemParams
+            nl: NeighbourList
+            cv: CV
+            traj_info: TrajectoryInfo
+
             round_path = self.path(c=self.cv, r=0, i=i)
             round_path.mkdir(parents=True, exist_ok=True)
 
-            sp = trajectory_info.ti.sp
-            nl = sp.get_neighbour_list(r_cut=current_round.tic.r_cut, z_array=current_round.tic.atomic_numbers)
-
-            if cv_trans is not None:
-                new_cv, _ = cv_trans.compute_cv_trans(x=trajectory_info.ti.CV, nl=nl, chunk_size=chunk_size)
-            else:
-                new_cv, _ = self.get_collective_variable().compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)
-
             bias.save(round_path / "bias")
-            traj_info = trajectory_info.ti
+            traj_info
 
             new_traj_info = TrajectoryInfo(
                 _positions=traj_info.positions,
@@ -484,7 +796,8 @@ class Rounds(ABC):
                 bias=self.rel_path(round_path / "bias"),
             )
 
-            self.invalidate_data(c=self.cv, r=self.round, i=i)
+            if invalidate:
+                self.invalidate_data(c=self.cv, r=self.round, i=i)
 
     def iter_ase_atoms(self, r: int | None = None, num: int = 3):
         from molmod import angstrom
@@ -563,7 +876,7 @@ class Rounds(ABC):
             c = self.cv
 
         if r is None:
-            r = self.round
+            r = self.get_round(c=c)
 
         with self.lock:
             f = self.h5file
@@ -624,11 +937,11 @@ class Rounds(ABC):
 
     @property
     def T(self):
-        return self.round_information(r=self.round).tic.T
+        return self.round_information().tic.T
 
     @property
     def P(self):
-        return self.round_information(r=self.round).tic.P
+        return self.round_information().tic.P
 
     @property
     def round(self):
@@ -636,6 +949,9 @@ class Rounds(ABC):
         with self.lock:
             f = self.h5file
             return len(f[f"{c}"].keys()) - 1
+
+    def get_round(self, c=None):
+        return self._get_attr(c=c, name="num") - 1
 
     @property
     def cv(self):
@@ -648,15 +964,15 @@ class Rounds(ABC):
             c = self.cv
 
         if r is None:
-            r = self.round
-        return self.round_information(r=self.round).num
+            r = self.get_round(c=c)
+        return self.round_information(r=r).num
 
     def invalidate_data(self, c=None, r=None, i=None):
         if c is None:
             c = self.cv
 
         if r is None:
-            r = self.round
+            r = self.get_round(c=c)
 
         if not (p := self.path(c=c, r=r, i=i) / "invalid").exists():
             if not p.parent.exists():
@@ -672,7 +988,7 @@ class Rounds(ABC):
             c = self.cv
 
         if r is None:
-            r = self.round
+            r = self.get_round(c=c)
 
         return (self.path(c=c, r=r, i=i) / "invalid").exists()
 
@@ -685,7 +1001,7 @@ class Rounds(ABC):
             c = self.cv
 
         if r is None:
-            r = self.round
+            r = self.get_round(c=c)
 
         bn = self._get_attr("name_bias", c=c, r=r, i=i)
         return Bias.load(self.full_path(bn))
@@ -695,7 +1011,7 @@ class Rounds(ABC):
             c = self.cv
 
         if r is None:
-            r = self.round
+            r = self.get_round(c=c)
 
         name = self._get_attr("name_md", c=c, r=r)
         return MDEngine.load(self.full_path(name), filename=None)
@@ -715,18 +1031,26 @@ class Rounds(ABC):
         KEY=42,
         sp0: SystemParams | None = None,
         filter_e_pot=True,
-        correct_previous_bias=False,
+        correct_previous_bias=True,
+        ignore_invalid=True,
+        md_trajs: list[int] | None = None,
+        cv_round: int | None = None,
     ):
+        if cv_round is None:
+            cv_round = self.cv
+
+        round = self.get_round(c=cv_round)
+
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
 
         with self.lock:
             f = self.h5file
             common_bias_name = self.full_path(
-                f[f"{self.cv}/{self.round}"].attrs["name_bias"],
+                f[f"{cv_round}/{round}"].attrs["name_bias"],
             )
             common_md_name = self.full_path(
-                f[f"{self.cv}/{self.round}"].attrs["name_md"],
+                f[f"{cv_round}/{round}"].attrs["name_md"],
             )
         from parsl.dataflow.dflow import AppFuture
 
@@ -734,66 +1058,31 @@ class Rounds(ABC):
         plot_tasks = []
         md_engine = MDEngine.load(common_md_name)
 
-        r_cut = md_engine.static_trajectory_info.r_cut
-        z_array = md_engine.static_trajectory_info.atomic_numbers
+        sp0_provided = sp0 is not None
 
-        bias_prev = None
+        if not sp0_provided:
+            data = self.data_loader(
+                num=4,
+                out=100,
+                split_data=True,
+                filter_bias=correct_previous_bias,
+                filter_energy=filter_e_pot,
+                new_r_cut=md_engine.static_trajectory_info.r_cut,
+                ignore_invalid=ignore_invalid,
+                md_trajs=md_trajs,
+                cv_round=cv_round,
+            )
 
-        if sp0 is None:
-            tis: TrajectoryInfo | None = None
-
-            # also get smaples form init round
-            for ri, ti in self.iter(start=0, num=2, ignore_invalid=True):
-                round_bias = ri.get_bias()
-                ti_bias = ti.get_bias()
-
-                traj_info = ti.ti
-
-                if traj_info.cv is None:
-                    nl = traj_info.sp.get_neighbour_list(
-                        r_cut=ri.tic.r_cut,
-                        z_array=ri.tic.atomic_numbers,
-                    )
-                    cv, _ = round_bias.collective_variable.compute_cv(traj_info.sp, nl)
-                else:
-                    cv = traj_info.CV
-
-                if ti_bias is None:
-                    epot_r_i, _ = ti_bias.compute_from_cv(cv)
-                else:
-                    epot_r_i = traj_info.e_bias
-
-                # epot_r, _ = round_bias.compute_from_cv(cv)
-
-                # sp0 = ti.ti.sp
-                if tis is None:
-                    tis = ti.ti
-                    if epot_r_i is not None:
-                        bias_prev = [epot_r_i]
-                else:
-                    assert tis is not None
-                    tis += ti.ti
-
-                    if epot_r_i is not None:
-                        bias_prev.append(epot_r_i)
-                    else:
-                        assert bias_prev is None
-
-            if tis is None:
-                tis = TrajectoryInfo(
-                    _positions=md_engine.sp.coordinates,
-                    _cell=md_engine.sp.cell,
-                )
+            cv_stack = CV.stack(*data.cv)
+            # nl_stack = NeighbourList.stack(*data.nl)
+            sp_stack = SystemParams.stack(*data.sp)
         else:
             assert sp0.shape[0] == len(
                 biases,
             ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
 
-        if bias_prev is not None:
-            bias_prev = jnp.hstack(bias_prev)
-
         for i, bias in enumerate(biases):
-            path_name = self.path(c=self.cv, r=self.round, i=i)
+            path_name = self.path(c=cv_round, r=round, i=i)
             if not os.path.exists(path_name):
                 os.mkdir(path_name)
 
@@ -809,110 +1098,31 @@ class Rounds(ABC):
 
             traj_name = path_name / "trajectory_info.h5"
 
-            @bash_app_python(executors=["reference"])
-            def run(
-                steps: int,
-                sp: SystemParams | None,
-                inputs=[],
-                outputs=[],
-            ):
-                bias = Bias.load(inputs[1].filepath)
+            if not sp0_provided:
+                biases, _ = b.compute_from_cv(cvs=cv_stack)
 
-                kwargs = dict(
-                    bias=bias,
-                    trajectory_file=outputs[1].filepath,
+                biases -= jnp.min(biases)
+
+                probs = jnp.exp(
+                    -biases / (md_engine.static_trajectory_info.T * boltzmann),
+                )
+                probs = probs / jnp.sum(probs)
+
+                KEY, k = jax.random.split(KEY, 2)
+                index = jax.random.choice(
+                    a=probs.shape[0],
+                    key=k,
+                    p=probs,
                 )
 
-                if sp is not None:
-                    kwargs["sp"] = sp
-
-                md = MDEngine.load(inputs[0].filepath, **kwargs)
-                md.run(steps)
-                bias.save(outputs[0].filepath)
-                d = md.get_trajectory()
-                return d
-
-            @bash_app_python(executors=["default"])
-            def plot_app(
-                st: StaticMdInfo,
-                traj: TrajectoryInfo,
-                inputs=[],
-                outputs=[],
-            ):
-                bias = Bias.load(inputs[0].filepath)
-
-                if st.equilibration is not None:
-                    if traj._t is not None:
-                        traj = traj[traj._t > st.equilibration]
-
-                cvs = traj.CV
-                if cvs is None:
-                    sp = traj.sp
-                    nl = sp.get_neighbour_list(
-                        r_cut=st.r_cut,
-                        z_array=st.atomic_numbers,
-                    )
-                    cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
-
-                bias.plot(name=outputs[0].filepath, traj=[cvs])
-
-            if sp0 is None:
-                if tis.shape > 1:  # type: ignore
-                    assert tis is not None
-
-                    if tis.cv is not None:
-                        cv = tis.CV
-                    else:
-                        sp = tis.sp
-                        nl = sp.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-
-                        cv = bias.collective_variable.f.compute_cv_flow(sp=sp, nl=nl)
-                    # compensate for bias of current simulation
-                    bs, _ = b.compute_from_cv(cvs=cv)
-
-                    if bias_prev is not None and correct_previous_bias:
-                        bs -= bias_prev
-
-                    bs = jnp.reshape(bs, (-1))
-
-                    # # compensate for bias of previous
-                    if filter_e_pot:
-                        bs += tis.e_pot
-
-                    bs -= jnp.mean(bs)
-
-                    probs = jnp.exp(
-                        -bs / (md_engine.static_trajectory_info.T * boltzmann),
-                    )
-                    probs = probs / jnp.sum(probs)
-
-                    KEY, k = jax.random.split(KEY, 2)
-                    index = jax.random.choice(
-                        a=probs.shape[0],
-                        key=k,
-                        p=probs,
-                    )
-
-                else:
-                    index = 0
-
-                tisi = tis[index]
-                spi = tisi.sp
-
-                spi = spi.unbatch()
-                # nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                # print(
-                #     f"new point got cv={ tisi.CV}, e_pot={tisi.e_pot/kjmol if tisi.e_pot is not None else None  } and new bias {  bias.compute_from_system_params(sp=spi, nl=nli)[1].energy/kjmol} ",
-                # )
+                spi = sp_stack[index]
+                # spi = spi.unbatch()
 
             else:
                 spi = sp0[i]
                 spi = spi.unbatch()
-                # nli = spi.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-                # cvi, bi = bias.compute_from_system_params(sp=spi, nl=nli)
-                # print(f"new point got cv={cvi}, new bias  {bi.energy/kjmol} ")
 
-            future = run(
+            future = Rounds.run_md(
                 sp=spi,  # type: ignore
                 inputs=[File(common_md_name), File(str(b_name))],
                 outputs=[File(str(b_name_new)), File(str(traj_name))],
@@ -923,7 +1133,7 @@ class Rounds(ABC):
             if plot:
                 plot_file = path_name / "plot.pdf"
 
-                plot_fut = plot_app(
+                plot_fut = Rounds.plot_md_run(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
@@ -943,9 +1153,58 @@ class Rounds(ABC):
         # wait for tasks to finish
         for i, future in tasks:
             d = future.result()
-            self.add_md(d=d, bias=self.rel_path(Path(future.outputs[0].filename)), i=i)
+            self.add_md(d=d, bias=self.rel_path(Path(future.outputs[0].filename)), i=i, c=cv_round)
 
         # wait for plots to finish
         if plot:
             for future in plot_tasks:
                 d = future.result()
+
+    @staticmethod
+    @bash_app_python(executors=["reference"])
+    def run_md(
+        steps: int,
+        sp: SystemParams | None,
+        inputs=[],
+        outputs=[],
+    ) -> TrajectoryInfo:
+        bias = Bias.load(inputs[1].filepath)
+
+        kwargs = dict(
+            bias=bias,
+            trajectory_file=outputs[1].filepath,
+        )
+
+        if sp is not None:
+            kwargs["sp"] = sp
+
+        md = MDEngine.load(inputs[0].filepath, **kwargs)
+        md.run(steps)
+        bias.save(outputs[0].filepath)
+        d = md.get_trajectory()
+        return d
+
+    @staticmethod
+    @bash_app_python(executors=["default"])
+    def plot_md_run(
+        st: StaticMdInfo,
+        traj: TrajectoryInfo,
+        inputs=[],
+        outputs=[],
+    ):
+        bias = Bias.load(inputs[0].filepath)
+
+        if st.equilibration is not None:
+            if traj._t is not None:
+                traj = traj[traj._t > st.equilibration]
+
+        cvs = traj.CV
+        if cvs is None:
+            sp = traj.sp
+            nl = sp.get_neighbour_list(
+                r_cut=st.r_cut,
+                z_array=st.atomic_numbers,
+            )
+            cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
+
+        bias.plot(name=outputs[0].filepath, traj=[cvs])

@@ -12,9 +12,13 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import stack_reduce
+from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
+from jax import jit
 from jax import random
+from jax import vmap
+from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 
 
@@ -273,79 +277,65 @@ class TranformerAutoEncoder(Transformer):
 
 
 class TransoformerLDA(Transformer):
+    def __init__(
+        self,
+        outdim: int,
+        kernel=False,
+        optimizer=None,
+        chunck_size=None,
+        solver="eigen",
+        method="pymanopt",
+        harmonic=True,
+        min_gradient_norm: float = 1e-4,
+        min_step_size: float = 1e-4,
+        max_iterations=50,
+        **kwargs,
+    ):
+        super().__init__(
+            outdim=outdim,
+            kernel=kernel,
+            optimizer=optimizer,
+            chunck_size=chunck_size,
+            solver=solver,
+            method=method,
+            harmonic=harmonic,
+            min_gradient_norm=min_gradient_norm,
+            min_step_size=min_step_size,
+            max_iterations=max_iterations,
+            **kwargs,
+        )
+
     def _fit(
         self,
         cv_list: list[CV],
         nl_list: list[NeighbourList] | None,
         kernel=False,
-        harmonic=True,
-        sort="rematch",
-        alpha_rematch=1e-1,
         optimizer=None,
         chunck_size=None,
         solver="eigen",
+        method="pymanopt",
+        harmonic=True,
+        min_gradient_norm: float = 1e-4,
+        min_step_size: float = 1e-4,
+        max_iterations=50,
         **kwargs,
     ):
-        try:
-            import pymanopt
-        except ImportError:
-            raise ImportError(
-                "pymanopt not installed, please install it to use LDA collective variable",
-            )
-
-        assert isinstance(cv_list, list)
-        if optimizer is None:
-            # optimizer = pymanopt.optimizers.TrustRegions(max_iterations=50)
-            optimizer = pymanopt.optimizers.ConjugateGradient()
-
-        # @vmap
-
         if kernel:
             raise NotImplementedError("kernel not implemented for lda")
 
-        if sort == "l2" or sort == "average":
-            norm_data = [
-                get_sinkhorn_divergence(
-                    None,
-                    None,
-                    sort=sort,
-                    alpha_rematch=alpha_rematch,
-                ),
-            ]
-        elif sort == "rematch":
-            norm_data = []
-            assert nl_list is not None, "Neigbourlist required for rematch"
-            for cvi, nli in zip(cv_list, nl_list):
-                norm_data.append(
-                    get_sinkhorn_divergence(
-                        nli=nli[0],
-                        pi=jnp.average(cvi.cv, axis=0),
-                        sort=sort,
-                        alpha_rematch=alpha_rematch,
-                    ),
-                )
-        else:
-            raise NotImplementedError
-
         cv = CV.stack(*cv_list)
-        nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
+        nl = NeighbourList.stack(*nl_list)
+        cv, _ = un_atomize.compute_cv_trans(cv)
 
-        hs = []
+        if method == "sklearn":
+            labels = []
+            for i, cvi in enumerate(cv_list):
+                labels.append(jnp.full(cvi.shape[0], i))
 
-        cv_out = []
-
-        labels = []
-        for i, ni in enumerate(cv._stack_dims):
-            labels.append(jnp.full(ni, i))
-
-        labels = jnp.hstack(labels)
-
-        for nd in norm_data:
-            cv_i, _ = nd.compute_cv_trans(cv, nl, chunck_size=chunck_size)
-            cv_i, _ = un_atomize.compute_cv_trans(cv_i)
+            labels = jnp.hstack(labels)
 
             alpha = LDA(n_components=self.outdim, solver=solver, shrinkage="auto").fit(
-                cv_i.cv,
+                cv.cv,
                 labels,
             )
 
@@ -380,9 +370,9 @@ class TransoformerLDA(Transformer):
                 )
 
             lda_cv = CvTrans.from_cv_function(partial(LDA_trans, f=f))
-            cv_i, _ = lda_cv.compute_cv_trans(cv_i)
+            cv, _ = lda_cv.compute_cv_trans(cv)
 
-            cvs = CV.unstack(cv_i)
+            cvs = CV.unstack(cv)
 
             mean = []
             for i, cvs_i in enumerate(cvs):
@@ -401,74 +391,77 @@ class TransoformerLDA(Transformer):
                 )
 
             lda_rescale = CvTrans.from_cv_function(partial(LDA_rescale, mean=mean))
-            cv_i, _ = lda_rescale.compute_cv_trans(cv_i)
+            cv, _ = lda_rescale.compute_cv_trans(cv)
 
-            cv_out.append(cv_i)
-            hs.append(nd * un_atomize * lda_cv * lda_rescale)
+            full_trans = un_atomize * lda_cv * lda_rescale
 
-            # cv_i, _f = trunc_svd(cv_i)
-            # normed_cv_u = CV.unstack(cv_i)
+        elif method == "pymanopt":
+            try:
+                import pymanopt
+            except ImportError:
+                raise ImportError(
+                    "pymanopt not installed, please install it to use LDA collective variable",
+                )
 
-            # mu_i = [jnp.mean(x.cv, axis=0) for x in normed_cv_u]
-            # mu = jnp.einsum(
-            #     "i,ij->j",
-            #     jnp.array(cv.stack_dims) / jnp.sum(jnp.array(cv.stack_dims)),
-            #     jnp.array(mu_i),
-            # )
+            assert isinstance(cv_list, list)
+            if optimizer is None:
+                optimizer = pymanopt.optimizers.TrustRegions(
+                    max_iterations=max_iterations,
+                    min_gradient_norm=min_gradient_norm,
+                    min_step_size=min_step_size,
+                )
 
-            # obersevations_within = CV.stack(*[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)])
-            # observations_between = CV.stack(*[cv_i - mu for cv_i in normed_cv_u])
+            cv, _f = trunc_svd(cv)
+            normed_cv_u = CV.unstack(cv)
 
-            # cov_w = LedoitWolf(assume_centered=True).fit(obersevations_within.cv).covariance_
-            # cov_b = LedoitWolf(assume_centered=True).fit(observations_between.cv).covariance_
+            mu_i = [jnp.mean(x.cv, axis=0) for x in normed_cv_u]
+            mu = jnp.einsum(
+                "i,ij->j",
+                jnp.array(cv.stack_dims) / jnp.sum(jnp.array(cv.stack_dims)),
+                jnp.array(mu_i),
+            )
 
-            # manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=self.outdim)
+            obersevations_within = CV.stack(*[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)])
+            observations_between = CV.stack(*[cv_i - mu for cv_i in normed_cv_u])
 
-            # @pymanopt.function.jax(manifold)
-            # @jit
-            # def cost(x):
-            #     # a = jnp.einsum("ab, ia,ic, cb ", x, correlation_w.cv, correlation_w.cv, x) / (x.shape[0] - 1)
-            #     # b = jnp.einsum("ab, ja, jc, cb ", x, correlation_b.cv, correlation_b.cv, x) / (x.shape[0] - 1)
+            cov_w = LedoitWolf(assume_centered=True).fit(obersevations_within.cv).covariance_
+            cov_b = LedoitWolf(assume_centered=True).fit(observations_between.cv).covariance_
 
-            #     # if harmonic:
-            #     #     out = ((1 - shrinkage) * a + shrinkage) / ((1 - shrinkage) * b + shrinkage)
-            #     # else:
-            #     #     out = -((1 - shrinkage) * b + shrinkage) / ((1 - shrinkage) * a + shrinkage)
+            manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=self.outdim)
 
-            #     a = jnp.trace(x.T @ cov_w @ x)
-            #     b = jnp.trace(x.T @ cov_b @ x)
+            @pymanopt.function.jax(manifold)
+            @jit
+            def cost(x):
+                a = jnp.trace(x.T @ cov_w @ x)
+                b = jnp.trace(x.T @ cov_b @ x)
 
-            #     if harmonic:
-            #         out = a / b
-            #     else:
-            #         out = -(b / a)
+                if harmonic:
+                    out = a / b
+                else:
+                    out = -(b / a)
 
-            #     return out
+                return out
 
-            # problem = pymanopt.Problem(manifold, cost)
-            # result = optimizer.run(problem)
+            problem = pymanopt.Problem(manifold, cost)
+            result = optimizer.run(problem)
 
-            # alpha = result.point
+            alpha = result.point
 
-            # scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
+            scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
 
-            # def scale_trans(cv: CV, nl: NeighbourList | None, _, alpha=alpha, scale_factor=scale_factor):
-            #     return CV(
-            #         (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
-            #         _stack_dims=cv._stack_dims,
-            #         _combine_dims=cv._combine_dims,
-            #         atomic=cv.atomic,
-            #         mapped=cv.mapped,
-            #     )
+            def scale_trans(cv: CV, nl: NeighbourList | None, _, alpha=alpha, scale_factor=scale_factor):
+                return CV(
+                    (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
+                    _stack_dims=cv._stack_dims,
+                    _combine_dims=cv._combine_dims,
+                    atomic=cv.atomic,
+                    mapped=cv.mapped,
+                )
 
-            # _g = CvTrans.from_cv_function(partial(scale_trans, alpha=alpha, scale_factor=scale_factor))
+            _g = CvTrans.from_cv_function(partial(scale_trans, alpha=alpha, scale_factor=scale_factor))
 
-            # cv_i = _g.compute_cv_trans(cv_i, nl)[0]
+            cv = _g.compute_cv_trans(cv, nl)[0]
 
-            # cv_out.append(cv_i)
-            # hs.append(nd * _f * _g)
+            full_trans = un_atomize * _f * _g
 
-        stacked_trans = CvTrans.stack(*hs) * stack_reduce()
-        cv_stacked = stack_reduce().compute_cv_trans(CV.combine(*cv_out), nl)[0]
-
-        return cv_stacked, stacked_trans
+        return cv, full_trans

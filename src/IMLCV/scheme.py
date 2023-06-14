@@ -12,7 +12,7 @@ from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import SystemParams
-from IMLCV.base.CVDiscovery import CVDiscovery
+from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import EnergyResult
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.MdEngine import TrajectoryInfo
@@ -22,6 +22,7 @@ from IMLCV.implementations.bias import BiasMTD
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.bias import RbfBias
 from molmod.constants import boltzmann
+from molmod.units import kjmol
 
 
 class Scheme:
@@ -79,10 +80,10 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def FESBias(self, **kwargs):
+    def FESBias(self, cv_round: int | None = None, **kwargs):
         """replace the current md bias with the computed FES from current
         round."""
-        obs = ThermoLIB(self.rounds)
+        obs = ThermoLIB(self.rounds, cv_round=cv_round)
         fesBias = obs.fes_bias(**kwargs)
         self.md = self.md.new_bias(fesBias)
 
@@ -93,7 +94,8 @@ class Scheme:
         n=8,
         max_grad=None,
         plot=True,
-        scale_n=True,
+        scale_n: int | None = None,
+        cv_round: int | None = None,
     ):
         m = self.md.bias.collective_variable.metric
 
@@ -102,8 +104,9 @@ class Scheme:
         if k is None:
             k = 2 * self.md.static_trajectory_info.T * boltzmann
         k /= ((m.bounding_box[:, 1] - m.bounding_box[:, 0]) / 2) ** 2
-        if scale_n:
-            k *= n**2
+        if scale_n is None:
+            scale_n = n
+        k *= scale_n**2
 
         self.rounds.run_par(
             [
@@ -117,10 +120,11 @@ class Scheme:
             ],
             steps=steps,
             plot=plot,
+            cv_round=cv_round,
         )
 
-    def new_metric(self, plot=False, r=None):
-        o = ThermoLIB(self.rounds)
+    def new_metric(self, plot=False, r=None, cv_round: int | None = None):
+        o = ThermoLIB(self.rounds, cv_round=cv_round)
 
         self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
@@ -138,44 +142,56 @@ class Scheme:
         plot=True,
         choice="rbf",
         fes_bias_rnds=4,
+        scale_n: int | None = None,
+        cv_round: int | None = None,
     ):
+        if cv_round is None:
+            cv_round = self.rounds.cv
+
         if init != 0:
             print(f"running init round with {init} steps")
 
-            self.grid_umbrella(steps=init, n=n, k=K, max_grad=init_max_grad, plot=plot)
-            self.rounds.invalidate_data()
-            self.rounds.add_round_from_md(self.md)
+            self.grid_umbrella(steps=init, n=n, k=K, max_grad=init_max_grad, plot=plot, cv_round=cv_round)
+            self.rounds.invalidate_data(c=cv_round)
+            self.rounds.add_round_from_md(self.md, cv=cv_round)
         else:
             self.md.static_trajectory_info.max_grad = max_grad
 
         for _ in range(rnds):
             print(f"running round with {steps} steps")
-            self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad, plot=plot)
+            self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad, plot=plot, scale_n=scale_n, cv_round=cv_round)
 
             if update_metric:
                 self.new_metric(plot=plot)
                 update_metric = False
             else:
-                self.FESBias(plot=plot, samples_per_bin=samples_per_bin, choice=choice, num_rnds=fes_bias_rnds)
+                self.FESBias(
+                    plot=plot,
+                    samples_per_bin=samples_per_bin,
+                    choice=choice,
+                    num_rnds=fes_bias_rnds,
+                    cv_round=cv_round,
+                )
 
-            self.rounds.add_round_from_md(self.md)
+            self.rounds.add_round_from_md(self.md, cv=cv_round)
 
     def update_CV(
         self,
-        cvd: CVDiscovery,
+        transformer: Transformer,
+        dlo: Rounds.data_loader_output,
         chunk_size=None,
-        samples=2e3,
         plot=True,
         new_r_cut=None,
-        **kwargs,
+        save_samples=True,
+        save_multiple_cvs=False,
     ):
-        new_cv = cvd.compute(
-            self.rounds,
-            samples=samples,
-            plot=plot,
+        # dlo = self.rounds.data_loader()
+
+        cvs_new, new_cv = transformer.fit(
+            dlo=dlo,
             chunk_size=chunk_size,
-            new_r_cut=new_r_cut,
-            **kwargs,
+            plot=plot,
+            plot_folder=self.rounds.path(c=self.rounds.cv + 1),
         )
 
         # update state
@@ -184,6 +200,26 @@ class Scheme:
         self.rounds.add_cv_from_cv(new_cv)
         self.md.static_trajectory_info.r_cut = new_r_cut
         self.rounds.add_round_from_md(self.md)
+
+        if save_samples:
+            first = True
+
+            if save_multiple_cvs:
+                for dlo_i, cv_new_i in zip(iter(dlo), CV.unstack(cvs_new)):
+                    if not first:
+                        self.md.bias = NoneBias(new_cv)
+                        self.rounds.add_cv_from_cv(new_cv)
+                        self.md.static_trajectory_info.r_cut = new_r_cut
+                        self.rounds.add_round_from_md(self.md)
+
+                    self.rounds.copy_from_previous_round(dlo=dlo_i, new_cvs=[cv_new_i])
+                    self.rounds.add_round_from_md(self.md)
+
+                    first = False
+
+            else:
+                self.rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new))
+                self.rounds.add_round_from_md(self.md)
 
     def transform_CV(
         self,

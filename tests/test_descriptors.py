@@ -9,6 +9,8 @@ import numpy as onp
 import pytest
 import scipy.special
 from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CV
+from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import sb_descriptor
@@ -82,8 +84,8 @@ def get_sps(
 
 
 @pytest.mark.parametrize(
-    "cell, matching, pp",
-    [(True, "rematch", "sb"), (False, "average", "soap")],
+    "cell,matching, pp,double_ref",
+    [(True, "rematch", "sb", False), (False, "average", "soap", False)],
 )
 def test_SOAP_SB_sinkhorn(cell, matching, pp):
     n = 10
@@ -114,21 +116,24 @@ def test_SOAP_SB_sinkhorn(cell, matching, pp):
             num=50,
         )
 
-    p1 = desc.compute_cv_flow(sp1, nl1)
+    p_ref = desc.compute_cv_flow(sp1, nl1)
+    nl_ref = nl1
+
     cv = CollectiveVariable(
         f=desc
         * get_sinkhorn_divergence(
-            nli=nl1,
-            pi=p1,
+            nli=nl_ref,
+            pi=p_ref,
             sort=matching,
             alpha_rematch=alpha,
-            output="scalar",
+            output="divergence",
         ),
         metric=None,
         jac=jax.jacrev,
     )
 
     # n.b. each function jit compiles again bc shape nl constants/ shape are different.
+    # with jax.disable_jit():
     x1, dx1 = cv.compute_cv(sp1, nl1, jacobian=True)
     x3, dx3 = cv.compute_cv(sp3, nl3, jacobian=True)
     x2, dx2 = cv.compute_cv(sp2, nl2, jacobian=True)

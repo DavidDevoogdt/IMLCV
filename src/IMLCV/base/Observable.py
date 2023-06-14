@@ -26,16 +26,28 @@ class ThermoLIB:
 
     time_per_bin = 2 * picosecond
 
-    def __init__(self, rounds: Rounds, rnd=None, cv: CollectiveVariable | None = None) -> None:
+    def __init__(
+        self,
+        rounds: Rounds,
+        rnd=None,
+        cv_round: int | None = None,
+        cv: CollectiveVariable | None = None,
+    ) -> None:
         self.rounds = rounds
+
+        if cv_round is None:
+            self.cv_round = rounds.cv
+        else:
+            self.cv_round = cv_round
+
         if rnd is None:
-            rnd = rounds.round
+            rnd = rounds.get_round(c=self.cv_round)
 
         self.rnd = rnd
-        self.common_bias = self.rounds.get_bias(r=self.rnd)
+        self.common_bias = self.rounds.get_bias(c=cv_round, r=self.rnd)
 
         if cv is None:
-            self.collective_variable = self.rounds.get_bias(r=self.rnd).collective_variable
+            self.collective_variable = self.rounds.get_bias(c=self.cv_round, r=self.rnd).collective_variable
         else:
             self.collective_variable = cv
 
@@ -78,7 +90,7 @@ class ThermoLIB:
 
         temp = self.rounds.T
 
-        directory = self.rounds.path(c=self.rounds.cv, r=self.rnd)
+        directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
         rnd = self.rnd
 
@@ -86,10 +98,13 @@ class ThermoLIB:
         trajs_plot = []
         biases = []
 
+        # TODO: change to rounds data loader
+
         for round, trajectory in self.rounds.iter(
             start=start_r,
             num=num_rnds,
             stop=self.rnd,
+            c=self.cv_round,
         ):
             bias = trajectory.get_bias()
 
@@ -301,7 +316,7 @@ class ThermoLIB:
             raise ValueError
 
         if plot:
-            fold = str(self.rounds.path(c=self.rounds.cv))
+            fold = str(self.rounds.path(c=self.cv_round))
 
             pf = []
 

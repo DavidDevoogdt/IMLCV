@@ -18,27 +18,29 @@ from pynndescent import NNDescent
 from umap.umap_ import nearest_neighbors
 
 
-def get_nn(x, nl, n_neigh, chunk_size=None):
-    @partial(jit, static_argnames=("n_neigh", "chunk_size"))
-    def _get_tree(x, nl, n_neigh, chunk_size=None):
-        dist, _ = NeighbourList.sinkhorn_divergence(
-            x.cv,
-            x.cv,
-            nl,
-            nl,
-            matching="average",
-            alpha=1e-2,
-            chunk_size=chunk_size,
+class TranformerUMAP(Transformer):
+    def __init__(
+        self,
+        outdim=2,
+        decoder=False,
+        nunits=256,
+        nlayers=3,
+        parametric=True,
+        densmap=False,
+        n_neighbors=20,
+        **kwargs,
+    ):
+        super().__init__(
+            outdim=outdim,
+            decoder=decoder,
+            nunits=nunits,
+            nlayers=nlayers,
+            parametric=parametric,
+            n_neighbors=n_neighbors,
+            densmap=densmap,
+            **kwargs,
         )
 
-        dist_i, i = jax.lax.approx_min_k(dist, n_neigh)
-        return i, dist_i
-
-    i, di = _get_tree(x=x, nl=nl, n_neigh=n_neigh, chunk_size=chunk_size)
-    return np.array(i), np.array(di), object.__new__(NNDescent)
-
-
-class TranformerUMAP(Transformer):
     def _fit(
         self,
         x: list[CV],
@@ -47,21 +49,22 @@ class TranformerUMAP(Transformer):
         nunits=256,
         nlayers=3,
         parametric=True,
+        densmap=False,
         n_neighbors=20,
         # metric=None,
         chunk_size=None,
         **kwargs,
     ):
         x = CV.stack(*x)
-        nl = sum(nl[1:], nl[0])
-
-        tree = get_nn(x, nl, n_neighbors, chunk_size=chunk_size)
+        # nl = sum(nl[1:], nl[0])
 
         x = un_atomize.compute_cv_trans(x, None)[0]
 
         dims = x.shape[1:]
 
         kwargs["n_components"] = self.outdim
+        kwargs["n_neighbors"] = n_neighbors
+        kwargs["densmap"] = densmap
 
         # kwargs["metric"] = "precomputed"
 
@@ -106,11 +109,9 @@ class TranformerUMAP(Transformer):
 
             reducer = umap.parametric_umap.ParametricUMAP(
                 **kwargs,
-                precomputed_knn=tree,
-                force_approximation_algorithm=True,
             )
         else:
-            reducer = umap.UMAP(**kwargs, precomputed_knn=tree, force_approximation_algorithm=True)
+            reducer = umap.UMAP(**kwargs)
 
         reducer.fit_transform(X=x.cv)
 

@@ -297,7 +297,7 @@ class Bias(BC, ABC):
 
         If map==False, the cvs are assumed to be already mapped
         """
-        assert isinstance(cvs, CV)
+        # assert isinstance(cvs, CV)
 
         # map compute command
         def f0(x):
@@ -377,7 +377,7 @@ class Bias(BC, ABC):
             if x_unit is not None:
                 if x_unit == "rad":
                     x_unit_label = "rad"
-                    x_fact = 0
+                    x_fact = 1
                 elif x_unit == "ang":
                     x_unit_label = "Ang"
                     x_fact = angstrom
@@ -386,9 +386,9 @@ class Bias(BC, ABC):
                 x_unit_label = "a.u."
 
             if x_lim is None:
-                xlim = [bins.min() / x_fact, bins.max() / x_fact]
+                x_lim = [bins.min() / x_fact, bins.max() / x_fact]
 
-            extent = [xlim[0], xlim[1]]
+            extent = [x_lim[0], x_lim[1]]
 
             @jit
             def f(point):
@@ -411,6 +411,7 @@ class Bias(BC, ABC):
             ax.set_xlim(*extent)
             ax.set_ylim(vmin / kjmol, vmax / kjmol)
             p = ax.plot(bins, bias / (kjmol))
+
             ax2 = ax.twinx()
 
             ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
@@ -424,7 +425,7 @@ class Bias(BC, ABC):
                     traj = [traj]
                 for tr in traj:
                     # trajs are ij indexed
-                    _ = ax2.hist(tr.cv, density=True, histtype="step")
+                    _ = ax2.hist(tr.cv[:, 0], density=True, histtype="step")
 
         elif self.collective_variable.n == 2:
             if bins is None:
@@ -458,11 +459,11 @@ class Bias(BC, ABC):
                 y_unit_label = "a.u."
 
             if x_lim is None:
-                xlim = [mg[0].min() / x_fact, mg[0].max() / x_fact]
+                x_lim = [mg[0].min() / x_fact, mg[0].max() / x_fact]
             if y_lim is None:
                 ylim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
 
-            extent = [xlim[0], xlim[1], ylim[0], ylim[1]]
+            extent = [x_lim[0], x_lim[1], ylim[0], ylim[1]]
 
             def f(point):
                 return self.compute_from_cv(

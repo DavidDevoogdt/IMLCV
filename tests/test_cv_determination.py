@@ -6,7 +6,6 @@ import jax
 import jax.numpy as jnp
 import pytest
 from IMLCV.base.bias import NoneBias
-from IMLCV.base.CVDiscovery import CVDiscovery
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import config
 from IMLCV.configs.config_general import ROOT_DIR
@@ -126,12 +125,10 @@ def test_cv_discovery(
     descriptor = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2, reshape=True)
 
     if cvd == "AE":
-        tf = TranformerAutoEncoder(outdim=out_dim, descriptor=descriptor)
-
         kwargs = {"num_epochs": 20}
-    elif cvd == "UMAP":
-        tf = TranformerUMAP(outdim=out_dim, descriptor=descriptor)
 
+        tf = TranformerAutoEncoder(outdim=out_dim, descriptor=descriptor, **kwargs)
+    elif cvd == "UMAP":
         from keras.api._v2 import keras as KerasAPI
 
         keras: KerasAPI = import_module("tensorflow.keras")
@@ -146,23 +143,22 @@ def test_cv_discovery(
             parametric_reconstruction=True,
             parametric_reconstruction_loss_fcn=keras.losses.MSE,
             decoder=True,
-            jac=jax.jacrev,  # calltf only supports jacrev, fixed with custom loop batchter  # https://github.com/google/jax/issues/14150
+            # jac=jax.jacrev,  # calltf only supports jacrev, fixed with custom loop batchter  # https://github.com/google/jax/issues/14150
         )
+
+        tf = TranformerUMAP(outdim=out_dim, descriptor=descriptor, **kwargs)
     else:
         raise ValueError
 
-    cvd = CVDiscovery(
-        transformer=tf,
-    )
-
     config()
 
+    dlo = scheme0.rounds.data_loader(out=1e3, new_r_cut=r_cut)
+
     scheme0.update_CV(
-        samples=1e3,
-        cvd=cvd,
+        transformer=tf,
         new_r_cut=r_cut,
+        dlo=dlo,
         chunk_size=chunk_size,
-        **kwargs,
     )
 
     _cv_discovery_asserts(scheme0, out_dim, r_cut)
@@ -179,17 +175,21 @@ def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
 
     descriptor = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2, reshape=True)
 
-    tf = TransoformerLDA(outdim=out_dim, descriptor=descriptor)
-
-    scheme0.update_CV(
-        samples=5e2,
-        split_data=True,
-        cvd=CVDiscovery(transformer=tf),
-        new_r_cut=r_cut,
-        chunk_size=200,
+    tf = TransoformerLDA(
+        outdim=out_dim,
+        descriptor=descriptor,
         max_iterations=20,
         alpha_rematch=1e-1,
         sort="rematch",
+    )
+
+    dlo = scheme0.rounds.data_loader(out=5e2, new_r_cut=r_cut, split_data=True, chunk_size=200)
+
+    scheme0.update_CV(
+        stransformer=tf,
+        dlo=dlo,
+        new_r_cut=r_cut,
+        chunk_size=200,
         plot=True,
     )
 
@@ -201,5 +201,5 @@ if __name__ == "__main__":
     # (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
     # (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
 
-    test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
-    # test_LDA_CV(tmpdir=Path("tmp"))
+    # test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
+    test_LDA_CV(tmpdir=Path("tmp"))

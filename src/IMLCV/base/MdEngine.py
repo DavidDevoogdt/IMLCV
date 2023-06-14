@@ -13,6 +13,7 @@ from time import time
 
 import cloudpickle
 import h5py
+import jax
 import jax.numpy as jnp
 import numpy as np
 import yaff.analysis.biased_sampling
@@ -32,8 +33,6 @@ from molmod.periodic import periodic
 from molmod.units import angstrom
 from molmod.units import bar
 from molmod.units import kjmol
-
-yaff.log.set_level(yaff.log.silent)
 
 
 ######################################
@@ -198,59 +197,62 @@ class TrajectoryInfo:
     def __getitem__(self, slices):
         "gets slice from indices. the output is truncated to the to include only items wihtin _size"
 
-        slz = (jnp.ones(self._capacity).cumsum() - 1)[slices]
-        ind = slz <= self._size
-        # print(f"ind: {ind}, cap = {jnp.sum(ind)}, t : {self.t[slices][ind].shape}")
+        slz = (jnp.ones(self._capacity, dtype=jnp.int32).cumsum() - 1)[slices]
+        slz = slz[slz <= self._size]
 
         return TrajectoryInfo(
-            _positions=self._positions[slices, :][ind],
-            _cell=self._cell[slices, :][ind] if self._cell is not None else None,
-            _charges=(self._charges[slices, :][ind] if self._cell is not None else None)
-            if self._charges is not None
-            else None,
-            _e_pot=self._e_pot[slices][ind] if self._e_pot is not None else None,
-            _e_pot_gpos=self._e_pot_gpos[slices, :][ind] if self._e_pot_gpos is not None else None,
-            _e_pot_vtens=self._e_pot_vtens[slices, :][ind] if self._e_pot_vtens is not None else None,
-            _e_bias=self._e_bias[slices][ind] if self._e_bias is not None else None,
-            _e_bias_gpos=self._e_bias_gpos[slices, :][ind] if self._e_bias_gpos is not None else None,
-            _e_bias_vtens=self._e_bias_vtens[slices, :][ind] if self._e_bias_vtens is not None else None,
-            _cv=self._cv[slices, :][ind] if self._cv is not None else None,
-            _T=self._T[slices][ind] if self._T is not None else None,
-            _P=self._P[slices][ind] if self._P is not None else None,
-            _err=self._err[slices][ind] if self._err is not None else None,
-            _t=self._t[slices][ind] if self._t is not None else None,
-            _capacity=jnp.sum(ind),
-            _size=jnp.sum(ind),
+            _positions=self._positions[slz, :],
+            _cell=self._cell[slz, :] if self._cell is not None else None,
+            _charges=(self._charges[slz, :] if self._cell is not None else None) if self._charges is not None else None,
+            _e_pot=self._e_pot[slz,] if self._e_pot is not None else None,
+            _e_pot_gpos=self._e_pot_gpos[slz, :] if self._e_pot_gpos is not None else None,
+            _e_pot_vtens=self._e_pot_vtens[slz, :] if self._e_pot_vtens is not None else None,
+            _e_bias=self._e_bias[slz,] if self._e_bias is not None else None,
+            _e_bias_gpos=self._e_bias_gpos[slz, :] if self._e_bias_gpos is not None else None,
+            _e_bias_vtens=self._e_bias_vtens[slz, :] if self._e_bias_vtens is not None else None,
+            _cv=self._cv[slz, :] if self._cv is not None else None,
+            _T=self._T[slz,] if self._T is not None else None,
+            _P=self._P[slz,] if self._P is not None else None,
+            _err=self._err[slz,] if self._err is not None else None,
+            _t=self._t[slz,] if self._t is not None else None,
+            _capacity=jnp.size(slz),
+            _size=jnp.size(slz),
         )
 
-    def __add__(self, ti: TrajectoryInfo):
-        sz = ti._size
+    @staticmethod
+    def stack(*ti: list[TrajectoryInfo]) -> TrajectoryInfo:
+        return TrajectoryInfo(
+            _positions=jnp.vstack([t._positions[0 : t._size, :] for t in ti]),
+            _cell=jnp.vstack([t._cell[0 : t._size, :] for t in ti]) if ti[0]._cell is not None else None,
+            _charges=jnp.vstack([t._charges[0 : t._size, :] for t in ti]) if ti[0]._charges is not None else None,
+            _e_pot=jnp.hstack([t._e_pot[0 : t._size,] for t in ti]) if ti[0]._e_pot is not None else None,
+            _e_pot_gpos=jnp.vstack([t._e_pot_gpos[0 : t._size, :] for t in ti])
+            if ti[0]._e_pot_gpos is not None
+            else None,
+            _e_pot_vtens=jnp.vstack([t._e_pot_vtens[0 : t._size, :] for t in ti])
+            if ti[0]._e_pot_vtens is not None
+            else None,
+            _e_bias=jnp.hstack([t._e_bias[0 : t._size,] for t in ti]) if ti[0]._e_bias is not None else None,
+            _e_bias_gpos=jnp.vstack([t._e_bias_gpos[0 : t._size, :] for t in ti])
+            if ti[0]._e_bias_gpos is not None
+            else None,
+            _e_bias_vtens=jnp.vstack([t._e_bias_vtens[0 : t._size, :] for t in ti])
+            if ti[0]._e_bias_vtens is not None
+            else None,
+            _cv=jnp.vstack([t._cv[0 : t._size, :] for t in ti]) if ti[0]._cv is not None else None,
+            _T=jnp.hstack([t._T[0 : t._size,] for t in ti]) if ti[0]._T is not None else None,
+            _P=jnp.hstack([t._P[0 : t._size,] for t in ti]) if ti[0]._P is not None else None,
+            _err=jnp.hstack([t._err[0 : t._size,] for t in ti]) if ti[0]._err is not None else None,
+            _t=jnp.hstack([t._t[0 : t._size,] for t in ti]) if ti[0]._t is not None else None,
+            _capacity=sum([t._size for t in ti]),
+            _size=sum([t._size for t in ti]),
+        )
 
-        while self._capacity <= self._size + ti._size:
-            self._expand_capacity()
-
-        for name in self._items_vec:
-            prop_ti = ti.__getattribute__(name)
-            prop_self = self.__getattribute__(name)
-            if prop_ti is None:
-                assert prop_self is None
-            else:
-                prop_self[self._size : self._size + sz, :] = prop_ti[0:sz, :]
-
-        for name in self._items_scal:
-            prop_ti = ti.__getattribute__(name)
-            prop_self = self.__getattribute__(name)
-            if prop_ti is None:
-                assert prop_self is None
-            else:
-                prop_self[self._size : self._size + sz] = prop_ti[0:sz]
-
-        self._size += sz
-
-        return self
+    def __add__(self, ti: TrajectoryInfo) -> TrajectoryInfo:
+        return TrajectoryInfo.stack(self, ti)
 
     def _expand_capacity(self):
-        nc = min(self._capacity * 2, self._capacity + 10000)
+        nc = min(self._capacity * 2, self._capacity + 1000)
         delta = nc - self._capacity
         self._capacity = nc
 
@@ -549,12 +551,12 @@ class MDEngine(ABC):
 
         print(f"running for {int(steps)} steps!")
 
-        try:
-            self._run(int(steps))
-        except Exception as err:
-            if self.step == 1:
-                raise err
-            print(f"The calculator finished early with error {err=},{type(err)=}")
+        # try:
+        self._run(int(steps))
+        # except Exception as err:
+        #     if self.step == 1:
+        #         raise err
+        #     print(f"The calculator finished early with error {err=},{type(err)=}")
 
         self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
@@ -642,12 +644,22 @@ class MDEngine(ABC):
         gpos: bool = False,
         vtens: bool = False,
     ) -> tuple[CV, EnergyResult]:
+        # try:
         cv, ener = self.bias.compute_from_system_params(
             sp=self.sp,
             nl=self.nl,
             gpos=gpos,
             vir=vtens,
         )
+        # except Exception as err:
+        #     print(f"Error in bias calculation: {err=}")
+        #     with jax.disable_jit():
+        #         cv, ener = self.bias.compute_from_system_params(
+        #             sp=self.sp,
+        #             nl=self.nl,
+        #             gpos=gpos,
+        #             vir=vtens,
+        #         )
 
         return cv, ener
 

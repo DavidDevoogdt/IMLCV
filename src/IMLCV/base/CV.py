@@ -22,9 +22,6 @@ from jax import jit
 from jax import vmap
 from molmod.units import angstrom
 from netket.jax import vmap_chunked
-from ott.geometry.pointcloud import PointCloud
-from ott.problems.linear import linear_problem
-from ott.solvers.linear import sinkhorn
 
 ######################################
 #        Data types                  #
@@ -81,6 +78,10 @@ class SystemParams:
             coordinates=jnp.vstack([s.coordinates, o.coordinates]),
             cell=None if self.cell is None else jnp.vstack([s.cell, o.cell]),
         )
+
+    @staticmethod
+    def stack(*sps: SystemParams) -> SystemParams:
+        return sum(sps[1:], sps[0])
 
     def __str__(self):
         string = f"coordinates shape: \n{self.coordinates.shape}"
@@ -1134,141 +1135,33 @@ class NeighbourList:
 
         return jnp.array(bool_masks), arg_split, p
 
-    @staticmethod
-    @partial(jit, static_argnames=["matching", "alpha", "mode", "chunk_size"])
-    def sinkhorn_divergence(
-        p1: Array,
-        p2: Array,
-        nl1: NeighbourList,
-        nl2: NeighbourList,
-        matching="REMatch",
-        alpha=1e-2,
-        chunk_size=None,
-    ):
-        # file:///home/david/Downloads/Permutation_Invariant_Representations_with_Applica.pdf
+    def batch(self):
+        if self.batched:
+            return self
 
-        if nl1.batched:
-            return vmap_chunked(
-                lambda p1, nl1: NeighbourList.sinkhorn_divergence(
-                    p1=p1,
-                    nl1=nl1,
-                    p2=p2,
-                    nl2=nl2,
-                    matching=matching,
-                    alpha=alpha,
-                ),
-                chunk_size=chunk_size,
-                in_axes=(0, 0),
-            )(p1, nl1)
-
-        if nl2.batched:
-            return vmap_chunked(
-                lambda p2, nl2: NeighbourList.sinkhorn_divergence(
-                    p1=p1,
-                    nl1=nl1,
-                    p2=p2,
-                    nl2=nl2,
-                    matching=matching,
-                    alpha=alpha,
-                ),
-                chunk_size=chunk_size,
-                in_axes=(0, 0),
-            )(p2, nl2)
-
-        @vmap
-        def __norm(p):
-            n1_sq = jnp.einsum("...,...->", p, p)
-            n1_sq_safe = jnp.where(n1_sq <= 1e-16, 1, n1_sq)
-
-            mask = n1_sq == 0
-
-            n1_i = jnp.where(mask, 0.0, 1 / jnp.sqrt(n1_sq_safe))
-
-            return p * n1_i, n1_sq, ~mask
-
-        p1, n1_sq, m1 = __norm(p1)
-        p2, n2_sq, m2 = __norm(p2)
-
-        b1, a1_s, z1 = nl1.nl_split_z((p1, n1_sq))
-        b2, a2_s, z2 = nl2.nl_split_z((p2, n2_sq))
-
-        def _f(p1, p2, b1, b2, matching):
-            # if norm:
-
-            b1 = jnp.array(b1)
-            b2 = jnp.array(b2)
-
-            if matching == "average":
-                P12 = jnp.einsum("ni,nj->ij", b1, b2)
-                P11 = jnp.einsum("ni,nj->ij", b1, b1)
-                P22 = jnp.einsum("ni,nj->ij", b2, b2)
-
-            elif matching == "norm":
-                raise
-
-            else:
-                # @jax.jit
-                def __gs_mask(p1, p2, m1, m2):
-                    n = p1.shape[0]
-
-                    geom = PointCloud(
-                        x=jnp.reshape(p1, (n, -1)),
-                        y=jnp.reshape(p2, (n, -1)),
-                        # scale_cost=True, leads to problems if x==y
-                        epsilon=alpha,
-                    )
-
-                    geom = geom.mask(m1, m2)
-
-                    prob = linear_problem.LinearProblem(geom)
-
-                    solver = sinkhorn.Sinkhorn()
-                    out = solver(prob)
-
-                    # out = sinkhorn_divergence(geom, x=geom.x, y=geom.y)
-
-                    P_ij = out.matrix
-
-                    # Tr(  P.T * C )
-                    return P_ij
-
-                P12 = jnp.einsum(
-                    "nij,ni,nj->ij",
-                    vmap(__gs_mask, in_axes=(None, None, 0, 0))(p1, p2, b1, b2),
-                    b1,
-                    b2,
-                )
-                P11 = jnp.einsum(
-                    "nij,ni,nj->ij",
-                    vmap(__gs_mask, in_axes=(None, None, 0, 0))(p1, p1, b1, b1),
-                    b1,
-                    b1,
-                )
-                P22 = jnp.einsum(
-                    "nij,ni,nj->ij",
-                    vmap(__gs_mask, in_axes=(None, None, 0, 0))(p2, p2, b2, b2),
-                    b2,
-                    b2,
-                )
-
-            res = (
-                jnp.einsum("ij,i...,j...->", P11, p1, p1)
-                + jnp.einsum("ij,i...,j...->", P22, p2, p2)
-                - 2 * jnp.einsum("ij,i...,j...->", P12, p1, p2)
-            )
-
-            return res, (P11, P12, P22)
-
-        return _f(p1, p2, b1, b2, matching)
+        return NeighbourList(
+            r_cut=self.r_cut,
+            atom_indices=jnp.expand_dims(self.atom_indices, axis=0),
+            ijk_indices=jnp.expand_dims(self.ijk_indices, axis=0) if self.ijk_indices is not None else None,
+            op_cell=jnp.expand_dims(self.op_cell, axis=0) if self.op_cell is not None else None,
+            op_coor=jnp.expand_dims(self.op_coor, axis=0) if self.op_coor is not None else None,
+            op_center=jnp.expand_dims(self.op_center, axis=0) if self.op_center is not None else None,
+            z_array=self.z_array,
+            z_unique=self.z_unique,
+            num_z_unique=self.num_z_unique,
+            r_skin=self.r_skin,
+            sp_orig=self.sp_orig,
+            nxyz=self.nxyz,
+        )
 
     def __add__(self, other):
         assert isinstance(other, NeighbourList)
 
-        if self.batched and not other.batched:
-            return vmap(lambda self: self + other)(self)
+        if not self.batched:
+            self = self.batch()
 
-        if other.batched and not self.batched:
-            return vmap(lambda other: self + other)(other)
+        if not other.batched:
+            other = other.batch()
 
         assert self.r_cut == other.r_cut
         assert self.r_skin == other.r_skin
@@ -1545,6 +1438,7 @@ class CV:
         i = 0
 
         out: list[CV] = []
+
         for j in self.stack_dims:
             out += [
                 CV(
@@ -2109,7 +2003,7 @@ class _CvTrans:
             else:
                 out = f(x.cv, nl, None)
 
-            return CV(cv=out, atomic=x.atomic)
+            return CV(cv=out, atomic=x.atomic, _stack_dims=x._stack_dims)
 
         return CvTrans.from_cv_function(f=f2)
 
@@ -2326,6 +2220,20 @@ class CvFlow:
 
         return CvFlow(func=self.func, trans=trans)
 
+    def save(self, file):
+        with open(file, "wb") as f:
+            cloudpickle.dump(self, f)
+
+    @staticmethod
+    def load(file, **kwargs) -> CvFlow:
+        with open(file, "rb") as f:
+            self = cloudpickle.load(f)
+
+        for key in kwargs.keys():
+            self.__setattr__(key, kwargs[key])
+
+        return self
+
     def find_sp(
         self,
         x0: SystemParams,
@@ -2437,10 +2345,7 @@ class CollectiveVariable:
         with open(file, "rb") as f:
             self = cloudpickle.load(f)
 
-        print("Loading MD engine")
         for key in kwargs.keys():
-            print(f"setting {key}={kwargs[key]}")
-
             self.__setattr__(key, kwargs[key])
 
         return self

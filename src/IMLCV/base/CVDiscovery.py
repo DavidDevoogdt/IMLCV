@@ -12,15 +12,8 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import scale_cv_trans
-from jax import Array
-from jax import jacrev
-from jax import vmap
-from jax.random import choice
-from jax.random import PRNGKey
-from jax.random import split
 from matplotlib import gridspec
 from matplotlib.figure import Figure
 
@@ -32,6 +25,9 @@ class Transformer:
         periodicity=None,
         bounding_box=None,
         descriptor=CvFlow,
+        pre_scale=True,
+        post_scale=True,
+        **fit_kwargs,
     ) -> None:
         self.outdim = outdim
 
@@ -39,15 +35,17 @@ class Transformer:
             periodicity = [False for _ in range(self.outdim)]
 
         self.periodicity = periodicity
-
         self.descriptor = descriptor
+        self.pre_scale = pre_scale
+        self.post_scale = post_scale
+
+        self.fit_kwargs = fit_kwargs
 
     def pre_fit(
         self,
         z: list[SystemParams],
         nl: list[NeighbourList] | None,
         chunk_size=None,
-        scale=True,
     ) -> tuple[list[CV], CvFlow]:
         f = self.descriptor
 
@@ -55,9 +53,10 @@ class Transformer:
 
         for i, zi in enumerate(z):
             nli = nl[i] if nl is not None else None
+
             x.append(f.compute_cv_flow(zi, nli, chunk_size=chunk_size))
 
-        if scale:
+        if self.pre_scale:
             g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
             x = [g.compute_cv_trans(xi)[0] for xi in x]
 
@@ -67,20 +66,22 @@ class Transformer:
 
     def fit(
         self,
-        sp_list: list[SystemParams],
-        nl_list: list[NeighbourList] | None,
+        dlo: Rounds.data_loader_output,
         chunk_size=None,
-        prescale=True,
-        postscale=True,
-        jac=jacrev,
-        **fit_kwargs,
+        plot=True,
+        plot_folder: str | Path | None = None,
     ) -> tuple[CV, CollectiveVariable]:
+        if plot:
+            assert plot_folder is not None, "plot_folder must be specified if plot=True"
+
+        sp_list = dlo.sp
+        nl_list = dlo.nl
+
         print("starting pre_fit")
 
         x, f = self.pre_fit(
             sp_list,
             nl_list,
-            scale=prescale,
             chunk_size=chunk_size,
         )
 
@@ -89,13 +90,13 @@ class Transformer:
             x,
             nl_list,
             chunk_size=chunk_size,
-            **fit_kwargs,
+            **self.fit_kwargs,
         )
 
         print("starting post_fit")
-        z, h = self.post_fit(y, scale=postscale)
+        z, h = self.post_fit(y)
 
-        cv = CollectiveVariable(
+        new_collective_variable = CollectiveVariable(
             f=f * g * h,
             metric=CvMetric(
                 periodicities=self.periodicity,
@@ -103,256 +104,40 @@ class Transformer:
                     [jnp.min(z.cv, axis=0), jnp.max(z.cv, axis=0)],
                 ).T,
             ),
-            jac=jac,
         )
 
-        return z, cv
+        if plot:
+            sp = SystemParams.stack(*sp_list)
+            nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
+
+            Transformer.plot_app(
+                name=str(plot_folder / "cvdiscovery"),
+                old_cv=dlo.collective_variable,
+                new_cv=new_collective_variable,
+                sps=sp,
+                nl=nl if nl is not None else None,
+                chunk_size=chunk_size,
+                cv_data_old=CV.stack(*dlo.cv),
+                cv_data_new=z,
+            )
+
+        return z, new_collective_variable
 
     def _fit(
         self,
         x: list[CV],
         nl: list[NeighbourList] | None,
         chunk_size=None,
-        **kwargs,
+        **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         raise NotImplementedError
 
-    def post_fit(self, y: list[CV], scale) -> tuple[CV, CvTrans]:
-        y = CV.stack(*y)
-        if not scale:
+    def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:
+        # y = CV.stack(*y)
+        if not self.post_scale:
             return y, CvTrans.from_cv_function(lambda x, _: x)
         h = scale_cv_trans(y)
         return h.compute_cv_trans(y)[0], h
-
-
-class CVDiscovery:
-    """convert set of coordinates to good collective variables."""
-
-    def __init__(self, transformer: Transformer) -> None:
-        # self.rounds = rounds
-        self.transformer = transformer
-
-    @staticmethod
-    def data_loader(
-        rounds: Rounds,
-        num=4,
-        out=-1,
-        split_data=False,
-        new_r_cut=None,
-        cv_round=None,
-        filter_bias=False,
-        filter_energy=False,
-    ) -> tuple[list[SystemParams], list[NeighbourList] | None, CollectiveVariable, StaticMdInfo, list[CV]]:
-        weights = []
-
-        colvar = rounds.get_collective_variable()
-        sti: StaticMdInfo | None = None
-        sp: list[SystemParams] = []
-        nl: list[NeighbourList] | None = [] if new_r_cut is not None else None
-        cv: list[CV] = []
-
-        for round, traj in rounds.iter(stop=None, num=num, c=cv_round):
-            if sti is None:
-                sti = round.tic
-
-            sp0 = traj.ti.sp
-            nl0 = (
-                sp0.get_neighbour_list(
-                    r_cut=new_r_cut,
-                    z_array=round.tic.atomic_numbers,
-                )
-                if new_r_cut is not None
-                else None
-            )
-
-            if (cv0 := traj.ti.CV) is None:
-                bias = traj.get_bias()
-                if colvar is None:
-                    colvar = bias.collective_variable
-
-                if new_r_cut != round.tic.r_cut:
-                    nlr = (
-                        sp0.get_neighbour_list(
-                            r_cut=round.tic.r_cut,
-                            z_array=round.tic.atomic_numbers,
-                        )
-                        if round.tic.r_cut is not None
-                        else None
-                    )
-                else:
-                    nlr = nl0
-
-                cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
-
-            e = None
-
-            if filter_bias:
-                if (b0 := traj.ti.e_bias) is None:
-                    # map cvs
-                    bias = traj.get_bias()
-
-                    b0, _ = bias.compute_from_cv(cvs=cv0)
-
-                e = b0
-
-            if filter_energy:
-                if (e0 := traj.ti.e_pot) is None:
-                    raise ValueError("e_pot is None")
-
-                if e is None:
-                    e = e0
-                else:
-                    e = e + e0
-
-            sp.append(sp0)
-            if nl is not None:
-                assert nl0 is not None
-                nl.append(nl0)
-            cv.append(cv0)
-
-            if e is None:
-                weights.append(None)
-            else:
-                beta = 1 / round.tic.T
-                weight = jnp.exp(-beta * e)
-                weights.append(weight)
-
-        assert sti is not None
-        assert len(sp) != 0
-        if nl is not None:
-            assert len(nl) == len(sp)
-
-        def choose(key, probs: Array, len: int):
-            if len is None:
-                len = probs.shape[0]
-
-            key, key_return = split(key, 2)
-
-            indices = choice(
-                key=key,
-                a=len,
-                shape=(int(out),),
-                p=probs,
-                replace=True,
-            )
-
-            return key_return, indices
-
-        key = PRNGKey(0)
-
-        out_sp: list[SystemParams] = []
-        out_nl: list[NeighbourList] | None = [] if nl is not None else None
-        out_cv: list[CV] = []
-
-        if split_data:
-            for n, wi in enumerate(weights):
-                if wi is None:
-                    probs = None
-                else:
-                    probs = wi / jnp.sum(wi)
-                key, indices = choose(key, probs)
-
-                out_sp.append(sp[n][indices])
-                if nl is not None:
-                    assert out_nl is not None
-                    out_nl.append(nl[n][indices])
-                out_cv.append(cv[n][indices])
-
-        else:
-            if weights[0] is None:
-                probs = None
-            else:
-                probs = jnp.hstack(weights)
-                probs = probs / jnp.sum(probs)
-
-            key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
-
-            indices = jnp.sort(indices)
-
-            count = 0
-
-            sp_trimmed = []
-            nl_trimmed = [] if nl is not None else None
-            cv_trimmed = []
-
-            for sp_n, nl_n, cv_n in zip(sp, nl, cv):
-                n_i = sp_n.shape[0]
-
-                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
-                sp_trimmed.append(sp_n[index])
-                if nl is not None:
-                    nl_trimmed.append(nl_n[index])
-                cv_trimmed.append(cv_n[index])
-                count += n_i
-
-            if len(sp) >= 1:
-                out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
-                if nl is not None:
-                    assert out_nl is not None
-                    out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
-                out_cv.append(CV.stack(*cv_trimmed))
-
-            else:
-                out_sp.append(sp_trimmed[0][indices])
-                if nl is not None:
-                    assert out_nl is not None
-                    out_nl.append(nl_trimmed[0][indices])
-                out_cv.append(cv_trimmed[0][indices])
-
-        return (out_sp, out_nl, colvar, sti, out_cv)
-
-    def compute(
-        self,
-        rounds: Rounds,
-        num_rounds=4,
-        samples=1e4,
-        plot=True,
-        new_r_cut=None,
-        chunk_size=None,
-        split_data=False,
-        name=None,
-        **kwargs,
-    ) -> CollectiveVariable:
-        (sp_list, nl_list, old_collective_variable, sti, cvs_old) = self.data_loader(
-            num=num_rounds,
-            out=samples,
-            rounds=rounds,
-            new_r_cut=new_r_cut,
-            split_data=split_data,
-        )
-
-        cvs_new, new_collective_variable = self.transformer.fit(
-            sp_list,
-            nl_list,
-            chunk_size=chunk_size,
-            **kwargs,
-        )
-
-        # todo: use cv data instead of reaculating
-
-        if plot:
-            sp = sum(sp_list[1:], sp_list[0])
-            nl = sum(nl_list[1:], nl_list[0]) if nl_list is not None else None
-            ind = np.random.choice(
-                a=sp.shape[0],
-                size=min(1e4, sp.shape[0]),
-                replace=False,
-            )
-
-            folder = rounds.path(c=rounds.cv, r=rounds.round)
-
-            CVDiscovery.plot_app(
-                name=str(folder / "cvdiscovery"),
-                old_cv=old_collective_variable,
-                new_cv=new_collective_variable,
-                sps=sp[ind],
-                nl=nl[ind] if nl is not None else None,
-                chunk_size=chunk_size,
-                cv_data_old=CV.stack(*cvs_old)[ind],
-                cv_data_new=cvs_new[ind],
-            )
-
-        return new_collective_variable
 
     @staticmethod
     def plot_app(
@@ -395,7 +180,7 @@ class CVDiscovery:
 
             fig = plt.figure()
 
-            for in_out_color, ls, rs in CVDiscovery._grid_spec_iterator(
+            for in_out_color, ls, rs in Transformer._grid_spec_iterator(
                 fig=fig,
                 indim=indim,
                 outdim=outdim,
@@ -445,11 +230,11 @@ class CVDiscovery:
                     if dim == 1:
                         data_proc = jnp.hstack([data_proc, rgb[:, [0]]])
 
-                        f = CVDiscovery._plot_1d
+                        f = Transformer._plot_1d
                     elif dim == 2:
-                        f = CVDiscovery._plot_2d
+                        f = Transformer._plot_2d
                     elif dim == 3:
-                        f = CVDiscovery._plot_3d
+                        f = Transformer._plot_3d
 
                     f(fig, axes, data_proc, rgb, labels[0][0:dim], **kwargs)
 
