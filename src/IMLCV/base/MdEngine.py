@@ -551,12 +551,12 @@ class MDEngine(ABC):
 
         print(f"running for {int(steps)} steps!")
 
-        # try:
-        self._run(int(steps))
-        # except Exception as err:
-        #     if self.step == 1:
-        #         raise err
-        #     print(f"The calculator finished early with error {err=},{type(err)=}")
+        try:
+            self._run(int(steps))
+        except Exception as err:
+            if self.step == 1:
+                raise err
+            print(f"The calculator finished early with error {err=},{type(err)=}")
 
         self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:

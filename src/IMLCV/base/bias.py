@@ -291,8 +291,8 @@ class Bias(BC, ABC):
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 
-    @partial(jax.jit, static_argnames=["self", "diff"])
-    def compute_from_cv(self, cvs: CV, diff=False) -> CV:
+    @partial(jax.jit, static_argnames=["self", "diff", "chunk_size"])
+    def compute_from_cv(self, cvs: CV, diff=False, chunk_size=None) -> CV:
         """compute the energy and derivative.
 
         If map==False, the cvs are assumed to be already mapped
@@ -314,7 +314,7 @@ class Bias(BC, ABC):
             return value_and_grad(f0)(x) if diff else (f0(x), None)
 
         def f2(cvs):
-            return vmap(f1)(cvs) if cvs.batched else f1(cvs)
+            return vmap_chunked(f1, chunk_size=chunk_size)(cvs) if cvs.batched else f1(cvs)
 
         return f2(cvs)
 
@@ -463,6 +463,11 @@ class Bias(BC, ABC):
             if y_lim is None:
                 ylim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
 
+            # extent = [bins[0][0], bins[0][-1], bins[1][0], bins[1][-1]]
+
+            # bb = self.collective_variable.metric.bounding_box
+
+            # extent = [bb[0, 0], bb[1, 0], bb[0, 1], bb[1, 1]]
             extent = [x_lim[0], x_lim[1], ylim[0], ylim[1]]
 
             def f(point):
@@ -504,6 +509,9 @@ class Bias(BC, ABC):
                 for tr in traj:
                     # trajs are ij indexed
                     ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=3)
+
+                ax.set_xlim(extent[0], extent[1])
+                ax.set_ylim(extent[2], extent[3])
 
         else:
             raise ValueError

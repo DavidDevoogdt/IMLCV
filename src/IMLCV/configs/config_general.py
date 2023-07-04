@@ -9,6 +9,9 @@ from IMLCV.configs.local_threadpool import get_config as get_config_local
 from parsl.config import Config
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent
+
+print(f"{ROOT_DIR=}")
+
 py_env = " which python"
 
 

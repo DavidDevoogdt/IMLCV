@@ -469,6 +469,7 @@ class Rounds(ABC):
         cv: list[CV]
         ti: list[TrajectoryInfo]
         collective_variable: CollectiveVariable
+        time_series: bool = False
 
         def __iter__(self):
             for spi, nli, cvi, ti in zip(self.sp, self.nl, self.cv, self.ti):
@@ -492,6 +493,24 @@ class Rounds(ABC):
                 collective_variable=self.collective_variable,
             )
 
+        def weights(self):
+            beta = 1 / (self.sti.T * boltzmann)
+
+            weights = []
+
+            for ti_i in self.ti:
+                u = beta * ti_i.e_bias
+                u -= np.max(u)
+
+                w = np.exp(u)
+                if (n := np.sum(w)) != 0:
+                    w /= n
+                # w *= ti_i._size
+
+                weights.append(w)
+
+            return weights
+
     def data_loader(
         self,
         num=4,
@@ -506,6 +525,7 @@ class Rounds(ABC):
         md_trajs: list[int] | None = None,
         start: int | None = None,
         stop: int | None = None,
+        time_series: bool = False,
     ) -> data_loader_output:
         weights = []
 
@@ -517,6 +537,8 @@ class Rounds(ABC):
         ti: list[TrajectoryInfo] = []
 
         min_energy = None
+
+        out = int(out)
 
         for round, traj in self.iter(
             start=start,
@@ -629,6 +651,13 @@ class Rounds(ABC):
             for n in range(len(sp)):
                 indices = jnp.where(ti[n].e_pot - min_energy < energy_threshold)[0]
 
+                if len(indices) == 0:
+                    continue
+
+                if time_series:
+                    print("energy threshold surpassed in time_series, removing the data")
+                    continue
+
                 sp[n] = sp[n][indices]
                 if nl is not None:
                     nl[n] = nl[n][indices]
@@ -640,70 +669,81 @@ class Rounds(ABC):
         out_cv: list[CV] = []
         out_ti = []
 
-        if split_data:
-            for n, wi in enumerate(weights):
-                if wi is None:
-                    probs = None
-                else:
-                    probs = wi / jnp.sum(wi)
-                key, indices = choose(key, probs, len=sp[n].shape[0])
-
-                out_sp.append(sp[n][indices])
+        if time_series:
+            for sp_n, nl_n, cv_n, ti_n in zip(sp, nl, cv, ti):
+                out_sp.append(sp_n[-out:])
                 if nl is not None:
                     assert out_nl is not None
-                    out_nl.append(nl[n][indices])
-                out_cv.append(cv[n][indices])
+                    out_nl.append(nl_n[-out:])
+                out_cv.append(cv_n[-out:])
 
-                out_ti.append(ti[n][indices])
+                out_ti.append(ti_n[-out:])
 
         else:
-            if weights[0] is None:
-                probs = None
+            if split_data:
+                for n, wi in enumerate(weights):
+                    if wi is None:
+                        probs = None
+                    else:
+                        probs = wi / jnp.sum(wi)
+                    key, indices = choose(key, probs, len=sp[n].shape[0])
+
+                    out_sp.append(sp[n][indices])
+                    if nl is not None:
+                        assert out_nl is not None
+                        out_nl.append(nl[n][indices])
+                    out_cv.append(cv[n][indices])
+
+                    out_ti.append(ti[n][indices])
+
             else:
-                probs = jnp.hstack(weights)
-                probs = probs / jnp.sum(probs)
+                if weights[0] is None:
+                    probs = None
+                else:
+                    probs = jnp.hstack(weights)
+                    probs = probs / jnp.sum(probs)
 
-            key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
+                key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
 
-            indices = jnp.sort(indices)
+                indices = jnp.sort(indices)
 
-            count = 0
+                count = 0
 
-            sp_trimmed = []
-            nl_trimmed = [] if nl is not None else None
-            cv_trimmed = []
-            ti_trimmed = []
+                sp_trimmed = []
+                nl_trimmed = [] if nl is not None else None
+                cv_trimmed = []
+                ti_trimmed = []
 
-            for n, (sp_n, nl_n, cv_n, ti_n) in enumerate(zip(sp, nl, cv, ti)):
-                n_i = sp_n.shape[0]
+                for n, (sp_n, nl_n, cv_n, ti_n) in enumerate(zip(sp, nl, cv, ti)):
+                    n_i = sp_n.shape[0]
 
-                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
-                sp_trimmed.append(sp_n[index])
-                if nl is not None:
-                    nl_trimmed.append(nl_n[index])
-                cv_trimmed.append(cv_n[index])
-                ti_trimmed.append(ti_n[index])
+                    index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
+                    sp_trimmed.append(sp_n[index])
+                    if nl is not None:
+                        nl_trimmed.append(nl_n[index])
+                    cv_trimmed.append(cv_n[index])
+                    ti_trimmed.append(ti_n[index])
 
-                count += n_i
+                    count += n_i
 
-            # if len(sp) >= 1:
-            out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
+                # if len(sp) >= 1:
+                out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
 
-            if nl_trimmed is not None:
-                assert out_nl is not None
-                out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
-                del nl_trimmed
-            out_cv.append(CV.stack(*cv_trimmed))
+                if nl_trimmed is not None:
+                    assert out_nl is not None
+                    out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
+                    del nl_trimmed
+                out_cv.append(CV.stack(*cv_trimmed))
 
-            out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
+                out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
 
-            # else:
-            #     out_sp.append(sp_trimmed[0][indices])
-            #     if nl is not None:
-            #         assert out_nl is not None
-            #         out_nl.append(nl_trimmed[0][indices])
-            #     out_cv.append(cv_trimmed[0][indices])
-            #     out_ti.append(ti_trimmed[0][indices])
+                # else:
+                #     out_sp.append(sp_trimmed[0][indices])
+                #     if nl is not None:
+                #         assert out_nl is not None
+                #         out_nl.append(nl_trimmed[0][indices])
+                #     out_cv.append(cv_trimmed[0][indices])
+                #     out_ti.append(ti_trimmed[0][indices])
 
         return Rounds.data_loader_output(
             sp=out_sp,
@@ -712,6 +752,7 @@ class Rounds(ABC):
             ti=out_ti,
             sti=sti,
             collective_variable=colvar,
+            time_series=time_series,
         )
 
     def copy_from_previous_round(

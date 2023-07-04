@@ -29,7 +29,7 @@ from yaff.test.common import get_alaninedipeptide_amber99ff
 
 yaff.log.set_level(yaff.log.silent)
 
-DATA_ROOT = ROOT_DIR / "IMLCV" / "data"
+DATA_ROOT = ROOT_DIR / "data"
 
 
 def alanine_dipeptide_yaff(
@@ -151,7 +151,7 @@ def mil53_yaff():
     P = 1 * units.atm
 
     def f():
-        rd = ROOT_DIR / "IMLCV" / "data" / "MIL53"
+        rd = ROOT_DIR / "data" / "MIL53"
         system = yaff.System.from_file(str(rd / "MIL53.chk"))
         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
         return ff
@@ -197,7 +197,7 @@ def mil53_yaff():
     return yaffmd
 
 
-def CsPbI3(cv, unit_cells):
+def CsPbI3(cv=None, unit_cells=[2]):
     assert isinstance(unit_cells, list)
 
     if len(unit_cells) == 3:
@@ -233,8 +233,10 @@ def CsPbI3(cv, unit_cells):
         "POTENTIAL_FILE_NAME": path_potentials,
     }
 
+    refs, z_array, atoms = CsPbI3_refs(x, y, z)
+
     energy = Cp2kEnergy(
-        atoms=CsPbI3_refs(x, y, z)[0],
+        atoms=atoms[0],
         input_file=fb / "cp2k.inp",
         input_kwargs=input_params,
         stress_tensor=True,
@@ -252,7 +254,7 @@ def CsPbI3(cv, unit_cells):
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         timecon_baro=500.0 * units.femtosecond,
-        atomic_numbers=energy.atoms.get_atomic_numbers(),
+        atomic_numbers=z_array,
         equilibration=0 * units.femtosecond,
         screen_log=1,
         r_cut=r_cut,
@@ -333,4 +335,4 @@ def CsPbI3_refs(x, y, z):
                 cell=a.cell * angstrom,
             )
 
-    return refs
+    return refs, z_arr, atoms

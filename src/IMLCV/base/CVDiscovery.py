@@ -88,13 +88,30 @@ class Transformer:
         print("starting fit")
         y, g = self._fit(
             x,
-            nl_list,
+            dlo,
             chunk_size=chunk_size,
             **self.fit_kwargs,
         )
 
+        # remove outliers from the data
+        bounds = jnp.percentile(y.cv, jnp.array([1, 99]), axis=0)
+
+        margin = 0.1
+
+        diff = bounds[1, :] - bounds[0, :]
+
+        bounds_l = bounds[0, :] - margin * diff
+        bounds_u = bounds[1, :] + margin * diff
+
+        mask_l = jnp.all(y.cv > bounds_l, axis=1)
+        mask_u = jnp.all(y.cv < bounds_u, axis=1)
+        mask = mask_l & mask_u
+
+        y_masked = y[mask]
+
         print("starting post_fit")
-        z, h = self.post_fit(y)
+        z_masked, h = self.post_fit(y_masked)
+        z, _ = h.compute_cv_trans(y)
 
         new_collective_variable = CollectiveVariable(
             f=f * g * h,
@@ -107,18 +124,18 @@ class Transformer:
         )
 
         if plot:
-            sp = SystemParams.stack(*sp_list)
-            nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
+            # sp = SystemParams.stack(*sp_list)
+            # nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
 
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery"),
                 old_cv=dlo.collective_variable,
                 new_cv=new_collective_variable,
-                sps=sp,
-                nl=nl if nl is not None else None,
-                chunk_size=chunk_size,
-                cv_data_old=CV.stack(*dlo.cv),
-                cv_data_new=z,
+                # sps=sp,
+                # nl=nl if nl is not None else None,
+                # chunk_size=chunk_size,
+                cv_data_old=CV.stack(*dlo.cv)[mask],
+                cv_data_new=z_masked,
             )
 
         return z, new_collective_variable
@@ -126,7 +143,7 @@ class Transformer:
     def _fit(
         self,
         x: list[CV],
-        nl: list[NeighbourList] | None,
+        dlo: Rounds.data_loader_output,
         chunk_size=None,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
@@ -141,12 +158,12 @@ class Transformer:
 
     @staticmethod
     def plot_app(
-        sps: SystemParams,
-        nl: NeighbourList,
         old_cv: CollectiveVariable,
         new_cv: CollectiveVariable,
         name: str | Path,
         labels=None,
+        sps: SystemParams = None,
+        nl: NeighbourList = None,
         chunk_size: int | None = None,
         cv_data_old: CV | None = None,
         cv_data_new: CV | None = None,
