@@ -359,6 +359,7 @@ def config(
     cpu_cluster=None,
     gpu_cluster=None,
     py_env=None,
+    account=None,
 ):
     if env == "hortense":
         if cpu_cluster is not None:
@@ -378,7 +379,7 @@ def config(
 
         kw = {
             "cpu_cluster": "dodrio",
-            "account": "2022_069",
+            "account": account,
             "cpu_part": "cpu_rome" if cpu_cluster is None else cpu_cluster,
             "gpu_part": "gpu_rome_a100" if gpu_cluster is None else gpu_cluster,
             "path_internal": path_internal,

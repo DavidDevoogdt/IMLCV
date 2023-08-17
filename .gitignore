@@ -64,3 +64,14 @@ notebooks/alanine_dipeptide_LDA/*
 notebooks/alanine_dipeptide_LDA_*/*
 
 notebooks/alanine_dipeptide_sd_*/*
+
+.pip_cache/*
+
+saved_output/*
+
+Miniconda3/*
+Miniconda3.sh
+perovskites/*
+micromamba/*
+bin/*
+src/IMLCV/.runinfo/*

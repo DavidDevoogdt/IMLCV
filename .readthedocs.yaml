@@ -25,7 +25,7 @@ build:
   jobs:
     pre_install:
       - git config --global url."https://${UGENT_USER_PWD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
-      - pip install numpy cython
+      - pip install numpy cython==0.29
 
 python:
   install:
