@@ -156,6 +156,8 @@ class SystemParams:
 
             bounds = jnp.ceil(jnp.sum(jnp.abs(jnp.linalg.inv(proj)) * r_cut, axis=1))
 
+            bounds = jnp.nan_to_num(bounds)
+
             return bounds
 
         # cannot be jitted

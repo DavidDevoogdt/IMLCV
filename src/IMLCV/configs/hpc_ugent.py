@@ -14,7 +14,7 @@ from parsl.providers.base import JobStatus
 from parsl.providers.slurm.template import template_string
 from parsl.utils import wtime_to_minutes
 
-ROOT_DIR = Path(os.path.dirname(__file__)).parent
+ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 
 
 logger = logging.getLogger(__name__)
@@ -246,7 +246,11 @@ def get_slurm_provider(
     py_env=None,
 ):
     if py_env is None:
-        py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
+        if env == "hortense":
+            print("setting python env for hortense")
+            py_env = f"source {ROOT_DIR}/micromamba/bin/activate; which python"
+        else:
+            py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
@@ -260,6 +264,7 @@ def get_slurm_provider(
     elif env == "stevin":
         worker_init += "module load CP2K/7.1-foss-2020a \n"
     worker_init += "module unload SciPy-bundle Python \n"
+    # worker_init += "module load texlive \n"
 
     if not parsl_cores:
         if open_mp_threads_per_core is None:

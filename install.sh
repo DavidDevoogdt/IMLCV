@@ -23,6 +23,7 @@ source ~/.bashrc
 micromamba activate
 micromamba install python=3.10 jupyter -c conda-forge
 micromamba install -c conda-forge ndcctools
+micromamba install texlive-core -c conda-forge
 
 #cython 3.0.0 has breaking changes
 pip install cython==0.29 numpy

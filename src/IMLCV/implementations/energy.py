@@ -205,7 +205,7 @@ class Cp2kEnergy(AseEnergy):
 
         new_dict = {}
         for key, val in self.input_kwargs.items():
-            assert Path(val).exists()
+            assert Path(val).exists(), f"recieved {val=},{key=}, resolved to {Path(val)}"
             new_dict[key] = relative(val, rp)
 
         with open(self.cp2k_inp) as f:
