@@ -460,7 +460,7 @@ class Rounds(ABC):
 
                 yield _r, _r_i
 
-    @dataclass()
+    @dataclass(repr=False)
     class data_loader_output:
         sp: list[SystemParams]
         nl: list[NeighbourList] | None
@@ -497,14 +497,18 @@ class Rounds(ABC):
             beta = 1 / (self.sti.T * boltzmann)
 
             weights = []
+            energy = []
 
             for ti_i in self.ti:
                 u = beta * ti_i.e_bias
-                u -= np.max(u)
+                u -= jnp.max(u)
 
-                w = np.exp(u)
+                w = jnp.exp(u)
                 if (n := np.sum(w)) != 0:
                     w /= n
+
+                energy.append(jnp.dot(ti_i.e_pot, w))
+
                 # w *= ti_i._size
 
                 weights.append(w)

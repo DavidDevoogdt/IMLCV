@@ -212,7 +212,11 @@ class Transformer:
                 max_val = jnp.max(color_data, axis=0)
                 min_val = jnp.min(color_data, axis=0)
 
-                data_col = (color_data - min_val) / (max_val - min_val)
+                if (max_val == min_val).all():
+                    data_col = color_data
+
+                else:
+                    data_col = (color_data - min_val) / (max_val - min_val)
 
                 # https://www.hsluv.org/
                 # hue 0-360 sat 0-100 lighness 0-1000

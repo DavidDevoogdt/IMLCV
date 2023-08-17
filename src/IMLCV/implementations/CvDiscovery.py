@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import pymanopt
+import scipy.linalg
 from flax import linen as nn
 from flax.training import train_state
 from IMLCV.base.CV import CV
@@ -31,7 +32,7 @@ def shrink(S: Array, n: int, shrinkage="OAS"):
         return S
     # Todo https://papers.nips.cc/paper_files/paper/2014/file/fa83a11a198d5a7f0bf77a1987bcd006-Paper.pdf
     # todo: paper Covariance shrinkage for autocorrelated data
-    assert shrinkage in ["RBLW", "OAS"]
+    assert shrinkage in ["RBLW", "OAS", "BC"]
 
     p = S.shape[0]
     F = jnp.trace(S) / p * jnp.eye(p)
@@ -45,10 +46,53 @@ def shrink(S: Array, n: int, shrinkage="OAS"):
         # use oracle https://arxiv.org/pdf/0907.4698.pdf, eq 23
         rho = ((1 - 2 / p) * tr_s2 + tr2_s) / ((n + 1 - 2 / p) * (tr_s2 - tr2_s / p))
 
+    elif shrinkage == "BC":
+        # https://proceedings.neurips.cc/paper_files/paper/2014/file/fa83a11a198d5a7f0bf77a1987bcd006-Paper.pdf
+        pass
+        # shrinkage based on  X
+        # n = X.shape[0]
+        # p = X.shape[1]
+        # b = 20
+
+        # u = X - pi_x
+        # v = Y - pi_y
+
+        # S_0 = jnp.einsum("ti,tj->ij", u, u) / (n - 1)
+        # S_1 = jnp.einsum("ti,tj->ij", u, v) / (n - 1)
+
+        # T_0 = jnp.trace(S_0) / p * jnp.eye(p)
+        # T_1 = jnp.trace(S_1) / p * jnp.eye(p)
+
+        # def gamma(s, u, v, S):
+        #     return (
+        #         jnp.einsum(
+        #             "ti,tj,ti,tj,t->ij", u[: n - s, :], w[: n - s], v[: n - s, :], u[s:, :], w[s:], v[s:, :], w
+        #         )
+        #         - jnp.sum(w[: n - s]) / jnp.sum(w) * S**2
+        #     )
+
+        # var_BC = gamma(0)
+        # for i in range(1, b + 1):
+        #     var_BC += 2 * gamma(i)
+        # var_BC /= n - 1 - 2 * b + b * (b + 1) / n
+
+        # lambda_BC = jnp.einsum("ij,ij", var_BC, var_BC) / jnp.einsum("ij,ij", S_0 - T_0, S_0 - T_0)
+
+        # lambda_BC = jnp.clip(lambda_BC, 0, 1)
+
+        # print(f"lambda_BC = {lambda_BC}")
+
+        #
+
     if rho > 1:
         rho = 1
 
-    return rho, F, rho * F + (1 - rho) * S
+    print(f"{rho=}")
+
+    def f(C):
+        return rho * F + (1 - rho) * C
+
+    return f
 
 
 class Encoder(nn.Module):
@@ -502,7 +546,7 @@ class TransformerMAF(Transformer):
         min_gradient_norm: float = 1e-5,
         min_step_size: float = 1e-5,
         max_iterations=100,
-        shrinkage="OAS",
+        shrinkage="BC",
         weights="bias",
         solver="eig",
         slow_feature_analysis=False,
@@ -529,9 +573,9 @@ class TransformerMAF(Transformer):
         x: list[CV],
         dlo: Rounds.data_loader_output,
         lag_n=100,
-        shrinkage="OAS",
+        shrinkage="BC",
         solver="eig",
-        weights="bias",
+        weights=None,
         optimizer=None,
         min_gradient_norm: float = 1e-5,
         min_step_size: float = 1e-5,
@@ -563,21 +607,7 @@ class TransformerMAF(Transformer):
         cv_0 = CV.stack(*X)
         cv_tau = CV.stack(*Y)
 
-        def trunc_eig(COV, n, sym):
-            rho, F, COV = shrink(COV, n, shrinkage=shrinkage)
-
-            s, q = jnp.linalg.eigh(COV)
-
-            include_mask = jnp.abs(s) > 10 * jnp.max(jnp.array([q.shape[0], n])) * jnp.finfo(
-                s.dtype,
-            ).eps * jnp.max(jnp.abs(s))
-
-            s = s[include_mask]
-            q = q[:, include_mask]
-
-            return s, q  # rho, s, q
-
-        def whiten_spectrum(cv_0: CV, cv_tau: CV, W, sym=False, add_1=False):
+        def get_covs(cv_0: CV, cv_tau: CV, W=None, sym=False, add_1=False, shrink_output=False, epsilon=1e-7):
             # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
 
             X = cv_0.cv
@@ -588,86 +618,123 @@ class TransformerMAF(Transformer):
 
             if sym:
                 pi = jnp.sum(0.5 * (X + Y).T @ W, axis=1)
-                COV = 0.5 * (X.T @ W @ X + Y.T @ W @ Y) - jnp.outer(pi, pi)
+                COV = 0.5 * (X.T @ W @ X + Y.T @ W @ Y)
+                ccov = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
+
             else:
                 pi = jnp.sum(X.T @ W, axis=1)
-                COV = X.T @ W @ X - jnp.outer(pi, pi)
+                COV = X.T @ W @ X
+                ccov = X.T @ W @ Y
 
-            s, q = trunc_eig(COV, cv_0.shape[0], sym=sym)
+            # transform to diagonal basis
+
+            # transform to a basis where the covariance matrix is diagonal, and remove the small eigenvalues
+            l, q = jnp.linalg.eigh(COV)
+
+            mask = l >= epsilon  # jnp.max(
+            #     jnp.array([jnp.max(jnp.abs(l)) * jnp.max(jnp.array(X.shape)) * jnp.finfo(COV.dtype).eps, 1e-6])
+            # )
+
+            mask2 = jnp.diag(q.T @ ccov @ q)[mask] > epsilon
+
+            mask = mask.at[mask].set(mask2)
+
+            q = q[:, mask]
+            l = l[mask]
 
             @CvTrans.from_cv_function
-            def whiten_trans(cv, nl, _):
-                return CV(cv=(q / jnp.sqrt(s)).T @ (cv.cv - pi), _stack_dims=cv._stack_dims)
+            def tranform(cv, nl, _):
+                cv_v = q.T @ (cv.cv - pi)
+                if add_1:
+                    cv_v = jnp.hstack([cv_v, jnp.array([1])])
 
-            cv_0_new, _ = whiten_trans.compute_cv_trans(cv_0)
-            cv_tau_new, _ = whiten_trans.compute_cv_trans(cv_tau)
+                return CV(cv=cv_v, _stack_dims=cv._stack_dims)
 
-            trans = whiten_trans
+            cv_0, _ = tranform.compute_cv_trans(cv_0)
+            cv_tau, _ = tranform.compute_cv_trans(cv_tau)
 
-            if add_1:
-
-                @CvTrans.from_cv_function
-                def add_one(cv, nl, _):
-                    return CV(cv=jnp.hstack([cv.cv, jnp.array([1])]), _stack_dims=cv._stack_dims)
-
-                cv_0_new, _ = add_one.compute_cv_trans(cv_0_new)
-                cv_tau_new, _ = add_one.compute_cv_trans(cv_tau_new)
-
-                trans = trans * add_one
-
-            X_new = cv_0_new.cv
-            Y_new = cv_tau_new.cv
+            X = cv_0.cv
+            Y = cv_tau.cv
+            if W is None:
+                W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
 
             if sym:
-                # C_0 = 0.5 * (X_new.T @ W @ X_new + Y_new.T @ W @ Y_new)
-                C_1 = 0.5 * (X_new.T @ W @ Y_new + Y_new.T @ W @ X_new)
-                K = C_1
+                C_0 = 0.5 * (X.T @ W @ X + Y.T @ W @ Y)
+                C_1 = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
             else:
-                # C_0 = X_new.T @ W @ X_new
-                C_1 = X_new.T @ W @ Y_new
-                K = C_1
+                C_0 = X.T @ W @ X
+                C_1 = X.T @ W @ Y
 
-            # K = jnp.linalg.inv(C_0) @ C_1
+            if shrink_output:
+                f_shrink = shrink(C_0, n=cv_0.shape[0])
 
-            return K, cv_0_new, cv_tau_new, trans
+                C_0 = f_shrink(C_0)
+                # C_1 = f_shrink(C_1)
 
-        def get_koopman_weights(cv_0_i, cv_tau_i):
-            K, cv_0_new, cv_tau_new, whiten_trans = whiten_spectrum(cv_0_i, cv_tau_i, W=None, sym=False, add_1=True)
+            return C_0, C_1, cv_0, cv_tau, tranform
 
-            eig_val, u = jnp.linalg.eig(K.T)
+        def get_koopman_weights(cv_0_i, cv_tau_i, shrink=False):
+            C_0, C_1, cv_0_new, cv_tau_new, _ = get_covs(
+                cv_0_i,
+                cv_tau_i,
+                W=None,
+                sym=False,
+                add_1=True,
+                shrink_output=shrink,
+            )
 
-            idx = jnp.argsort(jnp.abs(eig_val - 1))[0]
+            # eigenvalue of K.T
+            eigval, u = scipy.linalg.eig(a=C_1.T, b=C_0.T)  # C_1 is not symmetric
+            idx = jnp.argsort(jnp.abs(eigval - 1))[0]
+
+            if not shrink:
+                assert jnp.all(jnp.abs(eigval[idx] - 1) < 1e-5), f"eigenvalue not 1 but {eigval[idx]}"
+
+                assert jnp.all(
+                    jnp.abs(eigval) < 1 + 1e-5,
+                ), f"largest eigenvalue has norm larger than 1: { jnp.sort(jnp.abs(eigval))[-5:]}, falling back to normal weighing"
+
+            else:
+                print(f"eigenvalue is {eigval[idx]}")
 
             u = jnp.real(u[:, idx] / jnp.sum(cv_0_new.cv @ u[:, idx]))
             w = jnp.real(cv_0_new.cv @ u)
 
+            if (nn := jnp.sum(w < 0)) != 0:
+                print(f" {nn}/{w.shape[0]} koopman weights are negative")
+                # w = jnp.ones_like(w) / w.shape[0]
+                w = w.at[w < 0].set(0)
+
             return w
 
-        if weights is None:
-            W = jnp.diag(jnp.ones(cv_0.shape[0]) / cv_0.shape[0])
-        elif weights == "koopman":
+        # w = []
+        # for a in dlo.weights():
+        #     s = jnp.sum(a[:-lag_n])
+        #     out = a[:-lag_n]
+        #     if s != 0:
+        #         out /= s
+        #     w.append(out)
+
+        # w = jnp.hstack(w)
+        # w /= jnp.sum(w)
+
+        if weights == "koopman":
             w_k = [
                 get_koopman_weights(cv_0_i, cv_tau_i) for cv_0_i, cv_tau_i in zip(CV.unstack(cv_0), CV.unstack(cv_tau))
             ]
-
-            W = jnp.diag(jnp.hstack(w_k))
-
-            W = W / jnp.trace(W)  # normalize number of trajectories
-        elif weights == "bias":
-            w_k = []
-            for a in dlo.weights():
-                s = jnp.sum(a[:-lag_n])
-                out = a[:-lag_n]
-                if s != 0:
-                    out /= s
-                w_k.append(out)
 
             w = jnp.hstack(w_k)
             w /= jnp.sum(w)
 
             W = jnp.diag(w)
+
+            W = W / jnp.trace(W)  # normalize number of trajectories
+
         else:
-            raise ValueError(f"weights {weights} not supported")
+            W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
+            # w = jnp.hstack(w_k)
+            # w /= jnp.sum(w)
+            # W = W = jnp.diag(w)
 
         # also add bias weights
 
@@ -676,26 +743,34 @@ class TransformerMAF(Transformer):
         if solver == "eig":
             #   https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
 
-            K_eq, cv_0_eq, cv_tau_eq, trans_whiten = whiten_spectrum(cv_0, cv_tau, W=W, sym=True, add_1=True)
-            K_eq = jnp.real(K_eq)
+            shrink_output = False
 
-            cv, _ = trans_whiten.compute_cv_trans(cv)
-            trans *= trans_whiten
+            C_0, C_1, cv_0_new, cv_tau_new, tr = get_covs(
+                cv_0,
+                cv_tau,
+                W=W,
+                sym=True,
+                add_1=True,
+                shrink_output=shrink_output,
+            )
 
-            eig_val_eq, eig_vec_eq = jnp.linalg.eigh(K_eq)
+            trans *= tr
 
-            idx_eq = jnp.argsort(jnp.real(eig_val_eq))[::-1]
-            eig_vec_selection = eig_vec_eq[:, idx_eq[1 : self.outdim + 1]]
-            # eig_val_selection = eig_val_eq[idx_eq[1 : self.outdim + 1]]
+            n = C_0.shape[0]
+            w, u = scipy.linalg.eigh(a=C_1, b=C_0, subset_by_index=[n - self.outdim - 1, n - 1])
 
-            print(eig_val_eq[idx_eq[0 : self.outdim + 5]])
+            if weights == "koopman":
+                if not shrink_output:
+                    assert jnp.abs(w[-1] - 1) < 1e-5, "last eigenvalue should be 1"
+                print(f"eigenvalue are {w}")
 
             @CvTrans.from_cv_function
             def tica_selection(cv: CV, nl: NeighbourList | None, _):
-                return CV(cv=cv.cv @ eig_vec_selection, _stack_dims=cv._stack_dims)
+                return CV(cv=cv.cv @ u[:, :-1], _stack_dims=cv._stack_dims)
 
-            cv, _ = tica_selection.compute_cv_trans(cv)
             trans *= tica_selection
+
+            cv, _ = trans.compute_cv_trans(cv)
 
         elif solver == "opt":
             pi_eq = jnp.sum(0.5 * (X + Y).T @ W, axis=1)

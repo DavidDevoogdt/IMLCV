@@ -335,11 +335,13 @@ def sinkhorn_divergence(
     assert x1.atomic
     assert x2.atomic
 
+    eps = 100 * jnp.finfo(x1.cv.dtype).eps
+
     def p_norm(x: CV):
         p = x.cv
 
         p_sq = jnp.einsum("i...,i...->i", p, p)
-        p_sq_safe = jnp.where(p_sq <= 1e-16, 1, p_sq)
+        p_sq_safe = jnp.where(p_sq <= eps, 1, p_sq)
         p_norm_inv = jnp.where(p_sq == 0, 0.0, 1 / jnp.sqrt(p_sq_safe))
 
         return CV(
@@ -355,6 +357,7 @@ def sinkhorn_divergence(
 
         if x1.batched:
             x1_norm = vmap(x1_norm)
+
         if x2.batched:
             x2_norm = vmap(x2_norm)
 
@@ -432,13 +435,24 @@ def sinkhorn_divergence(
         p1 = x1.cv
         p2 = x2.cv
 
-        p2_inv = jnp.where(p2 != 0, p2, jnp.ones_like(p2))
-        p2_inv = jnp.where(p2 != 0, 1 / p2_inv, jnp.zeros_like(p2_inv))
+        # p2_inv = jnp.where(p2 != 0, p2, jnp.ones_like(p2))
+        # p2_inv = jnp.where(p2 != 0, 1 / p2_inv, jnp.zeros_like(p2_inv))
 
-        x1_trans = (
-            -2 * jnp.einsum("i...,ij->j...", p1, P12)
-            + jnp.einsum("i...,j...,ij->j...", p1, p1 * p2_inv, P11)
-            + jnp.einsum("i...,ij->j...", p2, P22)
+        # x1_trans = (
+        #     -2 * jnp.einsum("i...,ij->j...", p1, P12)
+        #     + jnp.einsum("i...,j...,ij->j...", p1, p1 * p2_inv, P11)
+        #     + jnp.einsum("i...,ij->j...", p2, P22)
+        # )
+
+        cv = CV(
+            cv=(
+                -2 * jnp.einsum("i...,j...,ij->j...", p1, p2, P12)
+                + jnp.einsum("i...,j...,ij->j...", p1, p1, P11)
+                + jnp.einsum("i...,j...,ij->j...", p2, p2, P22)
+            ),
+            _stack_dims=x1._stack_dims,
+            _combine_dims=x1._combine_dims,
+            atomic=x1.atomic,
         )
 
         div = CV(
@@ -453,12 +467,12 @@ def sinkhorn_divergence(
             _combine_dims=x1._combine_dims,
         )
 
-        cv = CV(
-            cv=x1_trans,
-            _stack_dims=x1._stack_dims,
-            _combine_dims=x1._combine_dims,
-            atomic=x1.atomic,
-        )
+        # cv = CV(
+        #     cv=x1_trans,
+        #     _stack_dims=x1._stack_dims,
+        #     _combine_dims=x1._combine_dims,
+        #     atomic=x1.atomic,
+        # )
 
         return div, cv
 
@@ -533,16 +547,25 @@ def get_sinkhorn_divergence(
             return CV(cv=w, _stack_dims=cv._stack_dims)
 
         if output == "aligned_cv":
-            if pi.batched:
-                if weighted:
-                    out = CV(
-                        cv=jnp.einsum("i...,i->...", out.cv, w),
-                        _stack_dims=out._stack_dims,
-                        _combine_dims=out._combine_dims,
-                        atomic=out.atomic,
-                    )
-                else:  # just combine them to a larger cv
-                    out = CV.combine(*[cvi for cvi in CV.unstack(out)])
+            if weighted:
+                out = CV(
+                    cv=jnp.einsum("i...,i->...", out.cv, w),
+                    _stack_dims=out._stack_dims,
+                    _combine_dims=out._combine_dims,
+                    atomic=out.atomic,
+                )
+            else:  # just combine them to a larger cv
+                out = CV.combine(
+                    *[
+                        CV(
+                            cv=cvi,
+                            _stack_dims=out._stack_dims,
+                            _combine_dims=out._combine_dims,
+                            atomic=out.atomic,
+                        )
+                        for cvi in out.cv
+                    ],
+                )
 
             return out
 

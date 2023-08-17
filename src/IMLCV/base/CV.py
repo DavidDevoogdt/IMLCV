@@ -1584,7 +1584,7 @@ class CV:
             cv=jnp.hstack(out_cv),
             mapped=mapped,
             _combine_dims=out_dim,
-            _stack_dims=stack_dims,
+            _stack_dims=cvs[0]._stack_dims,
             atomic=atomic,
         )
 

@@ -494,7 +494,10 @@ class MDEngine(ABC):
         if self.static_trajectory_info.r_cut is None:
             return None
 
+        # print("update neighbour list")
+
         def _nl():
+            print("slow update")
             return self.sp.get_neighbour_list(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,

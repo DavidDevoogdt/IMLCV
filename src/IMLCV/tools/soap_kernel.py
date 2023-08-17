@@ -20,9 +20,6 @@ from jax import lax
 from jax import vmap
 from scipy.special import legendre as sp_legendre
 
-# todo: Optimizing many-body atomic descriptors for enhanced computational performance of
-# machine learning based interatomic potentials
-
 
 # @partial(jit, static_argnums=(1,))
 def legendre(x, n):

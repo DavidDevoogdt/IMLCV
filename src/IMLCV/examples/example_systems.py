@@ -42,7 +42,7 @@ def alanine_dipeptide_yaff(
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        write_step=10,
+        write_step=200,
         atomic_numbers=jnp.array(
             [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
             dtype=int,

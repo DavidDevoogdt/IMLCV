@@ -238,4 +238,5 @@ def test_bessel():
 
 
 if __name__ == "__main__":
-    test_SOAP_SB_sinkhorn(cell=True, matching="average", pp="soap")
+    # test_SOAP_SB_sinkhorn(cell=True, matching="average", pp="soap")
+    test_bessel()
