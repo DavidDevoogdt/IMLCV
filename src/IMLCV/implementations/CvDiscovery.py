@@ -3,6 +3,8 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import optax
+import pymanopt
+import scipy.linalg
 from flax import linen as nn
 from flax.training import train_state
 from IMLCV.base.CV import CV
@@ -10,6 +12,9 @@ from IMLCV.base.CV import CvFun
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.CV import get_normalize_trans
+from IMLCV.implementations.CV import get_remove_mean_trans
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import stack_reduce
 from IMLCV.implementations.CV import trunc_svd
@@ -20,6 +25,74 @@ from jax import random
 from jax import vmap
 from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+
+
+def shrink(S: Array, n: int, shrinkage="OAS"):
+    if shrinkage == "None":
+        return S
+    # Todo https://papers.nips.cc/paper_files/paper/2014/file/fa83a11a198d5a7f0bf77a1987bcd006-Paper.pdf
+    # todo: paper Covariance shrinkage for autocorrelated data
+    assert shrinkage in ["RBLW", "OAS", "BC"]
+
+    p = S.shape[0]
+    F = jnp.trace(S) / p * jnp.eye(p)
+
+    tr_s2 = jnp.trace(S**2)
+    tr2_s = jnp.trace(S) ** 2
+
+    if shrinkage == "RBLW":
+        rho = ((n - 2) / n * tr_s2 + tr2_s) / ((n + 2) * (tr_s2 - tr2_s / p))
+    elif shrinkage == "OAS":
+        # use oracle https://arxiv.org/pdf/0907.4698.pdf, eq 23
+        rho = ((1 - 2 / p) * tr_s2 + tr2_s) / ((n + 1 - 2 / p) * (tr_s2 - tr2_s / p))
+
+    elif shrinkage == "BC":
+        # https://proceedings.neurips.cc/paper_files/paper/2014/file/fa83a11a198d5a7f0bf77a1987bcd006-Paper.pdf
+        pass
+        # shrinkage based on  X
+        # n = X.shape[0]
+        # p = X.shape[1]
+        # b = 20
+
+        # u = X - pi_x
+        # v = Y - pi_y
+
+        # S_0 = jnp.einsum("ti,tj->ij", u, u) / (n - 1)
+        # S_1 = jnp.einsum("ti,tj->ij", u, v) / (n - 1)
+
+        # T_0 = jnp.trace(S_0) / p * jnp.eye(p)
+        # T_1 = jnp.trace(S_1) / p * jnp.eye(p)
+
+        # def gamma(s, u, v, S):
+        #     return (
+        #         jnp.einsum(
+        #             "ti,tj,ti,tj,t->ij", u[: n - s, :], w[: n - s], v[: n - s, :], u[s:, :], w[s:], v[s:, :], w
+        #         )
+        #         - jnp.sum(w[: n - s]) / jnp.sum(w) * S**2
+        #     )
+
+        # var_BC = gamma(0)
+        # for i in range(1, b + 1):
+        #     var_BC += 2 * gamma(i)
+        # var_BC /= n - 1 - 2 * b + b * (b + 1) / n
+
+        # lambda_BC = jnp.einsum("ij,ij", var_BC, var_BC) / jnp.einsum("ij,ij", S_0 - T_0, S_0 - T_0)
+
+        # lambda_BC = jnp.clip(lambda_BC, 0, 1)
+
+        # print(f"lambda_BC = {lambda_BC}")
+
+        #
+
+    if rho > 1:
+        rho = 1
+
+    print(f"{rho=}")
+
+    def f(C):
+        return rho * F + (1 - rho) * C
+
+    return f
 
 
 class Encoder(nn.Module):
@@ -112,7 +185,7 @@ class TranformerAutoEncoder(Transformer):
     def _fit(
         self,
         cv: list[CV],
-        nl: list[NeighbourList] | None,
+        dlo: Rounds.data_loader_output,
         nunits=250,
         nlayers=3,
         lr=1e-4,
@@ -308,7 +381,7 @@ class TransoformerLDA(Transformer):
     def _fit(
         self,
         cv_list: list[CV],
-        nl_list: list[NeighbourList] | None,
+        dlo: Rounds.data_loader_output,
         kernel=False,
         optimizer=None,
         chunck_size=None,
@@ -320,6 +393,8 @@ class TransoformerLDA(Transformer):
         max_iterations=50,
         **kwargs,
     ):
+        nl_list = dlo.nl
+
         if kernel:
             raise NotImplementedError("kernel not implemented for lda")
 
@@ -396,13 +471,6 @@ class TransoformerLDA(Transformer):
             full_trans = un_atomize * lda_cv * lda_rescale
 
         elif method == "pymanopt":
-            try:
-                import pymanopt
-            except ImportError:
-                raise ImportError(
-                    "pymanopt not installed, please install it to use LDA collective variable",
-                )
-
             assert isinstance(cv_list, list)
             if optimizer is None:
                 optimizer = pymanopt.optimizers.TrustRegions(
@@ -465,3 +533,288 @@ class TransoformerLDA(Transformer):
             full_trans = un_atomize * _f * _g
 
         return cv, full_trans
+
+
+class TransformerMAF(Transformer):
+    # Maximum Autocorrelation Factors
+
+    def __init__(
+        self,
+        outdim: int,
+        lag_n=100,
+        optimizer=None,
+        min_gradient_norm: float = 1e-5,
+        min_step_size: float = 1e-5,
+        max_iterations=100,
+        shrinkage="BC",
+        weights="bias",
+        solver="eig",
+        slow_feature_analysis=False,
+        harmonic=False,
+        **kwargs,
+    ):
+        super().__init__(
+            outdim=outdim,
+            lag_n=lag_n,
+            optimizer=optimizer,
+            min_gradient_norm=min_gradient_norm,
+            min_step_size=min_step_size,
+            max_iterations=max_iterations,
+            shrinkage=shrinkage,
+            solver=solver,
+            weights=weights,
+            harmonic=harmonic,
+            slow_feature_analysis=slow_feature_analysis,
+            **kwargs,
+        )
+
+    def _fit(
+        self,
+        x: list[CV],
+        dlo: Rounds.data_loader_output,
+        lag_n=100,
+        shrinkage="BC",
+        solver="eig",
+        weights=None,
+        optimizer=None,
+        min_gradient_norm: float = 1e-5,
+        min_step_size: float = 1e-5,
+        max_iterations=25,
+        harmonic=False,
+        slow_feature_analysis=False,
+        **fit_kwargs,
+    ) -> tuple[CV, CvTrans]:
+        nl_list = dlo.nl
+
+        cv = CV.stack(*x)
+
+        # n = cv.shape[0]
+        nl = NeighbourList.stack(*nl_list)
+        cv, _ = un_atomize.compute_cv_trans(cv)
+
+        trans = un_atomize
+
+        # cv, _f = trunc_svd(cv)
+
+        # part one, create time series data and lagged time series
+        X = []
+        Y = []
+
+        for cv_i in CV.unstack(cv):
+            X.append(cv_i[:-lag_n])
+            Y.append(cv_i[lag_n:])
+
+        cv_0 = CV.stack(*X)
+        cv_tau = CV.stack(*Y)
+
+        def get_covs(cv_0: CV, cv_tau: CV, W=None, sym=False, add_1=False, shrink_output=False, epsilon=1e-7):
+            # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
+
+            X = cv_0.cv
+            Y = cv_tau.cv
+
+            if W is None:
+                W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
+
+            if sym:
+                pi = jnp.sum(0.5 * (X + Y).T @ W, axis=1)
+                COV = 0.5 * (X.T @ W @ X + Y.T @ W @ Y)
+                ccov = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
+
+            else:
+                pi = jnp.sum(X.T @ W, axis=1)
+                COV = X.T @ W @ X
+                ccov = X.T @ W @ Y
+
+            # transform to diagonal basis
+
+            # transform to a basis where the covariance matrix is diagonal, and remove the small eigenvalues
+            l, q = jnp.linalg.eigh(COV)
+
+            mask = l >= epsilon  # jnp.max(
+            #     jnp.array([jnp.max(jnp.abs(l)) * jnp.max(jnp.array(X.shape)) * jnp.finfo(COV.dtype).eps, 1e-6])
+            # )
+
+            mask2 = jnp.diag(q.T @ ccov @ q)[mask] > epsilon
+
+            mask = mask.at[mask].set(mask2)
+
+            q = q[:, mask]
+            l = l[mask]
+
+            @CvTrans.from_cv_function
+            def tranform(cv, nl, _):
+                cv_v = q.T @ (cv.cv - pi)
+                if add_1:
+                    cv_v = jnp.hstack([cv_v, jnp.array([1])])
+
+                return CV(cv=cv_v, _stack_dims=cv._stack_dims)
+
+            cv_0, _ = tranform.compute_cv_trans(cv_0)
+            cv_tau, _ = tranform.compute_cv_trans(cv_tau)
+
+            X = cv_0.cv
+            Y = cv_tau.cv
+            if W is None:
+                W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
+
+            if sym:
+                C_0 = 0.5 * (X.T @ W @ X + Y.T @ W @ Y)
+                C_1 = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
+            else:
+                C_0 = X.T @ W @ X
+                C_1 = X.T @ W @ Y
+
+            if shrink_output:
+                f_shrink = shrink(C_0, n=cv_0.shape[0])
+
+                C_0 = f_shrink(C_0)
+                # C_1 = f_shrink(C_1)
+
+            return C_0, C_1, cv_0, cv_tau, tranform
+
+        def get_koopman_weights(cv_0_i, cv_tau_i, shrink=False):
+            C_0, C_1, cv_0_new, cv_tau_new, _ = get_covs(
+                cv_0_i,
+                cv_tau_i,
+                W=None,
+                sym=False,
+                add_1=True,
+                shrink_output=shrink,
+            )
+
+            # eigenvalue of K.T
+            eigval, u = scipy.linalg.eig(a=C_1.T, b=C_0.T)  # C_1 is not symmetric
+            idx = jnp.argsort(jnp.abs(eigval - 1))[0]
+
+            if not shrink:
+                assert jnp.all(jnp.abs(eigval[idx] - 1) < 1e-5), f"eigenvalue not 1 but {eigval[idx]}"
+
+                assert jnp.all(
+                    jnp.abs(eigval) < 1 + 1e-5,
+                ), f"largest eigenvalue has norm larger than 1: { jnp.sort(jnp.abs(eigval))[-5:]}, falling back to normal weighing"
+
+            else:
+                print(f"eigenvalue is {eigval[idx]}")
+
+            u = jnp.real(u[:, idx] / jnp.sum(cv_0_new.cv @ u[:, idx]))
+            w = jnp.real(cv_0_new.cv @ u)
+
+            if (nn := jnp.sum(w < 0)) != 0:
+                print(f" {nn}/{w.shape[0]} koopman weights are negative")
+                # w = jnp.ones_like(w) / w.shape[0]
+                w = w.at[w < 0].set(0)
+
+            return w
+
+        # w = []
+        # for a in dlo.weights():
+        #     s = jnp.sum(a[:-lag_n])
+        #     out = a[:-lag_n]
+        #     if s != 0:
+        #         out /= s
+        #     w.append(out)
+
+        # w = jnp.hstack(w)
+        # w /= jnp.sum(w)
+
+        if weights == "koopman":
+            w_k = [
+                get_koopman_weights(cv_0_i, cv_tau_i) for cv_0_i, cv_tau_i in zip(CV.unstack(cv_0), CV.unstack(cv_tau))
+            ]
+
+            w = jnp.hstack(w_k)
+            w /= jnp.sum(w)
+
+            W = jnp.diag(w)
+
+            W = W / jnp.trace(W)  # normalize number of trajectories
+
+        else:
+            W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
+            # w = jnp.hstack(w_k)
+            # w /= jnp.sum(w)
+            # W = W = jnp.diag(w)
+
+        # also add bias weights
+
+        # decorrelateion part 2
+
+        if solver == "eig":
+            #   https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
+
+            shrink_output = False
+
+            C_0, C_1, cv_0_new, cv_tau_new, tr = get_covs(
+                cv_0,
+                cv_tau,
+                W=W,
+                sym=True,
+                add_1=True,
+                shrink_output=shrink_output,
+            )
+
+            trans *= tr
+
+            n = C_0.shape[0]
+            w, u = scipy.linalg.eigh(a=C_1, b=C_0, subset_by_index=[n - self.outdim - 1, n - 1])
+
+            if weights == "koopman":
+                if not shrink_output:
+                    assert jnp.abs(w[-1] - 1) < 1e-5, "last eigenvalue should be 1"
+                print(f"eigenvalue are {w}")
+
+            @CvTrans.from_cv_function
+            def tica_selection(cv: CV, nl: NeighbourList | None, _):
+                return CV(cv=cv.cv @ u[:, :-1], _stack_dims=cv._stack_dims)
+
+            trans *= tica_selection
+
+            cv, _ = trans.compute_cv_trans(cv)
+
+        elif solver == "opt":
+            pi_eq = jnp.sum(0.5 * (X + Y).T @ W, axis=1)
+            COV_eq = 0.5 * (X.T @ W @ X + Y.T @ W @ Y) - jnp.outer(pi_eq, pi_eq)
+
+            rho, F, COV_eq = shrink(S=COV_eq, n=X.shape[0], shrinkage=shrinkage)
+
+            COV_tau_eq = 0.5 * (X.T @ W @ Y + Y.T @ W @ X) - jnp.outer(pi_eq, pi_eq)
+            # COV_tau_eq = (1 - rho) * COV_tau_eq + rho * F
+
+            if optimizer is None:
+                optimizer = pymanopt.optimizers.TrustRegions(
+                    max_iterations=max_iterations,
+                    min_gradient_norm=min_gradient_norm,
+                    min_step_size=min_step_size,
+                )
+            manifold = pymanopt.manifolds.stiefel.Stiefel(n=COV_eq.shape[0], p=self.outdim)
+
+            @pymanopt.function.jax(manifold)
+            @jit
+            def cost(x):
+                a = jnp.trace(x.T @ COV_eq @ x)
+                b = jnp.trace(x.T @ COV_tau_eq @ x)
+
+                if slow_feature_analysis:
+                    out = b - a
+                else:
+                    if harmonic:
+                        out = a / b
+                    else:
+                        out = -(b / a)
+
+                return out
+
+            problem = pymanopt.Problem(manifold, cost)
+            result = optimizer.run(problem)
+
+            alpha = jnp.array(result.point)
+
+            @CvTrans.from_cv_function
+            def tica_selection(cv: CV, nl: NeighbourList | None, _):
+                return CV(cv=(cv.cv - pi_eq) @ alpha, _stack_dims=cv._stack_dims)
+
+            cv = tica_selection.compute_cv_trans(cv, nl)[0]
+            trans *= tica_selection
+
+        return cv, trans

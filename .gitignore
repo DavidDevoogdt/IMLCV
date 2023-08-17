@@ -75,3 +75,5 @@ perovskites/*
 micromamba/*
 bin/*
 src/IMLCV/.runinfo/*
+notebooks/alanine_dipeptide_tica_*/*
+perovskites/*

@@ -1203,43 +1203,59 @@ class NeighbourList:
         else:
             assert jnp.all(self.num_z_unique == other.num_z_unique)
 
-        if self.atom_indices is not None:
-            m = jnp.max(
-                jnp.array([self.atom_indices.shape[-1], other.atom_indices.shape[-1]]),
-            )
+        op_cell = None
+        op_coor = None
+        op_center = None
+        ijk_indices = None
+        atom_indices = None
 
-            def _p(a, n):
+        if self.atom_indices is not None or self.ijk_indices is not None:  # depends on number of neighbours
+            if self.atom_indices is not None:
+                m = jnp.max(
+                    jnp.array([self.atom_indices.shape[-1], other.atom_indices.shape[-1]]),
+                )
+            else:
+                m = jnp.max(
+                    jnp.array([self.ijk_indices.shape[-2], other.ijk_indices.shape[-2]]),
+                )
+
+            @vmap
+            def _p(a):
+                n = m - a.shape[-1]
+
                 return jnp.pad(
                     array=a,
                     pad_width=((0, 0), (0, n)),
                     constant_values=-1,
                 )
 
-            if self.batched:
-                _p = vmap(_p, in_axes=(0, None))
+            if self.atom_indices is not None:
+                atom_indices = jnp.vstack([_p(self.atom_indices), _p(other.atom_indices)])
 
-            if self.atom_indices.shape[-1] != m:
-                sa = _p(self.atom_indices, m - self.atom_indices.shape[-1])
-            else:
-                sa = self.atom_indices
+            if self.ijk_indices is not None:
+                _p = vmap(_p, in_axes=(-1), out_axes=(-1))
+                ijk_indices = jnp.vstack([_p(self.ijk_indices), _p(other.ijk_indices)])
 
-            if other.atom_indices.shape[-1] != m:
-                sb = _p(other.atom_indices, m - other.atom_indices.shape[-1])
-            else:
-                sb = other.atom_indices
+        if self.op_cell is not None:
+            op_cell = jnp.vstack([self.op_cell, other.op_cell])
+        if self.op_coor is not None:
+            op_coor = jnp.vstack([self.op_coor, other.op_coor])
+
+        if self.op_center is not None:
+            op_center = jnp.vstack([self.op_center, other.op_center])
 
         return NeighbourList(
             r_cut=self.r_cut,
             r_skin=self.r_skin,
-            atom_indices=jnp.vstack([sa, sb]) if self.atom_indices is not None else None,
+            atom_indices=atom_indices,
             z_array=self.z_array,
             z_unique=self.z_unique,
             nxyz=self.nxyz,
             sp_orig=self.sp_orig + other.sp_orig if self.sp_orig is not None else None,
-            ijk_indices=jnp.vstack([self.ijk_indices, other.ijk_indices]) if self.ijk_indices is not None else None,
-            op_cell=jnp.vstack([self.op_cell, other.op_cell]) if self.op_cell is not None else None,
-            op_coor=jnp.vstack([self.op_coor, other.op_coor]) if self.op_coor is not None else None,
-            op_center=jnp.vstack([self.op_center, other.op_center]) if self.op_center is not None else None,
+            ijk_indices=ijk_indices,
+            op_cell=op_cell,
+            op_coor=op_coor,
+            op_center=op_center,
             num_z_unique=self.num_z_unique,
         )
 
@@ -1414,7 +1430,7 @@ class CV:
         for cv in cvs:
             assert atomic == cv.atomic
 
-            assert isinstance(cv, CV)
+            # assert isinstance(cv, CV)
             if in_dims is None:
                 in_dims = cv._combine_dims
                 mapped = cv.mapped
@@ -1568,7 +1584,7 @@ class CV:
             cv=jnp.hstack(out_cv),
             mapped=mapped,
             _combine_dims=out_dim,
-            _stack_dims=stack_dims,
+            _stack_dims=cvs[0]._stack_dims,
             atomic=atomic,
         )
 

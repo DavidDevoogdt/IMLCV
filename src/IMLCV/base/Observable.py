@@ -4,6 +4,7 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
+from IMLCV.base.bias import CompositeBias
 from IMLCV.base.bias import plot_app
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -58,36 +59,8 @@ class ThermoLIB:
         start_r=0,
         update_bounding_box=False,
         samples_per_bin=500,
+        chunk_size=None,
     ):
-        class ThermoBiasND(BiasPotential2D):
-            def __init__(self, bias: Bias) -> None:
-                self.bias = bias
-
-                super().__init__("IMLCV_bias")
-
-            def __call__(self, *cv):
-                # map meshgrids of cvs to IMLCV biases and evaluate
-                return np.array(self.f_par(jnp.array([*cv])), dtype=np.double)
-
-            @partial(jit, static_argnums=(0,))
-            def f_par(self, cvs):
-                b, _ = jnp.apply_along_axis(
-                    self.f,
-                    axis=0,
-                    arr=cvs,
-                )
-                return b
-
-            @partial(jit, static_argnums=(0,))
-            def f(self, point):
-                return self.bias.compute_from_cv(
-                    cvs=CV(cv=point),
-                    diff=False,
-                )
-
-            def print_pars(self, *pars_units):
-                pass
-
         temp = self.rounds.T
 
         directory = self.rounds.path(c=self.cv_round, r=self.rnd)
@@ -99,15 +72,12 @@ class ThermoLIB:
         biases = []
 
         # TODO: change to rounds data loader
-
         for round, trajectory in self.rounds.iter(
             start=start_r,
             num=num_rnds,
             stop=self.rnd,
             c=self.cv_round,
         ):
-            bias = trajectory.get_bias()
-
             ti = trajectory.ti[trajectory.ti._t > round.tic.equilibration]
 
             if ti._cv is not None:
@@ -126,7 +96,7 @@ class ThermoLIB:
                 continue
 
             trajs.append(cvs)
-            biases.append(ThermoBiasND(bias))
+            biases.append(File(str(self.rounds.path() / trajectory.name_bias)))
             if plot:
                 if round.round == rnd:
                     trajs_plot.append(cvs)
@@ -155,20 +125,60 @@ class ThermoLIB:
             samples_per_bin=samples_per_bin,
         )
 
-        histo = bash_app_python(HistogramND.from_wham, executors=["model"])(
-            # histo = HistogramND.from_wham(
+        @bash_app_python(executors=["model"])
+        def get_histos(
+            bins,
+            temp,
+            trajs,
+            inputs=[],
+            outputs=[],
+        ):
+            class ThermoBiasND(BiasPotential2D):
+                def __init__(self, bias: Bias) -> None:
+                    self.bias = bias
+
+                    super().__init__("IMLCV_bias")
+
+                def __call__(self, *cv):
+                    shape = cv[0].shape
+
+                    colvar = CV.combine(*[CV(cv=cvi.reshape((-1, 1))) for cvi in cv])
+                    out, _ = self.bias.compute_from_cv(
+                        cvs=colvar,
+                        diff=False,
+                        chunk_size=chunk_size,
+                    )
+
+                    # map meshgrids of cvs to IMLCV biases and evaluate
+                    return np.array(jnp.reshape(out, shape), dtype=np.double)
+
+                def print_pars(self, *pars_units):
+                    pass
+
+            biases = [ThermoBiasND(Bias.load(b.filepath)) for b in inputs]
+
+            histo = HistogramND.from_wham(
+                bins=bins,
+                trajectories=[
+                    np.array(
+                        traj.cv,
+                        dtype=np.double,
+                    )
+                    for traj in trajs
+                ],
+                error_estimate=None,
+                biasses=biases,
+                temp=temp,
+                verbosity="high",
+            )
+
+            return histo
+
+        histo = get_histos(
             bins=bins,
-            trajectories=[
-                np.array(
-                    traj.cv,
-                    dtype=np.double,
-                )
-                for traj in trajs
-            ],
-            error_estimate="mle_f",
-            biasses=biases,
             temp=temp,
-            verbosity="high",
+            trajs=trajs,
+            inputs=biases,
             execution_folder=directory,
         ).result()
 
@@ -237,13 +247,14 @@ class ThermoLIB:
         plot=True,
         max_bias=None,
         fs=None,
-        choice="gridbias",
+        choice="rbf",
         num_rnds=4,
         start_r=0,
         rbf_kernel="thin_plate_spline",
         rbf_degree=None,
         smoothing_threshold=5 * kjmol,
-        samples_per_bin=500,
+        samples_per_bin=100,
+        chunk_size=None,
         **plot_kwargs,
     ):
         if fs is None:
@@ -252,30 +263,24 @@ class ThermoLIB:
                 start_r=start_r,
                 samples_per_bin=samples_per_bin,
                 num_rnds=num_rnds,
+                chunk_size=chunk_size,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij
         fs = np.transpose(fes.fs)
 
-        mask = ~np.isnan(fs)
+        # remove previous fs
+        cv_grid = CV.stack(*list(zip(*grid))[1])
+        prev_fs = jnp.reshape(self.common_bias.compute_from_cv(cv_grid)[0], fs.shape)
+        fs += np.array(prev_fs)
 
         # invert to use as bias
-        if max_bias is not None:
-            fs[:] = -fs[:] + np.min([max_bias, fs[mask].max()])
-        else:
-            fs[:] = -fs[:] + fs[mask].max()
-
-        fs[~mask] = 0.0
-
-        fl = fes.flower.T
-        fu = fes.fupper.T
-
-        sigma = fu - fl
-        sigma = (sigma) / smoothing_threshold
+        mask = ~np.isnan(fs)
+        fs[:] = -fs[:] + fs[mask].max()
 
         if choice == "rbf":
             fslist = []
-            smoothing_list = []
+            # smoothing_list = []
             cv: list[CV] = []
 
             for idx, cvi in grid:
@@ -284,7 +289,7 @@ class ThermoLIB:
 
                     cv += [cvi]
 
-                    smoothing_list.append(sigma[idx])
+                    # smoothing_list.append(sigma[idx])
             cv = CV.stack(*cv)
 
             fslist = jnp.array(fslist)
@@ -310,10 +315,12 @@ class ThermoLIB:
             fesBias = get_b(1.0)
 
         elif choice == "gridbias":
+            fs[~mask] = 0.0
             fesBias = GridBias(cvs=self.collective_variable, vals=fs, bounds=bounds)
-
         else:
             raise ValueError
+
+        fes_bias_tot = CompositeBias(biases=[self.common_bias, fesBias])
 
         if plot:
             fold = str(self.rounds.path(c=self.cv_round))
@@ -323,6 +330,29 @@ class ThermoLIB:
             pf.append(
                 plot_app(
                     bias=fesBias,
+                    outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                    inverted=True,
+                    execution_folder=fold,
+                    stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
+                    stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
+                    **plot_kwargs,
+                ),
+            )
+
+            pf.append(
+                plot_app(
+                    bias=fesBias,
+                    outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.pdf")],
+                    execution_folder=fold,
+                    stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
+                    stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
+                    **plot_kwargs,
+                ),
+            )
+
+            pf.append(
+                plot_app(
+                    bias=fes_bias_tot,
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.pdf")],
                     inverted=True,
                     execution_folder=fold,
@@ -334,7 +364,7 @@ class ThermoLIB:
 
             pf.append(
                 plot_app(
-                    bias=fesBias,
+                    bias=fes_bias_tot,
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.pdf")],
                     execution_folder=fold,
                     stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
@@ -346,4 +376,4 @@ class ThermoLIB:
             for f in pf:
                 f.result()
 
-        return fesBias
+        return fes_bias_tot

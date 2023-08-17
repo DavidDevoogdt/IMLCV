@@ -494,7 +494,10 @@ class MDEngine(ABC):
         if self.static_trajectory_info.r_cut is None:
             return None
 
+        # print("update neighbour list")
+
         def _nl():
+            print("slow update")
             return self.sp.get_neighbour_list(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,
@@ -551,12 +554,12 @@ class MDEngine(ABC):
 
         print(f"running for {int(steps)} steps!")
 
-        # try:
-        self._run(int(steps))
-        # except Exception as err:
-        #     if self.step == 1:
-        #         raise err
-        #     print(f"The calculator finished early with error {err=},{type(err)=}")
+        try:
+            self._run(int(steps))
+        except Exception as err:
+            if self.step == 1:
+                raise err
+            print(f"The calculator finished early with error {err=},{type(err)=}")
 
         self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:

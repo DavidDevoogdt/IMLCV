@@ -269,13 +269,15 @@ def scale_cv_trans(array: CV, lower=0, upper=1):
     return f0
 
 
-def trunc_svd(m: CV) -> tuple[CV, CvTrans]:
+def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     assert m.batched
 
     if m.atomic:
         cvi = m.cv.reshape((m.cv.shape[0], -1))
     else:
         cvi = m.cv
+
+    cvi = cvi[range, :]
 
     u, s, v = jnp.linalg.svd(cvi, full_matrices=False)
 
@@ -287,9 +289,12 @@ def trunc_svd(m: CV) -> tuple[CV, CvTrans]:
 
     def _f(u, s, v, include_mask):
         u, s, v = u[:, include_mask], s[include_mask], v[include_mask, :]
-        return (u, s, v)
 
-    _, _, v = _f(u, s, v, include_mask)
+        out = v
+
+        return s, out
+
+    s, v = _f(u, s, v, include_mask)
 
     if m.atomic:
         v = v.reshape((v.shape[0], m.cv.shape[1], m.cv.shape[2]))
@@ -297,17 +302,15 @@ def trunc_svd(m: CV) -> tuple[CV, CvTrans]:
     @CvTrans.from_cv_function
     def f(x: CV, nl: NeighbourList | None, _):
         if m.atomic:
-
-            def _f(x, v):
-                return jnp.einsum("ni,jni->j", x, v)
+            out = jnp.einsum("ni,jni->j", x.cv, v)
 
         else:
+            out = jnp.einsum("i,ji->j", x.cv, v)
 
-            def _f(x, v):
-                return jnp.einsum("i,ji->j", x, v)
+        out = out * jnp.sqrt(cvi.shape[0])
 
         return CV(
-            cv=_f(x.cv, v),
+            cv=out,
             _stack_dims=x._stack_dims,
             _combine_dims=x._combine_dims,
             atomic=False,
@@ -332,11 +335,13 @@ def sinkhorn_divergence(
     assert x1.atomic
     assert x2.atomic
 
+    eps = 100 * jnp.finfo(x1.cv.dtype).eps
+
     def p_norm(x: CV):
         p = x.cv
 
         p_sq = jnp.einsum("i...,i...->i", p, p)
-        p_sq_safe = jnp.where(p_sq <= 1e-16, 1, p_sq)
+        p_sq_safe = jnp.where(p_sq <= eps, 1, p_sq)
         p_norm_inv = jnp.where(p_sq == 0, 0.0, 1 / jnp.sqrt(p_sq_safe))
 
         return CV(
@@ -352,6 +357,7 @@ def sinkhorn_divergence(
 
         if x1.batched:
             x1_norm = vmap(x1_norm)
+
         if x2.batched:
             x2_norm = vmap(x2_norm)
 
@@ -429,31 +435,44 @@ def sinkhorn_divergence(
         p1 = x1.cv
         p2 = x2.cv
 
-        p2_inv = jnp.where(p2 != 0, p2, jnp.ones_like(p2))
-        p2_inv = jnp.where(p2 != 0, 1 / p2_inv, jnp.zeros_like(p2_inv))
+        # p2_inv = jnp.where(p2 != 0, p2, jnp.ones_like(p2))
+        # p2_inv = jnp.where(p2 != 0, 1 / p2_inv, jnp.zeros_like(p2_inv))
 
-        x1_trans = (
-            -2 * jnp.einsum("i...,ij->j...", p1, P12)
-            + jnp.einsum("i...,j...,ij->j...", p1, p1 * p2_inv, P11)
-            + jnp.einsum("i...,ij->j...", p2, P22)
+        # x1_trans = (
+        #     -2 * jnp.einsum("i...,ij->j...", p1, P12)
+        #     + jnp.einsum("i...,j...,ij->j...", p1, p1 * p2_inv, P11)
+        #     + jnp.einsum("i...,ij->j...", p2, P22)
+        # )
+
+        cv = CV(
+            cv=(
+                -2 * jnp.einsum("i...,j...,ij->j...", p1, p2, P12)
+                + jnp.einsum("i...,j...,ij->j...", p1, p1, P11)
+                + jnp.einsum("i...,j...,ij->j...", p2, p2, P22)
+            ),
+            _stack_dims=x1._stack_dims,
+            _combine_dims=x1._combine_dims,
+            atomic=x1.atomic,
         )
 
         div = CV(
-            cv=jnp.mean(
-                -2 * jnp.einsum("i...,j...,ij->j", p1, p2, P12)
-                + jnp.einsum("i...,j...,ij->j", p1, p1, P11)
-                + jnp.einsum("i...,j...,ij->j", p2, p2, P22),
+            cv=(
+                jnp.mean(
+                    -2 * jnp.einsum("i...,j...,ij->j", p1, p2, P12)
+                    + jnp.einsum("i...,j...,ij->j", p1, p1, P11)
+                    + jnp.einsum("i...,j...,ij->j", p2, p2, P22),
+                )
             ),
             _stack_dims=x1._stack_dims,
             _combine_dims=x1._combine_dims,
         )
 
-        cv = CV(
-            cv=x1_trans,
-            _stack_dims=x1._stack_dims,
-            _combine_dims=x1._combine_dims,
-            atomic=x1.atomic,
-        )
+        # cv = CV(
+        #     cv=x1_trans,
+        #     _stack_dims=x1._stack_dims,
+        #     _combine_dims=x1._combine_dims,
+        #     atomic=x1.atomic,
+        # )
 
         return div, cv
 
@@ -504,7 +523,10 @@ def get_sinkhorn_divergence(
         divergence: CV
 
         if output == "divergence":
-            return divergence
+            return CV(
+                cv=jnp.array([divergence.cv]),
+                _stack_dims=cv._stack_dims,
+            )
 
         div_safe = jnp.where(divergence.cv >= 1e-16, divergence.cv, jnp.ones_like(divergence.cv))
         dist = jnp.where(divergence.cv >= 1e-16, jnp.sqrt(div_safe), jnp.zeros_like(div_safe))
@@ -525,16 +547,25 @@ def get_sinkhorn_divergence(
             return CV(cv=w, _stack_dims=cv._stack_dims)
 
         if output == "aligned_cv":
-            if pi.batched:
-                if weighted:
-                    out = CV(
-                        cv=jnp.einsum("i...,i->...", out.cv, w),
-                        _stack_dims=out._stack_dims,
-                        _combine_dims=out._combine_dims,
-                        atomic=out.atomic,
-                    )
-                else:  # just combine them to a larger cv
-                    out = CV.combine(*[cvi for cvi in CV.unstack(out)])
+            if weighted:
+                out = CV(
+                    cv=jnp.einsum("i...,i->...", out.cv, w),
+                    _stack_dims=out._stack_dims,
+                    _combine_dims=out._combine_dims,
+                    atomic=out.atomic,
+                )
+            else:  # just combine them to a larger cv
+                out = CV.combine(
+                    *[
+                        CV(
+                            cv=cvi,
+                            _stack_dims=out._stack_dims,
+                            _combine_dims=out._combine_dims,
+                            atomic=out.atomic,
+                        )
+                        for cvi in out.cv
+                    ],
+                )
 
             return out
 
@@ -634,6 +665,28 @@ def affine_2d(old: Array, new: Array | None = None):
         )
 
     return affine_trans
+
+
+def get_remove_mean_trans(c: CV, range=Ellipsis):
+    assert c.batched
+    mean = jnp.mean(c.cv[range, :], axis=0)
+
+    @CvTrans.from_cv_function
+    def remove_mean(cv: CV, nl: NeighbourList | None, _):
+        return cv - mean
+
+    return remove_mean.compute_cv_trans(c)[0], remove_mean
+
+
+def get_normalize_trans(c: CV, range=Ellipsis):
+    assert c.batched
+    std = jnp.std(c.cv[range, :], axis=0)
+
+    @CvTrans.from_cv_function
+    def remove_mean(cv: CV, nl: NeighbourList | None, _):
+        return cv * (1 / std)
+
+    return remove_mean.compute_cv_trans(c)[0], remove_mean
 
 
 ######################################

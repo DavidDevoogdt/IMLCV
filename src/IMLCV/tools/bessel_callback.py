@@ -4,6 +4,7 @@ import numpy as onp
 import scipy.special
 from jax import custom_jvp
 from jax import pure_callback
+from jax._src.scipy.special import bessel_jn
 from jax.custom_batching import custom_vmap
 
 # see https://github.com/google/jax/issues/11002

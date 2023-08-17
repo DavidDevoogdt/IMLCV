@@ -80,11 +80,11 @@ class Scheme:
         self.md.run(steps)
         self.md.bias.finalize()
 
-    def FESBias(self, cv_round: int | None = None, **kwargs):
+    def FESBias(self, cv_round: int | None = None, chunk_size=None, **kwargs):
         """replace the current md bias with the computed FES from current
         round."""
         obs = ThermoLIB(self.rounds, cv_round=cv_round)
-        fesBias = obs.fes_bias(**kwargs)
+        fesBias = obs.fes_bias(chunk_size=chunk_size, **kwargs)
         self.md = self.md.new_bias(fesBias)
 
     def grid_umbrella(
@@ -136,14 +136,15 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
-        samples_per_bin=500,
+        samples_per_bin=50,
         init_max_grad=None,
         max_grad=None,
         plot=True,
         choice="rbf",
-        fes_bias_rnds=4,
+        fes_bias_rnds=1,
         scale_n: int | None = None,
         cv_round: int | None = None,
+        chunk_size=None,
     ):
         if cv_round is None:
             cv_round = self.rounds.cv
@@ -171,6 +172,7 @@ class Scheme:
                     choice=choice,
                     num_rnds=fes_bias_rnds,
                     cv_round=cv_round,
+                    chunk_size=chunk_size,
                 )
 
             self.rounds.add_round_from_md(self.md, cv=cv_round)
@@ -241,7 +243,7 @@ class Scheme:
 
         @jax.vmap
         def f(cv):
-            bias_inter, _ = self.md.bias.compute_from_cv(cv)
+            bias_inter, _ = self.md.bias.compute_from_cv(cv, chunk_size=chunk_size)
             v, log_jac = cv_trans.compute_cv_trans(cv, log_Jf=True)
 
             return bias_inter, v, log_jac
