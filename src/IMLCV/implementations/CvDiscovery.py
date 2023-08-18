@@ -607,6 +607,17 @@ class TransformerMAF(Transformer):
         cv_0 = CV.stack(*X)
         cv_tau = CV.stack(*Y)
 
+        mask = jnp.linalg.norm((cv_0.cv - jnp.mean(cv_0.cv, axis=0)), axis=0) > 1e-8
+
+        @CvTrans.from_cv_function
+        def transform(cv, nl, _):
+            return CV(cv=cv.cv[mask], _stack_dims=cv._stack_dims)
+
+        cv_0, _ = transform.compute_cv_trans(cv_0)
+        cv_tau, _ = transform.compute_cv_trans(cv_tau)
+
+        trans *= transform
+
         def get_covs(cv_0: CV, cv_tau: CV, W=None, sym=False, add_1=False, shrink_output=False, epsilon=1e-7):
             # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
 

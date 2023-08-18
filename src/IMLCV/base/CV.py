@@ -1183,7 +1183,7 @@ class NeighbourList:
         if self.nxyz is None:
             assert other.nxyz is None
         else:
-            assert self.nxyz == other.nxyz
+            nxyz = [ max(a,b) for a,b in zip(self.nxyz, other.nxyz)  ]
 
         if self.sp_orig is None:
             assert other.sp_orig is None
@@ -1252,7 +1252,7 @@ class NeighbourList:
             atom_indices=atom_indices,
             z_array=self.z_array,
             z_unique=self.z_unique,
-            nxyz=self.nxyz,
+            nxyz=nxyz,
             sp_orig=self.sp_orig + other.sp_orig if self.sp_orig is not None else None,
             ijk_indices=ijk_indices,
             op_cell=op_cell,

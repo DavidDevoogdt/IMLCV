@@ -390,7 +390,7 @@ def sinkhorn_divergence(
                 geom = PointCloud(
                     x=jnp.reshape(p1, (n, -1)),
                     y=jnp.reshape(p2, (n, -1)),
-                    # scale_cost=True,  # leads to problems if x==y
+                    # scale_cost=False,  # leads to problems if x==y
                     epsilon=alpha,
                 )
 
