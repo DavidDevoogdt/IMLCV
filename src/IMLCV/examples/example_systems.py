@@ -321,18 +321,18 @@ def CsPbI3_refs(x, y, z):
     refs: SystemParams | None = None
 
     for a in atoms:
+        sp_a,_ = SystemParams(
+                coordinates=a.positions * angstrom,
+                cell=a.cell * angstrom,
+            ).canoncialize()
+
         if z_arr is None:
             z_arr = a.get_atomic_numbers()
-            refs = SystemParams(
-                coordinates=a.positions * angstrom,
-                cell=a.cell * angstrom,
-            )
 
+            refs =  sp_a
         else:
             assert (z_arr == a.get_atomic_numbers()).all()
-            refs += SystemParams(
-                coordinates=a.positions * angstrom,
-                cell=a.cell * angstrom,
-            )
+           
+            refs +=  sp_a
 
     return refs, z_arr, atoms

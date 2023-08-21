@@ -62,12 +62,15 @@ def bash_app_python(
                     i += 1
                 return i, rename_num(name, i)
 
-            _, lockfile = find_num(execution_folder / f"{func.__name__}.lock")
+            i, lockfile = find_num(execution_folder / f"{func.__name__}.lock")
 
             with open(lockfile, "w+"):
                 pass
 
-            i, file_in = find_num(execution_folder / f"{func.__name__}.inp.cloudpickle")
+            file_in = rename_num(
+                execution_folder / f"{func.__name__}.inp.cloudpickle",
+                i,
+            )
             with open(file_in, "w+"):
                 pass
 
@@ -76,9 +79,7 @@ def bash_app_python(
                 i,
             )
 
-            i, stdout = find_num(
-                execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)),
-            )
+            stdout = rename_num(execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)), i)
 
             stderr = rename_num(
                 execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
@@ -133,7 +134,7 @@ def bash_app_python(
                     shutil.move(i.filepath, o.filepath)
 
                 # transfer complete,remove lock file
-                os.remove(str(lockfile))
+                # os.remove(str(lockfile.resolve()))
 
                 return result
 

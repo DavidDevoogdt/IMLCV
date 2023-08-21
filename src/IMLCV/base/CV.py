@@ -666,9 +666,11 @@ class SystemParams:
                 lambda: reduction_full(cell),
             )
 
-            sgn = jnp.diag(jnp.sign(jnp.sum(jnp.sign(reduced), axis=1)))
+            #todo: figure this out. biggest elements not always on diagonals
+            # sgn = jnp.diag(jnp.sign(jnp.sum(jnp.sign(reduced), axis=1)))
+            #return sgn @ reduced, sgn @ op
 
-            return sgn @ reduced, sgn @ op
+            return reduced, op
 
         if self.batched:
             cell, op = vmap(minkowski_reduce)(self.cell)

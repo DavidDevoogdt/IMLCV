@@ -125,7 +125,7 @@ class ThermoLIB:
             samples_per_bin=samples_per_bin,
         )
 
-        @bash_app_python(executors=["model"])
+        @bash_app_python(executors=["default"])
         def get_histos(
             bins,
             temp,
