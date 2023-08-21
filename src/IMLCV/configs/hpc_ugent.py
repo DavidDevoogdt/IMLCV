@@ -332,6 +332,7 @@ def get_slurm_provider(
             worker_options.append(f"--wall-time={walltime}")
             worker_options.append(f"--timeout={wq_timeout}")
             worker_options.append("--parent-death")
+
         executor: ParslExecutor = WorkQueueExecutor(
             label=label,
             # env={"OMP_NUM_THREADS":f"open_mp_threads_per_core",},
@@ -340,7 +341,7 @@ def get_slurm_provider(
             shared_fs=True,
             autocategory=False,
             port=0,
-            max_retries=0,
+            max_retries=1, #do not retry task
             worker_options=" ".join(worker_options),
         )
     else:
