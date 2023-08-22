@@ -471,12 +471,23 @@ class MDEngine(ABC):
         self.last_cv: CV | None = None
 
         # self._sp = sp
-        self.trajectory_info: TrajectoryInfo | None = None
+
+        if trajectory_file is not None:
+            self.trajectory_file = Path(trajectory_file)
+
+            # continue with existing file if it exists
+            if Path(trajectory_file).exists():
+                self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
+            else:
+                self.trajectory_info: TrajectoryInfo | None = None
+        else:
+            self.trajectory_file = None
+            self.trajectory_info: TrajectoryInfo | None = None
 
         self.step = 1
+
         if sp is not None:
             self.sp = sp
-        self.trajectory_file = trajectory_file
 
         self.time0 = time()
         self._nl: NeighbourList | None = None
