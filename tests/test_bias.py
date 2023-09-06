@@ -233,5 +233,23 @@ def test_FES_bias(tmpdir, choice):
     # assert jnp.allclose(energy_result.energy, er)
 
 
+def test_reparametrize():
+    cvs = CollectiveVariable(
+        f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+        metric=CvMetric(
+            periodicities=[True, True],
+            bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]],
+        ),
+    )
+
+    bias = CompositeBias(
+        biases=[
+            HarmonicBias(cvs, q0=CV(jnp.array([np.pi, -np.pi])), k=1.0 / 6**2),
+            HarmonicBias(cvs, q0=CV(jnp.array([0.0, 0.5])), k=1.0 / 6**2),
+        ],
+    )
+    _ = bias.resample(n=40)
+
+
 if __name__ == "__main__":
-    test_bias_save("tmp")
+    test_reparametrize()

@@ -278,9 +278,14 @@ def get_slurm_provider(
         worker_init += f"export SLURM_TASKS_PER_NODE={cores}\n"
         worker_init += f"export SLURM_NTASKS={cores}\n"
         worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_core}\n"
+
+        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={open_mp_threads_per_core}'\n"
+
     else:
         assert open_mp_threads_per_core is None, "parsl doens't use openmp cores"
         total_cores = cores
+
+        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
 
     if memory_per_core is not None:
         if mem is None:
@@ -341,7 +346,7 @@ def get_slurm_provider(
             shared_fs=True,
             autocategory=False,
             port=0,
-            max_retries=1, #do not retry task
+            max_retries=1,  # do not retry task
             worker_options=" ".join(worker_options),
         )
     else:
@@ -366,6 +371,7 @@ def config(
     gpu_cluster=None,
     py_env=None,
     account=None,
+    use_work_queue=False,
 ):
     if env == "hortense":
         if cpu_cluster is not None:
@@ -418,6 +424,8 @@ def config(
         }
     kw["env"] = env
     kw["py_env"] = py_env
+    kw["use_work_queue"] = use_work_queue
+
     if bootstrap:
         execs = [
             get_slurm_provider(
@@ -427,7 +435,7 @@ def config(
                 min_blocks=1,
                 max_blocks=1,
                 parallelism=0,
-                cores=1,
+                cores=4,
                 parsl_cores=True,
                 mem=10,
                 walltime="72:00:00",

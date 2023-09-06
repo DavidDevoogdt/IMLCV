@@ -57,9 +57,11 @@ class ThermoLIB:
         plot=True,
         num_rnds=4,
         start_r=0,
-        update_bounding_box=False,
+        update_bounding_box=True,
         samples_per_bin=500,
         chunk_size=None,
+        n_max=50,
+        n=None,
     ):
         temp = self.rounds.T
 
@@ -112,18 +114,23 @@ class ThermoLIB:
                 traj=trajs_plot,
             )
 
-        # todo: take actual bounds instead of calculated bounds
-        if update_bounding_box:
-            bb = None
-        else:
-            bb = self.collective_variable.metric.bounding_box
+        c = CV.stack(*trajs)
 
-        bounds, bins = self._FES_mg(
-            cvs=trajs,
-            bounding_box=bb,
-            n=None,
-            samples_per_bin=samples_per_bin,
-        )
+        if update_bounding_box:
+            bounding_box = [[c.cv[:, i].min(), c.cv[:, i].max()] for i in range(c.dim)]
+        else:
+            bounding_box = self.collective_variable.metric.bounding_box
+
+        if n is None:
+            n = int((c.batch_dim / samples_per_bin) ** (1 / c.dim))
+
+        assert n >= 4, "sample more points"
+
+        if n > n_max:
+            print(f"truncating number of bins {n=} to {n_max=}")
+            n = n_max
+
+        bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
         @bash_app_python(executors=["default"])
         def get_histos(
@@ -133,6 +140,9 @@ class ThermoLIB:
             inputs=[],
             outputs=[],
         ):
+            from time import time_ns
+            from IMLCV.base.CV import _pmap
+
             class ThermoBiasND(BiasPotential2D):
                 def __init__(self, bias: Bias) -> None:
                     self.bias = bias
@@ -140,17 +150,21 @@ class ThermoLIB:
                     super().__init__("IMLCV_bias")
 
                 def __call__(self, *cv):
-                    shape = cv[0].shape
+                    print(".", end="")
+
+                    @_pmap
+                    def _get_bias(cv: CV):
+                        out, _ = self.bias.compute_from_cv(
+                            cvs=cv,
+                            diff=False,
+                            chunk_size=chunk_size,
+                        )
+
+                        return out
 
                     colvar = CV.combine(*[CV(cv=cvi.reshape((-1, 1))) for cvi in cv])
-                    out, _ = self.bias.compute_from_cv(
-                        cvs=colvar,
-                        diff=False,
-                        chunk_size=chunk_size,
-                    )
-
-                    # map meshgrids of cvs to IMLCV biases and evaluate
-                    return np.array(jnp.reshape(out, shape), dtype=np.double)
+                    out = _get_bias(colvar)
+                    return np.array(jnp.reshape(out, cv[0].shape), dtype=np.double)
 
                 def print_pars(self, *pars_units):
                     pass
@@ -194,7 +208,7 @@ class ThermoLIB:
             center = [bin_centers[j][k] for j, k in enumerate(idx)]
             grid.append((idx, CV(cv=jnp.array(center))))
 
-        return fes, grid, bounds
+        return fes, grid, bounding_box
 
     def new_metric(self, plot=False, r=None):
         assert isinstance(self.rounds, Rounds)
@@ -225,23 +239,6 @@ class ThermoLIB:
 
         # return cvs.metric.update_metric(transitions, fn=fn)
 
-    def _FES_mg(self, cvs: list[CV], bounding_box, samples_per_bin=500, n=None):
-        c = CV.stack(*cvs)
-
-        if n is None:
-            n = int((c.batch_dim / samples_per_bin) ** (1 / c.dim))
-
-        assert n >= 4, "sample more points"
-
-        if bounding_box is None:
-            bounds = [[c.cv[:, i].min(), c.cv[:, i].max()] for i in range(c.dim)]
-        else:
-            bounds = bounding_box
-
-        bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounds]
-
-        return bounds, bins
-
     def fes_bias(
         self,
         plot=True,
@@ -255,6 +252,8 @@ class ThermoLIB:
         smoothing_threshold=5 * kjmol,
         samples_per_bin=100,
         chunk_size=None,
+        resample_bias=True,
+        update_bounding_box=True,  # make boudning box bigger for FES calculation
         **plot_kwargs,
     ):
         if fs is None:
@@ -264,6 +263,7 @@ class ThermoLIB:
                 samples_per_bin=samples_per_bin,
                 num_rnds=num_rnds,
                 chunk_size=chunk_size,
+                update_bounding_box=update_bounding_box,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij
@@ -315,12 +315,17 @@ class ThermoLIB:
             fesBias = get_b(1.0)
 
         elif choice == "gridbias":
+            raise ValueError("choose choice='rbf' for the moment")
+
             fs[~mask] = 0.0
             fesBias = GridBias(cvs=self.collective_variable, vals=fs, bounds=bounds)
         else:
             raise ValueError
 
         fes_bias_tot = CompositeBias(biases=[self.common_bias, fesBias])
+
+        if resample_bias:
+            fes_bias_tot = fes_bias_tot.resample(cv_grid=cv_grid)
 
         if plot:
             fold = str(self.rounds.path(c=self.cv_round))

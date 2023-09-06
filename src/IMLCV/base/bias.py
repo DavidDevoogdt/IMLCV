@@ -523,6 +523,17 @@ class Bias(BC, ABC):
 
         plt.close(fig=fig)  # write out
 
+    def resample(self, cv_grid: CV | None = None, n=None, margin=0.2) -> Bias:
+        from IMLCV.implementations.bias import RbfBias
+
+        if cv_grid is None:
+            grid = self.collective_variable.metric.grid(n=n, margin=margin)
+            cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
+
+        bias, _ = self.compute_from_cv(cv_grid)
+
+        return RbfBias(cv=cv_grid, cvs=self.collective_variable, vals=bias, kernel="thin_plate_spline")
+
 
 @bash_app_python(executors=["default"])
 def plot_app(

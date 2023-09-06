@@ -102,7 +102,14 @@ class Scheme:
         grid = m.grid(n)
 
         if k is None:
-            k = 2 * self.md.static_trajectory_info.T * boltzmann
+            # 0.1*N *Kb*T
+            k = (
+                0.1
+                * self.md.static_trajectory_info.T
+                * boltzmann
+                * self.md.static_trajectory_info.atomic_numbers.shape[0]
+            )
+
         k /= ((m.bounding_box[:, 1] - m.bounding_box[:, 0]) / 2) ** 2
         if scale_n is None:
             scale_n = n
@@ -141,7 +148,7 @@ class Scheme:
         max_grad=None,
         plot=True,
         choice="rbf",
-        fes_bias_rnds=1,
+        fes_bias_rnds=4,
         scale_n: int | None = None,
         cv_round: int | None = None,
         chunk_size=None,

@@ -4,8 +4,10 @@ from functools import partial
 import distrax
 import jax
 import jax.numpy as jnp
+import lineax as lx
 import numba
 import numpy as np
+import ott
 from flax.linen.linear import Dense
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -23,6 +25,8 @@ from jax import vmap
 from netket.jax import vmap_chunked
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
+from ott.solvers.linear import implicit_differentiation
+from ott.solvers.linear import lineax_implicit
 from ott.solvers.linear import sinkhorn
 
 ######################################
@@ -319,7 +323,7 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     return f.compute_cv_trans(m)[0], f
 
 
-@partial(jit, static_argnames=["matching", "alpha", "mode", "chunk_size", "output", "normalize"])
+@partial(jit, static_argnames=["matching", "alpha", "normalize", "chunk_size"])
 def sinkhorn_divergence(
     x1: CV,
     x2: CV,
@@ -398,7 +402,18 @@ def sinkhorn_divergence(
 
                 prob = linear_problem.LinearProblem(geom)
 
-                solver = sinkhorn.Sinkhorn()
+                # make svd class that accepts rtol and atol params
+                class _SVD(lx.SVD):
+                    def __init__(self, rtol, atol, rcond=None):
+                        super().__init__(rcond=rcond)
+
+                solver = sinkhorn.Sinkhorn(
+                    implicit_diff=implicit_differentiation.ImplicitDiff(
+                        solver_kwargs={
+                            "nonsym_solver": _SVD,
+                        },
+                    ),
+                )
                 out = solver(prob)
 
                 P_ij = out.matrix

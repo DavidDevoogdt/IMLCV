@@ -393,13 +393,13 @@ class TransoformerLDA(Transformer):
         max_iterations=50,
         **kwargs,
     ):
-        nl_list = dlo.nl
+        # nl_list = dlo.nl
 
         if kernel:
             raise NotImplementedError("kernel not implemented for lda")
 
         cv = CV.stack(*cv_list)
-        nl = NeighbourList.stack(*nl_list)
+        # nl = NeighbourList.stack(*nl_list)
         cv, _ = un_atomize.compute_cv_trans(cv)
 
         if method == "sklearn":
@@ -528,7 +528,7 @@ class TransoformerLDA(Transformer):
 
             _g = CvTrans.from_cv_function(partial(scale_trans, alpha=alpha, scale_factor=scale_factor))
 
-            cv = _g.compute_cv_trans(cv, nl)[0]
+            cv = _g.compute_cv_trans(cv)[0]
 
             full_trans = un_atomize * _f * _g
 
@@ -584,12 +584,10 @@ class TransformerMAF(Transformer):
         slow_feature_analysis=False,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
-        nl_list = dlo.nl
+        # nl_list = dlo.nl
 
         cv = CV.stack(*x)
-
-        # n = cv.shape[0]
-        nl = NeighbourList.stack(*nl_list)
+        # nl = NeighbourList.stack(*nl_list)
         cv, _ = un_atomize.compute_cv_trans(cv)
 
         trans = un_atomize
@@ -639,16 +637,17 @@ class TransformerMAF(Transformer):
 
             # transform to diagonal basis
 
+            print("removing small eigenvalues")
             # transform to a basis where the covariance matrix is diagonal, and remove the small eigenvalues
-            l, q = jnp.linalg.eigh(COV)
+            # l, q = jnp.linalg.eigh(COV)
 
-            mask = l >= epsilon  # jnp.max(
-            #     jnp.array([jnp.max(jnp.abs(l)) * jnp.max(jnp.array(X.shape)) * jnp.finfo(COV.dtype).eps, 1e-6])
-            # )
+            l, q = scipy.linalg.eigh(a=COV, subset_by_value=[epsilon, jnp.inf])
 
-            mask2 = jnp.diag(q.T @ ccov @ q)[mask] > epsilon
+            print(f"got {l=}")
 
-            mask = mask.at[mask].set(mask2)
+            diag_2 = jnp.diag(q.T @ ccov @ q)
+
+            mask = diag_2 > epsilon
 
             q = q[:, mask]
             l = l[mask]
@@ -701,9 +700,16 @@ class TransformerMAF(Transformer):
             if not shrink:
                 assert jnp.all(jnp.abs(eigval[idx] - 1) < 1e-5), f"eigenvalue not 1 but {eigval[idx]}"
 
-                assert jnp.all(
+                if not jnp.all(
                     jnp.abs(eigval) < 1 + 1e-5,
-                ), f"largest eigenvalue has norm larger than 1: { jnp.sort(jnp.abs(eigval))[-5:]}, falling back to normal weighing"
+                ):
+                    print(
+                        f"largest eigenvalue has norm larger than 1: { jnp.sort(jnp.abs(eigval))[-5:]}, falling back to normal weighing",
+                    )
+
+                    w = jnp.ones(shape=(cv_0_new.shape[0],))
+                    w /= jnp.sum(w)
+                    return w
 
             else:
                 print(f"eigenvalue is {eigval[idx]}")
@@ -713,7 +719,7 @@ class TransformerMAF(Transformer):
 
             if (nn := jnp.sum(w < 0)) != 0:
                 print(f" {nn}/{w.shape[0]} koopman weights are negative")
-                # w = jnp.ones_like(w) / w.shape[0]
+                # print(f"vals={w[w<0]}")
                 w = w.at[w < 0].set(0)
 
             return w
@@ -767,6 +773,7 @@ class TransformerMAF(Transformer):
 
             trans *= tr
 
+            print("calculating eigenvalues")
             n = C_0.shape[0]
             w, u = scipy.linalg.eigh(a=C_1, b=C_0, subset_by_index=[n - self.outdim - 1, n - 1])
 
@@ -775,9 +782,12 @@ class TransformerMAF(Transformer):
                     assert jnp.abs(w[-1] - 1) < 1e-5, "last eigenvalue should be 1"
                 print(f"eigenvalue are {w}")
 
+            u = u[:, :-1]
+            u = u[:, ::-1]
+
             @CvTrans.from_cv_function
             def tica_selection(cv: CV, nl: NeighbourList | None, _):
-                return CV(cv=cv.cv @ u[:, :-1], _stack_dims=cv._stack_dims)
+                return CV(cv=cv.cv @ u, _stack_dims=cv._stack_dims)
 
             trans *= tica_selection
 
@@ -825,7 +835,7 @@ class TransformerMAF(Transformer):
             def tica_selection(cv: CV, nl: NeighbourList | None, _):
                 return CV(cv=(cv.cv - pi_eq) @ alpha, _stack_dims=cv._stack_dims)
 
-            cv = tica_selection.compute_cv_trans(cv, nl)[0]
+            cv = tica_selection.compute_cv_trans(cv)[0]
             trans *= tica_selection
 
         return cv, trans

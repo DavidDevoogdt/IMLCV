@@ -844,10 +844,10 @@ class Rounds(ABC):
             if invalidate:
                 self.invalidate_data(c=self.cv, r=self.round, i=i)
 
-    def iter_ase_atoms(self, r: int | None = None, num: int = 3):
+    def iter_ase_atoms(self, r: int | None = None, c: int | None = None, num: int = 3):
         from molmod import angstrom
 
-        for round, trajejctory in self.iter(stop=r, num=num):
+        for round, trajejctory in self.iter(stop=r, c=c, num=num):
             traj = trajejctory.ti
 
             pos_A = traj._positions / angstrom
@@ -1080,6 +1080,7 @@ class Rounds(ABC):
         ignore_invalid=True,
         md_trajs: list[int] | None = None,
         cv_round: int | None = None,
+        wait_for_plots=False,
     ):
         if cv_round is None:
             cv_round = self.cv
@@ -1197,13 +1198,19 @@ class Rounds(ABC):
 
         # wait for tasks to finish
         for i, future in tasks:
-            d = future.result()
-            self.add_md(d=d, bias=self.rel_path(Path(future.outputs[0].filename)), i=i, c=cv_round)
+            try:
+                d = future.result()
+                self.add_md(d=d, bias=self.rel_path(Path(future.outputs[0].filename)), i=i, c=cv_round)
+            except Exception as e:
+                print(f"got exception {e} while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
 
         # wait for plots to finish
-        if plot:
-            for future in plot_tasks:
-                d = future.result()
+        if plot and wait_for_plots:
+            for i, future in enumerate(plot_tasks):
+                try:
+                    d = future.result()
+                except Exception as e:
+                    print(f"got exception {e} while trying to collect plot of {i}, continuing ")
 
     @staticmethod
     @bash_app_python(executors=["reference"])

@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from hsluv import hsluv_to_rgb
+from IMLCV.base.CV import _pmap
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFlow
@@ -14,6 +15,8 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import scale_cv_trans
+from jax import pmap
+from jax_dataclasses import copy_and_mutate
 from matplotlib import gridspec
 from matplotlib.figure import Figure
 
@@ -46,21 +49,33 @@ class Transformer:
         z: list[SystemParams],
         nl: list[NeighbourList] | None,
         chunk_size=None,
+        p_map=True,
     ) -> tuple[list[CV], CvFlow]:
         f = self.descriptor
 
-        x: list[CV] = []
+        stack_dims = [z_i.batch_dim for z_i in z]
+        z = SystemParams.stack(*z)
+        nl = NeighbourList.stack(*nl) if nl is not None else None
 
-        for i, zi in enumerate(z):
-            nli = nl[i] if nl is not None else None
+        def _f(sp, nl):
+            return f.compute_cv_flow(sp, nl, chunk_size)
 
-            x.append(f.compute_cv_flow(zi, nli, chunk_size=chunk_size))
+        if p_map:
+            _f = _pmap(_f)
+
+        x = _f(z, nl)
+
+        with copy_and_mutate(x, validate=False) as x_stacked:
+            x_stacked._stack_dims = stack_dims
 
         if self.pre_scale:
-            g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
-            x = [g.compute_cv_trans(xi)[0] for xi in x]
+            g = scale_cv_trans(x_stacked, lower=0, upper=1)
+
+            x_stacked, _ = g.compute_cv_trans(x_stacked)
 
             f = f * g
+
+        x = x_stacked.unstack()
 
         return x, f
 
@@ -70,6 +85,7 @@ class Transformer:
         chunk_size=None,
         plot=True,
         plot_folder: str | Path | None = None,
+        p_map=True,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
@@ -83,6 +99,7 @@ class Transformer:
             sp_list,
             nl_list,
             chunk_size=chunk_size,
+            p_map=p_map,
         )
 
         print("starting fit")
@@ -128,7 +145,7 @@ class Transformer:
             # nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
 
             Transformer.plot_app(
-                name=str(plot_folder / "cvdiscovery"),
+                name=str(plot_folder / "cvdiscovery.pdf"),
                 old_cv=dlo.collective_variable,
                 new_cv=new_collective_variable,
                 # sps=sp,
