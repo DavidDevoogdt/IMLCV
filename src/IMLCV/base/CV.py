@@ -21,6 +21,8 @@ from jax import jacrev
 from jax import jit
 from jax import pmap
 from jax import vmap
+from jax.tree_util import tree_flatten
+from jax.tree_util import tree_unflatten
 from molmod.units import angstrom
 from netket.jax import vmap_chunked
 
@@ -29,30 +31,35 @@ from netket.jax import vmap_chunked
 ######################################
 
 
-def _n_pad(x, n_devices, b):
-    if x is None:
-        return x
+def padded_pmap(f, n_devices: int | None = None):
+    def get_shape(n_devices, batch_dim):
+        _, b = jnp.divmod(batch_dim, n_devices)
 
-    if b != 0:
-        pad_shape = jnp.zeros((len(x.shape), 2), dtype=jnp.int16)
-        pad_shape = pad_shape.at[0, 1].set(n_devices - b)  # add extra zeros
-        pad_shape = jnp.array(pad_shape)
-        # print(f"got {b=}, shape = {x.shape}, {n_devices=}")
-        x_padded = jnp.pad(x, pad_shape)
-    else:
-        x_padded = x
+        if b == 0:
+            return 0
 
-    return jnp.reshape(x_padded, (n_devices, -1, *x.shape[1:]))
+        return n_devices - b
 
+    def n_pad(x, n_devices, p):
+        if x is None:
+            return x
 
-def _n_unpad(y, n_devices, b):
-    out = jnp.reshape(y, (-1, *y.shape[2:]))
-    if b != 0:
-        out = out[: -(n_devices - b)]
-    return out
+        if p != 0:
+            pad_shape = jnp.zeros((len(x.shape), 2), dtype=jnp.int16)
+            pad_shape = pad_shape.at[0, 1].set(p)
+            pad_shape = jnp.array(pad_shape)
+            x_padded = jnp.pad(x, pad_shape)
+        else:
+            x_padded = x
 
+        return jnp.reshape(x_padded, (n_devices, -1, *x.shape[1:]))
 
-def _pmap(f, n_devices: int | None = None):
+    def n_unpad(y, p):
+        out = jnp.reshape(y, (-1, *y.shape[2:]))
+        if p != 0:
+            out = out[:-p]
+        return out
+
     def apply_pmap_fn(
         *args: CV | SystemParams | NeighbourList,
         n_devices: int | None = None,
@@ -62,19 +69,37 @@ def _pmap(f, n_devices: int | None = None):
 
         if n_devices == 1:
             # print(f"only 1 device found, skipping parallel mapping")
+            # still vmap it
             return f(*args)
 
-        args_pad, b = zip(*[a.n_pad(n_devices) for a in args])
-        out: SystemParams | CV | NeighbourList | Array = pmap(f)(*args_pad)
+        p = None
 
-        b = jnp.array(b, dtype=jnp.int16)
+        # pad the input args
+        tree_padded, tree_def = tree_flatten(args)
+        leaves_padded = []
 
-        assert (b == b[0]).all()
+        for leaf_padded in tree_padded:
+            if p is None:
+                p = get_shape(n_devices, leaf_padded.shape[0])
+            else:
+                assert p == get_shape(n_devices, leaf_padded.shape[0]), "inconsisitent batch dims"
 
-        if isinstance(out, Array):
-            return _n_unpad(out, n_devices, b[0])
+            leaves_padded.append(n_pad(leaf_padded, n_devices, p))
 
-        return out.n_unpad(n_devices, b[0])
+        tree_padded = tree_unflatten(tree_def, leaves_padded)
+
+        out_padded: SystemParams | CV | NeighbourList | Array = pmap(f)(*tree_padded)
+
+        # remove padding from output leaves
+        tree_padded, tree_def = tree_flatten(out_padded)
+        leaves = []
+
+        for leaf_padded in tree_padded:
+            leaves.append(n_unpad(leaf_padded, p))
+
+        tree_unpadded = tree_unflatten(tree_def, leaves)
+
+        return tree_unpadded
 
     return partial(apply_pmap_fn, n_devices=n_devices)
 
@@ -243,6 +268,8 @@ class SystemParams:
         else:
             bx, by, bz = None, None, None
 
+        # this is batchable
+
         @jax.jit
         def func(r_ij, index, i, j, k):
             return (
@@ -369,8 +396,7 @@ class SystemParams:
                 center_op,
             )
 
-        @jax.jit
-        def _f(sp):
+        def _f(sp: SystemParams):
             bools, r, a, ijk, co = res(sp, sp.coordinates)
             num_neighs = jnp.max(jnp.sum(bools, axis=1))
 
@@ -387,7 +413,7 @@ class SystemParams:
             return r, a, ijk
 
         if sp.batched:
-            _f = vmap(_f)
+            _f = padded_pmap(vmap(_f))
             take = vmap(take, in_axes=(None, 0, 0, 0))
 
         nn, _, r, a, ijk, co = _f(sp)
@@ -401,9 +427,6 @@ class SystemParams:
             b = jnp.logical_and(b, nn <= num_neighs)
 
         r, a, ijk = take(num_neighs, r, a, ijk)
-
-        # r_rec = jnp.linalg.norm(_pos(self, ijk, a, op_cell, op_coor,co), axis=-1)
-        # assert jnp.mean(jnp.abs(r_rec - r)) < 1e-6
 
         return (
             b,
@@ -822,27 +845,6 @@ class SystemParams:
 
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
-
-    def n_unpad(self, n_devices, b):
-        return SystemParams(
-            coordinates=_n_unpad(self.coordinates, n_devices, b),
-            cell=_n_unpad(self.cell, n_devices, b),
-        )
-
-    def n_pad(self, n_devices=None):
-        if n_devices is None:
-            n_devices = jax.device_count("cpu")
-
-        assert self.batched
-        a, b = jnp.divmod(self.batch_dim, n_devices)
-
-        return (
-            SystemParams(
-                coordinates=_n_pad(self.coordinates, n_devices, b),
-                cell=_n_pad(self.cell, n_devices, b),
-            ),
-            b,
-        )
 
 
 @jdc.pytree_dataclass
@@ -1352,47 +1354,6 @@ class NeighbourList:
     def stack(*nls: NeighbourList) -> NeighbourList:
         return sum(nls[1:], nls[0])
 
-    def n_unpad(self, n_devices, b):
-        return NeighbourList(
-            r_cut=self.r_cut,
-            atom_indices=_n_unpad(self.atom_indices, n_devices, b),
-            op_cell=_n_unpad(self.op_cell, n_devices, b),
-            op_coor=_n_unpad(self.op_coor, n_devices, b),
-            op_center=_n_unpad(self.op_center, n_devices, b),
-            r_skin=self.r_skin,
-            sp_orig=self.sp_orig.n_unpad(n_devices, b),
-            ijk_indices=_n_unpad(self.ijk_indices, n_devices, b),
-            nxyz=_n_unpad(self.nxyz, n_devices, b),
-            z_array=self.z_array,
-            z_unique=self.z_unique,
-            num_z_unique=self.num_z_unique,
-        )
-
-    def n_pad(self, n_devices=None):
-        if n_devices is None:
-            n_devices = jax.device_count("cpu")
-
-        assert self.batched
-        a, b = jnp.divmod(self.batch_dim, n_devices)
-
-        return (
-            NeighbourList(
-                r_cut=self.r_cut,
-                atom_indices=_n_pad(self.atom_indices, n_devices, b),
-                op_cell=_n_pad(self.op_cell, n_devices, b),
-                op_coor=_n_pad(self.op_coor, n_devices, b),
-                op_center=_n_pad(self.op_center, n_devices, b),
-                r_skin=self.r_skin,
-                sp_orig=self.sp_orig.n_pad(n_devices)[0],
-                ijk_indices=_n_pad(self.ijk_indices, n_devices, b),
-                nxyz=_n_pad(self.nxyz, n_devices, b),
-                z_array=self.z_array,
-                z_unique=self.z_unique,
-                num_z_unique=self.num_z_unique,
-            ),
-            b,
-        )
-
 
 @jdc.pytree_dataclass
 class CV:
@@ -1716,32 +1677,6 @@ class CV:
             _combine_dims=out_dim,
             _stack_dims=cvs[0]._stack_dims,
             atomic=atomic,
-        )
-
-    def n_unpad(self, n_devices, b):
-        return CV(
-            cv=_n_unpad(self.cv, n_devices, b),
-            atomic=self.atomic,
-            _combine_dims=self._combine_dims,
-            _stack_dims=self._stack_dims,
-        )
-
-    def n_pad(self, n_devices=None):
-        if n_devices is None:
-            n_devices = jax.device_count("cpu")
-
-        assert self.batched
-
-        a, b = jnp.divmod(self.batch_dim, n_devices)
-
-        return (
-            CV(
-                cv=_n_pad(self.cv, n_devices, b),
-                atomic=self.atomic,
-                _combine_dims=self._combine_dims,
-                _stack_dims=self._stack_dims,
-            ),
-            b,
         )
 
 

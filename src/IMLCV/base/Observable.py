@@ -19,6 +19,7 @@ from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
+from IMLCV.base.rounds import Rounds
 
 
 class ThermoLIB:
@@ -60,48 +61,32 @@ class ThermoLIB:
         update_bounding_box=True,
         samples_per_bin=500,
         chunk_size=None,
-        n_max=50,
+        n_max=60,
         n=None,
     ):
         temp = self.rounds.T
 
         directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
-        rnd = self.rnd
-
-        trajs = []
-        trajs_plot = []
-        biases = []
-
-        # TODO: change to rounds data loader
-        for round, trajectory in self.rounds.iter(
-            start=start_r,
+        dlo = self.rounds.data_loader(
             num=num_rnds,
-            stop=self.rnd,
-            c=self.cv_round,
-        ):
-            ti = trajectory.ti[trajectory.ti._t > round.tic.equilibration]
+            ignore_invalid=False,
+            cv_round=self.cv_round,
+            start=start_r,
+            split_data=True,
+            new_r_cut=None,
+        )
 
-            if ti._cv is not None:
-                cvs = ti.CV
+        trajs = dlo.cv
+        biases = dlo.bias
 
-            else:
-                sp = ti.sp
-                nl = sp.get_neighbour_list(
-                    r_cut=round.tic.r_cut,
-                    z_array=round.tic.atomic_numbers,
-                )
-                cvs, _ = self.collective_variable.compute_cv(sp=sp, nl=nl)
-
-            if cvs.batch_dim <= 1:
-                print("##############bdim {cvs.batch_dim} ignored\n")
-                continue
-
-            trajs.append(cvs)
-            biases.append(File(str(self.rounds.path() / trajectory.name_bias)))
-            if plot:
-                if round.round == rnd:
-                    trajs_plot.append(cvs)
+        trajs_plot = self.rounds.data_loader(
+            num=1,
+            ignore_invalid=False,
+            cv_round=self.cv_round,
+            split_data=True,
+            new_r_cut=None,
+        ).cv
 
         if plot:
             plot_app(
@@ -137,11 +122,13 @@ class ThermoLIB:
             bins,
             temp,
             trajs,
+            biases: list[Bias],
             inputs=[],
             outputs=[],
         ):
             from time import time_ns
-            from IMLCV.base.CV import _pmap
+            from IMLCV.base.CV import padded_pmap
+            from IMLCV.base.bias import Bias
 
             class ThermoBiasND(BiasPotential2D):
                 def __init__(self, bias: Bias) -> None:
@@ -152,7 +139,7 @@ class ThermoLIB:
                 def __call__(self, *cv):
                     print(".", end="")
 
-                    @_pmap
+                    @padded_pmap
                     def _get_bias(cv: CV):
                         out, _ = self.bias.compute_from_cv(
                             cvs=cv,
@@ -169,7 +156,7 @@ class ThermoLIB:
                 def print_pars(self, *pars_units):
                     pass
 
-            biases = [ThermoBiasND(Bias.load(b.filepath)) for b in inputs]
+            bias_wrapped = [ThermoBiasND(b) for b in biases]
 
             histo = HistogramND.from_wham(
                 bins=bins,
@@ -181,7 +168,7 @@ class ThermoLIB:
                     for traj in trajs
                 ],
                 error_estimate=None,
-                biasses=biases,
+                biasses=bias_wrapped,
                 temp=temp,
                 verbosity="high",
             )
@@ -192,7 +179,8 @@ class ThermoLIB:
             bins=bins,
             temp=temp,
             trajs=trajs,
-            inputs=biases,
+            biases=biases,
+            # inputs=biases,
             execution_folder=directory,
         ).result()
 
@@ -213,31 +201,7 @@ class ThermoLIB:
     def new_metric(self, plot=False, r=None):
         assert isinstance(self.rounds, Rounds)
 
-        # trans = []
-        # cvs = None
-
         raise NotImplementedError
-
-        # for run_data in self.rounds.iter(num=1, stop=r):
-        #     bias = Bias.load(run_data["attr"]["name_bias"])
-        #     if cvs is None:
-        #         cvs = bias.collective_variable
-
-        #     monitor = find_monitor(bias)
-        #     assert monitor is not None
-
-        #     trans.append(monitor.transitions)
-
-        #     # this data should not be used anymore
-        # self.rounds.invalidate_data(r=r)
-
-        # transitions = jnp.vstack(trans)
-        # if plot:
-        #     fn = f"{self.folder}/round_{self.rnd}/"
-        # else:
-        #     fn = None
-
-        # return cvs.metric.update_metric(transitions, fn=fn)
 
     def fes_bias(
         self,
@@ -254,6 +218,7 @@ class ThermoLIB:
         chunk_size=None,
         resample_bias=True,
         update_bounding_box=True,  # make boudning box bigger for FES calculation
+        n_max=60,
         **plot_kwargs,
     ):
         if fs is None:
@@ -264,6 +229,7 @@ class ThermoLIB:
                 num_rnds=num_rnds,
                 chunk_size=chunk_size,
                 update_bounding_box=update_bounding_box,
+                n_max=n_max,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij

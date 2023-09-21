@@ -5,13 +5,13 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from hsluv import hsluv_to_rgb
-from IMLCV.base.CV import _pmap
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import padded_pmap
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import scale_cv_trans
@@ -53,7 +53,7 @@ class Transformer:
     ) -> tuple[list[CV], CvFlow]:
         f = self.descriptor
 
-        stack_dims = [z_i.batch_dim for z_i in z]
+        stack_dims = tuple([z_i.batch_dim for z_i in z])
         z = SystemParams.stack(*z)
         nl = NeighbourList.stack(*nl) if nl is not None else None
 
@@ -61,7 +61,7 @@ class Transformer:
             return f.compute_cv_flow(sp, nl, chunk_size)
 
         if p_map:
-            _f = _pmap(_f)
+            _f = padded_pmap(_f)
 
         x = _f(z, nl)
 
@@ -130,13 +130,17 @@ class Transformer:
         z_masked, h = self.post_fit(y_masked)
         z, _ = h.compute_cv_trans(y)
 
+        new_bounding_box = jnp.vstack(
+            [jnp.min(z_masked.cv, axis=0), jnp.max(z_masked.cv, axis=0)],
+        ).T
+
+        # print(f"{new_bounding_box=}")
+
         new_collective_variable = CollectiveVariable(
             f=f * g * h,
             metric=CvMetric(
                 periodicities=self.periodicity,
-                bounding_box=jnp.vstack(
-                    [jnp.min(z.cv, axis=0), jnp.max(z.cv, axis=0)],
-                ).T,
+                bounding_box=new_bounding_box,
             ),
         )
 

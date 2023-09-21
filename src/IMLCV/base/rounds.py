@@ -466,10 +466,10 @@ class Rounds(ABC):
         nl: list[NeighbourList] | None
         cv: list[CV]
         sti: StaticMdInfo
-        cv: list[CV]
         ti: list[TrajectoryInfo]
         collective_variable: CollectiveVariable
         time_series: bool = False
+        bias: list[Bias] | None = None
 
         def __iter__(self):
             for spi, nli, cvi, ti in zip(self.sp, self.nl, self.cv, self.ti):
@@ -493,23 +493,29 @@ class Rounds(ABC):
                 collective_variable=self.collective_variable,
             )
 
-        def weights(self):
+        def weights(self, norm="max"):
             beta = 1 / (self.sti.T * boltzmann)
 
             weights = []
             energy = []
 
             for ti_i in self.ti:
+                if ti_i.e_bias is None:
+                    weights.append(None)
+                    print("no e_bias")
+                    continue
+
                 u = beta * ti_i.e_bias
-                u -= jnp.max(u)
+                if norm == "max":
+                    u -= jnp.max(u)
+                else:
+                    raise
 
                 w = jnp.exp(u)
                 if (n := np.sum(w)) != 0:
                     w /= n
 
                 energy.append(jnp.dot(ti_i.e_pot, w))
-
-                # w *= ti_i._size
 
                 weights.append(w)
 
@@ -520,7 +526,7 @@ class Rounds(ABC):
         num=4,
         out=-1,
         split_data=False,
-        new_r_cut=None,
+        new_r_cut=-1,
         cv_round=None,
         filter_bias=False,
         filter_energy=False,
@@ -530,8 +536,12 @@ class Rounds(ABC):
         start: int | None = None,
         stop: int | None = None,
         time_series: bool = False,
+        T_max_over_T=50,
     ) -> data_loader_output:
         weights = []
+
+        if new_r_cut == -1:
+            new_r_cut = self.round_information(c=cv_round).tic.r_cut
 
         colvar = self.get_collective_variable()
         sti: StaticMdInfo | None = None
@@ -539,6 +549,7 @@ class Rounds(ABC):
         nl: list[NeighbourList] | None = [] if new_r_cut is not None else None
         cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
+        bias_list: list[Bias] = []
 
         min_energy = None
 
@@ -558,6 +569,7 @@ class Rounds(ABC):
             ti.append(traj.ti)
 
             sp0 = traj.ti.sp
+
             nl0 = (
                 sp0.get_neighbour_list(
                     r_cut=new_r_cut,
@@ -621,6 +633,8 @@ class Rounds(ABC):
                 nl.append(nl0)
             cv.append(cv0)
 
+            bias_list.append(traj.get_bias())
+
             if e is None:
                 weights.append(None)
             else:
@@ -652,6 +666,13 @@ class Rounds(ABC):
         key = PRNGKey(0)
 
         if energy_threshold is not None:
+            raise
+            sp_new: list[SystemParams] = []
+            nl_new: list[NeighbourList] | None = [] if new_r_cut is not None else None
+            cv_new: list[CV] = []
+            ti_new: list[TrajectoryInfo] = []
+            new_weights = []
+
             for n in range(len(sp)):
                 indices = jnp.where(ti[n].e_pot - min_energy < energy_threshold)[0]
 
@@ -662,11 +683,50 @@ class Rounds(ABC):
                     print("energy threshold surpassed in time_series, removing the data")
                     continue
 
-                sp[n] = sp[n][indices]
+                sp_new.append(sp[n][indices])
+
+                if nl_new is not None:
+                    nl_new.append(nl[n][indices])
+                cv_new.append(cv[n][indices])
+                ti_new.append(ti[n][indices])
+                new_weights.append(weights[n])
+
+            sp = sp_new
+            nl = nl_new
+            ti = ti_new
+            cv = cv_new
+            weights = new_weights
+
+        if T_max_over_T is not None:
+            sp_new: list[SystemParams] = []
+            nl_new: list[NeighbourList] | None = [] if new_r_cut is not None else None
+            cv_new: list[CV] = []
+            ti_new: list[TrajectoryInfo] = []
+            new_weights = []
+            new_bias_list = []
+
+            for n in range(len(sp)):
+                indices = jnp.where(ti[n].T > sti.T * T_max_over_T)[0]
+
+                if len(indices) != 0:
+                    print(f"temperature threshold surpassed in time_series {n=}, removing the data")
+                    continue
+
+                sp_new.append(sp[n])
+
                 if nl is not None:
-                    nl[n] = nl[n][indices]
-                cv[n] = cv[n][indices]
-                ti[n] = ti[n][indices]
+                    nl_new.append(nl[n])
+                cv_new.append(cv[n])
+                ti_new.append(ti[n])
+                new_weights.append(weights[n])
+                new_bias_list.append(bias_list[n])
+
+            sp = sp_new
+            nl = nl_new
+            ti = ti_new
+            cv = cv_new
+            weights = new_weights
+            bias_list = new_bias_list
 
         out_sp: list[SystemParams] = []
         out_nl: list[NeighbourList] | None = [] if nl is not None else None
@@ -674,14 +734,16 @@ class Rounds(ABC):
         out_ti = []
 
         if time_series:
-            for sp_n, nl_n, cv_n, ti_n in zip(sp, nl, cv, ti):
+            for sp_n, cv_n, ti_n in zip(sp, cv, ti):
                 out_sp.append(sp_n[-out:])
-                if nl is not None:
-                    assert out_nl is not None
-                    out_nl.append(nl_n[-out:])
+
                 out_cv.append(cv_n[-out:])
 
                 out_ti.append(ti_n[-out:])
+            if nl is not None:
+                assert out_nl is not None
+                for nl_n in nl:
+                    out_nl.append(nl_n[-out:])
 
         else:
             if split_data:
@@ -718,17 +780,26 @@ class Rounds(ABC):
                 cv_trimmed = []
                 ti_trimmed = []
 
-                for n, (sp_n, nl_n, cv_n, ti_n) in enumerate(zip(sp, nl, cv, ti)):
+                for n, (sp_n, cv_n, ti_n) in enumerate(zip(sp, cv, ti)):
                     n_i = sp_n.shape[0]
 
                     index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
                     sp_trimmed.append(sp_n[index])
-                    if nl is not None:
-                        nl_trimmed.append(nl_n[index])
+
                     cv_trimmed.append(cv_n[index])
                     ti_trimmed.append(ti_n[index])
 
                     count += n_i
+                
+                count = 0
+
+                if nl is not None:
+                    for n, nl_n in enumerate(nl):
+                        n_i = nl_n.shape[0]
+                        index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
+                        count += n_i
+
+                        nl_trimmed.append(nl_n[index])
 
                 # if len(sp) >= 1:
                 out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
@@ -738,16 +809,8 @@ class Rounds(ABC):
                     out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
                     del nl_trimmed
                 out_cv.append(CV.stack(*cv_trimmed))
-
                 out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
-
-                # else:
-                #     out_sp.append(sp_trimmed[0][indices])
-                #     if nl is not None:
-                #         assert out_nl is not None
-                #         out_nl.append(nl_trimmed[0][indices])
-                #     out_cv.append(cv_trimmed[0][indices])
-                #     out_ti.append(ti_trimmed[0][indices])
+                bias = None
 
         return Rounds.data_loader_output(
             sp=out_sp,
@@ -757,6 +820,7 @@ class Rounds(ABC):
             sti=sti,
             collective_variable=colvar,
             time_series=time_series,
+            bias=bias_list,
         )
 
     def copy_from_previous_round(
@@ -1037,8 +1101,11 @@ class Rounds(ABC):
 
         return (self.path(c=c, r=r, i=i) / "invalid").exists()
 
-    def get_collective_variable(self) -> CollectiveVariable:
-        bias = self.get_bias()
+    def get_collective_variable(
+        self,
+        c=None,
+    ) -> CollectiveVariable:
+        bias = self.get_bias(c=c)
         return bias.collective_variable
 
     def get_bias(self, c=None, r=None, i=None) -> Bias:
@@ -1075,8 +1142,8 @@ class Rounds(ABC):
         plot=True,
         KEY=42,
         sp0: SystemParams | None = None,
-        filter_e_pot=True,
-        correct_previous_bias=True,
+        filter_e_pot=False,
+        correct_previous_bias=False,
         ignore_invalid=True,
         md_trajs: list[int] | None = None,
         cv_round: int | None = None,
@@ -1108,20 +1175,20 @@ class Rounds(ABC):
 
         if not sp0_provided:
             data = self.data_loader(
-                num=4,
-                out=100,
-                split_data=True,
+                num=2,
+                out=1000,
+                split_data=False,
                 filter_bias=correct_previous_bias,
                 filter_energy=filter_e_pot,
-                new_r_cut=md_engine.static_trajectory_info.r_cut,
+                new_r_cut=None,
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
                 cv_round=cv_round,
             )
 
-            cv_stack = CV.stack(*data.cv)
+            cv_stack = data.cv[0]
             # nl_stack = NeighbourList.stack(*data.nl)
-            sp_stack = SystemParams.stack(*data.sp)
+            sp_stack = data.sp[0]
         else:
             assert sp0.shape[0] == len(
                 biases,
@@ -1145,8 +1212,7 @@ class Rounds(ABC):
             traj_name = path_name / "trajectory_info.h5"
 
             if not sp0_provided:
-                biases, _ = b.compute_from_cv(cvs=cv_stack)
-
+                biases, _ = bias.compute_from_cv(cvs=cv_stack)
                 biases -= jnp.min(biases)
 
                 probs = jnp.exp(

@@ -582,6 +582,7 @@ class TransformerMAF(Transformer):
         max_iterations=25,
         harmonic=False,
         slow_feature_analysis=False,
+        correct_bias=False,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         # nl_list = dlo.nl
@@ -642,15 +643,11 @@ class TransformerMAF(Transformer):
             # l, q = jnp.linalg.eigh(COV)
 
             l, q = scipy.linalg.eigh(a=COV, subset_by_value=[epsilon, jnp.inf])
-
-            print(f"got {l=}")
-
             diag_2 = jnp.diag(q.T @ ccov @ q)
-
             mask = diag_2 > epsilon
 
-            q = q[:, mask]
-            l = l[mask]
+            q = jnp.array(q[:, mask])
+            l = jnp.array(l[mask])
 
             @CvTrans.from_cv_function
             def tranform(cv, nl, _):
@@ -683,11 +680,11 @@ class TransformerMAF(Transformer):
 
             return C_0, C_1, cv_0, cv_tau, tranform
 
-        def get_koopman_weights(cv_0_i, cv_tau_i, shrink=False):
+        def get_koopman_weights(cv_0_i, cv_tau_i, w=None, shrink=False):
             C_0, C_1, cv_0_new, cv_tau_new, _ = get_covs(
                 cv_0_i,
                 cv_tau_i,
-                W=None,
+                W=jnp.diag(w) if w is not None else None,
                 sym=False,
                 add_1=True,
                 shrink_output=shrink,
@@ -707,53 +704,50 @@ class TransformerMAF(Transformer):
                         f"largest eigenvalue has norm larger than 1: { jnp.sort(jnp.abs(eigval))[-5:]}, falling back to normal weighing",
                     )
 
-                    w = jnp.ones(shape=(cv_0_new.shape[0],))
-                    w /= jnp.sum(w)
+                    if w is None:
+                        w = jnp.ones(shape=(cv_0_new.shape[0],))
+                        w /= jnp.sum(w)
                     return w
 
             else:
                 print(f"eigenvalue is {eigval[idx]}")
 
             u = jnp.real(u[:, idx] / jnp.sum(cv_0_new.cv @ u[:, idx]))
-            w = jnp.real(cv_0_new.cv @ u)
+            w_n = jnp.real(cv_0_new.cv @ u)
 
-            if (nn := jnp.sum(w < 0)) != 0:
+            if (nn := jnp.sum(w_n < 0)) != 0:
                 print(f" {nn}/{w.shape[0]} koopman weights are negative")
                 # print(f"vals={w[w<0]}")
-                w = w.at[w < 0].set(0)
+                w_n = w_n.at[w_n < 0].set(0)
 
-            return w
+            if w is not None:
+                w_n *= w
 
-        # w = []
-        # for a in dlo.weights():
-        #     s = jnp.sum(a[:-lag_n])
-        #     out = a[:-lag_n]
-        #     if s != 0:
-        #         out /= s
-        #     w.append(out)
+            return w_n
 
-        # w = jnp.hstack(w)
-        # w /= jnp.sum(w)
+        # also add bias weights
+        if correct_bias:
+            w_k = []
+            for a in dlo.weights():
+                s = jnp.sum(a[:-lag_n])
+                out = a[:-lag_n]
+
+                if s != 0:
+                    out /= s
+                w_k.append(out)
+
+        else:
+            w_k = [jnp.ones((cv_0_i.shape[0],)) for cv_0_i in CV.unstack(cv_0)]
 
         if weights == "koopman":
             w_k = [
-                get_koopman_weights(cv_0_i, cv_tau_i) for cv_0_i, cv_tau_i in zip(CV.unstack(cv_0), CV.unstack(cv_tau))
+                get_koopman_weights(cv_0_i, cv_tau_i, w=w_i)
+                for cv_0_i, cv_tau_i, w_i in zip(CV.unstack(cv_0), CV.unstack(cv_tau), w_k)
             ]
 
-            w = jnp.hstack(w_k)
-            w /= jnp.sum(w)
-
-            W = jnp.diag(w)
-
-            W = W / jnp.trace(W)  # normalize number of trajectories
-
-        else:
-            W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
-            # w = jnp.hstack(w_k)
-            # w /= jnp.sum(w)
-            # W = W = jnp.diag(w)
-
-        # also add bias weights
+        w = jnp.hstack(w_k)
+        W = jnp.diag(w)
+        W = W / jnp.trace(W)  # normalize number of trajectories
 
         # decorrelateion part 2
 

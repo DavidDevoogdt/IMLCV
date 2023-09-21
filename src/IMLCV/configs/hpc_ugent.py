@@ -9,7 +9,7 @@ from parsl import HighThroughputExecutor
 from parsl import WorkQueueExecutor
 from parsl.channels import LocalChannel
 from parsl.executors.base import ParslExecutor
-from parsl.providers.base import JobState
+from parsl.jobs.states import JobState
 from parsl.providers.base import JobStatus
 from parsl.providers.slurm.template import template_string
 from parsl.utils import wtime_to_minutes

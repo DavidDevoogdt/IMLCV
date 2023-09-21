@@ -46,9 +46,10 @@ class Scheme:
         self.rounds.add_round_from_md(self.md)
 
     @staticmethod
-    def from_rounds(rounds: Rounds) -> Scheme:
+    def from_rounds(rounds: Rounds, md=None) -> Scheme:
         self = Scheme.__new__(Scheme)
-        self.md = rounds.get_engine()
+        if md is None:
+            self.md = rounds.get_engine()
 
         self.rounds = rounds
 
@@ -96,6 +97,7 @@ class Scheme:
         plot=True,
         scale_n: int | None = None,
         cv_round: int | None = None,
+        ignore_invalid=False,
     ):
         m = self.md.bias.collective_variable.metric
 
@@ -128,6 +130,7 @@ class Scheme:
             steps=steps,
             plot=plot,
             cv_round=cv_round,
+            ignore_invalid=ignore_invalid,
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):
@@ -165,9 +168,18 @@ class Scheme:
         else:
             self.md.static_trajectory_info.max_grad = max_grad
 
-        for _ in range(rnds):
+        for i in range(rnds):
             print(f"running round with {steps} steps")
-            self.grid_umbrella(steps=steps, n=n, k=K, max_grad=max_grad, plot=plot, scale_n=scale_n, cv_round=cv_round)
+            self.grid_umbrella(
+                steps=steps,
+                n=n,
+                k=K,
+                max_grad=max_grad,
+                plot=plot,
+                scale_n=scale_n,
+                cv_round=cv_round,
+                ignore_invalid=i == 0,
+            )
 
             if update_metric:
                 self.new_metric(plot=plot)
