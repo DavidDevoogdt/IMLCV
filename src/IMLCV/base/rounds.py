@@ -547,7 +547,6 @@ class Rounds(ABC):
         colvar = self.get_collective_variable()
         sti: StaticMdInfo | None = None
         sp: list[SystemParams] = []
-        nl: list[NeighbourList] | None = [] if new_r_cut is not None else None
         cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
         bias_list: list[Bias] = []
@@ -568,34 +567,21 @@ class Rounds(ABC):
                 sti = round.tic
 
             ti.append(traj.ti)
-
             sp0 = traj.ti.sp
-
-            nl0 = (
-                sp0.get_neighbour_list(
-                    r_cut=new_r_cut,
-                    z_array=round.tic.atomic_numbers,
-                )
-                if new_r_cut is not None
-                else None
-            )
 
             if (cv0 := traj.ti.CV) is None:
                 bias = traj.get_bias()
                 if colvar is None:
                     colvar = bias.collective_variable
 
-                if new_r_cut != round.tic.r_cut:
-                    nlr = (
-                        sp0.get_neighbour_list(
-                            r_cut=round.tic.r_cut,
-                            z_array=round.tic.atomic_numbers,
-                        )
-                        if round.tic.r_cut is not None
-                        else None
+                nlr = (
+                    sp0.get_neighbour_list(
+                        r_cut=round.tic.r_cut,
+                        z_array=round.tic.atomic_numbers,
                     )
-                else:
-                    nlr = nl0
+                    if round.tic.r_cut is not None
+                    else None
+                )
 
                 cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
 
@@ -629,11 +615,7 @@ class Rounds(ABC):
                     min_energy = min(min_energy, e0.min())
 
             sp.append(sp0)
-            if nl is not None:
-                assert nl0 is not None
-                nl.append(nl0)
             cv.append(cv0)
-
             bias_list.append(traj.get_bias())
 
             if e is None:
@@ -645,8 +627,6 @@ class Rounds(ABC):
 
         assert sti is not None
         assert len(sp) != 0
-        if nl is not None:
-            assert len(nl) == len(sp)
 
         def choose(key, probs: Array, len: int):
             if len is None:
@@ -669,7 +649,6 @@ class Rounds(ABC):
         if energy_threshold is not None:
             raise
             sp_new: list[SystemParams] = []
-            nl_new: list[NeighbourList] | None = [] if new_r_cut is not None else None
             cv_new: list[CV] = []
             ti_new: list[TrajectoryInfo] = []
             new_weights = []
@@ -685,22 +664,17 @@ class Rounds(ABC):
                     continue
 
                 sp_new.append(sp[n][indices])
-
-                if nl_new is not None:
-                    nl_new.append(nl[n][indices])
                 cv_new.append(cv[n][indices])
                 ti_new.append(ti[n][indices])
                 new_weights.append(weights[n])
 
             sp = sp_new
-            nl = nl_new
             ti = ti_new
             cv = cv_new
             weights = new_weights
 
         if T_max_over_T is not None:
             sp_new: list[SystemParams] = []
-            nl_new: list[NeighbourList] | None = [] if new_r_cut is not None else None
             cv_new: list[CV] = []
             ti_new: list[TrajectoryInfo] = []
             new_weights = []
@@ -715,36 +689,26 @@ class Rounds(ABC):
 
                 sp_new.append(sp[n])
 
-                if nl is not None:
-                    nl_new.append(nl[n])
                 cv_new.append(cv[n])
                 ti_new.append(ti[n])
                 new_weights.append(weights[n])
                 new_bias_list.append(bias_list[n])
 
             sp = sp_new
-            nl = nl_new
             ti = ti_new
             cv = cv_new
             weights = new_weights
             bias_list = new_bias_list
 
         out_sp: list[SystemParams] = []
-        out_nl: list[NeighbourList] | None = [] if nl is not None else None
         out_cv: list[CV] = []
         out_ti = []
 
         if time_series:
             for sp_n, cv_n, ti_n in zip(sp, cv, ti):
                 out_sp.append(sp_n[-out:])
-
                 out_cv.append(cv_n[-out:])
-
                 out_ti.append(ti_n[-out:])
-            if nl is not None:
-                assert out_nl is not None
-                for nl_n in nl:
-                    out_nl.append(nl_n[-out:])
 
         else:
             if split_data:
@@ -756,11 +720,7 @@ class Rounds(ABC):
                     key, indices = choose(key, probs, len=sp[n].shape[0])
 
                     out_sp.append(sp[n][indices])
-                    if nl is not None:
-                        assert out_nl is not None
-                        out_nl.append(nl[n][indices])
                     out_cv.append(cv[n][indices])
-
                     out_ti.append(ti[n][indices])
 
             else:
@@ -777,7 +737,6 @@ class Rounds(ABC):
                 count = 0
 
                 sp_trimmed = []
-                nl_trimmed = [] if nl is not None else None
                 cv_trimmed = []
                 ti_trimmed = []
 
@@ -794,24 +753,14 @@ class Rounds(ABC):
 
                 count = 0
 
-                if nl is not None:
-                    for n, nl_n in enumerate(nl):
-                        n_i = nl_n.shape[0]
-                        index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
-                        count += n_i
-
-                        nl_trimmed.append(nl_n[index])
-
-                # if len(sp) >= 1:
                 out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
-
-                if nl_trimmed is not None:
-                    assert out_nl is not None
-                    out_nl.append(sum(nl_trimmed[1:], nl_trimmed[0]))
-                    del nl_trimmed
                 out_cv.append(CV.stack(*cv_trimmed))
                 out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
                 bias = None
+
+            out_nl = None
+            if new_r_cut is not None:
+                out_nl = [osp.get_neighbour_list(r_cut=new_r_cut, z_array=sti.atomic_numbers) for osp in out_sp]
 
         return Rounds.data_loader_output(
             sp=out_sp,
