@@ -355,7 +355,7 @@ class TransoformerLDA(Transformer):
         outdim: int,
         kernel=False,
         optimizer=None,
-        chunck_size=None,
+        chunk_size=None,
         solver="eigen",
         method="pymanopt",
         harmonic=True,
@@ -368,7 +368,7 @@ class TransoformerLDA(Transformer):
             outdim=outdim,
             kernel=kernel,
             optimizer=optimizer,
-            chunck_size=chunck_size,
+            chunk_size=chunk_size,
             solver=solver,
             method=method,
             harmonic=harmonic,
@@ -384,7 +384,7 @@ class TransoformerLDA(Transformer):
         dlo: Rounds.data_loader_output,
         kernel=False,
         optimizer=None,
-        chunck_size=None,
+        chunk_size=None,
         solver="eigen",
         method="pymanopt",
         harmonic=True,
@@ -740,12 +740,12 @@ class TransformerMAF(Transformer):
             w_k = [jnp.ones((cv_0_i.shape[0],)) for cv_0_i in CV.unstack(cv_0)]
 
         if weights == "koopman":
-            w_k = [
-                get_koopman_weights(cv_0_i, cv_tau_i, w=w_i)
-                for cv_0_i, cv_tau_i, w_i in zip(CV.unstack(cv_0), CV.unstack(cv_tau), w_k)
-            ]
+            w = jnp.hstack(w_k)
+            w = get_koopman_weights(cv_0, cv_tau, w=w)
 
-        w = jnp.hstack(w_k)
+        else:
+            w = jnp.hstack(w_k)
+
         W = jnp.diag(w)
         W = W / jnp.trace(W)  # normalize number of trajectories
 

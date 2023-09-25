@@ -14,6 +14,7 @@ import jax_dataclasses
 import matplotlib.pyplot as plt
 import numpy as np
 import yaff
+from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import NeighbourList
@@ -24,10 +25,10 @@ from jax import Array
 from jax import jit
 from jax import value_and_grad
 from jax import vmap
+from jax.tree_util import Partial
 from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
-from netket.jax import vmap_chunked
 from parsl.data_provider.files import File
 
 yaff.log.set_level(yaff.log.silent)
@@ -255,16 +256,28 @@ class Bias(BC, ABC):
         if sp.batched:
             if nl is not None:
                 assert nl.batched
-                return vmap_chunked(
-                    self.compute_from_system_params,
-                    in_axes=(0, 0, None, None),
+                return chunk_map(
+                    vmap(
+                        Partial(
+                            self.compute_from_system_params,
+                            gpos=gpos,
+                            vir=vir,
+                        ),
+                    ),
                     chunk_size=chunk_size,
-                )(sp, nl, gpos, vir)
+                )(sp, nl)
             else:
-                return vmap_chunked(
-                    self.compute_from_system_params,
-                    in_axes=(0, None, None, None),
-                )(sp, nl, gpos, vir, nl)
+                return chunk_map(
+                    vmap(
+                        Partial(
+                            self.compute_from_system_params,
+                            gpos=gpos,
+                            vir=vir,
+                            nl=None,
+                        ),
+                    ),
+                    chunk_size=chunk_size,
+                )(sp)
 
         [cvs, jac] = self.collective_variable.compute_cv(
             sp=sp,
@@ -314,7 +327,7 @@ class Bias(BC, ABC):
             return value_and_grad(f0)(x) if diff else (f0(x), None)
 
         def f2(cvs):
-            return vmap_chunked(f1, chunk_size=chunk_size)(cvs) if cvs.batched else f1(cvs)
+            return chunk_map(vmap(f1), chunk_size=chunk_size)(cvs) if cvs.batched else f1(cvs)
 
         return f2(cvs)
 

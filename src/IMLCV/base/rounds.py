@@ -537,6 +537,7 @@ class Rounds(ABC):
         stop: int | None = None,
         time_series: bool = False,
         T_max_over_T=50,
+        chunk_size=None,
     ) -> data_loader_output:
         weights = []
 
@@ -790,7 +791,7 @@ class Rounds(ABC):
                     ti_trimmed.append(ti_n[index])
 
                     count += n_i
-                
+
                 count = 0
 
                 if nl is not None:

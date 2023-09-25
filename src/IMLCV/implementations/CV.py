@@ -9,6 +9,7 @@ import numba
 import numpy as np
 import ott
 from flax.linen.linear import Dense
+from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFlow
@@ -22,7 +23,6 @@ from IMLCV.base.CV import SystemParams
 from jax import Array
 from jax import jit
 from jax import vmap
-from netket.jax import vmap_chunked
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
 from ott.solvers.linear import implicit_differentiation
@@ -435,12 +435,24 @@ def sinkhorn_divergence(
     get_P12 = get_P
 
     if nl1.batched:
-        get_P1 = vmap_chunked(get_P1, chunk_size=chunk_size, in_axes=(0, 0, None, None))
-        get_P12 = vmap_chunked(get_P12, chunk_size=chunk_size, in_axes=(0, 0, None, None))
+        get_P1 = chunk_map(
+            vmap(get_P1, in_axes=(0, 0, None, None)),
+            chunk_size=chunk_size,
+        )
+        get_P12 = chunk_map(
+            vmap(get_P12, in_axes=(0, 0, None, None)),
+            chunk_size=chunk_size,
+        )
 
     if nl2.batched:
-        get_P2 = vmap_chunked(get_P2, chunk_size=chunk_size, in_axes=(0, 0, None, None))
-        get_P12 = vmap_chunked(get_P12, chunk_size=chunk_size, in_axes=(None, None, 0, 0))
+        get_P2 = chunk_map(
+            vmap(get_P2, in_axes=(0, 0, None, None)),
+            chunk_size=chunk_size,
+        )
+        get_P12 = chunk_map(
+            vmap(get_P12, in_axes=(None, None, 0, 0)),
+            chunk_size=chunk_size,
+        )
 
     P11 = get_P1(x1, nl1, None, None)
     P22 = get_P2(x2, nl2, None, None)

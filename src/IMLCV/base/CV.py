@@ -21,10 +21,10 @@ from jax import jacrev
 from jax import jit
 from jax import pmap
 from jax import vmap
+from jax.tree_util import Partial
 from jax.tree_util import tree_flatten
 from jax.tree_util import tree_unflatten
 from molmod.units import angstrom
-from netket.jax import vmap_chunked
 
 ######################################
 #        Data types                  #
@@ -32,6 +32,8 @@ from netket.jax import vmap_chunked
 
 
 def padded_pmap(f, n_devices: int | None = None):
+    # helper function to pad pytree, apply pmap and unpad the result
+
     def get_shape(n_devices, batch_dim):
         _, b = jnp.divmod(batch_dim, n_devices)
 
@@ -102,6 +104,81 @@ def padded_pmap(f, n_devices: int | None = None):
         return tree_unpadded
 
     return partial(apply_pmap_fn, n_devices=n_devices)
+
+
+def chunk_map(f, chunk_size):
+    # helper function to pad pytree, apply function in chunks of chunk_size and unpad the result
+
+    def get_shape(chunk_size, batch_dim):
+        a = batch_dim // chunk_size
+        b = batch_dim - a * chunk_size
+
+        # print(f"{a=}\n{b=}\n{chunk_size=}\n{batch_dim=}\n")
+
+        if b == 0:
+            return a, 0
+
+        # print(f"working with {a,b=}")
+
+        return a + 1, chunk_size - b
+
+    def n_pad(x, a, p):
+        if x is None:
+            return x
+
+        if p != 0:
+            pad_shape = [[0, 0] for a in range(x.ndim)]
+            pad_shape[0][1] = p
+            x_padded = jnp.pad(x, pad_shape)
+        else:
+            x_padded = x
+
+        return jnp.reshape(x_padded, (a, -1, *x.shape[1:]))
+
+    def n_unpad(y, p):
+        out = jnp.reshape(y, (-1, *y.shape[2:]))
+        if p != 0:
+            out = out[:-p]
+        return out
+
+    def _f(*args, **kwargs):
+        if chunk_size is None:
+            return f(*args, **kwargs)
+
+        tree_padded, tree_def = tree_flatten((args, kwargs))
+        leaves_padded = []
+
+        a = None
+        p = None
+
+        for leaf_padded in tree_padded:
+            if p is None:
+                a, p = get_shape(chunk_size, leaf_padded.shape[0])
+            else:
+                a_2, p_2 = get_shape(chunk_size, leaf_padded.shape[0])
+
+                assert a == a_2 and p == p_2, "inconsisitent batch dims"
+
+            leaves_padded.append(n_pad(leaf_padded, a, p))
+
+        def __f(x):
+            (args, kwargs) = tree_unflatten(tree_def, x)
+            return f(*args, **kwargs)
+
+        out_padded = jax.lax.map(__f, leaves_padded)
+
+        # remove padding from output leaves
+        tree_padded, tree_def = tree_flatten(out_padded)
+        leaves = []
+
+        for leaf_padded in tree_padded:
+            leaves.append(n_unpad(leaf_padded, p))
+
+        tree_unpadded = tree_unflatten(tree_def, leaves)
+
+        return tree_unpadded
+
+    return _f
 
 
 @jdc.pytree_dataclass
@@ -2126,30 +2203,31 @@ class _CvTrans:
             CvTransNN(trans=(proto,))
         return CvTrans(trans=(proto,))
 
-    # @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunck_size"))
+    # @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunk_size"))
     def compute_cv_trans(
         self,
         x: CV,
         nl: NeighbourList | None = None,
         reverse=False,
         log_Jf=False,
-        chunck_size=None,
+        chunk_size=None,
     ) -> tuple[CV, Array | None]:
         """
         result is always batched
         arg: CV
         """
         if x.batched:
-            return vmap_chunked(
-                self.compute_cv_trans,
-                in_axes=(0, 0, None, None),
-                chunk_size=chunck_size,
-            )(
-                x,
-                nl,
-                reverse,
-                log_Jf,
-            )
+            return chunk_map(
+                vmap(
+                    Partial(
+                        self.compute_cv_trans,
+                        reverse=reverse,
+                        log_Jf=log_Jf,
+                        chunk_size=None,
+                    ),
+                ),
+                chunk_size=chunk_size,
+            )(x, nl)
 
         ordered = reversed(self.trans) if reverse else self.trans
 
@@ -2202,21 +2280,27 @@ class _CvTrans:
 class CvTrans(_CvTrans):
     trans: tuple[CvFunBase]
 
-    @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunck_size"))
+    @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunk_size"))
     def compute_cv_trans(
         self,
         x: CV,
         nl: NeighbourList | None = None,
         reverse=False,
         log_Jf=False,
-        chunck_size=None,
+        chunk_size=None,
     ) -> tuple[CV, Array | None]:
         """
         result is always batched
         arg: CV
         """
 
-        return super().compute_cv_trans(x=x, nl=nl, reverse=reverse, log_Jf=log_Jf, chunck_size=chunck_size)
+        return super().compute_cv_trans(
+            x=x,
+            nl=nl,
+            reverse=reverse,
+            log_Jf=log_Jf,
+            chunk_size=chunk_size,
+        )
 
 
 class CvTransNN(nn.Module, _CvTrans):
@@ -2294,11 +2378,13 @@ class CvFlow:
         chunk_size: int | None = None,
     ) -> CV:
         if x.batched:
-            return vmap_chunked(
-                self.compute_cv_flow,
-                in_axes=(0, 0, None),
+            return chunk_map(
+                vmap(
+                    self.compute_cv_flow,
+                    in_axes=0,
+                ),
                 chunk_size=chunk_size,
-            )(x, nl, chunk_size)
+            )(x, nl)
 
         out = self.func(x, nl)
         if self.trans is not None:
@@ -2412,28 +2498,30 @@ class CollectiveVariable:
     ) -> tuple[CV, CV]:
         if sp.batched:
             if nl is None:
-                return vmap_chunked(
-                    self.compute_cv,
-                    in_axes=(0, None, None, None),
-                    chunk_size=chunk_size,
-                )(
-                    sp,
-                    nl,
-                    jacobian,
-                    chunk_size,
-                )
-            else:
                 assert nl.batched
-                return vmap_chunked(
-                    self.compute_cv,
-                    in_axes=(0, 0, None, None),
+
+                return chunk_map(
+                    vmap(
+                        Partial(
+                            self.compute_cv,
+                            jacobian=jacobian,
+                            chunk_size=None,
+                        ),
+                    ),
                     chunk_size=chunk_size,
-                )(
-                    sp,
-                    nl,
-                    jacobian,
-                    chunk_size,
-                )
+                )(sp, nl)
+
+            return chunk_map(
+                vmap(
+                    Partial(
+                        self.compute_cv,
+                        jacobian=jacobian,
+                        chunk_size=None,
+                        nl=None,
+                    ),
+                ),
+                chunk_size=chunk_size,
+            )(sp)
 
         cv = self.f.compute_cv_flow(sp, nl)
         dcv = self.jac(self.f.compute_cv_flow)(sp, nl) if jacobian else None

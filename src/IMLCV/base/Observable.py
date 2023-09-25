@@ -19,7 +19,6 @@ from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
-from IMLCV.base.rounds import Rounds
 
 
 class ThermoLIB:
@@ -117,7 +116,7 @@ class ThermoLIB:
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
-        @bash_app_python(executors=["default"])
+        @bash_app_python(executors=["reference"])
         def get_histos(
             bins,
             temp,
