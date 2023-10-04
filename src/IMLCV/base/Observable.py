@@ -116,7 +116,7 @@ class ThermoLIB:
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
-        @bash_app_python(executors=["reference"])
+        @bash_app_python(executors=["default"])
         def get_histos(
             bins,
             temp,
@@ -302,6 +302,7 @@ class ThermoLIB:
                     bias=fesBias,
                     outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
                     inverted=True,
+                    label="Free Energy [kJ/mol]",
                     execution_folder=fold,
                     stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
@@ -325,6 +326,7 @@ class ThermoLIB:
                     bias=fes_bias_tot,
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.pdf")],
                     inverted=True,
+                    label="Free Energy [kJ/mol]",
                     execution_folder=fold,
                     stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",

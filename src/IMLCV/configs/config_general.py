@@ -48,6 +48,7 @@ def config(
     initialize_logging=True,
     account=None,
     use_work_queue=False,
+    default_on_threads=False,
 ):
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
@@ -74,6 +75,7 @@ def config(
             gpu_cluster=gpu_cluster,
             account=account,
             use_work_queue=use_work_queue,
+            default_on_threads=default_on_threads,
         )
 
     config = Config(

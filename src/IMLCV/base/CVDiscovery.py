@@ -135,11 +135,12 @@ class Transformer:
         ).T
 
         # print(f"{new_bounding_box=}")
+        # if self.periodcity is None
 
         new_collective_variable = CollectiveVariable(
             f=f * g * h,
             metric=CvMetric(
-                periodicities=self.periodicity,
+                periodicities=None,
                 bounding_box=new_bounding_box,
             ),
         )

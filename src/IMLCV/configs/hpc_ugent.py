@@ -8,6 +8,7 @@ import parsl.providers.slurm.slurm
 from parsl import HighThroughputExecutor
 from parsl import WorkQueueExecutor
 from parsl.channels import LocalChannel
+from parsl.executors import ThreadPoolExecutor
 from parsl.executors.base import ParslExecutor
 from parsl.jobs.states import JobState
 from parsl.providers.base import JobStatus
@@ -372,6 +373,7 @@ def config(
     py_env=None,
     account=None,
     use_work_queue=False,
+    default_on_threads=False,
 ):
     if env == "hortense":
         if cpu_cluster is not None:
@@ -443,18 +445,25 @@ def config(
         ]
 
     else:
-        # general tasks
-        default = get_slurm_provider(
-            label="default",
-            init_blocks=1,
-            min_blocks=1,
-            max_blocks=512,
-            parallelism=1,
-            cores=4,
-            parsl_cores=True,
-            walltime="02:00:00",
-            **kw,
-        )
+        if not default_on_threads:
+            # general tasks
+            default = get_slurm_provider(
+                label="default",
+                init_blocks=1,
+                min_blocks=1,
+                max_blocks=512,
+                parallelism=1,
+                cores=4,
+                parsl_cores=True,
+                walltime="02:00:00",
+                **kw,
+            )
+        else:
+            default = ThreadPoolExecutor(
+                label="default",
+                max_threads=4,
+                working_dir=str(path_internal / "default"),
+            )
 
         gpu_part = get_slurm_provider(
             gpu=True,

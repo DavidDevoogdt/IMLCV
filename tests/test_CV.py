@@ -146,7 +146,7 @@ def _get_sp_rand(
             ],
         )
         * 1.0,
-    ).canoncialize()
+    ).canonicalize()
 
     # r_cut = 4 * angstrom
     z_array = jax.random.randint(k2, (n,), 0, 5)

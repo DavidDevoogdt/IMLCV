@@ -11,9 +11,12 @@ import cloudpickle
 import jax
 import jax.numpy as jnp
 import jax_dataclasses
+import matplotlib
+import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import yaff
+from hsluv import hsluv_to_rgb
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -358,7 +361,7 @@ class Bias(BC, ABC):
 
     @staticmethod
     def load(filename) -> Bias:
-        bias = BC.load(filename=filename)
+        bias: Bias = BC.load(filename=filename)
         return bias
 
     def plot(
@@ -376,17 +379,28 @@ class Bias(BC, ABC):
         x_lim=None,
         y_lim=None,
         bins=None,
+        label="bias [kJ/mol]",
     ):
         """plot bias."""
+        if bins is None:
+            bins = self.collective_variable.metric.grid(
+                n=n,
+                endpoints=True,
+                margin=margin,
+            )
+        mg = np.meshgrid(*bins, indexing="xy")
+
+        cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*bins)])
+
+        bias, _ = self.compute_from_cv(cv_grid)
+
+        if inverted:
+            bias = -bias
+
+        bias -= bias[~np.isnan(bias)].min()
+        bias = bias.reshape([len(mg_i) for mg_i in mg])
 
         if self.collective_variable.n == 1:
-            if bins is None:
-                [bins] = self.collective_variable.metric.grid(
-                    n=n,
-                    endpoints=True,
-                    margin=margin,
-                )
-
             if x_unit is not None:
                 if x_unit == "rad":
                     x_unit_label = "rad"
@@ -403,22 +417,7 @@ class Bias(BC, ABC):
 
             extent = [x_lim[0], x_lim[1]]
 
-            @jit
-            def f(point):
-                return self.compute_from_cv(
-                    CV(cv=point),
-                    diff=False,
-                )
-
-            bias, _ = jnp.apply_along_axis(f, axis=0, arr=jnp.array([bins]))
-
-            if inverted:
-                bias = -bias
-            bias -= bias[~np.isnan(bias)].min()
-
-            bias = jnp.reshape(bias, (-1,))
-
-            # plt.switch_backend("PDF")
+            plt.switch_backend("PDF")
             fig, ax = plt.subplots()
 
             ax.set_xlim(*extent)
@@ -428,7 +427,7 @@ class Bias(BC, ABC):
             ax2 = ax.twinx()
 
             ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
-            ax.set_ylabel("Bias [kJ/mol]]", fontsize=16)
+            ax.set_ylabel(label, fontsize=16)
 
             ax.tick_params(axis="both", which="major", labelsize=18)
             ax.tick_params(axis="both", which="minor", labelsize=16)
@@ -441,14 +440,6 @@ class Bias(BC, ABC):
                     _ = ax2.hist(tr.cv[:, 0], density=True, histtype="step")
 
         elif self.collective_variable.n == 2:
-            if bins is None:
-                bins = self.collective_variable.metric.grid(
-                    n=n,
-                    endpoints=True,
-                    margin=margin,
-                )
-            mg = np.meshgrid(*bins, indexing="xy")
-
             if x_unit is not None:
                 if x_unit == "rad":
                     x_unit_label = "rad"
@@ -476,27 +467,47 @@ class Bias(BC, ABC):
             if y_lim is None:
                 ylim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
 
-            # extent = [bins[0][0], bins[0][-1], bins[1][0], bins[1][-1]]
-
-            # bb = self.collective_variable.metric.bounding_box
-
-            # extent = [bb[0, 0], bb[1, 0], bb[0, 1], bb[1, 1]]
             extent = [x_lim[0], x_lim[1], ylim[0], ylim[1]]
 
-            def f(point):
-                return self.compute_from_cv(
-                    CV(cv=point),
-                    diff=False,
-                )
-
-            bias, _ = jnp.apply_along_axis(f, axis=0, arr=np.array(mg))
-
-            if inverted:
-                bias = -bias
-            bias -= bias[~np.isnan(bias)].min()
+            print("styling plot")
 
             # plt.switch_backend("PDF")
-            fig, ax = plt.subplots()
+
+            # import matplotlib.gridspec as gridspec
+
+            # plt.rcdefaults()
+
+            plt.rc("text", usetex=False)
+            plt.rc("font", family="DejaVu Sans", size=18)
+
+            # plt.switch_backend("PDF")
+            fig = plt.figure(layout="constrained")
+
+            if traj is not None:
+                gs = gridspec.GridSpec(
+                    nrows=2,
+                    ncols=3,
+                    width_ratios=[4, 1, 0.2],
+                    height_ratios=[1, 4],
+                    figure=fig,
+                )
+
+                ax = fig.add_subplot(gs[1, 0])
+            else:
+                gs = gridspec.GridSpec(
+                    nrows=1,
+                    ncols=2,
+                    width_ratios=[4, 0.2],
+                    height_ratios=[1],
+                    figure=fig,
+                )
+                ax = fig.add_subplot(gs[0, 0])
+
+            ax.set_xlabel(f"cv1 [{x_unit_label}]")
+            ax.set_ylabel(f"cv2 [{y_unit_label}]")
+
+            ax.set_xlim(extent[0], extent[1])
+            ax.set_ylim(extent[2], extent[3])
 
             p = ax.imshow(
                 bias / (kjmol),
@@ -505,35 +516,91 @@ class Bias(BC, ABC):
                 extent=extent,
                 vmin=vmin / kjmol,
                 vmax=vmax / kjmol,
+                aspect="auto",
             )
 
-            ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
-            ax.set_ylabel(f"cv2 [{y_unit_label}]", fontsize=16)
+            if traj is not None:
+                ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
+                ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
 
-            ax.tick_params(axis="both", which="major", labelsize=18)
-            ax.tick_params(axis="both", which="minor", labelsize=16)
+                ax_histx.tick_params(axis="x", labelbottom=False, labelleft=False)
+                ax_histy.tick_params(axis="y", labelleft=False, labelbottom=False)
 
-            cbar = fig.colorbar(p)
-            cbar.set_label("Bias [kJ/mol]", size=18)
+                # ax_histx.set_ylabel(f"n")
+                # ax_histy.set_xlabel(f"n")
+
+                ax_cbar = fig.add_subplot(gs[1, 2])
+            else:
+                ax_cbar = fig.add_subplot(gs[0, 1])
 
             if traj is not None:
                 if not isinstance(traj, Iterable):
                     traj = [traj]
-                for tr in traj:
-                    # trajs are ij indexed
-                    ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=3)
 
-                ax.set_xlim(extent[0], extent[1])
-                ax.set_ylim(extent[2], extent[3])
+                n = len(traj)
+
+                n_sqrt = jnp.ceil(jnp.sqrt(n))
+
+                x_list = []
+                y_list = []
+                c_list = []
+
+                n_points = 0
+
+                for tr_i, tr in enumerate(traj):
+                    a = tr_i // n_sqrt
+                    b = tr_i - a * n_sqrt
+
+                    col = hsluv_to_rgb(
+                        [
+                            float(a) / float(n_sqrt - 1) * 360 if n != 1 else 180,
+                            75,
+                            20 + float(b) / float(n_sqrt - 1) * 60 if n != 1 else 70,
+                        ],
+                    )
+
+                    # trajs are ij indexed
+                    ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=2, color=col)
+
+                    x_list.append(tr.cv[:, 0])
+                    y_list.append(tr.cv[:, 1])
+                    c_list.append(col)
+                    n_points += tr.shape[0]
+
+                n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+
+                ax_histx.hist(
+                    x_list,
+                    bins=n_bins,
+                    color=c_list,
+                    stacked=True,
+                    histtype="step",
+                )
+                ax_histy.hist(
+                    y_list,
+                    bins=n_bins,
+                    color=c_list,
+                    histtype="step",
+                    stacked=True,
+                    orientation="horizontal",
+                )
+
+                fig.align_ylabels([ax, ax_histx])
+
+            cbar = fig.colorbar(p, cax=ax_cbar)
+            cbar.set_label(label)
+
+            # plt.title(label)
 
         else:
             raise ValueError
 
         Path(name).parent.mkdir(parents=True, exist_ok=True)
 
-        plt.tight_layout()
-        plt.savefig(name)
+        # fig.set_tig
+        # gs.tight_layout(fig)
 
+        plt.savefig(name)
         plt.close(fig=fig)  # write out
 
     def resample(self, cv_grid: CV | None = None, n=None, margin=0.2) -> Bias:
@@ -564,6 +631,7 @@ def plot_app(
     x_lim=None,
     y_lim=None,
     bins=None,
+    label="bias [kJ/mol]",
 ):
     bias.plot(
         name=outputs[0].filepath,
@@ -579,6 +647,7 @@ def plot_app(
         x_lim=x_lim,
         y_lim=y_lim,
         bins=bins,
+        label=label,
     )
 
 

@@ -50,6 +50,8 @@ class Scheme:
         self = Scheme.__new__(Scheme)
         if md is None:
             self.md = rounds.get_engine()
+        else:
+            self.md = md
 
         self.rounds = rounds
 
@@ -98,6 +100,7 @@ class Scheme:
         scale_n: int | None = None,
         cv_round: int | None = None,
         ignore_invalid=False,
+        eps=0.1,
     ):
         m = self.md.bias.collective_variable.metric
 
@@ -106,7 +109,7 @@ class Scheme:
         if k is None:
             # 0.1*N *Kb*T
             k = (
-                0.1
+                eps
                 * self.md.static_trajectory_info.T
                 * boltzmann
                 * self.md.static_trajectory_info.atomic_numbers.shape[0]
@@ -155,6 +158,7 @@ class Scheme:
         scale_n: int | None = None,
         cv_round: int | None = None,
         chunk_size=None,
+        eps_umbrella=0.1,
     ):
         if cv_round is None:
             cv_round = self.rounds.cv
@@ -162,7 +166,15 @@ class Scheme:
         if init != 0:
             print(f"running init round with {init} steps")
 
-            self.grid_umbrella(steps=init, n=n, k=K, max_grad=init_max_grad, plot=plot, cv_round=cv_round)
+            self.grid_umbrella(
+                steps=init,
+                n=n,
+                k=K,
+                max_grad=init_max_grad,
+                plot=plot,
+                cv_round=cv_round,
+                eps=eps_umbrella,
+            )
             self.rounds.invalidate_data(c=cv_round)
             self.rounds.add_round_from_md(self.md, cv=cv_round)
         else:
@@ -179,6 +191,7 @@ class Scheme:
                 scale_n=scale_n,
                 cv_round=cv_round,
                 ignore_invalid=i == 0,
+                eps=eps_umbrella,
             )
 
             if update_metric:

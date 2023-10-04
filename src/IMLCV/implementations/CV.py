@@ -45,7 +45,7 @@ def Volume(sp: SystemParams, _):
 def distance_descriptor():
     @CvFlow.from_function
     def h(x: SystemParams, _):
-        x = x.canoncialize()[0]
+        x = x.canonicalize()[0]
 
         n = x.shape[-2]
 
@@ -462,15 +462,6 @@ def sinkhorn_divergence(
         p1 = x1.cv
         p2 = x2.cv
 
-        # p2_inv = jnp.where(p2 != 0, p2, jnp.ones_like(p2))
-        # p2_inv = jnp.where(p2 != 0, 1 / p2_inv, jnp.zeros_like(p2_inv))
-
-        # x1_trans = (
-        #     -2 * jnp.einsum("i...,ij->j...", p1, P12)
-        #     + jnp.einsum("i...,j...,ij->j...", p1, p1 * p2_inv, P11)
-        #     + jnp.einsum("i...,ij->j...", p2, P22)
-        # )
-
         cv = CV(
             cv=(
                 -2 * jnp.einsum("i...,j...,ij->j...", p1, p2, P12)
@@ -493,13 +484,6 @@ def sinkhorn_divergence(
             _stack_dims=x1._stack_dims,
             _combine_dims=x1._combine_dims,
         )
-
-        # cv = CV(
-        #     cv=x1_trans,
-        #     _stack_dims=x1._stack_dims,
-        #     _combine_dims=x1._combine_dims,
-        #     atomic=x1.atomic,
-        # )
 
         return div, cv
 

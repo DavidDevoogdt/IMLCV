@@ -291,7 +291,7 @@ class SystemParams:
         if r_cut is None:
             return False, None
 
-        sp, op_cell, op_coor = self.canoncialize()
+        sp, op_cell, op_coor = self.canonicalize()
 
         b = True
 
@@ -418,6 +418,7 @@ class SystemParams:
             return bools, val
 
         @partial(vmap, in_axes=(None, 0))
+        @jax.jit
         def res(sp, center_coordinates):
             if center_coordinates is not None:
                 sp_center = SystemParams(sp.coordinates - center_coordinates, sp.cell)
@@ -473,6 +474,7 @@ class SystemParams:
                 center_op,
             )
 
+        @jax.jit
         def _f(sp: SystemParams):
             bools, r, a, ijk, co = res(sp, sp.coordinates)
             num_neighs = jnp.max(jnp.sum(bools, axis=1))
@@ -896,9 +898,9 @@ class SystemParams:
         return deproj(reduced), op
 
     @partial(jit, static_argnames=["min"])
-    def canoncialize(self, min=False) -> tuple[SystemParams, Array, Array]:
+    def canonicalize(self, min=False) -> tuple[SystemParams, Array, Array]:
         if self.batched:
-            return vmap(lambda sp: sp.canoncialize(min=min))(self)
+            return vmap(lambda sp: sp.canonicalize(min=min))(self)
 
         mr, op_cell = self.minkowski_reduce()
         mr, op_coor = mr.wrap_positions(min)
@@ -908,7 +910,7 @@ class SystemParams:
     def min_distance(self, index_1, index_2):
         assert self.batched is False
 
-        sp, _, _ = self.canoncialize()  # necessary if cell is skewed
+        sp, _, _ = self.canonicalize()  # necessary if cell is skewed
         coor1 = sp.coordinates[index_1, :]
         coor2 = sp.coordinates[index_2, :]
 
@@ -1762,23 +1764,31 @@ class CvMetric:
 
     def __init__(
         self,
-        periodicities,
+        periodicities=None,
         bounding_box=None,
         # map_meshgrids=None,
     ) -> None:
-        if bounding_box is None:
-            bounding_box = jnp.zeros((len(periodicities), 2))
-            bounding_box = bounding_box.at[:, 1].set(1.0)
+        if periodicities is None:
+            assert bounding_box is not None
 
-        if isinstance(bounding_box, list):
-            bounding_box = jnp.array(bounding_box)
-
-        if bounding_box.ndim == 1:
-            bounding_box = jnp.reshape(bounding_box, (1, 2))
+            periodicities = [False for a in bounding_box]
 
         if isinstance(periodicities, list):
             periodicities = jnp.array(periodicities)
+
         assert periodicities.ndim == 1
+
+        if bounding_box is None:
+            assert periodicities is not None
+
+            bounding_box = jnp.zeros((len(periodicities), 2))
+            bounding_box = bounding_box.at[:, 1].set(1.0)
+        else:
+            if isinstance(bounding_box, list):
+                bounding_box = jnp.array(bounding_box)
+
+            if bounding_box.ndim == 1:
+                bounding_box = jnp.reshape(bounding_box, (1, 2))
 
         self.bounding_box = bounding_box
         self.periodicities = periodicities
@@ -1864,7 +1874,7 @@ class CvMetric:
             bounding_box=bounding_box,
         )
 
-    def grid(self, n, endpoints=None, margin=None):
+    def grid(self, n, endpoints=None, margin=0.1):
         """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
 
         Args:
@@ -1878,9 +1888,9 @@ class CvMetric:
         """
 
         if endpoints is None:
-            endpoints = np.array(~self.periodicities)
+            endpoints = ~self.periodicities
         elif isinstance(endpoints, bool):
-            endpoints = np.full(self.periodicities.shape, endpoints)
+            endpoints = jnp.full(self.periodicities.shape, endpoints)
 
         b = self.bounding_box
 
@@ -1890,7 +1900,7 @@ class CvMetric:
             b = b.at[:, 1].set(b[:, 1] + diff)
 
         assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), "give proper boundaries"
-        grid = [jnp.linspace(row[0], row[1], n, endpoint=endpoints[i]) for i, row in enumerate(b)]
+        grid = [jnp.linspace(row[0], row[1], n, endpoint=bool(endpoints[i])) for i, row in enumerate(b)]
 
         return grid
 

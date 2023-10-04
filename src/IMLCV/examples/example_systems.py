@@ -324,7 +324,7 @@ def CsPbI3_refs(x, y, z):
         sp_a, _, _ = SystemParams(
             coordinates=a.positions * angstrom,
             cell=a.cell * angstrom,
-        ).canoncialize()
+        ).canonicalize()
 
         if z_arr is None:
             z_arr = a.get_atomic_numbers()

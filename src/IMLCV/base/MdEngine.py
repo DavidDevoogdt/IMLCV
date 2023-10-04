@@ -512,7 +512,7 @@ class MDEngine(ABC):
             return self.sp.get_neighbour_list(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,
-                r_skin=0.0,
+                r_skin=1.0 * angstrom,
             )
 
         if self._nl is None:

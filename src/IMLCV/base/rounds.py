@@ -176,6 +176,7 @@ class Rounds(ABC):
         r: int | None = None,
         num: int = 1,
         repeat=None,
+        minkowski_reduce=True,
     ):
         from ase.io.extxyz import write_extxyz
 
@@ -183,7 +184,7 @@ class Rounds(ABC):
             c = self.cv
 
         for i, (atoms, round, trajejctory) in enumerate(
-            self.iter_ase_atoms(c=c, r=r, num=num),
+            self.iter_ase_atoms(c=c, r=r, num=num, minkowski_reduce=minkowski_reduce),
         ):
             with open(
                 self.path(c=c, r=round.round, i=trajejctory.num) / "trajectory.xyz",
@@ -240,13 +241,24 @@ class Rounds(ABC):
                     if i in f[f"{c}/{r}"].keys():
                         continue
 
+                    bash_tin = md_i / "bash_app_trajectory_info.h5"
                     tin = md_i / "trajectory_info.h5"
 
-                    if not (tin).exists():
-                        if not (md_i / "bash_app_trajectory_info.h5").exists():
-                            continue
+                    # take longest trajectory
+                    if tin.exists() and bash_tin.exists():
+                        traj_1 = TrajectoryInfo.load(tin)
+                        traj_2 = TrajectoryInfo.load(bash_tin)
+
+                        if traj_1._size > traj_2._size:
+                            traj = traj_1
                         else:
-                            tin = md_i / "bash_app_trajectory_info.h5"
+                            traj = traj_2
+                    elif bash_tin.exists():
+                        traj = TrajectoryInfo.load(bash_tin)
+                    elif tin.exists():
+                        traj = TrajectoryInfo.load(tin)
+                    else:
+                        continue
 
                     bias = None
                     if (p := (md_i / "new_bias")).exists():
@@ -259,7 +271,6 @@ class Rounds(ABC):
                     if (p := (md_i / "invalid")).exists():
                         attr["valid"] = False
 
-                    traj = TrajectoryInfo.load(tin)
                     self.add_md(c=c, i=i, r=r, d=traj, bias=bias, attrs=attr)
 
     def add_cv(self, c=None, attr=None):
@@ -493,11 +504,10 @@ class Rounds(ABC):
                 collective_variable=self.collective_variable,
             )
 
-        def weights(self, norm="max"):
+        def weights(self, norm: str | None = None):
             beta = 1 / (self.sti.T * boltzmann)
 
             weights = []
-            energy = []
 
             for ti_i in self.ti:
                 if ti_i.e_bias is None:
@@ -506,17 +516,19 @@ class Rounds(ABC):
                     continue
 
                 u = beta * ti_i.e_bias
-                if norm == "max":
+
+                if norm is None:
+                    pass
+                elif norm == "max":
                     u -= jnp.max(u)
                 else:
                     raise
 
                 w = jnp.exp(u)
-                if (n := np.sum(w)) != 0:
-                    w /= n
 
-                energy.append(jnp.dot(ti_i.e_pot, w))
-
+                if norm:
+                    if (n := np.sum(w)) != 0:
+                        w /= n
                 weights.append(w)
 
             return weights
@@ -758,9 +770,9 @@ class Rounds(ABC):
                 out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
                 bias = None
 
-            out_nl = None
-            if new_r_cut is not None:
-                out_nl = [osp.get_neighbour_list(r_cut=new_r_cut, z_array=sti.atomic_numbers) for osp in out_sp]
+        out_nl = None
+        if new_r_cut is not None:
+            out_nl = [osp.get_neighbour_list(r_cut=new_r_cut, z_array=sti.atomic_numbers) for osp in out_sp]
 
         return Rounds.data_loader_output(
             sp=out_sp,
@@ -858,19 +870,20 @@ class Rounds(ABC):
             if invalidate:
                 self.invalidate_data(c=self.cv, r=self.round, i=i)
 
-    def iter_ase_atoms(self, r: int | None = None, c: int | None = None, num: int = 3):
+    def iter_ase_atoms(self, r: int | None = None, c: int | None = None, num: int = 3, minkowski_reduce=True):
         from molmod import angstrom
 
         for round, trajejctory in self.iter(stop=r, c=c, num=num):
-            traj = trajejctory.ti
+            # traj = trajejctory.ti
 
-            pos_A = traj._positions / angstrom
-            pbc = traj._cell is not None
+            sp = trajejctory.ti.sp
+            if minkowski_reduce:
+                sp, _, _ = sp.canonicalize()
+
+            pos_A = sp.coordinates / angstrom
+            pbc = sp.cell is not None
             if pbc:
-                cell_A = traj._cell / angstrom
-                # vol_A3 = traj.volume / angstrom**3
-                # vtens_eV = traj.vtens / electronvolt
-                # stresses_eVA3 = vtens_eV / vol_A3
+                cell_A = sp.cell / angstrom
 
                 atoms = [
                     ase.Atoms(
@@ -882,7 +895,7 @@ class Rounds(ABC):
                     )
                     for pos, cell in zip(pos_A, cell_A)
                 ]
-                # atoms.info["stress"] = stresses_eVA3
+
             else:
                 atoms = [
                     ase.Atoms(
@@ -892,11 +905,6 @@ class Rounds(ABC):
                     )
                     for positions in pos_A
                 ]
-
-            # if traj.gpos is not None:
-            #     atoms.arrays["forces"] = -traj.gpos * angstrom / electronvolt
-            # if traj.e_pot is not None:
-            #     atoms.info["energy"] = traj.e_pot / electronvolt
 
             yield atoms, round, trajejctory
 

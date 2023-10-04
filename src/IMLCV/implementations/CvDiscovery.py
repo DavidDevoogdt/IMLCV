@@ -629,12 +629,12 @@ class TransformerMAF(Transformer):
             if sym:
                 pi = jnp.sum(0.5 * (X + Y).T @ W, axis=1)
                 COV = 0.5 * (X.T @ W @ X + Y.T @ W @ Y)
-                ccov = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
+                # ccov = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
 
             else:
                 pi = jnp.sum(X.T @ W, axis=1)
                 COV = X.T @ W @ X
-                ccov = X.T @ W @ Y
+                # ccov = X.T @ W @ Y
 
             # transform to diagonal basis
 
@@ -642,12 +642,10 @@ class TransformerMAF(Transformer):
             # transform to a basis where the covariance matrix is diagonal, and remove the small eigenvalues
             # l, q = jnp.linalg.eigh(COV)
 
-            l, q = scipy.linalg.eigh(a=COV, subset_by_value=[epsilon, jnp.inf])
-            diag_2 = jnp.diag(q.T @ ccov @ q)
-            mask = diag_2 > epsilon
+            eps = jnp.finfo(COV.dtype).eps * jnp.max(jnp.array(X.shape)) * 100
+            print(f"using {eps=}")
 
-            q = jnp.array(q[:, mask])
-            l = jnp.array(l[mask])
+            l, q = scipy.linalg.eigh(a=COV, subset_by_value=[epsilon, jnp.inf])
 
             @CvTrans.from_cv_function
             def tranform(cv, nl, _):
@@ -729,11 +727,11 @@ class TransformerMAF(Transformer):
         if correct_bias:
             w_k = []
             for a in dlo.weights():
-                s = jnp.sum(a[:-lag_n])
+                # s = jnp.sum(a[:-lag_n])
                 out = a[:-lag_n]
 
-                if s != 0:
-                    out /= s
+                # if s != 0:
+                #     out /= s
                 w_k.append(out)
 
         else:
