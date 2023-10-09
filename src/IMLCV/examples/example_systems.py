@@ -303,7 +303,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
     return yaffmd
 
 
-def CsPbI3_refs(x, y, z):
+def CsPbI3_refs(x, y, z, input_atoms=None):
     fb = DATA_ROOT / "CsPbI_3" / f"{x}x{y}x{z}"
 
     from ase import Atoms
@@ -311,7 +311,14 @@ def CsPbI3_refs(x, y, z):
     assert (p := fb).exists(), f"cannot find {p}"
     atoms: list[Atoms] = []
 
-    input_atoms = fb.glob("*.xyz")
+    if input_atoms is None:
+        input_atoms = fb.glob("*.xyz")
+    else:
+        o = []
+        for a in input_atoms:
+            assert (p := fb / f"{a}.xyz").exists()
+            o.append(p)
+        input_atoms = o
 
     for a in input_atoms:
         atoms.append(ase.io.read(str(a)))

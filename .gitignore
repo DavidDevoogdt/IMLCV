@@ -80,3 +80,4 @@ perovskites/*
 .jupyter_ystore.db
 
 .virtual_documents/*
+.jupyter_ystore.db-journal

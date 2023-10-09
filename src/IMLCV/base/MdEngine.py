@@ -187,7 +187,7 @@ class TrajectoryInfo:
             for name in [*self._items_vec, *self._items_scal]:
                 prop = self.__getattribute__(name)
                 if prop is not None:
-                    self.__setattr__(name, np.array([prop]))
+                    self.__setattr__(name, jnp.array([prop]))
 
         # test wether cell is truly not None
         if self._cell is not None:
@@ -261,14 +261,14 @@ class TrajectoryInfo:
             if prop is not None:
                 self.__setattr__(
                     name,
-                    np.vstack((prop, np.zeros((delta, *prop.shape[1:])))),
+                    jnp.vstack((prop, jnp.zeros((delta, *prop.shape[1:])))),
                 )
         for name in self._items_scal:
             prop = self.__getattribute__(name)
             if prop is not None:
                 self.__setattr__(
                     name,
-                    np.hstack([prop, np.zeros(delta)]),
+                    jnp.hstack([prop, jnp.zeros(delta)]),
                 )
 
     def _shrink_capacity(self):
@@ -508,7 +508,7 @@ class MDEngine(ABC):
         # print("update neighbour list")
 
         def _nl():
-            print("slow update")
+            print("fast nl update")
             return self.sp.get_neighbour_list(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,

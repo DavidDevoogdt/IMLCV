@@ -32,7 +32,15 @@ def legendre(x, n):
 
 
 # @partial(jit, static_argnums=(2, 3))
-def p_i(sp: SystemParams, nl: NeighbourList, p, r_cut):
+def p_i(
+    sp: SystemParams,
+    nl: NeighbourList,
+    p,
+    r_cut,
+    chunk_size_neigbourgs=None,
+    chunk_size_atoms=None,
+    chunk_size_batch=None,
+):
     if sp.batched:
         return vmap(p_i, in_axes=(0, 0, None, None))(sp, nl, p, r_cut)
 
@@ -47,6 +55,9 @@ def p_i(sp: SystemParams, nl: NeighbourList, p, r_cut):
         reduce="full",
         unique=True,
         split_z=True,
+        chunk_size_neigbourgs=chunk_size_neigbourgs,
+        chunk_size_atoms=chunk_size_atoms,
+        chunk_size_batch=chunk_size_batch,
     )
 
     return val0

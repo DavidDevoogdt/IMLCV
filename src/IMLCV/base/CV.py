@@ -13,7 +13,6 @@ import jax.numpy as jnp
 import jax.scipy.optimize
 import jax_dataclasses as jdc
 import jaxopt.objective
-import numpy as np
 from flax import linen as nn
 from jax import Array
 from jax import jacfwd
@@ -999,19 +998,28 @@ class NeighbourList:
         reduce="full",  # or 'z' or 'none'
         split_z=False,  #
         exclude_self=False,
+        chunk_size_neigbourgs=None,
+        chunk_size_atoms=None,
+        chunk_size_batch=None,
     ):
         if sp.batched:
-            return vmap(
-                lambda nl, sp: NeighbourList.apply_fun_neighbour(
-                    self=nl,
-                    sp=sp,
-                    func=func,
-                    r_cut=r_cut,
-                    fill_value=fill_value,
-                    reduce=reduce,
-                    split_z=split_z,
-                    exclude_self=exclude_self,
+            return chunk_map(
+                vmap(
+                    lambda nl, sp: NeighbourList.apply_fun_neighbour(
+                        self=nl,
+                        sp=sp,
+                        func=func,
+                        r_cut=r_cut,
+                        fill_value=fill_value,
+                        reduce=reduce,
+                        split_z=split_z,
+                        exclude_self=exclude_self,
+                        chunk_size_neigbourgs=chunk_size_neigbourgs,
+                        chunk_size_atoms=chunk_size_atoms,
+                        chunk_size_batch=None,
+                    ),
                 ),
+                chunk_size=chunk_size_batch,
             )(self, sp)
 
         if r_cut is None:
@@ -1031,7 +1039,16 @@ class NeighbourList:
         if func is None:
             return bools, None
 
-        true_val = vmap(vmap(func))(pos, ind)
+        true_val = chunk_map(
+            vmap(
+                chunk_map(
+                    vmap(func),
+                    chunk_size=chunk_size_neigbourgs,
+                )
+            ),
+            chunk_size=chunk_size_atoms,
+        )(pos, ind)
+
         false_val = jax.tree_map(
             lambda a: jnp.zeros_like(a) + fill_value,
             true_val,
@@ -1102,6 +1119,9 @@ class NeighbourList:
         split_z=False,  #
         exclude_self=True,
         unique=True,
+        chunk_size_neigbourgs=None,
+        chunk_size_atoms=None,
+        chunk_size_batch=None,
     ):
         """
         Args:
@@ -1116,19 +1136,22 @@ class NeighbourList:
 
         """
         if sp.batched:
-            return vmap(
-                lambda nl, sp: NeighbourList.apply_fun_neighbour_pair(
-                    self=nl,
-                    sp=sp,
-                    func_single=func_single,
-                    func_double=func_double,
-                    r_cut=r_cut,
-                    fill_value=fill_value,
-                    reduce=reduce,
-                    split_z=split_z,
-                    exclude_self=exclude_self,
-                    unique=unique,
+            return chunk_map(
+                vmap(
+                    lambda nl, sp: NeighbourList.apply_fun_neighbour_pair(
+                        self=nl,
+                        sp=sp,
+                        func_single=func_single,
+                        func_double=func_double,
+                        r_cut=r_cut,
+                        fill_value=fill_value,
+                        reduce=reduce,
+                        split_z=split_z,
+                        exclude_self=exclude_self,
+                        unique=unique,
+                    )
                 ),
+                chunk_size=chunk_size_batch,
             )(self, sp)
 
         pos = self._pos(sp)
@@ -1141,13 +1164,23 @@ class NeighbourList:
             reduce="none",
             fill_value=fill_value,
             exclude_self=exclude_self,
+            chunk_size_neigbourgs=chunk_size_neigbourgs,
+            chunk_size_atoms=chunk_size_atoms,
         )
 
-        out_ijk = vmap(
+        out_ijk = chunk_map(
             lambda x, y, z: vmap(
-                vmap(func_double, in_axes=(0, 0, 0, None, None, None)),
-                in_axes=(None, None, None, 0, 0, 0),
+                lambda x1, y1, z1, x2, y2, z2: chunk_map( 
+                    vmap(
+                        lambda vx1, vy1, vz1: chunk_map(
+                            vmap(lambda vx2, vy2, vz2: func_double(vx1, vy1, vz1, vx2, vy2, vz2)),
+                            chunk_size=chunk_size_neigbourgs,
+                        )(x2, y2, z2)
+                    ),
+                    chunk_size=chunk_size_neigbourgs,
+                )(x1, y1, z1)
             )(x, y, z, x, y, z),
+            chunk_size=chunk_size_atoms,
         )(pos, ind, data_single)
 
         bools = vmap(
@@ -1276,6 +1309,7 @@ class NeighbourList:
         )
 
         def _f(sp: SystemParams):
+            jax.debug.print("fast nl update")
             return sp._get_neighbour_list(
                 r_cut=self.r_cut,
                 r_skin=self.r_skin,
@@ -1286,10 +1320,13 @@ class NeighbourList:
                 nxyz=self.nxyz,
             )
 
+        def _noop(sp: SystemParams):
+            return True, self
+
         return jax.lax.cond(
             max_displacement > self.r_skin,
             _f,
-            lambda _: (True, self),
+            _noop,
             sp,
         )
 

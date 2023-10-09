@@ -99,6 +99,8 @@ def sb_descriptor(
     l_max: int,
     reduce=True,
     reshape=True,
+    chunk_size_atoms=None,
+    chunk_size_neigbourgs=None,
 ) -> CvFlow:
     from IMLCV.tools.soap_kernel import p_i, p_inl_sb
 
@@ -129,7 +131,11 @@ def sb_descriptor(
         )  # eliminate Z2>Z1
         return a
 
-    p = p_inl_sb(r_cut=r_cut, n_max=n_max, l_max=l_max)
+    p = p_inl_sb(
+        r_cut=r_cut,
+        n_max=n_max,
+        l_max=l_max,
+    )
 
     def f(sp: SystemParams, nl: NeighbourList):
         assert nl is not None, "provide neighbourlist for sb describport"
@@ -139,6 +145,8 @@ def sb_descriptor(
             nl=nl,
             p=p,
             r_cut=r_cut,
+            chunk_size_atoms=chunk_size_atoms,
+            chunk_size_neigbourgs=chunk_size_neigbourgs,
         )
 
         if reduce:
