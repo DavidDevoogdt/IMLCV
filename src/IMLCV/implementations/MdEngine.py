@@ -17,6 +17,7 @@ from IMLCV.base.MdEngine import StaticMdInfo
 from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
+import jax.numpy as jnp
 
 
 class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):

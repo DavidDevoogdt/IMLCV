@@ -567,3 +567,9 @@ class RBFInterpolator:
             return out.reshape((nx, -1))
         else:
             return out.reshape((-1,))
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)

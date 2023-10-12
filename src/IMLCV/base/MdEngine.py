@@ -350,7 +350,11 @@ class TrajectoryInfo:
     @property
     def volume(self):
         if self.cell is not None:
-            return jnp.linalg.det(self._cell)
+            vol_unsigned = jnp.linalg.det(self._cell)
+            if vol_unsigned < 0:
+                print("cell volume was negative")
+
+            return jnp.abs(vol_unsigned)
         return None
 
     @property
@@ -585,10 +589,15 @@ class MDEngine(ABC):
         self.trajectory_info._shrink_capacity()
         return self.trajectory_info
 
-    def save_step(self, T=None, P=None, t=None, err=None):
+    def save_step(self, T=None, P=None, t=None, err=None, canonicalize=False):
+        if canonicalize:
+            sp = self.nl.canonicalized_sp(self.sp)
+        else:
+            sp = self.sp
+
         ti = TrajectoryInfo(
-            _positions=self.sp.coordinates,
-            _cell=self.sp.cell,
+            _positions=sp.coordinates,
+            _cell=sp.cell,
             _e_pot=self.last_ener.energy,
             _e_pot_gpos=self.last_ener.gpos,
             _e_bias=self.last_bias.energy,
@@ -658,22 +667,12 @@ class MDEngine(ABC):
         gpos: bool = False,
         vtens: bool = False,
     ) -> tuple[CV, EnergyResult]:
-        # try:
         cv, ener = self.bias.compute_from_system_params(
             sp=self.sp,
             nl=self.nl,
             gpos=gpos,
             vir=vtens,
         )
-        # except Exception as err:
-        #     print(f"Error in bias calculation: {err=}")
-        #     with jax.disable_jit():
-        #         cv, ener = self.bias.compute_from_system_params(
-        #             sp=self.sp,
-        #             nl=self.nl,
-        #             gpos=gpos,
-        #             vir=vtens,
-        #         )
 
         return cv, ener
 
@@ -700,7 +699,7 @@ class MDEngine(ABC):
 
             @rvecs.setter
             def rvecs(self, rvecs):
-                self._ener.cell = rvecs
+                self._ener.cell = jnp.array(rvecs)
 
             def update_rvecs(self, rvecs):
                 self.rvecs = rvecs
@@ -714,7 +713,11 @@ class MDEngine(ABC):
                 if self.nvec == 0:
                     return np.nan
 
-                return np.linalg.det(self.rvecs)
+                vol_unsigned = np.linalg.det(self.rvecs)
+                if vol_unsigned < 0:
+                    print("cell volume was negative")
+
+                return np.abs(vol_unsigned)
 
         def __post_init__(self):
             self._cell = self.YaffCell(_ener=self._ener)
@@ -741,7 +744,7 @@ class MDEngine(ABC):
 
         @pos.setter
         def pos(self, pos):
-            self._ener.coordinates = pos
+            self._ener.coordinates = jnp.array(pos)
 
         @property
         def natom(self):

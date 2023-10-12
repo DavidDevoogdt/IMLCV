@@ -16,6 +16,7 @@ from IMLCV.base.bias import EnergyResult
 from IMLCV.configs.config_general import get_cp2k
 from molmod.units import angstrom
 from molmod.units import electronvolt
+import jax.numpy as jnp
 
 yaff.log.set_level(yaff.log.silent)
 
@@ -41,11 +42,11 @@ class YaffEnergy(Energy):
 
     @property
     def coordinates(self):
-        return self.ff.system.pos[:]
+        return jnp.array(self.ff.system.pos[:])
 
     @coordinates.setter
     def coordinates(self, coordinates):
-        self.ff.update_pos(coordinates)
+        self.ff.update_pos(np.array(coordinates))
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
@@ -83,7 +84,7 @@ class AseEnergy(Energy):
 
     @property
     def cell(self):
-        return self.atoms.get_cell()[:] * angstrom
+        return jnp.array(self.atoms.get_cell()[:] * angstrom)
 
     @cell.setter
     def cell(self, cell):
@@ -91,7 +92,7 @@ class AseEnergy(Energy):
 
     @property
     def coordinates(self):
-        return self.atoms.get_positions() * angstrom
+        return jnp.array(self.atoms.get_positions() * angstrom)
 
     @coordinates.setter
     def coordinates(self, coordinates):
@@ -117,13 +118,11 @@ class AseEnergy(Energy):
 
         if vir:
             cell = self.atoms.get_cell()
-            volume = np.linalg.det(cell)
+            volume = cell.volume
             stress = self.atoms.get_stress(voigt=False)
             vtens_out = volume * stress * electronvolt
 
-        res = EnergyResult(energy, gpos_out, vtens_out)
-
-        return res
+        return EnergyResult(energy, gpos_out, vtens_out)
 
     def _calculator(self) -> ase.calculators.calculator.Calculator:
         raise NotImplementedError

@@ -38,7 +38,7 @@ from ott.solvers.linear import sinkhorn
 def Volume(sp: SystemParams, _):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
-    vol = jnp.abs(jnp.dot(sp.cell[0], jnp.cross(sp.cell[1], sp.cell[2])))
+    vol = jnp.abs(jnp.linalg.det(sp.cell))
     return jnp.array([vol])
 
 

@@ -328,7 +328,7 @@ def CsPbI3_refs(x, y, z, input_atoms=None):
     refs: SystemParams | None = None
 
     for a in atoms:
-        sp_a, _, _ = SystemParams(
+        sp_a, _ = SystemParams(
             coordinates=a.positions * angstrom,
             cell=a.cell * angstrom,
         ).canonicalize()

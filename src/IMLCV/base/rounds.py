@@ -878,7 +878,7 @@ class Rounds(ABC):
 
             sp = trajejctory.ti.sp
             if minkowski_reduce:
-                sp, _, _ = sp.canonicalize()
+                sp, _ = sp.canonicalize(qr=True)
 
             pos_A = sp.coordinates / angstrom
             pbc = sp.cell is not None

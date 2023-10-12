@@ -290,7 +290,7 @@ class SystemParams:
         if r_cut is None:
             return False, None
 
-        sp, op_cell, op_coor = self.canonicalize()
+        sp, (op_cell, op_coor, _) = self.canonicalize()
 
         b = True
 
@@ -475,10 +475,10 @@ class SystemParams:
 
         @jax.jit
         def _f(sp: SystemParams):
-            bools, r, a, ijk, co = res(sp, sp.coordinates)
+            bools, r, a, ijk, center_op = res(sp, sp.coordinates)
             num_neighs = jnp.max(jnp.sum(bools, axis=1))
 
-            return num_neighs, bools, r, a, ijk, co
+            return num_neighs, bools, r, a, ijk, center_op
 
         @partial(jit, static_argnums=0)
         def take(num_neighs, r, a, ijk):
@@ -494,7 +494,7 @@ class SystemParams:
             _f = padded_pmap(vmap(_f))
             take = vmap(take, in_axes=(None, 0, 0, 0))
 
-        nn, _, r, a, ijk, co = _f(sp)
+        nn, _, r, a, ijk, center_op = _f(sp)
 
         if sp.batched:
             nn = jnp.max(nn)  # ingore: type
@@ -520,7 +520,7 @@ class SystemParams:
                 nxyz=nxyz,
                 op_cell=op_cell,
                 op_coor=op_coor,
-                op_center=co,
+                op_center=center_op,
             ),
         )
 
@@ -549,7 +549,7 @@ class SystemParams:
 
     @jax.jit
     def minkowski_reduce(self) -> tuple[SystemParams, Array]:
-        """base on code from ASE: https://wiki.fysik.dtu.dk/ase/_modules/ase/geometry/minkowski_reductsp.cellion.html#minkowski_reduce"""
+        """base on code from ASE: https://wiki.fysik.dtu.dk/ase/_modules/ase/geometry/minkowski_reduction.html"""
         if self.cell is None:
             return self, jnp.eye(3)
 
@@ -824,11 +824,12 @@ class SystemParams:
                 lambda: reduction_full(cell),
             )
 
-            # todo: figure this out. biggest elements not always on diagonals
-            # sgn = jnp.diag(jnp.sign(jnp.sum(jnp.sign(reduced), axis=1)))
-            # return sgn @ reduced, sgn @ op
+            change_handedness = jnp.sign(jnp.linalg.det(cell)) * jnp.sign(jnp.linalg.det(reduced))
+            # jax.debug.print("handedness change {}", change_handedness)
 
-            return reduced, op
+            op = change_handedness * op
+
+            return op @ cell, op
 
         if self.batched:
             cell, op = vmap(minkowski_reduce)(self.cell)
@@ -837,31 +838,57 @@ class SystemParams:
 
         return SystemParams(coordinates=self.coordinates, cell=cell), op
 
+    @jax.jit
+    def apply_minkowski_reduction(self, op):
+        assert not self.batched, "apply vamp"
+
+        return SystemParams(self.coordinates, op @ self.cell)
+
+    @jax.jit
+    def rotate_cell(self) -> tuple[SystemParams, tuple[Array, Array] | None]:
+        if self.cell is None:
+            return self, None
+
+        if self.batched:
+            return vmap(SystemParams.rotate_cell)(self)
+
+        q, r = jnp.linalg.qr(self.cell.T)
+
+        # make diagonals positive
+        signs = jnp.sign(jnp.diag(r))
+
+        # do not flip sign of new coordinates, as these are absolute
+        new_cell = jnp.diag(signs) @ self.cell @ q
+        new_coordinates = self.coordinates @ q
+
+        return SystemParams(coordinates=new_coordinates, cell=new_cell), (signs, q)
+
+    @jax.jit
+    def apply_rotation(self, op):
+        signs, q = op
+        sp = self
+        if sp.cell is None:
+            return sp
+
+        assert not sp.batched, "apply vmap"
+
+        new_cell = jnp.diag(signs) @ self.cell @ q
+        new_coordinates = self.coordinates @ q
+
+        return SystemParams(coordinates=new_coordinates, cell=new_cell)
+
     @partial(jit, static_argnames=["min"])
     def wrap_positions(self, min=False) -> tuple[SystemParams, Array]:
         """wrap pos to lie within unit cell"""
 
-        def f(x, y):
-            return SystemParams._wrap_pos(cell=x, coordinates=y, min=min)
-
         if self.batched:
-            f = vmap(f)
+            return vmap(Partial(SystemParams.wrap_positions, min=min))(self)
 
-        coor, op = f(self.cell, self.coordinates)
-        return (
-            SystemParams(coordinates=coor, cell=self.cell),
-            op,
-        )
+        cell = self.cell
+        coordinates = self.coordinates
 
-    @staticmethod
-    @partial(jit, static_argnames=["min"])
-    def _wrap_pos(
-        cell: Array | None,
-        coordinates: Array,
-        min=False,
-    ) -> tuple[Array, Array]:
-        if cell is None:
-            return coordinates, jnp.zeros_like(coordinates, dtype=jnp.int64)
+        if self.cell is None:
+            return self, jnp.zeros_like(coordinates, dtype=jnp.int64)
 
         trans = vmap(vmap(jnp.dot, in_axes=(0, None)), in_axes=(None, 0))(
             vmap(lambda x: x / jnp.linalg.norm(x))(cell),
@@ -894,22 +921,51 @@ class SystemParams:
 
         op, reduced = jax.lax.cond(min, _f1, _f2)
 
-        return deproj(reduced), op
+        return SystemParams(deproj(reduced), cell), op
 
-    @partial(jit, static_argnames=["min"])
-    def canonicalize(self, min=False) -> tuple[SystemParams, Array, Array]:
+    @jax.jit
+    def apply_wrap(sp: SystemParams, wrap_op: Array) -> SystemParams:
+        if sp.cell is None:
+            return sp
+
+        assert not sp.batched, "apply vmap"
+
+        return SystemParams(sp.coordinates + wrap_op @ sp.cell, sp.cell)
+
+    @partial(jit, static_argnames=["min", "qr"])
+    def canonicalize(self, min=False, qr=False) -> tuple[SystemParams, Array, Array]:
         if self.batched:
-            return vmap(lambda sp: sp.canonicalize(min=min))(self)
+            return vmap(lambda sp: sp.canonicalize(min=min, qr=qr))(self)
 
         mr, op_cell = self.minkowski_reduce()
+
+        op_qr = None
+
+        if qr:
+            mr, op_qr = mr.rotate_cell()
+
         mr, op_coor = mr.wrap_positions(min)
 
-        return mr, op_cell, op_coor
+        return mr, (op_cell, op_coor, op_qr)
+
+    @jax.jit
+    def apply_canonicalize(self, ops):
+        op_cell, op_coor, op_qr = ops
+        assert not self.batched, "apply vmap"
+
+        sp = self.apply_minkowski_reduction(op_cell)
+
+        if op_qr is not None:
+            sp = sp.apply_rotation(op_qr)
+
+        sp = sp.apply_wrap(op_coor)
+
+        return sp
 
     def min_distance(self, index_1, index_2):
         assert self.batched is False
 
-        sp, _, _ = self.canonicalize()  # necessary if cell is skewed
+        sp, _ = self.canonicalize()  # necessary if cell is skewed
         coor1 = sp.coordinates[index_1, :]
         coor2 = sp.coordinates[index_2, :]
 
@@ -923,6 +979,19 @@ class SystemParams:
 
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+
+        if not isinstance(self, SystemParams):
+            print(f"loaded {self=}  has {isinstance(self,SystemParams)=}, recreating the object")
+            self = SystemParams(
+                coordinates=self.coordinates,
+                cell=self.cell,
+            )
 
 
 @jdc.pytree_dataclass
@@ -943,49 +1012,58 @@ class NeighbourList:
     num_z_unique: jdc.Static[tuple[int] | None] = None
 
     @jax.jit
-    def _pos(self, sp_orig):
+    def canonicalized_sp(self, sp: SystemParams) -> SystemParams:
+        app_can = SystemParams.apply_canonicalize
+
+        if self.batched:
+            assert sp.batched
+            app_can = vmap(app_can)
+
+        return app_can(sp, (self.op_cell, self.op_coor, None))
+
+    @jax.jit
+    def neighbour_pos(self, sp_orig):
         @partial(vmap, in_axes=(0, 0, None, None))
-        def _transform(ijk, a, spi, cell):
-            out = spi[a]
+        def neighbour_translate(ijk, a, sp_centered_on_atom, cell):
+            # a: index of atom
+            out = sp_centered_on_atom[a]
             if ijk is not None:
                 (i, j, k) = ijk
                 out = out + i * cell[0, :] + j * cell[1, :] + k * cell[2, :]
             return out
 
         @partial(vmap, in_axes=(0, 0, 0, None, 0))
-        def _recover(center_coordinates, ijk_indices, atom_indices, sp, co):
-            sp_center = sp.coordinates - center_coordinates
-            if sp.cell is not None:
-                sp_center += co @ sp.cell
+        def vmap_atoms(
+            atom_center_coordinates: Array,
+            ijk_indices: Array,
+            atom_indices: Array,
+            canon_sp: SystemParams,
+            op_center: Array,
+        ):
+            # center on atom
 
-            return _transform(
+            sp_centered_on_atom = SystemParams(canon_sp.coordinates - atom_center_coordinates, can_sp.cell)
+            sp_centered_on_atom = SystemParams.apply_wrap(sp_centered_on_atom, op_center)
+
+            # transform centered neighbours
+            return neighbour_translate(
                 ijk_indices,
                 atom_indices,
-                sp_center,
-                sp.cell,
+                sp_centered_on_atom.coordinates,
+                canon_sp.cell,
             )
-
-        def _sp(sp: SystemParams, op_cell, op_coor):
-            if sp.cell is not None:
-                cell = op_cell @ sp.cell
-                coor = sp.coordinates + op_coor @ cell
-            else:
-                cell = None
-                coor = sp.coordinates
-            return SystemParams(coor, cell)
 
         if sp_orig.batched:
             assert self.batched
-            _recover = vmap(_recover, in_axes=(0, 0, 0, 0))
-            _sp = vmap(_sp)
+            vmap_atoms = vmap(vmap_atoms)
 
-        sp = _sp(sp_orig, self.op_cell, self.op_coor)
+        can_sp = self.canonicalized_sp(sp_orig)
 
-        return _recover(
-            sp.coordinates,
+        return vmap_atoms(
+            can_sp.coordinates,
             self.ijk_indices,
             self.atom_indices,
-            sp,
+            can_sp,
             self.op_center,
         )
 
@@ -1025,7 +1103,7 @@ class NeighbourList:
         if r_cut is None:
             r_cut is self.r_cut
 
-        pos = self._pos(sp)
+        pos = self.neighbour_pos(sp)
         ind = self.atom_indices
         r = jnp.linalg.norm(pos, axis=-1)
 
@@ -1154,7 +1232,7 @@ class NeighbourList:
                 chunk_size=chunk_size_batch,
             )(self, sp)
 
-        pos = self._pos(sp)
+        pos = self.neighbour_pos(sp)
         ind = self.atom_indices
 
         bools, data_single = self.apply_fun_neighbour(
@@ -1170,10 +1248,10 @@ class NeighbourList:
 
         out_ijk = chunk_map(
             lambda x, y, z: vmap(
-                lambda x1, y1, z1, x2, y2, z2: chunk_map( 
+                lambda x1, y1, z1, x2, y2, z2: chunk_map(
                     vmap(
                         lambda vx1, vy1, vz1: chunk_map(
-                            vmap(lambda vx2, vy2, vz2: func_double(vx1, vy1, vz1, vx2, vy2, vz2)),
+                            vmap(lambda vx2, vy2, vz2: func_double(vx2, vy2, vz2, vx1, vy1, vz1)),
                             chunk_size=chunk_size_neigbourgs,
                         )(x2, y2, z2)
                     ),
@@ -1305,10 +1383,10 @@ class NeighbourList:
     @jax.jit
     def update(self, sp: SystemParams) -> tuple[bool, NeighbourList]:
         max_displacement = jnp.max(
-            jnp.linalg.norm(self._pos(self.sp_orig) - self._pos(sp), axis=-1),
+            jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
         )
 
-        def _f(sp: SystemParams):
+        def _f():
             jax.debug.print("fast nl update")
             return sp._get_neighbour_list(
                 r_cut=self.r_cut,
@@ -1320,14 +1398,10 @@ class NeighbourList:
                 nxyz=self.nxyz,
             )
 
-        def _noop(sp: SystemParams):
-            return True, self
-
         return jax.lax.cond(
             max_displacement > self.r_skin,
             _f,
-            _noop,
-            sp,
+            lambda: (True, self),
         )
 
     def nl_split_z(self, p):
@@ -1794,6 +1868,22 @@ class CV:
             _stack_dims=cvs[0]._stack_dims,
             atomic=atomic,
         )
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+
+        if not isinstance(self, CV):
+            print(f"loaded {self=}  has {isinstance(self,CV)=}, recreating the object")
+            self = CV(
+                cv=self.cv,
+                mapped=self.mapped,
+                atomic=self.atomic,
+                _combine_dims=self.combine_dims,
+                _stack_dims=self._stack_dims,
+            )
 
 
 class CvMetric:

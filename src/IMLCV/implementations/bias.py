@@ -65,6 +65,7 @@ class HarmonicBias(Bias):
             self.y0 = jnp.einsum("i,i,i->", k, self.r0, self.r0) / 2
 
     def _compute(self, cvs: CV, *args):
+        assert isinstance(cvs, CV)
         r = self.collective_variable.metric.difference(cvs, self.q0)
 
         def parabola(r):
@@ -90,6 +91,22 @@ class HarmonicBias(Bias):
 
     def get_args(self):
         return []
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+
+        if not isinstance(self.q0, CV):
+            print(f"loaded {self.q0=}  has {isinstance(self.q,CV)=}, recreating the object")
+            self.q0 = CV(
+                cv=self.q0.cv,
+                mapped=self.q0.mapped,
+                atomic=self.q0.atomic,
+                _combine_dims=self.q0.combine_dims,
+                _stack_dims=self.q0._stack_dims,
+            )
 
 
 class BiasMTD(Bias):
@@ -233,6 +250,12 @@ class RbfBias(Bias):
 
     def get_args(self):
         return []
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
 
 
 class GridBias(Bias):

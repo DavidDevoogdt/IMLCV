@@ -68,12 +68,11 @@ class EnergyResult:
             gpos += other.gpos
 
         vtens = self.vtens
-
-        if other.vtens is not None:
-            if vtens is not None:
-                vtens += other.vtens
-            else:
-                vtens = other.vtens
+        if self.vtens is None:
+            assert other.vtens is None
+        else:
+            assert other.vtens is not None
+            vtens += other.vtens
 
         return EnergyResult(energy=self.energy + other.energy, gpos=gpos, vtens=vtens)
 
@@ -313,7 +312,8 @@ class Bias(BC, ABC):
 
         If map==False, the cvs are assumed to be already mapped
         """
-        # assert isinstance(cvs, CV)
+        assert isinstance(cvs, CV)
+        # jax.debug.print("cvs {}", cvs)
 
         # map compute command
         def f0(x):

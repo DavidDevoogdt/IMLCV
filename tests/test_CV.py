@@ -136,7 +136,7 @@ def _get_sp_rand(
 
     r_side = 6 * (n / 5) ** (1 / 3)
 
-    sp0, _, _ = SystemParams(
+    sp0, _ = SystemParams(
         coordinates=jax.random.uniform(k1, shape=(n, 3)) * r_side,
         cell=jnp.array(
             [
@@ -489,9 +489,46 @@ def test_canoncicalize():
 
     # test minkowski reduction
     sp0, sp1 = sp0.minkowski_reduce()[0], sp1.minkowski_reduce()[0]
+    for i in range(3):
+        assert jnp.all(jnp.abs(sp0.cell[i, :] - sp1.cell[i, :]) < 1e-6) or jnp.all(
+            jnp.abs(sp0.cell[i, :] + sp1.cell[i, :]) < 1e-6
+        )
 
-    assert jnp.all(jnp.abs(sp0.cell - sp1.cell) < 1e-6)
+    # test qr
+    sp0, sp1 = sp0.rotate_cell()[0], sp1.rotate_cell()[0]
+    assert jnp.all(jnp.abs(sp0.cell - sp1.cell) < 1e-6), f"{sp0.cell},{sp1.cell}"
 
     sp0, sp1 = sp0.wrap_positions()[0], sp1.wrap_positions()[0]
 
-    assert jnp.all(jnp.abs(sp0.coordinates - sp1.coordinates) < 1e-6)
+    assert jnp.all(jnp.abs(sp0.coordinates - sp1.coordinates) < 1e-6), f"{sp0.coordinates}, {sp1.coordinates}"
+
+
+def test_sp_apply():
+    prng = jax.random.PRNGKey(42)
+    k1, k2, prng = jax.random.split(prng, 3)
+
+    cell = jax.random.uniform(k1, (500, 3, 3))
+    coordinates = jax.random.uniform(k2, (500, 2, 3))
+
+    sp = SystemParams(cell=cell, coordinates=coordinates)
+
+    sp_wrapped, op = sp.wrap_positions(min=True)
+    sp_wrapped_2 = vmap(SystemParams.apply_wrap)(sp, op)
+    assert jnp.linalg.norm(sp_wrapped.coordinates - sp_wrapped_2.coordinates) < 1e-10
+
+    sp_rot, op = sp.rotate_cell()
+    sp_rot_2 = vmap(SystemParams.apply_rotation)(sp, op)
+
+    assert jnp.linalg.norm(sp_rot.cell - sp_rot_2.cell) < 1e-10
+    assert jnp.linalg.norm(sp_rot.coordinates - sp_rot_2.coordinates) < 1e-10
+
+    sp_min, op = sp.minkowski_reduce()
+    sp_min_2 = vmap(SystemParams.apply_minkowski_reduction)(sp, op)
+
+    assert jnp.linalg.norm(sp_min.cell - sp_min_2.cell) < 1e-10
+
+    sp_can, op = sp.canonicalize(min=False, qr=True)
+    sp_can_2 = vmap(SystemParams.apply_canonicalize)(sp, op)
+
+    assert jnp.linalg.norm(sp_can.cell - sp_can_2.cell) < 1e-10
+    assert jnp.linalg.norm(sp_can.coordinates - sp_can_2.coordinates) < 1e-10
