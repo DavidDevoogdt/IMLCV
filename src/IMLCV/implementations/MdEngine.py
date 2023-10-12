@@ -69,6 +69,9 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 
         self.save_step(**kwargs)
 
+    def expects_call(self, counter):
+        return True
+
     def _setup_verlet(self):
         # hooks = [self, VerletScreenLog(step=self.static_trajectory_info.screen_log)]
 

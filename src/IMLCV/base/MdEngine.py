@@ -476,24 +476,35 @@ class MDEngine(ABC):
 
         # self._sp = sp
 
+        cont = False
+
         if trajectory_file is not None:
             self.trajectory_file = Path(trajectory_file)
 
             # continue with existing file if it exists
             if Path(trajectory_file).exists():
                 self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
+                cont = True
+                print("continue with existing trajectory file")
             else:
                 self.trajectory_info: TrajectoryInfo | None = None
         else:
             self.trajectory_file = None
             self.trajectory_info: TrajectoryInfo | None = None
 
-        self.step = 1
+        if not cont:
+            self.step = 1
 
-        if sp is not None:
-            self.sp = sp
+            if sp is not None:
+                self.sp = sp
 
-        self.time0 = time()
+            self.time0 = time()
+
+        else:
+            self.step = self.trajectory_info._size
+            self.sp = self.trajectory_info.sp[-1]
+            self.time0 = self.trajectory_info.t[-1]
+
         self._nl: NeighbourList | None = None
 
     @property
@@ -546,11 +557,19 @@ class MDEngine(ABC):
         with open(file, "rb") as f:
             self = cloudpickle.load(f)
 
-        print("Loading MD engine")
         for key in kwargs.keys():
-            # print(f"setting {key}={kwargs[key]}")
-
             self.__setattr__(key, kwargs[key])
+
+            if key == "trajectory_file":
+                print(f"loading ti  {self.trajectory_file} ")
+                trajectory_file = kwargs[key]
+                if Path(trajectory_file).exists():
+                    self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
+                    self.step = self.trajectory_info._size
+                    self.sp = self.trajectory_info.sp[-1]
+                    self.time0 = self.trajectory_info.t[-1]
+
+                    print(f"loaded ti  {self.step=} ")
 
         return self
 
@@ -567,7 +586,11 @@ class MDEngine(ABC):
             steps: number of MD steps
         """
 
-        print(f"running for {int(steps)} steps!")
+        if self.step != 1:
+            steps = steps - self.step
+            print(f"previous run had {self.step} steps, running for additional {int(steps)} steps!")
+        else:
+            print(f"running for {int(steps)} steps!")
 
         try:
             self._run(int(steps))

@@ -1236,6 +1236,95 @@ class Rounds(ABC):
                 except Exception as e:
                     print(f"got exception {e} while trying to collect plot of {i}, continuing ")
 
+    def continue_run(
+        self,
+        steps: int,
+        cv_round: int | None = None,
+        round: int | None = None,
+        plot=True,
+        wait_for_plots=True,
+    ):
+        if cv_round is None:
+            cv_round = self.cv
+
+        if round is None:
+            round = self.get_round(c=cv_round)
+
+        with self.lock:
+            f = self.h5file
+            common_md_name = self.full_path(
+                f[f"{cv_round}/{round}"].attrs["name_md"],
+            )
+
+        md_engine = MDEngine.load(common_md_name)
+
+        from parsl.dataflow.dflow import AppFuture
+
+        tasks: list[tuple[int, AppFuture]] | None = None
+        plot_tasks = []
+
+        ri = self.round_information(c=cv_round, r=round)
+
+        for i in ri.num_vals:
+            path_name = self.path(c=cv_round, r=round, i=i)
+
+            b_name = path_name / "bias"
+            b_name_new = path_name / "bias_new"
+
+            if not b_name.exists():
+                print(f"skipping {i=}, {b_name_new=}not found")
+                continue
+
+            if b_name_new.exists():
+                print(f"skipping {i=}, new bias found")
+                continue
+
+            traj_name = path_name / "trajectory_info.h5"
+
+            future = Rounds.run_md(
+                sp=None,  # type: ignore
+                inputs=[File(common_md_name), File(str(b_name))],
+                outputs=[File(str(b_name_new)), File(str(traj_name))],
+                steps=int(steps),
+                execution_folder=path_name,
+            )
+
+            if plot:
+                plot_file = path_name / "plot.pdf"
+
+                plot_fut = Rounds.plot_md_run(
+                    traj=future,
+                    st=md_engine.static_trajectory_info,
+                    inputs=[future.outputs[0]],
+                    outputs=[File(str(plot_file))],
+                    execution_folder=path_name,
+                )
+
+                plot_tasks.append(plot_fut)
+
+            if tasks is None:
+                tasks = [(i, future)]
+            else:
+                tasks.append((i, future))
+
+        assert tasks is not None
+
+        # wait for tasks to finish
+        for i, future in tasks:
+            try:
+                d = future.result()
+                self.add_md(d=d, bias=self.rel_path(Path(future.outputs[0].filename)), i=i, c=cv_round)
+            except Exception as e:
+                print(f"got exception {e} while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
+
+        # wait for plots to finish
+        if plot and wait_for_plots:
+            for i, future in enumerate(plot_tasks):
+                try:
+                    d = future.result()
+                except Exception as e:
+                    print(f"got exception {e} while trying to collect plot of {i}, continuing ")
+
     @staticmethod
     @bash_app_python(executors=["reference"])
     def run_md(
