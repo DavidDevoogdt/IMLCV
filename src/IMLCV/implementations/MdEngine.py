@@ -2,6 +2,7 @@
 
 Currently, the MD is done with YAFF/OpenMM
 """
+import jax.numpy as jnp
 import numpy as np
 import yaff.analysis.biased_sampling
 import yaff.external
@@ -17,7 +18,6 @@ from IMLCV.base.MdEngine import StaticMdInfo
 from yaff.external import libplumed
 from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
-import jax.numpy as jnp
 
 
 class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
@@ -182,10 +182,10 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             self.md_engine.last_bias = bias
             self.md_engine.last_cv = cv
 
-            if gpos is not None:
-                gpos[:] += np.array(res.gpos)
-            if vtens is not None:
-                vtens[:] += np.array(res.vtens)
+            if res.gpos is not None:
+                gpos[:] += np.array(res.gpos, dtype=np.float64)
+            if res.vtens is not None:
+                vtens[:] += np.array(res.vtens, dtype=np.float64)
 
             return res.energy
 

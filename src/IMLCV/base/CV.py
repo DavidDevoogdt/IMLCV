@@ -11,9 +11,9 @@ import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
 import jax.scipy.optimize
-import jax_dataclasses as jdc
 import jaxopt.objective
 from flax import linen as nn
+from flax import struct
 from jax import Array
 from jax import jacfwd
 from jax import jacrev
@@ -24,6 +24,9 @@ from jax.tree_util import Partial
 from jax.tree_util import tree_flatten
 from jax.tree_util import tree_unflatten
 from molmod.units import angstrom
+
+# import jax_dataclasses as jdc
+
 
 ######################################
 #        Data types                  #
@@ -180,16 +183,10 @@ def chunk_map(f, chunk_size):
     return _f
 
 
-@jdc.pytree_dataclass
+@struct.dataclass
 class SystemParams:
     coordinates: Array
     cell: Array | None = None
-
-    def __post_init__(self):
-        if isinstance(self.coordinates, Array):
-            self.__dict__["coordinates"] = jnp.array(self.coordinates)
-        if isinstance(self.cell, Array):
-            self.__dict__["cell"] = jnp.array(self.cell)
 
     def __getitem__(self, slices) -> SystemParams:
         return SystemParams(
@@ -842,6 +839,12 @@ class SystemParams:
     def apply_minkowski_reduction(self, op):
         assert not self.batched, "apply vamp"
 
+        if self.cell is None:
+            return self
+
+        if op is None:
+            return self
+
         return SystemParams(self.coordinates, op @ self.cell)
 
     @jax.jit
@@ -953,12 +956,12 @@ class SystemParams:
         op_cell, op_coor, op_qr = ops
         assert not self.batched, "apply vmap"
 
-        sp = self.apply_minkowski_reduction(op_cell)
+        sp: SystemParams = self.apply_minkowski_reduction(op_cell)
 
         if op_qr is not None:
-            sp = sp.apply_rotation(op_qr)
+            sp: SystemParams = sp.apply_rotation(op_qr)
 
-        sp = sp.apply_wrap(op_coor)
+        sp: SystemParams = sp.apply_wrap(op_coor)
 
         return sp
 
@@ -984,6 +987,7 @@ class SystemParams:
         return self.__dict__
 
     def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
         self.__dict__.update(d)
 
         if not isinstance(self, SystemParams):
@@ -994,22 +998,22 @@ class SystemParams:
             )
 
 
-@jdc.pytree_dataclass
+@struct.dataclass
 class NeighbourList:
-    r_cut: jdc.Static[jnp.floating]
+    r_cut: float = struct.field(pytree_node=False)
     atom_indices: Array
 
     op_cell: Array | None
     op_coor: Array | None
     op_center: Array | None
 
-    r_skin: jdc.Static[jnp.floating]
+    r_skin: float = struct.field(pytree_node=False)
     sp_orig: SystemParams | None = None
     ijk_indices: Array | None = None
-    nxyz: jdc.Static[tuple[int] | None] = None
-    z_array: jdc.Static[tuple[int] | None] = None
-    z_unique: jdc.Static[tuple[int] | None] = None
-    num_z_unique: jdc.Static[tuple[int] | None] = None
+    nxyz: tuple[int] | None = struct.field(pytree_node=False, default=None)
+    z_array: tuple[int] | None = struct.field(pytree_node=False, default=None)
+    z_unique: tuple[int] | None = struct.field(pytree_node=False, default=None)
+    num_z_unique: tuple[int] | None = struct.field(pytree_node=False, default=None)
 
     @jax.jit
     def canonicalized_sp(self, sp: SystemParams) -> SystemParams:
@@ -1122,7 +1126,7 @@ class NeighbourList:
                 chunk_map(
                     vmap(func),
                     chunk_size=chunk_size_neigbourgs,
-                )
+                ),
             ),
             chunk_size=chunk_size_atoms,
         )(pos, ind)
@@ -1227,7 +1231,7 @@ class NeighbourList:
                         split_z=split_z,
                         exclude_self=exclude_self,
                         unique=unique,
-                    )
+                    ),
                 ),
                 chunk_size=chunk_size_batch,
             )(self, sp)
@@ -1253,10 +1257,10 @@ class NeighbourList:
                         lambda vx1, vy1, vz1: chunk_map(
                             vmap(lambda vx2, vy2, vz2: func_double(vx2, vy2, vz2, vx1, vy1, vz1)),
                             chunk_size=chunk_size_neigbourgs,
-                        )(x2, y2, z2)
+                        )(x2, y2, z2),
                     ),
                     chunk_size=chunk_size_neigbourgs,
-                )(x1, y1, z1)
+                )(x1, y1, z1),
             )(x, y, z, x, y, z),
             chunk_size=chunk_size_atoms,
         )(pos, ind, data_single)
@@ -1544,14 +1548,21 @@ class NeighbourList:
     def stack(*nls: NeighbourList) -> NeighbourList:
         return sum(nls[1:], nls[0])
 
+    def __getstate__(self):
+        return self.__dict__
 
-@jdc.pytree_dataclass
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+
+
+@struct.dataclass
 class CV:
     cv: Array
-    mapped: jdc.Static[bool] = False
-    atomic: jdc.Static[bool] = False
-    _combine_dims: jdc.Static[list | None] = None
-    _stack_dims: jdc.Static[list | None] = None
+    mapped: bool = struct.field(pytree_node=False, default=False)
+    atomic: bool = struct.field(pytree_node=False, default=False)
+    _combine_dims: list | None = struct.field(pytree_node=False, default=None)
+    _stack_dims: list | None = struct.field(pytree_node=False, default=None)
 
     @property
     def batched(self):
@@ -1873,6 +1884,7 @@ class CV:
         return self.__dict__
 
     def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
         self.__dict__.update(d)
 
         if not isinstance(self, CV):
@@ -2035,6 +2047,14 @@ class CvMetric:
     def ndim(self):
         return len(self.periodicities)
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+        # print(f"update_done")
+
 
 ######################################
 #       CV tranformations            #
@@ -2059,6 +2079,14 @@ class CvFunInput:
         cvs = [*x.split()]
         cvs[self.input] = res
         return CV.combine(*cvs)
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+        # print(f"update_done")
 
 
 class _CvFunBase:
@@ -2113,6 +2141,14 @@ class _CvFunBase:
         log_det = jnp.log(jnp.abs(jnp.linalg.det(b.cv.cv)))
 
         return a, log_det
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+        # print(f"update_done")
 
 
 @dataclasses.dataclass(kw_only=True, frozen=True)
@@ -2308,6 +2344,14 @@ class CombinedCvFun(CvFunBase):
 
         raise NotImplementedError("untested")
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+        # print(f"update_done")
+
 
 class _CvTrans:
     """f can either be a single CV tranformation or a list of transformations"""
@@ -2412,6 +2456,14 @@ class _CvTrans:
             trans=tuple([CombinedCvFun(classes=tuple([cvt.trans for cvt in cv_trans]))]),
         )
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+        # print(f"update_done")
+
 
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class CvTrans(_CvTrans):
@@ -2482,6 +2534,14 @@ class NormalizingFlow(nn.Module):
         a, b = self.nn_flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
 
         return a, b
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+        # print(f"update_done")
 
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -2611,6 +2671,13 @@ class CvFlow:
         sp0 = _l(x0, nl0)
         return sp0
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+
 
 ######################################
 #       Collective variable          #
@@ -2634,7 +2701,7 @@ class CollectiveVariable:
         chunk_size: int | None = None,
     ) -> tuple[CV, CV]:
         if sp.batched:
-            if nl is None:
+            if nl is not None:
                 assert nl.batched
 
                 return chunk_map(
@@ -2681,3 +2748,7 @@ class CollectiveVariable:
             self.__setattr__(key, kwargs[key])
 
         return self
+
+    def __setstate__(self, d):
+        # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)

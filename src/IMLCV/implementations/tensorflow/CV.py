@@ -76,7 +76,7 @@ class KerasFunBase(CvFunBase):
         if not batched:
             out = out.reshape((-1,))
 
-        return CV(cv=out, _combine_dims=x._combine_dims, _stack_dims=x._stack_dims)
+        return x.replace(cv=out)
 
     def __getstate__(self):
         # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model

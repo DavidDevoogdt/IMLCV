@@ -21,9 +21,12 @@ import logging
 import os
 import sys
 from logging import warning
+import cloudpickle
+
 
 import jax
 from jax import random
+import jax._src.tree_util
 
 KEY = random.PRNGKey(0)
 LOGLEVEL = logging.CRITICAL
@@ -46,3 +49,17 @@ logging.getLogger("absl").addFilter(
         "call_tf works best with a TensorFlow function that does not capture variables or tensors from the context.",
     ),
 )
+
+logging.getLogger("cloudpickle").setLevel(logging.DEBUG)
+
+
+# print("registring")
+# s = jax._src.tree_util.default_registry.
+# cloudpickle
+# class pytree_registry:
+#     pass
+
+
+# # pytree_registry = default_registry
+
+# cloudpickle.register_pickle_by_value(pytree_registry)

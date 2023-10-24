@@ -186,7 +186,7 @@ def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
     dlo = scheme0.rounds.data_loader(out=5e2, new_r_cut=r_cut, split_data=True, chunk_size=200)
 
     scheme0.update_CV(
-        stransformer=tf,
+        transformer=tf,
         dlo=dlo,
         new_r_cut=r_cut,
         chunk_size=200,

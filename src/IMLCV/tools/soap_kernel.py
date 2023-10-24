@@ -121,7 +121,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
         x = jnp.linspace(0, r_cut, num=num)
         y = vmap(f)(x)
 
-        return jnp.apply_along_axis(lambda y: jnp.trapz(y=y, x=x), axis=0, arr=y)
+        return jnp.apply_along_axis(lambda y: jax.scipy.integrate.trapezoid(y=y, x=x), axis=0, arr=y)
 
     @jit
     def f_cut(r):

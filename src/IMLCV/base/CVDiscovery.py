@@ -16,9 +16,10 @@ from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import scale_cv_trans
 from jax import pmap
-from jax_dataclasses import copy_and_mutate
 from matplotlib import gridspec
 from matplotlib.figure import Figure
+
+# from jax_dataclasses import copy_and_mutate
 
 
 class Transformer:
@@ -65,8 +66,7 @@ class Transformer:
 
         x = _f(z, nl)
 
-        with copy_and_mutate(x, validate=False) as x_stacked:
-            x_stacked._stack_dims = stack_dims
+        x_stacked = x.replace(_stack_dims=stack_dims)
 
         if self.pre_scale:
             g = scale_cv_trans(x_stacked, lower=0, upper=1)
@@ -86,6 +86,8 @@ class Transformer:
         plot=True,
         plot_folder: str | Path | None = None,
         p_map=True,
+        percentile=5,
+        margin=0.01,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
@@ -111,14 +113,12 @@ class Transformer:
         )
 
         # remove outliers from the data
-        bounds = jnp.percentile(y.cv, jnp.array([1, 99]), axis=0)
-
-        margin = 0.1
+        bounds = jnp.percentile(y.cv, jnp.array([percentile, 100 - percentile]), axis=0)
 
         diff = bounds[1, :] - bounds[0, :]
 
-        bounds_l = bounds[0, :] - margin * diff
-        bounds_u = bounds[1, :] + margin * diff
+        bounds_l = bounds[0, :] - margin * diff / (1 - 2 * percentile / 100) * (1 + margin)
+        bounds_u = bounds[1, :] + margin * diff / (1 - 2 * percentile / 100) * (1 + margin)
 
         mask_l = jnp.all(y.cv > bounds_l, axis=1)
         mask_u = jnp.all(y.cv < bounds_u, axis=1)
@@ -134,8 +134,10 @@ class Transformer:
             [jnp.min(z_masked.cv, axis=0), jnp.max(z_masked.cv, axis=0)],
         ).T
 
-        # print(f"{new_bounding_box=}")
-        # if self.periodcity is None
+        # d = (new_bounding_box[:, 1] - new_bounding_box[:, 0]) * margin / 2
+
+        # new_bounding_box = new_bounding_box.at[:, 0].set(new_bounding_box[:, 0] - d * margin / 2)
+        # new_bounding_box = new_bounding_box.at[:, 1].set(new_bounding_box[:, 1] + d * margin / 2)
 
         new_collective_variable = CollectiveVariable(
             f=f * g * h,
@@ -194,7 +196,6 @@ class Transformer:
 
         cv_data: list[CV] = []
 
-        cvs = [old_cv, new_cv]
         if cv_data_old is None:
             cv_data.append(old_cv.compute_cv(sps, nl, chunk_size=chunk_size)[0])
         else:
@@ -214,84 +215,84 @@ class Transformer:
                 ["cv out 1", "cv out 2", "cv out 3"],
             ]
 
-            indim = cvs[0].n
-            outdim = cvs[1].n
+        indim = cv_data[0].shape[1]
+        outdim = cv_data[1].shape[1]
 
-            fig = plt.figure()
+        fig = plt.figure()
 
-            for in_out_color, ls, rs in Transformer._grid_spec_iterator(
-                fig=fig,
-                indim=indim,
-                outdim=outdim,
-            ):
-                if in_out_color == 0:
-                    dim = indim
-                    color_data = cv_data[0].cv
-                else:
-                    dim = outdim
-                    color_data = cv_data[1].cv
+        for in_out_color, ls, rs in Transformer._grid_spec_iterator(
+            fig=fig,
+            indim=indim,
+            outdim=outdim,
+        ):
+            if in_out_color == 0:
+                dim = indim
+                color_data = cv_data[0].cv
+            else:
+                dim = outdim
+                color_data = cv_data[1].cv
 
-                max_val = jnp.max(color_data, axis=0)
-                min_val = jnp.min(color_data, axis=0)
+            max_val = jnp.max(color_data, axis=0)
+            min_val = jnp.min(color_data, axis=0)
 
-                if (max_val == min_val).all():
-                    data_col = color_data
+            if (max_val == min_val).all():
+                data_col = color_data
 
-                else:
-                    data_col = (color_data - min_val) / (max_val - min_val)
+            else:
+                data_col = (color_data - min_val) / (max_val - min_val)
 
-                # https://www.hsluv.org/
-                # hue 0-360 sat 0-100 lighness 0-1000
+            # https://www.hsluv.org/
+            # hue 0-360 sat 0-100 lighness 0-1000
 
-                if dim == 1:  # skip luminance and set to 0.5. green/red = blue/yellow
-                    lab = jnp.ones((data_col.shape[0], 3))
-                    lab = lab.at[:, 0].set(data_col[:, 0] * 360)
-                    lab = lab.at[:, 1].set(75)
-                    lab = lab.at[:, 2].set(40)
+            if dim == 1:  # skip luminance and set to 0.5. green/red = blue/yellow
+                lab = jnp.ones((data_col.shape[0], 3))
+                lab = lab.at[:, 0].set(data_col[:, 0] * 360)
+                lab = lab.at[:, 1].set(75)
+                lab = lab.at[:, 2].set(40)
 
-                if dim == 2:
-                    lab = jnp.ones((data_col.shape[0], 3))
-                    lab = lab.at[:, 0].set(data_col[:, 0] * 360)
-                    lab = lab.at[:, 1].set(75)
-                    lab = lab.at[:, 2].set(data_col[:, 1] * 100)
+            if dim == 2:
+                lab = jnp.ones((data_col.shape[0], 3))
+                lab = lab.at[:, 0].set(data_col[:, 0] * 360)
+                lab = lab.at[:, 1].set(75)
+                lab = lab.at[:, 2].set(data_col[:, 1] * 100)
 
-                if dim == 3:
-                    lab = jnp.ones((data_col.shape[0], 3))
-                    lab = lab.at[:, 0].set(data_col[:, 0] * 360)
-                    lab = lab.at[:, 1].set(data_col[:, 1] * 100)
-                    lab = lab.at[:, 2].set(data_col[:, 2] * 100)
+            if dim == 3:
+                lab = jnp.ones((data_col.shape[0], 3))
+                lab = lab.at[:, 0].set(data_col[:, 0] * 360)
+                lab = lab.at[:, 1].set(data_col[:, 1] * 100)
+                lab = lab.at[:, 2].set(data_col[:, 2] * 100)
 
-                rgb = []
+            rgb = []
 
-                for s in lab:
-                    rgb.append(hsluv_to_rgb(s))
+            for s in lab:
+                rgb.append(hsluv_to_rgb(s))
 
-                rgb = jnp.array(rgb)
+            rgb = jnp.array(rgb)
 
-                def do_plot(dim, in_out, axes):
-                    data_proc = cv_data[in_out].cv
-                    if dim == 1:
-                        data_proc = jnp.hstack([data_proc, rgb[:, [0]]])
+            def do_plot(dim, in_out, axes):
+                data_proc = cv_data[in_out].cv
+                if dim == 1:
+                    data_proc = jnp.hstack([data_proc, rgb[:, [0]]])
 
-                        f = Transformer._plot_1d
-                    elif dim == 2:
-                        f = Transformer._plot_2d
-                    elif dim == 3:
-                        f = Transformer._plot_3d
+                    f = Transformer._plot_1d
+                elif dim == 2:
+                    f = Transformer._plot_2d
+                elif dim == 3:
+                    f = Transformer._plot_3d
 
-                    f(fig, axes, data_proc, rgb, labels[0][0:dim], **kwargs)
+                f(fig, axes, data_proc, rgb, labels[0][0:dim], **kwargs)
 
-                do_plot(indim, 0, ls)
-                do_plot(outdim, 1, rs)
+            do_plot(indim, 0, ls)
+            do_plot(outdim, 1, rs)
 
-            name = Path(name)
-            if name.suffix != ".pdf":
-                name = Path(
-                    f"{name}.pdf",
-                )
+        name = Path(name)
+        if name.suffix != ".pdf":
+            name = Path(
+                f"{name}.pdf",
+            )
 
-            name.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(name)
+        name.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(name)
 
     @staticmethod
     def _grid_spec_iterator(

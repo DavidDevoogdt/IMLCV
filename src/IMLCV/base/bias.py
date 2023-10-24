@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING
 import cloudpickle
 import jax
 import jax.numpy as jnp
-import jax_dataclasses
 import matplotlib
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import yaff
+from flax import struct
 from hsluv import hsluv_to_rgb
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
@@ -34,6 +34,7 @@ from molmod.units import electronvolt
 from molmod.units import kjmol
 from parsl.data_provider.files import File
 
+
 yaff.log.set_level(yaff.log.silent)
 
 if TYPE_CHECKING:
@@ -45,11 +46,11 @@ if TYPE_CHECKING:
 ######################################
 
 
-@jax_dataclasses.pytree_dataclass
+@struct.dataclass
 class EnergyResult:
     energy: float
-    gpos: Array | None = None
-    vtens: Array | None = None
+    gpos: Array | None = struct.field(default=None)
+    vtens: Array | None = struct.field(default=None)
 
     def __post_init__(self):
         if isinstance(self.gpos, Array):
@@ -174,7 +175,6 @@ class Energy(BC):
         nl: NeighbourList | None = None,
     ) -> EnergyResult:
         if sp is not None:
-            raise NotImplementedError("untested")
             self.sp = sp
 
         # try:
@@ -312,7 +312,7 @@ class Bias(BC, ABC):
 
         If map==False, the cvs are assumed to be already mapped
         """
-        assert isinstance(cvs, CV)
+        # assert isinstance(cvs, CV)
         # jax.debug.print("cvs {}", cvs)
 
         # map compute command
@@ -352,12 +352,13 @@ class Bias(BC, ABC):
 
         self.finalized = True
 
-    # def __getstate__(self):
-    #     return self.__dict__
+    def __getstate__(self):
+        return self.__dict__
 
-    # def __setstate__(self, state):
-    #     self.__init__(**state)
-    #     return self
+    def __setstate__(self, d):
+        # # print(f"unpickling {self.__class__}")
+        self.__dict__.update(d)
+        # print(f"update_done")
 
     @staticmethod
     def load(filename) -> Bias:

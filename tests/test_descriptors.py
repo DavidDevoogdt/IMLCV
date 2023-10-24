@@ -84,8 +84,8 @@ def get_sps(
 
 
 @pytest.mark.parametrize(
-    "cell,matching, pp,double_ref",
-    [(True, "rematch", "sb", False), (False, "average", "soap", False)],
+    "cell,matching, pp",
+    [(True, "rematch", "sb"), (False, "average", "soap")],
 )
 def test_SOAP_SB_sinkhorn(cell, matching, pp):
     n = 10

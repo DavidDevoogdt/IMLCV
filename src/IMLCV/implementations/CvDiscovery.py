@@ -13,10 +13,6 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.CV import get_normalize_trans
-from IMLCV.implementations.CV import get_remove_mean_trans
-from IMLCV.implementations.CV import get_sinkhorn_divergence
-from IMLCV.implementations.CV import stack_reduce
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -610,7 +606,7 @@ class TransformerMAF(Transformer):
 
         @CvTrans.from_cv_function
         def transform(cv, nl, _):
-            return CV(cv=cv.cv[mask], _stack_dims=cv._stack_dims)
+            return cv.replace(cv=cv.cv[mask])
 
         cv_0, _ = transform.compute_cv_trans(cv_0)
         cv_tau, _ = transform.compute_cv_trans(cv_tau)
@@ -779,7 +775,7 @@ class TransformerMAF(Transformer):
 
             @CvTrans.from_cv_function
             def tica_selection(cv: CV, nl: NeighbourList | None, _):
-                return CV(cv=cv.cv @ u, _stack_dims=cv._stack_dims)
+                return cv @ u
 
             trans *= tica_selection
 

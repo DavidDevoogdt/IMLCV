@@ -549,6 +549,7 @@ class MDEngine(ABC):
         return {key: self.__getattribute__(key) for key in MDEngine.keys}
 
     def __setstate__(self, state):
+        print(f"setting {state=}")
         self.__init__(**state)
         return self
 
@@ -683,6 +684,8 @@ class MDEngine(ABC):
         return self.energy.compute_from_system_params(
             gpos=gpos,
             vir=vtens,
+            sp=self.sp,
+            nl=self.nl,
         )
 
     def get_bias(

@@ -131,7 +131,7 @@ def _get_sp_rand(
     prng,
     n=15,
     r_cut=3,
-) -> tuple[jax.random.KeyArray, SystemParams, NeighbourList]:
+) -> tuple[jax.Array, SystemParams, NeighbourList]:
     k1, k2, k3, prng = jax.random.split(prng, 4)
 
     r_side = 6 * (n / 5) ** (1 / 3)
@@ -161,7 +161,7 @@ def _permute_sp_rand(
     sp0,
     nl0,
     eps,
-) -> tuple[jax.random.KeyArray, SystemParams, NeighbourList]:
+) -> tuple[jax.Array, SystemParams, NeighbourList]:
     k1, k2, k3, prng = jax.random.split(prng, 4)
 
     sp1 = SystemParams(
@@ -173,7 +173,7 @@ def _permute_sp_rand(
     return prng, sp1, nl1
 
 
-def _get_equival_sp(sp, rng) -> tuple[jax.random.KeyArray, SystemParams]:
+def _get_equival_sp(sp, rng) -> tuple[jax.Array, SystemParams]:
     # check rotational and translationa invariance
     from scipy.spatial.transform import Rotation as R
 
@@ -491,7 +491,7 @@ def test_canoncicalize():
     sp0, sp1 = sp0.minkowski_reduce()[0], sp1.minkowski_reduce()[0]
     for i in range(3):
         assert jnp.all(jnp.abs(sp0.cell[i, :] - sp1.cell[i, :]) < 1e-6) or jnp.all(
-            jnp.abs(sp0.cell[i, :] + sp1.cell[i, :]) < 1e-6
+            jnp.abs(sp0.cell[i, :] + sp1.cell[i, :]) < 1e-6,
         )
 
     # test qr

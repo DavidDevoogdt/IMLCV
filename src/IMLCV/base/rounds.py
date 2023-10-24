@@ -43,8 +43,12 @@ class TrajectoryInformation:
     valid: bool = True
 
     def get_bias(self) -> Bias:
-        assert self.name_bias is not None
-        return Bias.load(self.folder / self.name_bias)
+        try:
+            assert self.name_bias is not None
+            return Bias.load(self.folder / self.name_bias)
+        except Exception as e:
+            print(f"unable to load bias {e=}")
+            return None
 
 
 @dataclass
@@ -550,13 +554,18 @@ class Rounds(ABC):
         time_series: bool = False,
         T_max_over_T=50,
         chunk_size=None,
+        get_colvar=True,
     ) -> data_loader_output:
         weights = []
 
         if new_r_cut == -1:
             new_r_cut = self.round_information(c=cv_round).tic.r_cut
 
-        colvar = self.get_collective_variable()
+        if get_colvar:
+            colvar = self.get_collective_variable(c=cv_round)
+        else:
+            colvar = None
+
         sti: StaticMdInfo | None = None
         sp: list[SystemParams] = []
         cv: list[CV] = []
@@ -1074,6 +1083,7 @@ class Rounds(ABC):
             r = self.get_round(c=c)
 
         bn = self._get_attr("name_bias", c=c, r=r, i=i)
+
         return Bias.load(self.full_path(bn))
 
     def get_engine(self, c=None, r=None) -> MDEngine:

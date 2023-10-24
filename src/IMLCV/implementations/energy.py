@@ -7,6 +7,7 @@ import ase.cell
 import ase.geometry
 import ase.stress
 import ase.units
+import jax.numpy as jnp
 import numpy as np
 import yaff
 from ase.calculators.cp2k import CP2K
@@ -16,7 +17,6 @@ from IMLCV.base.bias import EnergyResult
 from IMLCV.configs.config_general import get_cp2k
 from molmod.units import angstrom
 from molmod.units import electronvolt
-import jax.numpy as jnp
 
 yaff.log.set_level(yaff.log.silent)
 
@@ -50,19 +50,24 @@ class YaffEnergy(Energy):
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
-        vtens_out = np.zeros_like(self.ff.vtens) if vir else None
+        vtens_out = np.zeros_like(self.ff.vtens) if (vir and self.cell is not None) else None
 
         try:
             ener = self.ff.compute(gpos=gpos_out, vtens=vtens_out)
         except BaseException as be:
             raise EnergyError(f"calculating yaff  energy raised execption:\n{be}\n")
 
-        return EnergyResult(ener, gpos_out, vtens_out)
+        return EnergyResult(
+            ener,
+            jnp.array(gpos_out) if gpos_out is not None else None,
+            jnp.array(vtens_out) if vtens_out is not None else None,
+        )
 
     def __getstate__(self):
         return {"f": self.f, "sp": self.sp}
 
     def __setstate__(self, state):
+        # print(f"unpickling {self.__class__}")
         self.f = state["f"]
         self.ff = self.f()
         self.sp = state["sp"]
@@ -250,6 +255,8 @@ class Cp2kEnergy(AseEnergy):
         ]
 
     def __setstate__(self, state):
+        # print(f"unpickling {self.__class__}")
+
         atoms_dict, cp2k_inp, input_kwargs, kwargs = state
 
         self.__init__(

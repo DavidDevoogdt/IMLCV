@@ -122,6 +122,7 @@ def sb_descriptor(
         )(
             a,
         )  # eliminate l>n
+
         a = vmap(
             vmap(_triu, in_axes=(0), out_axes=(0)),
             in_axes=(3),
@@ -341,7 +342,7 @@ def sinkhorn_divergence(
     alpha=1e-2,
     normalize=True,
     chunk_size=None,
-) -> CV:
+) -> tuple[CV, CV]:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
     assert x1.atomic
@@ -415,12 +416,16 @@ def sinkhorn_divergence(
                     def __init__(self, rtol, atol, rcond=None):
                         super().__init__(rcond=rcond)
 
+                # precondition_fun=lambda x: x,
+                # symmetric=True,
+
                 solver = sinkhorn.Sinkhorn(
                     implicit_diff=implicit_differentiation.ImplicitDiff(
                         solver_kwargs={
                             "nonsym_solver": _SVD,
                         },
                     ),
+                    use_danskin=True,
                 )
                 out = solver(prob)
 
@@ -470,12 +475,36 @@ def sinkhorn_divergence(
         p1 = x1.cv
         p2 = x2.cv
 
+        # todo: P_11 p1 p1 term not aligned -> nonseniscal?
         cv = CV(
             cv=(
                 -2 * jnp.einsum("i...,j...,ij->j...", p1, p2, P12)
                 + jnp.einsum("i...,j...,ij->j...", p1, p1, P11)
                 + jnp.einsum("i...,j...,ij->j...", p2, p2, P22)
             ),
+            _stack_dims=x1._stack_dims,
+            _combine_dims=x1._combine_dims,
+            atomic=x1.atomic,
+        )
+
+        # avoid non differentiable code
+        p2_sq = jnp.einsum("i...,i...->i...", p2, p2)
+        p2_safe = jnp.where(p2_sq <= eps, 1, p2)
+        p2_inv = jnp.where(p2_sq <= eps, 0.0, 1 / p2_safe)
+
+        cv_2 = CV(
+            cv=(
+                -2 * jnp.einsum("i...,ij->j...", p1, P12)
+                + jnp.einsum("i...,j...,j...,ij", p1, p1, p2_inv, P11)
+                + jnp.einsum("i...,ij->j...", p2, P22)
+            ),
+            _stack_dims=x1._stack_dims,
+            _combine_dims=x1._combine_dims,
+            atomic=x1.atomic,
+        )
+
+        cv_3 = CV(
+            cv=(-2 * jnp.einsum("i...,ij->j...", p1, P12) + 2 * jnp.einsum("i...,ij->j...", p2, P22)),
             _stack_dims=x1._stack_dims,
             _combine_dims=x1._combine_dims,
             atomic=x1.atomic,
@@ -491,9 +520,10 @@ def sinkhorn_divergence(
             ),
             _stack_dims=x1._stack_dims,
             _combine_dims=x1._combine_dims,
+            atomic=False,
         )
 
-        return div, cv
+        return div, cv, cv_2, cv_3
 
     if nl1.batched:
         combine = vmap(combine, in_axes=(0, None, 0, 0, None))
@@ -510,11 +540,6 @@ def get_sinkhorn_divergence(
     sort="rematch",
     alpha_rematch=0.1,
     output="divergence",
-    weighted=True,
-    weighting_kwargs={
-        "method": "exp",
-        "scale": 10.0,
-    },
     normalize=True,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
@@ -529,7 +554,23 @@ def get_sinkhorn_divergence(
     ):
         assert nl is not None, "Neigbourlist required for rematch"
 
-        divergence, out = sinkhorn_divergence(
+        # if output == "ddiv":
+
+        #     @jax.jacrev
+        #     def outp(pi):
+        #         return sinkhorn_divergence(
+        #             x1=cv,
+        #             x2=pi,
+        #             nl1=nl,
+        #             nl2=nli,
+        #             matching=sort,
+        #             alpha=alpha_rematch,
+        #             normalize=normalize,
+        #         )[0]
+
+        #     return CV(cv=jnp.reshape(outp(pi).cv.cv, -1), atomic=False, _stack_dims=cv._stack_dims)
+
+        divergence, out, matched, ddiv = sinkhorn_divergence(
             x1=cv,
             x2=pi,
             nl1=nl,
@@ -538,57 +579,159 @@ def get_sinkhorn_divergence(
             alpha=alpha_rematch,
             normalize=normalize,
         )
-        out: CV
-        divergence: CV
 
         if output == "divergence":
+            return divergence
+
+        if output == "aligned_cv":
+            return CV.combine(
+                *[
+                    CV(
+                        cv=cvi,
+                        _stack_dims=out._stack_dims,
+                        _combine_dims=out._combine_dims,
+                        atomic=out.atomic,
+                    )
+                    for cvi in out.cv
+                ],
+            )
+
+        if output == "matched":
+            return CV.combine(
+                *[
+                    CV(
+                        cv=cvi,
+                        _stack_dims=out._stack_dims,
+                        _combine_dims=out._combine_dims,
+                        atomic=matched.atomic,
+                    )
+                    for cvi in matched.cv
+                ],
+            )
+
+        if output == "ddiv":
+            return CV.combine(
+                *[
+                    CV(
+                        cv=cvi,
+                        _stack_dims=ddiv._stack_dims,
+                        _combine_dims=ddiv._combine_dims,
+                        atomic=ddiv.atomic,
+                    )
+                    for cvi in ddiv.cv
+                ],
+            )
+
+        raise ValueError(f"{output=}")
+
+    return sinkhorn_divergence_trans
+
+
+def get_sinkhorn_divergence_2(
+    nli: NeighbourList | None,
+    pi: CV,
+    alpha_rematch=0.1,
+    output="divergence",
+    normalize=True,
+) -> CvTrans:
+    """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
+
+    assert pi.atomic, "pi must be atomic"
+
+    @partial(jit, static_argnames=["alpha", "normalize"])
+    def sinkhorn_divergence_2(
+        x1: CV,
+        x2: CV,
+        nl1: NeighbourList,
+        nl2: NeighbourList,
+        alpha=1e-2,
+        normalize=True,
+    ) -> Array:
+        """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
+
+        assert x1.atomic
+        assert x2.atomic
+        assert not x1.batched
+        assert not x2.batched
+
+        eps = 100 * jnp.finfo(x1.cv.dtype).eps
+
+        def p_norm(x: CV):
+            p = x.cv
+
+            p_sq = jnp.einsum("i...,i...->i", p, p)
+            p_sq_safe = jnp.where(p_sq <= eps, 1, p_sq)
+            p_norm_inv = jnp.where(p_sq == 0, 0.0, 1 / jnp.sqrt(p_sq_safe))
+
             return CV(
-                cv=jnp.array([divergence.cv]),
+                cv=jnp.einsum("i...,i->i...", p, p_norm_inv),
+                _stack_dims=x._stack_dims,
+                _combine_dims=x._combine_dims,
+                atomic=x.atomic,
+            )
+
+        if normalize:
+            x1 = p_norm(x1)
+            x2 = p_norm(x2)
+
+        from ott.tools import sinkhorn_divergence
+
+        b1, _, p1 = nl1.nl_split_z(x1)
+        _, _, p2 = nl2.nl_split_z(x2)
+
+        def get_divergence(p1, p2):
+            n = p1.shape[0]
+
+            return sinkhorn_divergence.sinkhorn_divergence(
+                PointCloud,
+                x=jnp.reshape(p1, (n, -1)),
+                y=jnp.reshape(p2, (n, -1)),
+                epsilon=alpha,
+                sinkhorn_kwargs={
+                    "implicit_diff": implicit_differentiation.ImplicitDiff(
+                        precondition_fun=lambda x: x,
+                        symmetric=True,
+                    ),
+                    "use_danskin": True,
+                },
+            ).divergence
+
+        divergences = jnp.array([get_divergence(p1_z.cv, p2_z.cv) for p1_z, p2_z in zip(p1, p2)])
+
+        # weigh according to number of atoms
+        w = jnp.sum(b1, axis=1)
+        w /= jnp.sum(w)
+
+        return divergences * w
+
+    @CvTrans.from_cv_function
+    def sinkhorn_divergence_trans(
+        cv: CV,
+        nl: NeighbourList | None,
+        _,
+    ):
+        assert nl is not None, "Neigbourlist required for rematch"
+
+        def f(pii, nlii):
+            return CV(
+                cv=sinkhorn_divergence_2(
+                    x1=cv,
+                    x2=pii,
+                    nl1=nl,
+                    nl2=nlii,
+                    alpha=alpha_rematch,
+                    normalize=normalize,
+                ),
                 _stack_dims=cv._stack_dims,
             )
 
-        div_safe = jnp.where(divergence.cv >= 1e-16, divergence.cv, jnp.ones_like(divergence.cv))
-        dist = jnp.where(divergence.cv >= 1e-16, jnp.sqrt(div_safe), jnp.zeros_like(div_safe))
-        sum_dist = jnp.sum(dist)
-        frac = jnp.where(sum_dist != 0, dist / sum_dist, jnp.zeros_like(dist))
+        if output == "ddiv":
+            f = jax.jacrev(f)
+            div = CV.combine(*[f(pii, nlii).cv for pii, nlii in zip(pi, nli)])
+        else:
+            div = CV.combine(*[f(pii, nlii) for pii, nlii in zip(pi, nli)])
 
-        assert "method" in weighting_kwargs, "method must be specified"
-        if weighting_kwargs["method"] == "exp":
-            assert "scale" in weighting_kwargs, "scale must be specified"
-            scale = weighting_kwargs["scale"]
-            w = jnp.exp(-scale * frac)
-        elif weighting_kwargs["method"] == "frac":
-            w = 1 - frac
-
-        w = w / jnp.sum(w)
-
-        if output == "weights":
-            return CV(cv=w, _stack_dims=cv._stack_dims)
-
-        if output == "aligned_cv":
-            if weighted:
-                out = CV(
-                    cv=jnp.einsum("i...,i->...", out.cv, w),
-                    _stack_dims=out._stack_dims,
-                    _combine_dims=out._combine_dims,
-                    atomic=out.atomic,
-                )
-            else:  # just combine them to a larger cv
-                out = CV.combine(
-                    *[
-                        CV(
-                            cv=cvi,
-                            _stack_dims=out._stack_dims,
-                            _combine_dims=out._combine_dims,
-                            atomic=out.atomic,
-                        )
-                        for cvi in out.cv
-                    ],
-                )
-
-            return out
-
-        raise ValueError(f"Invalid output {output}")
+        return div.replace(cv=jnp.reshape(div.cv, (-1)), atomic=False)
 
     return sinkhorn_divergence_trans
 
@@ -622,7 +765,7 @@ def stack_reduce(op=jnp.mean):
     return _stack_reduce
 
 
-def affine_2d(old: Array, new: Array | None = None):
+def affine_2d(old: Array, new: Array):
     """old: set of coordinates in the original space, new: set of coordinates in the new space"""
 
     # source:https://github.com/opencv/opencv/blob/11b020b9f9e111bddd40bffe3b1759aa02d966f0/modules/imgproc/src/imgwarp.cpp#L3001

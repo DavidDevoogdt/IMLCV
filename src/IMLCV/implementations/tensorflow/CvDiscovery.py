@@ -9,7 +9,6 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import un_atomize
 from IMLCV.implementations.tensorflow.CV import KerasFunBase
 from IMLCV.implementations.tensorflow.CV import PeriodicLayer

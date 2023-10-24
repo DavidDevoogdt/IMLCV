@@ -65,7 +65,7 @@ class HarmonicBias(Bias):
             self.y0 = jnp.einsum("i,i,i->", k, self.r0, self.r0) / 2
 
     def _compute(self, cvs: CV, *args):
-        assert isinstance(cvs, CV)
+        # assert isinstance(cvs, CV)
         r = self.collective_variable.metric.difference(cvs, self.q0)
 
         def parabola(r):
@@ -99,7 +99,7 @@ class HarmonicBias(Bias):
         self.__dict__.update(d)
 
         if not isinstance(self.q0, CV):
-            print(f"loaded {self.q0=}  has {isinstance(self.q,CV)=}, recreating the object")
+            print(f"loaded {self.q0=}  has {isinstance(self.q0,CV)=}, recreating the object")
             self.q0 = CV(
                 cv=self.q0.cv,
                 mapped=self.q0.mapped,

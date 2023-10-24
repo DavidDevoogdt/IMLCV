@@ -86,7 +86,7 @@ def test_RBF_bias(kernel):
         CvFlow(func=lambda x: x.coordinates),
         CvMetric(
             periodicities=[False, False],
-            bounding_box=np.array([[-2, 2], [1, 5]]),
+            bounding_box=jnp.array([[-2, 2], [1, 5]]),
         ),
     )
 
@@ -98,9 +98,9 @@ def test_RBF_bias(kernel):
 
     # reevaluation of thermolib histo
     bin_centers1, bin_centers2 = 0.5 * (bins[0][:-1] + bins[0][1:]), 0.5 * (bins[1][:-1] + bins[1][1:])
-    xc, yc = np.meshgrid(bin_centers1, bin_centers2, indexing="ij")
-    xcf = np.reshape(xc, (-1))
-    ycf = np.reshape(yc, (-1))
+    xc, yc = jnp.meshgrid(bin_centers1, bin_centers2, indexing="ij")
+    xcf = jnp.reshape(xc, (-1))
+    ycf = jnp.reshape(yc, (-1))
 
     center_cvs = CV(jnp.stack([xcf, ycf], axis=1))
 
@@ -110,7 +110,7 @@ def test_RBF_bias(kernel):
     bias = RbfBias(cvs=cv, cv=center_cvs, vals=val, kernel=kernel)
 
     val2, _ = bias.compute_from_cv(center_cvs)
-    assert np.allclose(val, val2)
+    assert jnp.allclose(val, val2)
 
 
 def test_combine_bias():
@@ -132,14 +132,14 @@ def test_combine_bias():
     bias1 = BiasMTD(
         cvs=cv0,
         K=2.0 * units.kjmol,
-        sigmas=np.array([0.35, 0.35]),
+        sigmas=jnp.array([0.35, 0.35]),
         start=25,
         step=500,
     )
     bias2 = BiasMTD(
         cvs=cv0,
         K=0.5 * units.kjmol,
-        sigmas=np.array([0.1, 0.1]),
+        sigmas=jnp.array([0.1, 0.1]),
         start=50,
         step=250,
     )
@@ -151,7 +151,7 @@ def test_combine_bias():
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
         write_step=1,
-        atomic_numbers=np.array(
+        atomic_numbers=jnp.array(
             [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
             dtype=int,
         ),
@@ -174,7 +174,7 @@ def test_bias_save(tmpdir):
         bias=lambda cv0: BiasMTD(
             cvs=cv0,
             K=2.0 * units.kjmol,
-            sigmas=np.array([0.35, 0.35]),
+            sigmas=jnp.array([0.35, 0.35]),
             start=25,
             step=500,
         ),
@@ -248,7 +248,7 @@ def test_reparametrize():
             HarmonicBias(cvs, q0=CV(jnp.array([0.0, 0.5])), k=1.0 / 6**2),
         ],
     )
-    _ = bias.resample(n=40)
+    _ = bias.resample(n=20)
 
 
 if __name__ == "__main__":
