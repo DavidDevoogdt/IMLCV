@@ -55,7 +55,7 @@ def alanine_dipeptide_yaff(
     if cv == "backbone_dihedrals":
         cv0 = CollectiveVariable(
             f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
-            metric=CvMetric(
+            metric=CvMetric.create(
                 periodicities=[True, True],
                 bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
             ),
@@ -69,11 +69,13 @@ def alanine_dipeptide_yaff(
         )
 
     if bias is None:
-        bias_cv0 = NoneBias(cvs=cv0)
+        bias_cv0 = NoneBias.create(collective_variable=cv0)
     else:
         bias_cv0 = bias(cv0)
 
-    mde = YaffEngine(
+    print(bias_cv0)
+
+    mde = YaffEngine.create(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         static_trajectory_info=tic,
         bias=bias_cv0,
@@ -158,7 +160,7 @@ def mil53_yaff():
 
     cvs = CollectiveVariable(
         f=Volume,
-        metric=CvMetric(
+        metric=CvMetric.create(
             periodicities=[False],
             bounding_box=jnp.array(
                 [850, 1500],
@@ -167,13 +169,13 @@ def mil53_yaff():
         ),
     )
 
-    bias = HarmonicBias(
+    bias = HarmonicBias.create(
         cvs=cvs,
         q0=CV(cv=jnp.array([3000 * angstrom**3])),
         k=jnp.array([0.1 * kjmol]),
     )
 
-    bias = NoneBias(cvs=cvs)
+    bias = NoneBias.create(collective_variable=cvs)
 
     energy = YaffEnergy(f=f)
 
@@ -188,7 +190,7 @@ def mil53_yaff():
         atomic_numbers=energy.ff.system.numbers,
     )
 
-    yaffmd = YaffEngine(
+    yaffmd = YaffEngine.create(
         energy=energy,
         bias=bias,
         static_trajectory_info=st,
@@ -281,7 +283,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
 
         cv = CollectiveVariable(
             f=f,
-            metric=CvMetric(
+            metric=CvMetric.create(
                 periodicities=[False, False],
                 bounding_box=jnp.array([[0.0, 3.0 * x], [5.5 * x, 8.0 * x]]) * angstrom,
             ),
@@ -292,9 +294,9 @@ def CsPbI3(cv=None, unit_cells=[2]):
     else:
         raise ValueError(f"unknown value {cv} for cv choose 'cell_vec'")
 
-    bias = NoneBias(cvs=cv)
+    bias = NoneBias.create(collective_variable=cv)
 
-    yaffmd = YaffEngine(
+    yaffmd = YaffEngine.create(
         energy=energy,
         bias=bias,
         static_trajectory_info=tic,

@@ -219,7 +219,7 @@ def soap_descriptor(
 def NoneCV() -> CollectiveVariable:
     return CollectiveVariable(
         f=CvFlow.from_function(lambda sp, nl: jnp.array([0.0])),
-        metric=CvMetric(periodicities=[None]),
+        metric=CvMetric.create(periodicities=[None]),
     )
 
 
@@ -633,6 +633,7 @@ def get_sinkhorn_divergence_2(
     alpha_rematch=0.1,
     output="divergence",
     normalize=True,
+    sum_divergence=False,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -646,6 +647,7 @@ def get_sinkhorn_divergence_2(
         nl2: NeighbourList,
         alpha=1e-2,
         normalize=True,
+        sum_divergence=False,
     ) -> Array:
         """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -682,6 +684,10 @@ def get_sinkhorn_divergence_2(
         def get_divergence(p1, p2):
             n = p1.shape[0]
 
+            class _SVD(lx.SVD):
+                def __init__(self, rtol, atol, rcond=None):
+                    super().__init__(rcond=rcond)
+
             return sinkhorn_divergence.sinkhorn_divergence(
                 PointCloud,
                 x=jnp.reshape(p1, (n, -1)),
@@ -689,8 +695,9 @@ def get_sinkhorn_divergence_2(
                 epsilon=alpha,
                 sinkhorn_kwargs={
                     "implicit_diff": implicit_differentiation.ImplicitDiff(
-                        precondition_fun=lambda x: x,
-                        symmetric=True,
+                        solver_kwargs={
+                            "nonsym_solver": _SVD,
+                        },
                     ),
                     "use_danskin": True,
                 },
@@ -698,11 +705,13 @@ def get_sinkhorn_divergence_2(
 
         divergences = jnp.array([get_divergence(p1_z.cv, p2_z.cv) for p1_z, p2_z in zip(p1, p2)])
 
-        # weigh according to number of atoms
-        w = jnp.sum(b1, axis=1)
-        w /= jnp.sum(w)
+        if sum_divergence:
+            # weigh according to number of atoms
+            w = jnp.sum(b1, axis=1)
+            w /= jnp.sum(w)
+            divergences = divergences * w
 
-        return divergences * w
+        return divergences
 
     @CvTrans.from_cv_function
     def sinkhorn_divergence_trans(
@@ -738,14 +747,13 @@ def get_sinkhorn_divergence_2(
 
 @CvTrans.from_cv_function
 def un_atomize(x: CV, nl, _):
-    if x.atomic:
-        x = CV(
-            cv=jnp.reshape(x.cv, (-1,)),
-            atomic=False,
-            _combine_dims=x._combine_dims,
-            _stack_dims=x._stack_dims,
-        )
-    return x
+    if not x.atomic:
+        return x
+
+    return x.replace(
+        cv=jnp.reshape(x.cv, (-1,)),
+        atomic=False,
+    )
 
 
 def stack_reduce(op=jnp.mean):

@@ -52,7 +52,6 @@ def test_nf():
             method=NormalizingFlow.calc,
             x=x,
             nl=None,
-            test_log_det=True,
             reverse=False,
         )
         x2, Jx = mf.apply(
@@ -60,7 +59,6 @@ def test_nf():
             method=NormalizingFlow.calc,
             x=y,
             nl=None,
-            test_log_det=True,
             reverse=True,
         )
 
@@ -109,22 +107,6 @@ def test_nf():
     )
 
     test(NormalizingFlow(chain), x2, key_2)
-
-    # b2 = jnp.log(
-    #     jnp.abs(
-    #         jnp.linalg.det(
-    #             jacrev(
-    #                 lambda x: self.nn_flow.compute_cv_trans(
-    #                     x,
-    #                     nl,
-    #                     reverse=reverse,
-    #                     log_Jf=False,
-    #                 )[0],
-    #             )(x).cv.cv,
-    #         ),
-    #     ),
-    # )
-    # assert jnp.abs(b - b2) < 1e-5
 
 
 def _get_sp_rand(

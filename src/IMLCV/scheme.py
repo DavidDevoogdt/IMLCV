@@ -57,32 +57,6 @@ class Scheme:
 
         return self
 
-    def MTDBias(self, steps, K=None, sigmas=None, start=500, step=250):
-        """generate a metadynamics bias."""
-
-        raise NotImplementedError("validate this")
-
-        if sigmas is None:
-            sigmas = (
-                self.md.bias.collective_variable.metric[:, 1] - self.md.bias.collective_variable.metric[:, 0]
-            ) / 20
-
-        if K is None:
-            K = 1.0 * self.md.T * boltzmann
-
-        biasmtd = BiasMTD(
-            self.md.bias.collective_variable,
-            K,
-            sigmas,
-            start=start,
-            step=step,
-        )
-        bias = CompositeBias([self.md.bias, biasmtd])
-
-        self.md = self.md.new_bias(bias, filename=None)
-        self.md.run(steps)
-        self.md.bias.finalize()
-
     def FESBias(self, cv_round: int | None = None, chunk_size=None, **kwargs):
         """replace the current md bias with the computed FES from current
         round."""
@@ -122,7 +96,7 @@ class Scheme:
 
         self.rounds.run_par(
             [
-                HarmonicBias(
+                HarmonicBias.create(
                     self.md.bias.collective_variable,
                     CV(cv=jnp.array(cv)),
                     k,
@@ -230,7 +204,7 @@ class Scheme:
 
         # update state
 
-        self.md.bias = NoneBias(new_cv)
+        self.md.bias = NoneBias.create(new_cv)
         self.rounds.add_cv_from_cv(new_cv)
         self.md.static_trajectory_info.r_cut = new_r_cut
         self.rounds.add_round_from_md(self.md)
@@ -241,7 +215,7 @@ class Scheme:
             if save_multiple_cvs:
                 for dlo_i, cv_new_i in zip(iter(dlo), CV.unstack(cvs_new)):
                     if not first:
-                        self.md.bias = NoneBias(new_cv)
+                        self.md.bias = NoneBias.create(new_cv)
                         self.rounds.add_cv_from_cv(new_cv)
                         self.md.static_trajectory_info.r_cut = new_r_cut
                         self.rounds.add_round_from_md(self.md)
@@ -290,14 +264,14 @@ class Scheme:
 
         new_collective_variable = CollectiveVariable(
             f=original_collective_variable.f * cv_trans,
-            metric=CvMetric(
+            metric=CvMetric.create(
                 periodicities=[False] * cv_new.shape[1],
                 bounding_box=jnp.array([jnp.min(cv_grid_strict.cv, axis=0), jnp.max(cv_grid_strict.cv, axis=0)]).T,
             ),
         )
 
-        fes_offset_bias = RbfBias(cvs=new_collective_variable, cv=cv_new, vals=FES_offset, kernel=kernel)
-        self.md.bias = RbfBias(
+        fes_offset_bias = RbfBias.create(cvs=new_collective_variable, cv=cv_new, vals=FES_offset, kernel=kernel)
+        self.md.bias = RbfBias.create(
             cvs=new_collective_variable,
             cv=cv_new,
             vals=FES_offset + bias_inter,

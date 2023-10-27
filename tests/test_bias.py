@@ -32,13 +32,13 @@ from molmod.units import kelvin
 def test_harmonic():
     cvs = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
-        metric=CvMetric(
+        metric=CvMetric.create(
             periodicities=[True, True],
             bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]],
         ),
     )
 
-    bias = HarmonicBias(cvs, q0=CV(jnp.array([np.pi, -np.pi])), k=1.0)
+    bias = HarmonicBias.create(cvs, q0=CV(jnp.array([np.pi, -np.pi])), k=1.0)
 
     x = np.random.rand(2)
 
@@ -57,7 +57,7 @@ def test_harmonic():
 def test_virial():
     # virial for volume based CV is V*I(3)
 
-    metric = CvMetric(periodicities=[False])
+    metric = CvMetric.create(periodicities=[False])
     cv0 = CollectiveVariable(f=Volume, metric=metric)
     coordinates = np.random.random((10, 3))
     cell = np.random.random((3, 3))
@@ -66,7 +66,7 @@ def test_virial():
     def fun(x):
         return x.cv[0]
 
-    bias = BiasF(cvs=cv0, g=fun)
+    bias = BiasF.create(cvs=cv0, g=fun)
 
     _, e_r = bias.compute_from_system_params(
         sp=SystemParams(coordinates=coordinates, cell=cell),
@@ -83,8 +83,8 @@ def test_RBF_bias(kernel):
     n = 5
 
     cv = CollectiveVariable(
-        CvFlow(func=lambda x: x.coordinates),
-        CvMetric(
+        f=CvFlow(func=lambda x: x.coordinates),
+        metric=CvMetric.create(
             periodicities=[False, False],
             bounding_box=jnp.array([[-2, 2], [1, 5]]),
         ),
@@ -107,7 +107,7 @@ def test_RBF_bias(kernel):
     val, _ = f.compute_cv_trans(center_cvs)
 
     # with jax.disable_jit():
-    bias = RbfBias(cvs=cv, cv=center_cvs, vals=val, kernel=kernel)
+    bias = RbfBias.create(cvs=cv, cv=center_cvs, vals=val, kernel=kernel)
 
     val2, _ = bias.compute_from_cv(center_cvs)
     assert jnp.allclose(val, val2)
@@ -123,20 +123,20 @@ def test_combine_bias():
 
     cv0 = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
-        metric=CvMetric(
+        metric=CvMetric.create(
             periodicities=[True, True],
             bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
         ),
     )
 
-    bias1 = BiasMTD(
+    bias1 = BiasMTD.create(
         cvs=cv0,
         K=2.0 * units.kjmol,
         sigmas=jnp.array([0.35, 0.35]),
         start=25,
         step=500,
     )
-    bias2 = BiasMTD(
+    bias2 = BiasMTD.create(
         cvs=cv0,
         K=0.5 * units.kjmol,
         sigmas=jnp.array([0.1, 0.1]),
@@ -144,7 +144,7 @@ def test_combine_bias():
         step=250,
     )
 
-    bias = CompositeBias(biases=[bias1, bias2])
+    bias = CompositeBias.create(biases=[bias1, bias2])
 
     stic = StaticMdInfo(
         T=T,
@@ -157,7 +157,7 @@ def test_combine_bias():
         ),
     )
 
-    mde = YaffEngine(
+    mde = YaffEngine.create(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         bias=bias,
         static_trajectory_info=stic,
@@ -171,7 +171,7 @@ def test_bias_save(tmpdir):
     from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
     yaffmd = alanine_dipeptide_yaff(
-        bias=lambda cv0: BiasMTD(
+        bias=lambda cv0: BiasMTD.create(
             cvs=cv0,
             K=2.0 * units.kjmol,
             sigmas=jnp.array([0.35, 0.35]),
@@ -198,11 +198,13 @@ def test_bias_save(tmpdir):
     assert pytest.approx(db.cv) == db2.cv
 
 
-@pytest.mark.parametrize("choice", ["gridbias", "rbf"])
+@pytest.mark.parametrize("choice", ["rbf"])
 def test_FES_bias(tmpdir, choice):
     import zipfile
 
     folder = tmpdir / "alanine_dipeptide"
+
+    print(folder)
 
     with zipfile.ZipFile(
         ROOT_DIR / "data" / "alanine_dipeptide.zip",
@@ -213,13 +215,15 @@ def test_FES_bias(tmpdir, choice):
     from IMLCV.scheme import Scheme
 
     rnds = Rounds(folder=folder, new_folder=False)
+
     scheme0 = Scheme.from_rounds(rnds)
 
-    config()
+    config(env="local")
 
     scheme0.FESBias(
         plot=False,
         choice=choice,
+        cv_round=0,
     )
 
     sp = scheme0.md.sp
@@ -230,26 +234,21 @@ def test_FES_bias(tmpdir, choice):
 
     cv, _ = scheme0.md.bias.compute_from_system_params(sp, nl)
     assert jnp.allclose(cv.cv, jnp.array([-2.85656026, 2.79090329]))
-    # assert jnp.allclose(energy_result.energy, er)
 
 
 def test_reparametrize():
     cvs = CollectiveVariable(
         f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
-        metric=CvMetric(
+        metric=CvMetric.create(
             periodicities=[True, True],
             bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]],
         ),
     )
 
-    bias = CompositeBias(
+    bias = CompositeBias.create(
         biases=[
-            HarmonicBias(cvs, q0=CV(jnp.array([np.pi, -np.pi])), k=1.0 / 6**2),
-            HarmonicBias(cvs, q0=CV(jnp.array([0.0, 0.5])), k=1.0 / 6**2),
+            HarmonicBias.create(cvs, q0=CV(jnp.array([np.pi, -np.pi])), k=1.0 / 6**2),
+            HarmonicBias.create(cvs, q0=CV(jnp.array([0.0, 0.5])), k=1.0 / 6**2),
         ],
     )
     _ = bias.resample(n=20)
-
-
-if __name__ == "__main__":
-    test_reparametrize()

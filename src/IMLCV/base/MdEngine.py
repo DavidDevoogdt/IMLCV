@@ -8,6 +8,7 @@ import tempfile
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from time import time
 
@@ -15,8 +16,6 @@ import cloudpickle
 import h5py
 import jax
 import jax.numpy as jnp
-import numpy as np
-import yaff.analysis.biased_sampling
 import yaff.external
 import yaff.log
 import yaff.pes.bias
@@ -33,6 +32,7 @@ from molmod.periodic import periodic
 from molmod.units import angstrom
 from molmod.units import bar
 from molmod.units import kjmol
+from typing_extensions import Self
 
 
 ######################################
@@ -220,7 +220,7 @@ class TrajectoryInfo:
         )
 
     @staticmethod
-    def stack(*ti: list[TrajectoryInfo]) -> TrajectoryInfo:
+    def stack(*ti: TrajectoryInfo) -> TrajectoryInfo:
         return TrajectoryInfo(
             _positions=jnp.vstack([t._positions[0 : t._size, :] for t in ti]),
             _cell=jnp.vstack([t._cell[0 : t._size, :] for t in ti]) if ti[0]._cell is not None else None,
@@ -445,67 +445,67 @@ class TrajectoryInfo:
 ######################################
 
 
+@dataclass
 class MDEngine(ABC):
     """Base class for MD engine."""
 
-    keys = [
-        "bias",
-        "energy",
-        "static_trajectory_info",
-        "trajectory_file",
-        # "sp",
-        # "sp",
-    ]
+    bias: Bias
+    energy: Energy
+    static_trajectory_info: StaticMdInfo
+    trajectory_info: TrajectoryInfo | None = None
+    trajectory_file: Path | None = None
+    time0: float = field(default_factory=time)
 
-    def __init__(
+    step: int = 1
+
+    last_bias: EnergyResult = EnergyResult(0)
+    last_ener: EnergyResult = EnergyResult(0)
+    last_cv: CV | None = None
+    _nl: NeighbourList | None = None
+
+    @classmethod
+    def create(
         self,
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
+        trajectory_info=None,
         trajectory_file=None,
         sp: SystemParams | None = None,
-    ) -> None:
-        self.static_trajectory_info = static_trajectory_info
-
-        self.bias = bias
-        self.energy = energy
-
-        self.last_bias = EnergyResult(0)
-        self.last_ener = EnergyResult(0)
-        self.last_cv: CV | None = None
-
-        # self._sp = sp
-
+        **kwargs,
+    ) -> Self:
         cont = False
 
-        if trajectory_file is not None:
-            self.trajectory_file = Path(trajectory_file)
+        create_kwargs = {}
 
+        if trajectory_file is not None:
+            trajectory_file = Path(trajectory_file)
             # continue with existing file if it exists
             if Path(trajectory_file).exists():
-                self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
+                trajectory_info = TrajectoryInfo.load(trajectory_file)
                 cont = True
-                print("continue with existing trajectory file")
-            else:
-                self.trajectory_info: TrajectoryInfo | None = None
-        else:
-            self.trajectory_file = None
-            self.trajectory_info: TrajectoryInfo | None = None
 
         if not cont:
-            self.step = 1
-
+            create_kwargs["step"] = 1
             if sp is not None:
-                self.sp = sp
-
-            self.time0 = time()
+                energy.sp = sp
 
         else:
-            self.step = self.trajectory_info._size
-            self.sp = self.trajectory_info.sp[-1]
-            self.time0 = self.trajectory_info.t[-1]
+            create_kwargs["step"] = trajectory_info._size
+            energy.sp = trajectory_info.sp[-1]
+            if trajectory_info.t is not None:
+                create_kwargs["time0"] = time() - trajectory_info.t[-1]
 
-        self._nl: NeighbourList | None = None
+        kwargs.update(create_kwargs)
+
+        return self(
+            bias=bias,
+            energy=energy,
+            static_trajectory_info=static_trajectory_info,
+            trajectory_info=trajectory_info,
+            trajectory_file=trajectory_file,
+            **kwargs,
+        )
 
     @property
     def sp(self) -> SystemParams:
@@ -545,18 +545,10 @@ class MDEngine(ABC):
         with open(file, "wb") as f:
             cloudpickle.dump(self, f)
 
-    def __getstate__(self):
-        return {key: self.__getattribute__(key) for key in MDEngine.keys}
-
-    def __setstate__(self, state):
-        print(f"setting {state=}")
-        self.__init__(**state)
-        return self
-
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
         with open(file, "rb") as f:
-            self = cloudpickle.load(f)
+            self: MDEngine = cloudpickle.load(f)
 
         for key in kwargs.keys():
             self.__setattr__(key, kwargs[key])
@@ -676,7 +668,7 @@ class MDEngine(ABC):
             if self.trajectory_file is not None:
                 self.trajectory_info.save(self.trajectory_file)  # type: ignore
 
-        self.bias.update_bias(self)
+        self.bias = self.bias.update_bias(self)
 
         self.step += 1
 
@@ -701,77 +693,3 @@ class MDEngine(ABC):
         )
 
         return cv, ener
-
-    @property
-    def yaff_system(self) -> MDEngine.YaffSys:
-        return self.YaffSys(self.energy, self.static_trajectory_info)
-
-    # definitons of different interfaces. These encode the state of the system in the format of a given md engine
-
-    @dataclass
-    class YaffSys:
-        _ener: Energy
-        _tic: StaticMdInfo
-
-        @dataclass
-        class YaffCell:
-            _ener: Energy
-
-            @property
-            def rvecs(self):
-                if self._ener.cell is None:
-                    return np.zeros((0, 3))
-                return np.array(self._ener.cell)
-
-            @rvecs.setter
-            def rvecs(self, rvecs):
-                self._ener.cell = jnp.array(rvecs)
-
-            def update_rvecs(self, rvecs):
-                self.rvecs = rvecs
-
-            @property
-            def nvec(self):
-                return self.rvecs.shape[0]
-
-            @property
-            def volume(self):
-                if self.nvec == 0:
-                    return np.nan
-
-                vol_unsigned = np.linalg.det(self.rvecs)
-                if vol_unsigned < 0:
-                    print("cell volume was negative")
-
-                return np.abs(vol_unsigned)
-
-        def __post_init__(self):
-            self._cell = self.YaffCell(_ener=self._ener)
-
-        @property
-        def numbers(self):
-            return self._tic.atomic_numbers
-
-        @property
-        def masses(self):
-            return np.array(self._tic.masses)
-
-        @property
-        def charges(self):
-            return None
-
-        @property
-        def cell(self):
-            return self._cell
-
-        @property
-        def pos(self):
-            return np.array(self._ener.coordinates)
-
-        @pos.setter
-        def pos(self, pos):
-            self._ener.coordinates = jnp.array(pos)
-
-        @property
-        def natom(self):
-            return self.pos.shape[0]

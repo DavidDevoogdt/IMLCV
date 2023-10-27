@@ -64,7 +64,7 @@ class Transformer:
         if p_map:
             _f = padded_pmap(_f)
 
-        x = _f(z, nl)
+        x: CV = _f(z, nl)
 
         x_stacked = x.replace(_stack_dims=stack_dims)
 
@@ -141,7 +141,7 @@ class Transformer:
 
         new_collective_variable = CollectiveVariable(
             f=f * g * h,
-            metric=CvMetric(
+            metric=CvMetric.create(
                 periodicities=None,
                 bounding_box=new_bounding_box,
             ),

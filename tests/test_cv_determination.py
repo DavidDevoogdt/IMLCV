@@ -78,7 +78,7 @@ def get_LDA_CV_round(folder, lda_steps=10000) -> Rounds:
 
         biases = []
         for _ in refs:
-            biases.append(NoneBias(cvs=NoneCV()))
+            biases.append(NoneBias.create(collective_variable=NoneCV()))
 
         rnds.run_par(biases=biases, steps=lda_steps, sp0=refs, plot=False)
         shutil.make_archive(p.parent / p.stem, "zip", folder)

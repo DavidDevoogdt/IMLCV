@@ -48,7 +48,10 @@ class ThermoLIB:
         self.common_bias = self.rounds.get_bias(c=cv_round, r=self.rnd)
 
         if cv is None:
-            self.collective_variable = self.rounds.get_bias(c=self.cv_round, r=self.rnd).collective_variable
+            b = self.rounds.get_bias(c=self.cv_round, r=self.rnd)
+            print(b.__dict__)
+
+            self.collective_variable = b.collective_variable
         else:
             self.collective_variable = cv
 
@@ -79,15 +82,15 @@ class ThermoLIB:
         trajs = dlo.cv
         biases = dlo.bias
 
-        trajs_plot = self.rounds.data_loader(
-            num=1,
-            ignore_invalid=False,
-            cv_round=self.cv_round,
-            split_data=True,
-            new_r_cut=None,
-        ).cv
-
         if plot:
+            trajs_plot = self.rounds.data_loader(
+                num=1,
+                ignore_invalid=False,
+                cv_round=self.cv_round,
+                split_data=True,
+                new_r_cut=None,
+            ).cv
+
             plot_app(
                 bias=self.common_bias,
                 outputs=[File(f"{directory}/combined.png")],  # png because heavy file
@@ -265,7 +268,7 @@ class ThermoLIB:
 
                 # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
 
-                fesBias = RbfBias(
+                fesBias = RbfBias.create(
                     cvs=self.collective_variable,
                     vals=fslist,
                     cv=cv,
@@ -287,7 +290,7 @@ class ThermoLIB:
         else:
             raise ValueError
 
-        fes_bias_tot = CompositeBias(biases=[self.common_bias, fesBias])
+        fes_bias_tot = CompositeBias.create(biases=[self.common_bias, fesBias])
 
         if resample_bias:
             fes_bias_tot = fes_bias_tot.resample(cv_grid=cv_grid)

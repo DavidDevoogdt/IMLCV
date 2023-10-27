@@ -8,7 +8,7 @@ from IMLCV.configs.hpc_ugent import config as config_ugent
 from IMLCV.configs.local_threadpool import get_config as get_config_local
 from parsl.config import Config
 
-ROOT_DIR = Path().resolve().parent
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 print(f"{ROOT_DIR=}")
 

@@ -42,7 +42,7 @@ class TrajectoryInformation:
     name_bias: str | None = None
     valid: bool = True
 
-    def get_bias(self) -> Bias:
+    def get_bias(self) -> Bias | None:
         try:
             assert self.name_bias is not None
             return Bias.load(self.folder / self.name_bias)
@@ -1171,7 +1171,7 @@ class Rounds(ABC):
             if bias is None:
                 b = Bias.load(common_bias_name)
             else:
-                b = CompositeBias([Bias.load(common_bias_name), bias])
+                b = CompositeBias.create([Bias.load(common_bias_name), bias])
 
             b_name = path_name / "bias"
             b_name_new = path_name / "bias_new"

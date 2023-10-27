@@ -351,7 +351,6 @@ class TransoformerLDA(Transformer):
         outdim: int,
         kernel=False,
         optimizer=None,
-        chunk_size=None,
         solver="eigen",
         method="pymanopt",
         harmonic=True,
@@ -364,7 +363,6 @@ class TransoformerLDA(Transformer):
             outdim=outdim,
             kernel=kernel,
             optimizer=optimizer,
-            chunk_size=chunk_size,
             solver=solver,
             method=method,
             harmonic=harmonic,
@@ -605,7 +603,7 @@ class TransformerMAF(Transformer):
         mask = jnp.linalg.norm((cv_0.cv - jnp.mean(cv_0.cv, axis=0)), axis=0) > 1e-8
 
         @CvTrans.from_cv_function
-        def transform(cv, nl, _):
+        def transform(cv: CV, nl: NeighbourList | None, _):
             return cv.replace(cv=cv.cv[mask])
 
         cv_0, _ = transform.compute_cv_trans(cv_0)
@@ -772,6 +770,7 @@ class TransformerMAF(Transformer):
 
             u = u[:, :-1]
             u = u[:, ::-1]
+            u = jnp.array(u)
 
             @CvTrans.from_cv_function
             def tica_selection(cv: CV, nl: NeighbourList | None, _):

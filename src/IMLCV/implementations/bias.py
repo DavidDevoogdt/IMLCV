@@ -1,10 +1,13 @@
 from collections.abc import Iterable
 
+import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
 import scipy
 import yaff
+from flax.struct import field
+from flax.struct import PyTreeNode
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
@@ -15,25 +18,36 @@ from jax import Array
 from molmod.units import kjmol
 from molmod.units import nanometer
 from molmod.units import picosecond
-
-yaff.log.set_level(yaff.log.silent)
+from typing_extensions import Self
 
 
 class MinBias(CompositeBias):
-    def __init__(self, biases: Iterable[Bias]) -> None:
-        super().__init__(biases, fun=jnp.min)
+    @classmethod
+    def create(clz, biases: Iterable[Bias]) -> Self:
+        b: clz = CompositeBias.create(biases=biases, fun=jnp.min)
+        return b
 
 
 class HarmonicBias(Bias):
     """Harmonic bias potential centered arround q0 with force constant k."""
 
-    def __init__(
-        self,
+    q0: CV
+    k: Array
+    k_max: Array | None = field(pytree_node=False, default=None)
+    y0: Array | None = field(pytree_node=False, default=None)
+    r0: Array | None = field(pytree_node=False, default=None)
+
+    @classmethod
+    def create(
+        clz,
         cvs: CollectiveVariable,
         q0: CV,
         k,
         k_max: Array | float | None = None,
-    ):
+        start=None,
+        step=None,
+        finalized=None,
+    ) -> Self:
         """generate harmonic potentia;
 
         Args:
@@ -41,7 +55,6 @@ class HarmonicBias(Bias):
             q0: rest pos spring
             k: force constant spring
         """
-        super().__init__(cvs)
 
         if isinstance(k, float):
             k = jnp.zeros_like(q0.cv) + k
@@ -55,16 +68,29 @@ class HarmonicBias(Bias):
                 assert k_max.shape == q0.cv.shape
 
         assert np.all(k > 0)
-        self.k = jnp.array(k)
-        self.q0 = q0
+        k = jnp.array(k)
 
-        self.k_max = k_max
         if k_max is not None:
             assert np.all(k_max > 0)
-            self.r0 = k_max / k
-            self.y0 = jnp.einsum("i,i,i->", k, self.r0, self.r0) / 2
+            r0 = k_max / k
+            y0 = jnp.einsum("i,i,i->", k, r0, r0) / 2
+        else:
+            r0 = None
+            y0 = None
 
-    def _compute(self, cvs: CV, *args):
+        return clz(
+            collective_variable=cvs,
+            q0=q0,
+            k=k,
+            k_max=k_max,
+            r0=r0,
+            y0=y0,
+            start=start,
+            step=step,
+            finalized=finalized,
+        )
+
+    def _compute(self, cvs: CV):
         # assert isinstance(cvs, CV)
         r = self.collective_variable.metric.difference(cvs, self.q0)
 
@@ -89,25 +115,6 @@ class HarmonicBias(Bias):
             + self.y0,
         )
 
-    def get_args(self):
-        return []
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, d):
-        self.__dict__.update(d)
-
-        if not isinstance(self.q0, CV):
-            print(f"loaded {self.q0=}  has {isinstance(self.q0,CV)=}, recreating the object")
-            self.q0 = CV(
-                cv=self.q0.cv,
-                mapped=self.q0.mapped,
-                atomic=self.q0.atomic,
-                _combine_dims=self.q0.combine_dims,
-                _stack_dims=self.q0._stack_dims,
-            )
-
 
 class BiasMTD(Bias):
     r"""A sum of Gaussian hills, for instance used in metadynamics:
@@ -120,7 +127,14 @@ class BiasMTD(Bias):
     variables.
     """
 
-    def __init__(
+    q0s: jax.Array
+    sigmas: jax.Array = field(pytree_node=False)
+    K: jax.Array
+    Ks: jax.Array
+    tempering: bool = field(pytree_node=False)
+
+    @classmethod
+    def create(
         self,
         cvs: CollectiveVariable,
         K,
@@ -128,7 +142,8 @@ class BiasMTD(Bias):
         tempering=0.0,
         start=None,
         step=None,
-    ):
+        finalized=False,
+    ) -> Self:
         """_summary_
 
         Args:
@@ -147,62 +162,63 @@ class BiasMTD(Bias):
         if isinstance(sigmas, Array):
             sigmas = jnp.array(sigmas)
 
-        self.ncv = cvs.n
+        ncv = cvs.n
         assert sigmas.ndim == 1
-        assert sigmas.shape[0] == self.ncv
+        assert sigmas.shape[0] == ncv
         assert jnp.all(sigmas > 0)
-        self.sigmas = sigmas
-        self.sigmas_isq = 1.0 / (2.0 * sigmas**2.0)
 
-        self.Ks = jnp.zeros((0,))
-        self.q0s = jnp.zeros((0, self.ncv))
+        Ks = jnp.zeros((0,))
+        q0s = jnp.zeros((0, ncv))
+        tempering = tempering
+        K = K
 
-        self.tempering = tempering
-        self.K = K
-
-        super().__init__(cvs, start, step)
+        return self(
+            collective_variable=cvs,
+            start=start,
+            step=step,
+            q0s=q0s,
+            sigmas=sigmas,
+            K=K,
+            Ks=Ks,
+            tempering=tempering,
+            finalized=finalized,
+        )
 
     def update_bias(
         self,
         md: MDEngine,
     ):
-        if not self._update_bias():
-            return
+        b, self = self._update_bias()
 
-        assert md.trajectory_info is not None
-        sp = md.sp
+        if not b:
+            return self
 
-        if self.finalized:
-            return
-        # Compute current CV values
-        nl = sp.get_neighbour_list(
-            md.static_trajectory_info.r_cut,
-            z_array=md.static_trajectory_info.atomic_numbers,
-        )
-        q0s = self.collective_variable.compute_cv(sp=sp, nl=nl)[0].cv
+        assert md.last_cv is not None
 
+        q0s = md.last_cv.cv
         K = self.K
+
         if self.tempering != 0.0:
+            # update K
             raise NotImplementedError("untested")
 
-        self.q0s = jnp.vstack([self.q0s, q0s])
-        self.Ks = jnp.array([*self.Ks, K])
+        q0s = jnp.vstack([self.q0s, q0s])
+        Ks = jnp.array([*self.Ks, K])
 
-    def _compute(self, cvs, q0s, Ks):
+        return self.replace(q0s=q0s, Ks=Ks, K=K)
+
+    def _compute(self, cvs):
         """Computes sum of hills."""
 
         def f(x):
             return self.collective_variable.metric.difference(x1=CV(cv=x), x2=cvs)
 
-        deltas = jnp.apply_along_axis(f, axis=1, arr=q0s.val)
+        deltas = jnp.apply_along_axis(f, axis=1, arr=self.q0s)
 
-        exparg = jnp.einsum("ji,ji,i -> j", deltas, deltas, self.sigmas_isq)
-        energy = jnp.sum(jnp.exp(-exparg) * Ks.val)
+        exparg = jnp.einsum("ji,ji,i -> j", deltas, deltas, 1.0 / (2.0 * self.sigmas**2.0))
+        energy = jnp.sum(jnp.exp(-exparg) * self.Ks)
 
         return energy
-
-    def get_args(self):
-        return [self.q0s, self.Ks]
 
 
 class RbfBias(Bias):
@@ -211,8 +227,11 @@ class RbfBias(Bias):
     values are caluclated in bin centers
     """
 
-    def __init__(
-        self,
+    rbf: RBFInterpolator = field(pytree_node=False)
+
+    @classmethod
+    def create(
+        clz,
         cvs: CollectiveVariable,
         vals: Array,
         cv: CV,
@@ -222,15 +241,14 @@ class RbfBias(Bias):
         epsilon=None,
         smoothing=0.0,
         degree=None,
-    ) -> None:
-        super().__init__(cvs, start, step)
-
+        finalized=False,
+    ) -> Self:
         assert cv.batched
         assert cv.shape[1] == cvs.n
         assert len(vals.shape) == 1
         assert cv.shape[0] == vals.shape[0]
 
-        self.rbf = RBFInterpolator(
+        rbf = RBFInterpolator.create(
             y=cv,
             kernel=kernel,
             d=vals,
@@ -240,22 +258,13 @@ class RbfBias(Bias):
             degree=degree,
         )
 
-        # assert jnp.allclose(vals, self.rbf(cv), atol=1e-7)
+        return clz(collective_variable=cvs, start=start, step=step, rbf=rbf, finalized=finalized)
 
-    def _compute(self, cvs: CV, *args):
+    def _compute(self, cvs: CV):
         out = self.rbf(cvs)
         if cvs.batched:
             return out
         return out[0]
-
-    def get_args(self):
-        return []
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, d):
-        self.__dict__.update(d)
 
 
 class GridBias(Bias):
@@ -264,7 +273,12 @@ class GridBias(Bias):
     values are caluclated in bin centers
     """
 
-    def __init__(
+    n: jax.Array
+    bounds: jax.Array
+    vals: jax.Array
+
+    @classmethod
+    def create(
         self,
         cvs: CollectiveVariable,
         vals,
@@ -272,14 +286,13 @@ class GridBias(Bias):
         start=None,
         step=None,
         centers=True,
-    ) -> None:
-        super().__init__(cvs, start, step)
-
+        finalized=False,
+    ) -> Self:
         if not centers:
             raise NotImplementedError
 
         # extend periodically
-        self.n = np.array(vals.shape)
+        n = np.array(vals.shape)
 
         bias = vals
         for i, p in enumerate(self.collective_variable.metric.periodicities):
@@ -308,6 +321,7 @@ class GridBias(Bias):
         mask = np.isnan(bias)
         inds_pairs[:, mask]
 
+        # TODO: change wiht own rbf interpollator
         rbf = scipy.interpolate.RBFInterpolator(
             np.array([i[~mask] for i in inds_pairs]).T,
             bias[~mask],
@@ -315,10 +329,20 @@ class GridBias(Bias):
 
         bias[mask] = rbf(np.array([i[mask] for i in inds_pairs]).T)
 
-        self.vals = bias
-        self.bounds = jnp.array(bounds)
+        vals = bias
+        bounds = jnp.array(bounds)
 
-    def _compute(self, cvs: CV, *args):
+        return self(
+            collective_variable=cvs,
+            start=start,
+            step=step,
+            n=n,
+            vals=vals,
+            bounds=bounds,
+            finalized=finalized,
+        )
+
+    def _compute(self, cvs: CV):
         # overview of grid points. stars are addded to allow out of bounds extension.
         # the bounds of the x square are per.
         #  ___ ___ ___ ___
@@ -350,118 +374,115 @@ class GridBias(Bias):
         # type: ignore
         return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)
 
-    def get_args(self):
-        return []
 
+# class PlumedBias(Bias):
+#     def __init__(
+#         self,
+#         collective_variable: CollectiveVariable,
+#         timestep,
+#         kernel=None,
+#         fn="plumed.dat",
+#         fn_log="plumed.log",
+#     ) -> None:
+#         super().__init__(
+#             collective_variable,
+#             start=0,
+#             step=1,
+#         )
 
-class PlumedBias(Bias):
-    def __init__(
-        self,
-        collective_variable: CollectiveVariable,
-        timestep,
-        kernel=None,
-        fn="plumed.dat",
-        fn_log="plumed.log",
-    ) -> None:
-        super().__init__(
-            collective_variable,
-            start=0,
-            step=1,
-        )
+#         self.fn = fn
+#         self.kernel = kernel
+#         self.fn_log = fn_log
+#         self.plumedstep = 0
+#         self.hooked = False
 
-        self.fn = fn
-        self.kernel = kernel
-        self.fn_log = fn_log
-        self.plumedstep = 0
-        self.hooked = False
+#         self.setup_plumed(timestep, 0)
 
-        self.setup_plumed(timestep, 0)
+#         raise NotImplementedError("this is untested")
 
-        raise NotImplementedError("this is untested")
+#     def setup_plumed(self, timestep, restart):
+#         r"""Send commands to PLUMED to make it computation-ready.
 
-    def setup_plumed(self, timestep, restart):
-        r"""Send commands to PLUMED to make it computation-ready.
+#         **Arguments:**
 
-        **Arguments:**
+#         timestep
+#             The timestep (in au) of the integrator
 
-        timestep
-            The timestep (in au) of the integrator
+#         restart
+#             Set to an integer value different from 0 to let PLUMED know that
+#             this is a restarted run
+#         """
+#         # Try to load the plumed Python wrapper, quit if not possible
+#         try:
+#             from plumed import Plumed
+#         except ImportError as e:
+#             raise e
 
-        restart
-            Set to an integer value different from 0 to let PLUMED know that
-            this is a restarted run
-        """
-        # Try to load the plumed Python wrapper, quit if not possible
-        try:
-            from plumed import Plumed
-        except ImportError as e:
-            raise e
+#         self.plumed = Plumed(kernel=self.kernel)
+#         # Conversion between PLUMED internal units and YAFF internal units
+#         # Note that PLUMED output will follow the PLUMED conventions
+#         # concerning units
+#         self.plumed.cmd("setMDEnergyUnits", 1.0 / kjmol)
+#         self.plumed.cmd("setMDLengthUnits", 1.0 / nanometer)
+#         self.plumed.cmd("setMDTimeUnits", 1.0 / picosecond)
+#         # Initialize the system in PLUMED
+#         self.plumed.cmd("setPlumedDat", self.fn)
+#         self.plumed.cmd("setNatoms", self.system.natom)
+#         self.plumed.cmd("setMDEngine", "IMLCV")
+#         self.plumed.cmd("setLogFile", self.fn_log)
+#         self.plumed.cmd("setTimestep", timestep)
+#         self.plumed.cmd("setRestart", restart)
+#         self.plumed.cmd("init")
 
-        self.plumed = Plumed(kernel=self.kernel)
-        # Conversion between PLUMED internal units and YAFF internal units
-        # Note that PLUMED output will follow the PLUMED conventions
-        # concerning units
-        self.plumed.cmd("setMDEnergyUnits", 1.0 / kjmol)
-        self.plumed.cmd("setMDLengthUnits", 1.0 / nanometer)
-        self.plumed.cmd("setMDTimeUnits", 1.0 / picosecond)
-        # Initialize the system in PLUMED
-        self.plumed.cmd("setPlumedDat", self.fn)
-        self.plumed.cmd("setNatoms", self.system.natom)
-        self.plumed.cmd("setMDEngine", "IMLCV")
-        self.plumed.cmd("setLogFile", self.fn_log)
-        self.plumed.cmd("setTimestep", timestep)
-        self.plumed.cmd("setRestart", restart)
-        self.plumed.cmd("init")
+#     def update_bias(self, md: MDEngine):
+#         r"""When this point is reached, a complete time integration step was
+#         finished and PLUMED should be notified about this.
+#         """
+#         if not self.hooked:
+#             self.setup_plumed(timestep=self.plumedstep, restart=int(md.step > 0))
+#             self.hooked = True
 
-    def update_bias(self, md: MDEngine):
-        r"""When this point is reached, a complete time integration step was
-        finished and PLUMED should be notified about this.
-        """
-        if not self.hooked:
-            self.setup_plumed(timestep=self.plumedstep, restart=int(md.step > 0))
-            self.hooked = True
+#         # PLUMED provides a setEnergy command, which should pass the
+#         # current potential energy. It seems that this is never used, so we
+#         # don't pass anything for the moment.
+#         #        current_energy = sum([part.energy for part in iterative.ff.parts[:-1] if not isinstance(part, ForcePartPlumed)])
+#         #        self.plumed.cmd("setEnergy", current_energy)
+#         # Ensure the plumedstep is an integer and not a numpy data type
+#         self.plumedstep += 1
+#         self._internal_compute(None, None)
+#         self.plumed.cmd("update")
 
-        # PLUMED provides a setEnergy command, which should pass the
-        # current potential energy. It seems that this is never used, so we
-        # don't pass anything for the moment.
-        #        current_energy = sum([part.energy for part in iterative.ff.parts[:-1] if not isinstance(part, ForcePartPlumed)])
-        #        self.plumed.cmd("setEnergy", current_energy)
-        # Ensure the plumedstep is an integer and not a numpy data type
-        self.plumedstep += 1
-        self._internal_compute(None, None)
-        self.plumed.cmd("update")
-
-    def _internal_compute(self, gpos, vtens):
-        self.plumed.cmd("setStep", self.plumedstep)
-        self.plumed.cmd("setPositions", self.system.pos)
-        self.plumed.cmd("setMasses", self.system.masses)
-        if self.system.charges is not None:
-            self.plumed.cmd("setCharges", self.system.charges)
-        if self.system.cell.nvec > 0:
-            rvecs = self.system.cell.rvecs.copy()
-            self.plumed.cmd("setBox", rvecs)
-        # PLUMED always needs arrays to write forces and virial to, so
-        # provide dummy arrays if Yaff does not provide them
-        # Note that gpos and forces differ by a minus sign, which has to be
-        # corrected for when interacting with PLUMED
-        if gpos is None:
-            my_gpos = np.zeros(self.system.pos.shape)
-        else:
-            gpos[:] *= -1.0
-            my_gpos = gpos
-        self.plumed.cmd("setForces", my_gpos)
-        if vtens is None:
-            my_vtens = np.zeros((3, 3))
-        else:
-            my_vtens = vtens
-        self.plumed.cmd("setVirial", my_vtens)
-        # Do the actual calculation, without an update; this should
-        # only be done at the end of a time step
-        self.plumed.cmd("prepareCalc")
-        self.plumed.cmd("performCalcNoUpdate")
-        if gpos is not None:
-            gpos[:] *= -1.0
-        # Retrieve biasing energy
-        energy = np.zeros((1,))
-        self.plumed.cmd("getBias", energy)
-        return energy[0]
+#     def _internal_compute(self, gpos, vtens):
+#         self.plumed.cmd("setStep", self.plumedstep)
+#         self.plumed.cmd("setPositions", self.system.pos)
+#         self.plumed.cmd("setMasses", self.system.masses)
+#         if self.system.charges is not None:
+#             self.plumed.cmd("setCharges", self.system.charges)
+#         if self.system.cell.nvec > 0:
+#             rvecs = self.system.cell.rvecs.copy()
+#             self.plumed.cmd("setBox", rvecs)
+#         # PLUMED always needs arrays to write forces and virial to, so
+#         # provide dummy arrays if Yaff does not provide them
+#         # Note that gpos and forces differ by a minus sign, which has to be
+#         # corrected for when interacting with PLUMED
+#         if gpos is None:
+#             my_gpos = np.zeros(self.system.pos.shape)
+#         else:
+#             gpos[:] *= -1.0
+#             my_gpos = gpos
+#         self.plumed.cmd("setForces", my_gpos)
+#         if vtens is None:
+#             my_vtens = np.zeros((3, 3))
+#         else:
+#             my_vtens = vtens
+#         self.plumed.cmd("setVirial", my_vtens)
+#         # Do the actual calculation, without an update; this should
+#         # only be done at the end of a time step
+#         self.plumed.cmd("prepareCalc")
+#         self.plumed.cmd("performCalcNoUpdate")
+#         if gpos is not None:
+#             gpos[:] *= -1.0
+#         # Retrieve biasing energy
+#         energy = np.zeros((1,))
+#         self.plumed.cmd("getBias", energy)
+#         return energy[0]

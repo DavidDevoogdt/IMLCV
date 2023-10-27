@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import warnings
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Iterable
+from dataclasses import dataclass
+from dataclasses import fields
+from dataclasses import KW_ONLY
 from functools import partial
 from pathlib import Path
+from typing import Callable
 from typing import TYPE_CHECKING
 
 import cloudpickle
@@ -15,7 +20,10 @@ import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import yaff
-from flax import struct
+from flax.serialization import from_state_dict
+from flax.serialization import to_state_dict
+from flax.struct import field
+from flax.struct import PyTreeNode
 from hsluv import hsluv_to_rgb
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
@@ -33,6 +41,7 @@ from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
 from parsl.data_provider.files import File
+from typing_extensions import Self
 
 
 yaff.log.set_level(yaff.log.silent)
@@ -46,11 +55,10 @@ if TYPE_CHECKING:
 ######################################
 
 
-@struct.dataclass
-class EnergyResult:
+class EnergyResult(PyTreeNode):
     energy: float
-    gpos: Array | None = struct.field(default=None)
-    vtens: Array | None = struct.field(default=None)
+    gpos: Array | None = field(default=None)
+    vtens: Array | None = field(default=None)
 
     def __post_init__(self):
         if isinstance(self.gpos, Array):
@@ -86,51 +94,20 @@ class EnergyResult:
 
         return str
 
+    # def __getstate__(self ):
+    #     print(f"pickling {self.__class__}")
+    #     return  to_state_dict(self)
 
-class BC:
-    """base class for biased Energy of MD simulation."""
-
-    def __init__(self) -> None:
-        pass
-
-    # def compute_from_system_params(
-    #     self,
-    #     gpos=False,
-    #     vir=False,
-    #     sp: SystemParams | None = None,
-    #     nl: NeighbourList | None = None,
-    # ) -> EnergyResult:
-    #     """Computes the bias, the gradient of the bias wrt the coordinates and
-    #     the virial."""
-    #     raise NotImplementedError
-
-    def save(self, filename: str | Path):
-        if isinstance(filename, str):
-            filename = Path(filename)
-        if not filename.parent.exists():
-            filename.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(filename, "wb") as f:
-            cloudpickle.dump(self, f)
-
-    @staticmethod
-    def load(filename) -> BC:
-        with open(filename, "rb") as f:
-            self = cloudpickle.load(f)
-        return self
+    # def __setstate__(self, state):
+    #     print(f"unpickling {self.__class__}")
+    #     self = from_state_dict(self, state)
 
 
 class EnergyError(Exception):
     pass
 
 
-class Energy(BC):
-    @staticmethod
-    def load(filename) -> Energy:
-        energy = BC.load(filename=filename)
-        assert isinstance(energy, Energy)
-        return energy
-
+class Energy:
     @property
     @abstractmethod
     def cell(self):
@@ -180,6 +157,21 @@ class Energy(BC):
         # try:
         return self._compute_coor(gpos=gpos, vir=vir)
 
+    def save(self, filename: str | Path):
+        if isinstance(filename, str):
+            filename = Path(filename)
+        if not filename.parent.exists():
+            filename.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(filename, "wb") as f:
+            cloudpickle.dump(self, f)
+
+    @staticmethod
+    def load(filename) -> Energy:
+        with open(filename, "rb") as f:
+            self = cloudpickle.load(f)
+        return self
+
 
 class PlumedEnerg(Energy):
     pass
@@ -194,56 +186,47 @@ class BiasError(Exception):
     pass
 
 
-class Bias(BC, ABC):
+class Bias(PyTreeNode, ABC):
     """base class for biased MD runs."""
 
-    def __init__(
-        self,
-        collective_variable: CollectiveVariable,
-        start=None,
-        step=None,
-    ) -> None:
-        """args:
-        cvs: collective variables
-        start: number of md steps before update is called
-        step: steps between update is called"""
-        super().__init__()
+    __: KW_ONLY
 
-        self.collective_variable = collective_variable
-        self.start = start
-        self.step = step
-        self.couter = 0
+    collective_variable: CollectiveVariable = field(pytree_node=False)
+    start: int | None = field(pytree_node=False, default=0)
+    step: int | None = field(pytree_node=False, default=1)
+    finalized: bool = field(pytree_node=False, default=False)
 
-        self.finalized = False
+    @classmethod
+    def create(clz, *args, **kwargs) -> Self:
+        return clz(*args, **kwargs)
 
     def update_bias(
         self,
         md: MDEngine,
-    ):
+    ) -> Bias:
         """update the bias.
 
         Can only change the properties from _get_args
         """
 
-    def _update_bias(self):
+        return self
+
+    def _update_bias(self) -> tuple[bool, Self]:
         """update the bias.
 
         Can only change the properties from _get_args
         """
         if self.finalized:
-            return False
+            return False, self
 
         if self.start is None or self.step is None:
-            return False
+            return False, self
 
         if self.start == 0:
-            self.start += self.step - 1
-            return True
-        self.start -= 1
-        return False
+            return True, self.replace(start=self.start + self.step - 1)
+        return False, self.replace(start=self.start - 1)
 
-    # @partial(jit, static_argnums=(0, 2, 3))
-    @partial(jax.jit, static_argnames=["self", "gpos", "vir", "chunk_size"])
+    @partial(jax.jit, static_argnames=["gpos", "vir", "chunk_size"])
     def compute_from_system_params(
         self,
         sp: SystemParams,
@@ -306,64 +289,34 @@ class Bias(BC, ABC):
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 
-    @partial(jax.jit, static_argnames=["self", "diff", "chunk_size"])
-    def compute_from_cv(self, cvs: CV, diff=False, chunk_size=None) -> CV:
+    @partial(jax.jit, static_argnames=["diff", "chunk_size"])
+    def compute_from_cv(self, cvs: CV, diff=False, chunk_size=None) -> tuple[CV, CV | None]:
         """compute the energy and derivative.
 
         If map==False, the cvs are assumed to be already mapped
         """
-        # assert isinstance(cvs, CV)
-        # jax.debug.print("cvs {}", cvs)
 
-        # map compute command
-        def f0(x):
-            args = [HashableArrayWrapper(a) for a in self.get_args()]
-            static_array_argnums = tuple(i + 1 for i in range(len(args)))
+        if cvs.batched:
+            return chunk_map(
+                vmap(
+                    Partial(
+                        self.compute_from_cv,
+                        chunk_size=chunk_size,
+                        diff=diff,
+                    ),
+                ),
+                chunk_size=chunk_size,
+            )(cvs)
 
-            # if jit:
-            return jax.jit(self._compute, static_argnums=static_array_argnums)(
-                x,
-                *args,
-            )
+        if diff:
+            return value_and_grad(self._compute)(cvs)
 
-        def f1(x):
-            return value_and_grad(f0)(x) if diff else (f0(x), None)
-
-        def f2(cvs):
-            return chunk_map(vmap(f1), chunk_size=chunk_size)(cvs) if cvs.batched else f1(cvs)
-
-        return f2(cvs)
+        return self._compute(cvs), None
 
     @abstractmethod
-    def _compute(self, cvs, *args):
+    def _compute(self, cvs):
         """function that calculates the bias potential. CVs live in mapped space"""
         raise NotImplementedError
-
-    @abstractmethod
-    def get_args(self):
-        """function that return dictionary with kwargs of _compute."""
-        return []
-
-    def finalize(self):
-        """Should be called at end of metadynamics simulation.
-
-        Optimises compute
-        """
-
-        self.finalized = True
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, d):
-        # # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-        # print(f"update_done")
-
-    @staticmethod
-    def load(filename) -> Bias:
-        bias: Bias = BC.load(filename=filename)
-        return bias
 
     def plot(
         self,
@@ -613,7 +566,45 @@ class Bias(BC, ABC):
 
         bias, _ = self.compute_from_cv(cv_grid)
 
-        return RbfBias(cv=cv_grid, cvs=self.collective_variable, vals=bias, kernel="thin_plate_spline")
+        return RbfBias.create(cv=cv_grid, cvs=self.collective_variable, vals=bias, kernel="thin_plate_spline")
+
+    def save(self, filename: str | Path):
+        if isinstance(filename, str):
+            filename = Path(filename)
+        if not filename.parent.exists():
+            filename.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(filename, "wb") as f:
+            cloudpickle.dump(self, f)
+
+    @staticmethod
+    def load(filename) -> Bias:
+        with open(filename, "rb") as f:
+            self = cloudpickle.load(f)
+        return self
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        try:
+            f_names = [f.name for f in fields(self.__class__)]
+
+            removed = []
+
+            for k in statedict.keys():
+                if k not in f_names:
+                    removed.append(k)
+
+            for k in removed:
+                del statedict[k]
+
+            self.__dict__.update(**statedict)
+        except Exception as e:
+            print(
+                f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
+            )
+            raise e
 
 
 @bash_app_python(executors=["default"])
@@ -655,99 +646,75 @@ def plot_app(
 class CompositeBias(Bias):
     """Class that combines several biases in one single bias."""
 
-    def __init__(self, biases: Iterable[Bias], fun=jnp.sum) -> None:
-        self.init = True
+    biases: list[Bias]
+    fun: Callable = field(pytree_node=False)
 
-        self.biases: list[Bias] = []
+    @classmethod
+    def create(clz, biases: Iterable[Bias], fun=jnp.sum) -> Self:
+        collective_variable: CollectiveVariable = None  # type: ignore
 
-        # self.start_list = np.array([], dtype=np.int16)
-        # self.step_list = np.array([], dtype=np.int16)
-        self.args_shape = np.array([0])
-        self.collective_variable: CollectiveVariable = None  # type: ignore
+        biases_new = []
 
-        for bias in biases:
-            self._append_bias(bias)
+        for b in biases:
+            if collective_variable is None:
+                collective_variable = b.collective_variable
 
-        if self.biases is None:
+            if b is NoneBias:
+                continue
+
+            biases_new.append(b)
+
+        if biases_new is None:
             assert biases[0] is NoneBias
-            self.biases = bias[0]
+            biases_new = biases[0]
 
-        self.fun = fun
+        assert collective_variable is not None
 
-        super().__init__(collective_variable=self.collective_variable, start=0, step=1)
-        self.init = True
-
-    def _append_bias(self, b: Bias):
-        if b is NoneBias:
-            return
-
-        self.biases.append(b)
-
-        # self.start_list = np.append(
-        #     self.start_list, b.start if (b.start is not None) else -1
-        # )
-        # self.step_list = np.append(
-        #     self.step_list, b.step if (b.step is not None) else -1
-        # )
-        self.args_shape = np.append(
-            self.args_shape,
-            len(b.get_args()) + self.args_shape[-1],
+        return clz(
+            collective_variable=collective_variable,
+            biases=biases_new,
+            fun=fun,
+            start=0,
+            step=1,
+            finalized=False,
         )
 
-        if self.collective_variable is None:
-            self.collective_variable = b.collective_variable
-        else:
-            pass
-            # assert self.cvs == b.cvs, "CV should be the same"
-
-    def _compute(self, cvs, *args):
-        return self.fun(
-            jnp.array(
-                [
-                    jnp.reshape(
-                        self.biases[i]._compute(
-                            cvs,
-                            *args[self.args_shape[i] : self.args_shape[i + 1]],
-                        ),
-                        (),
-                    )
-                    for i in range(len(self.biases))
-                ],
-            ),
-        )
-
-    def finalize(self):
-        for b in self.biases:
-            b.finalize()
+    def _compute(self, cvs):
+        return self.fun(jnp.array([jnp.reshape(self.biases[i]._compute(cvs), ()) for i in range(len(self.biases))]))
 
     def update_bias(
         self,
         md: MDEngine,
-    ):
-        for b in self.biases:
-            b.update_bias(md=md)
-
-    def get_args(self):
-        return [a for b in self.biases for a in b.get_args()]
+    ) -> Bias:
+        return self.replace(biases=[a.update_bias(md) for a in self.biases])
 
 
 class BiasF(Bias):
     """Bias according to CV."""
 
-    def __init__(self, cvs: CollectiveVariable, g=None):
-        self.g = g if (g is not None) else lambda _: jnp.array(0.0)
-        # self.g = jit(self.g) #leads to pickler issues
-        super().__init__(cvs, start=None, step=None)
+    g: Callable = field(pytree_node=False, default=lambda _: jnp.array(0.0))
+
+    @classmethod
+    def create(clz, cvs: CollectiveVariable, g: Callable):
+        return clz(
+            collective_variable=cvs,
+            g=g,
+            start=None,
+            step=None,
+            finalized=False,
+        )
 
     def _compute(self, cvs):
         return self.g(cvs)
 
-    def get_args(self):
-        return []
-
 
 class NoneBias(BiasF):
-    """dummy bias."""
-
-    def __init__(self, cvs: CollectiveVariable):
-        super().__init__(cvs)
+    @classmethod
+    def create(clz, collective_variable: CollectiveVariable) -> Self:  # type: ignore[override]
+        return clz(
+            collective_variable=collective_variable,
+            start=None,
+            step=None,
+            finalized=False,
+            g=lambda _: jnp.array(0.0),
+        )

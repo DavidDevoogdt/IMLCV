@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 from abc import abstractmethod
 from collections.abc import Callable
+from dataclasses import KW_ONLY
 from functools import partial
 
 import cloudpickle
@@ -13,7 +14,8 @@ import jax.numpy as jnp
 import jax.scipy.optimize
 import jaxopt.objective
 from flax import linen as nn
-from flax import struct
+from flax.struct import field
+from flax.struct import PyTreeNode
 from jax import Array
 from jax import jacfwd
 from jax import jacrev
@@ -24,9 +26,6 @@ from jax.tree_util import Partial
 from jax.tree_util import tree_flatten
 from jax.tree_util import tree_unflatten
 from molmod.units import angstrom
-
-# import jax_dataclasses as jdc
-
 
 ######################################
 #        Data types                  #
@@ -183,10 +182,9 @@ def chunk_map(f, chunk_size):
     return _f
 
 
-@struct.dataclass
-class SystemParams:
+class SystemParams(PyTreeNode):
     coordinates: Array
-    cell: Array | None = None
+    cell: Array | None = field(default=None)
 
     def __getitem__(self, slices) -> SystemParams:
         return SystemParams(
@@ -220,7 +218,7 @@ class SystemParams:
         return self.coordinates.shape
 
     def __add__(self, other):
-        assert isinstance(other, SystemParams)
+        assert isinstance(other, SystemParams), f"{other=} is not { SystemParams} "
         if self.cell is None:
             assert other.cell is None
 
@@ -983,37 +981,22 @@ class SystemParams:
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
 
-    def __getstate__(self):
-        return self.__dict__
 
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-
-        if not isinstance(self, SystemParams):
-            print(f"loaded {self=}  has {isinstance(self,SystemParams)=}, recreating the object")
-            self = SystemParams(
-                coordinates=self.coordinates,
-                cell=self.cell,
-            )
-
-
-@struct.dataclass
-class NeighbourList:
-    r_cut: float = struct.field(pytree_node=False)
+class NeighbourList(PyTreeNode):
     atom_indices: Array
+    r_cut: float = field(pytree_node=False)
+    r_skin: float = field(pytree_node=False)
 
     op_cell: Array | None
     op_coor: Array | None
     op_center: Array | None
 
-    r_skin: float = struct.field(pytree_node=False)
-    sp_orig: SystemParams | None = None
-    ijk_indices: Array | None = None
-    nxyz: tuple[int] | None = struct.field(pytree_node=False, default=None)
-    z_array: tuple[int] | None = struct.field(pytree_node=False, default=None)
-    z_unique: tuple[int] | None = struct.field(pytree_node=False, default=None)
-    num_z_unique: tuple[int] | None = struct.field(pytree_node=False, default=None)
+    sp_orig: SystemParams | None = field()
+    ijk_indices: Array | None = field(default=None)
+    nxyz: tuple[int] | None = field(pytree_node=False, default=None)
+    z_array: tuple[int] | None = field(pytree_node=False, default=None)
+    z_unique: tuple[int] | None = field(pytree_node=False, default=None)
+    num_z_unique: tuple[int] | None = field(pytree_node=False, default=None)
 
     @jax.jit
     def canonicalized_sp(self, sp: SystemParams) -> SystemParams:
@@ -1548,21 +1531,21 @@ class NeighbourList:
     def stack(*nls: NeighbourList) -> NeighbourList:
         return sum(nls[1:], nls[0])
 
-    def __getstate__(self):
-        return self.__dict__
+    # def __getstate__(self ):
+    #     print(f"pickling {self.__class__}")
+    #     return  to_state_dict(self)
 
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
+    # def __setstate__(self, state):
+    #     print(f"unpickling {self.__class__}")
+    #     self = from_state_dict(self, state)
 
 
-@struct.dataclass
-class CV:
-    cv: Array
-    mapped: bool = struct.field(pytree_node=False, default=False)
-    atomic: bool = struct.field(pytree_node=False, default=False)
-    _combine_dims: list | None = struct.field(pytree_node=False, default=None)
-    _stack_dims: list | None = struct.field(pytree_node=False, default=None)
+class CV(PyTreeNode):
+    cv: Array = field()
+    mapped: bool = field(pytree_node=False, default=False)
+    atomic: bool = field(pytree_node=False, default=False)
+    _combine_dims: list | None = field(pytree_node=False, default=None)
+    _stack_dims: list | None = field(pytree_node=False, default=None)
 
     @property
     def batched(self):
@@ -1880,28 +1863,15 @@ class CV:
             atomic=atomic,
         )
 
-    def __getstate__(self):
-        return self.__dict__
 
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-
-        if not isinstance(self, CV):
-            print(f"loaded {self=}  has {isinstance(self,CV)=}, recreating the object")
-            self = CV(
-                cv=self.cv,
-                mapped=self.mapped,
-                atomic=self.atomic,
-                _combine_dims=self.combine_dims,
-                _stack_dims=self._stack_dims,
-            )
-
-
-class CvMetric:
+class CvMetric(PyTreeNode):
     """class to keep track of topology of given CV. Identifies the periodicitie of CVs and maps to unit square with correct peridicities"""
 
-    def __init__(
+    bounding_box: jax.Array
+    periodicities: jax.Array
+
+    @classmethod
+    def create(
         self,
         periodicities=None,
         bounding_box=None,
@@ -1910,7 +1880,7 @@ class CvMetric:
         if periodicities is None:
             assert bounding_box is not None
 
-            periodicities = [False for a in bounding_box]
+            periodicities = [False for _ in bounding_box]
 
         if isinstance(periodicities, list):
             periodicities = jnp.array(periodicities)
@@ -1929,15 +1899,13 @@ class CvMetric:
             if bounding_box.ndim == 1:
                 bounding_box = jnp.reshape(bounding_box, (1, 2))
 
-        self.bounding_box = bounding_box
-        self.periodicities = periodicities
+        return CvMetric(bounding_box=bounding_box, periodicities=periodicities)
 
-    @partial(jit, static_argnums=(0))
     def norm(self, x1: CV, x2: CV, k=1.0):
         diff = self.difference(x1=x1, x2=x2) * k
         return jnp.linalg.norm(diff)
 
-    @partial(jit, static_argnums=(0, 2))
+    @partial(jit, static_argnums=(2))
     def periodic_wrap(self, x: CV, min=False) -> CV:
         out = CV(cv=self.__periodic_wrap(self.map(x.cv), min=min), mapped=True)
 
@@ -1945,7 +1913,7 @@ class CvMetric:
             return out
         return self.unmap(out)
 
-    @partial(jit, static_argnums=(0))
+    @jit
     def difference(self, x1: CV, x2: CV) -> Array:
         assert not x1.mapped
         assert not x2.mapped
@@ -1963,7 +1931,7 @@ class CvMetric:
             displace=False,
         )
 
-    @partial(jit, static_argnums=(0, 2))
+    @partial(jit, static_argnums=(2))
     def __periodic_wrap(self, xs: Array, min=False):
         """Translate cvs such over unit cell.
 
@@ -1976,7 +1944,7 @@ class CvMetric:
 
         return jnp.where(self.periodicities, coor, xs)
 
-    @partial(jit, static_argnums=(0, 2))
+    @partial(jit, static_argnums=(2))
     def map(self, x: Array, displace=True) -> Array:
         """transform CVs to lie in unit square."""
 
@@ -1987,7 +1955,7 @@ class CvMetric:
 
         return y
 
-    @partial(jit, static_argnums=(0, 2))
+    @partial(jit, static_argnums=(2))
     def unmap(self, x: Array, displace=True) -> Array:
         """transform CVs to lie in unit square."""
 
@@ -2047,24 +2015,16 @@ class CvMetric:
     def ndim(self):
         return len(self.periodicities)
 
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-        # print(f"update_done")
-
 
 ######################################
 #       CV tranformations            #
 ######################################
 
 
-@dataclasses.dataclass(kw_only=True, frozen=True)
-class CvFunInput:
-    input: int
-    conditioners: tuple[int] | None = None
+class CvFunInput(PyTreeNode):
+    __: KW_ONLY
+    input: int = field(pytree_node=False)
+    conditioners: tuple[int] | None = field(pytree_node=False, default=None)
 
     def split(self, x: CV):
         cvs = x.split()
@@ -2079,14 +2039,6 @@ class CvFunInput:
         cvs = [*x.split()]
         cvs[self.input] = res
         return CV.combine(*cvs)
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-        # print(f"update_done")
 
 
 class _CvFunBase:
@@ -2142,29 +2094,16 @@ class _CvFunBase:
 
         return a, log_det
 
-    def __getstate__(self):
-        return self.__dict__
 
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-        # print(f"update_done")
-
-
-@dataclasses.dataclass(kw_only=True, frozen=True)
-class CvFunBase(_CvFunBase):
+class CvFunBase(_CvFunBase, PyTreeNode):
+    __: KW_ONLY
     cv_input: CvFunInput | None = None
 
 
-@dataclasses.dataclass(kw_only=True, frozen=False)
-class CvFunBase_unfrozen(_CvFunBase):
-    cv_input: CvFunInput | None = None
-
-
-@dataclasses.dataclass(kw_only=True, frozen=True)
-class CvFun(CvFunBase):
-    forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
-    backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = None
+class CvFun(CvFunBase, PyTreeNode):
+    __: KW_ONLY
+    forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = field(pytree_node=False, default=None)
+    backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = field(pytree_node=False, default=None)
 
     def _calc(
         self,
@@ -2186,14 +2125,15 @@ class CvFun(CvFunBase):
             return self.forward(x, nl, c)
 
 
-class CvFunNn(nn.Module, CvFunBase_unfrozen):
+class CvFunNn(nn.Module, _CvFunBase):
     """used to instantiate flax linen CvTrans"""
+
+    cv_input: CvFunInput | None = None
 
     @abstractmethod
     def setup(self):
         pass
 
-    # @partial(jit, static_argnums=(0,3))
     def _calc(
         self,
         x: CV,
@@ -2225,7 +2165,7 @@ class CvFunNn(nn.Module, CvFunBase_unfrozen):
         pass
 
 
-class CvFunDistrax(nn.Module, CvFunBase_unfrozen):
+class CvFunDistrax(nn.Module, _CvFunBase):
     """
     creates bijective CV function based on a distrax flow. The seup function should initialize the bijector
 
@@ -2250,12 +2190,12 @@ class CvFunDistrax(nn.Module, CvFunBase_unfrozen):
     """
 
     bijector: distrax.Bijector = dataclasses.field(init=False)
+    cv_input: CvFunInput | None = None
 
     @abstractmethod
     def setup(self):
         """setups self.bijector"""
 
-    # @partial(jit, static_argnums=(0, 4, 5))
     def _calc(
         self,
         x: CV,
@@ -2298,9 +2238,9 @@ class CvFunDistrax(nn.Module, CvFunBase_unfrozen):
         return CV(cv=z, atomic=x.atomic), jac
 
 
-@dataclasses.dataclass(kw_only=True, frozen=True)
-class CombinedCvFun(CvFunBase):
-    classes: tuple[tuple[CvFunBase]]
+class _CombinedCvFun(_CvFunBase):
+    __: KW_ONLY
+    classes: tuple[tuple[_CvFunBase]]
 
     def calc(
         self,
@@ -2344,19 +2284,35 @@ class CombinedCvFun(CvFunBase):
 
         raise NotImplementedError("untested")
 
-    def __getstate__(self):
-        return self.__dict__
 
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-        # print(f"update_done")
+class CombinedCvFun(_CombinedCvFun, PyTreeNode):
+    __: KW_ONLY
+    classes: tuple[tuple[CvFunBase]]
+
+
+class CombinedCvFunNN(nn.Module, _CombinedCvFun):
+    __: KW_ONLY
+    classes: tuple[tuple[CvFunNn]]
 
 
 class _CvTrans:
     """f can either be a single CV tranformation or a list of transformations"""
 
     trans: tuple[CvFunBase]
+
+    @property
+    def _comb(self) -> type[_CombinedCvFun]:
+        if isinstance(self, CvTrans):
+            return CombinedCvFun
+
+        if isinstance(self, CvTransNN):
+            return CombinedCvFunNN
+
+        raise
+
+    @property
+    def _cv_trans(self) -> type[_CvTrans]:
+        return self.__class__
 
     @staticmethod
     def from_array_function(f: Callable[[Array, NeighbourList | None, None], Array]):
@@ -2368,7 +2324,7 @@ class _CvTrans:
             else:
                 out = f(x.cv, nl, None)
 
-            return CV(cv=out, atomic=x.atomic, _stack_dims=x._stack_dims)
+            return x.replace(cv=out)
 
         return CvTrans.from_cv_function(f=f2)
 
@@ -2379,12 +2335,11 @@ class _CvTrans:
         return CvTrans.from_cv_fun(proto=CvFun(forward=f))
 
     @staticmethod
-    def from_cv_fun(proto: CvFunBase):
+    def from_cv_fun(proto: _CvFunBase):
         if isinstance(proto, nn.Module):
-            CvTransNN(trans=(proto,))
+            return CvTransNN(trans=(proto,))
         return CvTrans(trans=(proto,))
 
-    # @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunk_size"))
     def compute_cv_trans(
         self,
         x: CV,
@@ -2425,51 +2380,49 @@ class _CvTrans:
         return x, log_det
 
     def __mul__(self, other):
-        assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
-        return CvTrans(
+        assert isinstance(other, self._cv_trans), f"can only multiply by {self._cv_trans} object"
+        return self._cv_trans(
             trans=(
                 *self.trans,
                 *other.trans,
             ),
         )
 
-    def __add__(self, other: CvTrans) -> CvTrans:
-        assert isinstance(other, CvTrans), "can only add CvTrans object"
+    def __add__(self, other: _CvTrans) -> _CvTrans:
+        assert isinstance(other, self._cv_trans), f"can only add by {self._cv_trans} object"
 
         @CvTrans.from_cv_function
         def double(x: CV, nl: NeighbourList | None, _):
             return CV.combine(x, x)
 
-        return double * CvTrans(
-            trans=(CombinedCvFun(classes=(self.trans, other.trans)),),
+        return double * self._cv_trans(
+            trans=(self._comb(classes=(self.trans, other.trans)),),
         )
 
     @staticmethod
-    def stack(*cv_trans: CvTrans):
+    def stack(*cv_trans: _CvTrans):
         n = len(cv_trans)
 
-        @CvTrans.from_cv_function
+        _cv_trans = cv_trans[0]._cv_trans
+        _cv_comb = cv_trans[0]._comb
+
+        for i in cv_trans:
+            assert isinstance(i, _cv_trans)
+
+        @_cv_trans.from_cv_function
         def duplicate(x: CV, nl: NeighbourList | None, _):
             return CV.combine(*[x] * n)
 
-        return duplicate * CvTrans(
-            trans=tuple([CombinedCvFun(classes=tuple([cvt.trans for cvt in cv_trans]))]),
+        return duplicate * _cv_trans(
+            trans=tuple([_cv_comb(classes=tuple([cvt.trans for cvt in cv_trans]))]),
         )
 
-    def __getstate__(self):
-        return self.__dict__
 
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-        # print(f"update_done")
-
-
-@dataclasses.dataclass(kw_only=True, frozen=True)
-class CvTrans(_CvTrans):
+class CvTrans(_CvTrans, PyTreeNode):
+    __: KW_ONLY
     trans: tuple[CvFunBase]
 
-    @partial(jit, static_argnames=("self", "reverse", "log_Jf", "chunk_size"))
+    @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size"))
     def compute_cv_trans(
         self,
         x: CV,
@@ -2478,11 +2431,6 @@ class CvTrans(_CvTrans):
         log_Jf=False,
         chunk_size=None,
     ) -> tuple[CV, Array | None]:
-        """
-        result is always batched
-        arg: CV
-        """
-
         return super().compute_cv_trans(
             x=x,
             nl=nl,
@@ -2493,10 +2441,12 @@ class CvTrans(_CvTrans):
 
 
 class CvTransNN(nn.Module, _CvTrans):
-    trans: tuple[CvFunBase]
+    trans: tuple[CvFunNn]
 
     def setup(self) -> None:
-        pass
+        for i, a in enumerate(self.trans):
+            if not isinstance(a, nn.Module):
+                self.trans[i] = CvFunNn(cv_input=a.cv_input)
 
     @nn.compact
     def compute_cv_trans(
@@ -2506,7 +2456,7 @@ class CvTransNN(nn.Module, _CvTrans):
         reverse=False,
         log_Jf=False,
     ) -> tuple[CV, Array | None]:
-        return jax.jit(super().compute_cv_trans, static_argnames=("reverse", "log_Jf"))(
+        return super().compute_cv_trans(
             x=x,
             nl=nl,
             reverse=reverse,
@@ -2515,8 +2465,11 @@ class CvTransNN(nn.Module, _CvTrans):
 
     @nn.nowrap
     def __mul__(self, other):
-        assert isinstance(other, CvTrans | CvTransNN)
-        return CvTransNN(trans=tuple([s + o for s, o in zip(self.trans, other.trans)]))
+        return _CvTrans.__mul__(self, other)
+
+    @nn.nowrap
+    def __add__(self, other):
+        return _CvTrans.__add__(self, other)
 
 
 class NormalizingFlow(nn.Module):
@@ -2526,27 +2479,16 @@ class NormalizingFlow(nn.Module):
 
     def setup(self) -> None:
         if isinstance(self.flow, CvTrans):
-            self.nn_flow = CvTransNN(trans=self.flow.trans)
-        else:
-            self.nn_flow = self.flow
+            self.flow = CvTransNN(trans=self.flow.trans)
 
-    def calc(self, x: CV, nl: NeighbourList | None, reverse: bool, test_log_det=False):
-        a, b = self.nn_flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
+    def calc(self, x: CV, nl: NeighbourList | None, reverse: bool):
+        a, b = self.flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
 
         return a, b
 
-    def __getstate__(self):
-        return self.__dict__
 
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-        # print(f"update_done")
-
-
-@dataclasses.dataclass(frozen=True, eq=True)
-class CvFlow:
-    func: Callable[[SystemParams, NeighbourList | None], CV]
+class CvFlow(PyTreeNode):
+    func: Callable[[SystemParams, NeighbourList | None], CV] = field(pytree_node=False)
     trans: CvTrans | None = None
 
     @staticmethod
@@ -2567,7 +2509,7 @@ class CvFlow:
 
         return CvFlow(func=f2)
 
-    @partial(jax.jit, static_argnames=["self", "chunk_size"])
+    @partial(jax.jit, static_argnames=["chunk_size"])
     def compute_cv_flow(
         self,
         x: SystemParams,
@@ -2671,28 +2613,18 @@ class CvFlow:
         sp0 = _l(x0, nl0)
         return sp0
 
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
-
 
 ######################################
 #       Collective variable          #
 ######################################
 
 
-class CollectiveVariable:
-    def __init__(self, f: CvFlow, metric: CvMetric, jac=jacrev) -> None:
-        "jac: kind of jacobian. Default is jacrev (more efficient low dimensional CVs)"
+class CollectiveVariable(PyTreeNode):
+    f: CvFlow
+    metric: CvMetric
+    jac: Callable = field(pytree_node=False, default=jax.jacrev)
 
-        self.metric = metric
-        self.f = f
-        self.jac = jac
-
-    @partial(jax.jit, static_argnames=["self", "chunk_size", "jacobian"])
+    @partial(jax.jit, static_argnames=["chunk_size", "jacobian"])
     def compute_cv(
         self,
         sp: SystemParams,
@@ -2748,7 +2680,3 @@ class CollectiveVariable:
             self.__setattr__(key, kwargs[key])
 
         return self
-
-    def __setstate__(self, d):
-        # print(f"unpickling {self.__class__}")
-        self.__dict__.update(d)
