@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import cloudpickle
+import jsonpickle, json
 from parsl import bash_app
 from parsl import File
 from parsl import python_app
@@ -17,6 +18,7 @@ def bash_app_python(
     function=None,
     executors="all",
     precommand="",  # command to run before the python command
+    pickle_extension="cloudpickle",
 ):
     def decorator(func):
         def wrapper(
@@ -68,14 +70,14 @@ def bash_app_python(
                 pass
 
             file_in = rename_num(
-                execution_folder / f"{func.__name__}.inp.cloudpickle",
+                execution_folder / f"{func.__name__}.inp.{pickle_extension}",
                 i,
             )
             with open(file_in, "w+"):
                 pass
 
             file_out = rename_num(
-                execution_folder / f"{func.__name__}.outp.cloudpickle",
+                execution_folder / f"{func.__name__}.outp.{pickle_extension}",
                 i,
             )
 
@@ -107,8 +109,14 @@ def bash_app_python(
                 if len(outputs) > 1:
                     kwargs["outputs"] = [File(o) for o in outputs[:-1]]
 
-                with open(execution_folder / file_in, "rb+") as f:
-                    cloudpickle.dump((func, args, kwargs), f)
+                filename = execution_folder / file_in
+
+                if filename.suffix == ".json":
+                    with open(filename, "r+") as f:
+                        f.writelines(jsonpickle.encode((func, args, kwargs), indent=1))
+                else:
+                    with open(filename, "rb+") as f:
+                        cloudpickle.dump((func, args, kwargs), f)
 
                 return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }"
 
@@ -124,17 +132,19 @@ def bash_app_python(
             )
 
             def load(inputs=[], outputs=[]):
-                with open(inputs[-1].filepath, "rb") as f:
-                    result = cloudpickle.load(f)
+                filename = Path(inputs[-1].filepath)
+                if filename.suffix == ".json":
+                    with open(filename, "r") as f:
+                        result = jsonpickle.decode(f.read())
+                else:
+                    with open(filename, "rb") as f:
+                        result = cloudpickle.load(f)
                 import os
                 import shutil
 
                 os.remove(inputs[-1].filepath)
                 for i, o in zip(inputs[:-1], outputs):
                     shutil.move(i.filepath, o.filepath)
-
-                # transfer complete,remove lock file
-                # os.remove(str(lockfile.resolve()))
 
                 return result
 
@@ -159,13 +169,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--file_in",
         type=str,
-        help="path to file f containing cloudpickle.dump((func, args, kwargs), f)",
+        help="path to file f containing pickle.dump((func, args, kwargs), f)",
     )
 
     parser.add_argument(
         "--file_out",
         type=str,
-        help="path to file f containing cloudpickle.dump((func, args, kwargs), f)",
+        help="path to file f containing pickle.dump((func, args, kwargs), f)",
     )
     parser.add_argument("--folder", type=str, help="working directory")
     args = parser.parse_args()
@@ -177,7 +187,7 @@ if __name__ == "__main__":
     try:
         from mpi4py import MPI
 
-        MPI.pickle.__init__(cloudpickle.dumps, cloudpickle.loads)
+        # MPI.pickle.__init__(pickle.dumps, pickle.loads)
 
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
@@ -196,8 +206,15 @@ if __name__ == "__main__":
         if use_mpi:
             print(f"using mpi with {num_ranks} ranks")
 
-        with open(args.file_in, "rb") as f:
-            func, fargs, fkwargs = cloudpickle.load(f)
+        file_in = Path(args.file_in)
+
+        if file_in.suffix == ".json":
+            with open(file_in, "r") as f1:
+                func, fargs, fkwargs = jsonpickle.decode(f1.read())
+        else:
+            with open(file_in, "rb") as f2:
+                func, fargs, fkwargs = cloudpickle.load(f2)
+
         print("#" * 20)
     else:
         func = None
@@ -209,16 +226,20 @@ if __name__ == "__main__":
         fargs = comm.bcast(fargs, root=0)
         fkwargs = comm.bcast(fkwargs, root=0)
 
-    import jax
-
     a = func(*fargs, **fkwargs)
 
     if use_mpi:
         a = comm.gather(a, root=0)
 
     if rank == 0:
-        with open(args.file_out, "wb+") as f:
-            cloudpickle.dump(a, f)
+        file_out = Path(args.file_out)
+
+        if file_out.suffix == ".json":
+            with open(file_out, "w+") as f3:
+                f3.writelines(jsonpickle.encode(a, indent=1))
+        else:
+            with open(file_out, "wb+") as f4:
+                cloudpickle.dump(a, f4)
 
         os.remove(args.file_in)
 

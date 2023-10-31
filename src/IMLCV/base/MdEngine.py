@@ -8,11 +8,12 @@ import tempfile
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import field, fields
 from pathlib import Path
 from time import time
 
 import cloudpickle
+import jsonpickle, json
 import h5py
 import jax
 import jax.numpy as jnp
@@ -542,13 +543,24 @@ class MDEngine(ABC):
         return nl
 
     def save(self, file):
-        with open(file, "wb") as f:
-            cloudpickle.dump(self, f)
+        filename = Path(file)
+        if filename.suffix == ".json":
+            with open(filename, "w") as f:
+                f.writelines(jsonpickle.encode(self, indent=1))
+        else:
+            with open(filename, "wb") as f:
+                cloudpickle.dump(self, f)
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
-        with open(file, "rb") as f:
-            self: MDEngine = cloudpickle.load(f)
+        filename = Path(file)
+
+        if filename.suffix == ".json":
+            with open(filename, "r") as f:
+                self = jsonpickle.decode(f.read())
+        else:
+            with open(filename, "rb") as f:
+                self = cloudpickle.load(f)
 
         for key in kwargs.keys():
             self.__setattr__(key, kwargs[key])
@@ -693,3 +705,24 @@ class MDEngine(ABC):
         )
 
         return cv, ener
+
+    def __setstate__(self, statedict: dict):
+        try:
+            f_names = [f.name for f in fields(self.__class__)]
+
+            removed = []
+
+            for k in statedict.keys():
+                if k not in f_names:
+                    removed.append(k)
+
+            for k in removed:
+                del statedict[k]
+
+            self.__class__.__init__(self, **statedict)
+
+        except Exception as e:
+            print(
+                f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
+            )
+            raise e

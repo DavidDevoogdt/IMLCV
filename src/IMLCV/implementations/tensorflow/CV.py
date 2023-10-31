@@ -104,7 +104,8 @@ class KerasFunBase(CvFunBase):
             custom_objects = {"PeriodicLayer": PeriodicLayer}
             with keras.utils.custom_object_scope(custom_objects):
                 fwd = keras.models.load_model(fd.name)
-        self.fwd = fwd
+
+        self.replace(fwd=fwd)
 
         if (bwd_str := state.get("bwd_str", None)) is not None:
             with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
@@ -115,4 +116,4 @@ class KerasFunBase(CvFunBase):
                 with keras.utils.custom_object_scope(custom_objects):
                     bwd = keras.models.load_model(fd.name)
 
-            self.bwd = bwd
+            self.replace(bwd=bwd)

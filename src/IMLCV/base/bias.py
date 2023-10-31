@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 from typing import TYPE_CHECKING
 
+import jsonpickle, json
 import cloudpickle
 import jax
 import jax.numpy as jnp
@@ -42,7 +43,7 @@ from molmod.units import electronvolt
 from molmod.units import kjmol
 from parsl.data_provider.files import File
 from typing_extensions import Self
-
+from pathlib import Path
 
 yaff.log.set_level(yaff.log.silent)
 
@@ -158,18 +159,29 @@ class Energy:
         return self._compute_coor(gpos=gpos, vir=vir)
 
     def save(self, filename: str | Path):
-        if isinstance(filename, str):
-            filename = Path(filename)
+        filename = Path(filename)
+
         if not filename.parent.exists():
             filename.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(filename, "wb") as f:
-            cloudpickle.dump(self, f)
+        if filename.suffix == ".json":
+            with open(filename, "w") as f:
+                f.writelines(jsonpickle.encode(self, indent=1))
+        else:
+            with open(filename, "wb") as f:
+                cloudpickle.dump(self, f)
 
     @staticmethod
     def load(filename) -> Energy:
-        with open(filename, "rb") as f:
-            self = cloudpickle.load(f)
+        filename = Path(filename)
+
+        if filename.suffix == ".json":
+            with open(filename, "r") as f:
+                self = jsonpickle.decode(f.read())
+        else:
+            with open(filename, "rb") as f:
+                self = cloudpickle.load(f)
+
         return self
 
 
@@ -574,13 +586,23 @@ class Bias(PyTreeNode, ABC):
         if not filename.parent.exists():
             filename.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(filename, "wb") as f:
-            cloudpickle.dump(self, f)
+        if filename.suffix == ".json":
+            with open(filename, "w") as f:
+                f.writelines(jsonpickle.encode(self, indent=1))
+        else:
+            with open(filename, "wb") as f:
+                cloudpickle.dump(self, f)
 
     @staticmethod
     def load(filename) -> Bias:
-        with open(filename, "rb") as f:
-            self = cloudpickle.load(f)
+        filename = Path(filename)
+        if filename.suffix == ".json":
+            with open(filename, "r") as f:
+                self = jsonpickle.decode(f.read())
+        else:
+            with open(filename, "rb") as f:
+                self = cloudpickle.load(f)
+
         return self
 
     def __getstate__(self):

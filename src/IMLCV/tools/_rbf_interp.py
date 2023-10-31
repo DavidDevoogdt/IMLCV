@@ -152,7 +152,7 @@ class RBFInterpolator(PyTreeNode):
     d: jax.Array = field(repr=False)
     d_shape: tuple[int]
     d_dtype: jnp.dtype
-    smoothing: float
+    smoothing: float = field(repr=False)
     kernel: str
     epsilon: jax.Array
     powers: jax.Array = field(repr=False)

@@ -23,7 +23,6 @@ import sys
 from logging import warning
 import cloudpickle
 
-
 import jax
 from jax import random
 import jax._src.tree_util
@@ -50,16 +49,7 @@ logging.getLogger("absl").addFilter(
     ),
 )
 
-logging.getLogger("cloudpickle").setLevel(logging.DEBUG)
 
+# import jsonpickle.ext.numpy as jsonpickle_numpy
 
-# print("registring")
-# s = jax._src.tree_util.default_registry.
-# cloudpickle
-# class pytree_registry:
-#     pass
-
-
-# # pytree_registry = default_registry
-
-# cloudpickle.register_pickle_by_value(pytree_registry)
+# jsonpickle_numpy.register_handlers()

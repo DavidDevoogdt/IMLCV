@@ -64,6 +64,9 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 trajectory_info = TrajectoryInfo.load(trajectory_file)
                 cont = True
 
+            if trajectory_info._size is None:
+                cont = False
+
         if not cont:
             create_kwargs["step"] = 1
             if sp is not None:

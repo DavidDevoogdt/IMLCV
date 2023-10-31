@@ -190,7 +190,7 @@ def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
         dlo=dlo,
         new_r_cut=r_cut,
         chunk_size=200,
-        plot=True,
+        plot=False,
     )
 
     _cv_discovery_asserts(scheme0, out_dim, r_cut)

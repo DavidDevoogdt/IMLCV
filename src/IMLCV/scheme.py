@@ -57,11 +57,11 @@ class Scheme:
 
         return self
 
-    def FESBias(self, cv_round: int | None = None, chunk_size=None, **kwargs):
+    def FESBias(self, cv_round: int | None = None, chunk_size=None, **plotkwargs):
         """replace the current md bias with the computed FES from current
         round."""
         obs = ThermoLIB(self.rounds, cv_round=cv_round)
-        fesBias = obs.fes_bias(chunk_size=chunk_size, **kwargs)
+        fesBias = obs.fes_bias(chunk_size=chunk_size, **plotkwargs)
         self.md = self.md.new_bias(fesBias)
 
     def grid_umbrella(
@@ -127,6 +127,7 @@ class Scheme:
         init_max_grad=None,
         max_grad=None,
         plot=True,
+        plot_kwargs={},
         choice="rbf",
         fes_bias_rnds=4,
         scale_n: int | None = None,
@@ -179,6 +180,7 @@ class Scheme:
                     num_rnds=fes_bias_rnds,
                     cv_round=cv_round,
                     chunk_size=chunk_size,
+                    **plot_kwargs,
                 )
 
             self.rounds.add_round_from_md(self.md, cv=cv_round)

@@ -7,7 +7,6 @@ from IMLCV.configs.config_general import config
 from IMLCV.implementations.CV import dihedral
 
 
-@pytest.mark.skip(reason="reanable!")
 def test_parallel(tmp_path):
     config(env="local", path_internal=tmp_path)
 
@@ -30,7 +29,6 @@ def test_parallel(tmp_path):
     assert res == [0, 1, 2, 3, 4]
 
 
-@pytest.mark.skip(reason="reanable!")
 def test_py_env(tmp_path):
     config(env="local", path_internal=tmp_path)
 

@@ -6,7 +6,9 @@ from collections.abc import Callable
 from dataclasses import KW_ONLY
 from functools import partial
 
+from pathlib import Path
 import cloudpickle
+import jsonpickle, json
 import distrax
 import jax.flatten_util
 import jax.lax
@@ -64,7 +66,7 @@ def padded_pmap(f, n_devices: int | None = None):
         return out
 
     def apply_pmap_fn(
-        *args: CV | SystemParams | NeighbourList,
+        *args: PyTreeNode,
         n_devices: int | None = None,
     ):
         if n_devices is None:
@@ -91,7 +93,7 @@ def padded_pmap(f, n_devices: int | None = None):
 
         tree_padded = tree_unflatten(tree_def, leaves_padded)
 
-        out_padded: SystemParams | CV | NeighbourList | Array = pmap(f)(*tree_padded)
+        out_padded = pmap(f)(*tree_padded)
 
         # remove padding from output leaves
         tree_padded, tree_def = tree_flatten(out_padded)
@@ -103,6 +105,43 @@ def padded_pmap(f, n_devices: int | None = None):
         tree_unpadded = tree_unflatten(tree_def, leaves)
 
         return tree_unpadded
+
+        # tree = [to_state_dict(a) for a in args]
+        # leaves_padded = []
+
+        # for a in tree:
+        #     a_padded = {}
+
+        #     for key, leaf in a.items():
+        #         if p is None:
+        #             p = get_shape(n_devices, leaf.shape[0])
+        #         else:
+        #             assert p == get_shape(n_devices, leaf.shape[0]), "inconsisitent batch dims"
+
+        #         a_padded[key] = n_pad(leaf, n_devices, p)
+
+        #     leaves_padded.append(a_padded)
+
+        # tree_padded = [from_state_dict(a, l) for a, l in zip(args, leaves_padded)]
+
+        # out_padded = pmap(f)(*tree_padded)
+
+        # # remove padding from output leaves
+
+        # out_tree_padded = [to_state_dict(a) for a in out_padded]
+        # leaves = []
+
+        # for out_a_padded in out_tree_padded:
+        #     a = {}
+
+        #     for key, leaf in out_a_padded.values():
+        #         a[key] = n_unpad(leaf, p)
+
+        #     leaves.append(a)
+
+        # out_tree = [from_state_dict(a, l) for a, l in zip(out_padded, leaves)]
+
+        # print(f"{out_tree=}")
 
     return partial(apply_pmap_fn, n_devices=n_devices)
 
@@ -2431,7 +2470,8 @@ class CvTrans(_CvTrans, PyTreeNode):
         log_Jf=False,
         chunk_size=None,
     ) -> tuple[CV, Array | None]:
-        return super().compute_cv_trans(
+        return _CvTrans.compute_cv_trans(
+            self=self,
             x=x,
             nl=nl,
             reverse=reverse,
@@ -2456,7 +2496,8 @@ class CvTransNN(nn.Module, _CvTrans):
         reverse=False,
         log_Jf=False,
     ) -> tuple[CV, Array | None]:
-        return super().compute_cv_trans(
+        return _CvTrans.compute_cv_trans(
+            self=self,
             x=x,
             nl=nl,
             reverse=reverse,
@@ -2553,13 +2594,25 @@ class CvFlow(PyTreeNode):
         return CvFlow(func=self.func, trans=trans)
 
     def save(self, file):
-        with open(file, "wb") as f:
-            cloudpickle.dump(self, f)
+        filename = Path(file)
+
+        if filename.suffix == ".json":
+            with open(filename, "w") as f:
+                f.writelines(jsonpickle.encode(self, indent=1))
+        else:
+            with open(filename, "wb") as f:
+                cloudpickle.dump(self, f)
 
     @staticmethod
     def load(file, **kwargs) -> CvFlow:
-        with open(file, "rb") as f:
-            self = cloudpickle.load(f)
+        filename = Path(file)
+
+        if filename.suffix == ".json":
+            with open(filename, "r") as f:
+                self = jsonpickle.decode(f.read())
+        else:
+            with open(filename, "rb") as f:
+                self = cloudpickle.load(f)
 
         for key in kwargs.keys():
             self.__setattr__(key, kwargs[key])
@@ -2668,13 +2721,25 @@ class CollectiveVariable(PyTreeNode):
         return self.metric.ndim
 
     def save(self, file):
-        with open(file, "wb") as f:
-            cloudpickle.dump(self, f)
+        filename = Path(file)
+
+        if filename.suffix == ".json":
+            with open(filename, "w") as f:
+                f.writelines(jsonpickle.encode(self, indent=1))
+        else:
+            with open(filename, "wb") as f:
+                cloudpickle.dump(self, f)
 
     @staticmethod
     def load(file, **kwargs) -> CollectiveVariable:
-        with open(file, "rb") as f:
-            self = cloudpickle.load(f)
+        filename = Path(file)
+
+        if filename.suffix == ".json":
+            with open(filename, "r") as f:
+                self = jsonpickle.decode(f.read())
+        else:
+            with open(filename, "rb") as f:
+                self = cloudpickle.load(f)
 
         for key in kwargs.keys():
             self.__setattr__(key, kwargs[key])

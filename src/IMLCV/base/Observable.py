@@ -12,7 +12,6 @@ from IMLCV.base.rounds import Rounds
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.bias import GridBias
 from IMLCV.implementations.bias import RbfBias
-from jax import jit
 from molmod.units import kjmol
 from molmod.units import picosecond
 from parsl import File
@@ -120,21 +119,22 @@ class ThermoLIB:
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
         @bash_app_python(executors=["default"])
-        def get_histos(
+        def _get_histos(
             bins,
             temp,
             trajs,
             biases: list[Bias],
+            chunk_size=None,
             inputs=[],
             outputs=[],
         ):
-            from time import time_ns
             from IMLCV.base.CV import padded_pmap
             from IMLCV.base.bias import Bias
 
-            class ThermoBiasND(BiasPotential2D):
-                def __init__(self, bias: Bias) -> None:
+            class _ThermoBiasND(BiasPotential2D):
+                def __init__(self, bias: Bias, chunk_size=None) -> None:
                     self.bias = bias
+                    self.chunk_size = chunk_size
 
                     super().__init__("IMLCV_bias")
 
@@ -146,7 +146,7 @@ class ThermoLIB:
                         out, _ = self.bias.compute_from_cv(
                             cvs=cv,
                             diff=False,
-                            chunk_size=chunk_size,
+                            chunk_size=self.chunk_size,
                         )
 
                         return out
@@ -158,7 +158,7 @@ class ThermoLIB:
                 def print_pars(self, *pars_units):
                     pass
 
-            bias_wrapped = [ThermoBiasND(b) for b in biases]
+            bias_wrapped = [_ThermoBiasND(bias=b, chunk_size=chunk_size) for b in biases]
 
             histo = HistogramND.from_wham(
                 bins=bins,
@@ -177,12 +177,12 @@ class ThermoLIB:
 
             return histo
 
-        histo = get_histos(
+        histo = _get_histos(
             bins=bins,
             temp=temp,
             trajs=trajs,
             biases=biases,
-            # inputs=biases,
+            chunk_size=chunk_size,
             execution_folder=directory,
         ).result()
 

@@ -214,7 +214,9 @@ class Rounds(ABC):
             if (p := (self.path(c=c) / "invalid")).exists():
                 attr["valid"] = False
 
-            if (p := (self.path(c=c) / "cv")).exists():
+            if (p := (self.path(c=c) / "cv.json")).exists():
+                attr["name_cv"] = self.rel_path(p)
+            elif (p := (self.path(c=c) / "cv")).exists():
                 attr["name_cv"] = self.rel_path(p)
 
             self.add_cv(c=c, attr=attr)
@@ -228,10 +230,14 @@ class Rounds(ABC):
                         filename=self.path(c=c, r=r) / "static_trajectory_info.h5",
                     )
 
-                    if (p := (self.path(c=c, r=r) / "bias")).exists():
+                    if (p := (self.path(c=c, r=r) / "bias.json")).exists():
+                        attr["name_bias"] = self.rel_path(p)
+                    elif (p := (self.path(c=c, r=r) / "bias")).exists():
                         attr["name_bias"] = self.rel_path(p)
 
-                    if (p := (self.path(c=c, r=r) / "engine")).exists():
+                    if (p := (self.path(c=c, r=r) / "engine.json")).exists():
+                        attr["name_md"] = self.rel_path(p)
+                    elif (p := (self.path(c=c, r=r) / "engine")).exists():
                         attr["name_md"] = self.rel_path(p)
 
                     if (p := (self.path(c=c, r=r) / "invalid")).exists():
@@ -265,7 +271,11 @@ class Rounds(ABC):
                         continue
 
                     bias = None
-                    if (p := (md_i / "new_bias")).exists():
+                    if (p := (md_i / "new_bias.json")).exists():
+                        bias = self.rel_path(p)
+                    elif (p := (md_i / "bias.json")).exists():
+                        bias = self.rel_path(p)
+                    elif (p := (md_i / "new_bias")).exists():
                         bias = self.rel_path(p)
                     elif (p := (md_i / "bias")).exists():
                         bias = self.rel_path(p)
@@ -311,9 +321,9 @@ class Rounds(ABC):
         if not os.path.isdir(directory):
             os.mkdir(directory)
 
-        cv.save(self.path(c=c) / "cv")
+        cv.save(self.path(c=c) / "cv.json")
 
-        attr["name_cv"] = self.rel_path(self.path(c=c) / "cv")
+        attr["name_cv"] = self.rel_path(self.path(c=c) / "cv.json")
         self.add_cv(attr=attr, c=c)
 
     def add_round(self, stic: StaticMdInfo, c=None, r=None, attr=None):
@@ -369,8 +379,8 @@ class Rounds(ABC):
         if not os.path.isdir(directory):
             os.mkdir(directory)
 
-        name_md = directory / "engine"
-        name_bias = directory / "bias"
+        name_md = directory / "engine.json"
+        name_bias = directory / "bias.json"
         md.save(name_md)
         md.bias.save(name_bias)
         md.bias.collective_variable
@@ -847,7 +857,7 @@ class Rounds(ABC):
             round_path = self.path(c=self.cv, r=0, i=i)
             round_path.mkdir(parents=True, exist_ok=True)
 
-            bias.save(round_path / "bias")
+            bias.save(round_path / "bias.json")
             traj_info
 
             new_traj_info = TrajectoryInfo(
@@ -873,7 +883,7 @@ class Rounds(ABC):
                 i=i,
                 d=new_traj_info,
                 attrs=None,
-                bias=self.rel_path(round_path / "bias"),
+                bias=self.rel_path(round_path / "bias.json"),
             )
 
             if invalidate:
@@ -1173,8 +1183,8 @@ class Rounds(ABC):
             else:
                 b = CompositeBias.create([Bias.load(common_bias_name), bias])
 
-            b_name = path_name / "bias"
-            b_name_new = path_name / "bias_new"
+            b_name = path_name / "bias.json"
+            b_name_new = path_name / "bias_new.json"
             b.save(b_name)
 
             traj_name = path_name / "trajectory_info.h5"
@@ -1278,8 +1288,8 @@ class Rounds(ABC):
         for i in ri.num_vals:
             path_name = self.path(c=cv_round, r=round, i=i)
 
-            b_name = path_name / "bias"
-            b_name_new = path_name / "bias_new"
+            b_name = path_name / "bias.json"
+            b_name_new = path_name / "bias_new.json"
 
             if not b_name.exists():
                 print(f"skipping {i=}, {b_name_new=}not found")
