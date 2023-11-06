@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import warnings
 from abc import ABC
 from abc import abstractmethod
@@ -12,10 +13,10 @@ from pathlib import Path
 from typing import Callable
 from typing import TYPE_CHECKING
 
-import jsonpickle, json
 import cloudpickle
 import jax
 import jax.numpy as jnp
+import jsonpickle
 import matplotlib
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -43,7 +44,6 @@ from molmod.units import electronvolt
 from molmod.units import kjmol
 from parsl.data_provider.files import File
 from typing_extensions import Self
-from pathlib import Path
 
 yaff.log.set_level(yaff.log.silent)
 
@@ -176,7 +176,7 @@ class Energy:
         filename = Path(filename)
 
         if filename.suffix == ".json":
-            with open(filename, "r") as f:
+            with open(filename) as f:
                 self = jsonpickle.decode(f.read())
         else:
             with open(filename, "rb") as f:
@@ -597,7 +597,7 @@ class Bias(PyTreeNode, ABC):
     def load(filename) -> Bias:
         filename = Path(filename)
         if filename.suffix == ".json":
-            with open(filename, "r") as f:
+            with open(filename) as f:
                 self = jsonpickle.decode(f.read())
         else:
             with open(filename, "rb") as f:
@@ -621,48 +621,14 @@ class Bias(PyTreeNode, ABC):
             for k in removed:
                 del statedict[k]
 
-            self.__dict__.update(**statedict)
+            self.__init__(**statedict)
+
+            # self.__dict__.update(**statedict)
         except Exception as e:
             print(
                 f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
             )
             raise e
-
-
-@bash_app_python(executors=["default"])
-def plot_app(
-    bias: Bias,
-    outputs: list[File],
-    n: int = 50,
-    vmin: float = 0,
-    vmax: float = 100 * kjmol,
-    map: bool = True,
-    inverted=False,
-    traj: list[CV] | None = None,
-    margin=None,
-    x_unit=None,
-    y_unit=None,
-    x_lim=None,
-    y_lim=None,
-    bins=None,
-    label="bias [kJ/mol]",
-):
-    bias.plot(
-        name=outputs[0].filepath,
-        n=n,
-        traj=traj,
-        vmin=vmin,
-        vmax=vmax,
-        map=map,
-        inverted=inverted,
-        margin=margin,
-        x_unit=x_unit,
-        y_unit=y_unit,
-        x_lim=x_lim,
-        y_lim=y_lim,
-        bins=bins,
-        label=label,
-    )
 
 
 class CompositeBias(Bias):
@@ -711,10 +677,14 @@ class CompositeBias(Bias):
         return self.replace(biases=[a.update_bias(md) for a in self.biases])
 
 
+def _zero_fun(cvs: CV):
+    return jnp.array(0.0)
+
+
 class BiasF(Bias):
     """Bias according to CV."""
 
-    g: Callable = field(pytree_node=False, default=lambda _: jnp.array(0.0))
+    g: Callable = field(pytree_node=False, default=_zero_fun)
 
     @classmethod
     def create(clz, cvs: CollectiveVariable, g: Callable):
@@ -733,10 +703,7 @@ class BiasF(Bias):
 class NoneBias(BiasF):
     @classmethod
     def create(clz, collective_variable: CollectiveVariable) -> Self:  # type: ignore[override]
-        return clz(
-            collective_variable=collective_variable,
-            start=None,
-            step=None,
-            finalized=False,
-            g=lambda _: jnp.array(0.0),
+        return super().create(
+            cvs=collective_variable,
+            g=_zero_fun,
         )

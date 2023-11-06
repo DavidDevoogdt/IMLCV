@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
-from IMLCV.base.bias import plot_app
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.rounds import Rounds
@@ -18,6 +17,8 @@ from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
+
+# from IMLCV.base.bias import plot_app
 
 
 class ThermoLIB:
@@ -48,11 +49,82 @@ class ThermoLIB:
 
         if cv is None:
             b = self.rounds.get_bias(c=self.cv_round, r=self.rnd)
-            print(b.__dict__)
 
             self.collective_variable = b.collective_variable
         else:
             self.collective_variable = cv
+
+    @staticmethod
+    def _get_histos(
+        bins,
+        temp,
+        trajs,
+        biases: list[Bias],
+        chunk_size=None,
+    ):
+        from IMLCV.base.CV import padded_pmap
+        from IMLCV.base.bias import Bias
+        import jax
+
+        class _ThermoBiasND(BiasPotential2D):
+            def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:
+                self.bias = bias
+                self.chunk_size = chunk_size
+                self.num = num
+
+                super().__init__(f"IMLCV_bias_{num}")
+
+            def __call__(self, *cv):
+                print(".", end="")
+
+                colvar = CV.combine(
+                    *[
+                        CV(
+                            cv=jnp.array(
+                                cvi.reshape(
+                                    (-1, 1),
+                                ),
+                                dtype=jnp.float64,
+                            ),
+                        )
+                        for cvi in cv
+                    ],
+                )
+
+                @partial(jax.jit, static_argnames=["name"])
+                def _get_bias(cvs, name):
+                    out, _ = self.bias.compute_from_cv(
+                        cvs=cvs,
+                        diff=False,
+                        chunk_size=chunk_size,
+                    )
+                    return out
+
+                out = _get_bias(colvar, self.name)
+
+                return np.array(jnp.reshape(out, cv[0].shape), dtype=np.double)
+
+            def print_pars(self, *pars_units):
+                pass
+
+        bias_wrapped = [_ThermoBiasND(bias=b, chunk_size=chunk_size, num=i) for i, b in enumerate(biases)]
+
+        histo = HistogramND.from_wham(
+            bins=bins,
+            trajectories=[
+                np.array(
+                    traj.cv,
+                    dtype=np.double,
+                )
+                for traj in trajs
+            ],
+            error_estimate=None,
+            biasses=bias_wrapped,
+            temp=temp,
+            verbosity="high",
+        )
+
+        return histo
 
     def fes_nd_thermolib(
         self,
@@ -90,9 +162,9 @@ class ThermoLIB:
                 new_r_cut=None,
             ).cv
 
-            plot_app(
-                bias=self.common_bias,
+            bash_app_python(self.common_bias.plot, executors=["default"])(
                 outputs=[File(f"{directory}/combined.png")],  # png because heavy file
+                name="combined.png",
                 execution_folder=directory,
                 stdout="combined.stdout",
                 stderr="combined.stderr",
@@ -118,66 +190,7 @@ class ThermoLIB:
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
-        @bash_app_python(executors=["default"])
-        def _get_histos(
-            bins,
-            temp,
-            trajs,
-            biases: list[Bias],
-            chunk_size=None,
-            inputs=[],
-            outputs=[],
-        ):
-            from IMLCV.base.CV import padded_pmap
-            from IMLCV.base.bias import Bias
-
-            class _ThermoBiasND(BiasPotential2D):
-                def __init__(self, bias: Bias, chunk_size=None) -> None:
-                    self.bias = bias
-                    self.chunk_size = chunk_size
-
-                    super().__init__("IMLCV_bias")
-
-                def __call__(self, *cv):
-                    print(".", end="")
-
-                    @padded_pmap
-                    def _get_bias(cv: CV):
-                        out, _ = self.bias.compute_from_cv(
-                            cvs=cv,
-                            diff=False,
-                            chunk_size=self.chunk_size,
-                        )
-
-                        return out
-
-                    colvar = CV.combine(*[CV(cv=cvi.reshape((-1, 1))) for cvi in cv])
-                    out = _get_bias(colvar)
-                    return np.array(jnp.reshape(out, cv[0].shape), dtype=np.double)
-
-                def print_pars(self, *pars_units):
-                    pass
-
-            bias_wrapped = [_ThermoBiasND(bias=b, chunk_size=chunk_size) for b in biases]
-
-            histo = HistogramND.from_wham(
-                bins=bins,
-                trajectories=[
-                    np.array(
-                        traj.cv,
-                        dtype=np.double,
-                    )
-                    for traj in trajs
-                ],
-                error_estimate=None,
-                biasses=bias_wrapped,
-                temp=temp,
-                verbosity="high",
-            )
-
-            return histo
-
-        histo = _get_histos(
+        histo = bash_app_python(ThermoLIB._get_histos, executors=["default"])(
             bins=bins,
             temp=temp,
             trajs=trajs,
@@ -301,9 +314,9 @@ class ThermoLIB:
             pf = []
 
             pf.append(
-                plot_app(
-                    bias=fesBias,
+                bash_app_python(fesBias.plot, executors=["default"])(
                     outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                    name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.pdf",
                     inverted=True,
                     label="Free Energy [kJ/mol]",
                     execution_folder=fold,
@@ -314,9 +327,9 @@ class ThermoLIB:
             )
 
             pf.append(
-                plot_app(
-                    bias=fesBias,
+                bash_app_python(fesBias.plot, executors=["default"])(
                     outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.pdf")],
+                    name=f"diff_FES_bias_{self.rnd}_{choice}.pdf",
                     execution_folder=fold,
                     stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
                     stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
@@ -325,9 +338,9 @@ class ThermoLIB:
             )
 
             pf.append(
-                plot_app(
-                    bias=fes_bias_tot,
+                bash_app_python(fes_bias_tot.plot, executors=["default"])(
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                    name=f"FES_bias_{self.rnd}_inverted_{choice}.pdf",
                     inverted=True,
                     label="Free Energy [kJ/mol]",
                     execution_folder=fold,
@@ -338,9 +351,9 @@ class ThermoLIB:
             )
 
             pf.append(
-                plot_app(
-                    bias=fes_bias_tot,
+                bash_app_python(fes_bias_tot.plot, executors=["default"])(
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.pdf")],
+                    name=f"FES_bias_{self.rnd}_{choice}.pdf",
                     execution_folder=fold,
                     stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_{choice}.stderr",

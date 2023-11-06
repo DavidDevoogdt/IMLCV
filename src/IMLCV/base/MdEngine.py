@@ -4,19 +4,21 @@ Currently, the MD is done with YAFF/OpenMM
 """
 from __future__ import annotations
 
+import json
 import tempfile
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
-from dataclasses import field, fields
+from dataclasses import field
+from dataclasses import fields
 from pathlib import Path
 from time import time
 
 import cloudpickle
-import jsonpickle, json
 import h5py
 import jax
 import jax.numpy as jnp
+import jsonpickle
 import yaff.external
 import yaff.log
 import yaff.pes.bias
@@ -556,7 +558,7 @@ class MDEngine(ABC):
         filename = Path(file)
 
         if filename.suffix == ".json":
-            with open(filename, "r") as f:
+            with open(filename) as f:
                 self = jsonpickle.decode(f.read())
         else:
             with open(filename, "rb") as f:

@@ -345,6 +345,57 @@ class TranformerAutoEncoder(Transformer):
         return f_enc.compute_cv_trans(cv)[0], un_atomize * f_enc
 
 
+def _LDA_trans(cv: CV, nl: NeighbourList | None, _, alpha, outdim, solver):
+    if solver == "eigen":
+
+        def f(cv, scalings):
+            return cv @ scalings
+
+        f = partial(f, scalings=jnp.array(alpha.scalings_)[:, :outdim])
+
+    elif solver == "svd":
+
+        def f(cv, scalings, xbar):
+            return (cv - xbar) @ scalings
+
+        f = partial(
+            f,
+            scalings=jnp.array(alpha.scalings_),
+            xbar=jnp.array(alpha.xbar_),
+        )
+
+    else:
+        raise NotImplementedError
+
+    return CV(
+        cv=f(cv.cv),
+        _stack_dims=cv._stack_dims,
+        _combine_dims=cv._combine_dims,
+        atomic=cv.atomic,
+        mapped=cv.mapped,
+    )
+
+
+def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, mean):
+    return CV(
+        cv=(cv.cv - mean[0]) / (mean[1] - mean[0]),
+        _stack_dims=cv._stack_dims,
+        _combine_dims=cv._combine_dims,
+        atomic=cv.atomic,
+        mapped=cv.mapped,
+    )
+
+
+def _scale_trans(cv: CV, nl: NeighbourList | None, _, alpha, scale_factor):
+    return CV(
+        (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
+        _stack_dims=cv._stack_dims,
+        _combine_dims=cv._combine_dims,
+        atomic=cv.atomic,
+        mapped=cv.mapped,
+    )
+
+
 class TransoformerLDA(Transformer):
     def __init__(
         self,
@@ -408,37 +459,7 @@ class TransoformerLDA(Transformer):
                 labels,
             )
 
-            if solver == "eigen":
-
-                def f(cv, scalings):
-                    return cv @ scalings
-
-                f = partial(f, scalings=jnp.array(alpha.scalings_)[:, : self.outdim])
-
-            elif solver == "svd":
-
-                def f(cv, scalings, xbar):
-                    return (cv - xbar) @ scalings
-
-                f = partial(
-                    f,
-                    scalings=jnp.array(alpha.scalings_),
-                    xbar=jnp.array(alpha.xbar_),
-                )
-
-            else:
-                raise NotImplementedError
-
-            def LDA_trans(cv: CV, nl: NeighbourList | None, _, f):
-                return CV(
-                    cv=f(cv.cv),
-                    _stack_dims=cv._stack_dims,
-                    _combine_dims=cv._combine_dims,
-                    atomic=cv.atomic,
-                    mapped=cv.mapped,
-                )
-
-            lda_cv = CvTrans.from_cv_function(partial(LDA_trans, f=f))
+            lda_cv = CvTrans.from_cv_function(_LDA_trans, alpha=alpha, outdim=self.outdim, solver=solver)
             cv, _ = lda_cv.compute_cv_trans(cv)
 
             cvs = CV.unstack(cv)
@@ -450,16 +471,7 @@ class TransoformerLDA(Transformer):
 
             assert self.outdim == 1
 
-            def LDA_rescale(cv: CV, nl: NeighbourList | None, _, mean):
-                return CV(
-                    cv=(cv.cv - mean[0]) / (mean[1] - mean[0]),
-                    _stack_dims=cv._stack_dims,
-                    _combine_dims=cv._combine_dims,
-                    atomic=cv.atomic,
-                    mapped=cv.mapped,
-                )
-
-            lda_rescale = CvTrans.from_cv_function(partial(LDA_rescale, mean=mean))
+            lda_rescale = CvTrans.from_cv_function(_LDA_rescale, mean=mean)
             cv, _ = lda_rescale.compute_cv_trans(cv)
 
             full_trans = un_atomize * lda_cv * lda_rescale
@@ -511,22 +523,33 @@ class TransoformerLDA(Transformer):
 
             scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
 
-            def scale_trans(cv: CV, nl: NeighbourList | None, _, alpha=alpha, scale_factor=scale_factor):
-                return CV(
-                    (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
-                    _stack_dims=cv._stack_dims,
-                    _combine_dims=cv._combine_dims,
-                    atomic=cv.atomic,
-                    mapped=cv.mapped,
-                )
-
-            _g = CvTrans.from_cv_function(partial(scale_trans, alpha=alpha, scale_factor=scale_factor))
+            _g = CvTrans.from_cv_function(_scale_trans, alpha=alpha, scale_factor=scale_factor)
 
             cv = _g.compute_cv_trans(cv)[0]
 
             full_trans = un_atomize * _f * _g
 
         return cv, full_trans
+
+
+def _transform(cv: CV, nl: NeighbourList | None, _, mask):
+    return cv.replace(cv=cv.cv[mask])
+
+
+def _tranform_maf(cv, nl, _, q, pi, add_1):
+    cv_v = q.T @ (cv.cv - pi)
+    if add_1:
+        cv_v = jnp.hstack([cv_v, jnp.array([1])])
+
+    return CV(cv=cv_v, _stack_dims=cv._stack_dims)
+
+
+def _tica_selection(cv: CV, nl: NeighbourList | None, _, pi_eq, alpha):
+    return CV(cv=(cv.cv - pi_eq) @ alpha, _stack_dims=cv._stack_dims)
+
+
+def _tica_selection_2(cv: CV, nl: NeighbourList | None, _, u):
+    return cv @ u
 
 
 class TransformerMAF(Transformer):
@@ -602,9 +625,7 @@ class TransformerMAF(Transformer):
 
         mask = jnp.linalg.norm((cv_0.cv - jnp.mean(cv_0.cv, axis=0)), axis=0) > 1e-8
 
-        @CvTrans.from_cv_function
-        def transform(cv: CV, nl: NeighbourList | None, _):
-            return cv.replace(cv=cv.cv[mask])
+        transform = CvTrans.from_cv_function(_transform, mask=mask)
 
         cv_0, _ = transform.compute_cv_trans(cv_0)
         cv_tau, _ = transform.compute_cv_trans(cv_tau)
@@ -641,16 +662,10 @@ class TransformerMAF(Transformer):
 
             l, q = scipy.linalg.eigh(a=COV, subset_by_value=[epsilon, jnp.inf])
 
-            @CvTrans.from_cv_function
-            def tranform(cv, nl, _):
-                cv_v = q.T @ (cv.cv - pi)
-                if add_1:
-                    cv_v = jnp.hstack([cv_v, jnp.array([1])])
+            transform_maf = CvTrans.from_cv_function(_tranform_maf, add_1=add_1, q=q, pi=pi)
 
-                return CV(cv=cv_v, _stack_dims=cv._stack_dims)
-
-            cv_0, _ = tranform.compute_cv_trans(cv_0)
-            cv_tau, _ = tranform.compute_cv_trans(cv_tau)
+            cv_0, _ = transform_maf.compute_cv_trans(cv_0)
+            cv_tau, _ = transform_maf.compute_cv_trans(cv_tau)
 
             X = cv_0.cv
             Y = cv_tau.cv
@@ -670,7 +685,7 @@ class TransformerMAF(Transformer):
                 C_0 = f_shrink(C_0)
                 # C_1 = f_shrink(C_1)
 
-            return C_0, C_1, cv_0, cv_tau, tranform
+            return C_0, C_1, cv_0, cv_tau, transform_maf
 
         def get_koopman_weights(cv_0_i, cv_tau_i, w=None, shrink=False):
             C_0, C_1, cv_0_new, cv_tau_new, _ = get_covs(
@@ -772,9 +787,7 @@ class TransformerMAF(Transformer):
             u = u[:, ::-1]
             u = jnp.array(u)
 
-            @CvTrans.from_cv_function
-            def tica_selection(cv: CV, nl: NeighbourList | None, _):
-                return cv @ u
+            tica_selection = CvTrans.from_cv_function(_tica_selection_2, u=u)
 
             trans *= tica_selection
 
@@ -818,9 +831,7 @@ class TransformerMAF(Transformer):
 
             alpha = jnp.array(result.point)
 
-            @CvTrans.from_cv_function
-            def tica_selection(cv: CV, nl: NeighbourList | None, _):
-                return CV(cv=(cv.cv - pi_eq) @ alpha, _stack_dims=cv._stack_dims)
+            tica_selection = CvTrans.from_cv_function(_tica_selection, pi_eq=pi_eq, alpha=alpha)
 
             cv = tica_selection.compute_cv_trans(cv)[0]
             trans *= tica_selection

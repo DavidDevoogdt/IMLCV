@@ -53,6 +53,8 @@ MANIFEST
 .conda*/
 .python-version
 
+.vscode-server/*
+
 
 # large folders
 dist/*

@@ -14,6 +14,7 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import padded_pmap
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.CV import identity_trans
 from IMLCV.implementations.CV import scale_cv_trans
 from jax import pmap
 from matplotlib import gridspec
@@ -176,7 +177,7 @@ class Transformer:
     def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:
         # y = CV.stack(*y)
         if not self.post_scale:
-            return y, CvTrans.from_cv_function(lambda x, _: x)
+            return y, identity_trans
         h = scale_cv_trans(y)
         return h.compute_cv_trans(y)[0], h
 

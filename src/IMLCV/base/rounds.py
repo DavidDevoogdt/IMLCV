@@ -1212,7 +1212,7 @@ class Rounds(ABC):
                 spi = sp0[i]
                 spi = spi.unbatch()
 
-            future = Rounds.run_md(
+            future = bash_app_python(Rounds.run_md, pass_files=True, executors=["reference"])(
                 sp=spi,  # type: ignore
                 inputs=[File(common_md_name), File(str(b_name))],
                 outputs=[File(str(b_name_new)), File(str(traj_name))],
@@ -1223,7 +1223,7 @@ class Rounds(ABC):
             if plot:
                 plot_file = path_name / "plot.pdf"
 
-                plot_fut = Rounds.plot_md_run(
+                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=["default"])(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
@@ -1301,7 +1301,7 @@ class Rounds(ABC):
 
             traj_name = path_name / "trajectory_info.h5"
 
-            future = Rounds.run_md(
+            future = bash_app_python(Rounds.run_md, pass_files=True, executors=["reference"])(
                 sp=None,  # type: ignore
                 inputs=[File(common_md_name), File(str(b_name))],
                 outputs=[File(str(b_name_new)), File(str(traj_name))],
@@ -1312,7 +1312,7 @@ class Rounds(ABC):
             if plot:
                 plot_file = path_name / "plot.pdf"
 
-                plot_fut = Rounds.plot_md_run(
+                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=["default"])(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
@@ -1346,7 +1346,6 @@ class Rounds(ABC):
                     print(f"got exception {e} while trying to collect plot of {i}, continuing ")
 
     @staticmethod
-    @bash_app_python(executors=["reference"])
     def run_md(
         steps: int,
         sp: SystemParams | None,
@@ -1370,7 +1369,6 @@ class Rounds(ABC):
         return d
 
     @staticmethod
-    @bash_app_python(executors=["default"])
     def plot_md_run(
         st: StaticMdInfo,
         traj: TrajectoryInfo,

@@ -89,13 +89,11 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
-    @jit
     def phi(n, n_max, r, r_cut, sigma_a):
         return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2))
 
     @partial(vmap, in_axes=(None, 0, None), out_axes=1)
     @partial(vmap, in_axes=(0, None, None), out_axes=0)
-    @jit
     def I_prime_ml(n, l_vec, r_ij):
         def f(r):
             # https://mathworld.wolfram.com/ModifiedSphericalBesselFunctionoftheFirstKind.html
@@ -123,7 +121,6 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
         return jnp.apply_along_axis(lambda y: jax.scipy.integrate.trapezoid(y=y, x=x), axis=0, arr=y)
 
-    @jit
     def f_cut(r):
         return lax.cond(
             r > r_cut,
@@ -159,14 +156,12 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
     l_list = list(range(l_max + 1))
 
-    @jit
     def _l(p_ij, p_ik):
         return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
 
     def a_nlj(r_ij):
         return U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ij) * f_cut(r_ij)
 
-    @jit
     def _p_i_soap_2_s(p_ij, atom_index_j):
         r_ij2 = jnp.dot(p_ij, p_ij)
         r_ij2 = jax.lax.cond(r_ij2 == 0, lambda: jnp.ones_like(r_ij2), lambda: r_ij2)
@@ -181,7 +176,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
 
         return a_jnl
 
-    @jit
+    # @jit
     def _p_i_soap_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
         a_nlj = data_j
         a_nlk = data_k
@@ -252,7 +247,6 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     @partial(vmap, in_axes=(0, None, None))
     @partial(vmap, in_axes=(None, 0, None))
-    @jit
     def f_nl(n, l, r):
         def f(r):
             return (
@@ -268,11 +262,9 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     nm1_vec = jnp.arange(n_max)
 
-    @jit
     def _l(p_ij, p_ik):
         return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
 
-    @jit
     def g_nl(r: Array):
         fnl = f_nl(n_vec, l_vec, r)
 
@@ -301,7 +293,6 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         return out
 
-    @jit
     def _p_i_sb_2_s(p_ij, atom_index_j):
         r_ij_sq = jnp.dot(p_ij, p_ij)
         r_ij_sq_safe = jax.lax.cond(
@@ -320,7 +311,6 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         return a_jnl
 
-    @jit
     def _p_i_sb_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
         a_jnl = data_j
         a_knl = data_k

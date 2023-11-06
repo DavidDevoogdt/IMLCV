@@ -249,7 +249,7 @@ def get_slurm_provider(
     if py_env is None:
         if env == "hortense":
             print("setting python env for hortense")
-            py_env = f"source {ROOT_DIR}/micromamba/bin/activate; which python"
+            py_env = f"source {ROOT_DIR}/micromamba/envs/py310/bin/activate; which python"
         else:
             py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
 

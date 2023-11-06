@@ -276,7 +276,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
             l0 = jnp.max(l)
             l1 = jnp.min(l)
 
-            return jnp.array([(l0 - l1) / 2, (l0 + l1) / 2])
+            return CV(cv=jnp.array([(l0 - l1) / 2, (l0 + l1) / 2]))
 
         assert x == y
         assert x == z

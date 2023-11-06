@@ -34,31 +34,59 @@ from ott.solvers.linear import sinkhorn
 ######################################
 
 
-@CvFlow.from_function
-def Volume(sp: SystemParams, _):
+def _identity_trans(x, nl, _):
+    return x
+
+
+identity_trans = CvFlow.from_function(_identity_trans)
+
+
+def _Volume(sp: SystemParams, *_):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
     vol = jnp.abs(jnp.linalg.det(sp.cell))
-    return jnp.array([vol])
+    return CV(cv=jnp.array([vol]))
+
+
+Volume = CvFlow.from_function(_Volume)
+
+
+def _distance(x: SystemParams, *_):
+    x = x.canonicalize()[0]
+
+    n = x.shape[-2]
+
+    out = vmap(vmap(x.min_distance, in_axes=(0, None)), in_axes=(None, 0))(
+        jnp.arange(n),
+        jnp.arange(n),
+    )
+
+    return CV(cv=out[jnp.triu_indices_from(out, k=1)])
 
 
 def distance_descriptor():
-    @CvFlow.from_function
-    def h(x: SystemParams, _):
-        x = x.canonicalize()[0]
+    return CvFlow.from_function(_distance)
 
-        n = x.shape[-2]
 
-        out = vmap(vmap(x.min_distance, in_axes=(0, None)), in_axes=(None, 0))(
-            jnp.arange(n),
-            jnp.arange(n),
-        )
+def _dihedral(sp: SystemParams, _nl, _c, numbers):
+    coor = sp.coordinates
+    p0 = coor[numbers[0]]
+    p1 = coor[numbers[1]]
+    p2 = coor[numbers[2]]
+    p3 = coor[numbers[3]]
 
-        return out[jnp.triu_indices_from(out, k=1)]
+    b0 = -1.0 * (p1 - p0)
+    b1 = p2 - p1
+    b2 = p3 - p2
 
-        # return out
+    b1 /= jnp.linalg.norm(b1)
 
-    return h
+    v = b0 - jnp.dot(b0, b1) * b1
+    w = b2 - jnp.dot(b2, b1) * b1
+
+    x = jnp.dot(v, w)
+    y = jnp.dot(jnp.cross(b1, v), w)
+    return CV(cv=jnp.arctan2(y, x))
 
 
 def dihedral(numbers: list[int] | Array):
@@ -69,39 +97,23 @@ def dihedral(numbers: list[int] | Array):
         numbers: list with index of 4 atoms that form dihedral
     """
 
-    @CvFlow.from_function
-    def f(sp: SystemParams, _):
-        coor = sp.coordinates
-        p0 = coor[numbers[0]]
-        p1 = coor[numbers[1]]
-        p2 = coor[numbers[2]]
-        p3 = coor[numbers[3]]
-
-        b0 = -1.0 * (p1 - p0)
-        b1 = p2 - p1
-        b2 = p3 - p2
-
-        b1 /= jnp.linalg.norm(b1)
-
-        v = b0 - jnp.dot(b0, b1) * b1
-        w = b2 - jnp.dot(b2, b1) * b1
-
-        x = jnp.dot(v, w)
-        y = jnp.dot(jnp.cross(b1, v), w)
-        return jnp.arctan2(y, x)
-
-    return f
+    return CvFlow.from_function(_dihedral, numbers=numbers)
 
 
-def sb_descriptor(
+def _sb_descriptor(
+    sp: SystemParams,
+    nl: NeighbourList,
+    _,
     r_cut,
-    n_max: int,
-    l_max: int,
-    reduce=True,
-    reshape=True,
-    chunk_size_atoms=None,
-    chunk_size_neigbourgs=None,
-) -> CvFlow:
+    chunk_size_atoms,
+    chunk_size_neigbourgs,
+    reduce,
+    reshape,
+    n_max,
+    l_max,
+):
+    assert nl is not None, "provide neighbourlist for sb describport"
+
     from IMLCV.tools.soap_kernel import p_i, p_inl_sb
 
     def _reduce_sb(a):
@@ -138,39 +150,60 @@ def sb_descriptor(
         l_max=l_max,
     )
 
-    def f(sp: SystemParams, nl: NeighbourList):
-        assert nl is not None, "provide neighbourlist for sb describport"
+    a = p_i(
+        sp=sp,
+        nl=nl,
+        p=p,
+        r_cut=r_cut,
+        chunk_size_atoms=chunk_size_atoms,
+        chunk_size_neigbourgs=chunk_size_neigbourgs,
+    )
 
-        a = p_i(
-            sp=sp,
-            nl=nl,
-            p=p,
-            r_cut=r_cut,
-            chunk_size_atoms=chunk_size_atoms,
-            chunk_size_neigbourgs=chunk_size_neigbourgs,
-        )
+    if reduce:
+        a = _reduce_sb(a)
 
-        if reduce:
-            a = _reduce_sb(a)
+    if reshape:
+        a = jnp.reshape(a, (a.shape[0], -1))
 
-        if reshape:
-            a = jnp.reshape(a, (a.shape[0], -1))
-
-        return a
-
-    return CvFlow.from_function(f, atomic=True)  # type: ignore
+    return CV(cv=a, atomic=True)
 
 
-def soap_descriptor(
+def sb_descriptor(
     r_cut,
     n_max: int,
     l_max: int,
-    sigma_a: float,
-    r_delta: float,
     reduce=True,
     reshape=True,
-    num=50,
+    chunk_size_atoms=None,
+    chunk_size_neigbourgs=None,
 ) -> CvFlow:
+    return CvFlow.from_function(
+        _sb_descriptor,
+        r_cut=r_cut,
+        chunk_size_atoms=chunk_size_atoms,
+        chunk_size_neigbourgs=chunk_size_neigbourgs,
+        reduce=reduce,
+        reshape=reshape,
+        n_max=n_max,
+        l_max=l_max,
+    )
+
+
+def _soap_descriptor(
+    sp: SystemParams,
+    nl: NeighbourList,
+    _,
+    r_cut,
+    reduce,
+    reshape,
+    n_max,
+    l_max,
+    sigma_a,
+    r_delta,
+    num,
+):
+    assert nl is not None, "provide neighbourlist for soap describport"
+
     from IMLCV.tools.soap_kernel import p_i, p_innl_soap
 
     def _reduce_sb(a):
@@ -195,30 +228,48 @@ def soap_descriptor(
         num=num,
     )
 
-    def f(sp: SystemParams, nl: NeighbourList):
-        assert nl is not None, "provide neighbourlist for soap describport"
+    a = p_i(
+        sp=sp,
+        nl=nl,
+        p=p,
+        r_cut=r_cut,
+    )
 
-        a = p_i(
-            sp=sp,
-            nl=nl,
-            p=p,
-            r_cut=r_cut,
-        )
+    if reduce:
+        a = _reduce_sb(a)
 
-        if reduce:
-            a = _reduce_sb(a)
+    if reshape:
+        a = jnp.reshape(a, (a.shape[0], -1))
 
-        if reshape:
-            a = jnp.reshape(a, (a.shape[0], -1))
+    return CV(cv=a, atomic=True)
 
-        return a
 
-    return CvFlow.from_function(f, atomic=True)  # type: ignore
+def soap_descriptor(
+    r_cut,
+    n_max: int,
+    l_max: int,
+    sigma_a: float,
+    r_delta: float,
+    reduce=True,
+    reshape=True,
+    num=50,
+) -> CvFlow:
+    return CvFlow.from_function(
+        _soap_descriptor,
+        r_cut=r_cut,
+        reduce=reduce,
+        reshape=reshape,
+        n_max=n_max,
+        l_max=l_max,
+        sigma_a=sigma_a,
+        r_delta=r_delta,
+        num=num,
+    )
 
 
 def NoneCV() -> CollectiveVariable:
     return CollectiveVariable(
-        f=CvFlow.from_function(lambda sp, nl: jnp.array([0.0])),
+        f=CvFlow.from_function(lambda sp, nl, c: CV(cv=jnp.array([0.0]))),
         metric=CvMetric.create(periodicities=[None]),
     )
 
@@ -226,43 +277,45 @@ def NoneCV() -> CollectiveVariable:
 ######################################
 #           CV trans                 #
 ######################################
+def _rotate_2d(cv: CV, _nl: NeighbourList, _, alpha):
+    return (
+        jnp.array(
+            [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]],
+        )
+        @ cv
+    )
 
 
 def rotate_2d(alpha):
-    @CvTrans.from_cv_function
-    def f(cv: CV, *_):
-        return (
-            jnp.array(
-                [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]],
-            )
-            @ cv
-        )
+    return CvTrans.from_cv_function(_rotate_2d, alpha=alpha)
 
-    return f
+
+def _project_distances(cvs: CV, nl, _, a):
+    "projects the distances to a reaction coordinate"
+    import jax.numpy as jnp
+
+    from IMLCV.base.CV import CV
+
+    assert cvs.dim == 2
+
+    r1 = cvs.cv[0]
+    r2 = cvs.cv[1]
+
+    x = (r2**2 - r1**2) / (2 * a)
+    y2 = r2**2 - (a / 2 + x) ** 2
+
+    y2_safe = jnp.where(y2 <= 0, jnp.ones_like(y2), y2)
+    y = jnp.where(y2 <= 0, 0.0, y2_safe ** (1 / 2))
+
+    return CV(cv=jnp.array([x / a + 0.5, y / a]))
 
 
 def project_distances(a):
-    @CvTrans.from_cv_function
-    def project_distances(cvs: CV, *_):
-        "projects the distances to a reaction coordinate"
-        import jax.numpy as jnp
+    return CvTrans.from_cv_function(_project_distances, a=a)
 
-        from IMLCV.base.CV import CV
 
-        assert cvs.dim == 2
-
-        r1 = cvs.cv[0]
-        r2 = cvs.cv[1]
-
-        x = (r2**2 - r1**2) / (2 * a)
-        y2 = r2**2 - (a / 2 + x) ** 2
-
-        y2_safe = jnp.where(y2 <= 0, jnp.ones_like(y2), y2)
-        y = jnp.where(y2 <= 0, 0.0, y2_safe ** (1 / 2))
-
-        return CV(cv=jnp.array([x / a + 0.5, y / a]))
-
-    return project_distances
+def _scale_cv_trans(x, nl, _, upper, lower, mini, diff):
+    return x.replace(cv=((x.cv - mini) / diff) * (upper - lower) + lower)
 
 
 def scale_cv_trans(array: CV, lower=0, upper=1):
@@ -273,13 +326,24 @@ def scale_cv_trans(array: CV, lower=0, upper=1):
     diff = maxi - mini
     diff = jnp.where(diff == 0, 1, diff)
 
-    # mask = jnp.abs(diff) > 1e-6
+    return CvTrans.from_cv_function(_scale_cv_trans, upper=upper, lower=lower, mini=mini, diff=diff)
 
-    @CvTrans.from_array_function
-    def f0(x, *_):
-        return ((x - mini) / diff) * (upper - lower) + lower
 
-    return f0
+def _trunc_svd(x: CV, nl: NeighbourList | None, _, m_atomic, v, cvi_shape):
+    if m_atomic:
+        out = jnp.einsum("ni,jni->j", x.cv, v)
+
+    else:
+        out = jnp.einsum("i,ji->j", x.cv, v)
+
+    out = out * jnp.sqrt(cvi_shape)
+
+    return CV(
+        cv=out,
+        _stack_dims=x._stack_dims,
+        _combine_dims=x._combine_dims,
+        atomic=False,
+    )
 
 
 def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
@@ -291,6 +355,9 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
         cvi = m.cv
 
     cvi = cvi[range, :]
+
+    cvi_shape = cvi.shape[0]
+    m_atomic = m.atomic
 
     u, s, v = jnp.linalg.svd(cvi, full_matrices=False)
 
@@ -312,24 +379,9 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     if m.atomic:
         v = v.reshape((v.shape[0], m.cv.shape[1], m.cv.shape[2]))
 
-    @CvTrans.from_cv_function
-    def f(x: CV, nl: NeighbourList | None, _):
-        if m.atomic:
-            out = jnp.einsum("ni,jni->j", x.cv, v)
+    out = CvTrans.from_cv_function(_trunc_svd, m_atomic=m_atomic, v=v, cvi_shape=cvi_shape)
 
-        else:
-            out = jnp.einsum("i,ji->j", x.cv, v)
-
-        out = out * jnp.sqrt(cvi.shape[0])
-
-        return CV(
-            cv=out,
-            _stack_dims=x._stack_dims,
-            _combine_dims=x._combine_dims,
-            atomic=False,
-        )
-
-    return f.compute_cv_trans(m)[0], f
+    return out.compute_cv_trans(m)[0], out
 
 
 @partial(jit, static_argnames=["matching", "alpha", "normalize", "chunk_size"])
@@ -534,6 +586,74 @@ def sinkhorn_divergence(
     return combine(x1, x2, P11, P12, P22)
 
 
+def _sinkhorn_divergence_trans(
+    cv: CV,
+    nl: NeighbourList | None,
+    _,
+    nli,
+    pi,
+    sort,
+    alpha_rematch,
+    output,
+    normalize,
+):
+    assert nl is not None, "Neigbourlist required for rematch"
+
+    divergence, out, matched, ddiv = sinkhorn_divergence(
+        x1=cv,
+        x2=pi,
+        nl1=nl,
+        nl2=nli,
+        matching=sort,
+        alpha=alpha_rematch,
+        normalize=normalize,
+    )
+
+    if output == "divergence":
+        return divergence
+
+    if output == "aligned_cv":
+        return CV.combine(
+            *[
+                CV(
+                    cv=cvi,
+                    _stack_dims=out._stack_dims,
+                    _combine_dims=out._combine_dims,
+                    atomic=out.atomic,
+                )
+                for cvi in out.cv
+            ],
+        )
+
+    if output == "matched":
+        return CV.combine(
+            *[
+                CV(
+                    cv=cvi,
+                    _stack_dims=out._stack_dims,
+                    _combine_dims=out._combine_dims,
+                    atomic=matched.atomic,
+                )
+                for cvi in matched.cv
+            ],
+        )
+
+    if output == "ddiv":
+        return CV.combine(
+            *[
+                CV(
+                    cv=cvi,
+                    _stack_dims=ddiv._stack_dims,
+                    _combine_dims=ddiv._combine_dims,
+                    atomic=ddiv.atomic,
+                )
+                for cvi in ddiv.cv
+            ],
+        )
+
+    raise ValueError(f"{output=}")
+
+
 def get_sinkhorn_divergence(
     nli: NeighbourList | None,
     pi: CV,
@@ -546,85 +666,126 @@ def get_sinkhorn_divergence(
 
     assert pi.atomic, "pi must be atomic"
 
-    @CvTrans.from_cv_function
-    def sinkhorn_divergence_trans(
-        cv: CV,
-        nl: NeighbourList | None,
-        _,
-    ):
-        assert nl is not None, "Neigbourlist required for rematch"
+    return CvTrans.from_cv_function(
+        _sinkhorn_divergence_trans,
+        nli=nli,
+        pi=pi,
+        sort=sort,
+        alpha_rematch=alpha_rematch,
+        output=output,
+        normalize=normalize,
+    )
 
-        # if output == "ddiv":
 
-        #     @jax.jacrev
-        #     def outp(pi):
-        #         return sinkhorn_divergence(
-        #             x1=cv,
-        #             x2=pi,
-        #             nl1=nl,
-        #             nl2=nli,
-        #             matching=sort,
-        #             alpha=alpha_rematch,
-        #             normalize=normalize,
-        #         )[0]
+@partial(jit, static_argnames=["alpha", "normalize"])
+def sinkhorn_divergence_2(
+    x1: CV,
+    x2: CV,
+    nl1: NeighbourList,
+    nl2: NeighbourList,
+    alpha=1e-2,
+    normalize=True,
+    sum_divergence=False,
+) -> Array:
+    """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
-        #     return CV(cv=jnp.reshape(outp(pi).cv.cv, -1), atomic=False, _stack_dims=cv._stack_dims)
+    assert x1.atomic
+    assert x2.atomic
+    assert not x1.batched
+    assert not x2.batched
 
-        divergence, out, matched, ddiv = sinkhorn_divergence(
-            x1=cv,
-            x2=pi,
-            nl1=nl,
-            nl2=nli,
-            matching=sort,
-            alpha=alpha_rematch,
-            normalize=normalize,
+    eps = 100 * jnp.finfo(x1.cv.dtype).eps
+
+    def p_norm(x: CV):
+        p = x.cv
+
+        p_sq = jnp.einsum("i...,i...->i", p, p)
+        p_sq_safe = jnp.where(p_sq <= eps, 1, p_sq)
+        p_norm_inv = jnp.where(p_sq == 0, 0.0, 1 / jnp.sqrt(p_sq_safe))
+
+        return CV(
+            cv=jnp.einsum("i...,i->i...", p, p_norm_inv),
+            _stack_dims=x._stack_dims,
+            _combine_dims=x._combine_dims,
+            atomic=x.atomic,
         )
 
-        if output == "divergence":
-            return divergence
+    if normalize:
+        x1 = p_norm(x1)
+        x2 = p_norm(x2)
 
-        if output == "aligned_cv":
-            return CV.combine(
-                *[
-                    CV(
-                        cv=cvi,
-                        _stack_dims=out._stack_dims,
-                        _combine_dims=out._combine_dims,
-                        atomic=out.atomic,
-                    )
-                    for cvi in out.cv
-                ],
-            )
+    from ott.tools import sinkhorn_divergence
 
-        if output == "matched":
-            return CV.combine(
-                *[
-                    CV(
-                        cv=cvi,
-                        _stack_dims=out._stack_dims,
-                        _combine_dims=out._combine_dims,
-                        atomic=matched.atomic,
-                    )
-                    for cvi in matched.cv
-                ],
-            )
+    b1, _, p1 = nl1.nl_split_z(x1)
+    _, _, p2 = nl2.nl_split_z(x2)
 
-        if output == "ddiv":
-            return CV.combine(
-                *[
-                    CV(
-                        cv=cvi,
-                        _stack_dims=ddiv._stack_dims,
-                        _combine_dims=ddiv._combine_dims,
-                        atomic=ddiv.atomic,
-                    )
-                    for cvi in ddiv.cv
-                ],
-            )
+    def get_divergence(p1, p2):
+        n = p1.shape[0]
 
-        raise ValueError(f"{output=}")
+        class _SVD(lx.SVD):
+            def __init__(self, rtol, atol, rcond=None):
+                super().__init__(rcond=rcond)
 
-    return sinkhorn_divergence_trans
+        return sinkhorn_divergence.sinkhorn_divergence(
+            PointCloud,
+            x=jnp.reshape(p1, (n, -1)),
+            y=jnp.reshape(p2, (n, -1)),
+            epsilon=alpha,
+            sinkhorn_kwargs={
+                "implicit_diff": implicit_differentiation.ImplicitDiff(
+                    solver_kwargs={
+                        "nonsym_solver": _SVD,
+                    },
+                ),
+                "use_danskin": True,
+            },
+        ).divergence
+
+    divergences = jnp.array([get_divergence(p1_z.cv, p2_z.cv) for p1_z, p2_z in zip(p1, p2)])
+
+    if sum_divergence:
+        # weigh according to number of atoms
+        w = jnp.sum(b1, axis=1)
+        w /= jnp.sum(w)
+        divergences = divergences * w
+
+    return divergences
+
+
+def _sinkhorn_divergence_trans_2(
+    cv: CV,
+    nl: NeighbourList | None,
+    _,
+    nli,
+    pi,
+    alpha_rematch,
+    output,
+    normalize,
+    sum_divergence,
+    ddiv_arg=0,
+):
+    assert nl is not None, "Neigbourlist required for rematch"
+
+    def f(pii, cv, nlii, nl):
+        return CV(
+            cv=sinkhorn_divergence_2(
+                x1=cv,
+                x2=pii,
+                nl1=nl,
+                nl2=nlii,
+                alpha=alpha_rematch,
+                normalize=normalize,
+            ),
+            _stack_dims=cv._stack_dims,
+        )
+
+    if output == "ddiv":
+        f = jax.jacrev(f, argnums=ddiv_arg)
+        div = CV.combine(*[f(pii, cv, nlii, nl).cv for pii, nlii in zip(pi, nli)])
+    else:
+        div = CV.combine(*[f(pii, cv, nlii, nli) for pii, nlii in zip(pi, nli)])
+
+    return div.replace(cv=jnp.reshape(div.cv, (-1)), atomic=False)
 
 
 def get_sinkhorn_divergence_2(
@@ -634,119 +795,62 @@ def get_sinkhorn_divergence_2(
     output="divergence",
     normalize=True,
     sum_divergence=False,
+    ddiv_arg=0,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
     assert pi.atomic, "pi must be atomic"
 
-    @partial(jit, static_argnames=["alpha", "normalize"])
-    def sinkhorn_divergence_2(
-        x1: CV,
-        x2: CV,
-        nl1: NeighbourList,
-        nl2: NeighbourList,
-        alpha=1e-2,
-        normalize=True,
-        sum_divergence=False,
-    ) -> Array:
-        """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
-
-        assert x1.atomic
-        assert x2.atomic
-        assert not x1.batched
-        assert not x2.batched
-
-        eps = 100 * jnp.finfo(x1.cv.dtype).eps
-
-        def p_norm(x: CV):
-            p = x.cv
-
-            p_sq = jnp.einsum("i...,i...->i", p, p)
-            p_sq_safe = jnp.where(p_sq <= eps, 1, p_sq)
-            p_norm_inv = jnp.where(p_sq == 0, 0.0, 1 / jnp.sqrt(p_sq_safe))
-
-            return CV(
-                cv=jnp.einsum("i...,i->i...", p, p_norm_inv),
-                _stack_dims=x._stack_dims,
-                _combine_dims=x._combine_dims,
-                atomic=x.atomic,
-            )
-
-        if normalize:
-            x1 = p_norm(x1)
-            x2 = p_norm(x2)
-
-        from ott.tools import sinkhorn_divergence
-
-        b1, _, p1 = nl1.nl_split_z(x1)
-        _, _, p2 = nl2.nl_split_z(x2)
-
-        def get_divergence(p1, p2):
-            n = p1.shape[0]
-
-            class _SVD(lx.SVD):
-                def __init__(self, rtol, atol, rcond=None):
-                    super().__init__(rcond=rcond)
-
-            return sinkhorn_divergence.sinkhorn_divergence(
-                PointCloud,
-                x=jnp.reshape(p1, (n, -1)),
-                y=jnp.reshape(p2, (n, -1)),
-                epsilon=alpha,
-                sinkhorn_kwargs={
-                    "implicit_diff": implicit_differentiation.ImplicitDiff(
-                        solver_kwargs={
-                            "nonsym_solver": _SVD,
-                        },
-                    ),
-                    "use_danskin": True,
-                },
-            ).divergence
-
-        divergences = jnp.array([get_divergence(p1_z.cv, p2_z.cv) for p1_z, p2_z in zip(p1, p2)])
-
-        if sum_divergence:
-            # weigh according to number of atoms
-            w = jnp.sum(b1, axis=1)
-            w /= jnp.sum(w)
-            divergences = divergences * w
-
-        return divergences
-
-    @CvTrans.from_cv_function
-    def sinkhorn_divergence_trans(
-        cv: CV,
-        nl: NeighbourList | None,
-        _,
-    ):
-        assert nl is not None, "Neigbourlist required for rematch"
-
-        def f(pii, nlii):
-            return CV(
-                cv=sinkhorn_divergence_2(
-                    x1=cv,
-                    x2=pii,
-                    nl1=nl,
-                    nl2=nlii,
-                    alpha=alpha_rematch,
-                    normalize=normalize,
-                ),
-                _stack_dims=cv._stack_dims,
-            )
-
-        if output == "ddiv":
-            f = jax.jacrev(f)
-            div = CV.combine(*[f(pii, nlii).cv for pii, nlii in zip(pi, nli)])
-        else:
-            div = CV.combine(*[f(pii, nlii) for pii, nlii in zip(pi, nli)])
-
-        return div.replace(cv=jnp.reshape(div.cv, (-1)), atomic=False)
-
-    return sinkhorn_divergence_trans
+    return CvTrans.from_cv_function(
+        _sinkhorn_divergence_trans_2,
+        nli=nli,
+        pi=pi,
+        alpha_rematch=alpha_rematch,
+        output=output,
+        normalize=normalize,
+        sum_divergence=sum_divergence,
+        ddiv_arg=ddiv_arg,
+    )
 
 
-@CvTrans.from_cv_function
-def un_atomize(x: CV, nl, _):
+def _divergence_from_aligned_cv(
+    cv: CV,
+    nl: NeighbourList | None,
+    _,
+):
+    splitted = jnp.array([a.cv for a in cv.split()])
+    div = jnp.einsum("k...->k", splitted) / splitted.shape[0]
+
+    return CV(cv=div)
+
+
+divergence_from_aligned_cv = CvTrans.from_cv_function(f=_divergence_from_aligned_cv)
+
+
+def _divergence_weighed_aligned_cv(
+    cv: CV,
+    nl: NeighbourList | None,
+    _,
+    scaling,
+):
+    divergence, _ = divergence_from_aligned_cv.compute_cv_trans(cv, nl)
+
+    def soft_min(x):
+        x = x / scaling
+        a = jnp.exp(-x)
+        return a / jnp.sum(a)
+
+    weights = soft_min(divergence.cv)
+    cvs = cv.split()
+
+    return CV.combine(*[a * b for a, b in zip(cvs, weights)])
+
+
+def divergence_weighed_aligned_cv(scaling):
+    return CvTrans.from_cv_function(_divergence_weighed_aligned_cv, scaling=scaling)
+
+
+def _un_atomize(x: CV, nl, _):
     if not x.atomic:
         return x
 
@@ -756,21 +860,37 @@ def un_atomize(x: CV, nl, _):
     )
 
 
+un_atomize = CvTrans.from_cv_function(_un_atomize)
+
+
+def _stack_reduce(cv: CV, nl: NeighbourList | None, _, op):
+    cvs = cv.split(cv.stack_dims)
+
+    return CV(
+        op(jnp.stack([cvi.cv for cvi in cvs]), axis=0),
+        _stack_dims=cvs[0]._stack_dims,
+        _combine_dims=cvs[0]._combine_dims,
+        atomic=cvs[0].atomic,
+        mapped=cvs[0].mapped,
+    )
+
+
 def stack_reduce(op=jnp.mean):
-    # take average over both alignments
-    @CvTrans.from_cv_function
-    def _stack_reduce(cv: CV, nl: NeighbourList | None, _):
-        cvs = cv.split(cv.stack_dims)
+    return CvTrans.from_cv_function(_stack_reduce, op=op)
 
-        return CV(
-            op(jnp.stack([cvi.cv for cvi in cvs]), axis=0),
-            _stack_dims=cvs[0]._stack_dims,
-            _combine_dims=cvs[0]._combine_dims,
-            atomic=cvs[0].atomic,
-            mapped=cvs[0].mapped,
-        )
 
-    return _stack_reduce
+def _affine_trans(x: CV, nl, _, C):
+    assert x.dim == 2
+
+    u = (C[0] * x.cv[0] + C[1] * x.cv[1] + C[2]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
+    v = (C[3] * x.cv[0] + C[4] * x.cv[1] + C[5]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
+    return CV(
+        cv=jnp.array([u, v]),
+        mapped=x.mapped,
+        _combine_dims=x._combine_dims,
+        _stack_dims=x._stack_dims,
+        atomic=x.atomic,
+    )
 
 
 def affine_2d(old: Array, new: Array):
@@ -820,43 +940,33 @@ def affine_2d(old: Array, new: Array):
 
     C = jnp.linalg.solve(A, X)
 
-    @CvTrans.from_cv_function
-    def affine_trans(x: CV, *_):
-        assert x.dim == 2
+    return CvTrans.from_cv_function(_affine_trans, C=C)
 
-        u = (C[0] * x.cv[0] + C[1] * x.cv[1] + C[2]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
-        v = (C[3] * x.cv[0] + C[4] * x.cv[1] + C[5]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
-        return CV(
-            cv=jnp.array([u, v]),
-            mapped=x.mapped,
-            _combine_dims=x._combine_dims,
-            _stack_dims=x._stack_dims,
-            atomic=x.atomic,
-        )
 
-    return affine_trans
+def _remove_mean(cv: CV, nl: NeighbourList | None, _, mean):
+    return cv - mean
 
 
 def get_remove_mean_trans(c: CV, range=Ellipsis):
     assert c.batched
     mean = jnp.mean(c.cv[range, :], axis=0)
 
-    @CvTrans.from_cv_function
-    def remove_mean(cv: CV, nl: NeighbourList | None, _):
-        return cv - mean
+    trans = CvTrans.from_cv_function(_remove_mean, mean=mean)
 
-    return remove_mean.compute_cv_trans(c)[0], remove_mean
+    return trans.compute_cv_trans(c)[0], trans
+
+
+def _normalize(cv: CV, nl: NeighbourList | None, _, std):
+    return cv * (1 / std)
 
 
 def get_normalize_trans(c: CV, range=Ellipsis):
     assert c.batched
     std = jnp.std(c.cv[range, :], axis=0)
 
-    @CvTrans.from_cv_function
-    def remove_mean(cv: CV, nl: NeighbourList | None, _):
-        return cv * (1 / std)
+    trans = CvTrans.from_cv_function(_normalize, std=std)
 
-    return remove_mean.compute_cv_trans(c)[0], remove_mean
+    return trans.compute_cv_trans(c)[0], trans
 
 
 ######################################

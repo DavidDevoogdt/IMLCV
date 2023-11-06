@@ -48,8 +48,3 @@ logging.getLogger("absl").addFilter(
         "call_tf works best with a TensorFlow function that does not capture variables or tensors from the context.",
     ),
 )
-
-
-# import jsonpickle.ext.numpy as jsonpickle_numpy
-
-# jsonpickle_numpy.register_handlers()

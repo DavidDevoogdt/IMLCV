@@ -5,7 +5,6 @@ from IMLCV.configs.config_general import config
 from IMLCV.configs.config_general import ROOT_DIR
 
 
-@bash_app_python(executors=["default"])
 def f(args):
     from IMLCV.base.rounds import Rounds
     from IMLCV.configs.config_general import config
@@ -39,7 +38,7 @@ if __name__ == "__main__":
 
     config()
 
-    f(
+    bash_app_python(f, executors=["default"])(
         args,
         stdout=str(folder / "replot.stdout"),
         stderr=str(folder / "replot.stderr"),

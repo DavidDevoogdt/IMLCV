@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from abc import abstractmethod
 from collections.abc import Callable
 from dataclasses import KW_ONLY
 from functools import partial
-
 from pathlib import Path
+
 import cloudpickle
-import jsonpickle, json
 import distrax
 import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
 import jax.scipy.optimize
 import jaxopt.objective
+import jsonpickle
 from flax import linen as nn
 from flax.struct import field
 from flax.struct import PyTreeNode
@@ -105,43 +106,6 @@ def padded_pmap(f, n_devices: int | None = None):
         tree_unpadded = tree_unflatten(tree_def, leaves)
 
         return tree_unpadded
-
-        # tree = [to_state_dict(a) for a in args]
-        # leaves_padded = []
-
-        # for a in tree:
-        #     a_padded = {}
-
-        #     for key, leaf in a.items():
-        #         if p is None:
-        #             p = get_shape(n_devices, leaf.shape[0])
-        #         else:
-        #             assert p == get_shape(n_devices, leaf.shape[0]), "inconsisitent batch dims"
-
-        #         a_padded[key] = n_pad(leaf, n_devices, p)
-
-        #     leaves_padded.append(a_padded)
-
-        # tree_padded = [from_state_dict(a, l) for a, l in zip(args, leaves_padded)]
-
-        # out_padded = pmap(f)(*tree_padded)
-
-        # # remove padding from output leaves
-
-        # out_tree_padded = [to_state_dict(a) for a in out_padded]
-        # leaves = []
-
-        # for out_a_padded in out_tree_padded:
-        #     a = {}
-
-        #     for key, leaf in out_a_padded.values():
-        #         a[key] = n_unpad(leaf, p)
-
-        #     leaves.append(a)
-
-        # out_tree = [from_state_dict(a, l) for a, l in zip(out_padded, leaves)]
-
-        # print(f"{out_tree=}")
 
     return partial(apply_pmap_fn, n_devices=n_devices)
 
@@ -1124,7 +1088,7 @@ class NeighbourList(PyTreeNode):
                     ),
                 ),
                 chunk_size=chunk_size_batch,
-            )(self, sp)
+            )(self=self, sp=sp)
 
         if r_cut is None:
             r_cut is self.r_cut
@@ -1256,7 +1220,7 @@ class NeighbourList(PyTreeNode):
                     ),
                 ),
                 chunk_size=chunk_size_batch,
-            )(self, sp)
+            )(self=self, sp=sp)
 
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
@@ -1570,13 +1534,49 @@ class NeighbourList(PyTreeNode):
     def stack(*nls: NeighbourList) -> NeighbourList:
         return sum(nls[1:], nls[0])
 
-    # def __getstate__(self ):
-    #     print(f"pickling {self.__class__}")
-    #     return  to_state_dict(self)
+    def __eq__(self, other):
+        if not isinstance(other, NeighbourList):
+            return False
 
-    # def __setstate__(self, state):
-    #     print(f"unpickling {self.__class__}")
-    #     self = from_state_dict(self, state)
+        if not self.r_cut == other:
+            return False
+
+        def _check_none(a, b, allclose=False):
+            if a is None:
+                return b is None
+
+            if b is None:
+                return False
+
+            if not isinstance(a, jax.Array):
+                a = jnp.array(a)
+
+            if not isinstance(b, jax.Array):
+                b = jnp.array(b)
+
+            if allclose:
+                jnp.allclose(a, b)
+
+            return (a == b).all()
+
+        if not _check_none(self.op_cell, other.op_cell):
+            return False
+        if not _check_none(self.op_coor, other.op_coor):
+            return False
+        if not _check_none(self.op_center, other.op_center):
+            return False
+        if not _check_none(self._ijk_indices, other.ijk_indices):
+            return False
+        if self.sp_orig == other.sp_orig:
+            return False
+        if not _check_none(self.z_array, other.z_array):
+            return False
+        if not _check_none(self.nxyz, other.nxyz):
+            return False
+        if not _check_none(self.z_unique, other.z_unique):
+            return False
+
+        return True
 
 
 class CV(PyTreeNode):
@@ -2082,6 +2082,7 @@ class CvFunInput(PyTreeNode):
 
 class _CvFunBase:
     cv_input: CvFunInput | None = None
+    kwargs: dict
 
     def calc(
         self,
@@ -2125,7 +2126,7 @@ class _CvFunBase:
         """naive automated implementation, overrride this"""
 
         def f(x):
-            return self._calc(x, nl, reverse, conditioners)
+            return self._calc(x, nl, reverse, conditioners, **self.kwargs)
 
         a = f(x)
         b = jacfwd(f)(x)
@@ -2137,12 +2138,14 @@ class _CvFunBase:
 class CvFunBase(_CvFunBase, PyTreeNode):
     __: KW_ONLY
     cv_input: CvFunInput | None = None
+    kwargs: dict = field(pytree_node=False, default_factory=dict)
 
 
 class CvFun(CvFunBase, PyTreeNode):
     __: KW_ONLY
     forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = field(pytree_node=False, default=None)
     backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = field(pytree_node=False, default=None)
+    conditioners = False
 
     def _calc(
         self,
@@ -2158,16 +2161,17 @@ class CvFun(CvFunBase, PyTreeNode):
 
         if reverse:
             assert self.backward is not None
-            return self.backward(x, nl, c)
+            return self.backward(x, nl, c, **self.kwargs)
         else:
             assert self.forward is not None
-            return self.forward(x, nl, c)
+            return self.forward(x, nl, c, **self.kwargs)
 
 
 class CvFunNn(nn.Module, _CvFunBase):
     """used to instantiate flax linen CvTrans"""
 
     cv_input: CvFunInput | None = None
+    kwargs: dict = field(pytree_node=False, default_factory=dict)
 
     @abstractmethod
     def setup(self):
@@ -2181,9 +2185,9 @@ class CvFunNn(nn.Module, _CvFunBase):
         conditioners: list[CV] | None = None,
     ) -> CV:
         if reverse:
-            return self.backward(x, nl, conditioners)
+            return self.backward(x, nl, conditioners, **self.kwargs)
         else:
-            return self.forward(x, nl, conditioners)
+            return self.forward(x, nl, conditioners, **self.kwargs)
 
     @abstractmethod
     def forward(
@@ -2334,6 +2338,28 @@ class CombinedCvFunNN(nn.Module, _CombinedCvFun):
     classes: tuple[tuple[CvFunNn]]
 
 
+def _from_array_function(
+    x: CV,
+    nl: NeighbourList | None,
+    conditioners: list[CV] | None = None,
+    f=None,
+    atomic=False,
+    **kwargs,
+):
+    assert conditioners is None, "implement this"
+
+    if x.batched:
+        out = vmap(f)(x.cv, nl, None, **kwargs)
+    else:
+        out = f(x.cv, nl, None, **kwargs)
+
+    return x.replace(cv=out, atomic=atomic)
+
+
+def _duplicate_trans(x: CV, nl: NeighbourList | None, _, n):
+    return CV.combine(*[x] * n)
+
+
 class _CvTrans:
     """f can either be a single CV tranformation or a list of transformations"""
 
@@ -2354,24 +2380,15 @@ class _CvTrans:
         return self.__class__
 
     @staticmethod
-    def from_array_function(f: Callable[[Array, NeighbourList | None, None], Array]):
-        def f2(x: CV, nl: NeighbourList | None, conditioners: list[CV] | None = None):
-            assert conditioners is None, "implement this"
-
-            if x.batched:
-                out = vmap(f)(x.cv, nl, None)
-            else:
-                out = f(x.cv, nl, None)
-
-            return x.replace(cv=out)
-
-        return CvTrans.from_cv_function(f=f2)
+    def from_array_function(f: Callable[[Array, NeighbourList | None, None], Array], atomic=False, **kwargs):
+        return CvTrans.from_cv_function(f=_from_array_function, atomic=atomic, **kwargs)
 
     @staticmethod
     def from_cv_function(
         f: Callable[[CV, NeighbourList | None, CV | None], CV],
+        **kwargs,
     ) -> CvTrans:
-        return CvTrans.from_cv_fun(proto=CvFun(forward=f))
+        return CvTrans.from_cv_fun(proto=CvFun(forward=f, kwargs=kwargs))
 
     @staticmethod
     def from_cv_fun(proto: _CvFunBase):
@@ -2381,7 +2398,7 @@ class _CvTrans:
 
     def compute_cv_trans(
         self,
-        x: CV,
+        x: CV | SystemParams,
         nl: NeighbourList | None = None,
         reverse=False,
         log_Jf=False,
@@ -2395,14 +2412,15 @@ class _CvTrans:
             return chunk_map(
                 vmap(
                     Partial(
-                        self.compute_cv_trans,
+                        _CvTrans.compute_cv_trans,
+                        self=self,
                         reverse=reverse,
                         log_Jf=log_Jf,
                         chunk_size=None,
                     ),
                 ),
                 chunk_size=chunk_size,
-            )(x, nl)
+            )(x=x, nl=nl)
 
         ordered = reversed(self.trans) if reverse else self.trans
 
@@ -2412,6 +2430,8 @@ class _CvTrans:
             log_det = None
 
         for tr in ordered:
+            # print(f"{tr=} {x=}")
+
             x, log_det_i = tr.calc(x=x, nl=nl, reverse=reverse, log_det=log_Jf)
             if log_Jf:
                 assert log_det_i is not None
@@ -2430,11 +2450,9 @@ class _CvTrans:
     def __add__(self, other: _CvTrans) -> _CvTrans:
         assert isinstance(other, self._cv_trans), f"can only add by {self._cv_trans} object"
 
-        @CvTrans.from_cv_function
-        def double(x: CV, nl: NeighbourList | None, _):
-            return CV.combine(x, x)
+        dt = CvTrans.from_cv_function(_duplicate_trans, n=2)
 
-        return double * self._cv_trans(
+        return dt * self._cv_trans(
             trans=(self._comb(classes=(self.trans, other.trans)),),
         )
 
@@ -2448,11 +2466,9 @@ class _CvTrans:
         for i in cv_trans:
             assert isinstance(i, _cv_trans)
 
-        @_cv_trans.from_cv_function
-        def duplicate(x: CV, nl: NeighbourList | None, _):
-            return CV.combine(*[x] * n)
+        dt = CvTrans.from_cv_function(_duplicate_trans, n=n)
 
-        return duplicate * _cv_trans(
+        return dt * _cv_trans(
             trans=tuple([_cv_comb(classes=tuple([cvt.trans for cvt in cv_trans]))]),
         )
 
@@ -2464,7 +2480,7 @@ class CvTrans(_CvTrans, PyTreeNode):
     @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size"))
     def compute_cv_trans(
         self,
-        x: CV,
+        x: CV | SystemParams,
         nl: NeighbourList | None = None,
         reverse=False,
         log_Jf=False,
@@ -2491,7 +2507,7 @@ class CvTransNN(nn.Module, _CvTrans):
     @nn.compact
     def compute_cv_trans(
         self,
-        x: CV,
+        x: CV | SystemParams,
         nl: NeighbourList | None,
         reverse=False,
         log_Jf=False,
@@ -2529,26 +2545,15 @@ class NormalizingFlow(nn.Module):
 
 
 class CvFlow(PyTreeNode):
-    func: Callable[[SystemParams, NeighbourList | None], CV] = field(pytree_node=False)
+    func: CvTrans
     trans: CvTrans | None = None
 
     @staticmethod
     def from_function(
-        f: Callable[[SystemParams, NeighbourList | None], Array],
-        atomic=False,
+        f: Callable[[SystemParams, NeighbourList | None], CV],
+        **kwargs,
     ) -> CvFlow:
-        def f2(
-            sp: SystemParams,
-            nl: NeighbourList | None = None,
-        ):
-            cv = CV(cv=f(sp, nl), atomic=atomic)
-            # assert (
-            #     len(cv.shape) == 1
-            # ), f"The CV output should have shape (n,), got shape {cv.shape} for cv function {f} "
-
-            return cv
-
-        return CvFlow(func=f2)
+        return CvFlow(func=_CvTrans.from_cv_function(f=f, **kwargs))
 
     @partial(jax.jit, static_argnames=["chunk_size"])
     def compute_cv_flow(
@@ -2564,9 +2569,12 @@ class CvFlow(PyTreeNode):
                     in_axes=0,
                 ),
                 chunk_size=chunk_size,
-            )(x, nl)
+            )(x=x, nl=nl)
 
-        out = self.func(x, nl)
+        # print(f"{self.func},{x=}")
+        out, _ = self.func.compute_cv_trans(x, nl, chunk_size=chunk_size)
+        # print(f"{out=}")
+
         if self.trans is not None:
             out, _ = self.trans.compute_cv_trans(x=out, nl=nl)
 
@@ -2575,13 +2583,8 @@ class CvFlow(PyTreeNode):
     def __add__(self, other) -> CvFlow:
         assert isinstance(other, CvFlow)
 
-        def f_add(x: SystemParams, nl: NeighbourList):
-            cv1: CV = self.compute_cv_flow(x, nl)
-            cv2: CV = other.compute_cv_flow(x, nl)
-
-            return CV.combine(cv1, cv2)
-
-        return CvFlow(func=f_add)
+        assert self.trans is None
+        return CvFlow(func=self.func + other.func)
 
     def __mul__(self, other) -> CvFlow:
         assert isinstance(other, CvTrans), "can only multiply by CvTrans object"
@@ -2608,7 +2611,7 @@ class CvFlow(PyTreeNode):
         filename = Path(file)
 
         if filename.suffix == ".json":
-            with open(filename, "r") as f:
+            with open(filename) as f:
                 self = jsonpickle.decode(f.read())
         else:
             with open(filename, "rb") as f:
@@ -2698,7 +2701,7 @@ class CollectiveVariable(PyTreeNode):
                         ),
                     ),
                     chunk_size=chunk_size,
-                )(sp, nl)
+                )(sp=sp, nl=nl)
 
             return chunk_map(
                 vmap(
@@ -2710,7 +2713,7 @@ class CollectiveVariable(PyTreeNode):
                     ),
                 ),
                 chunk_size=chunk_size,
-            )(sp)
+            )(sp=sp)
 
         cv = self.f.compute_cv_flow(sp, nl)
         dcv = self.jac(self.f.compute_cv_flow)(sp, nl) if jacobian else None
@@ -2735,7 +2738,7 @@ class CollectiveVariable(PyTreeNode):
         filename = Path(file)
 
         if filename.suffix == ".json":
-            with open(filename, "r") as f:
+            with open(filename) as f:
                 self = jsonpickle.decode(f.read())
         else:
             with open(filename, "rb") as f:

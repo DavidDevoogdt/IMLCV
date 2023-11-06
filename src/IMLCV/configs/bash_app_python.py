@@ -1,16 +1,17 @@
 # this is a helper function to perform md simulations. Executed by parsl on HPC infrastructure, but
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import cloudpickle
-import jsonpickle, json
+import jsonpickle
 from parsl import bash_app
 from parsl import File
 from parsl import python_app
-from parsl.dataflow.dflow import AppFuture
+from parsl.dataflow.futures import AppFuture
 
 
 # @typeguard.typechecked
@@ -19,6 +20,7 @@ def bash_app_python(
     executors="all",
     precommand="",  # command to run before the python command
     pickle_extension="cloudpickle",
+    pass_files=False,
 ):
     def decorator(func):
         def wrapper(
@@ -103,11 +105,11 @@ def bash_app_python(
 
                 file_in = inputs[-1]
                 file_out = outputs[-1]
-
-                if len(inputs) > 1:
-                    kwargs["inputs"] = [File(i) for i in inputs[:-1]]
-                if len(outputs) > 1:
-                    kwargs["outputs"] = [File(o) for o in outputs[:-1]]
+                if pass_files:
+                    if len(inputs) > 1:
+                        kwargs["inputs"] = [File(i) for i in inputs[:-1]]
+                    if len(outputs) > 1:
+                        kwargs["outputs"] = [File(o) for o in outputs[:-1]]
 
                 filename = execution_folder / file_in
 
@@ -134,7 +136,7 @@ def bash_app_python(
             def load(inputs=[], outputs=[]):
                 filename = Path(inputs[-1].filepath)
                 if filename.suffix == ".json":
-                    with open(filename, "r") as f:
+                    with open(filename) as f:
                         result = jsonpickle.decode(f.read())
                 else:
                     with open(filename, "rb") as f:
@@ -209,7 +211,7 @@ if __name__ == "__main__":
         file_in = Path(args.file_in)
 
         if file_in.suffix == ".json":
-            with open(file_in, "r") as f1:
+            with open(file_in) as f1:
                 func, fargs, fkwargs = jsonpickle.decode(f1.read())
         else:
             with open(file_in, "rb") as f2:
