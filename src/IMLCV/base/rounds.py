@@ -759,6 +759,7 @@ class Rounds(ABC):
                     probs = None
                 else:
                     probs = jnp.hstack(weights)
+                    probs -= jnp.mean(probs)
                     probs = probs / jnp.sum(probs)
 
                 key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
@@ -1165,8 +1166,8 @@ class Rounds(ABC):
             )
 
             cv_stack = data.cv[0]
-            # nl_stack = NeighbourList.stack(*data.nl)
             sp_stack = data.sp[0]
+            print(f"{cv_stack=}")
         else:
             assert sp0.shape[0] == len(
                 biases,
@@ -1177,11 +1178,7 @@ class Rounds(ABC):
             if not os.path.exists(path_name):
                 os.mkdir(path_name)
 
-            # construct bias
-            if bias is None:
-                b = Bias.load(common_bias_name)
-            else:
-                b = CompositeBias.create([Bias.load(common_bias_name), bias])
+            b = CompositeBias.create([Bias.load(common_bias_name), bias])
 
             b_name = path_name / "bias.json"
             b_name_new = path_name / "bias_new.json"

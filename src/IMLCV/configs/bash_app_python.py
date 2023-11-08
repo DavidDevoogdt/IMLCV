@@ -33,12 +33,8 @@ def bash_app_python(
             **kwargs,
         ):
             # merge in and outputs
-            inputs = [*inputs, *kwargs.pop("inputs", [])]
-            outputs = [*outputs, *kwargs.pop("outputs", [])]
-
-            def rename(name):
-                path, name = os.path.split(name.filepath)
-                return os.path.join(path, f"bash_app_{name}")
+            inp = [*inputs, *kwargs.pop("inputs", [])]
+            outp = [*outputs, *kwargs.pop("outputs", [])]
 
             if execution_folder is None:
                 p = Path.cwd() / func.__name__
@@ -100,16 +96,16 @@ def bash_app_python(
 
                 execution_folder = Path(inputs[-1].filepath)
 
-                outputs = [str(os.path.relpath(i.filepath, execution_folder)) for i in outputs]
-                inputs = [str(os.path.relpath(o.filepath, execution_folder)) for o in inputs[:-1]]
+                op = [str(os.path.relpath(i.filepath, execution_folder)) for i in outputs]
+                ip = [str(os.path.relpath(o.filepath, execution_folder)) for o in inputs[:-1]]
 
-                file_in = inputs[-1]
-                file_out = outputs[-1]
+                file_in = ip[-1]
+                file_out = op[-1]
                 if pass_files:
-                    if len(inputs) > 1:
-                        kwargs["inputs"] = [File(i) for i in inputs[:-1]]
-                    if len(outputs) > 1:
-                        kwargs["outputs"] = [File(o) for o in outputs[:-1]]
+                    if len(ip) > 1:
+                        kwargs["inputs"] = [File(i) for i in ip[:-1]]
+                    if len(op) > 1:
+                        kwargs["outputs"] = [File(o) for o in op[:-1]]
 
                 filename = execution_folder / file_in
 
@@ -125,8 +121,8 @@ def bash_app_python(
             fun.__name__ = func.__name__
 
             future: AppFuture = bash_app(function=fun, executors=executors)(
-                inputs=[*inputs, File(str(file_in)), File(str(execution_folder))],
-                outputs=[*[File(rename(o)) for o in outputs], File(str(file_out))],
+                inputs=[*inp, File(str(file_in)), File(str(execution_folder))],
+                outputs=[*outp, File(str(file_out))],
                 stdout=str(stdout),
                 stderr=str(stderr),
                 *args,
@@ -142,19 +138,15 @@ def bash_app_python(
                     with open(filename, "rb") as f:
                         result = cloudpickle.load(f)
                 import os
-                import shutil
 
                 os.remove(inputs[-1].filepath)
-                for i, o in zip(inputs[:-1], outputs):
-                    shutil.move(i.filepath, o.filepath)
-
                 return result
 
             load.__name__ = f"{func.__name__}_load"
 
             return python_app(load, executors=["default"])(
                 inputs=future.outputs,
-                outputs=outputs,
+                outputs=outp,
             )
 
         return wrapper
@@ -181,6 +173,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--folder", type=str, help="working directory")
     args = parser.parse_args()
+
+    cwd = os.getcwd()
     os.chdir(args.folder)
 
     rank = 0
@@ -238,7 +232,7 @@ if __name__ == "__main__":
 
         if file_out.suffix == ".json":
             with open(file_out, "w+") as f3:
-                f3.writelines(jsonpickle.encode(a, indent=1))
+                f3.writelines(jsonpickle.encode(a))
         else:
             with open(file_out, "wb+") as f4:
                 cloudpickle.dump(a, f4)
@@ -248,3 +242,5 @@ if __name__ == "__main__":
         print("#" * 20)
         print(f"task finished at {datetime.now():%d/%m/%Y %H:%M:%S}")
         print("#" * 20)
+    # change back to starting directory
+    os.chdir(cwd)

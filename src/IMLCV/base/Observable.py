@@ -91,8 +91,8 @@ class ThermoLIB:
                     ],
                 )
 
-                @partial(jax.jit, static_argnames=["name"])
-                def _get_bias(cvs, name):
+                @padded_pmap
+                def _get_bias(cvs):
                     out, _ = self.bias.compute_from_cv(
                         cvs=cvs,
                         diff=False,
@@ -100,7 +100,7 @@ class ThermoLIB:
                     )
                     return out
 
-                out = _get_bias(colvar, self.name)
+                out = _get_bias(colvar)
 
                 return np.array(jnp.reshape(out, cv[0].shape), dtype=np.double)
 
@@ -316,10 +316,10 @@ class ThermoLIB:
             pf.append(
                 bash_app_python(fesBias.plot, executors=["default"])(
                     outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                    execution_folder=fold,
                     name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.pdf",
                     inverted=True,
                     label="Free Energy [kJ/mol]",
-                    execution_folder=fold,
                     stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
                     **plot_kwargs,
@@ -340,10 +340,10 @@ class ThermoLIB:
             pf.append(
                 bash_app_python(fes_bias_tot.plot, executors=["default"])(
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                    execution_folder=fold,
                     name=f"FES_bias_{self.rnd}_inverted_{choice}.pdf",
                     inverted=True,
                     label="Free Energy [kJ/mol]",
-                    execution_folder=fold,
                     stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
                     **plot_kwargs,
@@ -353,8 +353,8 @@ class ThermoLIB:
             pf.append(
                 bash_app_python(fes_bias_tot.plot, executors=["default"])(
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.pdf")],
-                    name=f"FES_bias_{self.rnd}_{choice}.pdf",
                     execution_folder=fold,
+                    name=f"FES_bias_{self.rnd}_{choice}.pdf",
                     stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
                     **plot_kwargs,

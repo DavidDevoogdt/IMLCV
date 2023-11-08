@@ -677,7 +677,7 @@ def get_sinkhorn_divergence(
     )
 
 
-@partial(jit, static_argnames=["alpha", "normalize"])
+@partial(jit, static_argnames=["alpha", "normalize", "sum_divergence"])
 def sinkhorn_divergence_2(
     x1: CV,
     x2: CV,
@@ -775,6 +775,7 @@ def _sinkhorn_divergence_trans_2(
                 nl2=nlii,
                 alpha=alpha_rematch,
                 normalize=normalize,
+                sum_divergence=sum_divergence,
             ),
             _stack_dims=cv._stack_dims,
         )
@@ -783,7 +784,7 @@ def _sinkhorn_divergence_trans_2(
         f = jax.jacrev(f, argnums=ddiv_arg)
         div = CV.combine(*[f(pii, cv, nlii, nl).cv for pii, nlii in zip(pi, nli)])
     else:
-        div = CV.combine(*[f(pii, cv, nlii, nli) for pii, nlii in zip(pi, nli)])
+        div = CV.combine(*[f(pii, cv, nlii, nl) for pii, nlii in zip(pi, nli)])
 
     return div.replace(cv=jnp.reshape(div.cv, (-1)), atomic=False)
 
