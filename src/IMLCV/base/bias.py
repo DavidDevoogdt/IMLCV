@@ -27,6 +27,7 @@ from flax.serialization import to_state_dict
 from flax.struct import field
 from flax.struct import PyTreeNode
 from hsluv import hsluv_to_rgb
+from IMLCV import Unpickler
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -177,7 +178,7 @@ class Energy:
 
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read())
+                self = jsonpickle.decode(f.read(), context=Unpickler())
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
@@ -504,6 +505,7 @@ class Bias(PyTreeNode, ABC):
                     traj = [traj]
 
                 n = len(traj)
+                print(f"plotting {n=} trajectories")
 
                 n_sqrt = jnp.ceil(jnp.sqrt(n))
 
@@ -563,9 +565,6 @@ class Bias(PyTreeNode, ABC):
 
         Path(name).parent.mkdir(parents=True, exist_ok=True)
 
-        # fig.set_tig
-        # gs.tight_layout(fig)
-
         plt.savefig(name)
         plt.close(fig=fig)  # write out
 
@@ -598,7 +597,7 @@ class Bias(PyTreeNode, ABC):
         filename = Path(filename)
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read())
+                self = jsonpickle.decode(f.read(), context=Unpickler())
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
@@ -623,7 +622,6 @@ class Bias(PyTreeNode, ABC):
 
             self.__init__(**statedict)
 
-            # self.__dict__.update(**statedict)
         except Exception as e:
             print(
                 f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",

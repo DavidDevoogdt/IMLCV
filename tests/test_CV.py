@@ -188,7 +188,7 @@ def test_reconstruction():
         # references_nl=nl0,
     )
 
-    cv0 = cv.compute_cv_flow(sp0, nl0)  # should be close to 0
+    cv0, _ = cv.compute_cv_flow(sp0, nl0)  # should be close to 0
 
     prng, sp1, nl1 = _permute_sp_rand(prng, sp0, nl0, eps=0.5)
 
@@ -216,8 +216,8 @@ def test_reconstruction():
     assert (
         1
         - Kernel(
-            cv.compute_cv_flow(sp0, nl0).cv,
-            cv.compute_cv_flow(sp01, nl01).cv,
+            cv.compute_cv_flow(sp0, nl0)[0].cv,
+            cv.compute_cv_flow(sp01, nl01)[0].cv,
             nl0,
             nl01,
         )

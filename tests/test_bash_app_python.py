@@ -34,7 +34,7 @@ def test_py_env(tmp_path):
     def _f(sp):
         d_flow: CvFlow = dihedral([0, 1, 2, 3])
 
-        return d_flow.compute_cv_flow(sp, None)
+        return d_flow.compute_cv_flow(sp, None)[0]
 
     n = 5
     sp = SystemParams(

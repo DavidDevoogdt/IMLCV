@@ -445,7 +445,7 @@ class TransoformerLDA(Transformer):
 
         cv = CV.stack(*cv_list)
         # nl = NeighbourList.stack(*nl_list)
-        cv, _ = un_atomize.compute_cv_trans(cv)
+        cv, _, _ = un_atomize.compute_cv_trans(cv)
 
         if method == "sklearn":
             labels = []
@@ -460,7 +460,7 @@ class TransoformerLDA(Transformer):
             )
 
             lda_cv = CvTrans.from_cv_function(_LDA_trans, alpha=alpha, outdim=self.outdim, solver=solver)
-            cv, _ = lda_cv.compute_cv_trans(cv)
+            cv, _, _ = lda_cv.compute_cv_trans(cv)
 
             cvs = CV.unstack(cv)
 
@@ -472,7 +472,7 @@ class TransoformerLDA(Transformer):
             assert self.outdim == 1
 
             lda_rescale = CvTrans.from_cv_function(_LDA_rescale, mean=mean)
-            cv, _ = lda_rescale.compute_cv_trans(cv)
+            cv, _, _ = lda_rescale.compute_cv_trans(cv)
 
             full_trans = un_atomize * lda_cv * lda_rescale
 
@@ -606,7 +606,7 @@ class TransformerMAF(Transformer):
 
         cv = CV.stack(*x)
         # nl = NeighbourList.stack(*nl_list)
-        cv, _ = un_atomize.compute_cv_trans(cv)
+        cv, _, _ = un_atomize.compute_cv_trans(cv)
 
         trans = un_atomize
 
@@ -627,8 +627,8 @@ class TransformerMAF(Transformer):
 
         transform = CvTrans.from_cv_function(_transform, mask=mask)
 
-        cv_0, _ = transform.compute_cv_trans(cv_0)
-        cv_tau, _ = transform.compute_cv_trans(cv_tau)
+        cv_0, _, _ = transform.compute_cv_trans(cv_0)
+        cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
 
         trans *= transform
 
@@ -664,8 +664,8 @@ class TransformerMAF(Transformer):
 
             transform_maf = CvTrans.from_cv_function(_tranform_maf, add_1=add_1, q=q, pi=pi)
 
-            cv_0, _ = transform_maf.compute_cv_trans(cv_0)
-            cv_tau, _ = transform_maf.compute_cv_trans(cv_tau)
+            cv_0, _, _ = transform_maf.compute_cv_trans(cv_0)
+            cv_tau, _, _ = transform_maf.compute_cv_trans(cv_tau)
 
             X = cv_0.cv
             Y = cv_tau.cv
@@ -791,7 +791,7 @@ class TransformerMAF(Transformer):
 
             trans *= tica_selection
 
-            cv, _ = trans.compute_cv_trans(cv)
+            cv, _, _ = trans.compute_cv_trans(cv)
 
         elif solver == "opt":
             pi_eq = jnp.sum(0.5 * (X + Y).T @ W, axis=1)

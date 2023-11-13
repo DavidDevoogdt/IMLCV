@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -254,20 +255,25 @@ class Rounds(ABC):
                     bash_tin = md_i / "bash_app_trajectory_info.h5"
                     tin = md_i / "trajectory_info.h5"
 
-                    # take longest trajectory
-                    if tin.exists() and bash_tin.exists():
-                        traj_1 = TrajectoryInfo.load(tin)
-                        traj_2 = TrajectoryInfo.load(bash_tin)
+                    try:
+                        # take longest trajectory
+                        if tin.exists() and bash_tin.exists():
+                            traj_1 = TrajectoryInfo.load(tin)
+                            traj_2 = TrajectoryInfo.load(bash_tin)
 
-                        if traj_1._size > traj_2._size:
-                            traj = traj_1
+                            if traj_1._size > traj_2._size:
+                                traj = traj_1
+                            else:
+                                traj = traj_2
+                        elif bash_tin.exists():
+                            traj = TrajectoryInfo.load(bash_tin)
+
+                        elif tin.exists():
+                            traj = TrajectoryInfo.load(tin)
                         else:
-                            traj = traj_2
-                    elif bash_tin.exists():
-                        traj = TrajectoryInfo.load(bash_tin)
-                    elif tin.exists():
-                        traj = TrajectoryInfo.load(tin)
-                    else:
+                            continue
+                    except Exception as e:
+                        print(f"failed to load with ({e=}),continuing")
                         continue
 
                     bias = None
@@ -449,7 +455,13 @@ class Rounds(ABC):
         ignore_invalid=False,
         c=None,
         md_trajs: list[int] | None = None,
+        print_timings=False,
     ) -> Iterable[tuple[RoundInformation, TrajectoryInformation]]:
+        t_0 = time.time()
+        load_r_time = 0
+        load_i_time = 0
+        yield_time = 0
+
         if c is None:
             c = self.cv
 
@@ -463,7 +475,9 @@ class Rounds(ABC):
             assert num == 1
 
         for r0 in range(max(stop - (num - 1), start), stop + 1):
+            t_r = time.time()
             _r = self.round_information(c=c, r=r0)
+            load_r_time += time.time() - t_r
 
             if not _r.valid and not ignore_invalid:
                 continue
@@ -474,7 +488,9 @@ class Rounds(ABC):
                 rn = _r.num_vals
 
             for i in rn:
+                t_i = time.time()
                 _r_i = self.get_trajectory_information(c=c, r=r0, i=i)
+                load_i_time += time.time() - t_i
 
                 if not _r_i.valid and not ignore_invalid:
                     continue
@@ -483,7 +499,19 @@ class Rounds(ABC):
                 if _r_i.ti._size <= 0:
                     continue
 
+                t_y = time.time()
                 yield _r, _r_i
+                yield_time += time.time() - t_y
+
+        t_1 = time.time()
+
+        if print_timings:
+            print(f"{'iter stats':-^16}")
+            print(f"load round time {load_r_time}")
+            print(f"load traj  time {load_i_time}")
+            print(f"yield time {yield_time}")
+            print(f"total iter time {t_1 - t_0}")
+            print(f"{'end iter stats':-^16}")
 
     @dataclass(repr=False)
     class data_loader_output:
@@ -653,7 +681,9 @@ class Rounds(ABC):
                 weights.append(None)
             else:
                 beta = 1 / (round.tic.T * boltzmann)
-                weight = jnp.exp(-beta * e)
+                weight = -beta * e
+
+                # weight = jnp.exp(-beta * e)
                 weights.append(weight)
 
         assert sti is not None
@@ -747,6 +777,8 @@ class Rounds(ABC):
                     if wi is None:
                         probs = None
                     else:
+                        wi -= jnp.mean(wi)
+                        wi = jnp.exp(-wi)
                         probs = wi / jnp.sum(wi)
                     key, indices = choose(key, probs, len=sp[n].shape[0])
 
@@ -758,9 +790,10 @@ class Rounds(ABC):
                 if weights[0] is None:
                     probs = None
                 else:
-                    probs = jnp.hstack(weights)
-                    probs -= jnp.mean(probs)
-                    probs = probs / jnp.sum(probs)
+                    ws = jnp.hstack(weights)
+                    ws -= jnp.mean(ws)
+                    probs = jnp.exp(-ws)
+                    probs /= jnp.sum(probs)
 
                 key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
 
@@ -785,14 +818,32 @@ class Rounds(ABC):
 
                 count = 0
 
-                out_sp.append(sum(sp_trimmed[1:], sp_trimmed[0]))
+                t0 = time.time()
+
+                out_sp.append(SystemParams.stack(*sp_trimmed))
                 out_cv.append(CV.stack(*cv_trimmed))
                 out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
+
+                print(f"{'stack time':-^20}={t0- time.time()}")
                 bias = None
 
         out_nl = None
         if new_r_cut is not None:
-            out_nl = [osp.get_neighbour_list(r_cut=new_r_cut, z_array=sti.atomic_numbers) for osp in out_sp]
+            # much faster if stacked
+            if len(out_sp) >= 2:
+                out_sp_merged = SystemParams.stack(*out_sp)
+            else:
+                out_sp_merged = out_sp[0]
+
+            out_nl_stacked = out_sp_merged.get_neighbour_list(r_cut=new_r_cut, z_array=sti.atomic_numbers)
+
+            if len(out_sp) >= 2:
+                ind = 0
+                out_nl = []
+                for osp in out_sp:
+                    out_nl.append(out_nl_stacked[ind : ind + osp.shape[0]])
+            else:
+                out_nl = out_nl_stacked[0]
 
         return Rounds.data_loader_output(
             sp=out_sp,

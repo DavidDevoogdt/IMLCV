@@ -24,6 +24,7 @@ import yaff.log
 import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling.iterative
+from IMLCV import Unpickler
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import Energy
 from IMLCV.base.bias import EnergyResult
@@ -36,7 +37,6 @@ from molmod.units import angstrom
 from molmod.units import bar
 from molmod.units import kjmol
 from typing_extensions import Self
-
 
 ######################################
 #             Trajectory             #
@@ -557,9 +557,11 @@ class MDEngine(ABC):
     def load(file, **kwargs) -> MDEngine:
         filename = Path(file)
 
+        # print(f"loading md engine {filename=} with {kwargs}")
+
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read())
+                self = jsonpickle.decode(f.read(), context=Unpickler())
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
@@ -583,7 +585,8 @@ class MDEngine(ABC):
     def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
         with tempfile.NamedTemporaryFile() as tmp:
             self.save(tmp.name)
-            mde = MDEngine.load(tmp.name, **{"bias": bias, **kwargs})
+            kwargs["bias"] = bias
+            mde = MDEngine.load(tmp.name, **kwargs)
         return mde
 
     def run(self, steps):

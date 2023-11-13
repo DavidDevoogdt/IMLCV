@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Iterator
 
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -60,7 +61,7 @@ class Transformer:
         nl = NeighbourList.stack(*nl) if nl is not None else None
 
         def _f(sp, nl):
-            return f.compute_cv_flow(sp, nl, chunk_size)
+            return f.compute_cv_flow(sp, nl, chunk_size)[0]
 
         if p_map:
             _f = padded_pmap(_f)
@@ -72,7 +73,7 @@ class Transformer:
         if self.pre_scale:
             g = scale_cv_trans(x_stacked, lower=0, upper=1)
 
-            x_stacked, _ = g.compute_cv_trans(x_stacked)
+            x_stacked, _, _ = g.compute_cv_trans(x_stacked)
 
             f = f * g
 
@@ -89,6 +90,7 @@ class Transformer:
         p_map=True,
         percentile=5,
         margin=0.01,
+        jac=jax.jacfwd,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
@@ -129,7 +131,7 @@ class Transformer:
 
         print("starting post_fit")
         z_masked, h = self.post_fit(y_masked)
-        z, _ = h.compute_cv_trans(y)
+        z, _, _ = h.compute_cv_trans(y)
 
         new_bounding_box = jnp.vstack(
             [jnp.min(z_masked.cv, axis=0), jnp.max(z_masked.cv, axis=0)],
@@ -142,6 +144,7 @@ class Transformer:
 
         new_collective_variable = CollectiveVariable(
             f=f * g * h,
+            jac=jac,
             metric=CvMetric.create(
                 periodicities=None,
                 bounding_box=new_bounding_box,
@@ -219,6 +222,9 @@ class Transformer:
         indim = cv_data[0].shape[1]
         outdim = cv_data[1].shape[1]
 
+        plt.rc("text", usetex=False)
+        plt.rc("font", family="DejaVu Sans", size=18)
+
         fig = plt.figure()
 
         for in_out_color, ls, rs in Transformer._grid_spec_iterator(
@@ -287,7 +293,7 @@ class Transformer:
             do_plot(outdim, 1, rs)
 
         name = Path(name)
-        if name.suffix != ".pdf":
+        if name.suffix != ".pdf" or name.suffix != ".png":
             name = Path(
                 f"{name}.pdf",
             )

@@ -194,6 +194,7 @@ class Scheme:
         new_r_cut=None,
         save_samples=True,
         save_multiple_cvs=False,
+        jac=jax.jacfwd,
     ):
         # dlo = self.rounds.data_loader()
 
@@ -202,6 +203,7 @@ class Scheme:
             chunk_size=chunk_size,
             plot=plot,
             plot_folder=self.rounds.path(c=self.rounds.cv + 1),
+            jac=jac,
         )
 
         # update state
@@ -252,7 +254,7 @@ class Scheme:
         @jax.vmap
         def f(cv):
             bias_inter, _ = self.md.bias.compute_from_cv(cv, chunk_size=chunk_size)
-            v, log_jac = cv_trans.compute_cv_trans(cv, log_Jf=True)
+            v, _, log_jac = cv_trans.compute_cv_trans(cv, log_Jf=True)
 
             return bias_inter, v, log_jac
 

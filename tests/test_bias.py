@@ -104,7 +104,7 @@ def test_RBF_bias(kernel):
 
     center_cvs = CV(jnp.stack([xcf, ycf], axis=1))
 
-    val, _ = f.compute_cv_trans(center_cvs)
+    val, _, _ = f.compute_cv_trans(center_cvs)
 
     # with jax.disable_jit():
     bias = RbfBias.create(cvs=cv, cv=center_cvs, vals=val, kernel=kernel)

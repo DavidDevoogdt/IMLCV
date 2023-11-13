@@ -169,7 +169,7 @@ class RBFInterpolator(PyTreeNode):
         epsilon=None,
         degree=None,
     ):
-        assert isinstance(y, CV)
+        # assert isinstance(y, CV)
         y = CV(jnp.asarray(y.cv, order="K"))
 
         ny, ndim = y.shape

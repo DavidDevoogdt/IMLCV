@@ -8,6 +8,7 @@ from pathlib import Path
 
 import cloudpickle
 import jsonpickle
+from IMLCV import Unpickler
 from parsl import bash_app
 from parsl import File
 from parsl import python_app
@@ -133,7 +134,7 @@ def bash_app_python(
                 filename = Path(inputs[-1].filepath)
                 if filename.suffix == ".json":
                     with open(filename) as f:
-                        result = jsonpickle.decode(f.read())
+                        result = jsonpickle.decode(f.read(), context=Unpickler())
                 else:
                     with open(filename, "rb") as f:
                         result = cloudpickle.load(f)
@@ -206,7 +207,7 @@ if __name__ == "__main__":
 
         if file_in.suffix == ".json":
             with open(file_in) as f1:
-                func, fargs, fkwargs = jsonpickle.decode(f1.read())
+                func, fargs, fkwargs = jsonpickle.decode(f1.read(), context=Unpickler())
         else:
             with open(file_in, "rb") as f2:
                 func, fargs, fkwargs = cloudpickle.load(f2)

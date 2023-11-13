@@ -3,10 +3,12 @@ from __future__ import annotations
 import dataclasses
 import json
 from abc import abstractmethod
-from collections.abc import Callable
 from dataclasses import KW_ONLY
 from functools import partial
 from pathlib import Path
+from typing import Any
+from typing import Callable
+from typing import TypeVar
 
 import cloudpickle
 import distrax
@@ -19,6 +21,7 @@ import jsonpickle
 from flax import linen as nn
 from flax.struct import field
 from flax.struct import PyTreeNode
+from IMLCV import Unpickler
 from jax import Array
 from jax import jacfwd
 from jax import jacrev
@@ -238,13 +241,6 @@ class SystemParams(PyTreeNode):
     @staticmethod
     def stack(*sps: SystemParams) -> SystemParams:
         return sum(sps[1:], sps[0])
-
-    def __str__(self):
-        string = f"coordinates shape: \n{self.coordinates.shape}"
-        if self.cell is not None:
-            string += f"\n cell [Angstrom]:\n{self.cell/angstrom }"
-
-        return string
 
     def batch(self) -> SystemParams:
         if self.batched:
@@ -984,6 +980,27 @@ class SystemParams(PyTreeNode):
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
 
+    def __eq__(self, other):
+        if not isinstance(other, SystemParams):
+            return False
+
+        if not jnp.allclose(self.coordinates - other.coordinates):
+            return False
+
+        if self.cell is None:
+            if other.cell is not None:
+                return False
+        else:
+            if not jnp.allclose(self.cell - other.cell):
+                return False
+        return True
+
+    # def __getstate__(self):
+    #     return self.__dict__
+
+    # def __setstate__(self, statedict: dict):
+    #     self.__init__(**statedict)
+
 
 class NeighbourList(PyTreeNode):
     atom_indices: Array
@@ -1372,27 +1389,27 @@ class NeighbourList(PyTreeNode):
 
     @jax.jit
     def update(self, sp: SystemParams) -> tuple[bool, NeighbourList]:
-        max_displacement = jnp.max(
-            jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
+        # max_displacement = jnp.max(
+        #     jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
+        # )
+
+        # def _f():
+        #     jax.debug.print("fast nl update")
+        return sp._get_neighbour_list(
+            r_cut=self.r_cut,
+            r_skin=self.r_skin,
+            z_array=self.z_array,
+            z_unique=self.z_unique,
+            num_z_unique=self.num_z_unique,
+            num_neighs=self.num_neigh,
+            nxyz=self.nxyz,
         )
 
-        def _f():
-            jax.debug.print("fast nl update")
-            return sp._get_neighbour_list(
-                r_cut=self.r_cut,
-                r_skin=self.r_skin,
-                z_array=self.z_array,
-                z_unique=self.z_unique,
-                num_z_unique=self.num_z_unique,
-                num_neighs=self.num_neigh,
-                nxyz=self.nxyz,
-            )
-
-        return jax.lax.cond(
-            max_displacement > self.r_skin,
-            _f,
-            lambda: (True, self),
-        )
+        # return jax.lax.cond(
+        #     max_displacement > self.r_skin,
+        #     _f,
+        #     lambda: (True, self),
+        # )
 
     def nl_split_z(self, p):
         if self.batched:
@@ -1567,7 +1584,7 @@ class NeighbourList(PyTreeNode):
             return False
         if not _check_none(self._ijk_indices, other.ijk_indices):
             return False
-        if self.sp_orig == other.sp_orig:
+        if not self.sp_orig == other.sp_orig:
             return False
         if not _check_none(self.z_array, other.z_array):
             return False
@@ -1577,6 +1594,12 @@ class NeighbourList(PyTreeNode):
             return False
 
         return True
+
+    # def __getstate__(self):
+    #     return self.__dict__
+
+    # def __setstate__(self, statedict: dict):
+    #     self.__init__(**statedict)
 
 
 class CV(PyTreeNode):
@@ -1628,63 +1651,35 @@ class CV(PyTreeNode):
     def __add__(self, other) -> CV:
         assert isinstance(other, Array)
 
-        return CV(
-            cv=self.cv + other,
-            atomic=self.atomic,
-            _stack_dims=self._stack_dims,
-            _combine_dims=self._combine_dims,
-        )
+        return self.replace(cv=self.cv + other)
 
     def __radd__(self, other) -> CV:
         return other + self
 
     def __sub__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(
-            cv=self.cv - other,
-            atomic=self.atomic,
-            _stack_dims=self._stack_dims,
-            _combine_dims=self._combine_dims,
-        )
+        return self.replace(cv=self.cv - other)
 
     def __rsub__(self, other) -> CV:
         return other - self
 
     def __mul__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(
-            cv=self.cv * other,
-            atomic=self.atomic,
-            _stack_dims=self._stack_dims,
-            _combine_dims=self._combine_dims,
-        )
+        return self.replace(cv=self.cv * other)
 
     def __rmul__(self, other) -> CV:
         return other * self
 
     def __matmul__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(
-            cv=self.cv @ other,
-            atomic=self.atomic,
-            _stack_dims=self._stack_dims,
-            _combine_dims=self._combine_dims,
-        )
+        return self.replace(cv=self.cv @ other)
 
     def __rmatmul__(self, other) -> CV:
         return other @ self
 
     def __div__(self, other) -> CV:
         assert isinstance(other, Array)
-        return CV(
-            cv=self.cv / other,
-            atomic=self.atomic,
-            _stack_dims=self._stack_dims,
-            _combine_dims=self._combine_dims,
-        )
-
-    def __rdiv__(self, other) -> CV:
-        return other / self
+        return self.replace(cv=self.cv / other)
 
     def batch(self) -> CV:
         if self.batched:
@@ -1902,6 +1897,12 @@ class CV(PyTreeNode):
             atomic=atomic,
         )
 
+    # def __getstate__(self):
+    #     return self.__dict__
+
+    # def __setstate__(self, statedict: dict):
+    #     self.__init__(**statedict)
+
 
 class CvMetric(PyTreeNode):
     """class to keep track of topology of given CV. Identifies the periodicitie of CVs and maps to unit square with correct peridicities"""
@@ -2054,10 +2055,32 @@ class CvMetric(PyTreeNode):
     def ndim(self):
         return len(self.periodicities)
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
+
 
 ######################################
 #       CV tranformations            #
 ######################################
+
+
+# U = TypeVar("U")  # Declare type variable "U"
+
+# Callable = Callable[[Callable[[Any], U], Any], Callable[[Any], U]]
+
+
+def jac_compose(jac1: CV | SystemParams, jac2: CV) -> CV:
+    return jac2.replace(cv=jnp.einsum("ij,jnm->inm", jac2.cv, jac1.cv))
+
+    # return jac2.replace(
+    #     cv=jac1.replace(
+    #         sp=jnp.einsum("ij,jnm->inm", jac2.cv,jac1.coordinates),
+    #         cell=jnp.einsum("ij,jnm->inm", jac2.cv,jac1.cell) if jac2.cell is not None else None,
+    #     )
+    # )
 
 
 class CvFunInput(PyTreeNode):
@@ -2081,8 +2104,9 @@ class CvFunInput(PyTreeNode):
 
 
 class _CvFunBase:
-    cv_input: CvFunInput | None = None
-    kwargs: dict
+    # cv_input: CvFunInput | None = None
+    # kwargs: dict
+    # jacfun: Callable = jax.jacfwd
 
     def calc(
         self,
@@ -2090,21 +2114,28 @@ class _CvFunBase:
         nl: NeighbourList | None,
         reverse=False,
         log_det=False,
+        jacobian=False,
     ) -> tuple[CV, Array | None]:
         if self.cv_input is not None:
             y, cond = self.cv_input.split(x)
         else:
             y, cond = x, None
 
-        if log_det:
+        if jacobian:
+            out, jac, log_det = self._jac(y, nl, reverse=reverse, conditioners=cond)
+
+        elif log_det:
             out, log_det = self._log_Jf(y, nl, reverse=reverse, conditioners=cond)
+            jac = None
         else:
-            out, log_det = self._calc(y, nl, reverse=reverse, conditioners=cond), None
+            out = self._calc(y, nl, reverse=reverse, conditioners=cond)
+            jac = None
+            log_det = None
 
         if self.cv_input:
             out = self.cv_input.combine(x, out)
 
-        return out, log_det
+        return out, jac, log_det
 
     @abstractmethod
     def _calc(
@@ -2126,7 +2157,7 @@ class _CvFunBase:
         """naive automated implementation, overrride this"""
 
         def f(x):
-            return self._calc(x, nl, reverse, conditioners, **self.kwargs)
+            return self._calc(x, nl, reverse, conditioners)
 
         a = f(x)
         b = jacfwd(f)(x)
@@ -2134,11 +2165,34 @@ class _CvFunBase:
 
         return a, log_det
 
+    def _jac(
+        self,
+        x: CV,
+        nl: NeighbourList | None,
+        reverse=False,
+        conditioners: list[CV] | None = None,
+    ) -> tuple[CV, Array | None]:
+        def f(x):
+            return self._calc(x, nl, reverse, conditioners)
+
+        a = f(x)
+        b = self.jacfun(f)(x).cv
+        # print(b)
+
+        return a, b, None
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
+
 
 class CvFunBase(_CvFunBase, PyTreeNode):
     __: KW_ONLY
     cv_input: CvFunInput | None = None
     kwargs: dict = field(pytree_node=False, default_factory=dict)
+    jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
 
 
 class CvFun(CvFunBase, PyTreeNode):
@@ -2166,12 +2220,47 @@ class CvFun(CvFunBase, PyTreeNode):
             assert self.forward is not None
             return self.forward(x, nl, c, **self.kwargs)
 
+    def __eq__(self, other):
+        if not isinstance(other, CvFun):
+            return False
+
+        if not self.kwargs.keys() == self.kwargs.keys():
+            return False
+
+        if not self.forward == other.forward:
+            return False
+
+        if not self.backward == other.backward:
+            return False
+
+        if not self.cv_input == other.cv_input:
+            return False
+
+        if not self.conditioners == other.conditioners:
+            return False
+
+        for k in self.kwargs.keys():
+            if self.kwargs[k] is None:
+                if not other.kwargs[k] is None:
+                    return False
+            elif isinstance(self.kwargs[k], jax.Array):
+                if not isinstance(other.kwargs[k], jax.Array):
+                    return False
+                if not (self.kwargs[k] == other.kwargs[k]).all():
+                    return False
+            else:
+                if not self.kwargs[k] == other.kwargs[k]:
+                    return False
+
+        return True
+
 
 class CvFunNn(nn.Module, _CvFunBase):
     """used to instantiate flax linen CvTrans"""
 
     cv_input: CvFunInput | None = None
     kwargs: dict = field(pytree_node=False, default_factory=dict)
+    jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
 
     @abstractmethod
     def setup(self):
@@ -2233,6 +2322,7 @@ class CvFunDistrax(nn.Module, _CvFunBase):
     """
 
     bijector: distrax.Bijector = dataclasses.field(init=False)
+    jacfun: Callable = dataclasses.field(default=jax.jacfwd)
     cv_input: CvFunInput | None = None
 
     @abstractmethod
@@ -2291,11 +2381,13 @@ class _CombinedCvFun(_CvFunBase):
         nl: NeighbourList | None,
         reverse=False,
         log_det=False,
-    ) -> tuple[CV, Array | None]:
+        jacobian=False,
+    ) -> tuple[CV, CV, Array | None]:
         assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
 
         out_x = []
         out_log_det = []
+        out_jac = []
 
         for cl, xi in zip(self.classes, x.split()):
             ordered = reversed(cl) if reverse else cl
@@ -2305,16 +2397,26 @@ class _CombinedCvFun(_CvFunBase):
             else:
                 log_det = None
 
+            jac = None
+
             for tr in ordered:
-                xi, log_det_i = tr.calc(x=xi, nl=nl, reverse=reverse, log_det=log_det)
+                xi, jac_i, log_det_i = tr.calc(x=xi, nl=nl, reverse=reverse, log_det=log_det, jacobian=jacobian)
+
+                if jacobian:
+                    if jac is None:
+                        jac = jac_i
+                    else:
+                        jac = jac_compose(jac, jac_i)
+
                 if log_det:
                     assert log_det_i is not None
                     log_det += log_det_i
 
+            out_jac.append(jac)
             out_x.append(xi)
             out_log_det.append(log_det)
 
-        return CV.combine(*out_x), jnp.sum(jnp.array(out_log_det))
+        return CV.combine(*out_x), CV.combine(*out_jac), jnp.sum(jnp.array(out_log_det))
 
     def _log_Jf(
         self,
@@ -2342,16 +2444,16 @@ def _from_array_function(
     x: CV,
     nl: NeighbourList | None,
     conditioners: list[CV] | None = None,
-    f=None,
+    array_func=None,
     atomic=False,
     **kwargs,
 ):
     assert conditioners is None, "implement this"
 
     if x.batched:
-        out = vmap(f)(x.cv, nl, None, **kwargs)
+        out = vmap(array_func)(x.cv, nl, None, **kwargs)
     else:
-        out = f(x.cv, nl, None, **kwargs)
+        out = array_func(x.cv, nl, None, **kwargs)
 
     return x.replace(cv=out, atomic=atomic)
 
@@ -2380,15 +2482,26 @@ class _CvTrans:
         return self.__class__
 
     @staticmethod
-    def from_array_function(f: Callable[[Array, NeighbourList | None, None], Array], atomic=False, **kwargs):
-        return CvTrans.from_cv_function(f=_from_array_function, atomic=atomic, **kwargs)
+    def from_array_function(
+        f: Callable[[Array, NeighbourList | None, None], Array],
+        jacfun: Callable = None,
+        atomic=False,
+        **kwargs,
+    ):
+        return CvTrans.from_cv_function(f=_from_array_function, array_func=f, atomic=atomic, jacfun=jacfun, **kwargs)
 
     @staticmethod
     def from_cv_function(
         f: Callable[[CV, NeighbourList | None, CV | None], CV],
+        jacfun: Callable = None,
         **kwargs,
     ) -> CvTrans:
-        return CvTrans.from_cv_fun(proto=CvFun(forward=f, kwargs=kwargs))
+        kw = dict(forward=f, kwargs=kwargs)
+
+        if jacfun is not None:
+            kw["jacfun"] = jacfun
+
+        return CvTrans.from_cv_fun(proto=CvFun(**kw))
 
     @staticmethod
     def from_cv_fun(proto: _CvFunBase):
@@ -2403,7 +2516,8 @@ class _CvTrans:
         reverse=False,
         log_Jf=False,
         chunk_size=None,
-    ) -> tuple[CV, Array | None]:
+        jacobian=False,
+    ) -> tuple[CV, CV | None, Array | None]:
         """
         result is always batched
         arg: CV
@@ -2417,6 +2531,7 @@ class _CvTrans:
                         reverse=reverse,
                         log_Jf=log_Jf,
                         chunk_size=None,
+                        jacobian=jacobian,
                     ),
                 ),
                 chunk_size=chunk_size,
@@ -2429,14 +2544,24 @@ class _CvTrans:
         else:
             log_det = None
 
+        jac = None
+
         for tr in ordered:
             # print(f"{tr=} {x=}")
 
-            x, log_det_i = tr.calc(x=x, nl=nl, reverse=reverse, log_det=log_Jf)
+            x, jac_i, log_det_i = tr.calc(x=x, nl=nl, reverse=reverse, log_det=log_Jf, jacobian=jacobian)
+
+            if jacobian:
+                if jac is None:
+                    jac = jac_i
+                else:
+                    jac = jac_compose(jac, jac_i)
+
             if log_Jf:
                 assert log_det_i is not None
                 log_det += log_det_i
-        return x, log_det
+
+        return x, jac, log_det
 
     def __mul__(self, other):
         assert isinstance(other, self._cv_trans), f"can only multiply by {self._cv_trans} object"
@@ -2472,20 +2597,27 @@ class _CvTrans:
             trans=tuple([_cv_comb(classes=tuple([cvt.trans for cvt in cv_trans]))]),
         )
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
+
 
 class CvTrans(_CvTrans, PyTreeNode):
     __: KW_ONLY
     trans: tuple[CvFunBase]
 
-    @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size"))
+    @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size", "jacobian"))
     def compute_cv_trans(
         self,
         x: CV | SystemParams,
         nl: NeighbourList | None = None,
         reverse=False,
         log_Jf=False,
+        jacobian=False,
         chunk_size=None,
-    ) -> tuple[CV, Array | None]:
+    ) -> tuple[CV, CV, Array | None]:
         return _CvTrans.compute_cv_trans(
             self=self,
             x=x,
@@ -2493,6 +2625,7 @@ class CvTrans(_CvTrans, PyTreeNode):
             reverse=reverse,
             log_Jf=log_Jf,
             chunk_size=chunk_size,
+            jacobian=jacobian,
         )
 
 
@@ -2511,7 +2644,7 @@ class CvTransNN(nn.Module, _CvTrans):
         nl: NeighbourList | None,
         reverse=False,
         log_Jf=False,
-    ) -> tuple[CV, Array | None]:
+    ) -> tuple[CV, CV, Array | None]:
         return _CvTrans.compute_cv_trans(
             self=self,
             x=x,
@@ -2528,6 +2661,12 @@ class CvTransNN(nn.Module, _CvTrans):
     def __add__(self, other):
         return _CvTrans.__add__(self, other)
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
+
 
 class NormalizingFlow(nn.Module):
     """normalizing flow. _ProtoCvTransNN are stored separately because they need to be initialized by this module in setup"""
@@ -2539,9 +2678,15 @@ class NormalizingFlow(nn.Module):
             self.flow = CvTransNN(trans=self.flow.trans)
 
     def calc(self, x: CV, nl: NeighbourList | None, reverse: bool):
-        a, b = self.flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
+        a, _, b = self.flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
 
         return a, b
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
 
 
 class CvFlow(PyTreeNode):
@@ -2555,30 +2700,33 @@ class CvFlow(PyTreeNode):
     ) -> CvFlow:
         return CvFlow(func=_CvTrans.from_cv_function(f=f, **kwargs))
 
-    @partial(jax.jit, static_argnames=["chunk_size"])
+    @partial(jax.jit, static_argnames=["chunk_size", "jacobian"])
     def compute_cv_flow(
         self,
         x: SystemParams,
         nl: NeighbourList | None = None,
         chunk_size: int | None = None,
-    ) -> CV:
+        jacobian=False,
+    ) -> tuple[CV, CV | None]:
         if x.batched:
             return chunk_map(
                 vmap(
-                    self.compute_cv_flow,
+                    Partial(self.compute_cv_flow, jacobian=jacobian),
                     in_axes=0,
                 ),
                 chunk_size=chunk_size,
             )(x=x, nl=nl)
 
-        # print(f"{self.func},{x=}")
-        out, _ = self.func.compute_cv_trans(x, nl, chunk_size=chunk_size)
-        # print(f"{out=}")
+        out, out_jac, _ = self.func.compute_cv_trans(x, nl, jacobian=jacobian, chunk_size=chunk_size)
+        # print(f"{out_jac}")
 
         if self.trans is not None:
-            out, _ = self.trans.compute_cv_trans(x=out, nl=nl)
+            out, out_jac_i, _ = self.trans.compute_cv_trans(x=out, nl=nl, jacobian=jacobian)
 
-        return out
+            if jacobian:
+                out_jac = jac_compose(out_jac, out_jac_i)
+
+        return out, out_jac
 
     def __add__(self, other) -> CvFlow:
         assert isinstance(other, CvFlow)
@@ -2612,7 +2760,7 @@ class CvFlow(PyTreeNode):
 
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read())
+                self = jsonpickle.decode(f.read(), context=Unpickler())
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
@@ -2635,7 +2783,7 @@ class CvFlow(PyTreeNode):
     ) -> SystemParams:
         def loss(sp: SystemParams, nl: NeighbourList, norm):
             b, nl = jit(nl.update)(sp)
-            cvi = self.compute_cv_flow(sp, nl)
+            cvi, _ = self.compute_cv_flow(sp, nl)
             nn = norm(cvi.cv, target.cv, nl, target_nl)
 
             return nn, (b, nl, nn)  # aux output
@@ -2669,6 +2817,12 @@ class CvFlow(PyTreeNode):
         sp0 = _l(x0, nl0)
         return sp0
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
+
 
 ######################################
 #       Collective variable          #
@@ -2678,7 +2832,7 @@ class CvFlow(PyTreeNode):
 class CollectiveVariable(PyTreeNode):
     f: CvFlow
     metric: CvMetric
-    jac: Callable = field(pytree_node=False, default=jax.jacrev)
+    jac: Callable = field(pytree_node=False, default=jax.jacrev)  # jacfwd is generally faster, but not always supported
 
     @partial(jax.jit, static_argnames=["chunk_size", "jacobian"])
     def compute_cv(
@@ -2715,8 +2869,13 @@ class CollectiveVariable(PyTreeNode):
                 chunk_size=chunk_size,
             )(sp=sp)
 
-        cv = self.f.compute_cv_flow(sp, nl)
-        dcv = self.jac(self.f.compute_cv_flow)(sp, nl) if jacobian else None
+        # cv, dcv = self.f.compute_cv_flow(sp, nl, jacobian=jacobian)
+        def _f(sp):
+            cv, _ = self.f.compute_cv_flow(sp, nl, jacobian=False)
+            return cv
+
+        cv = _f(sp)
+        dcv = self.jac(_f)(sp) if jacobian else None
         return (cv, dcv)
 
     @property
@@ -2737,9 +2896,11 @@ class CollectiveVariable(PyTreeNode):
     def load(file, **kwargs) -> CollectiveVariable:
         filename = Path(file)
 
+        print("loading CV")
+
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read())
+                self = jsonpickle.decode(f.read(), context=Unpickler())
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
@@ -2748,3 +2909,9 @@ class CollectiveVariable(PyTreeNode):
             self.__setattr__(key, kwargs[key])
 
         return self
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)

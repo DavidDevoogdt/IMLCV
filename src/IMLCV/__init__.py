@@ -27,6 +27,12 @@ import jax
 from jax import random
 import jax._src.tree_util
 
+from flax.struct import PyTreeNode
+
+# helpr to unpickle class without setstate
+import jsonpickle
+
+
 KEY = random.PRNGKey(0)
 LOGLEVEL = logging.CRITICAL
 
@@ -48,3 +54,19 @@ logging.getLogger("absl").addFilter(
         "call_tf works best with a TensorFlow function that does not capture variables or tensors from the context.",
     ),
 )
+
+
+class Unpickler(jsonpickle.Unpickler):
+    def _restore_object_instance_variables(self, obj, instance):
+        update = False
+
+        if isinstance(instance, PyTreeNode):
+            update = True
+
+        out = super()._restore_object_instance_variables(obj, instance)
+
+        if update:
+            # print(f"calling init for {instance.__class__}")
+            instance.__init__(**instance.__dict__)
+
+        return out

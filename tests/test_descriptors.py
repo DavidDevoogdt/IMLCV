@@ -116,7 +116,7 @@ def test_SOAP_SB_sinkhorn(cell, matching, pp):
             num=50,
         )
 
-    p_ref = desc.compute_cv_flow(sp1, nl1)
+    p_ref, _ = desc.compute_cv_flow(sp1, nl1)
     nl_ref = nl1
 
     cv = CollectiveVariable(

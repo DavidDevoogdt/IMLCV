@@ -677,7 +677,7 @@ def get_sinkhorn_divergence(
     )
 
 
-@partial(jit, static_argnames=["alpha", "normalize", "sum_divergence"])
+@partial(jit, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
 def sinkhorn_divergence_2(
     x1: CV,
     x2: CV,
@@ -686,6 +686,8 @@ def sinkhorn_divergence_2(
     alpha=1e-2,
     normalize=True,
     sum_divergence=False,
+    ridge=1e-5,
+    sinkhorn_iterations=100,
 ) -> Array:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -719,12 +721,56 @@ def sinkhorn_divergence_2(
     b1, _, p1 = nl1.nl_split_z(x1)
     _, _, p2 = nl2.nl_split_z(x2)
 
+    class ComposedTranpsoseLinearOperator(lx.ComposedLinearOperator):
+        def transpose(self):
+            return self
+
+    def solve_lineax(
+        lin,
+        b: jnp.ndarray,
+        lin_t=None,
+        symmetric: bool = False,
+    ) -> jnp.ndarray:
+        input_structure = jax.eval_shape(lambda: b)
+        kwargs = {}
+        kwargs.setdefault("rtol", 1e-6)
+        kwargs.setdefault("atol", 1e-6)
+
+        ridge_kernel = ridge
+        ridge_identity = ridge
+
+        if ridge_kernel > 0.0 or ridge_identity > 0.0:
+
+            def lin_reg(x):
+                return lin(x) + ridge_kernel * jnp.sum(x) + ridge_identity * x
+
+            def lin_t_reg(x):
+                return lin_t(x) + ridge_kernel * jnp.sum(x) + ridge_identity * x
+
+        else:
+            lin_reg, lin_t_reg = lin, lin_t
+
+        solver = lx.CG(**kwargs)
+        if symmetric:
+            fn_operator = lx.FunctionLinearOperator(
+                lin_reg,
+                input_structure,
+                tags=[lx.symmetric_tag, lx.positive_semidefinite_tag],
+            )
+            return lx.linear_solve(fn_operator, b, solver).value
+
+        op = lx.FunctionLinearOperator(lin_reg, input_structure)
+        op_t = lx.FunctionLinearOperator(lin_t_reg, input_structure)
+
+        fn_operator = lx.TaggedLinearOperator(
+            ComposedTranpsoseLinearOperator(op_t, op),
+            tags=[lx.positive_semidefinite_tag],
+        )
+
+        return lx.linear_solve(fn_operator, op_t.mv(b), solver).value
+
     def get_divergence(p1, p2):
         n = p1.shape[0]
-
-        class _SVD(lx.SVD):
-            def __init__(self, rtol, atol, rcond=None):
-                super().__init__(rcond=rcond)
 
         return sinkhorn_divergence.sinkhorn_divergence(
             PointCloud,
@@ -732,12 +778,9 @@ def sinkhorn_divergence_2(
             y=jnp.reshape(p2, (n, -1)),
             epsilon=alpha,
             sinkhorn_kwargs={
-                "implicit_diff": implicit_differentiation.ImplicitDiff(
-                    solver_kwargs={
-                        "nonsym_solver": _SVD,
-                    },
-                ),
-                "use_danskin": True,
+                "threshold": 1e-4,
+                "implicit_diff": implicit_differentiation.ImplicitDiff(solver=solve_lineax),
+                "use_danskin": False,
             },
         ).divergence
 
@@ -763,6 +806,8 @@ def _sinkhorn_divergence_trans_2(
     normalize,
     sum_divergence,
     ddiv_arg=0,
+    ridge=1e-5,
+    sinkhorn_iterations=500,
 ):
     assert nl is not None, "Neigbourlist required for rematch"
 
@@ -776,6 +821,8 @@ def _sinkhorn_divergence_trans_2(
                 alpha=alpha_rematch,
                 normalize=normalize,
                 sum_divergence=sum_divergence,
+                ridge=ridge,
+                sinkhorn_iterations=sinkhorn_iterations,
             ),
             _stack_dims=cv._stack_dims,
         )
@@ -797,6 +844,8 @@ def get_sinkhorn_divergence_2(
     normalize=True,
     sum_divergence=False,
     ddiv_arg=0,
+    ridge=1e-5,
+    sinkhorn_iterations=500,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -804,6 +853,7 @@ def get_sinkhorn_divergence_2(
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
+        jacfun=jax.jacrev if output == "ddiv" and ddiv_arg == 0 else jax.jacfwd,
         nli=nli,
         pi=pi,
         alpha_rematch=alpha_rematch,
@@ -811,6 +861,8 @@ def get_sinkhorn_divergence_2(
         normalize=normalize,
         sum_divergence=sum_divergence,
         ddiv_arg=ddiv_arg,
+        ridge=ridge,
+        sinkhorn_iterations=sinkhorn_iterations,
     )
 
 
@@ -834,7 +886,7 @@ def _divergence_weighed_aligned_cv(
     _,
     scaling,
 ):
-    divergence, _ = divergence_from_aligned_cv.compute_cv_trans(cv, nl)
+    divergence, _, _ = divergence_from_aligned_cv.compute_cv_trans(cv, nl)
 
     def soft_min(x):
         x = x / scaling
