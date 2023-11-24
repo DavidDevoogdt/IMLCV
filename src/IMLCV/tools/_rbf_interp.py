@@ -147,15 +147,15 @@ def _build_and_solve_system(
 class RBFInterpolator(PyTreeNode):
     """Radial basis function (RBF) interpolation in N dimensions. adapted from scipy"""
 
-    _coeffs: jax.Array = field(repr=False)
-    y: CV = field(repr=False)
-    d: jax.Array = field(repr=False)
+    _coeffs: jax.Array
+    y: CV
+    d: jax.Array
     d_shape: tuple[int]
     d_dtype: jnp.dtype
-    smoothing: float = field(repr=False)
+    smoothing: float
     kernel: str
     epsilon: jax.Array
-    powers: jax.Array = field(repr=False)
+    powers: jax.Array
     metric: CvMetric
 
     @classmethod

@@ -567,18 +567,24 @@ class MDEngine(ABC):
                 self = cloudpickle.load(f)
 
         for key in kwargs.keys():
-            self.__setattr__(key, kwargs[key])
+            # if key == "sp":
+            #     print(f"setting sp={kwargs[key]}")
+            setattr(self, key, kwargs[key])
 
             if key == "trajectory_file":
                 print(f"loading ti  {self.trajectory_file} ")
                 trajectory_file = kwargs[key]
                 if Path(trajectory_file).exists():
+                    print("updating sp from trajectory file")
+
                     self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
                     self.step = self.trajectory_info._size
                     self.sp = self.trajectory_info.sp[-1]
                     self.time0 = self.trajectory_info.t[-1]
 
                     print(f"loaded ti  {self.step=} ")
+
+        # print(f"{self.sp=}")
 
         return self
 
@@ -604,10 +610,22 @@ class MDEngine(ABC):
 
         try:
             self._run(int(steps))
+
+            finished = Path(self.trajectory_file).parent / "finished"
+
+            if not finished.exists():
+                with open(finished, "w+"):
+                    pass
+
         except Exception as err:
             if self.step == 1:
                 raise err
-            print(f"The calculator finished early with error {err=},{type(err)=}")
+            print(f"The calculator finished early with error {err=},{type(err)=}, marking as invalid")
+            if self.trajectory_file is not None:
+                inv = Path(self.trajectory_file).parent / "invalid"
+                if not inv.exists():
+                    with open(inv, "w+"):
+                        pass
 
         self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
@@ -725,6 +743,12 @@ class MDEngine(ABC):
                 del statedict[k]
 
             self.__class__.__init__(self, **statedict)
+
+            if self.trajectory_file is not None:
+                if Path(self.trajectory_file).exists():
+                    self.step = self.trajectory_info._size
+                    self.sp = self.trajectory_info.sp[-1]
+                    self.time0 = time() - self.trajectory_info.t[-1]
 
         except Exception as e:
             print(

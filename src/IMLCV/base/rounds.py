@@ -6,6 +6,7 @@ import time
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import ase
@@ -16,6 +17,7 @@ import numpy as np
 from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
+from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans
@@ -182,6 +184,7 @@ class Rounds(ABC):
         num: int = 1,
         repeat=None,
         minkowski_reduce=True,
+        r_cut=None,
     ):
         from ase.io.extxyz import write_extxyz
 
@@ -189,7 +192,13 @@ class Rounds(ABC):
             c = self.cv
 
         for i, (atoms, round, trajejctory) in enumerate(
-            self.iter_ase_atoms(c=c, r=r, num=num, minkowski_reduce=minkowski_reduce),
+            self.iter_ase_atoms(
+                c=c,
+                r=r,
+                num=num,
+                minkowski_reduce=minkowski_reduce,
+                r_cut=r_cut,
+            ),
         ):
             with open(
                 self.path(c=c, r=round.round, i=trajejctory.num) / "trajectory.xyz",
@@ -593,6 +602,8 @@ class Rounds(ABC):
         T_max_over_T=50,
         chunk_size=None,
         get_colvar=True,
+        min_traj_length=None,
+        recalc_cv=False,
     ) -> data_loader_output:
         weights = []
 
@@ -622,13 +633,20 @@ class Rounds(ABC):
             ignore_invalid=ignore_invalid,
             md_trajs=md_trajs,
         ):
+            if min_traj_length is not None:
+                if traj.ti._size < min_traj_length:
+                    print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
+                    continue
+                else:
+                    print("adding trajectory")
+
             if sti is None:
                 sti = round.tic
 
             ti.append(traj.ti)
             sp0 = traj.ti.sp
 
-            if (cv0 := traj.ti.CV) is None:
+            if (cv0 := traj.ti.CV) is None or recalc_cv:
                 bias = traj.get_bias()
                 if colvar is None:
                     colvar = bias.collective_variable
@@ -637,12 +655,13 @@ class Rounds(ABC):
                     sp0.get_neighbour_list(
                         r_cut=round.tic.r_cut,
                         z_array=round.tic.atomic_numbers,
+                        chunk_size=chunk_size,
                     )
                     if round.tic.r_cut is not None
                     else None
                 )
 
-                cv0, _ = bias.collective_variable.compute_cv(sp=sp0, nl=nlr)
+                cv0, _ = colvar.compute_cv(sp=sp0, nl=nlr)
 
             e = None
 
@@ -766,10 +785,16 @@ class Rounds(ABC):
         out_ti = []
 
         if time_series:
+            if out == -1:
+                skip_step = 1
+            else:
+                skip_step = sum([a.shape[0] for a in sp]) // out
+            # print(f"got {skip_step=}")
+
             for sp_n, cv_n, ti_n in zip(sp, cv, ti):
-                out_sp.append(sp_n[-out:])
-                out_cv.append(cv_n[-out:])
-                out_ti.append(ti_n[-out:])
+                out_sp.append(sp_n[::skip_step])
+                out_cv.append(cv_n[::skip_step])
+                out_ti.append(ti_n[::skip_step])
 
         else:
             if split_data:
@@ -835,15 +860,20 @@ class Rounds(ABC):
             else:
                 out_sp_merged = out_sp[0]
 
-            out_nl_stacked = out_sp_merged.get_neighbour_list(r_cut=new_r_cut, z_array=sti.atomic_numbers)
+            out_nl_stacked = out_sp_merged.get_neighbour_list(
+                r_cut=new_r_cut,
+                z_array=sti.atomic_numbers,
+                chunk_size=chunk_size,
+            )
 
             if len(out_sp) >= 2:
                 ind = 0
                 out_nl = []
                 for osp in out_sp:
                     out_nl.append(out_nl_stacked[ind : ind + osp.shape[0]])
+                    ind += osp.shape[0]
             else:
-                out_nl = out_nl_stacked[0]
+                out_nl = [out_nl_stacked]
 
         return Rounds.data_loader_output(
             sp=out_sp,
@@ -941,15 +971,25 @@ class Rounds(ABC):
             if invalidate:
                 self.invalidate_data(c=self.cv, r=self.round, i=i)
 
-    def iter_ase_atoms(self, r: int | None = None, c: int | None = None, num: int = 3, minkowski_reduce=True):
+    def iter_ase_atoms(
+        self,
+        r: int | None = None,
+        c: int | None = None,
+        num: int = 3,
+        r_cut=None,
+        minkowski_reduce=True,
+    ):
         from molmod import angstrom
 
         for round, trajejctory in self.iter(stop=r, c=c, num=num):
             # traj = trajejctory.ti
 
             sp = trajejctory.ti.sp
+
             if minkowski_reduce:
-                sp, _ = sp.canonicalize(qr=True)
+                _, op = sp[0].canonicalize(qr=True)
+
+                sp = jax.vmap(SystemParams.apply_canonicalize, in_axes=(0, None))(sp, op)
 
             pos_A = sp.coordinates / angstrom
             pbc = sp.cell is not None
@@ -1178,6 +1218,7 @@ class Rounds(ABC):
         md_trajs: list[int] | None = None,
         cv_round: int | None = None,
         wait_for_plots=False,
+        min_traj_length=None,
     ):
         if cv_round is None:
             cv_round = self.cv
@@ -1214,6 +1255,7 @@ class Rounds(ABC):
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
                 cv_round=cv_round,
+                min_traj_length=min_traj_length,
             )
 
             cv_stack = data.cv[0]
@@ -1255,10 +1297,18 @@ class Rounds(ABC):
 
                 spi = sp_stack[index]
                 # spi = spi.unbatch()
+                cvi = cv_stack[index]
 
             else:
                 spi = sp0[i]
+                cvi = "unknown"
                 spi = spi.unbatch()
+
+            # cvi_recalc, _ = md_engine.bias.collective_variable.compute_cv(
+            #     spi, spi.get_neighbour_list(data.sti.r_cut, data.sti.atomic_numbers)
+            # )
+
+            print(f"starting trajectory {i} in {cvi=} {spi=}  ")
 
             future = bash_app_python(Rounds.run_md, pass_files=True, executors=["reference"])(
                 sp=spi,  # type: ignore
@@ -1406,11 +1456,14 @@ class Rounds(ABC):
             bias=bias,
             trajectory_file=outputs[1].filepath,
         )
-
         if sp is not None:
             kwargs["sp"] = sp
-
         md = MDEngine.load(inputs[0].filepath, **kwargs)
+
+        if sp is not None:
+            assert md.sp == sp
+            print(f"will start with {sp=}")
+
         md.run(steps)
         bias.save(outputs[0].filepath)
         d = md.get_trajectory()

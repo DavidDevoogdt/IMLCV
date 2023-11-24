@@ -9,6 +9,7 @@ import numba
 import numpy as np
 import ott
 from flax.linen.linear import Dense
+from IMLCV.base.CV import _CvTrans
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -38,7 +39,7 @@ def _identity_trans(x, nl, _):
     return x
 
 
-identity_trans = CvFlow.from_function(_identity_trans)
+identity_trans = _CvTrans.from_cv_function(_identity_trans)
 
 
 def _Volume(sp: SystemParams, *_):
@@ -338,12 +339,7 @@ def _trunc_svd(x: CV, nl: NeighbourList | None, _, m_atomic, v, cvi_shape):
 
     out = out * jnp.sqrt(cvi_shape)
 
-    return CV(
-        cv=out,
-        _stack_dims=x._stack_dims,
-        _combine_dims=x._combine_dims,
-        atomic=False,
-    )
+    return x.replace(cv=out, atomic=False)
 
 
 def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
@@ -384,7 +380,7 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     return out.compute_cv_trans(m)[0], out
 
 
-@partial(jit, static_argnames=["matching", "alpha", "normalize", "chunk_size"])
+# @partial(jit, static_argnames=["matching", "alpha", "normalize", "chunk_size"])
 def sinkhorn_divergence(
     x1: CV,
     x2: CV,
@@ -528,15 +524,12 @@ def sinkhorn_divergence(
         p2 = x2.cv
 
         # todo: P_11 p1 p1 term not aligned -> nonseniscal?
-        cv = CV(
+        cv = x1.replace(
             cv=(
                 -2 * jnp.einsum("i...,j...,ij->j...", p1, p2, P12)
                 + jnp.einsum("i...,j...,ij->j...", p1, p1, P11)
                 + jnp.einsum("i...,j...,ij->j...", p2, p2, P22)
             ),
-            _stack_dims=x1._stack_dims,
-            _combine_dims=x1._combine_dims,
-            atomic=x1.atomic,
         )
 
         # avoid non differentiable code
@@ -544,25 +537,19 @@ def sinkhorn_divergence(
         p2_safe = jnp.where(p2_sq <= eps, 1, p2)
         p2_inv = jnp.where(p2_sq <= eps, 0.0, 1 / p2_safe)
 
-        cv_2 = CV(
+        cv_2 = x1.replace(
             cv=(
                 -2 * jnp.einsum("i...,ij->j...", p1, P12)
                 + jnp.einsum("i...,j...,j...,ij", p1, p1, p2_inv, P11)
                 + jnp.einsum("i...,ij->j...", p2, P22)
             ),
-            _stack_dims=x1._stack_dims,
-            _combine_dims=x1._combine_dims,
-            atomic=x1.atomic,
         )
 
-        cv_3 = CV(
+        cv_3 = x1.replace(
             cv=(-2 * jnp.einsum("i...,ij->j...", p1, P12) + 2 * jnp.einsum("i...,ij->j...", p2, P22)),
-            _stack_dims=x1._stack_dims,
-            _combine_dims=x1._combine_dims,
-            atomic=x1.atomic,
         )
 
-        div = CV(
+        div = x1.replace(
             cv=(
                 jnp.mean(
                     -2 * jnp.einsum("i...,j...,ij->j", p1, p2, P12)
@@ -570,8 +557,6 @@ def sinkhorn_divergence(
                     + jnp.einsum("i...,j...,ij->j", p2, p2, P22),
                 )
             ),
-            _stack_dims=x1._stack_dims,
-            _combine_dims=x1._combine_dims,
             atomic=False,
         )
 
@@ -586,6 +571,7 @@ def sinkhorn_divergence(
     return combine(x1, x2, P11, P12, P22)
 
 
+# @partial(jax.jit,static_argnames=["sort","alpha_rematch","output","normalize"])
 def _sinkhorn_divergence_trans(
     cv: CV,
     nl: NeighbourList | None,
@@ -677,7 +663,7 @@ def get_sinkhorn_divergence(
     )
 
 
-@partial(jit, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
+# @partial(jit, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
 def sinkhorn_divergence_2(
     x1: CV,
     x2: CV,
@@ -688,6 +674,7 @@ def sinkhorn_divergence_2(
     sum_divergence=False,
     ridge=1e-5,
     sinkhorn_iterations=100,
+    use_dankskin=False,
 ) -> Array:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -780,7 +767,7 @@ def sinkhorn_divergence_2(
             sinkhorn_kwargs={
                 "threshold": 1e-4,
                 "implicit_diff": implicit_differentiation.ImplicitDiff(solver=solve_lineax),
-                "use_danskin": False,
+                "use_danskin": use_dankskin,
             },
         ).divergence
 
@@ -790,11 +777,23 @@ def sinkhorn_divergence_2(
         # weigh according to number of atoms
         w = jnp.sum(b1, axis=1)
         w /= jnp.sum(w)
-        divergences = divergences * w
+        divergences = jnp.dot(divergences, w)
 
     return divergences
 
 
+# @partial(
+#     jit,
+#     static_argnames=[
+#         "alpha_rematch",
+#         "output",
+#         "normalize",
+#         "sum_divergence",
+#         "ddiv_arg",
+#         "ridge",
+#         "sinkhorn_iterations"
+#     ],
+# )
 def _sinkhorn_divergence_trans_2(
     cv: CV,
     nl: NeighbourList | None,
@@ -823,12 +822,14 @@ def _sinkhorn_divergence_trans_2(
                 sum_divergence=sum_divergence,
                 ridge=ridge,
                 sinkhorn_iterations=sinkhorn_iterations,
+                use_dankskin=ddiv_arg != 1,
             ),
             _stack_dims=cv._stack_dims,
         )
 
     if output == "ddiv":
         f = jax.jacrev(f, argnums=ddiv_arg)
+
         div = CV.combine(*[f(pii, cv, nlii, nl).cv for pii, nlii in zip(pi, nli)])
     else:
         div = CV.combine(*[f(pii, cv, nlii, nl) for pii, nlii in zip(pi, nli)])
@@ -853,7 +854,7 @@ def get_sinkhorn_divergence_2(
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
-        jacfun=jax.jacrev if output == "ddiv" and ddiv_arg == 0 else jax.jacfwd,
+        jacfun=jax.jacrev if output == "ddiv" and ddiv_arg == 0 else jax.jacrev,
         nli=nli,
         pi=pi,
         alpha_rematch=alpha_rematch,

@@ -63,7 +63,10 @@ class Unpickler(jsonpickle.Unpickler):
         if isinstance(instance, PyTreeNode):
             update = True
 
-        out = super()._restore_object_instance_variables(obj, instance)
+        try:
+            out = super()._restore_object_instance_variables(obj, instance)
+        except Exception as e:
+            print(f"got {e=}\\m{obj=}\n {instance=}")
 
         if update:
             # print(f"calling init for {instance.__class__}")

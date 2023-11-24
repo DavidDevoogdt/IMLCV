@@ -136,6 +136,8 @@ class ThermoLIB:
         chunk_size=None,
         n_max=60,
         n=None,
+        min_traj_length=None,
+        margin=None,
     ):
         temp = self.rounds.T
 
@@ -148,6 +150,7 @@ class ThermoLIB:
             start=start_r,
             split_data=True,
             new_r_cut=None,
+            min_traj_length=min_traj_length,
         )
 
         trajs = dlo.cv
@@ -160,6 +163,7 @@ class ThermoLIB:
                 cv_round=self.cv_round,
                 split_data=True,
                 new_r_cut=None,
+                min_traj_length=min_traj_length,
             ).cv
 
             bash_app_python(self.common_bias.plot, executors=["default"])(
@@ -170,6 +174,7 @@ class ThermoLIB:
                 stderr="combined.stderr",
                 map=False,
                 traj=trajs_plot,
+                margin=margin,
             )
 
         c = CV.stack(*trajs)
@@ -234,6 +239,8 @@ class ThermoLIB:
         resample_bias=True,
         update_bounding_box=True,  # make boudning box bigger for FES calculation
         n_max=60,
+        min_traj_length=None,
+        margin=0.5,
         **plot_kwargs,
     ):
         if fs is None:
@@ -245,6 +252,8 @@ class ThermoLIB:
                 chunk_size=chunk_size,
                 update_bounding_box=update_bounding_box,
                 n_max=n_max,
+                min_traj_length=min_traj_length,
+                margin=margin,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij
@@ -322,6 +331,7 @@ class ThermoLIB:
                     label="Free Energy [kJ/mol]",
                     stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
+                    margin=margin,
                     **plot_kwargs,
                 ),
             )
@@ -333,6 +343,7 @@ class ThermoLIB:
                     execution_folder=fold,
                     stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
                     stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
+                    margin=margin,
                     **plot_kwargs,
                 ),
             )
@@ -346,6 +357,7 @@ class ThermoLIB:
                     label="Free Energy [kJ/mol]",
                     stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
+                    margin=margin,
                     **plot_kwargs,
                 ),
             )
@@ -357,6 +369,7 @@ class ThermoLIB:
                     name=f"FES_bias_{self.rnd}_{choice}.pdf",
                     stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
+                    margin=margin,
                     **plot_kwargs,
                 ),
             )

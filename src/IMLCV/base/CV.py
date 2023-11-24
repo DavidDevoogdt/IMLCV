@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
 from abc import abstractmethod
 from dataclasses import KW_ONLY
@@ -64,10 +65,10 @@ def padded_pmap(f, n_devices: int | None = None):
         return jnp.reshape(x_padded, (n_devices, -1, *x.shape[1:]))
 
     def n_unpad(y, p):
-        out = jnp.reshape(y, (-1, *y.shape[2:]))
+        y = jnp.reshape(y, (-1, *y.shape[2:]))
         if p != 0:
-            out = out[:-p]
-        return out
+            y = y[:-p]
+        return y
 
     def apply_pmap_fn(
         *args: PyTreeNode,
@@ -84,31 +85,30 @@ def padded_pmap(f, n_devices: int | None = None):
         p = None
 
         # pad the input args
-        tree_padded, tree_def = tree_flatten(args)
-        leaves_padded = []
+        in_tree, tree_def = tree_flatten(args)
 
-        for leaf_padded in tree_padded:
+        for i in range(len(in_tree)):
             if p is None:
-                p = get_shape(n_devices, leaf_padded.shape[0])
+                p = get_shape(n_devices, in_tree[i].shape[0])
             else:
-                assert p == get_shape(n_devices, leaf_padded.shape[0]), "inconsisitent batch dims"
+                assert p == get_shape(n_devices, in_tree[i].shape[0]), "inconsisitent batch dims"
 
-            leaves_padded.append(n_pad(leaf_padded, n_devices, p))
+            in_tree[i] = n_pad(in_tree[i], n_devices, p)
 
-        tree_padded = tree_unflatten(tree_def, leaves_padded)
+        in_tree = tree_unflatten(tree_def, in_tree)
 
-        out_padded = pmap(f)(*tree_padded)
+        out_tree = pmap(f)(*in_tree)
 
-        # remove padding from output leaves
-        tree_padded, tree_def = tree_flatten(out_padded)
-        leaves = []
+        del in_tree  # for memory purposes
 
-        for leaf_padded in tree_padded:
-            leaves.append(n_unpad(leaf_padded, p))
+        out_tree, tree_def = tree_flatten(out_tree)
 
-        tree_unpadded = tree_unflatten(tree_def, leaves)
+        for i in range(len(out_tree)):
+            out_tree[i] = n_unpad(out_tree[i], p)
 
-        return tree_unpadded
+        out_tree = tree_unflatten(tree_def, out_tree)
+
+        return out_tree
 
     return partial(apply_pmap_fn, n_devices=n_devices)
 
@@ -280,6 +280,8 @@ class SystemParams(PyTreeNode):
         num_z_unique: tuple[int] | None = None,
         num_neighs: int | None = None,
         nxyz: tuple[int] | None = None,
+        chunk_size=None,
+        max_neighs=None,
     ) -> tuple[bool, NeighbourList | None]:
         if r_cut is None:
             return False, None
@@ -314,29 +316,30 @@ class SystemParams(PyTreeNode):
 
         # cannot be jitted
         if sp.cell is not None:
-            if nxyz is None:
-                if sp.batched:
-                    nxyz = [
-                        int(i)
-                        for i in jnp.max(
-                            vmap(
-                                lambda sp: _get_num_per_images(sp.cell, r_cut + r_skin),
-                            )(sp),
-                            axis=0,
-                        ).tolist()
-                    ]
-                else:
-                    nxyz = [int(i) for i in _get_num_per_images(sp.cell, r_cut + r_skin).tolist()]
+            # if nxyz is None:
+            if sp.batched:
+                new_nxyz = jnp.max(
+                    vmap(
+                        lambda sp: _get_num_per_images(sp.cell, r_cut + r_skin),
+                    )(sp),
+                    axis=0,
+                )
+
             else:
-                b = (
-                    b and (_get_num_per_images(sp.cell, r_cut) <= jnp.array(nxyz)).all()
-                )  # only check r_cut, because we are retracing
+                new_nxyz = _get_num_per_images(sp.cell, r_cut + r_skin)
+
+            if nxyz is None:
+                nxyz = [int(i) for i in new_nxyz.tolist()]
+            else:
+                b = b and (jnp.array(new_nxyz) <= jnp.array(nxyz)).all()  # only check r_cut, because we are retracing
+
             nx, ny, nz = nxyz
             bx = jnp.arange(-nx, nx + 1)
             by = jnp.arange(-ny, ny + 1)
             bz = jnp.arange(-nz, nz + 1)
         else:
             bx, by, bz = None, None, None
+            new_nxyz = None
 
         # this is batchable
 
@@ -384,35 +387,21 @@ class SystemParams(PyTreeNode):
                     ),
                 )
 
-            true_val = vmap(func, in_axes=(0, 0, None, None, None))(
-                pos,
-                index_j,
-                i,
-                j,
-                k,
-            )
+            true_val = vmap(func, in_axes=(0, 0, None, None, None))(pos, index_j, i, j, k)
             false_val = jax.tree_map(
                 jnp.zeros_like,
                 true_val,
             )
 
             val = vmap(
-                lambda b, x, y: jax.tree_map(
-                    lambda t, f: jnp.where(b, t, f),
-                    x,
-                    y,
-                ),
-            )(
-                bools,
-                true_val,
-                false_val,
-            )
+                lambda b, x, y: jax.tree_map(lambda t, f: jnp.where(b, t, f), x, y),
+            )(bools, true_val, false_val)
 
             return bools, val
 
-        @partial(vmap, in_axes=(None, 0))
-        @jax.jit
-        def res(sp, center_coordinates):
+        @partial(vmap, in_axes=(None, 0, None))
+        @partial(jax.jit, static_argnames=["take_num"])
+        def res(sp, center_coordinates, take_num=0):
             if center_coordinates is not None:
                 sp_center = SystemParams(sp.coordinates - center_coordinates, sp.cell)
             else:
@@ -428,9 +417,9 @@ class SystemParams(PyTreeNode):
                     exclude_self=False,
                 )
 
-                idx = jnp.argsort(r)
-
-                return r[idx] < r_cut + r_skin, r[idx], atoms[idx], None, center_op
+                idx = jnp.argsort(r)[0:take_num]
+                n = jnp.sum(r < r_cut + r_skin)
+                return n, r[idx], atoms[idx], None, center_op
 
             _, (r, atoms, indices) = vmap(
                 vmap(
@@ -452,56 +441,48 @@ class SystemParams(PyTreeNode):
                 out_axes=2,
             )(bx, by, bz)
 
-            r, atoms, indices = (
-                jnp.reshape(r, (-1,)),
-                jnp.reshape(atoms, (-1)),
-                jnp.reshape(indices, (-1, 3)),
-            )
-            idx = jnp.argsort(r)
+            r = jnp.reshape(r, (-1,))
+            atoms = jnp.reshape(atoms, (-1))
+            indices = jnp.reshape(indices, (-1, 3))
 
-            return (
-                r[idx] < r_cut + r_skin,
-                r[idx],
-                atoms[idx],
-                indices[idx, :],
-                center_op,
-            )
+            idx = jnp.argsort(r)[0:take_num]
 
-        @jax.jit
-        def _f(sp: SystemParams):
-            bools, r, a, ijk, center_op = res(sp, sp.coordinates)
-            num_neighs = jnp.max(jnp.sum(bools, axis=1))
+            n = jnp.sum(r < r_cut + r_skin)
 
-            return num_neighs, bools, r, a, ijk, center_op
+            return n, r[idx], atoms[idx], indices[idx, :], center_op
 
-        @partial(jit, static_argnums=0)
-        def take(num_neighs, r, a, ijk):
-            r, a = (
-                r[:, 0:num_neighs],
-                a[:, 0:num_neighs],
-            )
-            if ijk is not None:
-                ijk = ijk[:, 0:num_neighs]
-            return r, a, ijk
+        @partial(jax.jit, static_argnames=["take_num"])
+        def _f(sp: SystemParams, take_num):
+            n, r, a, ijk, center_op = res(sp, sp.coordinates, take_num)
+            num_neighs = jnp.max(n)
 
-        if sp.batched:
-            _f = padded_pmap(vmap(_f))
-            take = vmap(take, in_axes=(None, 0, 0, 0))
+            return num_neighs, r, a, ijk, center_op
 
-        nn, _, r, a, ijk, center_op = _f(sp)
+        def get_f(take_num):
+            f = Partial(_f, take_num=take_num)
+            if sp.batched:
+                f = padded_pmap(chunk_map(vmap(f), chunk_size=chunk_size))
+            return f
+
+        # not jittable
+        if num_neighs is None:
+            nn, _, _, _, _ = get_f(1)(sp)
+            if sp.batched:
+                nn = jnp.max(nn)  # ingore: type
+
+            num_neighs = int(nn)
+
+        nn, r, a, ijk, center_op = get_f(num_neighs)(sp)
 
         if sp.batched:
             nn = jnp.max(nn)  # ingore: type
 
-        if num_neighs is None:
-            num_neighs = int(nn)
-        else:
-            b = jnp.logical_and(b, nn <= num_neighs)
-
-        r, a, ijk = take(num_neighs, r, a, ijk)
+        b = jnp.logical_and(b, nn <= num_neighs)
 
         return (
             b,
+            nn,
+            new_nxyz,
             NeighbourList(
                 r_cut=r_cut,
                 r_skin=r_skin,
@@ -523,6 +504,7 @@ class SystemParams(PyTreeNode):
         r_cut,
         z_array: list[int] | Array,
         r_skin=0.0,
+        chunk_size=None,
     ) -> NeighbourList | None:
         def to_tuple(a):
             if a is None:
@@ -532,12 +514,13 @@ class SystemParams(PyTreeNode):
         zu = jnp.unique(jnp.array(z_array)) if z_array is not None else None
         nzu = vmap(lambda zu: jnp.sum(jnp.array(z_array) == zu))(zu) if zu is not None else None
 
-        b, nl = self._get_neighbour_list(
+        b, _, _, nl = self._get_neighbour_list(
             r_cut=r_cut,
             r_skin=r_skin,
             z_array=to_tuple(z_array),
             z_unique=to_tuple(zu),
             num_z_unique=to_tuple(nzu),
+            chunk_size=chunk_size,
         )
         return nl
 
@@ -984,16 +967,30 @@ class SystemParams(PyTreeNode):
         if not isinstance(other, SystemParams):
             return False
 
-        if not jnp.allclose(self.coordinates - other.coordinates):
+        if not jnp.allclose(self.coordinates, other.coordinates):
             return False
 
         if self.cell is None:
             if other.cell is not None:
                 return False
         else:
-            if not jnp.allclose(self.cell - other.cell):
+            if not jnp.allclose(self.cell, other.cell):
                 return False
         return True
+
+    def super_cell(self, n: int | list[int]) -> SystemParams:
+        if self.batched:
+            return vmap(Partial(SystemParams.super_cell, n=n))(self)
+
+        if isinstance(n, int):
+            n = [n, n, n]
+
+        coor = []
+
+        for a, b, c in itertools.product(range(n[0]), range(n[1]), range(n[2])):
+            coor.append(self.coordinates + a * self.cell[0, :] + b * self.cell[1, :] + c * self.cell[2, :])
+
+        return SystemParams(coordinates=jnp.concatenate(coor, axis=0), cell=jnp.array(n) @ self.cell)
 
     # def __getstate__(self):
     #     return self.__dict__
@@ -1395,15 +1392,18 @@ class NeighbourList(PyTreeNode):
 
         # def _f():
         #     jax.debug.print("fast nl update")
-        return sp._get_neighbour_list(
+
+        a, _, _, b = sp._get_neighbour_list(
             r_cut=self.r_cut,
-            r_skin=self.r_skin,
+            r_skin=0.0,
             z_array=self.z_array,
             z_unique=self.z_unique,
             num_z_unique=self.num_z_unique,
             num_neighs=self.num_neigh,
             nxyz=self.nxyz,
         )
+
+        return a, b
 
         # return jax.lax.cond(
         #     max_displacement > self.r_skin,
@@ -1707,7 +1707,7 @@ class CV(PyTreeNode):
             cv=self.cv[idx, :],
             mapped=self.mapped,
             atomic=self.atomic,
-            _stack_dims=self._stack_dims,
+            _stack_dims=None,
             _combine_dims=self._combine_dims,
         )
 
@@ -2192,6 +2192,7 @@ class CvFunBase(_CvFunBase, PyTreeNode):
     __: KW_ONLY
     cv_input: CvFunInput | None = None
     kwargs: dict = field(pytree_node=False, default_factory=dict)
+    static_kwarg_names: dict = field(pytree_node=False, default_factory=dict)
     jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
 
 
@@ -2260,6 +2261,7 @@ class CvFunNn(nn.Module, _CvFunBase):
 
     cv_input: CvFunInput | None = None
     kwargs: dict = field(pytree_node=False, default_factory=dict)
+    static_kwarg_names: dict = field(pytree_node=False, default_factory=dict)
     jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
 
     @abstractmethod

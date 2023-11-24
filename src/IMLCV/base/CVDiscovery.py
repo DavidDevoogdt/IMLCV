@@ -67,17 +67,16 @@ class Transformer:
             _f = padded_pmap(_f)
 
         x: CV = _f(z, nl)
-
-        x_stacked = x.replace(_stack_dims=stack_dims)
+        x = x.replace(_stack_dims=stack_dims)
 
         if self.pre_scale:
-            g = scale_cv_trans(x_stacked, lower=0, upper=1)
+            g = scale_cv_trans(x, lower=0, upper=1)
 
-            x_stacked, _, _ = g.compute_cv_trans(x_stacked)
+            x, _, _ = g.compute_cv_trans(x)
 
             f = f * g
 
-        x = x_stacked.unstack()
+        x = x.unstack()
 
         return x, f
 
@@ -88,9 +87,10 @@ class Transformer:
         plot=True,
         plot_folder: str | Path | None = None,
         p_map=True,
-        percentile=5,
-        margin=0.01,
-        jac=jax.jacfwd,
+        percentile=1,
+        margin=0.05,
+        jac=jax.jacrev,
+        test=False,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
@@ -107,6 +107,14 @@ class Transformer:
             p_map=p_map,
         )
 
+        if test:
+            x_2, _ = f.compute_cv_flow(
+                SystemParams.stack(*sp_list),
+                NeighbourList.stack(*nl_list),
+                chunk_size=chunk_size,
+            )
+            assert jnp.allclose(x_2.cv, CV.stack(*x).cv)
+
         print("starting fit")
         y, g = self._fit(
             x,
@@ -115,13 +123,23 @@ class Transformer:
             **self.fit_kwargs,
         )
 
+        print(f"{y.stack_dims=}")
+
+        if y.stack_dims is None:
+            print("faulty stack dims, replacing")
+            y = y.replace(_stack_dim=[a.shape[0] for a in sp_list])
+
+        if test:
+            y_2, _, _ = g.compute_cv_trans(CV.stack(*x), NeighbourList.stack(*nl_list), chunk_size=chunk_size)
+            assert jnp.allclose(y_2.cv, y.cv)
+
         # remove outliers from the data
         bounds = jnp.percentile(y.cv, jnp.array([percentile, 100 - percentile]), axis=0)
 
-        diff = bounds[1, :] - bounds[0, :]
+        # diff = bounds[1, :] - bounds[0, :]
 
-        bounds_l = bounds[0, :] - margin * diff / (1 - 2 * percentile / 100) * (1 + margin)
-        bounds_u = bounds[1, :] + margin * diff / (1 - 2 * percentile / 100) * (1 + margin)
+        bounds_l = bounds[0, :]
+        bounds_u = bounds[1, :]
 
         mask_l = jnp.all(y.cv > bounds_l, axis=1)
         mask_u = jnp.all(y.cv < bounds_u, axis=1)
@@ -137,11 +155,6 @@ class Transformer:
             [jnp.min(z_masked.cv, axis=0), jnp.max(z_masked.cv, axis=0)],
         ).T
 
-        # d = (new_bounding_box[:, 1] - new_bounding_box[:, 0]) * margin / 2
-
-        # new_bounding_box = new_bounding_box.at[:, 0].set(new_bounding_box[:, 0] - d * margin / 2)
-        # new_bounding_box = new_bounding_box.at[:, 1].set(new_bounding_box[:, 1] + d * margin / 2)
-
         new_collective_variable = CollectiveVariable(
             f=f * g * h,
             jac=jac,
@@ -150,6 +163,15 @@ class Transformer:
                 bounding_box=new_bounding_box,
             ),
         )
+
+        if test:
+            cv_full, _ = new_collective_variable.compute_cv(
+                SystemParams.stack(*sp_list),
+                NeighbourList.stack(*nl_list),
+                chunk_size=chunk_size,
+            )
+
+            assert jnp.allclose(cv_full.cv, z.cv)
 
         if plot:
             # sp = SystemParams.stack(*sp_list)
@@ -188,13 +210,16 @@ class Transformer:
     def plot_app(
         old_cv: CollectiveVariable,
         new_cv: CollectiveVariable,
-        name: str | Path,
+        name: str | Path | None = None,
         labels=None,
         sps: SystemParams = None,
         nl: NeighbourList = None,
         chunk_size: int | None = None,
         cv_data_old: CV | None = None,
         cv_data_new: CV | None = None,
+        cv_titles=None,
+        data_titles=None,
+        color_trajectories=False,
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
@@ -210,43 +235,69 @@ class Transformer:
         else:
             cv_data.append(cv_data_new)
 
+        if cv_titles is None:
+            cv_titles = ["Old CV", "New CV"]
+
+        if data_titles is None:
+            data_titles = ["Old Data", "New Data"]
+
         # plot setting
-        kwargs = {"s": 0.2}
+        kwargs = {
+            "s": 0.3,
+            "edgecolor": "none",
+        }
 
         if labels is None:
             labels = [
-                ["cv in 1", "cv in 2", "cv in 3"],
-                ["cv out 1", "cv out 2", "cv out 3"],
+                ["cv_1 [a.u.]", "cv_2 [a.u.]", "cv_3 [a.u.]"],
+                ["cv_1 [a.u.]", "cv_2 [a.u.]", "cv_3 [a.u.]"],
             ]
 
         indim = cv_data[0].shape[1]
         outdim = cv_data[1].shape[1]
 
         plt.rc("text", usetex=False)
-        plt.rc("font", family="DejaVu Sans", size=18)
+        plt.rc("font", family="DejaVu Sans", size=16)
 
-        fig = plt.figure()
+        fig = plt.figure(layout="constrained")
 
         for in_out_color, ls, rs in Transformer._grid_spec_iterator(
             fig=fig,
             indim=indim,
             outdim=outdim,
+            cv_titles=cv_titles,
+            data_titles=data_titles,
         ):
+
+            def get_color_data(a: CV):
+                if color_trajectories:
+                    a_out = []
+
+                    for ai in a.unstack():
+                        avg = jnp.mean(ai.cv, axis=0, keepdims=True)
+                        a_out.append(ai.replace(cv=ai.cv * 0 + avg))
+
+                    a = CV.stack(*a_out)
+
+                color_data = a.cv
+
+                max_val = jnp.max(color_data, axis=0)
+                min_val = jnp.min(color_data, axis=0)
+
+                if (max_val == min_val).all():
+                    data_col = color_data
+
+                else:
+                    data_col = (color_data - min_val) / (max_val - min_val)
+
+                return data_col
+
             if in_out_color == 0:
                 dim = indim
-                color_data = cv_data[0].cv
+                data_col = get_color_data(cv_data[0])
             else:
                 dim = outdim
-                color_data = cv_data[1].cv
-
-            max_val = jnp.max(color_data, axis=0)
-            min_val = jnp.min(color_data, axis=0)
-
-            if (max_val == min_val).all():
-                data_col = color_data
-
-            else:
-                data_col = (color_data - min_val) / (max_val - min_val)
+                data_col = get_color_data(cv_data[1])
 
             # https://www.hsluv.org/
             # hue 0-360 sat 0-100 lighness 0-1000
@@ -287,32 +338,65 @@ class Transformer:
                 elif dim == 3:
                     f = Transformer._plot_3d
 
-                f(fig, axes, data_proc, rgb, labels[0][0:dim], **kwargs)
+                f(fig, axes, data_proc, rgb, labels[in_out][0:dim], **kwargs)
 
             do_plot(indim, 0, ls)
             do_plot(outdim, 1, rs)
 
-        name = Path(name)
-        if name.suffix != ".pdf" or name.suffix != ".png":
-            name = Path(
-                f"{name}.pdf",
-            )
+        if name is None:
+            plt.show()
+        else:
+            name = Path(name)
 
-        name.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(name)
+            if (name.suffix != ".pdf") and (name.suffix != ".png"):
+                print(f"{name.suffix} should be pdf or png, changing to pdf")
+
+                name = Path(
+                    f"{name}.pdf",
+                )
+
+            name.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(name)
 
     @staticmethod
     def _grid_spec_iterator(
         fig: Figure,
         indim,
         outdim,
+        cv_titles,
+        data_titles=None,
     ) -> Iterator[tuple[list[int], int, list[plt.Axes], list[plt.Axes]]]:
         width_in = 1 if indim < 3 else 2
         width_out = 1 if outdim < 3 else 2
 
-        spec = fig.add_gridspec(nrows=2, ncols=2, width_ratios=[width_in, width_out])
-        yield 0, spec[0, 0], spec[0, 1]
-        yield 1, spec[1, 0], spec[1, 1]
+        spec = fig.add_gridspec(nrows=3, ncols=3, width_ratios=[0.01, width_in, width_out], height_ratios=[0.01, 1, 1])
+
+        yield 0, spec[1, 1], spec[1, 2]
+        yield 1, spec[2, 1], spec[2, 2]
+
+        def add_ax(sp):
+            ax = fig.add_subplot(sp)
+
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.spines["right"].set_visible(False)
+            ax.spines["top"].set_visible(False)
+            ax.spines["bottom"].set_visible(False)
+            ax.spines["left"].set_visible(False)
+            return ax
+
+        ax_left = add_ax(spec[0, 1])
+        ax_left.set_title(cv_titles[0])
+
+        ax_right = add_ax(spec[0, 2])
+        ax_right.set_title(cv_titles[1])
+
+        if data_titles is not None:
+            ax_up = add_ax(spec[1, 0])
+            ax_up.set_title(data_titles[0])
+
+            ax_down = add_ax(spec[2, 0])
+            ax_down.set_title(data_titles[1])
 
     @staticmethod
     def _plot_1d(fig: Figure, grid: gridspec, data, colors, labels, **scatter_kwargs):
@@ -328,7 +412,7 @@ class Transformer:
             c=colors,
         )
 
-        ax.set_xlabel(labels)
+        ax.set_xlabel(labels[0])
         ax.set_ylabel("count")
 
         ax_histx.hist(data[:, 0])
@@ -355,6 +439,10 @@ class Transformer:
 
         ax_histx.hist(data[:, 0])
         ax_histy.hist(data[:, 1], orientation="horizontal")
+        ax_histy.tick_params(axis="x", rotation=-90)
+
+        ax_histx.set_xticks([])
+        ax_histy.set_yticks([])
 
     @staticmethod
     def _plot_3d(fig: Figure, grid: gridspec, data, colors, labels, **scatter_kwargs):
@@ -447,3 +535,16 @@ class Transformer:
                     zorder=1,
                     c=colors,
                 )
+
+
+class IdentityTransformer(Transformer):
+    def _fit(
+        self,
+        x: list[CV],
+        dlo: Rounds.data_loader_output,
+        chunk_size=None,
+        **fit_kwargs,
+    ) -> tuple[CV, CvTrans]:
+        cv = CV.stack(*x)
+
+        return cv, identity_trans

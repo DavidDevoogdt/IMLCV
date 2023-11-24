@@ -536,6 +536,7 @@ def _transform(cv: CV, nl: NeighbourList | None, _, mask):
     return cv.replace(cv=cv.cv[mask])
 
 
+# @partial(jax.jit,static_argnames="add_1")
 def _tranform_maf(cv, nl, _, q, pi, add_1):
     cv_v = q.T @ (cv.cv - pi)
     if add_1:
@@ -758,21 +759,21 @@ class TransformerMAF(Transformer):
 
         # decorrelateion part 2
 
+        shrink_output = False
+
+        C_0, C_1, cv_0_new, cv_tau_new, tr = get_covs(
+            cv_0,
+            cv_tau,
+            W=W,
+            sym=True,
+            add_1=solver == "eig",
+            shrink_output=shrink_output,
+        )
+
+        trans *= tr
+
         if solver == "eig":
             #   https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
-
-            shrink_output = False
-
-            C_0, C_1, cv_0_new, cv_tau_new, tr = get_covs(
-                cv_0,
-                cv_tau,
-                W=W,
-                sym=True,
-                add_1=True,
-                shrink_output=shrink_output,
-            )
-
-            trans *= tr
 
             print("calculating eigenvalues")
             n = C_0.shape[0]
@@ -781,40 +782,24 @@ class TransformerMAF(Transformer):
             if weights == "koopman":
                 if not shrink_output:
                     assert jnp.abs(w[-1] - 1) < 1e-5, "last eigenvalue should be 1"
-                print(f"eigenvalue are {w}")
 
             u = u[:, :-1]
             u = u[:, ::-1]
             u = jnp.array(u)
-
-            tica_selection = CvTrans.from_cv_function(_tica_selection_2, u=u)
-
-            trans *= tica_selection
-
-            cv, _, _ = trans.compute_cv_trans(cv)
-
         elif solver == "opt":
-            pi_eq = jnp.sum(0.5 * (X + Y).T @ W, axis=1)
-            COV_eq = 0.5 * (X.T @ W @ X + Y.T @ W @ Y) - jnp.outer(pi_eq, pi_eq)
-
-            rho, F, COV_eq = shrink(S=COV_eq, n=X.shape[0], shrinkage=shrinkage)
-
-            COV_tau_eq = 0.5 * (X.T @ W @ Y + Y.T @ W @ X) - jnp.outer(pi_eq, pi_eq)
-            # COV_tau_eq = (1 - rho) * COV_tau_eq + rho * F
-
             if optimizer is None:
                 optimizer = pymanopt.optimizers.TrustRegions(
                     max_iterations=max_iterations,
                     min_gradient_norm=min_gradient_norm,
                     min_step_size=min_step_size,
                 )
-            manifold = pymanopt.manifolds.stiefel.Stiefel(n=COV_eq.shape[0], p=self.outdim)
+            manifold = pymanopt.manifolds.stiefel.Stiefel(n=C_0.shape[0], p=self.outdim)
 
             @pymanopt.function.jax(manifold)
             @jit
             def cost(x):
-                a = jnp.trace(x.T @ COV_eq @ x)
-                b = jnp.trace(x.T @ COV_tau_eq @ x)
+                a = jnp.trace(x.T @ C_0 @ x)
+                b = jnp.trace(x.T @ C_1 @ x)
 
                 if slow_feature_analysis:
                     out = b - a
@@ -829,11 +814,22 @@ class TransformerMAF(Transformer):
             problem = pymanopt.Problem(manifold, cost)
             result = optimizer.run(problem)
 
-            alpha = jnp.array(result.point)
+            u = jnp.array(result.point)
 
-            tica_selection = CvTrans.from_cv_function(_tica_selection, pi_eq=pi_eq, alpha=alpha)
+            print(u.shape)
+            w = jnp.einsum("ji,jj,ji->i", u, C_1, u) / jnp.einsum("ji,jj,ji->i", u, C_0, u)
+            print(w.shape)
+            idx = jnp.argsort(w)
 
-            cv = tica_selection.compute_cv_trans(cv)[0]
-            trans *= tica_selection
+            w = w[idx]
+            u = u[:, idx]
+
+            print(u.shape)
+
+        print(f"eigenvalue are {w}")
+
+        tica_selection = CvTrans.from_cv_function(_tica_selection_2, u=u)
+        trans *= tica_selection
+        cv, _, _ = trans.compute_cv_trans(cv)
 
         return cv, trans

@@ -107,7 +107,10 @@ class AseEnergy(Energy):
         """use unit conventions of ASE"""
 
         if self.atoms.calc is None:
+            sp_save = self.sp
             self.atoms.calc = self._calculator()
+            self.sp = sp_save
+
             # self.atoms.calc.atoms = self.atoms
 
         try:
@@ -154,6 +157,8 @@ class AseEnergy(Energy):
         atom_params = state["atoms"]
 
         self.atoms = ase.Atoms.fromdict(**atom_params)
+        print(f"setting {atom_params=}")
+
         self.calculator = clss(**calc_params)
         self.atoms.calc = self.calculator
 

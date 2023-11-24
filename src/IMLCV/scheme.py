@@ -75,6 +75,7 @@ class Scheme:
         cv_round: int | None = None,
         ignore_invalid=False,
         eps=0.1,
+        min_traj_length=None,
     ):
         m = self.md.bias.collective_variable.metric
 
@@ -95,7 +96,7 @@ class Scheme:
         k *= scale_n**2
 
         self.rounds.run_par(
-            [
+            biases=[
                 HarmonicBias.create(
                     self.md.bias.collective_variable,
                     CV(cv=jnp.array(cv)),
@@ -108,6 +109,7 @@ class Scheme:
             plot=plot,
             cv_round=cv_round,
             ignore_invalid=ignore_invalid,
+            min_traj_length=min_traj_length,
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):
@@ -134,6 +136,7 @@ class Scheme:
         cv_round: int | None = None,
         chunk_size=None,
         eps_umbrella=0.1,
+        plot_margin=0.5,
     ):
         if cv_round is None:
             cv_round = self.rounds.cv
@@ -155,8 +158,10 @@ class Scheme:
         else:
             self.md.static_trajectory_info.max_grad = max_grad
 
-        for i in range(rnds):
-            print(f"running round with {steps} steps")
+        i_0 = self.rounds.get_round(c=cv_round)
+
+        for i in range(i_0, rnds):
+            print(f"running round {i=} with {steps} steps")
             self.grid_umbrella(
                 steps=steps,
                 n=n,
@@ -167,6 +172,7 @@ class Scheme:
                 cv_round=cv_round,
                 ignore_invalid=i == 0,
                 eps=eps_umbrella,
+                min_traj_length=steps if i != 0 else None,
             )
 
             if update_metric:
@@ -180,6 +186,8 @@ class Scheme:
                     num_rnds=fes_bias_rnds,
                     cv_round=cv_round,
                     chunk_size=chunk_size,
+                    min_traj_length=steps,
+                    margin=plot_margin,
                     **plot_kwargs,
                 )
 
@@ -194,11 +202,11 @@ class Scheme:
         new_r_cut=None,
         save_samples=True,
         save_multiple_cvs=False,
-        jac=jax.jacfwd,
+        jac=jax.jacrev,
     ):
         # dlo = self.rounds.data_loader()
 
-        cvs_new, new_cv = transformer.fit(
+        cvs_new, new_collective_variable = transformer.fit(
             dlo=dlo,
             chunk_size=chunk_size,
             plot=plot,
@@ -208,8 +216,8 @@ class Scheme:
 
         # update state
 
-        self.md.bias = NoneBias.create(new_cv)
-        self.rounds.add_cv_from_cv(new_cv)
+        self.md.bias = NoneBias.create(new_collective_variable)
+        self.rounds.add_cv_from_cv(new_collective_variable)
         self.md.static_trajectory_info.r_cut = new_r_cut
         self.rounds.add_round_from_md(self.md)
 
@@ -219,8 +227,8 @@ class Scheme:
             if save_multiple_cvs:
                 for dlo_i, cv_new_i in zip(iter(dlo), CV.unstack(cvs_new)):
                     if not first:
-                        self.md.bias = NoneBias.create(new_cv)
-                        self.rounds.add_cv_from_cv(new_cv)
+                        self.md.bias = NoneBias.create(new_collective_variable)
+                        self.rounds.add_cv_from_cv(new_collective_variable)
                         self.md.static_trajectory_info.r_cut = new_r_cut
                         self.rounds.add_round_from_md(self.md)
 
@@ -230,6 +238,8 @@ class Scheme:
                     first = False
 
             else:
+                print(f"{ len(dlo.cv)}, { len( CV.unstack(cvs_new))=  } ")
+
                 self.rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new))
                 self.rounds.add_round_from_md(self.md)
 
