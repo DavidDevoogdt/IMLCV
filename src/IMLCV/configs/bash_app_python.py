@@ -112,7 +112,7 @@ def bash_app_python(
 
                 if filename.suffix == ".json":
                     with open(filename, "r+") as f:
-                        f.writelines(jsonpickle.encode((func, args, kwargs), indent=1))
+                        f.writelines(jsonpickle.encode((func, args, kwargs), indent=1, use_base85=True))
                 else:
                     with open(filename, "rb+") as f:
                         cloudpickle.dump((func, args, kwargs), f)
@@ -233,7 +233,7 @@ if __name__ == "__main__":
 
         if file_out.suffix == ".json":
             with open(file_out, "w+") as f3:
-                f3.writelines(jsonpickle.encode(a))
+                f3.writelines(jsonpickle.encode(a, use_base85=True))
         else:
             with open(file_out, "wb+") as f4:
                 cloudpickle.dump(a, f4)

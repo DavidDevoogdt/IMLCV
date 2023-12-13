@@ -1,3 +1,5 @@
+from functools import partial
+
 import jax.debug
 import jax.dtypes
 import jax.lax
@@ -23,8 +25,10 @@ from IMLCV.tools.bessel_callback import kve
 from IMLCV.tools.bessel_callback import spherical_jn
 from IMLCV.tools.bessel_callback import spherical_yn
 from IMLCV.tools.bessel_callback import yv
+from IMLCV.tools.soap_kernel import p_inl_sb
 from jax import grad
 from jax import vmap
+from jax.tree_util import Partial
 
 
 def get_sps(
@@ -152,6 +156,33 @@ def test_SOAP_SB_sinkhorn(cell, matching, pp):
     assert 1e-3 < jnp.mean(jnp.linalg.norm(dx3.cv.coordinates, axis=1)) < 1
     if cell:
         assert 1e-3 < jnp.mean(jnp.linalg.norm(dx3.cv.cell, axis=1)) < 1
+
+
+def test_SB_basis():
+    n_max = 3
+    l_max = 3
+    r_cut = 1.0
+    n = 10000
+
+    r = jnp.zeros((n, 3))
+    r = r.at[:, 0].set(jnp.linspace(0, 1.0, n))
+
+    a, _ = p_inl_sb(n_max, l_max, r_cut)
+    # f = jax.vmap(Partial(a, atom_index_j=_))
+
+    o_g = jax.vmap(lambda r: a(r, _))(r)
+
+    @partial(jax.vmap, in_axes=(None, 2, 2))
+    @partial(jax.vmap, in_axes=(None, None, 1))
+    @partial(jax.vmap, in_axes=(None, 1, None))
+    def int(r, g, h):
+        r = jnp.linalg.norm(r, axis=1)
+        n = r.shape[0]
+        return jnp.sum(r**2 * g * h) / n
+
+    assert (
+        jnp.sqrt(jnp.max((int(r, o_g, o_g) - jax.vmap(lambda _: jnp.eye(o_g.shape[1]), in_axes=(2))(o_g)) ** 2)) < 2e-4
+    )
 
 
 def test_bessel():

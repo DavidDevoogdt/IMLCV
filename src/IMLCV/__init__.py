@@ -22,15 +22,15 @@ import os
 import sys
 from logging import warning
 import cloudpickle
-
 import jax
 from jax import random
 import jax._src.tree_util
-
 from flax.struct import PyTreeNode
-
-# helpr to unpickle class without setstate
 import jsonpickle
+from jsonpickle.handlers import BaseHandler
+from jsonpickle.ext.numpy import register_handlers, register
+import numpy as np
+import jax.numpy as jnp
 
 
 KEY = random.PRNGKey(0)
@@ -42,18 +42,33 @@ if "mpi4py" in sys.modules:
 
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-
 jax.config.update("jax_enable_x64", True)
-
-# cpu based
 jax.config.update("jax_platform_name", "cpu")
-
 
 logging.getLogger("absl").addFilter(
     logging.Filter(
         "call_tf works best with a TensorFlow function that does not capture variables or tensors from the context.",
     ),
 )
+
+
+register_handlers()
+
+
+class JaxHandler(BaseHandler):
+    "flattens the jax array to numpy array, which is already handled by jsonpickle"
+
+    def flatten(self, obj, data):
+        self.context: jsonpickle.Unpickler
+        data["array"] = self.context.flatten(np.array(obj).copy(), reset=False)
+        return data
+
+    def restore(self, data):
+        self.context: jsonpickle.Pickler
+        return jnp.array(self.context.restore(data["array"], reset=False))
+
+
+register(jax.Array, JaxHandler, base=True)
 
 
 class Unpickler(jsonpickle.Unpickler):
@@ -63,13 +78,9 @@ class Unpickler(jsonpickle.Unpickler):
         if isinstance(instance, PyTreeNode):
             update = True
 
-        try:
-            out = super()._restore_object_instance_variables(obj, instance)
-        except Exception as e:
-            print(f"got {e=}\\m{obj=}\n {instance=}")
+        out = super()._restore_object_instance_variables(obj, instance)
 
         if update:
-            # print(f"calling init for {instance.__class__}")
             instance.__init__(**instance.__dict__)
 
         return out

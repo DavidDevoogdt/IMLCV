@@ -548,7 +548,7 @@ class MDEngine(ABC):
         filename = Path(file)
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)

@@ -110,6 +110,46 @@ def padded_pmap(f, n_devices: int | None = None):
 
         return out_tree
 
+    # def apply_pmap_fn(
+    #     *args: PyTreeNode,
+    #     n_devices: int | None = None,
+    # ):
+    #     if n_devices is None:
+    #         n_devices = jax.device_count("cpu")
+
+    #     if n_devices == 1:
+    #         # print(f"only 1 device found, skipping parallel mapping")
+    #         # still vmap it
+    #         return f(*args)
+
+    #     p = None
+
+    #     # pad the input args
+    #     in_tree, tree_def = tree_flatten(args)
+
+    #     for i in range(len(in_tree)):
+    #         if p is None:
+    #             p = get_shape(n_devices, in_tree[i].shape[0])
+    #         else:
+    #             assert p == get_shape(n_devices, in_tree[i].shape[0]), "inconsisitent batch dims"
+
+    #         in_tree[i] = n_pad(in_tree[i], n_devices, p)
+
+    #     in_tree = tree_unflatten(tree_def, in_tree)
+
+    #     out_tree = pmap(f)(*in_tree)
+
+    #     del in_tree  # for memory purposes
+
+    #     out_tree, tree_def = tree_flatten(out_tree)
+
+    #     for i in range(len(out_tree)):
+    #         out_tree[i] = n_unpad(out_tree[i], p)
+
+    #     out_tree = tree_unflatten(tree_def, out_tree)
+
+    #     return out_tree
+
     return partial(apply_pmap_fn, n_devices=n_devices)
 
 
@@ -963,20 +1003,20 @@ class SystemParams(PyTreeNode):
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
 
-    def __eq__(self, other):
-        if not isinstance(other, SystemParams):
-            return False
+    # def __eq__(self, other):
+    #     if not isinstance(other, SystemParams):
+    #         return False
 
-        if not jnp.allclose(self.coordinates, other.coordinates):
-            return False
+    #     if not jnp.allclose(self.coordinates, other.coordinates):
+    #         return False
 
-        if self.cell is None:
-            if other.cell is not None:
-                return False
-        else:
-            if not jnp.allclose(self.cell, other.cell):
-                return False
-        return True
+    #     if self.cell is None:
+    #         if other.cell is not None:
+    #             return False
+    #     else:
+    #         if not jnp.allclose(self.cell, other.cell):
+    #             return False
+    #     return True
 
     def super_cell(self, n: int | list[int]) -> SystemParams:
         if self.batched:
@@ -1551,49 +1591,49 @@ class NeighbourList(PyTreeNode):
     def stack(*nls: NeighbourList) -> NeighbourList:
         return sum(nls[1:], nls[0])
 
-    def __eq__(self, other):
-        if not isinstance(other, NeighbourList):
-            return False
+    # def __eq__(self, other):
+    #     if not isinstance(other, NeighbourList):
+    #         return False
 
-        if not self.r_cut == other:
-            return False
+    #     if not self.r_cut == other:
+    #         return False
 
-        def _check_none(a, b, allclose=False):
-            if a is None:
-                return b is None
+    #     def _check_none(a, b, allclose=False):
+    #         if a is None:
+    #             return b is None
 
-            if b is None:
-                return False
+    #         if b is None:
+    #             return False
 
-            if not isinstance(a, jax.Array):
-                a = jnp.array(a)
+    #         if not isinstance(a, jax.Array):
+    #             a = jnp.array(a)
 
-            if not isinstance(b, jax.Array):
-                b = jnp.array(b)
+    #         if not isinstance(b, jax.Array):
+    #             b = jnp.array(b)
 
-            if allclose:
-                jnp.allclose(a, b)
+    #         if allclose:
+    #             jnp.allclose(a, b)
 
-            return (a == b).all()
+    #         return (a == b).all()
 
-        if not _check_none(self.op_cell, other.op_cell):
-            return False
-        if not _check_none(self.op_coor, other.op_coor):
-            return False
-        if not _check_none(self.op_center, other.op_center):
-            return False
-        if not _check_none(self._ijk_indices, other.ijk_indices):
-            return False
-        if not self.sp_orig == other.sp_orig:
-            return False
-        if not _check_none(self.z_array, other.z_array):
-            return False
-        if not _check_none(self.nxyz, other.nxyz):
-            return False
-        if not _check_none(self.z_unique, other.z_unique):
-            return False
+    #     if not _check_none(self.op_cell, other.op_cell):
+    #         return False
+    #     if not _check_none(self.op_coor, other.op_coor):
+    #         return False
+    #     if not _check_none(self.op_center, other.op_center):
+    #         return False
+    #     if not _check_none(self._ijk_indices, other.ijk_indices):
+    #         return False
+    #     if not self.sp_orig == other.sp_orig:
+    #         return False
+    #     if not _check_none(self.z_array, other.z_array):
+    #         return False
+    #     if not _check_none(self.nxyz, other.nxyz):
+    #         return False
+    #     if not _check_none(self.z_unique, other.z_unique):
+    #         return False
 
-        return True
+    #     return True
 
     # def __getstate__(self):
     #     return self.__dict__
@@ -1765,6 +1805,10 @@ class CV(PyTreeNode):
         out: list[CV] = []
 
         for j in self.stack_dims:
+            if j == 0:
+                print("skipping empty stack")
+                continue
+
             out += [
                 CV(
                     cv=self.cv[i : i + j, :],
@@ -1896,6 +1940,18 @@ class CV(PyTreeNode):
             _stack_dims=cvs[0]._stack_dims,
             atomic=atomic,
         )
+
+    # def __eq__(self, other):
+    #     if not isinstance(other, CV):
+    #         return False
+
+    #     return (
+    #         jnp.allclose(self.cv, other.cv)
+    #         and self._combine_dims == other._combine_dims
+    #         and self._stack_dims == other._stack_dims
+    #         and self.atomic == other.atomic
+    #         and self.mapped == other.mapped
+    #     )
 
     # def __getstate__(self):
     #     return self.__dict__
@@ -2104,10 +2160,6 @@ class CvFunInput(PyTreeNode):
 
 
 class _CvFunBase:
-    # cv_input: CvFunInput | None = None
-    # kwargs: dict
-    # jacfun: Callable = jax.jacfwd
-
     def calc(
         self,
         x: CV,
@@ -2185,14 +2237,20 @@ class _CvFunBase:
         return self.__dict__
 
     def __setstate__(self, statedict: dict):
+        if "static_kwarg_names" in statedict:
+            statedict.pop("static_kwarg_names")
+
+        if "static_kwargs" not in statedict:
+            statedict["static_kwargs"] = statedict.pop("kwargs")
+
         self.__init__(**statedict)
 
 
 class CvFunBase(_CvFunBase, PyTreeNode):
     __: KW_ONLY
     cv_input: CvFunInput | None = None
-    kwargs: dict = field(pytree_node=False, default_factory=dict)
-    static_kwarg_names: dict = field(pytree_node=False, default_factory=dict)
+    kwargs: dict = field(pytree_node=True, default_factory=dict)
+    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
     jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
 
 
@@ -2216,44 +2274,44 @@ class CvFun(CvFunBase, PyTreeNode):
 
         if reverse:
             assert self.backward is not None
-            return self.backward(x, nl, c, **self.kwargs)
+            return jax.jit(Partial(self.backward, **self.static_kwargs))(x, nl, c, **self.kwargs)
         else:
             assert self.forward is not None
-            return self.forward(x, nl, c, **self.kwargs)
+            return jax.jit(Partial(self.forward, **self.static_kwargs))(x, nl, c, **self.kwargs)
 
-    def __eq__(self, other):
-        if not isinstance(other, CvFun):
-            return False
+    # def __eq__(self, other):
+    #     if not isinstance(other, CvFun):
+    #         return False
 
-        if not self.kwargs.keys() == self.kwargs.keys():
-            return False
+    #     if not self.kwargs.keys() == self.kwargs.keys():
+    #         return False
 
-        if not self.forward == other.forward:
-            return False
+    #     if not self.forward == other.forward:
+    #         return False
 
-        if not self.backward == other.backward:
-            return False
+    #     if not self.backward == other.backward:
+    #         return False
 
-        if not self.cv_input == other.cv_input:
-            return False
+    #     if not self.cv_input == other.cv_input:
+    #         return False
 
-        if not self.conditioners == other.conditioners:
-            return False
+    #     if not self.conditioners == other.conditioners:
+    #         return False
 
-        for k in self.kwargs.keys():
-            if self.kwargs[k] is None:
-                if not other.kwargs[k] is None:
-                    return False
-            elif isinstance(self.kwargs[k], jax.Array):
-                if not isinstance(other.kwargs[k], jax.Array):
-                    return False
-                if not (self.kwargs[k] == other.kwargs[k]).all():
-                    return False
-            else:
-                if not self.kwargs[k] == other.kwargs[k]:
-                    return False
+    #     for k in self.kwargs.keys():
+    #         if self.kwargs[k] is None:
+    #             if not other.kwargs[k] is None:
+    #                 return False
+    #         elif isinstance(self.kwargs[k], jax.Array):
+    #             if not isinstance(other.kwargs[k], jax.Array):
+    #                 return False
+    #             if not (self.kwargs[k] == other.kwargs[k]).all():
+    #                 return False
+    #         else:
+    #             if not self.kwargs[k] == other.kwargs[k]:
+    #                 return False
 
-        return True
+    #     return True
 
 
 class CvFunNn(nn.Module, _CvFunBase):
@@ -2261,7 +2319,7 @@ class CvFunNn(nn.Module, _CvFunBase):
 
     cv_input: CvFunInput | None = None
     kwargs: dict = field(pytree_node=False, default_factory=dict)
-    static_kwarg_names: dict = field(pytree_node=False, default_factory=dict)
+    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
     jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
 
     @abstractmethod
@@ -2496,9 +2554,16 @@ class _CvTrans:
     def from_cv_function(
         f: Callable[[CV, NeighbourList | None, CV | None], CV],
         jacfun: Callable = None,
+        static_argnames=None,
         **kwargs,
     ) -> CvTrans:
-        kw = dict(forward=f, kwargs=kwargs)
+        static_kwargs = {}
+
+        if static_argnames is not None:
+            for a in static_argnames:
+                static_kwargs[a] = kwargs.pop(a)
+
+        kw = dict(forward=f, kwargs=kwargs, static_kwargs=static_kwargs)
 
         if jacfun is not None:
             kw["jacfun"] = jacfun
@@ -2577,7 +2642,7 @@ class _CvTrans:
     def __add__(self, other: _CvTrans) -> _CvTrans:
         assert isinstance(other, self._cv_trans), f"can only add by {self._cv_trans} object"
 
-        dt = CvTrans.from_cv_function(_duplicate_trans, n=2)
+        dt = CvTrans.from_cv_function(_duplicate_trans, static_argnames=["n"], n=2)
 
         return dt * self._cv_trans(
             trans=(self._comb(classes=(self.trans, other.trans)),),
@@ -2593,7 +2658,7 @@ class _CvTrans:
         for i in cv_trans:
             assert isinstance(i, _cv_trans)
 
-        dt = CvTrans.from_cv_function(_duplicate_trans, n=n)
+        dt = CvTrans.from_cv_function(_duplicate_trans, static_argnames=["n"], n=n)
 
         return dt * _cv_trans(
             trans=tuple([_cv_comb(classes=tuple([cvt.trans for cvt in cv_trans]))]),
@@ -2698,9 +2763,10 @@ class CvFlow(PyTreeNode):
     @staticmethod
     def from_function(
         f: Callable[[SystemParams, NeighbourList | None], CV],
+        static_argnames=None,
         **kwargs,
     ) -> CvFlow:
-        return CvFlow(func=_CvTrans.from_cv_function(f=f, **kwargs))
+        return CvFlow(func=_CvTrans.from_cv_function(f=f, static_argnames=static_argnames, **kwargs))
 
     @partial(jax.jit, static_argnames=["chunk_size", "jacobian"])
     def compute_cv_flow(
@@ -2751,7 +2817,7 @@ class CvFlow(PyTreeNode):
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
@@ -2889,7 +2955,7 @@ class CollectiveVariable(PyTreeNode):
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)

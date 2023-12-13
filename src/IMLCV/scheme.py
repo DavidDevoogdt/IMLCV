@@ -76,6 +76,7 @@ class Scheme:
         ignore_invalid=False,
         eps=0.1,
         min_traj_length=None,
+        recalc_cv=False,
     ):
         m = self.md.bias.collective_variable.metric
 
@@ -110,6 +111,7 @@ class Scheme:
             cv_round=cv_round,
             ignore_invalid=ignore_invalid,
             min_traj_length=min_traj_length,
+            recalc_cv=recalc_cv,
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):
@@ -137,9 +139,13 @@ class Scheme:
         chunk_size=None,
         eps_umbrella=0.1,
         plot_margin=0.5,
+        enforce_min_traj_length=True,
+        recalc_cv=False,
     ):
         if cv_round is None:
             cv_round = self.rounds.cv
+
+        print(f"{cv_round=}")
 
         if init != 0:
             print(f"running init round with {init} steps")
@@ -160,6 +166,8 @@ class Scheme:
 
         i_0 = self.rounds.get_round(c=cv_round)
 
+        print(f"{i_0=}")
+
         for i in range(i_0, rnds):
             print(f"running round {i=} with {steps} steps")
             self.grid_umbrella(
@@ -170,9 +178,10 @@ class Scheme:
                 plot=plot,
                 scale_n=scale_n,
                 cv_round=cv_round,
-                ignore_invalid=i == 0,
+                ignore_invalid=i <= 1,
                 eps=eps_umbrella,
-                min_traj_length=steps if i != 0 else None,
+                min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
+                recalc_cv=recalc_cv,
             )
 
             if update_metric:
@@ -186,7 +195,7 @@ class Scheme:
                     num_rnds=fes_bias_rnds,
                     cv_round=cv_round,
                     chunk_size=chunk_size,
-                    min_traj_length=steps,
+                    min_traj_length=steps if enforce_min_traj_length else None,
                     margin=plot_margin,
                     **plot_kwargs,
                 )
@@ -203,8 +212,11 @@ class Scheme:
         save_samples=True,
         save_multiple_cvs=False,
         jac=jax.jacrev,
+        cv_round_from=None,
+        test=False,
     ):
-        # dlo = self.rounds.data_loader()
+        if cv_round_from is None:
+            cv_round_from = self.rounds.cv
 
         cvs_new, new_collective_variable = transformer.fit(
             dlo=dlo,
@@ -212,12 +224,14 @@ class Scheme:
             plot=plot,
             plot_folder=self.rounds.path(c=self.rounds.cv + 1),
             jac=jac,
+            test=test,
         )
 
         # update state
 
-        self.md.bias = NoneBias.create(new_collective_variable)
         self.rounds.add_cv_from_cv(new_collective_variable)
+
+        self.md.bias = NoneBias.create(new_collective_variable)
         self.md.static_trajectory_info.r_cut = new_r_cut
         self.rounds.add_round_from_md(self.md)
 
@@ -232,7 +246,7 @@ class Scheme:
                         self.md.static_trajectory_info.r_cut = new_r_cut
                         self.rounds.add_round_from_md(self.md)
 
-                    self.rounds.copy_from_previous_round(dlo=dlo_i, new_cvs=[cv_new_i])
+                    self.rounds.copy_from_previous_round(dlo=dlo_i, new_cvs=[cv_new_i], cv_round=cv_round_from)
                     self.rounds.add_round_from_md(self.md)
 
                     first = False
@@ -240,7 +254,7 @@ class Scheme:
             else:
                 print(f"{ len(dlo.cv)}, { len( CV.unstack(cvs_new))=  } ")
 
-                self.rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new))
+                self.rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new), cv_round=cv_round_from)
                 self.rounds.add_round_from_md(self.md)
 
     def transform_CV(

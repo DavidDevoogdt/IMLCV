@@ -227,7 +227,7 @@ class RbfBias(Bias):
     values are caluclated in bin centers
     """
 
-    rbf: RBFInterpolator = field(pytree_node=False)
+    rbf: RBFInterpolator = field(pytree_node=True)
 
     @classmethod
     def create(

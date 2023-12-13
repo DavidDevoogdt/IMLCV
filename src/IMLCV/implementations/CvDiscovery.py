@@ -405,9 +405,9 @@ class TransoformerLDA(Transformer):
         solver="eigen",
         method="pymanopt",
         harmonic=True,
-        min_gradient_norm: float = 1e-4,
-        min_step_size: float = 1e-4,
-        max_iterations=50,
+        min_gradient_norm: float = 1e-3,
+        min_step_size: float = 1e-3,
+        max_iterations=25,
         **kwargs,
     ):
         super().__init__(
@@ -433,9 +433,9 @@ class TransoformerLDA(Transformer):
         solver="eigen",
         method="pymanopt",
         harmonic=True,
-        min_gradient_norm: float = 1e-4,
-        min_step_size: float = 1e-4,
-        max_iterations=50,
+        min_gradient_norm: float = 1e-3,
+        min_step_size: float = 1e-3,
+        max_iterations=25,
         **kwargs,
     ):
         # nl_list = dlo.nl
@@ -536,9 +536,13 @@ def _transform(cv: CV, nl: NeighbourList | None, _, mask):
     return cv.replace(cv=cv.cv[mask])
 
 
-# @partial(jax.jit,static_argnames="add_1")
-def _tranform_maf(cv, nl, _, q, pi, add_1):
-    cv_v = q.T @ (cv.cv - pi)
+def _cv_slice(cv: CV, nl: NeighbourList, _, indices):
+    return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
+
+
+def _tranform_maf(cv, nl, _, pi, add_1, q):
+    cv_v = (cv.cv - pi) @ q
+
     if add_1:
         cv_v = jnp.hstack([cv_v, jnp.array([1])])
 
@@ -559,11 +563,11 @@ class TransformerMAF(Transformer):
     def __init__(
         self,
         outdim: int,
-        lag_n=100,
+        lag_n=1,
         optimizer=None,
-        min_gradient_norm: float = 1e-5,
-        min_step_size: float = 1e-5,
-        max_iterations=100,
+        min_gradient_norm: float = 1e-4,
+        min_step_size: float = 1e-4,
+        max_iterations=30,
         shrinkage="BC",
         weights="bias",
         solver="eig",
@@ -595,24 +599,27 @@ class TransformerMAF(Transformer):
         solver="eig",
         weights=None,
         optimizer=None,
-        min_gradient_norm: float = 1e-5,
-        min_step_size: float = 1e-5,
-        max_iterations=25,
+        min_gradient_norm: float = 1e-4,
+        min_step_size: float = 1e-4,
+        max_iterations=30,
         harmonic=False,
         slow_feature_analysis=False,
         correct_bias=False,
+        pre_selction_epsilon=1e-14,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         # nl_list = dlo.nl
-
+        print("stacking")
         cv = CV.stack(*x)
         # nl = NeighbourList.stack(*nl_list)
+        print("unatomizing")
+
         cv, _, _ = un_atomize.compute_cv_trans(cv)
 
         trans = un_atomize
 
         # cv, _f = trunc_svd(cv)
-
+        print("generating cv and cv_tau")
         # part one, create time series data and lagged time series
         X = []
         Y = []
@@ -624,12 +631,19 @@ class TransformerMAF(Transformer):
         cv_0 = CV.stack(*X)
         cv_tau = CV.stack(*Y)
 
-        mask = jnp.linalg.norm((cv_0.cv - jnp.mean(cv_0.cv, axis=0)), axis=0) > 1e-8
+        del X
+        del Y
 
-        transform = CvTrans.from_cv_function(_transform, mask=mask)
+        print("removing 0 entries")
+
+        mask = jnp.linalg.norm(cv_0.cv - jnp.mean(cv_0.cv, axis=0), axis=0) > pre_selction_epsilon
+        args = jnp.argwhere(mask).reshape((-1,))
+        transform = CvTrans.from_cv_function(_cv_slice, indices=args)
 
         cv_0, _, _ = transform.compute_cv_trans(cv_0)
         cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
+
+        print(f"{cv_0.shape=}")
 
         trans *= transform
 
@@ -656,14 +670,21 @@ class TransformerMAF(Transformer):
 
             print("removing small eigenvalues")
             # transform to a basis where the covariance matrix is diagonal, and remove the small eigenvalues
-            # l, q = jnp.linalg.eigh(COV)
+            l, q = jnp.linalg.eigh(COV)
 
             eps = jnp.finfo(COV.dtype).eps * jnp.max(jnp.array(X.shape)) * 100
             print(f"using {eps=}")
 
             l, q = scipy.linalg.eigh(a=COV, subset_by_value=[epsilon, jnp.inf])
+            q = jnp.array(q)
 
-            transform_maf = CvTrans.from_cv_function(_tranform_maf, add_1=add_1, q=q, pi=pi)
+            transform_maf = CvTrans.from_cv_function(
+                _tranform_maf,
+                static_argnames=["add_1"],
+                add_1=add_1,
+                q=q,
+                pi=pi,
+            )
 
             cv_0, _, _ = transform_maf.compute_cv_trans(cv_0)
             cv_tau, _, _ = transform_maf.compute_cv_trans(cv_tau)
@@ -686,10 +707,10 @@ class TransformerMAF(Transformer):
                 C_0 = f_shrink(C_0)
                 # C_1 = f_shrink(C_1)
 
-            return C_0, C_1, cv_0, cv_tau, transform_maf
+            return C_0, C_1, cv_0, cv_tau, transform_maf, pi, q
 
         def get_koopman_weights(cv_0_i, cv_tau_i, w=None, shrink=False):
-            C_0, C_1, cv_0_new, cv_tau_new, _ = get_covs(
+            C_0, C_1, cv_0_new, cv_tau_new, _, _, _ = get_covs(
                 cv_0_i,
                 cv_tau_i,
                 W=jnp.diag(w) if w is not None else None,
@@ -761,16 +782,20 @@ class TransformerMAF(Transformer):
 
         shrink_output = False
 
-        C_0, C_1, cv_0_new, cv_tau_new, tr = get_covs(
+        print("getting covs")
+
+        add_1 = solver == "eig"
+
+        C_0, C_1, cv_0_new, cv_tau_new, tr, pi, q = get_covs(
             cv_0,
             cv_tau,
             W=W,
             sym=True,
-            add_1=solver == "eig",
+            add_1=add_1,
             shrink_output=shrink_output,
         )
 
-        trans *= tr
+        # trans *= tr
 
         if solver == "eig":
             #   https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
@@ -817,7 +842,7 @@ class TransformerMAF(Transformer):
             u = jnp.array(result.point)
 
             print(u.shape)
-            w = jnp.einsum("ji,jj,ji->i", u, C_1, u) / jnp.einsum("ji,jj,ji->i", u, C_0, u)
+            w = jnp.einsum("ji,jk,ki->i", u, C_1, u) / jnp.einsum("ji,jk,ki->i", u, C_0, u)
             print(w.shape)
             idx = jnp.argsort(w)
 
@@ -828,7 +853,16 @@ class TransformerMAF(Transformer):
 
         print(f"eigenvalue are {w}")
 
-        tica_selection = CvTrans.from_cv_function(_tica_selection_2, u=u)
+        if add_1:
+            u = u[:-1, :]
+
+        tica_selection = CvTrans.from_cv_function(
+            _tranform_maf,
+            static_argnames=["add_1"],
+            add_1=False,
+            q=q @ u,
+            pi=pi,
+        )
         trans *= tica_selection
         cv, _, _ = trans.compute_cv_trans(cv)
 

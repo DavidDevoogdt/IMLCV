@@ -219,6 +219,8 @@ class Rounds(ABC):
         for cv_c in self.path().glob("cv_*"):
             c = cv_c.parts[-1][3:]
 
+            print(f"reovering {c=}")
+
             attr = {}
 
             if (p := (self.path(c=c) / "invalid")).exists():
@@ -496,6 +498,8 @@ class Rounds(ABC):
             else:
                 rn = _r.num_vals
 
+            rn.sort()
+
             for i in rn:
                 t_i = time.time()
                 _r_i = self.get_trajectory_information(c=c, r=r0, i=i)
@@ -593,7 +597,7 @@ class Rounds(ABC):
         cv_round=None,
         filter_bias=False,
         filter_energy=False,
-        ignore_invalid=True,
+        ignore_invalid=False,
         energy_threshold=None,
         md_trajs: list[int] | None = None,
         start: int | None = None,
@@ -604,13 +608,14 @@ class Rounds(ABC):
         get_colvar=True,
         min_traj_length=None,
         recalc_cv=False,
+        get_bias_list=False,
     ) -> data_loader_output:
         weights = []
 
         if new_r_cut == -1:
             new_r_cut = self.round_information(c=cv_round).tic.r_cut
 
-        if get_colvar:
+        if get_colvar or recalc_cv:
             colvar = self.get_collective_variable(c=cv_round)
         else:
             colvar = None
@@ -619,7 +624,8 @@ class Rounds(ABC):
         sp: list[SystemParams] = []
         cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
-        bias_list: list[Bias] = []
+        if get_bias_list:
+            bias_list: list[Bias] = []
 
         min_energy = None
 
@@ -635,10 +641,10 @@ class Rounds(ABC):
         ):
             if min_traj_length is not None:
                 if traj.ti._size < min_traj_length:
-                    print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
+                    # print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
                     continue
-                else:
-                    print("adding trajectory")
+                # else:
+                # print("adding trajectory")
 
             if sti is None:
                 sti = round.tic
@@ -646,9 +652,11 @@ class Rounds(ABC):
             ti.append(traj.ti)
             sp0 = traj.ti.sp
 
-            if (cv0 := traj.ti.CV) is None or recalc_cv:
-                bias = traj.get_bias()
+            if (cv0 := traj.ti.CV) is None:
+                print("calculating CV")
+
                 if colvar is None:
+                    bias = traj.get_bias()
                     colvar = bias.collective_variable
 
                 nlr = (
@@ -694,7 +702,8 @@ class Rounds(ABC):
 
             sp.append(sp0)
             cv.append(cv0)
-            bias_list.append(traj.get_bias())
+            if get_bias_list:
+                bias_list.append(traj.get_bias())
 
             if e is None:
                 weights.append(None)
@@ -758,7 +767,8 @@ class Rounds(ABC):
             cv_new: list[CV] = []
             ti_new: list[TrajectoryInfo] = []
             new_weights = []
-            new_bias_list = []
+            if get_bias_list:
+                new_bias_list = []
 
             for n in range(len(sp)):
                 indices = jnp.where(ti[n].T > sti.T * T_max_over_T)[0]
@@ -772,13 +782,15 @@ class Rounds(ABC):
                 cv_new.append(cv[n])
                 ti_new.append(ti[n])
                 new_weights.append(weights[n])
-                new_bias_list.append(bias_list[n])
+                if get_bias_list:
+                    new_bias_list.append(bias_list[n])
 
             sp = sp_new
             ti = ti_new
             cv = cv_new
             weights = new_weights
-            bias_list = new_bias_list
+            if get_bias_list:
+                bias_list = new_bias_list
 
         out_sp: list[SystemParams] = []
         out_cv: list[CV] = []
@@ -875,6 +887,11 @@ class Rounds(ABC):
             else:
                 out_nl = [out_nl_stacked]
 
+        if recalc_cv:
+            print(f"old cvs {out_cv=}")
+            out_cv = [colvar.compute_cv(spi, nli)[0] for spi, nli in zip(out_sp, out_nl)]
+            print(f"new cvs {out_cv=}")
+
         return Rounds.data_loader_output(
             sp=out_sp,
             nl=out_nl,
@@ -883,7 +900,7 @@ class Rounds(ABC):
             sti=sti,
             collective_variable=colvar,
             time_series=time_series,
-            bias=bias_list,
+            bias=bias_list if get_bias_list else None,
         )
 
     def copy_from_previous_round(
@@ -899,9 +916,14 @@ class Rounds(ABC):
         dlo: Rounds.data_loader_output | None = None,
         new_cvs: list[CV] | None = None,
         invalidate: bool = True,
+        cv_round=None,
     ):
+        if cv_round is None:
+            cv_round = self.cv - 1
+
         current_round = self.round_information()
-        bias = self.get_bias()
+        # bias = self.get_bias()
+        col_var = self.get_collective_variable()
 
         if dlo is None:
             dlo = self.data_loader(
@@ -911,8 +933,8 @@ class Rounds(ABC):
                 filter_energy=filter_energy,
                 split_data=split_data,
                 new_r_cut=current_round.tic.r_cut,
-                cv_round=self.cv - 1,
                 md_trajs=md_trajs,
+                cv_round=cv_round,
             )
 
         if new_cvs is None:
@@ -927,7 +949,7 @@ class Rounds(ABC):
                 if cv_trans is not None:
                     new_cvs.append(cv_trans.compute_cv_trans(x=cv, nl=nl, chunk_size=chunk_size)[0])
                 else:
-                    new_cvs.append(self.get_collective_variable().compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)[0])
+                    new_cvs.append(col_var.compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)[0])
 
         for i, (sp, nl, cv, traj_info, new_cv) in enumerate(zip(dlo.sp, dlo.nl, dlo.cv, dlo.ti, new_cvs)):
             # # TODO: tranform biasses probabilitically or with jacobian determinant
@@ -939,7 +961,7 @@ class Rounds(ABC):
             round_path = self.path(c=self.cv, r=0, i=i)
             round_path.mkdir(parents=True, exist_ok=True)
 
-            bias.save(round_path / "bias.json")
+            # bias.save(round_path / "bias.json")
             traj_info
 
             new_traj_info = TrajectoryInfo(
@@ -965,7 +987,7 @@ class Rounds(ABC):
                 i=i,
                 d=new_traj_info,
                 attrs=None,
-                bias=self.rel_path(round_path / "bias.json"),
+                bias=None,  # self.rel_path(round_path / "bias.json"),
             )
 
             if invalidate:
@@ -981,7 +1003,7 @@ class Rounds(ABC):
     ):
         from molmod import angstrom
 
-        for round, trajejctory in self.iter(stop=r, c=c, num=num):
+        for round, trajejctory in self.iter(stop=r, c=c, num=num, ignore_invalid=True):
             # traj = trajejctory.ti
 
             sp = trajejctory.ti.sp
@@ -1126,7 +1148,9 @@ class Rounds(ABC):
         c = self.cv
         with self.lock:
             f = self.h5file
-            return len(f[f"{c}"].keys()) - 1
+            l = [int(i) for i in f[f"{c}"]]
+            l.sort()
+            return l[-1]
 
     def get_round(self, c=None):
         return self._get_attr(c=c, name="num") - 1
@@ -1135,7 +1159,9 @@ class Rounds(ABC):
     def cv(self):
         with self.lock:
             f = self.h5file
-            return len(f.keys()) - 1
+            l = [int(i) for i in f]
+            l.sort()
+            return l[-1]
 
     def n(self, c=None, r=None):
         if c is None:
@@ -1214,11 +1240,12 @@ class Rounds(ABC):
         sp0: SystemParams | None = None,
         filter_e_pot=False,
         correct_previous_bias=False,
-        ignore_invalid=True,
+        ignore_invalid=False,
         md_trajs: list[int] | None = None,
         cv_round: int | None = None,
         wait_for_plots=False,
         min_traj_length=None,
+        recalc_cv=False,
     ):
         if cv_round is None:
             cv_round = self.cv
@@ -1251,11 +1278,12 @@ class Rounds(ABC):
                 split_data=False,
                 filter_bias=correct_previous_bias,
                 filter_energy=filter_e_pot,
-                new_r_cut=None,
+                new_r_cut=-1,
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
                 cv_round=cv_round,
                 min_traj_length=min_traj_length,
+                recalc_cv=recalc_cv,
             )
 
             cv_stack = data.cv[0]

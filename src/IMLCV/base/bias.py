@@ -46,6 +46,7 @@ from molmod.units import kjmol
 from parsl.data_provider.files import File
 from typing_extensions import Self
 
+
 yaff.log.set_level(yaff.log.silent)
 
 if TYPE_CHECKING:
@@ -167,7 +168,7 @@ class Energy:
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
@@ -347,6 +348,8 @@ class Bias(PyTreeNode, ABC):
         y_lim=None,
         bins=None,
         label="bias [kJ/mol]",
+        plot_bias=True,
+        colors: Array | None = None,
     ):
         """plot bias."""
         if bins is None:
@@ -367,7 +370,15 @@ class Bias(PyTreeNode, ABC):
         bias -= bias[~np.isnan(bias)].min()
         bias = bias.reshape([len(mg_i) for mg_i in mg])
 
+        plt.rc("text", usetex=False)
+        plt.rc("font", family="DejaVu Sans", size=18)
+
+        # plt.switch_backend("PDF")
+        fig = plt.figure(layout="constrained")
+
         if self.collective_variable.n == 1:
+            bins = bins[0]
+
             if x_unit is not None:
                 if x_unit == "rad":
                     x_unit_label = "rad"
@@ -384,27 +395,67 @@ class Bias(PyTreeNode, ABC):
 
             extent = [x_lim[0], x_lim[1]]
 
-            plt.switch_backend("PDF")
-            fig, ax = plt.subplots()
-
+            ax = fig.add_subplot()
             ax.set_xlim(*extent)
             ax.set_ylim(vmin / kjmol, vmax / kjmol)
+
             p = ax.plot(bins, bias / (kjmol))
 
-            ax2 = ax.twinx()
+            ax.set_xlabel(f"cv_1 [{x_unit_label}]")
+            ax.set_ylabel(label)
 
-            ax.set_xlabel(f"cv1 [{x_unit_label}]", fontsize=16)
-            ax.set_ylabel(label, fontsize=16)
-
-            ax.tick_params(axis="both", which="major", labelsize=18)
-            ax.tick_params(axis="both", which="minor", labelsize=16)
+            ax.tick_params(axis="both", which="major")
+            ax.tick_params(axis="both", which="minor")
 
             if traj is not None:
+                ax2 = ax.twinx()
+                ax2.set_ylabel("count")
+
                 if not isinstance(traj, Iterable):
                     traj = [traj]
-                for tr in traj:
-                    # trajs are ij indexed
-                    _ = ax2.hist(tr.cv[:, 0], density=True, histtype="step")
+
+                n = len(traj)
+                print(f"plotting {n=} trajectories")
+
+                x_list = []
+                c_list = []
+
+                n_points = 0
+
+                if colors is None:
+                    from IMLCV.base.CVDiscovery import Transformer
+
+                    colors = [
+                        a.cv[0]
+                        for a in Transformer._get_color_data(
+                            CV.stack(*traj),
+                            1,
+                            True,
+                        ).unstack()
+                    ]
+
+                for col, tr in zip(colors, traj):
+                    col = np.array(col)
+
+                    x_list.append(tr.cv[:, 0])
+                    c_list.append(col)
+
+                    in_xlim = jnp.logical_and(tr.cv[:, 0] > x_lim[0], tr.cv[:, 0] < x_lim[1])
+
+                    n_points += jnp.sum(in_xlim)
+
+                n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+
+                ax2.hist(
+                    x_list,
+                    range=x_lim,
+                    bins=n_bins,
+                    color=c_list,
+                    stacked=True,
+                    histtype="step",
+                )
+
+                fig.align_ylabels([ax, ax2])
 
         elif self.collective_variable.n == 2:
             if x_unit is not None:
@@ -432,23 +483,9 @@ class Bias(PyTreeNode, ABC):
             if x_lim is None:
                 x_lim = [mg[0].min() / x_fact, mg[0].max() / x_fact]
             if y_lim is None:
-                ylim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
+                y_lim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
 
-            extent = [x_lim[0], x_lim[1], ylim[0], ylim[1]]
-
-            print("styling plot")
-
-            # plt.switch_backend("PDF")
-
-            # import matplotlib.gridspec as gridspec
-
-            # plt.rcdefaults()
-
-            plt.rc("text", usetex=False)
-            plt.rc("font", family="DejaVu Sans", size=18)
-
-            # plt.switch_backend("PDF")
-            fig = plt.figure(layout="constrained")
+            extent = [x_lim[0], x_lim[1], y_lim[0], y_lim[1]]
 
             if traj is not None:
                 gs = gridspec.GridSpec(
@@ -470,21 +507,22 @@ class Bias(PyTreeNode, ABC):
                 )
                 ax = fig.add_subplot(gs[0, 0])
 
-            ax.set_xlabel(f"cv1 [{x_unit_label}]")
-            ax.set_ylabel(f"cv2 [{y_unit_label}]")
+            ax.set_xlabel(f"cv_1 [{x_unit_label}]")
+            ax.set_ylabel(f"cv_2 [{y_unit_label}]")
 
             ax.set_xlim(extent[0], extent[1])
             ax.set_ylim(extent[2], extent[3])
 
-            p = ax.imshow(
-                bias / (kjmol),
-                cmap=plt.get_cmap("rainbow"),
-                origin="lower",
-                extent=extent,
-                vmin=vmin / kjmol,
-                vmax=vmax / kjmol,
-                aspect="auto",
-            )
+            if plot_bias:
+                p = ax.imshow(
+                    bias / (kjmol),
+                    cmap=plt.get_cmap("rainbow"),
+                    origin="lower",
+                    extent=extent,
+                    vmin=vmin / kjmol,
+                    vmax=vmax / kjmol,
+                    aspect="auto",
+                )
 
             if traj is not None:
                 ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
@@ -496,10 +534,6 @@ class Bias(PyTreeNode, ABC):
                 # ax_histx.set_ylabel(f"n")
                 # ax_histy.set_xlabel(f"n")
 
-                ax_cbar = fig.add_subplot(gs[1, 2])
-            else:
-                ax_cbar = fig.add_subplot(gs[0, 1])
-
             if traj is not None:
                 if not isinstance(traj, Iterable):
                     traj = [traj]
@@ -507,25 +541,29 @@ class Bias(PyTreeNode, ABC):
                 n = len(traj)
                 print(f"plotting {n=} trajectories")
 
-                n_sqrt = jnp.ceil(jnp.sqrt(n))
-
                 x_list = []
                 y_list = []
                 c_list = []
 
                 n_points = 0
 
-                for tr_i, tr in enumerate(traj):
-                    a = tr_i // n_sqrt
-                    b = tr_i - a * n_sqrt
+                if colors is None:
+                    from IMLCV.base.CVDiscovery import Transformer
 
-                    col = hsluv_to_rgb(
-                        [
-                            float(a) / float(n_sqrt - 1) * 360 if n != 1 else 180,
-                            75,
-                            20 + float(b) / float(n_sqrt - 1) * 60 if n != 1 else 70,
-                        ],
-                    )
+                    colors = [
+                        a.cv[0]
+                        for a in Transformer._get_color_data(
+                            CV.stack(*traj),
+                            2,
+                            True,
+                        ).unstack()
+                    ]
+
+                for col, tr in zip(colors, traj):
+                    col = np.array(col)
+
+                    # print(tr.cv)
+                    # print(col)
 
                     # trajs are ij indexed
                     ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=2, color=col)
@@ -533,12 +571,16 @@ class Bias(PyTreeNode, ABC):
                     x_list.append(tr.cv[:, 0])
                     y_list.append(tr.cv[:, 1])
                     c_list.append(col)
-                    n_points += tr.shape[0]
+                    in_xlim = jnp.logical_and(tr.cv[:, 0] > x_lim[0], tr.cv[:, 0] < x_lim[1])
+                    in_ylim = jnp.logical_and(tr.cv[:, 1] > y_lim[0], tr.cv[:, 1] < y_lim[1])
+
+                    n_points += jnp.sum(jnp.logical_and(in_xlim, in_ylim))
 
                 n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
 
                 ax_histx.hist(
                     x_list,
+                    range=x_lim,
                     bins=n_bins,
                     color=c_list,
                     stacked=True,
@@ -546,6 +588,7 @@ class Bias(PyTreeNode, ABC):
                 )
                 ax_histy.hist(
                     y_list,
+                    range=y_lim,
                     bins=n_bins,
                     color=c_list,
                     histtype="step",
@@ -553,10 +596,18 @@ class Bias(PyTreeNode, ABC):
                     orientation="horizontal",
                 )
 
+                ax_histy.tick_params(axis="x", rotation=-90)
+
                 fig.align_ylabels([ax, ax_histx])
 
-            cbar = fig.colorbar(p, cax=ax_cbar)
-            cbar.set_label(label)
+            if plot_bias:
+                if traj is not None:
+                    ax_cbar = fig.add_subplot(gs[1, 2])
+                else:
+                    ax_cbar = fig.add_subplot(gs[0, 1])
+
+                cbar = fig.colorbar(p, cax=ax_cbar)
+                cbar.set_label(label)
 
             # plt.title(label)
 
@@ -587,7 +638,7 @@ class Bias(PyTreeNode, ABC):
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
@@ -627,6 +678,10 @@ class Bias(PyTreeNode, ABC):
                 f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
             )
             raise e
+
+    # def __eq__(self, other):
+    #     print(f"comparing bias {self=}, {other=}")
+    #     return hash(self) == hash(other)
 
 
 class CompositeBias(Bias):

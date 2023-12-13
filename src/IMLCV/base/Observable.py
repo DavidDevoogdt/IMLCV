@@ -61,6 +61,7 @@ class ThermoLIB:
         trajs,
         biases: list[Bias],
         chunk_size=None,
+        pmap=True,
     ):
         from IMLCV.base.CV import padded_pmap
         from IMLCV.base.bias import Bias
@@ -91,7 +92,6 @@ class ThermoLIB:
                     ],
                 )
 
-                @padded_pmap
                 def _get_bias(cvs):
                     out, _ = self.bias.compute_from_cv(
                         cvs=cvs,
@@ -99,6 +99,9 @@ class ThermoLIB:
                         chunk_size=chunk_size,
                     )
                     return out
+
+                if pmap:
+                    _get_bias = padded_pmap(_get_bias)
 
                 out = _get_bias(colvar)
 
@@ -138,20 +141,28 @@ class ThermoLIB:
         n=None,
         min_traj_length=None,
         margin=None,
+        dlo=None,
+        directory=None,
+        temp=None,
+        pmap=True,
     ):
-        temp = self.rounds.T
+        if temp is None:
+            temp = self.rounds.T
 
-        directory = self.rounds.path(c=self.cv_round, r=self.rnd)
+        if directory is None:
+            directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
-        dlo = self.rounds.data_loader(
-            num=num_rnds,
-            ignore_invalid=False,
-            cv_round=self.cv_round,
-            start=start_r,
-            split_data=True,
-            new_r_cut=None,
-            min_traj_length=min_traj_length,
-        )
+        if dlo is None:
+            dlo = self.rounds.data_loader(
+                num=num_rnds,
+                cv_round=self.cv_round,
+                start=start_r,
+                split_data=True,
+                new_r_cut=None,
+                min_traj_length=min_traj_length,
+                chunk_size=chunk_size,
+                get_bias_list=True,
+            )
 
         trajs = dlo.cv
         biases = dlo.bias
@@ -202,6 +213,7 @@ class ThermoLIB:
             biases=biases,
             chunk_size=chunk_size,
             execution_folder=directory,
+            pmap=pmap,
         ).result()
 
         fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
@@ -227,7 +239,7 @@ class ThermoLIB:
         self,
         plot=True,
         max_bias=None,
-        fs=None,
+        fes=None,
         choice="rbf",
         num_rnds=4,
         start_r=0,
@@ -241,9 +253,13 @@ class ThermoLIB:
         n_max=60,
         min_traj_length=None,
         margin=0.5,
+        grid=None,
+        bounds=None,
+        use_prev_fs=True,
+        collective_variable=None,
         **plot_kwargs,
     ):
-        if fs is None:
+        if fes is None:
             fes, grid, bounds = self.fes_nd_thermolib(
                 plot=plot,
                 start_r=start_r,
@@ -261,8 +277,13 @@ class ThermoLIB:
 
         # remove previous fs
         cv_grid = CV.stack(*list(zip(*grid))[1])
-        prev_fs = jnp.reshape(self.common_bias.compute_from_cv(cv_grid)[0], fs.shape)
-        fs += np.array(prev_fs)
+
+        if collective_variable is None:
+            collective_variable = self.collective_variable
+
+        if use_prev_fs:
+            prev_fs = jnp.reshape(self.common_bias.compute_from_cv(cv_grid)[0], fs.shape)
+            fs += np.array(prev_fs)
 
         # invert to use as bias
         mask = ~np.isnan(fs)
@@ -291,7 +312,7 @@ class ThermoLIB:
                 # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
 
                 fesBias = RbfBias.create(
-                    cvs=self.collective_variable,
+                    cvs=collective_variable,
                     vals=fslist,
                     cv=cv,
                     # kernel="linear",
@@ -308,11 +329,14 @@ class ThermoLIB:
             raise ValueError("choose choice='rbf' for the moment")
 
             fs[~mask] = 0.0
-            fesBias = GridBias(cvs=self.collective_variable, vals=fs, bounds=bounds)
+            fesBias = GridBias(cvs=collective_variable, vals=fs, bounds=bounds)
         else:
             raise ValueError
 
-        fes_bias_tot = CompositeBias.create(biases=[self.common_bias, fesBias])
+        if use_prev_fs:
+            fes_bias_tot = CompositeBias.create(biases=[self.common_bias, fesBias])
+        else:
+            fes_bias_tot = fesBias
 
         if resample_bias:
             fes_bias_tot = fes_bias_tot.resample(cv_grid=cv_grid)
@@ -322,31 +346,32 @@ class ThermoLIB:
 
             pf = []
 
-            pf.append(
-                bash_app_python(fesBias.plot, executors=["default"])(
-                    outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
-                    execution_folder=fold,
-                    name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.pdf",
-                    inverted=True,
-                    label="Free Energy [kJ/mol]",
-                    stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
-                    stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
-                    margin=margin,
-                    **plot_kwargs,
-                ),
-            )
+            if use_prev_fs:
+                pf.append(
+                    bash_app_python(fesBias.plot, executors=["default"])(
+                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                        execution_folder=fold,
+                        name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.pdf",
+                        inverted=True,
+                        label="Free Energy [kJ/mol]",
+                        stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
+                        stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
+                        margin=margin,
+                        **plot_kwargs,
+                    ),
+                )
 
-            pf.append(
-                bash_app_python(fesBias.plot, executors=["default"])(
-                    outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.pdf")],
-                    name=f"diff_FES_bias_{self.rnd}_{choice}.pdf",
-                    execution_folder=fold,
-                    stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
-                    stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
-                    margin=margin,
-                    **plot_kwargs,
-                ),
-            )
+                pf.append(
+                    bash_app_python(fesBias.plot, executors=["default"])(
+                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.pdf")],
+                        name=f"diff_FES_bias_{self.rnd}_{choice}.pdf",
+                        execution_folder=fold,
+                        stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
+                        stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
+                        margin=margin,
+                        **plot_kwargs,
+                    ),
+                )
 
             pf.append(
                 bash_app_python(fes_bias_tot.plot, executors=["default"])(

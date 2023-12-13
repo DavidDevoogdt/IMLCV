@@ -150,13 +150,13 @@ class RBFInterpolator(PyTreeNode):
     _coeffs: jax.Array
     y: CV
     d: jax.Array
-    d_shape: tuple[int]
-    d_dtype: jnp.dtype
-    smoothing: float
-    kernel: str
+    smoothing: jax.Array
     epsilon: jax.Array
     powers: jax.Array
     metric: CvMetric
+    d_shape: tuple[int] = field(pytree_node=False)
+    d_dtype: jnp.dtype = field(pytree_node=False)
+    kernel: str = field(pytree_node=False)
 
     @classmethod
     def create(
@@ -169,9 +169,6 @@ class RBFInterpolator(PyTreeNode):
         epsilon=None,
         degree=None,
     ):
-        # assert isinstance(y, CV)
-        y = CV(jnp.asarray(y.cv, order="K"))
-
         ny, ndim = y.shape
 
         if jnp.iscomplexobj(d):
@@ -180,7 +177,7 @@ class RBFInterpolator(PyTreeNode):
         # d_dtype = jnp.complex64 if jnp.iscomplexobj(d) else jnp.float32
         d_dtype = d.dtype
 
-        d = jnp.asarray(d, dtype=d_dtype, order="K")
+        # d = jnp.asarray(d, dtype=d_dtype)
         if d.shape[0] != ny:
             raise ValueError(f"Expected the first axis of `d` to have length {ny}.")
 
@@ -194,7 +191,7 @@ class RBFInterpolator(PyTreeNode):
         if jnp.isscalar(smoothing):
             smoothing = jnp.full(ny, smoothing, dtype=float)
         else:
-            smoothing = jnp.asarray(smoothing, dtype=float, order="K")
+            smoothing = jnp.asarray(smoothing, dtype=float)
             if smoothing.shape != (ny,):
                 raise ValueError(
                     "Expected `smoothing` to be a scalar or have shape " f"({ny},).",
@@ -320,9 +317,6 @@ class RBFInterpolator(PyTreeNode):
             Values of the interpolant at `x`.
 
         """
-        x = CV(jnp.asarray(x.cv, order="K"))
-
-        assert isinstance(x, CV)
 
         isbatched = x.batched
 

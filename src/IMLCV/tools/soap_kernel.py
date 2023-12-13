@@ -65,7 +65,7 @@ def p_i(
 
 # @partial(vmap, in_axes=(0, None, None), out_axes=0)
 # @partial(jit, static_argnums=(0,))
-def lengendre_l(l, pj, pk):
+def legendre_l(l, pj, pk):
     # https://jax.readthedocs.io/en/latest/faq.html#gradients-contain-nan-where-using-where
 
     n2 = jnp.dot(pj, pj) * jnp.dot(pk, pk)
@@ -157,7 +157,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     l_list = list(range(l_max + 1))
 
     def _l(p_ij, p_ik):
-        return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
+        return jnp.array([legendre_l(l, p_ij, p_ik) for l in l_list])
 
     def a_nlj(r_ij):
         return U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ij) * f_cut(r_ij)
@@ -204,6 +204,7 @@ def p_inl_sb(l_max, n_max, r_cut):
             lambda x: jaxopt.GradientDescent(
                 lambda x: spherical_jn(n, x) ** 2,
                 maxiter=1000,
+                tol=1e-15,
             )
             .run(x)
             .params,
@@ -229,7 +230,7 @@ def p_inl_sb(l_max, n_max, r_cut):
         [plt.axvline(x0, color="b") for x0 in zeros_guess]
         plt.axhline(0, color="k")
 
-    u_ln = jnp.array([spherical_jn_zeros(n, l_max + 2) for n in range(n_max + 2)]).T
+    u_ln = jnp.array([spherical_jn_zeros(n, l_max + 2) for n in range(n_max + 2)])
 
     def e(x):
         l, n = x
@@ -252,7 +253,7 @@ def p_inl_sb(l_max, n_max, r_cut):
             return (
                 u_ln[l, n + 1] / spherical_jn(l + 1, u_ln[l, n]) * spherical_jn(l, r * u_ln[l, n] / r_cut)
                 - u_ln[l, n] / spherical_jn(l + 1, u_ln[l, n + 1]) * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
-            ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1]) / r_cut**3) ** (0.5)
+            ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1] ** 2) / r_cut**3) ** (0.5)
 
         return f(r)
 
@@ -263,7 +264,7 @@ def p_inl_sb(l_max, n_max, r_cut):
     nm1_vec = jnp.arange(n_max)
 
     def _l(p_ij, p_ik):
-        return jnp.array([lengendre_l(l, p_ij, p_ik) for l in l_list])
+        return jnp.array([legendre_l(l, p_ij, p_ik) for l in l_list])
 
     def g_nl(r: Array):
         fnl = f_nl(n_vec, l_vec, r)

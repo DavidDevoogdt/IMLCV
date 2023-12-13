@@ -8,6 +8,7 @@ import lineax as lx
 import numba
 import numpy as np
 import ott
+from equinox import Partial
 from flax.linen.linear import Dense
 from IMLCV.base.CV import _CvTrans
 from IMLCV.base.CV import chunk_map
@@ -98,7 +99,7 @@ def dihedral(numbers: list[int] | Array):
         numbers: list with index of 4 atoms that form dihedral
     """
 
-    return CvFlow.from_function(_dihedral, numbers=numbers)
+    return CvFlow.from_function(_dihedral, static_argnames=["numbers"], numbers=numbers)
 
 
 def _sb_descriptor(
@@ -180,6 +181,15 @@ def sb_descriptor(
 ) -> CvFlow:
     return CvFlow.from_function(
         _sb_descriptor,
+        static_argnames=[
+            "r_cut",
+            "chunk_size_atoms",
+            "chunk_size_neigbourgs",
+            "reduce",
+            "reshape",
+            "n_max",
+            "l_max",
+        ],
         r_cut=r_cut,
         chunk_size_atoms=chunk_size_atoms,
         chunk_size_neigbourgs=chunk_size_neigbourgs,
@@ -257,6 +267,16 @@ def soap_descriptor(
 ) -> CvFlow:
     return CvFlow.from_function(
         _soap_descriptor,
+        static_argnames=[
+            "r_cut",
+            "reduce",
+            "reshape",
+            "n_max",
+            "l_max",
+            "sigma_a",
+            "r_delta",
+            "num",
+        ],
         r_cut=r_cut,
         reduce=reduce,
         reshape=reshape,
@@ -375,7 +395,13 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     if m.atomic:
         v = v.reshape((v.shape[0], m.cv.shape[1], m.cv.shape[2]))
 
-    out = CvTrans.from_cv_function(_trunc_svd, m_atomic=m_atomic, v=v, cvi_shape=cvi_shape)
+    out = CvTrans.from_cv_function(
+        _trunc_svd,
+        static_argnames=["m_atomic", "cvi_shape"],
+        m_atomic=m_atomic,
+        v=v,
+        cvi_shape=cvi_shape,
+    )
 
     return out.compute_cv_trans(m)[0], out
 
@@ -654,6 +680,7 @@ def get_sinkhorn_divergence(
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans,
+        static_argnames=["sort", "alpha_rematch", "output", "normalize"],
         nli=nli,
         pi=pi,
         sort=sort,
@@ -798,7 +825,7 @@ def _sinkhorn_divergence_trans_2(
     cv: CV,
     nl: NeighbourList | None,
     _,
-    nli,
+    nli: NeighbourList,
     pi,
     alpha_rematch,
     output,
@@ -827,12 +854,45 @@ def _sinkhorn_divergence_trans_2(
             _stack_dims=cv._stack_dims,
         )
 
-    if output == "ddiv":
-        f = jax.jacrev(f, argnums=ddiv_arg)
+    def get_div(pi, cv):
+        return CV.combine(*[f(pii, cv, nlii, nl) for pii, nlii in zip(pi, nli)])
 
-        div = CV.combine(*[f(pii, cv, nlii, nl).cv for pii, nlii in zip(pi, nli)])
+    if output == "ddiv":
+        div = jax.jacrev(get_div, argnums=ddiv_arg)(pi, cv).cv
+    elif output == "both":
+        assert not sum_divergence, "not implemented"
+
+        # taken from https://github.com/google/jax/pull/762
+        def value_and_jacrev(f, x):
+            y, pullback = jax.vjp(f, x)
+            basis = y.replace(cv=jnp.eye(y.cv.size, dtype=y.cv.dtype))
+            (jac,) = jax.vmap(pullback)(basis)
+            return y, jac
+
+        if ddiv_arg == 0:
+            g = Partial(get_div, cv=cv)
+            x = pi
+        else:
+            g = Partial(get_div, pi=pi)
+            x = cv
+
+        div, jac = value_and_jacrev(g, x)
+
+        # d_size = int(div.shape[0])
+        x_shape = int(x.cv.size / x.shape[0])
+        n_z = x.shape[0]
+
+        jac = jac.replace(
+            cv=jac.cv.reshape(-1),
+            _combine_dims=[[[x_shape] * n_z] * a for a in div._combine_dims] if div._combine_dims is not None else None,
+            atomic=div.atomic,
+            _stack_dims=div._stack_dims,
+        )  # flatten according to ddiv combine dims
+
+        div = CV.combine(div, jac)
+
     else:
-        div = CV.combine(*[f(pii, cv, nlii, nl) for pii, nlii in zip(pi, nli)])
+        div = get_div(pi, cv)
 
     return div.replace(cv=jnp.reshape(div.cv, (-1)), atomic=False)
 
@@ -855,6 +915,15 @@ def get_sinkhorn_divergence_2(
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
         jacfun=jax.jacrev if output == "ddiv" and ddiv_arg == 0 else jax.jacrev,
+        static_argnames=[
+            "alpha_rematch",
+            "output",
+            "normalize",
+            "sum_divergence",
+            "ddiv_arg",
+            "ridge",
+            "sinkhorn_iterations",
+        ],
         nli=nli,
         pi=pi,
         alpha_rematch=alpha_rematch,
@@ -902,6 +971,38 @@ def _divergence_weighed_aligned_cv(
 
 def divergence_weighed_aligned_cv(scaling):
     return CvTrans.from_cv_function(_divergence_weighed_aligned_cv, scaling=scaling)
+
+
+def _weighted_sinkhorn_divergence_2(
+    cv: CV,
+    nl: NeighbourList | None,
+    _,
+    scaling,
+    append_weights=True,
+):
+    div, ddiv = cv.split()
+
+    def soft_min(x):
+        x = jnp.sum(x, axis=-1)
+        a = jnp.exp(-x)
+        return a / jnp.sum(a)
+
+    weights = soft_min(jnp.array([d.cv for d in (div * scaling).split()]))
+    out = CV.combine(*[a * b for a, b in zip(ddiv.split(), weights)])
+
+    if append_weights:
+        out = CV.combine(out, div.replace(cv=weights.reshape(-1)))
+
+    return out
+
+
+def weighted_sinkhorn_divergence_2(scaling, append_weights):
+    return CvTrans.from_cv_function(
+        _weighted_sinkhorn_divergence_2,
+        static_argnames=["append_weights"],
+        scaling=scaling,
+        append_weights=append_weights,
+    )
 
 
 def _un_atomize(x: CV, nl, _):
