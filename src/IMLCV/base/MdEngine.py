@@ -583,7 +583,7 @@ class MDEngine(ABC):
                     self.time0 = self.trajectory_info.t[-1]
 
                     print(f"loaded ti  {self.step=} ")
-
+        self._nl = None
         # print(f"{self.sp=}")
 
         return self
@@ -755,3 +755,6 @@ class MDEngine(ABC):
                 f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
             )
             raise e
+        
+
+        self._nl = None

@@ -205,7 +205,7 @@ class Bias(PyTreeNode, ABC):
 
     __: KW_ONLY
 
-    collective_variable: CollectiveVariable = field(pytree_node=False)
+    collective_variable: CollectiveVariable = field(pytree_node=True)
     start: int | None = field(pytree_node=False, default=0)
     step: int | None = field(pytree_node=False, default=1)
     finalized: bool = field(pytree_node=False, default=False)
@@ -556,6 +556,8 @@ class Bias(PyTreeNode, ABC):
                             CV.stack(*traj),
                             2,
                             True,
+                            min_val=  jnp.array([ extent[0],extent[2] ]) ,
+                            max_val=  jnp.array([ extent[1],extent[3] ]) ,
                         ).unstack()
                     ]
 

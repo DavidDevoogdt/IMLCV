@@ -1145,13 +1145,13 @@ class NeighbourList(PyTreeNode):
             )(self=self, sp=sp)
 
         if r_cut is None:
-            r_cut is self.r_cut
+            r_cut = self.r_cut
 
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
         r = jnp.linalg.norm(pos, axis=-1)
 
-        bools = r**2 < self.r_cut**2
+        bools = r**2 < r_cut**2
 
         if exclude_self:
             bools = jnp.logical_and(bools, r**2 != 0.0)
@@ -1806,7 +1806,7 @@ class CV(PyTreeNode):
 
         for j in self.stack_dims:
             if j == 0:
-                print("skipping empty stack")
+                # print("skipping empty stack")
                 continue
 
             out += [

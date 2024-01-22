@@ -263,7 +263,7 @@ class Transformer:
         plt.rc("text", usetex=False)
         plt.rc("font", family="DejaVu Sans", size=16)
 
-        fig = plt.figure(layout="constrained")
+        fig = plt.figure(figsize=(6, 6))
 
         for in_out_color, ls, rs in Transformer._grid_spec_iterator(
             fig=fig,
@@ -323,7 +323,14 @@ class Transformer:
         width_in = 1 if indim < 3 else 2
         width_out = 1 if outdim < 3 else 2
 
-        spec = fig.add_gridspec(nrows=3, ncols=3, width_ratios=[0.01, width_in, width_out], height_ratios=[0.01, 1, 1])
+        spec = fig.add_gridspec(
+            nrows=3,
+            ncols=3,
+            width_ratios=[0.01, width_in, width_out],
+            height_ratios=[0.01, 1, 1],
+            wspace=0.3,
+            hspace=0.2,
+        )
 
         yield 0, spec[1, 1], spec[1, 2]
         yield 1, spec[2, 1], spec[2, 2]
@@ -354,10 +361,17 @@ class Transformer:
 
     @staticmethod
     def _plot_1d(fig: Figure, grid: gridspec, data, colors, labels, margin=None, **scatter_kwargs):
-        gs = grid.subgridspec(ncols=1, nrows=2, height_ratios=[1, 4])
+        gs = grid.subgridspec(
+            ncols=1,
+            nrows=2,
+            height_ratios=[1, 4],
+            wspace=0.05,
+            hspace=0.05,
+        )
 
         ax = fig.add_subplot(gs[1, 0])
-        ax_histx = fig.add_subplot(gs[0, 0])
+        # ax.set_aspect('equal')
+        ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
 
         # create inset
         ax.scatter(
@@ -367,12 +381,18 @@ class Transformer:
             **scatter_kwargs,
         )
 
-        # ax.set_xlim(-margin, 1 + margin)
+        in_xlim = jnp.logical_and(data[:, 0] > -margin, data[:, 0] < 1 + margin)
+        n_points = jnp.sum(in_xlim)
+        n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
 
         ax.set_xlabel(labels[0])
         ax.set_ylabel("trajectory")
 
-        ax_histx.hist(data[:, 0])
+        ax_histx.hist(data[:, 0], bins=n_bins, range=[-margin, 1 + margin])
+
+        if margin is not None:
+            ax.set_xlim(-margin, 1 + margin)
+            ax_histx.set_xlim(-margin, 1 + margin)
 
     @staticmethod
     def _plot_2d(fig: Figure, grid: gridspec, data, colors, labels, margin=None, **scatter_kwargs):
@@ -381,29 +401,54 @@ class Transformer:
             nrows=2,
             width_ratios=[4, 1],
             height_ratios=[1, 4],
+            wspace=0.02,
+            hspace=0.02,
         )
         ax = fig.add_subplot(gs[1, 0])
 
-        # ax.set_xlim(-margin, 1 + margin)
-        # ax.set_ylim(-margin, 1 + margin)
+        ax_histx = fig.add_subplot(gs[0, 0],sharex=ax)
+        ax_histy = fig.add_subplot(gs[1, 1],sharey=ax)
 
-        ax_histx = fig.add_subplot(gs[0, 0])
-        ax_histy = fig.add_subplot(gs[1, 1])
 
         ax.scatter(
             *[data[:, l] for l in range(2)],
             c=colors,
             **scatter_kwargs,
         )
-        ax.set_xlabel(labels[0])
-        ax.set_ylabel(labels[1])
+        # ax.set_xlabel(labels[0])
+        # ax.set_ylabel(labels[1])
 
-        ax_histx.hist(data[:, 0])
-        ax_histy.hist(data[:, 1], orientation="horizontal")
+
+        in_xlim = jnp.logical_and(data[:, 0] > -margin, data[:, 0] < 1 + margin)
+        in_ylim = jnp.logical_and(data[:, 1] > -margin, data[:, 1] < 1 + margin)
+        n_points = jnp.sum(jnp.logical_and(in_xlim, in_ylim))
+        n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+
+
+        ax_histx.hist(data[:, 0], bins=n_bins, range=[-margin, 1 + margin])
+        ax_histy.hist(data[:, 1], bins=n_bins, range=[-margin, 1 + margin], orientation="horizontal")
         ax_histy.tick_params(axis="x", rotation=-90)
 
-        ax_histx.set_xticks([])
-        ax_histy.set_yticks([])
+
+        for b in [ax_histx,ax_histy]:
+            b.spines["right"].set_visible(False)
+            b.spines["top"].set_visible(False)
+            b.spines["bottom"].set_visible(False)
+            b.spines["left"].set_visible(False)
+
+
+        ax_histx.tick_params(top=False, bottom=False, left=False, right=False,  labelleft=False,labelbottom=False )
+        ax_histy.tick_params(top=False, bottom=False, left=False, right=False,  labelleft=False,labelbottom=False )
+
+        ax.locator_params( nbins=3)
+
+
+        if margin is not None:
+            ax.set_xlim(-margin, 1 + margin)
+            # ax_histx.set_xlim(-margin, 1 + margin)
+
+            ax.set_ylim(-margin, 1 + margin)
+            # ax_histy.set_ylim(-margin, 1 + margin)
 
     @staticmethod
     def _plot_3d(fig: Figure, grid: gridspec, data, colors, labels, margin=None, **scatter_kwargs):
@@ -502,7 +547,9 @@ class Transformer:
         dim: int,
         color_trajectories=True,
         color_1d=True,
-        margin=0.1,
+        max_val=None,
+        min_val=None,
+        margin=None,
     ) -> CV:
         if dim == 1:
             if color_1d:
@@ -526,14 +573,27 @@ class Transformer:
 
         color_data = a.cv
 
-        max_val = jnp.max(color_data, axis=0)
-        min_val = jnp.min(color_data, axis=0)
+        if max_val is None:
+            if margin is None:
+                max_val = jnp.max(color_data, axis=0)
+            else:
+                max_val = jnp.full((dim,), -margin)
+
+        if min_val is None:
+            if margin is None:
+                min_val = jnp.min(color_data, axis=0)
+            else:
+                min_val = jnp.full((dim,), 1 + margin)
 
         if (max_val == min_val).all():
             data_col = color_data
 
         else:
             data_col = (color_data - min_val) / (max_val - min_val)
+
+        jnp.clip(data_col,0.0,1.0)
+
+   
 
         # https://www.hsluv.org/
         # hue 0-360 sat 0-100 lighness 0-1000

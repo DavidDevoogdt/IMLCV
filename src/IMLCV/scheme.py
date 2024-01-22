@@ -59,7 +59,7 @@ class Scheme:
 
     def FESBias(self, cv_round: int | None = None, chunk_size=None, **plotkwargs):
         """replace the current md bias with the computed FES from current
-        round."""
+    round."""
         obs = ThermoLIB(self.rounds, cv_round=cv_round)
         fesBias = obs.fes_bias(chunk_size=chunk_size, **plotkwargs)
         self.md = self.md.new_bias(fesBias)
@@ -127,7 +127,7 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
-        samples_per_bin=50,
+        samples_per_bin=200,
         init_max_grad=None,
         max_grad=None,
         plot=True,

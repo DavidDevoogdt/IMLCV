@@ -1124,6 +1124,19 @@ def get_normalize_trans(c: CV, range=Ellipsis):
     return trans.compute_cv_trans(c)[0], trans
 
 
+def _cv_slice(cv: CV, nl: NeighbourList, _, indices):
+    return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
+
+
+def get_non_constant_trans(c: CV, epsilon=1e-14):
+    assert c.batched
+    mask = jnp.linalg.norm(c.cv - jnp.mean(c.cv, axis=0), axis=0) > epsilon
+    args = jnp.argwhere(mask).reshape((-1,))
+    trans = CvTrans.from_cv_function(_cv_slice, indices=args)
+
+    return trans.compute_cv_trans(c)[0], trans
+
+
 ######################################
 #           CV Fun                   #
 ######################################

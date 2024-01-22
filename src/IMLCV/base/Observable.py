@@ -135,7 +135,7 @@ class ThermoLIB:
         num_rnds=4,
         start_r=0,
         update_bounding_box=True,
-        samples_per_bin=500,
+        samples_per_bin=200,
         chunk_size=None,
         n_max=60,
         n=None,
@@ -246,7 +246,7 @@ class ThermoLIB:
         rbf_kernel="thin_plate_spline",
         rbf_degree=None,
         smoothing_threshold=5 * kjmol,
-        samples_per_bin=100,
+        samples_per_bin=200,
         chunk_size=None,
         resample_bias=True,
         update_bounding_box=True,  # make boudning box bigger for FES calculation

@@ -13,6 +13,7 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
+from IMLCV.implementations.CV import get_non_constant_trans
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -21,7 +22,9 @@ from jax import random
 from jax import vmap
 from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+import numpy as onp
 
+# https://arxiv.org/pdf/1602.08776.pdf appendix b
 
 def shrink(S: Array, n: int, shrinkage="OAS"):
     if shrinkage == "None":
@@ -565,9 +568,9 @@ class TransformerMAF(Transformer):
         outdim: int,
         lag_n=1,
         optimizer=None,
-        min_gradient_norm: float = 1e-4,
-        min_step_size: float = 1e-4,
-        max_iterations=30,
+        min_gradient_norm: float = 1e-5,
+        min_step_size: float = 1e-5,
+        max_iterations=50,
         shrinkage="BC",
         weights="bias",
         solver="eig",
@@ -599,28 +602,20 @@ class TransformerMAF(Transformer):
         solver="eig",
         weights=None,
         optimizer=None,
-        min_gradient_norm: float = 1e-4,
-        min_step_size: float = 1e-4,
-        max_iterations=30,
+        min_gradient_norm: float = 1e-5,
+        min_step_size: float = 1e-5,
+        max_iterations=50,
         harmonic=False,
         slow_feature_analysis=False,
         correct_bias=False,
         pre_selction_epsilon=1e-14,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
-        # nl_list = dlo.nl
-        print("stacking")
         cv = CV.stack(*x)
-        # nl = NeighbourList.stack(*nl_list)
-        print("unatomizing")
-
         cv, _, _ = un_atomize.compute_cv_trans(cv)
 
         trans = un_atomize
 
-        # cv, _f = trunc_svd(cv)
-        print("generating cv and cv_tau")
-        # part one, create time series data and lagged time series
         X = []
         Y = []
 
@@ -634,48 +629,105 @@ class TransformerMAF(Transformer):
         del X
         del Y
 
-        print("removing 0 entries")
-
-        mask = jnp.linalg.norm(cv_0.cv - jnp.mean(cv_0.cv, axis=0), axis=0) > pre_selction_epsilon
-        args = jnp.argwhere(mask).reshape((-1,))
-        transform = CvTrans.from_cv_function(_cv_slice, indices=args)
-
-        cv_0, _, _ = transform.compute_cv_trans(cv_0)
+        cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon)
         cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
+        trans *= transform
 
         print(f"{cv_0.shape=}")
 
-        trans *= transform
-
-        def get_covs(cv_0: CV, cv_tau: CV, W=None, sym=False, add_1=False, shrink_output=False, epsilon=1e-7):
+        def get_covs(cv_0: CV, cv_tau: CV, w=None, sym=False, add_1=False, shrink_output=False):
             # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
 
             X = cv_0.cv
             Y = cv_tau.cv
 
-            if W is None:
-                W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
+            if w is None:
+                w = jnp.ones((cv_0.shape[0],)) / cv_0.shape[0]
 
             if sym:
-                pi = jnp.sum(0.5 * (X + Y).T @ W, axis=1)
-                COV = 0.5 * (X.T @ W @ X + Y.T @ W @ Y)
-                # ccov = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
+                pi = jnp.einsum("ni,n->i", 0.5 * (X + Y), w)
+                C_0 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, X) + jnp.einsum("ni,n,nj->ij", Y, w, Y))
+                C_1 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, Y) + jnp.einsum("ni,n,nj->ij", Y, w, X))
 
             else:
-                pi = jnp.sum(X.T @ W, axis=1)
-                COV = X.T @ W @ X
-                # ccov = X.T @ W @ Y
+                pi = jnp.einsum("ni,n->i", X, w)
+                C_0 = jnp.einsum("ni,n,nj->ij", X, w, X)
+                C_1 = jnp.einsum("ni,n,nj->ij", X, w, Y)
 
-            # transform to diagonal basis
+            C_0 -= jnp.einsum("i,j->ij", pi, pi)
+            C_1 -= jnp.einsum("i,j->ij", pi, pi)
 
-            print("removing small eigenvalues")
-            # transform to a basis where the covariance matrix is diagonal, and remove the small eigenvalues
-            l, q = jnp.linalg.eigh(COV)
 
-            eps = jnp.finfo(COV.dtype).eps * jnp.max(jnp.array(X.shape)) * 100
-            print(f"using {eps=}")
+            eps= 1e-8
 
-            l, q = scipy.linalg.eigh(a=COV, subset_by_value=[epsilon, jnp.inf])
+
+            qr = False
+
+            if qr:
+                q1,r1,p1  = scipy.linalg.qr(a=C_0,pivoting=True )
+
+                l1 = jnp.diag(r1)
+                mask1 = jnp.abs(jnp.diag(r1))  >eps
+
+                q1 = q1[:,mask1]
+
+                print(f"{l1=} {q1.shape=}  ")
+
+                q2,r2,p2  = scipy.linalg.qr(a=q1.T@C_1@q1,pivoting=True )
+
+                l2 = jnp.diag(r2)
+                mask2 =  jnp.abs(jnp.diag(r2)) >eps
+
+                q2 = q2[:,mask2]
+
+                print(f"{l2=} {q2.shape=}  ")
+
+
+                # # #remove negative eigenvalues
+                # aa,bb,alpha,beta,q3,z3 = scipy.linalg.ordqz(A= q2.T@q1.T@C_1@q1@q2,B= q2.T@q1.T@C_0@q1@q2, sort='rhp')
+
+
+                # l3 = alpha/beta
+                # mask3 = l3>eps
+                # q3 = q3[:,mask3 ]
+
+
+                # print(f"{aa=}")
+                # print(f"{bb=}")
+
+                # print(f"{l3=} {q3.shape=}")
+
+
+                q = q1@q2#@q3
+
+
+            else:
+                # first remove dimensions with very low variance
+                l1, q1 = scipy.linalg.eigh(a=C_0,subset_by_value=[eps,onp.inf])
+                mask1 =   l1  > eps
+                
+                
+                l1 = l1[mask1]
+
+
+                q1 = q1[:,mask1]  
+
+                print(f"{l1=}{q1.shape=} ")
+
+
+                if not sym:
+                    l2, q2 = scipy.linalg.eig(a=q1.T@C_1@q1, b = q1.T@C_0@q1   )
+                else:
+                    l2, q2 = scipy.linalg.eigh(a=q1.T@C_1@q1,subset_by_value=[eps,onp.inf])
+
+                
+                mask2 =  l2  > eps
+                q2 = q2[:,mask2]  
+
+                print(f"{l2=} {q2.shape=}  ")
+
+                q = q1@q2
+
             q = jnp.array(q)
 
             transform_maf = CvTrans.from_cv_function(
@@ -691,29 +743,30 @@ class TransformerMAF(Transformer):
 
             X = cv_0.cv
             Y = cv_tau.cv
-            if W is None:
-                W = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
+            if w is None:
+                w = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
 
+            # already mean free
             if sym:
-                C_0 = 0.5 * (X.T @ W @ X + Y.T @ W @ Y)
-                C_1 = 0.5 * (X.T @ W @ Y + Y.T @ W @ X)
+                C_0 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, X) + jnp.einsum("ni,n,nj->ij", Y, w, Y))
+                C_1 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, Y) + jnp.einsum("ni,n,nj->ij", Y, w, X))
+
             else:
-                C_0 = X.T @ W @ X
-                C_1 = X.T @ W @ Y
+                C_0 = jnp.einsum("ni,n,nj->ij", X, w, X)
+                C_1 = jnp.einsum("ni,n,nj->ij", X, w, Y)
 
-            if shrink_output:
-                f_shrink = shrink(C_0, n=cv_0.shape[0])
-
-                C_0 = f_shrink(C_0)
-                # C_1 = f_shrink(C_1)
+            # if shrink_output:
+            #     f_shrink = shrink(C_0, n=cv_0.shape[0])
+            #     C_0 = f_shrink(C_0)
+            #     # C_1 = f_shrink(C_1)
 
             return C_0, C_1, cv_0, cv_tau, transform_maf, pi, q
 
         def get_koopman_weights(cv_0_i, cv_tau_i, w=None, shrink=False):
-            C_0, C_1, cv_0_new, cv_tau_new, _, _, _ = get_covs(
+            C_0, C_1, cv_0_new, cv_tau_new, _, _, _= get_covs(
                 cv_0_i,
                 cv_tau_i,
-                W=jnp.diag(w) if w is not None else None,
+                w=w if w is not None else None,
                 sym=False,
                 add_1=True,
                 shrink_output=shrink,
@@ -775,21 +828,17 @@ class TransformerMAF(Transformer):
         else:
             w = jnp.hstack(w_k)
 
-        W = jnp.diag(w)
-        W = W / jnp.trace(W)  # normalize number of trajectories
+        w /= jnp.sum(w)
 
         # decorrelateion part 2
-
         shrink_output = False
-
-        print("getting covs")
 
         add_1 = solver == "eig"
 
         C_0, C_1, cv_0_new, cv_tau_new, tr, pi, q = get_covs(
             cv_0,
             cv_tau,
-            W=W,
+            w=w,
             sym=True,
             add_1=add_1,
             shrink_output=shrink_output,
@@ -850,6 +899,51 @@ class TransformerMAF(Transformer):
             u = u[:, idx]
 
             print(u.shape)
+
+       
+        elif solver == "itr":
+            #taken from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4270008
+            #TODO: https://daggerfs.com/assets/pdf/tnn_traceratio.pdf this is even better
+
+
+            n = C_0.shape[0]
+
+            @jax.jit
+            def lamb(x):
+                a = jnp.trace(x.T @  C_0 @ x)
+                b = jnp.trace(x.T @ C_1 @ x)
+            
+                return  b / a
+
+            u = jnp.zeros( (C_0.shape[0], self.outdim ) )
+            u = u.at[0,0].set(1)
+            u = u.at[1,1].set(1)
+
+            lambd = lamb(u)
+            for b in range(100):
+
+
+                lambd_prev = lambd
+
+                w, u = scipy.linalg.eigh(a= C_1  - lambd*C_0 ,  subset_by_index=[n - self.outdim, n - 1])
+                u = jnp.array(u)
+
+                lambd = lamb(u)
+
+                w, v = scipy.linalg.eigh(a= u.T@ C_0@u)
+                u = u@v
+
+                norm = lambd - lambd_prev
+                
+                print(f"{b}: lambda {lambd} dlambda {norm} ")
+
+                if  norm <  1e-10:
+                    break
+
+            u = u[:, ::-1]
+            u = jnp.array(u)
+
+            print(f"got {w=} {v=}")
 
         print(f"eigenvalue are {w}")
 

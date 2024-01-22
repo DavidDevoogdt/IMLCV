@@ -14,6 +14,7 @@ import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
+from equinox import Partial
 from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
@@ -22,6 +23,7 @@ from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import padded_pmap
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.MdEngine import StaticMdInfo
@@ -219,7 +221,7 @@ class Rounds(ABC):
         for cv_c in self.path().glob("cv_*"):
             c = cv_c.parts[-1][3:]
 
-            print(f"reovering {c=}")
+            # print(f"reovering {c=}")
 
             attr = {}
 
@@ -238,9 +240,14 @@ class Rounds(ABC):
 
                 if r not in f[f"{c}"].keys():
                     attr = {}
-                    sti = StaticMdInfo.load(
-                        filename=self.path(c=c, r=r) / "static_trajectory_info.h5",
-                    )
+
+                    if not (p:=self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
+                        print(f"could not find {p}")
+                        continue
+
+                    # sti = StaticMdInfo.load(
+                    #     filename=self.path(c=c, r=r) / "static_trajectory_info.h5",
+                    # )
 
                     if (p := (self.path(c=c, r=r) / "bias.json")).exists():
                         attr["name_bias"] = self.rel_path(p)
@@ -255,7 +262,7 @@ class Rounds(ABC):
                     if (p := (self.path(c=c, r=r) / "invalid")).exists():
                         attr["valid"] = False
 
-                    self.add_round(attr=attr, stic=sti, c=c, r=r)
+                    self.add_round(attr=attr, stic=None, c=c, r=r)
 
                 for md_i in round_r.glob("md_*"):
                     i = md_i.parts[-1][3:]
@@ -263,29 +270,34 @@ class Rounds(ABC):
                     if i in f[f"{c}/{r}"].keys():
                         continue
 
-                    bash_tin = md_i / "bash_app_trajectory_info.h5"
-                    tin = md_i / "trajectory_info.h5"
+                    # this is lazy loaded
 
-                    try:
-                        # take longest trajectory
-                        if tin.exists() and bash_tin.exists():
-                            traj_1 = TrajectoryInfo.load(tin)
-                            traj_2 = TrajectoryInfo.load(bash_tin)
 
-                            if traj_1._size > traj_2._size:
-                                traj = traj_1
-                            else:
-                                traj = traj_2
-                        elif bash_tin.exists():
-                            traj = TrajectoryInfo.load(bash_tin)
 
-                        elif tin.exists():
-                            traj = TrajectoryInfo.load(tin)
-                        else:
-                            continue
-                    except Exception as e:
-                        print(f"failed to load with ({e=}),continuing")
+                    # bash_tin = md_i / "bash_app_trajectory_info.h5"
+                    if not ( md_i / "trajectory_info.h5").exists():
                         continue
+
+                    # try:
+                    #     # take longest trajectory
+                    #     if tin.exists() and bash_tin.exists():
+                    #         traj_1 = TrajectoryInfo.load(tin)
+                    #         traj_2 = TrajectoryInfo.load(bash_tin)
+
+                    #         if traj_1._size > traj_2._size:
+                    #             traj = traj_1
+                    #         else:
+                    #             traj = traj_2
+                    #     elif bash_tin.exists():
+                    #         traj = TrajectoryInfo.load(bash_tin)
+
+                    #     elif tin.exists():
+                    #         traj = TrajectoryInfo.load(tin)
+                    #     else:
+                    #         continue
+                    # except Exception as e:
+                    #     print(f"failed to load with ({e=}),continuing")
+                    #     continue
 
                     bias = None
                     if (p := (md_i / "new_bias.json")).exists():
@@ -302,7 +314,7 @@ class Rounds(ABC):
                     if (p := (md_i / "invalid")).exists():
                         attr["valid"] = False
 
-                    self.add_md(c=c, i=i, r=r, d=traj, bias=bias, attrs=attr)
+                    self.add_md(c=c, i=i, r=r, d=None, bias=bias, attrs=attr)
 
     def add_cv(self, c=None, attr=None):
         if c is None:
@@ -343,7 +355,7 @@ class Rounds(ABC):
         attr["name_cv"] = self.rel_path(self.path(c=c) / "cv.json")
         self.add_cv(attr=attr, c=c)
 
-    def add_round(self, stic: StaticMdInfo, c=None, r=None, attr=None):
+    def add_round(self, stic: StaticMdInfo|None, c=None, r=None, attr=None):
         if c is None:
             c = self.cv
 
@@ -368,7 +380,9 @@ class Rounds(ABC):
                 if attr[key] is not None:
                     f[f"{c}/{r}"].attrs[key] = attr[key]
 
-            stic.save(self.path(c=c, r=r) / "static_trajectory_info.h5")
+            if not (p:=self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
+                assert stic is not None
+                stic.save(p)
 
             f[f"{c}/{r}"].attrs["num"] = 0
             f[f"{c}/{r}"].attrs["num_vals"] = np.array([], dtype=np.int32)
@@ -412,7 +426,7 @@ class Rounds(ABC):
     def add_md(
         self,
         i,
-        d: TrajectoryInfo,
+        d: TrajectoryInfo|None,
         attrs=None,
         bias: str | None = None,
         r=None,
@@ -431,6 +445,7 @@ class Rounds(ABC):
 
             # check if in recover mode
             if not (p := self.path(c=c, r=r, i=i) / "trajectory_info.h5").exists():
+                assert d is not None
                 d.save(filename=p)
 
             if attrs is None:
@@ -502,7 +517,12 @@ class Rounds(ABC):
 
             for i in rn:
                 t_i = time.time()
-                _r_i = self.get_trajectory_information(c=c, r=r0, i=i)
+                try:
+                    _r_i = self.get_trajectory_information(c=c, r=r0, i=i)
+                except Exception as e:
+                    print(f"could not load {c=} {r0=} {i=} {e=}, skipping")
+                    continue
+                
                 load_i_time += time.time() - t_i
 
                 if not _r_i.valid and not ignore_invalid:
@@ -609,16 +629,12 @@ class Rounds(ABC):
         min_traj_length=None,
         recalc_cv=False,
         get_bias_list=False,
+        num_cv_rounds=1,
     ) -> data_loader_output:
         weights = []
 
         if new_r_cut == -1:
             new_r_cut = self.round_information(c=cv_round).tic.r_cut
-
-        if get_colvar or recalc_cv:
-            colvar = self.get_collective_variable(c=cv_round)
-        else:
-            colvar = None
 
         sti: StaticMdInfo | None = None
         sp: list[SystemParams] = []
@@ -631,88 +647,105 @@ class Rounds(ABC):
 
         out = int(out)
 
-        for round, traj in self.iter(
-            start=start,
-            stop=stop,
-            num=num,
-            c=cv_round,
-            ignore_invalid=ignore_invalid,
-            md_trajs=md_trajs,
-        ):
-            if min_traj_length is not None:
-                if traj.ti._size < min_traj_length:
-                    # print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
-                    continue
-                # else:
-                # print("adding trajectory")
+        cvrnds = []
 
-            if sti is None:
-                sti = round.tic
+        if num_cv_rounds != 1:
+            if cv_round is None:
+                cv_round = self.cv
 
-            ti.append(traj.ti)
-            sp0 = traj.ti.sp
+            cvrnds = range(max(0, cv_round - num_cv_rounds), cv_round + 1)
+            recalc_cv = True
+        else:
+            cvrnds.append(cv_round)
 
-            if (cv0 := traj.ti.CV) is None:
-                print("calculating CV")
+        if get_colvar or recalc_cv:
+            colvar = self.get_collective_variable(c=cv_round)
+        else:
+            colvar = None
 
-                if colvar is None:
-                    bias = traj.get_bias()
-                    colvar = bias.collective_variable
+        for cv_round in cvrnds:
+            for round, traj in self.iter(
+                start=start,
+                stop=stop,
+                num=num,
+                c=cv_round,
+                ignore_invalid=ignore_invalid,
+                md_trajs=md_trajs,
+            ):
+                if min_traj_length is not None:
+                    if traj.ti._size < min_traj_length:
+                        # print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
+                        continue
+                    # else:
+                    # print("adding trajectory")
 
-                nlr = (
-                    sp0.get_neighbour_list(
-                        r_cut=round.tic.r_cut,
-                        z_array=round.tic.atomic_numbers,
-                        chunk_size=chunk_size,
+                if sti is None:
+                    sti = round.tic
+
+                ti.append(traj.ti)
+                sp0 = traj.ti.sp
+
+                if (cv0 := traj.ti.CV) is None:
+                    print("calculating CV")
+
+                    if colvar is None:
+                        bias = traj.get_bias()
+                        colvar = bias.collective_variable
+
+                    nlr = (
+                        sp0.get_neighbour_list(
+                            r_cut=round.tic.r_cut,
+                            z_array=round.tic.atomic_numbers,
+                            chunk_size=chunk_size,
+                        )
+                        if round.tic.r_cut is not None
+                        else None
                     )
-                    if round.tic.r_cut is not None
-                    else None
-                )
 
-                cv0, _ = colvar.compute_cv(sp=sp0, nl=nlr)
+                    cv0, _ = colvar.compute_cv(sp=sp0, nl=nlr)
 
-            e = None
+                e = None
 
-            if filter_bias:
-                if (b0 := traj.ti.e_bias) is None:
-                    # map cvs
-                    bias = traj.get_bias()
+                if filter_bias:
+                    if (b0 := traj.ti.e_bias) is None:
+                        # map cvs
+                        bias = traj.get_bias()
 
-                    b0, _ = bias.compute_from_cv(cvs=cv0)
+                        b0, _ = bias.compute_from_cv(cvs=cv0)
 
-                e = b0
+                    e = b0
 
-            if filter_energy:
-                if (e0 := traj.ti.e_pot) is None:
-                    raise ValueError("e_pot is None")
+                if filter_energy:
+                    if (e0 := traj.ti.e_pot) is None:
+                        raise ValueError("e_pot is None")
+
+                    if e is None:
+                        e = e0
+                    else:
+                        e = e + e0
+
+                if energy_threshold is not None:
+                    if (e0 := traj.ti.e_pot) is None:
+                        raise ValueError("e_pot is None")
+
+                    if min_energy is None:
+                        min_energy = e0.min()
+                    else:
+                        min_energy = min(min_energy, e0.min())
+
+                sp.append(sp0)
+                cv.append(cv0)
+                if get_bias_list:
+                    bias_list.append(traj.get_bias())
 
                 if e is None:
-                    e = e0
+                    weights.append(None)
                 else:
-                    e = e + e0
+                    beta = 1 / (round.tic.T * boltzmann)
+                    weight = -beta * e
 
-            if energy_threshold is not None:
-                if (e0 := traj.ti.e_pot) is None:
-                    raise ValueError("e_pot is None")
-
-                if min_energy is None:
-                    min_energy = e0.min()
-                else:
-                    min_energy = min(min_energy, e0.min())
-
-            sp.append(sp0)
-            cv.append(cv0)
-            if get_bias_list:
-                bias_list.append(traj.get_bias())
-
-            if e is None:
-                weights.append(None)
-            else:
-                beta = 1 / (round.tic.T * boltzmann)
-                weight = -beta * e
-
-                # weight = jnp.exp(-beta * e)
-                weights.append(weight)
+                    # weight = jnp.exp(-beta * e)
+                    weights.append(weight)
 
         assert sti is not None
         assert len(sp) != 0
@@ -888,9 +921,26 @@ class Rounds(ABC):
                 out_nl = [out_nl_stacked]
 
         if recalc_cv:
-            print(f"old cvs {out_cv=}")
-            out_cv = [colvar.compute_cv(spi, nli)[0] for spi, nli in zip(out_sp, out_nl)]
-            print(f"new cvs {out_cv=}")
+            # print(f"old cvs {out_cv=}")
+
+            if len(out_sp) >= 2:
+                out_sp_merged = SystemParams.stack(*out_sp)
+                out_nl_merged = NeighbourList.stack(*out_nl)
+            else:
+                out_sp_merged = out_sp[0]
+                out_nl_merged = out_nl[0]
+
+            out_cv_stacked = padded_pmap(Partial(colvar.compute_cv, chunk_size=chunk_size))(
+                out_sp_merged,
+                out_nl_merged,
+            )[0]
+
+            if len(out_sp) >= 2:
+                out_cv = out_cv_stacked.replace(_stack_dims=[a.shape[0] for a in out_sp]).unstack()
+            else:
+                out_cv = [out_cv_stacked]
+
+            # print(f"new cvs {out_cv=}")
 
         return Rounds.data_loader_output(
             sp=out_sp,
@@ -1278,7 +1328,7 @@ class Rounds(ABC):
                 split_data=False,
                 filter_bias=correct_previous_bias,
                 filter_energy=filter_e_pot,
-                new_r_cut=-1,
+                new_r_cut=None,
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
                 cv_round=cv_round,
@@ -1489,7 +1539,7 @@ class Rounds(ABC):
         md = MDEngine.load(inputs[0].filepath, **kwargs)
 
         if sp is not None:
-            assert md.sp == sp
+            # assert md.sp == sp
             print(f"will start with {sp=}")
 
         md.run(steps)
