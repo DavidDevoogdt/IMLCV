@@ -28,7 +28,7 @@
         MAX_SCF  25
         EPS_SCF  1.0E-06
        &END OUTER_SCF
-       
+
      &END SCF
 
      &QS

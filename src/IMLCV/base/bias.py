@@ -556,8 +556,8 @@ class Bias(PyTreeNode, ABC):
                             CV.stack(*traj),
                             2,
                             True,
-                            min_val=  jnp.array([ extent[0],extent[2] ]) ,
-                            max_val=  jnp.array([ extent[1],extent[3] ]) ,
+                            min_val=jnp.array([extent[0], extent[2]]),
+                            max_val=jnp.array([extent[1], extent[3]]),
                         ).unstack()
                     ]
 

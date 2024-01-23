@@ -2,6 +2,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as onp
 import optax
 import pymanopt
 import scipy.linalg
@@ -22,9 +23,9 @@ from jax import random
 from jax import vmap
 from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-import numpy as onp
 
 # https://arxiv.org/pdf/1602.08776.pdf appendix b
+
 
 def shrink(S: Array, n: int, shrinkage="OAS"):
     if shrinkage == "None":
@@ -657,76 +658,65 @@ class TransformerMAF(Transformer):
             C_0 -= jnp.einsum("i,j->ij", pi, pi)
             C_1 -= jnp.einsum("i,j->ij", pi, pi)
 
-
-            eps= 1e-8
-
+            eps = 1e-8
 
             qr = False
 
             if qr:
-                q1,r1,p1  = scipy.linalg.qr(a=C_0,pivoting=True )
+                q1, r1, p1 = scipy.linalg.qr(a=C_0, pivoting=True)
 
                 l1 = jnp.diag(r1)
-                mask1 = jnp.abs(jnp.diag(r1))  >eps
+                mask1 = jnp.abs(jnp.diag(r1)) > eps
 
-                q1 = q1[:,mask1]
+                q1 = q1[:, mask1]
 
                 print(f"{l1=} {q1.shape=}  ")
 
-                q2,r2,p2  = scipy.linalg.qr(a=q1.T@C_1@q1,pivoting=True )
+                q2, r2, p2 = scipy.linalg.qr(a=q1.T @ C_1 @ q1, pivoting=True)
 
                 l2 = jnp.diag(r2)
-                mask2 =  jnp.abs(jnp.diag(r2)) >eps
+                mask2 = jnp.abs(jnp.diag(r2)) > eps
 
-                q2 = q2[:,mask2]
+                q2 = q2[:, mask2]
 
                 print(f"{l2=} {q2.shape=}  ")
-
 
                 # # #remove negative eigenvalues
                 # aa,bb,alpha,beta,q3,z3 = scipy.linalg.ordqz(A= q2.T@q1.T@C_1@q1@q2,B= q2.T@q1.T@C_0@q1@q2, sort='rhp')
 
-
                 # l3 = alpha/beta
                 # mask3 = l3>eps
                 # q3 = q3[:,mask3 ]
-
 
                 # print(f"{aa=}")
                 # print(f"{bb=}")
 
                 # print(f"{l3=} {q3.shape=}")
 
-
-                q = q1@q2#@q3
-
+                q = q1 @ q2  # @q3
 
             else:
                 # first remove dimensions with very low variance
-                l1, q1 = scipy.linalg.eigh(a=C_0,subset_by_value=[eps,onp.inf])
-                mask1 =   l1  > eps
-                
-                
+                l1, q1 = scipy.linalg.eigh(a=C_0, subset_by_value=[eps, onp.inf])
+                mask1 = l1 > eps
+
                 l1 = l1[mask1]
 
-
-                q1 = q1[:,mask1]  
+                q1 = q1[:, mask1]
 
                 print(f"{l1=}{q1.shape=} ")
 
-
                 if not sym:
-                    l2, q2 = scipy.linalg.eig(a=q1.T@C_1@q1, b = q1.T@C_0@q1   )
+                    l2, q2 = scipy.linalg.eig(a=q1.T @ C_1 @ q1, b=q1.T @ C_0 @ q1)
                 else:
-                    l2, q2 = scipy.linalg.eigh(a=q1.T@C_1@q1,subset_by_value=[eps,onp.inf])
+                    l2, q2 = scipy.linalg.eigh(a=q1.T @ C_1 @ q1, subset_by_value=[eps, onp.inf])
 
-                
-                mask2 =  l2  > eps
-                q2 = q2[:,mask2]  
+                mask2 = l2 > eps
+                q2 = q2[:, mask2]
 
                 print(f"{l2=} {q2.shape=}  ")
 
-                q = q1@q2
+                q = q1 @ q2
 
             q = jnp.array(q)
 
@@ -763,7 +753,7 @@ class TransformerMAF(Transformer):
             return C_0, C_1, cv_0, cv_tau, transform_maf, pi, q
 
         def get_koopman_weights(cv_0_i, cv_tau_i, w=None, shrink=False):
-            C_0, C_1, cv_0_new, cv_tau_new, _, _, _= get_covs(
+            C_0, C_1, cv_0_new, cv_tau_new, _, _, _ = get_covs(
                 cv_0_i,
                 cv_tau_i,
                 w=w if w is not None else None,
@@ -900,44 +890,40 @@ class TransformerMAF(Transformer):
 
             print(u.shape)
 
-       
         elif solver == "itr":
-            #taken from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4270008
-            #TODO: https://daggerfs.com/assets/pdf/tnn_traceratio.pdf this is even better
-
+            # taken from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4270008
+            # TODO: https://daggerfs.com/assets/pdf/tnn_traceratio.pdf this is even better
 
             n = C_0.shape[0]
 
             @jax.jit
             def lamb(x):
-                a = jnp.trace(x.T @  C_0 @ x)
+                a = jnp.trace(x.T @ C_0 @ x)
                 b = jnp.trace(x.T @ C_1 @ x)
-            
-                return  b / a
 
-            u = jnp.zeros( (C_0.shape[0], self.outdim ) )
-            u = u.at[0,0].set(1)
-            u = u.at[1,1].set(1)
+                return b / a
+
+            u = jnp.zeros((C_0.shape[0], self.outdim))
+            u = u.at[0, 0].set(1)
+            u = u.at[1, 1].set(1)
 
             lambd = lamb(u)
             for b in range(100):
-
-
                 lambd_prev = lambd
 
-                w, u = scipy.linalg.eigh(a= C_1  - lambd*C_0 ,  subset_by_index=[n - self.outdim, n - 1])
+                w, u = scipy.linalg.eigh(a=C_1 - lambd * C_0, subset_by_index=[n - self.outdim, n - 1])
                 u = jnp.array(u)
 
                 lambd = lamb(u)
 
-                w, v = scipy.linalg.eigh(a= u.T@ C_0@u)
-                u = u@v
+                w, v = scipy.linalg.eigh(a=u.T @ C_0 @ u)
+                u = u @ v
 
                 norm = lambd - lambd_prev
-                
+
                 print(f"{b}: lambda {lambd} dlambda {norm} ")
 
-                if  norm <  1e-10:
+                if norm < 1e-10:
                     break
 
             u = u[:, ::-1]

@@ -46,6 +46,7 @@ class TrajectoryInformation:
     folder: Path
     name_bias: str | None = None
     valid: bool = True
+    finished: bool = False
 
     def get_bias(self) -> Bias | None:
         try:
@@ -221,100 +222,27 @@ class Rounds(ABC):
         for cv_c in self.path().glob("cv_*"):
             c = cv_c.parts[-1][3:]
 
-            # print(f"reovering {c=}")
-
-            attr = {}
-
-            if (p := (self.path(c=c) / "invalid")).exists():
-                attr["valid"] = False
-
-            if (p := (self.path(c=c) / "cv.json")).exists():
-                attr["name_cv"] = self.rel_path(p)
-            elif (p := (self.path(c=c) / "cv")).exists():
-                attr["name_cv"] = self.rel_path(p)
-
-            self.add_cv(c=c, attr=attr)
+            self.add_cv(c=c)
 
             for round_r in cv_c.glob("round_*"):
                 r = round_r.parts[-1][6:]
 
                 if r not in f[f"{c}"].keys():
-                    attr = {}
-
-                    if not (p:=self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
+                    if not (p := self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
                         print(f"could not find {p}")
                         continue
 
-                    # sti = StaticMdInfo.load(
-                    #     filename=self.path(c=c, r=r) / "static_trajectory_info.h5",
-                    # )
-
-                    if (p := (self.path(c=c, r=r) / "bias.json")).exists():
-                        attr["name_bias"] = self.rel_path(p)
-                    elif (p := (self.path(c=c, r=r) / "bias")).exists():
-                        attr["name_bias"] = self.rel_path(p)
-
-                    if (p := (self.path(c=c, r=r) / "engine.json")).exists():
-                        attr["name_md"] = self.rel_path(p)
-                    elif (p := (self.path(c=c, r=r) / "engine")).exists():
-                        attr["name_md"] = self.rel_path(p)
-
-                    if (p := (self.path(c=c, r=r) / "invalid")).exists():
-                        attr["valid"] = False
-
-                    self.add_round(attr=attr, stic=None, c=c, r=r)
+                    self.add_round(c=c, r=r)
 
                 for md_i in round_r.glob("md_*"):
                     i = md_i.parts[-1][3:]
 
                     if i in f[f"{c}/{r}"].keys():
                         continue
-
-                    # this is lazy loaded
-
-
-
-                    # bash_tin = md_i / "bash_app_trajectory_info.h5"
-                    if not ( md_i / "trajectory_info.h5").exists():
+                    if not (md_i / "trajectory_info.h5").exists():
                         continue
 
-                    # try:
-                    #     # take longest trajectory
-                    #     if tin.exists() and bash_tin.exists():
-                    #         traj_1 = TrajectoryInfo.load(tin)
-                    #         traj_2 = TrajectoryInfo.load(bash_tin)
-
-                    #         if traj_1._size > traj_2._size:
-                    #             traj = traj_1
-                    #         else:
-                    #             traj = traj_2
-                    #     elif bash_tin.exists():
-                    #         traj = TrajectoryInfo.load(bash_tin)
-
-                    #     elif tin.exists():
-                    #         traj = TrajectoryInfo.load(tin)
-                    #     else:
-                    #         continue
-                    # except Exception as e:
-                    #     print(f"failed to load with ({e=}),continuing")
-                    #     continue
-
-                    bias = None
-                    if (p := (md_i / "new_bias.json")).exists():
-                        bias = self.rel_path(p)
-                    elif (p := (md_i / "bias.json")).exists():
-                        bias = self.rel_path(p)
-                    elif (p := (md_i / "new_bias")).exists():
-                        bias = self.rel_path(p)
-                    elif (p := (md_i / "bias")).exists():
-                        bias = self.rel_path(p)
-
-                    attr = {}
-
-                    if (p := (md_i / "invalid")).exists():
-                        attr["valid"] = False
-
-                    self.add_md(c=c, i=i, r=r, d=None, bias=bias, attrs=attr)
+                    self.add_md(c=c, i=i, r=r)
 
     def add_cv(self, c=None, attr=None):
         if c is None:
@@ -332,7 +260,18 @@ class Rounds(ABC):
             f.create_group(f"{c}")
 
             if "valid" not in attr:
-                attr["valid"] = True
+                if (p := (self.path(c=c) / "invalid")).exists():
+                    attr["valid"] = False
+                else:
+                    attr["valid"] = True
+
+            if "name_cv" not in attr:
+                if (p := (self.path(c=c) / "cv.json")).exists():
+                    attr["name_cv"] = self.rel_path(p)
+                elif (p := (self.path(c=c) / "cv")).exists():
+                    attr["name_cv"] = self.rel_path(p)
+                else:
+                    raise
 
             for key in attr:
                 if attr[key] is not None:
@@ -355,7 +294,7 @@ class Rounds(ABC):
         attr["name_cv"] = self.rel_path(self.path(c=c) / "cv.json")
         self.add_cv(attr=attr, c=c)
 
-    def add_round(self, stic: StaticMdInfo|None, c=None, r=None, attr=None):
+    def add_round(self, stic: StaticMdInfo | None = None, c=None, r=None, attr=None):
         if c is None:
             c = self.cv
 
@@ -369,20 +308,35 @@ class Rounds(ABC):
         if not dir.exists():
             dir.mkdir(parents=True)
 
+        if not (p := self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
+            assert stic is not None
+            stic.save(p)
+
         with self.lock:
             f = self.h5file
             f[f"{c}"].create_group(f"{r}")
 
             if "valid" not in attr:
-                attr["valid"] = True
+                if (p := (self.path(c=c, r=r) / "invalid")).exists():
+                    attr["valid"] = False
+                else:
+                    attr["valid"] = True
+
+            if "name_bias" not in attr:
+                if (p := (self.path(c=c, r=r) / "bias.json")).exists():
+                    attr["name_bias"] = self.rel_path(p)
+                elif (p := (self.path(c=c, r=r) / "bias")).exists():
+                    attr["name_bias"] = self.rel_path(p)
+
+            if "name_md" not in attr:
+                if (p := (self.path(c=c, r=r) / "engine.json")).exists():
+                    attr["name_md"] = self.rel_path(p)
+                elif (p := (self.path(c=c, r=r) / "engine")).exists():
+                    attr["name_md"] = self.rel_path(p)
 
             for key in attr:
                 if attr[key] is not None:
                     f[f"{c}/{r}"].attrs[key] = attr[key]
-
-            if not (p:=self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
-                assert stic is not None
-                stic.save(p)
 
             f[f"{c}/{r}"].attrs["num"] = 0
             f[f"{c}/{r}"].attrs["num_vals"] = np.array([], dtype=np.int32)
@@ -426,7 +380,7 @@ class Rounds(ABC):
     def add_md(
         self,
         i,
-        d: TrajectoryInfo|None,
+        d: TrajectoryInfo | None = None,
         attrs=None,
         bias: str | None = None,
         r=None,
@@ -438,21 +392,41 @@ class Rounds(ABC):
         if r is None:
             r = self.get_round(c=c)
 
+        if bias is None:
+            if (p := (self.path(c=c, r=r, i=i) / "new_bias.json")).exists():
+                bias = self.rel_path(p)
+            elif (p := (self.path(c=c, r=r, i=i) / "new_bias")).exists():
+                bias = self.rel_path(p)
+            elif (p := (self.path(c=c, r=r, i=i) / "bias.json")).exists():
+                bias = self.rel_path(p)
+            elif (p := (self.path(c=c, r=r, i=i) / "bias")).exists():
+                bias = self.rel_path(p)
+
+        if not (p := self.path(c=c, r=r, i=i) / "trajectory_info.h5").exists():
+            assert d is not None
+            d.save(filename=p)
+
         with self.lock:
             f = self.h5file
             if f"{i}" not in f[f"{c}/{r}"]:
                 f.create_group(f"{c}/{r}/{i}")
 
             # check if in recover mode
-            if not (p := self.path(c=c, r=r, i=i) / "trajectory_info.h5").exists():
-                assert d is not None
-                d.save(filename=p)
 
             if attrs is None:
                 attrs = {}
 
             if "valid" not in attrs:
-                attrs["valid"] = True
+                if (p := self.path(c=c, r=r, i=i) / "invalid").exists():
+                    attrs["valid"] = False
+                else:
+                    attrs["valid"] = True
+
+            if "finished" not in attrs:
+                if not (p := self.path(c=c, r=r, i=i) / "finished").exists():
+                    attrs["finished"] = False
+                else:
+                    attrs["finished"] = True
 
             if bias is not None:
                 attrs["name_bias"] = bias
@@ -471,7 +445,7 @@ class Rounds(ABC):
             self.h5file.flush()
 
     ######################################
-    #             retreiveal             #
+    #             retrieval              #
     ######################################
     def iter(
         self,
@@ -479,6 +453,7 @@ class Rounds(ABC):
         stop=None,
         num=3,
         ignore_invalid=False,
+        only_finshed=True,
         c=None,
         md_trajs: list[int] | None = None,
         print_timings=False,
@@ -522,10 +497,13 @@ class Rounds(ABC):
                 except Exception as e:
                     print(f"could not load {c=} {r0=} {i=} {e=}, skipping")
                     continue
-                
+
                 load_i_time += time.time() - t_i
 
                 if not _r_i.valid and not ignore_invalid:
+                    continue
+
+                if not _r_i.finished and only_finshed:
                     continue
 
                 # no points in collection
@@ -630,6 +608,7 @@ class Rounds(ABC):
         recalc_cv=False,
         get_bias_list=False,
         num_cv_rounds=1,
+        only_finished=True,
     ) -> data_loader_output:
         weights = []
 
@@ -671,6 +650,7 @@ class Rounds(ABC):
                 c=cv_round,
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
+                only_finshed=only_finished,
             ):
                 if min_traj_length is not None:
                     if traj.ti._size < min_traj_length:
@@ -1007,6 +987,7 @@ class Rounds(ABC):
             nl: NeighbourList
             cv: CV
             traj_info: TrajectoryInfo
+            new_cv: CV
 
             round_path = self.path(c=self.cv, r=0, i=i)
             round_path.mkdir(parents=True, exist_ok=True)
@@ -1237,6 +1218,22 @@ class Rounds(ABC):
 
         self._set_attr(name="valid", value=False, c=c, r=r, i=i)
 
+    def finish_data(self, c=None, r=None, i=None):
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+        if not (p := self.path(c=c, r=r, i=i) / "finished").exists():
+            if not p.parent.exists():
+                p.parent.mkdir(parents=True)
+
+            with open(p, "w+"):
+                pass
+
+        self._set_attr(name="finished", value=False, c=c, r=r, i=i)
+
     def is_valid(self, c=None, r=None, i=None):
         if c is None:
             c = self.cv
@@ -1245,6 +1242,15 @@ class Rounds(ABC):
             r = self.get_round(c=c)
 
         return (self.path(c=c, r=r, i=i) / "invalid").exists()
+
+    def is_finished(self, c=None, r=None, i=None):
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+        return (self.path(c=c, r=r, i=i) / "finished").exists()
 
     def get_collective_variable(
         self,

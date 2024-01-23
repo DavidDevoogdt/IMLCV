@@ -406,9 +406,8 @@ class Transformer:
         )
         ax = fig.add_subplot(gs[1, 0])
 
-        ax_histx = fig.add_subplot(gs[0, 0],sharex=ax)
-        ax_histy = fig.add_subplot(gs[1, 1],sharey=ax)
-
+        ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
+        ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
 
         ax.scatter(
             *[data[:, l] for l in range(2)],
@@ -418,30 +417,25 @@ class Transformer:
         # ax.set_xlabel(labels[0])
         # ax.set_ylabel(labels[1])
 
-
         in_xlim = jnp.logical_and(data[:, 0] > -margin, data[:, 0] < 1 + margin)
         in_ylim = jnp.logical_and(data[:, 1] > -margin, data[:, 1] < 1 + margin)
         n_points = jnp.sum(jnp.logical_and(in_xlim, in_ylim))
         n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
 
-
         ax_histx.hist(data[:, 0], bins=n_bins, range=[-margin, 1 + margin])
         ax_histy.hist(data[:, 1], bins=n_bins, range=[-margin, 1 + margin], orientation="horizontal")
         ax_histy.tick_params(axis="x", rotation=-90)
 
-
-        for b in [ax_histx,ax_histy]:
+        for b in [ax_histx, ax_histy]:
             b.spines["right"].set_visible(False)
             b.spines["top"].set_visible(False)
             b.spines["bottom"].set_visible(False)
             b.spines["left"].set_visible(False)
 
+        ax_histx.tick_params(top=False, bottom=False, left=False, right=False, labelleft=False, labelbottom=False)
+        ax_histy.tick_params(top=False, bottom=False, left=False, right=False, labelleft=False, labelbottom=False)
 
-        ax_histx.tick_params(top=False, bottom=False, left=False, right=False,  labelleft=False,labelbottom=False )
-        ax_histy.tick_params(top=False, bottom=False, left=False, right=False,  labelleft=False,labelbottom=False )
-
-        ax.locator_params( nbins=3)
-
+        ax.locator_params(nbins=3)
 
         if margin is not None:
             ax.set_xlim(-margin, 1 + margin)
@@ -591,9 +585,7 @@ class Transformer:
         else:
             data_col = (color_data - min_val) / (max_val - min_val)
 
-        jnp.clip(data_col,0.0,1.0)
-
-   
+        jnp.clip(data_col, 0.0, 1.0)
 
         # https://www.hsluv.org/
         # hue 0-360 sat 0-100 lighness 0-1000
