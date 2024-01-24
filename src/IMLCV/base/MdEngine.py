@@ -611,11 +611,12 @@ class MDEngine(ABC):
         try:
             self._run(int(steps))
 
-            finished = Path(self.trajectory_file).parent / "finished"
+            if self.trajectory_file is not None:
+                finished = Path(self.trajectory_file).parent / "finished"
 
-            if not finished.exists():
-                with open(finished, "w+"):
-                    pass
+                if not finished.exists():
+                    with open(finished, "w+"):
+                        pass
 
         except Exception as err:
             if self.step == 1:

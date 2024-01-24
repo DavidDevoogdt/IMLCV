@@ -77,6 +77,7 @@ class Scheme:
         eps=0.1,
         min_traj_length=None,
         recalc_cv=False,
+        only_finished=True,
     ):
         m = self.md.bias.collective_variable.metric
 
@@ -112,6 +113,7 @@ class Scheme:
             ignore_invalid=ignore_invalid,
             min_traj_length=min_traj_length,
             recalc_cv=recalc_cv,
+            only_finished=only_finished,
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):
@@ -182,6 +184,7 @@ class Scheme:
                 eps=eps_umbrella,
                 min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
                 recalc_cv=recalc_cv,
+                only_finished=i > 1,
             )
 
             if update_metric:

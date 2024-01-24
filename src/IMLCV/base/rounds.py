@@ -813,8 +813,13 @@ class Rounds(ABC):
             if out == -1:
                 skip_step = 1
             else:
-                skip_step = sum([a.shape[0] for a in sp]) // out
-            # print(f"got {skip_step=}")
+                n_points = sum([a.shape[0] for a in sp])
+
+                skip_step = n_points // out
+
+                if skip_step == 0:
+                    skip_step = 1
+                    print(f"not enough data, returning {n_points=} ")
 
             for sp_n, cv_n, ti_n in zip(sp, cv, ti):
                 out_sp.append(sp_n[::skip_step])
@@ -1302,6 +1307,7 @@ class Rounds(ABC):
         wait_for_plots=False,
         min_traj_length=None,
         recalc_cv=False,
+        only_finished=True,
     ):
         if cv_round is None:
             cv_round = self.cv
@@ -1340,6 +1346,7 @@ class Rounds(ABC):
                 cv_round=cv_round,
                 min_traj_length=min_traj_length,
                 recalc_cv=recalc_cv,
+                only_finished=only_finished,
             )
 
             cv_stack = data.cv[0]

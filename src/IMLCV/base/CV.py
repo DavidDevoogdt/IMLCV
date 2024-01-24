@@ -1003,21 +1003,6 @@ class SystemParams(PyTreeNode):
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
 
-    # def __eq__(self, other):
-    #     if not isinstance(other, SystemParams):
-    #         return False
-
-    #     if not jnp.allclose(self.coordinates, other.coordinates):
-    #         return False
-
-    #     if self.cell is None:
-    #         if other.cell is not None:
-    #             return False
-    #     else:
-    #         if not jnp.allclose(self.cell, other.cell):
-    #             return False
-    #     return True
-
     def super_cell(self, n: int | list[int]) -> SystemParams:
         if self.batched:
             return vmap(Partial(SystemParams.super_cell, n=n))(self)
@@ -1031,12 +1016,6 @@ class SystemParams(PyTreeNode):
             coor.append(self.coordinates + a * self.cell[0, :] + b * self.cell[1, :] + c * self.cell[2, :])
 
         return SystemParams(coordinates=jnp.concatenate(coor, axis=0), cell=jnp.array(n) @ self.cell)
-
-    # def __getstate__(self):
-    #     return self.__dict__
-
-    # def __setstate__(self, statedict: dict):
-    #     self.__init__(**statedict)
 
 
 class NeighbourList(PyTreeNode):
@@ -1643,7 +1622,7 @@ class NeighbourList(PyTreeNode):
 
 
 class CV(PyTreeNode):
-    cv: Array = field()
+    cv: Array = field(pytree_node=True)
     mapped: bool = field(pytree_node=False, default=False)
     atomic: bool = field(pytree_node=False, default=False)
     _combine_dims: list | None = field(pytree_node=False, default=None)
@@ -1941,24 +1920,6 @@ class CV(PyTreeNode):
             atomic=atomic,
         )
 
-    # def __eq__(self, other):
-    #     if not isinstance(other, CV):
-    #         return False
-
-    #     return (
-    #         jnp.allclose(self.cv, other.cv)
-    #         and self._combine_dims == other._combine_dims
-    #         and self._stack_dims == other._stack_dims
-    #         and self.atomic == other.atomic
-    #         and self.mapped == other.mapped
-    #     )
-
-    # def __getstate__(self):
-    #     return self.__dict__
-
-    # def __setstate__(self, statedict: dict):
-    #     self.__init__(**statedict)
-
 
 class CvMetric(PyTreeNode):
     """class to keep track of topology of given CV. Identifies the periodicitie of CVs and maps to unit square with correct peridicities"""
@@ -2237,11 +2198,8 @@ class _CvFunBase:
         return self.__dict__
 
     def __setstate__(self, statedict: dict):
-        if "static_kwarg_names" in statedict:
-            statedict.pop("static_kwarg_names")
-
-        if "static_kwargs" not in statedict:
-            statedict["static_kwargs"] = statedict.pop("kwargs")
+        # if "static_kwarg_names" in statedict:
+        # statedict["static_kwargs"] = statedict.pop("kwargs")
 
         self.__init__(**statedict)
 
@@ -2332,7 +2290,7 @@ class CvFunNn(nn.Module, _CvFunBase):
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
-    ) -> CV:
+    ) -> tuple[CV, CV | None, Array | None]:
         if reverse:
             return self.backward(x, nl, conditioners, **self.kwargs)
         else:
@@ -2396,7 +2354,7 @@ class CvFunDistrax(nn.Module, _CvFunBase):
         reverse=False,
         log_det=False,
         conditioners: list[CV] | None = None,
-    ) -> CV:
+    ) -> tuple[CV, CV, Array | None]:
         if conditioners is not None:
             z = CV.combine(*conditioners, x).cv
         else:
@@ -2437,19 +2395,23 @@ class _CombinedCvFun(_CvFunBase):
 
     def calc(
         self,
-        x: CV,
+        x: CV | list[SystemParams],
         nl: NeighbourList | None,
         reverse=False,
         log_det=False,
         jacobian=False,
-    ) -> tuple[CV, CV, Array | None]:
-        assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
+    ) -> tuple[CV, CV | None, Array | None]:
+        if isinstance(x, CV):
+            assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
+            splitted = x.split()
+        else:
+            splitted = x
 
         out_x = []
         out_log_det = []
         out_jac = []
 
-        for cl, xi in zip(self.classes, x.split()):
+        for cl, xi in zip(self.classes, splitted):
             ordered = reversed(cl) if reverse else cl
 
             if log_det:
@@ -2476,7 +2438,11 @@ class _CombinedCvFun(_CvFunBase):
             out_x.append(xi)
             out_log_det.append(log_det)
 
-        return CV.combine(*out_x), CV.combine(*out_jac), jnp.sum(jnp.array(out_log_det))
+        return (
+            CV.combine(*out_x),
+            CV.combine(*out_jac) if jacobian else None,
+            jnp.sum(jnp.array(out_log_det), axis=0) if log_det else None,
+        )
 
     def _log_Jf(
         self,
@@ -2518,7 +2484,10 @@ def _from_array_function(
     return x.replace(cv=out, atomic=atomic)
 
 
-def _duplicate_trans(x: CV, nl: NeighbourList | None, _, n):
+def _duplicate_trans(x: CV | SystemParams, nl: NeighbourList | None, _, n):
+    if isinstance(x, SystemParams):
+        return [x] * n
+
     return CV.combine(*[x] * n)
 
 
@@ -2762,7 +2731,7 @@ class CvFlow(PyTreeNode):
 
     @staticmethod
     def from_function(
-        f: Callable[[SystemParams, NeighbourList | None], CV],
+        f: Callable[[SystemParams, NeighbourList | None, CV | None], CV],
         static_argnames=None,
         **kwargs,
     ) -> CvFlow:

@@ -978,17 +978,29 @@ def _weighted_sinkhorn_divergence_2(
     nl: NeighbourList | None,
     _,
     scaling,
+    mean=None,
     append_weights=True,
+    sum_x=True,
 ):
     div, ddiv = cv.split()
 
     def soft_min(x):
-        x = jnp.sum(x, axis=-1)
+        if sum_x:
+            x = jnp.sum(x, axis=-1)
+
         a = jnp.exp(-x)
         return a / jnp.sum(a)
 
+    if mean is not None:
+        div = div - mean
     weights = soft_min(jnp.array([d.cv for d in (div * scaling).split()]))
-    out = CV.combine(*[a * b for a, b in zip(ddiv.split(), weights)])
+
+    if sum_x:
+        out = CV.combine(*[a * b for a, b in zip(ddiv.split(), weights)])
+    else:
+        out = CV.combine(
+            *[CV.combine(*[ai * bi for ai, bi in zip(a.split(), b)]) for a, b in zip(ddiv.split(), weights)],
+        )
 
     if append_weights:
         out = CV.combine(out, div.replace(cv=weights.reshape(-1)))
@@ -996,12 +1008,19 @@ def _weighted_sinkhorn_divergence_2(
     return out
 
 
-def weighted_sinkhorn_divergence_2(scaling, append_weights):
+def weighted_sinkhorn_divergence_2(
+    scaling,
+    append_weights,
+    mean=None,
+    sum_x=False,
+):
     return CvTrans.from_cv_function(
         _weighted_sinkhorn_divergence_2,
-        static_argnames=["append_weights"],
+        static_argnames=["append_weights", "sum_x"],
         scaling=scaling,
+        mean=mean,
         append_weights=append_weights,
+        sum_x=sum_x,
     )
 
 

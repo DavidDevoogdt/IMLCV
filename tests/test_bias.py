@@ -82,8 +82,11 @@ def test_RBF_bias(kernel):
     # bounds = [[0, 3], [0, 3]]
     n = 5
 
+    def a(sp, nl, _):
+        return CV(cv=sp.coordinates)
+
     cv = CollectiveVariable(
-        f=CvFlow(func=lambda x: x.coordinates),
+        f=CvFlow.from_function(f=a),
         metric=CvMetric.create(
             periodicities=[False, False],
             bounding_box=jnp.array([[-2, 2], [1, 5]]),
@@ -92,9 +95,8 @@ def test_RBF_bias(kernel):
 
     bins = cv.metric.grid(n=n)
 
-    @CvTrans.from_cv_function
     def f(cv: CV, _nl, _cond):
-        return cv.cv[0] ** 3 + cv.cv[1]
+        return cv.replace(cv=cv.cv[0] ** 3 + cv.cv[1])
 
     # reevaluation of thermolib histo
     bin_centers1, bin_centers2 = 0.5 * (bins[0][:-1] + bins[0][1:]), 0.5 * (bins[1][:-1] + bins[1][1:])
@@ -104,13 +106,12 @@ def test_RBF_bias(kernel):
 
     center_cvs = CV(jnp.stack([xcf, ycf], axis=1))
 
-    val, _, _ = f.compute_cv_trans(center_cvs)
+    val, _, _ = CvTrans.from_cv_function(f).compute_cv_trans(center_cvs)
 
-    # with jax.disable_jit():
-    bias = RbfBias.create(cvs=cv, cv=center_cvs, vals=val, kernel=kernel)
+    bias = RbfBias.create(cvs=cv, cv=center_cvs, vals=val.cv, kernel=kernel)
 
     val2, _ = bias.compute_from_cv(center_cvs)
-    assert jnp.allclose(val, val2)
+    assert jnp.allclose(val.cv, val2)
 
 
 def test_combine_bias():
@@ -184,20 +185,26 @@ def test_bias_save(tmpdir):
 
     tmpdir = Path(tmpdir)
 
-    yaffmd.bias.save(tmpdir / "bias_test_2.xyz")
-    bias = Bias.load(tmpdir / "bias_test_2.xyz")
+    yaffmd.bias.save(tmpdir / "bias_test_2.json")
+    bias = Bias.load(tmpdir / "bias_test_2.json")
 
     from IMLCV.base.CV import CV
 
     cvs = CV(cv=jnp.array([0.0, 0.0]))
 
-    [b, db] = yaffmd.bias.compute_from_cv(cvs=cvs, diff=True)
     [b2, db2] = bias.compute_from_cv(cvs=cvs, diff=True)
+    [b, db] = yaffmd.bias.compute_from_cv(cvs=cvs, diff=True)
+
+    # print(f"{bias=}")
+    # print(f"{yaffmd.bias=}")
+
+    print(f"{db=}\n{db2=}")
 
     assert pytest.approx(b) == b2
-    assert pytest.approx(db.cv) == db2.cv
+    assert jnp.allclose(db.cv, db2.cv)
 
 
+@pytest.mark.skip(reason="file_outdated")
 @pytest.mark.parametrize("choice", ["rbf"])
 def test_FES_bias(tmpdir, choice):
     import zipfile

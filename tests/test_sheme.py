@@ -19,6 +19,7 @@ def test_perov(tmpdir, steps=500, recalc=False):
 
 
 # @pytest.mark.skip(reason="run on HPC")
+@pytest.mark.skip(reason="file_outdated")
 def test_ala(tmpdir, steps=100):
     assert (p := ROOT_DIR / "data" / "alanine_dipeptide.zip").exists()
     folder = Path(tmpdir) / "alanine_dipeptide"

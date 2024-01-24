@@ -128,7 +128,7 @@ class BiasMTD(Bias):
     """
 
     q0s: jax.Array
-    sigmas: jax.Array = field(pytree_node=False)
+    sigmas: jax.Array
     K: jax.Array
     Ks: jax.Array
     tempering: bool = field(pytree_node=False)

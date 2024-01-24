@@ -329,7 +329,7 @@ class Bias(PyTreeNode, ABC):
 
     @abstractmethod
     def _compute(self, cvs):
-        """function that calculates the bias potential. CVs live in mapped space"""
+        """function that calculates the bias potential."""
         raise NotImplementedError
 
     def plot(
