@@ -149,7 +149,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     S = jnp.apply_along_axis(S_nm, axis=0, arr=indices)
 
     L, V = jnp.linalg.eigh(S)
-    L = L.at[L < 0].set(0)
+    L = jnp.where(L < 0, jnp.zeros_like(L), L)
 
     U = jnp.diag(jnp.sqrt(L)) @ V.T
     U_inv_nm = jnp.linalg.pinv(U)

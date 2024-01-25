@@ -80,7 +80,6 @@ class Scheme:
         only_finished=True,
     ):
         m = self.md.bias.collective_variable.metric
-
         grid = m.grid(n)
 
         if k is None:
@@ -141,8 +140,9 @@ class Scheme:
         chunk_size=None,
         eps_umbrella=0.1,
         plot_margin=0.5,
-        enforce_min_traj_length=True,
+        enforce_min_traj_length=False,
         recalc_cv=False,
+        only_finished=True,
     ):
         if cv_round is None:
             cv_round = self.rounds.cv
@@ -184,7 +184,7 @@ class Scheme:
                 eps=eps_umbrella,
                 min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
                 recalc_cv=recalc_cv,
-                only_finished=i > 1,
+                only_finished=i > 1 and only_finished,
             )
 
             if update_metric:

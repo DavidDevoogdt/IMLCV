@@ -58,7 +58,9 @@ def get_rounds_ala(tmpdir) -> Rounds:
     return rnds
 
 
-def get_LDA_CV_round(folder, lda_steps=10000) -> Rounds:
+def get_LDA_CV_round(tmpdir, lda_steps=1000) -> Rounds:
+    folder = tmpdir / "alanine_dipeptide_LDA"
+
     if (p := ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").exists():
         import zipfile
 
@@ -81,6 +83,11 @@ def get_LDA_CV_round(folder, lda_steps=10000) -> Rounds:
             biases.append(NoneBias.create(collective_variable=NoneCV()))
 
         rnds.run_par(biases=biases, steps=lda_steps, sp0=refs, plot=False)
+
+        for i in range(len(biases)):
+            print("finsihing")
+            rnds.finish_data(i=i)
+
         shutil.make_archive(p.parent / p.stem, "zip", folder)
 
     return rnds
@@ -165,11 +172,9 @@ def test_cv_discovery(
 
 
 def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
-    config()
+    config(env="local", path_internal=tmpdir)
 
-    folder = tmpdir / "alanine_dipeptide_LDA"
-
-    rnds = get_LDA_CV_round(folder=folder)
+    rnds = get_LDA_CV_round(tmpdir)
 
     scheme0 = Scheme.from_rounds(rnds)
 
@@ -198,8 +203,8 @@ def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
 
 if __name__ == "__main__":
     shutil.rmtree("tmp", ignore_errors=True)
-    # (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
-    # (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
+    (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
+    (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
 
-    # test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
+    # # test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
     test_LDA_CV(tmpdir=Path("tmp"))

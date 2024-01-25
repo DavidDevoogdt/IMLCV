@@ -145,6 +145,7 @@ class ThermoLIB:
         directory=None,
         temp=None,
         pmap=True,
+        only_finished=True,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -162,6 +163,7 @@ class ThermoLIB:
                 min_traj_length=min_traj_length,
                 chunk_size=chunk_size,
                 get_bias_list=True,
+                only_finished=only_finished,
             )
 
         trajs = dlo.cv
@@ -175,6 +177,7 @@ class ThermoLIB:
                 split_data=True,
                 new_r_cut=None,
                 min_traj_length=min_traj_length,
+                only_finished=only_finished,
             ).cv
 
             bash_app_python(self.common_bias.plot, executors=["default"])(
@@ -257,6 +260,7 @@ class ThermoLIB:
         bounds=None,
         use_prev_fs=True,
         collective_variable=None,
+        only_finished=True,
         **plot_kwargs,
     ):
         if fes is None:
@@ -270,6 +274,7 @@ class ThermoLIB:
                 n_max=n_max,
                 min_traj_length=min_traj_length,
                 margin=margin,
+                only_finished=only_finished,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij

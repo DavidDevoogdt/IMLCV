@@ -503,9 +503,8 @@ class Rounds(ABC):
                 if not _r_i.valid and not ignore_invalid:
                     continue
 
-                if not _r_i.finished and only_finshed:
+                if (not _r_i.finished) and only_finshed:
                     continue
-
                 # no points in collection
                 if _r_i.ti._size <= 0:
                     continue
@@ -611,6 +610,8 @@ class Rounds(ABC):
         only_finished=True,
     ) -> data_loader_output:
         weights = []
+
+        print(f"{only_finished=}")
 
         if new_r_cut == -1:
             new_r_cut = self.round_information(c=cv_round).tic.r_cut
@@ -1193,11 +1194,14 @@ class Rounds(ABC):
 
     @property
     def cv(self):
-        with self.lock:
-            f = self.h5file
-            l = [int(i) for i in f]
-            l.sort()
-            return l[-1]
+        try:
+            with self.lock:
+                f = self.h5file
+                l = [int(i) for i in f]
+                l.sort()
+                return l[-1]
+        except Exception:
+            return -1
 
     def n(self, c=None, r=None):
         if c is None:
@@ -1237,7 +1241,7 @@ class Rounds(ABC):
             with open(p, "w+"):
                 pass
 
-        self._set_attr(name="finished", value=False, c=c, r=r, i=i)
+        self._set_attr(name="finished", value=True, c=c, r=r, i=i)
 
     def is_valid(self, c=None, r=None, i=None):
         if c is None:

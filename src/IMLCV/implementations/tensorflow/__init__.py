@@ -32,7 +32,6 @@ try:
 
     batching.primitive_batchers[call_tf_p] = functools.partial(loop_batcher, call_tf_p)
 
-
 except (ImportError, ModuleNotFoundError):
     # Invalid device or cannot modify virtual devices once initialized.
     pass
