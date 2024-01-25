@@ -335,14 +335,14 @@ class TranformerAutoEncoder(Transformer):
 
             # @partial(jit, static_argnums=(0,))
 
-        def forward(x: CV, nl, y: list[CV] | None = None):
+        def forward(x: CV, nl, y: list[CV] | None = None, _=None):
             assert y is None
             encoded: Array = VAE(**vae_args).apply(
                 {"params": state.params},
                 x.cv,
                 method=VAE.encode,
             )
-            return CV(cv=encoded)
+            return x.replace(cv=encoded)
 
         f_enc = CvTrans(trans=(CvFun(forward=forward),))
 

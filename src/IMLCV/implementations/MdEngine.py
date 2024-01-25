@@ -19,9 +19,6 @@ from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.MdEngine import time
 from IMLCV.base.MdEngine import TrajectoryInfo
-from typing_extensions import Self
-from yaff.external import libplumed
-from yaff.log import log
 from yaff.sampling.verlet import VerletIntegrator
 
 
@@ -142,11 +139,22 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             hooks=hooks,
         )
 
+        i = None
+
+        for i, h in enumerate(self._verlet.hooks):
+            if isinstance(h, yaff.sampling.VerletScreenLog):
+                i = i
+
+                break
+
+        if i is not None:
+            self._verlet.hooks.pop(i)
+
         self._verlet_initialized = True
 
     @staticmethod
     def load(file, **kwargs) -> MDEngine:
-        return super().load(file, **kwargs)
+        return MDEngine.load(file, **kwargs)
 
     def _run(self, steps):
         if not self._verlet_initialized:

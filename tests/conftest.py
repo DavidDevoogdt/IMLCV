@@ -11,6 +11,8 @@ import os
 
 import jax
 import pytest
+from IMLCV.configs.config_general import config
+
 
 if os.getenv("_PYTEST_RAISE", "0") != "0":
 
@@ -24,6 +26,9 @@ if os.getenv("_PYTEST_RAISE", "0") != "0":
 
 
 jax.config.update("jax_enable_x64", True)
-
-# cpu based
 jax.config.update("jax_platform_name", "cpu")
+
+
+@pytest.fixture
+def config_test(tmpdir, local_ref_threads=4):
+    config(env="local", path_internal=tmpdir, local_ref_threads=local_ref_threads)

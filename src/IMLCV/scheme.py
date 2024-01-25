@@ -96,16 +96,23 @@ class Scheme:
             scale_n = n
         k *= scale_n**2
 
+        biases = [
+            HarmonicBias.create(
+                self.md.bias.collective_variable,
+                CV(cv=jnp.array(cv)),
+                k,
+                k_max=max_grad,
+            )
+            for cv in itertools.product(*grid)
+        ]
+
+        if self.rounds.cv == 0 and self.rounds.round == 0:
+            sp0 = SystemParams.stack(*[self.md.sp] * len(biases))
+        else:
+            sp0 = None
+
         self.rounds.run_par(
-            biases=[
-                HarmonicBias.create(
-                    self.md.bias.collective_variable,
-                    CV(cv=jnp.array(cv)),
-                    k,
-                    k_max=max_grad,
-                )
-                for cv in itertools.product(*grid)
-            ],
+            biases=biases,
             steps=steps,
             plot=plot,
             cv_round=cv_round,
@@ -113,6 +120,7 @@ class Scheme:
             min_traj_length=min_traj_length,
             recalc_cv=recalc_cv,
             only_finished=only_finished,
+            sp0=sp0,
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):

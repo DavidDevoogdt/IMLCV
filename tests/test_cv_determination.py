@@ -7,7 +7,6 @@ import jax.numpy as jnp
 import pytest
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.rounds import Rounds
-from IMLCV.configs.config_general import config
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import alanine_dipeptide_refs
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
@@ -19,11 +18,6 @@ from IMLCV.implementations.tensorflow.CvDiscovery import TranformerUMAP
 from IMLCV.scheme import Scheme
 from molmod.units import angstrom
 from molmod.units import kjmol
-
-try:
-    TF_INSTALLED = True
-except ImportError:
-    TF_INSTALLED = False
 
 
 def get_rounds_ala(tmpdir) -> Rounds:
@@ -39,8 +33,6 @@ def get_rounds_ala(tmpdir) -> Rounds:
 
         rnds = Rounds(folder=folder, new_folder=False)
     else:
-        config()
-
         mde = alanine_dipeptide_yaff()
 
         scheme = Scheme(folder=folder, Engine=mde)
@@ -52,6 +44,7 @@ def get_rounds_ala(tmpdir) -> Rounds:
             steps=steps,
             plot=False,
         )
+
         rnds = scheme.rounds
         shutil.make_archive(p.parent / p.stem, "zip", folder)
 
@@ -69,8 +62,6 @@ def get_LDA_CV_round(tmpdir, lda_steps=1000) -> Rounds:
 
         rnds = Rounds(folder=folder, new_folder=False)
     else:
-        config()
-
         mde = alanine_dipeptide_yaff()
         refs = alanine_dipeptide_refs()
 
@@ -113,10 +104,17 @@ def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut):
         assert ~jnp.any(dcv.cv.cell == jnp.nan)
 
 
-@pytest.mark.skipif(not TF_INSTALLED, reason="tensorflow not installed")
-@pytest.mark.parametrize("cvd", ["AE", "UMAP"])
+# @pytest.mark.skipif(not TF_INSTALLED, reason="tensorflow not installed")
+@pytest.mark.parametrize(
+    "cvd",
+    [
+        "AE",
+        "UMAP",
+    ],
+)
 def test_cv_discovery(
     tmpdir,
+    config_test,
     cvd,
     out_dim=3,
 ):
@@ -157,23 +155,20 @@ def test_cv_discovery(
     else:
         raise ValueError
 
-    config()
-
-    dlo = scheme0.rounds.data_loader(out=1e3, new_r_cut=r_cut)
+    dlo = scheme0.rounds.data_loader(out=1e3, split_data=True, new_r_cut=r_cut)
 
     scheme0.update_CV(
         transformer=tf,
         new_r_cut=r_cut,
         dlo=dlo,
         chunk_size=chunk_size,
+        plot=False,
     )
 
     _cv_discovery_asserts(scheme0, out_dim, r_cut)
 
 
-def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
-    config(env="local", path_internal=tmpdir)
-
+def test_LDA_CV(tmpdir, config_test, out_dim=1, r_cut=3 * angstrom):
     rnds = get_LDA_CV_round(tmpdir)
 
     scheme0 = Scheme.from_rounds(rnds)
@@ -203,8 +198,16 @@ def test_LDA_CV(tmpdir, out_dim=1, r_cut=3 * angstrom):
 
 if __name__ == "__main__":
     shutil.rmtree("tmp", ignore_errors=True)
-    (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
-    (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
 
-    # # test_cv_discovery(tmpdir=Path("tmp"), cvd="UMAP")
+    from IMLCV.configs.config_general import config
+
+    config(env="local", path_internal="tmp", local_ref_threads=32)
+
+    # (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
+    # (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
+
+    test_cv_discovery(tmpdir=Path("tmp") / "UMAP", config_test=None, cvd="UMAP")
+
+    test_cv_discovery(tmpdir=Path("tmp") / "AE", config_test=None, cvd="AE")
+
     test_LDA_CV(tmpdir=Path("tmp"))

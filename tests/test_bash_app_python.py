@@ -7,9 +7,7 @@ from IMLCV.configs.config_general import config
 from IMLCV.implementations.CV import dihedral
 
 
-def test_parallel(tmp_path):
-    config(env="local", path_internal=tmp_path)
-
+def test_parallel(tmp_path, config_test):
     def _f(i):
         from time import sleep
 
@@ -28,9 +26,7 @@ def test_parallel(tmp_path):
     assert res == [0, 1, 2, 3, 4]
 
 
-def test_py_env(tmp_path):
-    config(env="local", path_internal=tmp_path)
-
+def test_py_env(tmp_path, config_test):
     def _f(sp):
         d_flow: CvFlow = dihedral([0, 1, 2, 3])
 
@@ -64,10 +60,8 @@ def _f_MPI(i):
 
 
 @pytest.mark.skip(reason="not installed")
-def test_parallel_MPI(tmp_path):
+def test_parallel_MPI(tmp_path, config_test):
     from mpi4py import MPI
-
-    config(env="local", path_internal=tmp_path)
 
     i_enum = 5
 

@@ -11,16 +11,14 @@ from molmod.units import kjmol
 
 
 @pytest.mark.skip(reason="run on HPC")
-def test_perov(tmpdir, steps=500, recalc=False):
-    config()
-
+def test_perov(tmpdir, config_test, steps=500, recalc=False):
     scheme = Scheme(folder=tmpdir, Engine=CsPbI3())
     scheme.inner_loop(K=1 * kjmol, n=2, init=100, steps=steps)
 
 
 # @pytest.mark.skip(reason="run on HPC")
 @pytest.mark.skip(reason="file_outdated")
-def test_ala(tmpdir, steps=100):
+def test_ala(tmpdir, config_test, steps=100):
     assert (p := ROOT_DIR / "data" / "alanine_dipeptide.zip").exists()
     folder = Path(tmpdir) / "alanine_dipeptide"
 
@@ -29,8 +27,6 @@ def test_ala(tmpdir, steps=100):
 
     rnds = Rounds(folder=folder, new_folder=False)
     scheme0 = Scheme.from_rounds(rnds)
-
-    config()
 
     scheme0.FESBias()
     scheme0.rounds.add_round_from_md(scheme0.md)

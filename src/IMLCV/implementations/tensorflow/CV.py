@@ -1,8 +1,11 @@
 import tempfile
 from importlib import import_module
+from typing import Callable
 
 import numpy as np
 import tensorflow as tfl
+from flax.struct import field
+from flax.struct import PyTreeNode
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFunBase
 from IMLCV.base.CV import NeighbourList
@@ -45,10 +48,36 @@ class PeriodicLayer(keras.layers.Layer):
         return config
 
 
+class tfl_module(PyTreeNode):
+    mod: tfl.Module = field(pytree_node=False, default=None)
+
+    def __getstate__(self):
+        # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model
+
+        mod_str = ""
+        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+            tfl.keras.models.save_model(self.mod, fd.name, overwrite=True)
+            mod_str = fd.read()
+        return {"mod_str": mod_str}
+
+    def __setstate__(self, state):
+        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+            fd.write(state["mod_str"])
+            fd.flush()
+
+            custom_objects = {"PeriodicLayer": PeriodicLayer}
+            with keras.utils.custom_object_scope(custom_objects):
+                mod = keras.models.load_model(fd.name)
+
+        self.__init__(mod=mod)
+
+
 class KerasFunBase(CvFunBase):
-    def __init__(self, forward: tfl.Module, backward: tfl.Module | None) -> None:
-        self.fwd = forward
-        self.bwd = backward
+    fwd: tfl_module = field(pytree_node=False)
+    bwd: tfl_module | None = field(pytree_node=False, default=None)
+
+    def create(fwd: tfl.Module, bwd: tfl.Module = None):
+        return KerasFunBase(fwd=tfl_module(fwd), bwd=tfl_module(bwd) if bwd is not None else None)
 
     def _calc(
         self,
@@ -79,41 +108,7 @@ class KerasFunBase(CvFunBase):
         return x.replace(cv=out)
 
     def __getstate__(self):
-        # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model
-
-        fwd_str = ""
-        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
-            tfl.keras.models.save_model(self.fwd, fd.name, overwrite=True)
-            fwd_str = fd.read()
-        d = {"fwd_str": fwd_str}
-
-        if self.bwd is not None:
-            bwd_str = ""
-            with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
-                tfl.keras.models.save_model(self.bwd, fd.name, overwrite=True)
-                bwd_str = fd.read()
-            d["bwd_str"] = bwd_str
-
-        return d
+        return self.__dict__
 
     def __setstate__(self, state):
-        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
-            fd.write(state["fwd_str"])
-            fd.flush()
-
-            custom_objects = {"PeriodicLayer": PeriodicLayer}
-            with keras.utils.custom_object_scope(custom_objects):
-                fwd = keras.models.load_model(fd.name)
-
-        self.replace(fwd=fwd)
-
-        if (bwd_str := state.get("bwd_str", None)) is not None:
-            with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
-                fd.write(bwd_str)
-                fd.flush()
-
-                custom_objects = {"PeriodicLayer": PeriodicLayer}
-                with keras.utils.custom_object_scope(custom_objects):
-                    bwd = keras.models.load_model(fd.name)
-
-            self.replace(bwd=bwd)
+        self.__dict__ = state

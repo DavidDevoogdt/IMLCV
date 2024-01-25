@@ -206,7 +206,7 @@ def test_bias_save(tmpdir):
 
 @pytest.mark.skip(reason="file_outdated")
 @pytest.mark.parametrize("choice", ["rbf"])
-def test_FES_bias(tmpdir, choice):
+def test_FES_bias(tmpdir, config_test, choice):
     import zipfile
 
     folder = tmpdir / "alanine_dipeptide"
@@ -224,8 +224,6 @@ def test_FES_bias(tmpdir, choice):
     rnds = Rounds(folder=folder, new_folder=False)
 
     scheme0 = Scheme.from_rounds(rnds)
-
-    config(env="local")
 
     scheme0.FESBias(
         plot=False,
