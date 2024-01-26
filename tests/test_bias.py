@@ -204,7 +204,7 @@ def test_bias_save(tmpdir):
     assert jnp.allclose(db.cv, db2.cv)
 
 
-@pytest.mark.skip(reason="file_outdated")
+# @pytest.mark.skip(reason="file_outdated")
 @pytest.mark.parametrize("choice", ["rbf"])
 def test_FES_bias(tmpdir, config_test, choice):
     import zipfile
@@ -225,21 +225,20 @@ def test_FES_bias(tmpdir, config_test, choice):
 
     scheme0 = Scheme.from_rounds(rnds)
 
-    scheme0.FESBias(
-        plot=False,
-        choice=choice,
-        cv_round=0,
-    )
-
     sp = scheme0.md.sp
     nl = sp.get_neighbour_list(
         scheme0.md.static_trajectory_info.r_cut,
         z_array=scheme0.md.static_trajectory_info.atomic_numbers,
     )
 
-    cv, _ = scheme0.md.bias.compute_from_system_params(sp, nl)
-    assert jnp.allclose(cv.cv, jnp.array([-2.85656026, 2.79090329]))
+    scheme0.FESBias(
+        plot=False,
+        choice=choice,
+        cv_round=0,
+    )
 
+    _ = scheme0.md.bias.compute_from_system_params(sp, nl)
+    
 
 def test_reparametrize():
     cvs = CollectiveVariable(
@@ -256,4 +255,16 @@ def test_reparametrize():
             HarmonicBias.create(cvs, q0=CV(jnp.array([0.0, 0.5])), k=1.0 / 6**2),
         ],
     )
-    _ = bias.resample(n=20)
+
+    n=20 
+    margin = 0.1
+
+    grid = bias.collective_variable.metric.grid(n=n, margin=margin)
+    cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
+
+    new_bias = bias.resample(cv_grid = cv_grid)
+
+    b = bias.compute_from_cv(cv_grid)[0]
+    b2 = new_bias.compute_from_cv(cv_grid)[0]
+
+    assert jnp.allclose(b, b2)

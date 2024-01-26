@@ -11,3 +11,5 @@ sphinx-autoapi
 sphinx-autodoc-typehints
 sphinx-book-theme>=1.0.0
 sphinx-design
+autodoc-pydantic 
+pandoc

@@ -9,7 +9,7 @@ def test_call_tf_batcher():
     import numpy as np
     from jax import jacrev, jit, vmap
     from jax.experimental import jax2tf
-    from jax.experimental.jax2tf import call_tf_p
+    from jax.experimental.jax2tf.call_tf import call_tf_p
     from jax.interpreters import batching
 
     from IMLCV.external.tf2jax import loop_batcher
@@ -38,3 +38,7 @@ def test_call_tf_batcher():
     j_t = jit(jacrev(f_t))
 
     print(f"||jac(f)(x) - jac(f_t)(x)||_2 = { jnp.linalg.norm( j(x)-j_t(x) )  }")
+
+
+if __name__ == "__main__":
+    test_call_tf_batcher()

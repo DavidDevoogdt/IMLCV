@@ -60,7 +60,7 @@ jobs:
     strategy:
       matrix:
         python:
-        - "3.10"  # 3.11 fails for scipy https://github.com/sympy/sympy/actions/runs/2405296059/jobs/3637083522
+        - ["3.10", "3.11", "3.12"]
         platform:
         - ubuntu-latest
         # - macos-latest

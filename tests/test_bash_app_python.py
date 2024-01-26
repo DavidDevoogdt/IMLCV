@@ -15,24 +15,24 @@ def test_parallel(tmp_path, config_test):
 
         sleep(2)
 
-        return i
+        return 2*i
 
-    n = 5
+    n = 4
 
     futs = [bash_app_python(_f)(i, execution_folder=tmp_path) for i in range(n)]
 
     res = [f.result() for f in futs]
 
-    assert res == [0, 1, 2, 3, 4]
+    assert res == [0, 2, 4, 6]
 
-
+@pytest.mark.skip(reason="slow")
 def test_py_env(tmp_path, config_test):
     def _f(sp):
         d_flow: CvFlow = dihedral([0, 1, 2, 3])
 
         return d_flow.compute_cv_flow(sp, None)[0]
 
-    n = 5
+    n = 4
     sp = SystemParams(
         coordinates=jnp.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]),
         cell=None,

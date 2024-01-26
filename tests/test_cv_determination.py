@@ -148,7 +148,10 @@ def test_cv_discovery(
     descriptor = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2, reshape=True)
 
     if cvd == "AE":
-        kwargs = {"num_epochs": 2}
+        kwargs = {
+            "num_epochs": 2,
+            "batch_size": 50,
+        }
 
         tf = TranformerAutoEncoder(outdim=out_dim, descriptor=descriptor, **kwargs)
     elif cvd == "UMAP":
@@ -158,7 +161,7 @@ def test_cv_discovery(
 
         kwargs = dict(
             n_neighbors=20,
-            min_dist=0.1,
+            min_dist=0.5,
             nunits=50,
             nlayers=2,
             metric="l2",
@@ -166,14 +169,16 @@ def test_cv_discovery(
             parametric_reconstruction=True,
             parametric_reconstruction_loss_fcn=keras.losses.MSE,
             decoder=True,
-            # jac=jax.jacrev,  # calltf only supports jacrev, fixed with custom loop batchter  # https://github.com/google/jax/issues/14150
+            n_training_epochs=1,
+            batch_size=50,
+            n_epochs=5,  # only for test cases
         )
 
         tf = TranformerUMAP(outdim=out_dim, descriptor=descriptor, **kwargs)
     else:
         raise ValueError
 
-    dlo = scheme0.rounds.data_loader(out=1e3, split_data=True, new_r_cut=r_cut)
+    dlo = scheme0.rounds.data_loader(out=2e3, split_data=True, new_r_cut=r_cut)
 
     scheme0.update_CV(
         transformer=tf,
@@ -228,7 +233,6 @@ if __name__ == "__main__":
     # (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
     # (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
 
-    test_cv_discovery(tmpdir=Path("tmp") / "AE", config_test=None, cvd="AE")
     test_cv_discovery(tmpdir=Path("tmp") / "UMAP", config_test=None, cvd="UMAP")
-
+    test_cv_discovery(tmpdir=Path("tmp") / "AE", config_test=None, cvd="AE")
     test_LDA_CV(tmpdir=Path("tmp"))

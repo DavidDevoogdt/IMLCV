@@ -824,6 +824,9 @@ class Rounds(ABC):
 
         else:
             if split_data:
+
+                n_i = int( sum([a.shape[0] for a in sp]) // len(weights))
+
                 for n, wi in enumerate(weights):
                     if wi is None:
                         probs = None
@@ -831,7 +834,7 @@ class Rounds(ABC):
                         wi -= jnp.mean(wi)
                         wi = jnp.exp(-wi)
                         probs = wi / jnp.sum(wi)
-                    key, indices = choose(key, probs, len=sp[n].shape[0])
+                    key, indices = choose(key, probs, len= max( sp[n].shape[0],n_i)  )
 
                     out_sp.append(sp[n][indices])
                     out_cv.append(cv[n][indices])

@@ -170,58 +170,53 @@ def _get_equival_sp(sp, rng) -> tuple[jax.Array, SystemParams]:
     return rng, sp2
 
 
-@pytest.mark.skip(reason="not implemented")
-def test_reconstruction():
-    prng = jax.random.PRNGKey(seed=42)
+# @pytest.mark.skip(reason="not implemented")
+# def test_reconstruction():
+#     prng = jax.random.PRNGKey(seed=42)
 
-    r_cut = 6
-    prng, sp0, nl0 = _get_sp_rand(prng=prng, n=40, r_cut=r_cut)
-    k1, k2, k3, prng = jax.random.split(prng, 4)
+#     r_cut = 6
+#     prng, sp0, nl0 = _get_sp_rand(prng=prng, n=40, r_cut=r_cut)
+#     k1, k2, k3, prng = jax.random.split(prng, 4)
 
-    # with jax.debug_nans():
+#     cv = sb_descriptor(
+#         r_cut=r_cut,
+#         n_max=3,
+#         l_max=3,
+#     )
 
-    cv = sb_descriptor(
-        r_cut=r_cut,
-        n_max=5,
-        l_max=5,
-        # references=sp0,
-        # references_nl=nl0,
-    )
+#     cv0, _ = cv.compute_cv_flow(sp0, nl0)  # should be close to 0
 
-    cv0, _ = cv.compute_cv_flow(sp0, nl0)  # should be close to 0
+#     prng, sp1, nl1 = _permute_sp_rand(prng, sp0, nl0, eps=0.5)
 
-    prng, sp1, nl1 = _permute_sp_rand(prng, sp0, nl0, eps=0.5)
+#     tol = 1e-6
 
-    tol = 1e-6
 
-    from IMLCV.tools.soap_kernel import Kernel
+#     sp01 = cv.find_sp(
+#         x0=sp1,
+#         nl0=nl1,
+#         target=cv0,
+#         target_nl=nl0,
+#         tol=tol,
+#         norm=lambda cv1, cv2, nl1, nl2: jnp.sqrt(
+#             1 - Kernel(cv1, cv2, nl1, nl2, matching="average"),
+#         ),
+#         # solver=jaxopt.GradientDescent
+#         solver=jaxopt.GradientDescent,
+#         # solver=jaxopt.LBFGS,
+#         # solver=partial(jaxopt.ScipyMinimize, method="l-bfgs-b"),
+#     )
 
-    sp01 = cv.find_sp(
-        x0=sp1,
-        nl0=nl1,
-        target=cv0,
-        target_nl=nl0,
-        tol=tol,
-        norm=lambda cv1, cv2, nl1, nl2: jnp.sqrt(
-            1 - Kernel(cv1, cv2, nl1, nl2, matching="average"),
-        ),
-        # solver=jaxopt.GradientDescent
-        solver=jaxopt.GradientDescent,
-        # solver=jaxopt.LBFGS,
-        # solver=partial(jaxopt.ScipyMinimize, method="l-bfgs-b"),
-    )
+#     nl01 = sp01.get_neighbour_list(r_cut=r_cut, z_array=nl1.z_array)
 
-    nl01 = sp01.get_neighbour_list(r_cut=r_cut, z_array=nl1.z_array)
-
-    assert (
-        1
-        - Kernel(
-            cv.compute_cv_flow(sp0, nl0)[0].cv,
-            cv.compute_cv_flow(sp01, nl01)[0].cv,
-            nl0,
-            nl01,
-        )
-    ) < tol
+#     assert (
+#         1
+#         - Kernel(
+#             cv.compute_cv_flow(sp0, nl0)[0].cv,
+#             cv.compute_cv_flow(sp01, nl01)[0].cv,
+#             nl0,
+#             nl01,
+#         )
+#     ) < tol
 
 
 def test_neigh():
