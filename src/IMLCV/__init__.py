@@ -21,7 +21,6 @@ import logging
 import os
 import sys
 from logging import warning
-import cloudpickle
 import jax
 from jax import random
 import jax._src.tree_util

@@ -1,6 +1,5 @@
 # this is a helper function to perform md simulations. Executed by parsl on HPC infrastructure, but
 import argparse
-import json
 import os
 import sys
 from datetime import datetime

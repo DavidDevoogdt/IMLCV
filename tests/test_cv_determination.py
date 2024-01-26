@@ -84,9 +84,10 @@ def get_LDA_CV_round(tmpdir, lda_steps=1000) -> Rounds:
     return rnds
 
 
-def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut):
+def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut, pdf_file: Path):
     b = scheme0.md.bias
 
+    # test single datapoint
     sp = scheme0.md.sp
     nl = scheme0.md.sp.get_neighbour_list(
         r_cut=r_cut,
@@ -103,6 +104,23 @@ def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut):
     if sp.cell is not None:
         assert ~jnp.any(dcv.cv.cell == jnp.nan)
 
+    # test batch
+    dlo = scheme0.rounds.data_loader(
+        out=1e2,
+        split_data=False,
+        num=1,
+        stop=0,
+        only_finished=False,
+        ignore_invalid=True,
+        new_r_cut=r_cut,
+    )
+
+    cv_recomputed, _ = b.collective_variable.compute_cv(dlo.sp[0], dlo.nl[0], jacobian=False)
+
+    assert jnp.allclose(cv_recomputed.cv, dlo.cv[0].cv, atol=1e-5)
+
+    assert pdf_file.exists()
+
 
 # @pytest.mark.skipif(not TF_INSTALLED, reason="tensorflow not installed")
 @pytest.mark.parametrize(
@@ -116,7 +134,7 @@ def test_cv_discovery(
     tmpdir,
     config_test,
     cvd,
-    out_dim=3,
+    out_dim=2,
 ):
     # tmpdir = Path("tmp")
 
@@ -125,12 +143,12 @@ def test_cv_discovery(
     rnds = get_rounds_ala(tmpdir / "alanine_dipeptide")
     scheme0 = Scheme.from_rounds(rnds)
 
-    r_cut = 3 * angstrom
+    r_cut = 4 * angstrom
 
     descriptor = sb_descriptor(r_cut=r_cut, n_max=2, l_max=2, reshape=True)
 
     if cvd == "AE":
-        kwargs = {"num_epochs": 20}
+        kwargs = {"num_epochs": 2}
 
         tf = TranformerAutoEncoder(outdim=out_dim, descriptor=descriptor, **kwargs)
     elif cvd == "UMAP":
@@ -139,8 +157,8 @@ def test_cv_discovery(
         keras: KerasAPI = import_module("tensorflow.keras")
 
         kwargs = dict(
-            n_neighbors=40,
-            min_dist=0.8,
+            n_neighbors=20,
+            min_dist=0.1,
             nunits=50,
             nlayers=2,
             metric="l2",
@@ -162,10 +180,12 @@ def test_cv_discovery(
         new_r_cut=r_cut,
         dlo=dlo,
         chunk_size=chunk_size,
-        plot=False,
+        plot=True,
     )
 
-    _cv_discovery_asserts(scheme0, out_dim, r_cut)
+    pdf_file = rnds.path(rnds.cv) / "cvdiscovery.pdf"
+
+    _cv_discovery_asserts(scheme0, out_dim, r_cut, pdf_file)
 
 
 def test_LDA_CV(tmpdir, config_test, out_dim=1, r_cut=3 * angstrom):
@@ -190,10 +210,12 @@ def test_LDA_CV(tmpdir, config_test, out_dim=1, r_cut=3 * angstrom):
         dlo=dlo,
         new_r_cut=r_cut,
         chunk_size=200,
-        plot=False,
+        plot=True,
     )
 
-    _cv_discovery_asserts(scheme0, out_dim, r_cut)
+    pdf_file = rnds.path(rnds.cv) / "cvdiscovery.pdf"
+
+    _cv_discovery_asserts(scheme0, out_dim, r_cut, pdf_file)
 
 
 if __name__ == "__main__":
@@ -206,8 +228,7 @@ if __name__ == "__main__":
     # (ROOT_DIR / "data" / "alanine_dipeptide.zip").unlink(missing_ok=True)
     # (ROOT_DIR / "data" / "alanine_dipeptide_LDA.zip").unlink(missing_ok=True)
 
-    test_cv_discovery(tmpdir=Path("tmp") / "UMAP", config_test=None, cvd="UMAP")
-
     test_cv_discovery(tmpdir=Path("tmp") / "AE", config_test=None, cvd="AE")
+    test_cv_discovery(tmpdir=Path("tmp") / "UMAP", config_test=None, cvd="UMAP")
 
     test_LDA_CV(tmpdir=Path("tmp"))

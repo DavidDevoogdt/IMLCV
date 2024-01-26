@@ -111,4 +111,4 @@ class KerasFunBase(CvFunBase):
         return self.__dict__
 
     def __setstate__(self, state):
-        self.__dict__ = state
+        self.__init__(**state)

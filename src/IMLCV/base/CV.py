@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-import json
 from abc import abstractmethod
 from dataclasses import KW_ONLY
 from functools import partial
 from pathlib import Path
-from typing import Any
 from typing import Callable
-from typing import TypeVar
 
 import cloudpickle
 import distrax
@@ -25,14 +22,12 @@ from flax.struct import PyTreeNode
 from IMLCV import Unpickler
 from jax import Array
 from jax import jacfwd
-from jax import jacrev
 from jax import jit
 from jax import pmap
 from jax import vmap
 from jax.tree_util import Partial
 from jax.tree_util import tree_flatten
 from jax.tree_util import tree_unflatten
-from molmod.units import angstrom
 
 ######################################
 #        Data types                  #

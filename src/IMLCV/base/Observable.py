@@ -18,8 +18,6 @@ from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
 
-# from IMLCV.base.bias import plot_app
-
 
 class ThermoLIB:
     """class to convert data and CVs to different thermodynamic/ kinetic

@@ -6,7 +6,6 @@ import time
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 
 import ase
@@ -18,7 +17,6 @@ from equinox import Partial
 from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
-from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans
@@ -34,7 +32,6 @@ from jax.random import choice
 from jax.random import PRNGKey
 from jax.random import split
 from molmod.constants import boltzmann
-from molmod.units import kjmol
 from parsl.data_provider.files import File
 
 
@@ -611,8 +608,6 @@ class Rounds(ABC):
     ) -> data_loader_output:
         weights = []
 
-        print(f"{only_finished=}")
-
         if new_r_cut == -1:
             new_r_cut = self.round_information(c=cv_round).tic.r_cut
 
@@ -874,13 +869,13 @@ class Rounds(ABC):
 
                 count = 0
 
-                t0 = time.time()
+                # t0 = time.time()
 
                 out_sp.append(SystemParams.stack(*sp_trimmed))
                 out_cv.append(CV.stack(*cv_trimmed))
                 out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
 
-                print(f"{'stack time':-^20}={t0- time.time()}")
+                # print(f"{'stack time':-^20}={t0- time.time()}")
                 bias = None
 
         out_nl = None
@@ -1355,7 +1350,7 @@ class Rounds(ABC):
 
             cv_stack = data.cv[0]
             sp_stack = data.sp[0]
-            print(f"{cv_stack=}")
+            # print(f"{cv_stack=}")
         else:
             assert sp0.shape[0] == len(
                 biases,
@@ -1392,18 +1387,18 @@ class Rounds(ABC):
 
                 spi = sp_stack[index]
                 # spi = spi.unbatch()
-                cvi = cv_stack[index]
+                # cvi = cv_stack[index]
 
             else:
                 spi = sp0[i]
-                cvi = "unknown"
+                # cvi = "unknown"
                 spi = spi.unbatch()
 
             # cvi_recalc, _ = md_engine.bias.collective_variable.compute_cv(
             #     spi, spi.get_neighbour_list(data.sti.r_cut, data.sti.atomic_numbers)
             # )
 
-            print(f"starting trajectory {i} in {cvi=} {spi=}  ")
+            # print(f"starting trajectory {i} in {cvi=} {spi=}  ")
 
             future = bash_app_python(Rounds.run_md, pass_files=True, executors=["reference"])(
                 sp=spi,  # type: ignore

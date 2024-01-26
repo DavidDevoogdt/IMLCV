@@ -151,7 +151,11 @@ class Scheme:
         enforce_min_traj_length=False,
         recalc_cv=False,
         only_finished=True,
+        plot_umbrella=None,
     ):
+        if plot_umbrella is None:
+            plot_umbrella = plot
+
         if cv_round is None:
             cv_round = self.rounds.cv
 
@@ -165,7 +169,7 @@ class Scheme:
                 n=n,
                 k=K,
                 max_grad=init_max_grad,
-                plot=plot,
+                plot=plot_umbrella,
                 cv_round=cv_round,
                 eps=eps_umbrella,
             )
@@ -185,7 +189,7 @@ class Scheme:
                 n=n,
                 k=K,
                 max_grad=max_grad,
-                plot=plot,
+                plot=plot_umbrella,
                 scale_n=scale_n,
                 cv_round=cv_round,
                 ignore_invalid=i <= 1,

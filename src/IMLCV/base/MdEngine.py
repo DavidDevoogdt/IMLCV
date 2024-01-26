@@ -16,10 +16,8 @@ from time import time
 
 import cloudpickle
 import h5py
-import jax
 import jax.numpy as jnp
 import jsonpickle
-import yaff.external
 import yaff.log
 import yaff.pes.bias
 import yaff.pes.ext

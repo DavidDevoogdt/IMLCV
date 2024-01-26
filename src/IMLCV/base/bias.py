@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
-import warnings
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass
 from dataclasses import fields
 from dataclasses import KW_ONLY
 from functools import partial
@@ -17,33 +14,25 @@ import cloudpickle
 import jax
 import jax.numpy as jnp
 import jsonpickle
-import matplotlib
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import yaff
-from flax.serialization import from_state_dict
-from flax.serialization import to_state_dict
 from flax.struct import field
 from flax.struct import PyTreeNode
-from hsluv import hsluv_to_rgb
 from IMLCV import Unpickler
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
-from IMLCV.configs.bash_app_python import bash_app_python
-from IMLCV.tools.tools import HashableArrayWrapper
 from jax import Array
-from jax import jit
 from jax import value_and_grad
 from jax import vmap
 from jax.tree_util import Partial
 from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
-from parsl.data_provider.files import File
 from typing_extensions import Self
 
 
@@ -428,9 +417,9 @@ class Bias(PyTreeNode, ABC):
                     colors = [
                         a.cv[0]
                         for a in Transformer._get_color_data(
-                            CV.stack(*traj),
-                            1,
-                            True,
+                            a=CV.stack(*traj),
+                            dim=1,
+                            color_trajectories=True,
                         ).unstack()
                     ]
 
@@ -553,9 +542,9 @@ class Bias(PyTreeNode, ABC):
                     colors = [
                         a.cv[0]
                         for a in Transformer._get_color_data(
-                            CV.stack(*traj),
-                            2,
-                            True,
+                            a=CV.stack(*traj),
+                            dim=2,
+                            color_trajectories=True,
                             min_val=jnp.array([extent[0], extent[2]]),
                             max_val=jnp.array([extent[1], extent[3]]),
                         ).unstack()

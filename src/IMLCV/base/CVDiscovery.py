@@ -17,7 +17,6 @@ from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import identity_trans
 from IMLCV.implementations.CV import scale_cv_trans
-from jax import pmap
 from matplotlib import gridspec
 from matplotlib.figure import Figure
 
@@ -211,8 +210,8 @@ class Transformer:
 
     @staticmethod
     def plot_app(
-        old_cv: CollectiveVariable | None = None,
-        new_cv: CollectiveVariable | None = None,
+        old_cv: CollectiveVariable,
+        new_cv: CollectiveVariable,
         name: str | Path | None = None,
         labels=None,
         sps: SystemParams = None,
@@ -228,6 +227,8 @@ class Transformer:
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
         cv_data: list[CV] = []
+
+        metrics = [old_cv.metric, new_cv.metric]
 
         if cv_data_old is None:
             cv_data.append(old_cv.compute_cv(sps, nl, chunk_size=chunk_size)[0])
@@ -260,6 +261,8 @@ class Transformer:
         indim = cv_data[0].shape[1]
         outdim = cv_data[1].shape[1]
 
+        inoutdims = [indim, outdim]
+
         plt.rc("text", usetex=False)
         plt.rc("font", family="DejaVu Sans", size=16)
 
@@ -272,10 +275,13 @@ class Transformer:
             cv_titles=cv_titles,
             data_titles=data_titles,
         ):
-            if in_out_color == 0:
-                rgb = Transformer._get_color_data(cv_data[0], indim, color_trajectories, margin=margin).cv
-            else:
-                rgb = Transformer._get_color_data(cv_data[1], outdim, color_trajectories, margin=margin).cv
+            rgb = Transformer._get_color_data(
+                cv_data[in_out_color],
+                inoutdims[in_out_color],
+                color_trajectories,
+                metric=metrics[in_out_color],
+                margin=margin,
+            ).cv
 
             def do_plot(dim, in_out, axes):
                 data_proc = cv_data[in_out].cv
@@ -292,7 +298,7 @@ class Transformer:
                 elif dim == 3:
                     f = Transformer._plot_3d
 
-                f(fig, axes, data_proc, rgb, labels[in_out][0:dim], margin=margin, **kwargs)
+                f(fig, axes, data_proc, rgb, labels[in_out][0:dim], metric=metrics[in_out], margin=margin, **kwargs)
 
             do_plot(indim, 0, ls)
             do_plot(outdim, 1, rs)
@@ -360,7 +366,7 @@ class Transformer:
             ax_down.set_title(data_titles[1])
 
     @staticmethod
-    def _plot_1d(fig: Figure, grid: gridspec, data, colors, labels, margin=None, **scatter_kwargs):
+    def _plot_1d(fig: Figure, grid: gridspec, data, colors, labels, metric: CvMetric, margin=None, **scatter_kwargs):
         gs = grid.subgridspec(
             ncols=1,
             nrows=2,
@@ -395,7 +401,7 @@ class Transformer:
             ax_histx.set_xlim(-margin, 1 + margin)
 
     @staticmethod
-    def _plot_2d(fig: Figure, grid: gridspec, data, colors, labels, margin=None, **scatter_kwargs):
+    def _plot_2d(fig: Figure, grid: gridspec, data, colors, labels, metric: CvMetric, margin=None, **scatter_kwargs):
         gs = grid.subgridspec(
             ncols=2,
             nrows=2,
@@ -414,16 +420,24 @@ class Transformer:
             c=colors,
             **scatter_kwargs,
         )
-        # ax.set_xlabel(labels[0])
-        # ax.set_ylabel(labels[1])
 
-        in_xlim = jnp.logical_and(data[:, 0] > -margin, data[:, 0] < 1 + margin)
-        in_ylim = jnp.logical_and(data[:, 1] > -margin, data[:, 1] < 1 + margin)
+        m = (metric.bounding_box[:, 1] - metric.bounding_box[:, 0]) * margin
+
+        x_l = metric.bounding_box[0, :]
+        m_x = m[0]
+        y_l = metric.bounding_box[1, :]
+        m_y = m[1]
+
+        x_lim = [x_l[0] - m_x, x_l[1] + m_x]
+        y_lim = [y_l[0] - m_y, y_l[1] + m_y]
+
+        in_xlim = jnp.logical_and(data[:, 0] > x_lim[0], data[:, 0] < x_lim[1])
+        in_ylim = jnp.logical_and(data[:, 1] > y_lim[0], data[:, 1] < y_lim[1])
         n_points = jnp.sum(jnp.logical_and(in_xlim, in_ylim))
         n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
 
-        ax_histx.hist(data[:, 0], bins=n_bins, range=[-margin, 1 + margin])
-        ax_histy.hist(data[:, 1], bins=n_bins, range=[-margin, 1 + margin], orientation="horizontal")
+        ax_histx.hist(data[:, 0], bins=n_bins, range=x_lim)
+        ax_histy.hist(data[:, 1], bins=n_bins, range=y_lim, orientation="horizontal")
         ax_histy.tick_params(axis="x", rotation=-90)
 
         for b in [ax_histx, ax_histy]:
@@ -438,14 +452,11 @@ class Transformer:
         ax.locator_params(nbins=3)
 
         if margin is not None:
-            ax.set_xlim(-margin, 1 + margin)
-            # ax_histx.set_xlim(-margin, 1 + margin)
-
-            ax.set_ylim(-margin, 1 + margin)
-            # ax_histy.set_ylim(-margin, 1 + margin)
+            ax.set_xlim(*x_lim)
+            ax.set_ylim(*y_lim)
 
     @staticmethod
-    def _plot_3d(fig: Figure, grid: gridspec, data, colors, labels, margin=None, **scatter_kwargs):
+    def _plot_3d(fig: Figure, grid: gridspec, data, colors, labels, metric: CvMetric, margin=None, **scatter_kwargs):
         gs = grid.subgridspec(
             ncols=2,
             nrows=1,
@@ -541,6 +552,7 @@ class Transformer:
         dim: int,
         color_trajectories=True,
         color_1d=True,
+        metric: CvMetric | None = None,
         max_val=None,
         min_val=None,
         margin=None,
@@ -567,25 +579,27 @@ class Transformer:
 
         color_data = a.cv
 
-        if max_val is None:
-            if margin is None:
-                max_val = jnp.max(color_data, axis=0)
-            else:
-                max_val = jnp.full((dim,), -margin)
+        if max_val is not None and min_val is not None:
+            pass
 
-        if min_val is None:
-            if margin is None:
-                min_val = jnp.min(color_data, axis=0)
-            else:
-                min_val = jnp.full((dim,), 1 + margin)
+        elif metric is not None:
+            min_val = metric.bounding_box[:, 0]
+            max_val = metric.bounding_box[:, 1]
 
-        if (max_val == min_val).all():
+        else:
+            max_val = jnp.max(color_data, axis=0)
+            min_val = jnp.min(color_data, axis=0)
+
+        if margin is not None:
+            max_val = max_val + (max_val - min_val) * margin
+            min_val = min_val - (max_val - min_val) * margin
+
+        if jnp.allclose(max_val, min_val):
             data_col = color_data
-
         else:
             data_col = (color_data - min_val) / (max_val - min_val)
 
-        jnp.clip(data_col, 0.0, 1.0)
+        data_col = jnp.clip(data_col, 0.0, 1.0)
 
         # https://www.hsluv.org/
         # hue 0-360 sat 0-100 lighness 0-1000
