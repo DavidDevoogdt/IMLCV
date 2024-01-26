@@ -84,13 +84,14 @@ jobs:
         run: |
           git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
           git config --global core.longpaths true
-
           pip install tox
           tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}' -- -rFEx --durations 10 --color yes  # pytest args
         env:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
       - name: Generate coverage report
-        run: pipx run coverage lcov -o coverage.lcov -i
+        run: |
+          pip install coverage
+          coverage lcov -o coverage.lcov -i
       - name: Upload partial coverage report
         uses: coverallsapp/github-action@master
         with:
