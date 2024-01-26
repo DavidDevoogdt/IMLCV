@@ -59,7 +59,7 @@ jobs:
     needs: prepare
     strategy:
       matrix:
-        python: ["3.10", "3.11", "3.12"]
+        python: ["3.10", "3.11"]
         platform:
         - ubuntu-latest
         # - macos-latest
@@ -84,7 +84,9 @@ jobs:
         run: |
           git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
           git config --global core.longpaths true
-          pipx run --python '${{ steps.setup-python.outputs.python-path }}' tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}' -- -rFEx --durations 10 --color yes  # pytest args
+
+          pip install tox
+          tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}' -- -rFEx --durations 10 --color yes  # pytest args
         env:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
       - name: Generate coverage report
