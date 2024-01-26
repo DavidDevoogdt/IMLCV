@@ -824,7 +824,11 @@ class Rounds(ABC):
 
         else:
             if split_data:
-                n_i = int(sum([a.shape[0] for a in sp]) // len(weights))
+
+                if out == -1:
+                    out = int(sum([a.shape[0] for a in sp]))
+                
+                n_i = out // len(weights)
 
                 for n, wi in enumerate(weights):
                     if wi is None:
