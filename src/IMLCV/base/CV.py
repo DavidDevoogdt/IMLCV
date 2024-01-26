@@ -319,7 +319,7 @@ class SystemParams(PyTreeNode):
         max_neighs=None,
     ) -> tuple[bool, NeighbourList | None]:
         if r_cut is None:
-            return False,None,None, None
+            return False, None, None, None
 
         sp, (op_cell, op_coor, _) = self.canonicalize()
 

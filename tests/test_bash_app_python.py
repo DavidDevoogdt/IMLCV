@@ -15,7 +15,7 @@ def test_parallel(tmp_path, config_test):
 
         sleep(2)
 
-        return 2*i
+        return 2 * i
 
     n = 4
 
@@ -24,6 +24,7 @@ def test_parallel(tmp_path, config_test):
     res = [f.result() for f in futs]
 
     assert res == [0, 2, 4, 6]
+
 
 @pytest.mark.skip(reason="slow")
 def test_py_env(tmp_path, config_test):

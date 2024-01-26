@@ -238,7 +238,7 @@ def test_FES_bias(tmpdir, config_test, choice):
     )
 
     _ = scheme0.md.bias.compute_from_system_params(sp, nl)
-    
+
 
 def test_reparametrize():
     cvs = CollectiveVariable(
@@ -256,13 +256,13 @@ def test_reparametrize():
         ],
     )
 
-    n=20 
+    n = 20
     margin = 0.1
 
     grid = bias.collective_variable.metric.grid(n=n, margin=margin)
     cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
 
-    new_bias = bias.resample(cv_grid = cv_grid)
+    new_bias = bias.resample(cv_grid=cv_grid)
 
     b = bias.compute_from_cv(cv_grid)[0]
     b2 = new_bias.compute_from_cv(cv_grid)[0]
