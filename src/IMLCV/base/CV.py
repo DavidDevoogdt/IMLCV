@@ -2088,7 +2088,7 @@ class CvMetric(PyTreeNode):
         def get_mask(x):
             return jnp.logical_and(jnp.all(x > bounds[:, 0]), jnp.all(x < bounds[:, 1]))
 
-        return bounds.T, get_mask(cv.cv)
+        return bounds, get_mask(cv.cv)
 
 
 ######################################

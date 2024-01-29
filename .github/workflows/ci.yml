@@ -62,7 +62,7 @@ jobs:
         python:
           - "3.10" # oldes supportted
           # - "3.11"
-          - "3.11" # newest stable
+          - "3.12" # newest stable
         platform:
           - ubuntu-latest
           # - macos-latest
@@ -89,6 +89,7 @@ jobs:
           git config --global core.longpaths true
           pip install --upgrade pip
           pip install tox
+          pip install Cython==0.29.*
           tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}' -- -rFEx --durations 10 --color yes  # pytest args
         env:
           UGENT_USER_PASSWORD: ${{secrets.UGENT_USER_PASSWORD}}
