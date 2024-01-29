@@ -2073,7 +2073,7 @@ class CvMetric(PyTreeNode):
     def __setstate__(self, statedict: dict):
         self.__init__(**statedict)
 
-    @classmethod
+    @staticmethod
     def bounds_from_cv(cv: CV, percentile=1.0, margin=None):
         if margin is None:
             margin = percentile / 100 * 2
