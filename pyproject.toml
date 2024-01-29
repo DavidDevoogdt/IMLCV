@@ -11,4 +11,4 @@ version_scheme = "no-guess-dev"
 
 [tool.black]
 line-length = 120
-target-version = ['py39', 'py310']
+target-version = ['py310']
