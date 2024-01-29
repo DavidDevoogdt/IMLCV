@@ -7,6 +7,7 @@ from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvMetric
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.bias import GridBias
@@ -144,6 +145,7 @@ class ThermoLIB:
         temp=None,
         pmap=True,
         only_finished=True,
+        bounds_percentile=1,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -192,7 +194,11 @@ class ThermoLIB:
         c = CV.stack(*trajs)
 
         if update_bounding_box:
-            bounding_box = [[c.cv[:, i].min(), c.cv[:, i].max()] for i in range(c.dim)]
+            bounds, _ = CvMetric.bounds_from_cv(c, bounds_percentile)
+
+            print(f"old bounds: {self.collective_variable.metric.bounding_box=}  new bounds {bounds}  ")
+
+            bounding_box = bounds
         else:
             bounding_box = self.collective_variable.metric.bounding_box
 

@@ -639,7 +639,7 @@ class Rounds(ABC):
             colvar = None
 
         for cv_round in cvrnds:
-            for round, traj in self.iter(
+            for round_info, traj_info in self.iter(
                 start=start,
                 stop=stop,
                 num=num,
@@ -649,32 +649,32 @@ class Rounds(ABC):
                 only_finshed=only_finished,
             ):
                 if min_traj_length is not None:
-                    if traj.ti._size < min_traj_length:
+                    if traj_info.ti._size < min_traj_length:
                         # print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
                         continue
                     # else:
                     # print("adding trajectory")
 
                 if sti is None:
-                    sti = round.tic
+                    sti = round_info.tic
 
-                ti.append(traj.ti)
-                sp0 = traj.ti.sp
+                ti.append(traj_info.ti)
+                sp0 = traj_info.ti.sp
 
-                if (cv0 := traj.ti.CV) is None:
+                if (cv0 := traj_info.ti.CV) is None:
                     print("calculating CV")
 
                     if colvar is None:
-                        bias = traj.get_bias()
+                        bias = traj_info.get_bias()
                         colvar = bias.collective_variable
 
                     nlr = (
                         sp0.get_neighbour_list(
-                            r_cut=round.tic.r_cut,
-                            z_array=round.tic.atomic_numbers,
+                            r_cut=round_info.tic.r_cut,
+                            z_array=round_info.tic.atomic_numbers,
                             chunk_size=chunk_size,
                         )
-                        if round.tic.r_cut is not None
+                        if round_info.tic.r_cut is not None
                         else None
                     )
 
@@ -683,16 +683,16 @@ class Rounds(ABC):
                 e = None
 
                 if filter_bias:
-                    if (b0 := traj.ti.e_bias) is None:
+                    if (b0 := traj_info.ti.e_bias) is None:
                         # map cvs
-                        bias = traj.get_bias()
+                        bias = traj_info.get_bias()
 
                         b0, _ = bias.compute_from_cv(cvs=cv0)
 
                     e = b0
 
                 if filter_energy:
-                    if (e0 := traj.ti.e_pot) is None:
+                    if (e0 := traj_info.ti.e_pot) is None:
                         raise ValueError("e_pot is None")
 
                     if e is None:
@@ -701,7 +701,7 @@ class Rounds(ABC):
                         e = e + e0
 
                 if energy_threshold is not None:
-                    if (e0 := traj.ti.e_pot) is None:
+                    if (e0 := traj_info.ti.e_pot) is None:
                         raise ValueError("e_pot is None")
 
                     if min_energy is None:
@@ -712,12 +712,12 @@ class Rounds(ABC):
                 sp.append(sp0)
                 cv.append(cv0)
                 if get_bias_list:
-                    bias_list.append(traj.get_bias())
+                    bias_list.append(traj_info.get_bias())
 
                 if e is None:
                     weights.append(None)
                 else:
-                    beta = 1 / (round.tic.T * boltzmann)
+                    beta = 1 / (round_info.tic.T * boltzmann)
                     weight = -beta * e
 
                     # weight = jnp.exp(-beta * e)
@@ -726,7 +726,7 @@ class Rounds(ABC):
         assert sti is not None
         assert len(sp) != 0
 
-        def choose(key, probs: Array, len: int):
+        def choose(key, probs: Array, out: int, len: int):
             if len is None:
                 len = probs.shape[0]
 
@@ -805,17 +805,23 @@ class Rounds(ABC):
         out_cv: list[CV] = []
         out_ti = []
 
+        total = sum([a.shape[0] for a in sp])
+
+        if out == -1:
+            out = total
+
+        if out > total:
+            print(f"not enough data, returning {total} data points instead of {out}")
+            out = total
+
         if time_series:
             if out == -1:
                 skip_step = 1
             else:
-                n_points = sum([a.shape[0] for a in sp])
-
-                skip_step = n_points // out
+                skip_step = round(total / out)
 
                 if skip_step == 0:
                     skip_step = 1
-                    print(f"not enough data, returning {n_points=} ")
 
             for sp_n, cv_n, ti_n in zip(sp, cv, ti):
                 out_sp.append(sp_n[::skip_step])
@@ -824,10 +830,7 @@ class Rounds(ABC):
 
         else:
             if split_data:
-                if out == -1:
-                    out = int(sum([a.shape[0] for a in sp]))
-
-                n_i = out // len(weights)
+                frac = out / total
 
                 for n, wi in enumerate(weights):
                     if wi is None:
@@ -836,7 +839,8 @@ class Rounds(ABC):
                         wi -= jnp.mean(wi)
                         wi = jnp.exp(-wi)
                         probs = wi / jnp.sum(wi)
-                    key, indices = choose(key, probs, len=max(sp[n].shape[0], n_i))
+
+                    key, indices = choose(key, probs, out=int(frac * sp[n].shape[0]), len=sp[n].shape[0])
 
                     out_sp.append(sp[n][indices])
                     out_cv.append(cv[n][indices])
@@ -851,7 +855,7 @@ class Rounds(ABC):
                     probs = jnp.exp(-ws)
                     probs /= jnp.sum(probs)
 
-                key, indices = choose(key, probs, len=sum([sp_n.shape[0] for sp_n in sp]))
+                key, indices = choose(key, probs, out=int(out), len=total)
 
                 indices = jnp.sort(indices)
 
@@ -874,13 +878,9 @@ class Rounds(ABC):
 
                 count = 0
 
-                # t0 = time.time()
-
                 out_sp.append(SystemParams.stack(*sp_trimmed))
                 out_cv.append(CV.stack(*cv_trimmed))
                 out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
-
-                # print(f"{'stack time':-^20}={t0- time.time()}")
                 bias = None
 
         out_nl = None

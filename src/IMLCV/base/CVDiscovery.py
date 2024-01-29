@@ -133,17 +133,7 @@ class Transformer:
             assert jnp.allclose(y_2.cv, y.cv)
 
         # remove outliers from the data
-        bounds = jnp.percentile(y.cv, jnp.array([percentile, 100 - percentile]), axis=0)
-
-        # diff = bounds[1, :] - bounds[0, :]
-
-        bounds_l = bounds[0, :]
-        bounds_u = bounds[1, :]
-
-        mask_l = jnp.all(y.cv > bounds_l, axis=1)
-        mask_u = jnp.all(y.cv < bounds_u, axis=1)
-        mask = mask_l & mask_u
-
+        _, mask = CvMetric.bounds_from_cv(y, percentile=1.0)
         y_masked = y[mask]
 
         print("starting post_fit")

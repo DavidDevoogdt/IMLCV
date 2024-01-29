@@ -670,7 +670,7 @@ class TransformerMAF(Transformer):
 
                 q1 = q1[:, mask1]
 
-                print(f"{l1=} {q1.shape=}  ")
+                print(f"{q1.shape=}")
 
                 q2, r2, p2 = scipy.linalg.qr(a=q1.T @ C_1 @ q1, pivoting=True)
 
@@ -679,19 +679,7 @@ class TransformerMAF(Transformer):
 
                 q2 = q2[:, mask2]
 
-                print(f"{l2=} {q2.shape=}  ")
-
-                # # #remove negative eigenvalues
-                # aa,bb,alpha,beta,q3,z3 = scipy.linalg.ordqz(A= q2.T@q1.T@C_1@q1@q2,B= q2.T@q1.T@C_0@q1@q2, sort='rhp')
-
-                # l3 = alpha/beta
-                # mask3 = l3>eps
-                # q3 = q3[:,mask3 ]
-
-                # print(f"{aa=}")
-                # print(f"{bb=}")
-
-                # print(f"{l3=} {q3.shape=}")
+                print(f"{q2.shape=} ")
 
                 q = q1 @ q2  # @q3
 
@@ -704,7 +692,7 @@ class TransformerMAF(Transformer):
 
                 q1 = q1[:, mask1]
 
-                print(f"{l1=}{q1.shape=} ")
+                print(f"{q1.shape=} ")
 
                 if not sym:
                     l2, q2 = scipy.linalg.eig(a=q1.T @ C_1 @ q1, b=q1.T @ C_0 @ q1)
@@ -714,7 +702,7 @@ class TransformerMAF(Transformer):
                 mask2 = l2 > eps
                 q2 = q2[:, mask2]
 
-                print(f"{l2=} {q2.shape=}  ")
+                print(f"{q2.shape=}  ")
 
                 q = q1 @ q2
 

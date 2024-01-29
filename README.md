@@ -15,7 +15,7 @@
  -->
 
 [![Documentation Status](https://readthedocs.org/projects/imlcv/badge/?version=main)](https://imlcv.readthedocs.io/en/main/?badge=main)
-[![Coverage Status](https://coveralls.io/repos/github/DavidDevoogdt/IMLCV/badge.png?branch=main&kill_cache=1)](https://coveralls.io/github/DavidDevoogdt/IMLCV?branch=main)
+[![Coverage Status](https://coveralls.io/repos/github/DavidDevoogdt/IMLCV/badge.png?branch=main&service=github)](https://coveralls.io/github/DavidDevoogdt/IMLCV?branch=main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Project generated with PyScaffold](https://img.shields.io/badge/-PyScaffold-005CA0?logo=pyscaffold)](https://pyscaffold.org/)
 # IMLCV

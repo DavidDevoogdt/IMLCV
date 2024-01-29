@@ -59,11 +59,14 @@ jobs:
     needs: prepare
     strategy:
       matrix:
-        python: ["3.10", "3.11"]
+        python:
+          - "3.10" # oldes supportted
+          # - "3.11"
+          - "3.12" # newest stable
         platform:
-        - ubuntu-latest
-        # - macos-latest
-        # - windows-latest
+          - ubuntu-latest
+          # - macos-latest
+          # - windows-latest
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -84,6 +87,7 @@ jobs:
         run: |
           git config --global url."https://${UGENT_USER_PASSWORD}@github.ugent.be/".insteadOf "https://github.ugent.be/"
           git config --global core.longpaths true
+          pip install --upgrade pip
           pip install tox
           tox --installpkg '${{ needs.prepare.outputs.wheel-distribution }}' -- -rFEx --durations 10 --color yes  # pytest args
         env:

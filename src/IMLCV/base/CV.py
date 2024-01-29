@@ -2073,6 +2073,23 @@ class CvMetric(PyTreeNode):
     def __setstate__(self, statedict: dict):
         self.__init__(**statedict)
 
+    @classmethod
+    def bounds_from_cv(cv: CV, percentile=1.0, margin=None):
+        if margin is None:
+            margin = percentile / 100 * 2
+
+        bounds = jnp.percentile(cv.cv, jnp.array([percentile, 100 - percentile]), axis=0).T
+
+        bounds_margin = (bounds[:, 1] - bounds[:, 0]) * margin
+        bounds = bounds.at[:, 0].set(bounds[:, 0] - bounds_margin)
+        bounds = bounds.at[:, 1].set(bounds[:, 1] + bounds_margin)
+
+        @vmap
+        def get_mask(x):
+            return jnp.logical_and(jnp.all(x > bounds[:, 0]), jnp.all(x < bounds[:, 1]))
+
+        return bounds.T, get_mask(cv.cv)
+
 
 ######################################
 #       CV tranformations            #
