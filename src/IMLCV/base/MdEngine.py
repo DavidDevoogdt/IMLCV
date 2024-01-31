@@ -34,6 +34,7 @@ from molmod.periodic import periodic
 from molmod.units import angstrom
 from molmod.units import bar
 from molmod.units import kjmol
+from molmod.units import second
 from typing_extensions import Self
 
 ######################################
@@ -494,8 +495,6 @@ class MDEngine(ABC):
         else:
             create_kwargs["step"] = trajectory_info._size
             energy.sp = trajectory_info.sp[-1]
-            if trajectory_info.t is not None:
-                create_kwargs["time0"] = time() - trajectory_info.t[-1]
 
         kwargs.update(create_kwargs)
 
@@ -521,23 +520,28 @@ class MDEngine(ABC):
         if self.static_trajectory_info.r_cut is None:
             return None
 
-        # print("update neighbour list")
-
         def _nl():
-            print("fast nl update")
             return self.sp.get_neighbour_list(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,
                 r_skin=1.0 * angstrom,
             )
 
+        # only first time
         if self._nl is None:
-            nl = _nl()
-        else:
-            b, nl = self._nl.update(self.sp)  # jitted update
+            self._nl = _nl()
+            return self._nl
 
-            if not b:
-                nl = _nl()
+        if not self._nl.needs_update(self.sp):
+            return self._nl
+
+        print("updating nl")
+
+        b, nl = self._nl.update(self.sp)  # jitted update
+
+        if not b:
+            print("updating nl - slow")
+            nl = _nl()
 
         self._nl = nl
         return nl
@@ -555,8 +559,6 @@ class MDEngine(ABC):
     def load(file, **kwargs) -> MDEngine:
         filename = Path(file)
 
-        # print(f"loading md engine {filename=} with {kwargs}")
-
         if filename.suffix == ".json":
             with open(filename) as f:
                 self = jsonpickle.decode(f.read(), context=Unpickler())
@@ -565,22 +567,24 @@ class MDEngine(ABC):
                 self = cloudpickle.load(f)
 
         for key in kwargs.keys():
-            # if key == "sp":
-            #     print(f"setting sp={kwargs[key]}")
             setattr(self, key, kwargs[key])
 
             if key == "trajectory_file":
-                print(f"loading ti  {self.trajectory_file} ")
-                trajectory_file = kwargs[key]
-                if Path(trajectory_file).exists():
-                    print("updating sp from trajectory file")
+                continue
 
-                    self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
-                    self.step = self.trajectory_info._size
-                    self.sp = self.trajectory_info.sp[-1]
-                    self.time0 = self.trajectory_info.t[-1]
+        if (key := "trajectory_file") in kwargs.keys():
+            print(f"loading ti  {self.trajectory_file} ")
+            trajectory_file = kwargs[key]
+            if Path(trajectory_file).exists():
+                print("updating sp from trajectory file")
 
-                    print(f"loaded ti  {self.step=} ")
+                self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
+                self.step = self.trajectory_info._size
+                self.sp = self.trajectory_info.sp[-1]
+
+                print(f"loaded ti  {self.step=} ")
+
+        self.time0 = time()
         self._nl = None
         # print(f"{self.sp=}")
 
@@ -747,7 +751,8 @@ class MDEngine(ABC):
                 if Path(self.trajectory_file).exists():
                     self.step = self.trajectory_info._size
                     self.sp = self.trajectory_info.sp[-1]
-                    self.time0 = time() - self.trajectory_info.t[-1]
+
+            self.time0 = time()
 
         except Exception as e:
             print(

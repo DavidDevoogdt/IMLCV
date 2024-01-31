@@ -4,6 +4,7 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
+from IMLCV.base.bias import BiasF
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -196,7 +197,7 @@ class ThermoLIB:
         if update_bounding_box:
             bounds, _ = CvMetric.bounds_from_cv(c, bounds_percentile)
 
-            print(f"old bounds: {self.collective_variable.metric.bounding_box=}  new bounds {bounds}  ")
+            # print(f"old bounds: {self.collective_variable.metric.bounding_box=}  new bounds {bounds}  ")
 
             bounding_box = bounds
         else:
@@ -245,7 +246,7 @@ class ThermoLIB:
     def fes_bias(
         self,
         plot=True,
-        max_bias=None,
+        # max_bias: float | None = None,
         fes=None,
         choice="rbf",
         num_rnds=4,
@@ -259,10 +260,10 @@ class ThermoLIB:
         update_bounding_box=True,  # make boudning box bigger for FES calculation
         n_max=60,
         min_traj_length=None,
-        margin=0.5,
+        margin=0.1,
         grid=None,
         bounds=None,
-        use_prev_fs=True,
+        use_prev_fs=False,
         collective_variable=None,
         only_finished=True,
         **plot_kwargs,
@@ -290,13 +291,19 @@ class ThermoLIB:
         if collective_variable is None:
             collective_variable = self.collective_variable
 
+        # # invert to use as bias, center zero
+        mask = ~np.isnan(fs)
+        fs[:] = -(fs[:] - fs[mask].min())
+
+        # fs_max = fs[mask].max()  # = 0 kjmol
+        fs_min = fs[mask].min()  # = -max_bias kjmol
+
+        # if max_bias is None:
+        #     max_bias = fs_max - fs_min
+
         if use_prev_fs:
             prev_fs = jnp.reshape(self.common_bias.compute_from_cv(cv_grid)[0], fs.shape)
-            fs += np.array(prev_fs)
-
-        # invert to use as bias
-        mask = ~np.isnan(fs)
-        fs[:] = -fs[:] + fs[mask].max()
+            fs -= np.array(prev_fs)
 
         if choice == "rbf":
             fslist = []
@@ -349,6 +356,17 @@ class ThermoLIB:
 
         if resample_bias:
             fes_bias_tot = fes_bias_tot.resample(cv_grid=cv_grid)
+
+        # clip value of bias to min and max of computed FES
+        # if max_bias is not None:
+
+        fes_bias_tot = CompositeBias.create(
+            biases=[
+                fes_bias_tot,
+                BiasF.create(cvs=fes_bias_tot.collective_variable, g=lambda _: jnp.array(fs_min)),
+            ],
+            fun=jnp.max,
+        )
 
         if plot:
             fold = str(self.rounds.path(c=self.cv_round))

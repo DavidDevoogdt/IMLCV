@@ -339,6 +339,7 @@ class Bias(PyTreeNode, ABC):
         label="bias [kJ/mol]",
         plot_bias=True,
         colors: Array | None = None,
+        offset=False,
     ):
         """plot bias."""
         if bins is None:
@@ -356,7 +357,19 @@ class Bias(PyTreeNode, ABC):
         if inverted:
             bias = -bias
 
-        bias -= bias[~np.isnan(bias)].min()
+        if offset:
+            bias -= bias[~np.isnan(bias)].min()
+        else:
+            vrange = vmax - vmin
+
+            if inverted:
+                vmin = bias[~np.isnan(bias)].min()
+                vmax = vmin + vrange
+
+            else:
+                vmax = bias[~np.isnan(bias)].max()
+                vmin = vmax - vrange
+
         bias = bias.reshape([len(mg_i) for mg_i in mg])
 
         plt.rc("text", usetex=False)

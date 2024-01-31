@@ -538,7 +538,7 @@ class SystemParams(PyTreeNode):
         self,
         r_cut,
         z_array: list[int] | Array,
-        r_skin=0.0,
+        r_skin=1.0,
         chunk_size=None,
     ) -> NeighbourList | None:
         def to_tuple(a):
@@ -1399,17 +1399,21 @@ class NeighbourList(PyTreeNode):
         )
 
     @jax.jit
+    def needs_update(self, sp: SystemParams) -> bool:
+        if self.sp_orig is None:
+            return True
+
+        max_displacement = jnp.max(
+            jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
+        )
+
+        return max_displacement > self.r_skin
+
+    @jax.jit
     def update(self, sp: SystemParams) -> tuple[bool, NeighbourList]:
-        # max_displacement = jnp.max(
-        #     jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
-        # )
-
-        # def _f():
-        #     jax.debug.print("fast nl update")
-
         a, _, _, b = sp._get_neighbour_list(
             r_cut=self.r_cut,
-            r_skin=0.0,
+            r_skin=self.r_skin,
             z_array=self.z_array,
             z_unique=self.z_unique,
             num_z_unique=self.num_z_unique,
@@ -1418,12 +1422,6 @@ class NeighbourList(PyTreeNode):
         )
 
         return a, b
-
-        # return jax.lax.cond(
-        #     max_displacement > self.r_skin,
-        #     _f,
-        #     lambda: (True, self),
-        # )
 
     def nl_split_z(self, p):
         if self.batched:
@@ -1564,56 +1562,6 @@ class NeighbourList(PyTreeNode):
     @staticmethod
     def stack(*nls: NeighbourList) -> NeighbourList:
         return sum(nls[1:], nls[0])
-
-    # def __eq__(self, other):
-    #     if not isinstance(other, NeighbourList):
-    #         return False
-
-    #     if not self.r_cut == other:
-    #         return False
-
-    #     def _check_none(a, b, allclose=False):
-    #         if a is None:
-    #             return b is None
-
-    #         if b is None:
-    #             return False
-
-    #         if not isinstance(a, jax.Array):
-    #             a = jnp.array(a)
-
-    #         if not isinstance(b, jax.Array):
-    #             b = jnp.array(b)
-
-    #         if allclose:
-    #             jnp.allclose(a, b)
-
-    #         return (a == b).all()
-
-    #     if not _check_none(self.op_cell, other.op_cell):
-    #         return False
-    #     if not _check_none(self.op_coor, other.op_coor):
-    #         return False
-    #     if not _check_none(self.op_center, other.op_center):
-    #         return False
-    #     if not _check_none(self._ijk_indices, other.ijk_indices):
-    #         return False
-    #     if not self.sp_orig == other.sp_orig:
-    #         return False
-    #     if not _check_none(self.z_array, other.z_array):
-    #         return False
-    #     if not _check_none(self.nxyz, other.nxyz):
-    #         return False
-    #     if not _check_none(self.z_unique, other.z_unique):
-    #         return False
-
-    #     return True
-
-    # def __getstate__(self):
-    #     return self.__dict__
-
-    # def __setstate__(self, statedict: dict):
-    #     self.__init__(**statedict)
 
 
 class CV(PyTreeNode):

@@ -147,7 +147,7 @@ class Scheme:
         cv_round: int | None = None,
         chunk_size=None,
         eps_umbrella=0.1,
-        plot_margin=0.5,
+        plot_margin=0.1,
         enforce_min_traj_length=False,
         recalc_cv=False,
         only_finished=True,
@@ -212,6 +212,7 @@ class Scheme:
                     chunk_size=chunk_size,
                     min_traj_length=steps if enforce_min_traj_length else None,
                     margin=plot_margin,
+                    only_finished=only_finished,
                     **plot_kwargs,
                 )
 

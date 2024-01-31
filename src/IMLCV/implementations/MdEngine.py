@@ -73,7 +73,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             create_kwargs["step"] = trajectory_info._size
             energy.sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
-                create_kwargs["time0"] = time() - trajectory_info.t[-1]
+                create_kwargs["time0"] = time()
 
         kwargs.update(create_kwargs)
 
