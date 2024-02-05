@@ -260,7 +260,7 @@ def get_slurm_provider(
 
     worker_init = f"{py_env}; \n"
     if env == "hortense":
-        worker_init += "module load CP2K/8.2-foss-2021a \n"
+        worker_init += "module load CP2K/2023.1-foss-2022b \n"
 
     elif env == "stevin":
         worker_init += "module load CP2K/7.1-foss-2020a \n"

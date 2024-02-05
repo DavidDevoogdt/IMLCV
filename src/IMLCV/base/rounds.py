@@ -450,7 +450,7 @@ class Rounds(ABC):
         stop=None,
         num=3,
         ignore_invalid=False,
-        only_finshed=True,
+        only_finished=True,
         c=None,
         md_trajs: list[int] | None = None,
         print_timings=False,
@@ -500,7 +500,7 @@ class Rounds(ABC):
                 if not _r_i.valid and not ignore_invalid:
                     continue
 
-                if (not _r_i.finished) and only_finshed:
+                if (not _r_i.finished) and only_finished:
                     continue
                 # no points in collection
                 if _r_i.ti._size <= 0:
@@ -646,7 +646,7 @@ class Rounds(ABC):
                 c=cv_round,
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
-                only_finshed=only_finished,
+                only_finished=only_finished,
             ):
                 if min_traj_length is not None:
                     if traj_info.ti._size < min_traj_length:
@@ -1339,8 +1339,8 @@ class Rounds(ABC):
 
         if not sp0_provided:
             data = self.data_loader(
-                num=2,
-                out=1000,
+                num=4,
+                out=10000,
                 split_data=False,
                 filter_bias=correct_previous_bias,
                 filter_energy=filter_e_pot,

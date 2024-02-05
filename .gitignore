@@ -84,3 +84,6 @@ perovskites/*
 .virtual_documents/*
 .jupyter_ystore.db-journal
 thermolib_fix
+workdir/schaling.py
+workdir/scaling.png
+workdir/schaling.py

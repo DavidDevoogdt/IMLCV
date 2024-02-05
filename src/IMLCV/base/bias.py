@@ -715,7 +715,7 @@ class CompositeBias(Bias):
 
         assert collective_variable is not None
 
-        return clz(
+        return CompositeBias(
             collective_variable=collective_variable,
             biases=biases_new,
             fun=fun,
@@ -738,23 +738,62 @@ def _zero_fun(cvs: CV):
     return jnp.array(0.0)
 
 
+def _constant(cvs: CV, val: float = 0.0):
+    return jnp.array(val)
+
+
+class BiasModify(Bias):
+    """Bias according to CV."""
+
+    fun: Callable = field(pytree_node=False)
+    bias: Bias
+    kwargs: dict = field(pytree_node=False, default_factory=dict)
+    pytree_kwargs: dict = field(default_factory=dict)
+
+    @classmethod
+    def create(clz, fun: Callable, bias: Bias, kwargs: dict = {}, pytree_kwargs: dict = {}) -> Self:  # type: ignore[override]
+        return BiasModify(
+            collective_variable=bias.collective_variable,
+            fun=fun,
+            start=None,
+            step=None,
+            finalized=False,
+            kwargs=kwargs,
+            pytree_kwargs=pytree_kwargs,
+            bias=bias,
+        )
+
+    def _compute(self, cvs):
+        return self.fun(self.bias._compute(cvs), **self.kwargs, **self.pytree_kwargs)
+
+    def update_bias(
+        self,
+        md: MDEngine,
+    ) -> Bias:
+        return self.replace(bias=self.bias.update_bias(md))
+
+
 class BiasF(Bias):
     """Bias according to CV."""
 
-    g: Callable = field(pytree_node=False, default=_zero_fun)
+    g: Callable = field(pytree_node=False, default=_constant)
+    kwargs: dict = field(pytree_node=False, default_factory=dict)
+    pytree_kwargs: dict = field(default_factory=dict)
 
     @classmethod
-    def create(clz, cvs: CollectiveVariable, g: Callable):
-        return clz(
+    def create(clz, cvs: CollectiveVariable, g: Callable = _constant, kwargs: dict = {}, pytree_kwargs: dict = {}) -> Self:  # type: ignore[override]
+        return BiasF(
             collective_variable=cvs,
             g=g,
             start=None,
             step=None,
             finalized=False,
+            kwargs=kwargs,
+            pytree_kwargs=pytree_kwargs,
         )
 
     def _compute(self, cvs):
-        return self.g(cvs)
+        return self.g(cvs, **self.kwargs, **self.pytree_kwargs)
 
 
 class NoneBias(BiasF):

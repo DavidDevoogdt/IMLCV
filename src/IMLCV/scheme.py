@@ -136,7 +136,7 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
-        samples_per_bin=200,
+        samples_per_bin=100,
         init_max_grad=None,
         max_grad=None,
         plot=True,

@@ -9,6 +9,7 @@ import yaff
 from flax.struct import field
 from flax.struct import PyTreeNode
 from IMLCV.base.bias import Bias
+from IMLCV.base.bias import BiasModify
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -19,6 +20,17 @@ from molmod.units import kjmol
 from molmod.units import nanometer
 from molmod.units import picosecond
 from typing_extensions import Self
+
+######################################
+# helper functions that are pickable #
+######################################
+
+
+def _clip(x, a_min, a_max):
+    return jnp.clip(x, a_min, a_max)
+
+
+######################################
 
 
 class MinBias(CompositeBias):

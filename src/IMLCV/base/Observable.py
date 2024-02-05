@@ -5,12 +5,14 @@ import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import BiasF
+from IMLCV.base.bias import BiasModify
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.bash_app_python import bash_app_python
+from IMLCV.implementations.bias import _clip
 from IMLCV.implementations.bias import GridBias
 from IMLCV.implementations.bias import RbfBias
 from molmod.units import kjmol
@@ -248,6 +250,7 @@ class ThermoLIB:
         plot=True,
         # max_bias: float | None = None,
         fes=None,
+        max_bias=None,
         choice="rbf",
         num_rnds=4,
         start_r=0,
@@ -295,8 +298,13 @@ class ThermoLIB:
         mask = ~np.isnan(fs)
         fs[:] = -(fs[:] - fs[mask].min())
 
-        # fs_max = fs[mask].max()  # = 0 kjmol
+        fs_max = fs[mask].max()  # = 0 kjmol
         fs_min = fs[mask].min()  # = -max_bias kjmol
+
+        if max_bias is not None:
+            fs_min = -max_bias
+
+        print(f"min fs: {-fs_min/kjmol} kjmol")
 
         # if max_bias is None:
         #     max_bias = fs_max - fs_min
@@ -358,14 +366,10 @@ class ThermoLIB:
             fes_bias_tot = fes_bias_tot.resample(cv_grid=cv_grid)
 
         # clip value of bias to min and max of computed FES
-        # if max_bias is not None:
-
-        fes_bias_tot = CompositeBias.create(
-            biases=[
-                fes_bias_tot,
-                BiasF.create(cvs=fes_bias_tot.collective_variable, g=lambda _: jnp.array(fs_min)),
-            ],
-            fun=jnp.max,
+        fes_bias_tot = BiasModify.create(
+            bias=fes_bias_tot,
+            fun=_clip,
+            kwargs={"a_min": fs_min, "a_max": fs_max},
         )
 
         if plot:
