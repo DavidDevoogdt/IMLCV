@@ -27,19 +27,13 @@ class Transformer:
     def __init__(
         self,
         outdim,
-        periodicity=None,
-        bounding_box=None,
-        descriptor=CvFlow,
+        descriptor: CvFlow,
         pre_scale=True,
         post_scale=True,
         **fit_kwargs,
     ) -> None:
         self.outdim = outdim
 
-        if periodicity is None:
-            periodicity = [False for _ in range(self.outdim)]
-
-        self.periodicity = periodicity
         self.descriptor = descriptor
         self.pre_scale = pre_scale
         self.post_scale = post_scale

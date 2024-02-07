@@ -537,7 +537,8 @@ class TransoformerLDA(Transformer):
             _g = CvTrans.from_cv_function(_scale_trans, alpha=alpha, scale_factor=scale_factor)
 
             cv = _g.compute_cv_trans(cv)[0].unstack()
-            cv_t = _g.compute_cv_trans(cv_t)[0].unstack()
+            if cv_t is not None:
+                cv_t = _g.compute_cv_trans(cv_t)[0].unstack()
 
             full_trans = un_atomize * _f * _g
 
@@ -934,7 +935,7 @@ class TransformerMAF(Transformer):
             w = w[:-1]
 
         print(f"eigenvalue are {w}")
-        print(f" timescales  { -dlo.tau / jnp.log(w)  / nanosecond   } ")
+        print(f" timescales  { -dlo.tau / jnp.log(w)  / nanosecond   } ns")
 
         trans_mat = q @ u
         if kinetic_distance:

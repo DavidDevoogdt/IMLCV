@@ -2,6 +2,7 @@ import tempfile
 from importlib import import_module
 from typing import Callable
 
+import jax
 import numpy as np
 import tensorflow as tfl
 from flax.struct import field
@@ -9,6 +10,7 @@ from flax.struct import PyTreeNode
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFunBase
 from IMLCV.base.CV import NeighbourList
+from jax.custom_batching import custom_vmap
 from jax.experimental.jax2tf import call_tf
 from keras.api._v2 import keras as KerasAPI
 
@@ -97,9 +99,27 @@ class KerasFunBase(CvFunBase):
 
         if reverse:
             assert self.bwd is not None, "No backward model defined"
+
             out = call_tf(self.bwd.mod.call, has_side_effects=False)(y)
         else:
             assert self.fwd is not None
+
+            @custom_vmap
+            def forward(y):
+                print(f"custom batching rule {y.shape=}")
+
+                return call_tf(self.fwd.mod.call, has_side_effects=False)(y)
+
+            @forward.def_vmap
+            def _forward_vmap(axis_size, in_batched, y):
+                (x_batched,) = in_batched
+
+                assert x_batched
+
+                print(f"custom batching rule {axis_size=}  {axis_size=}  ")
+
+                return forward(x), True
+
             out = call_tf(self.fwd.mod.call, has_side_effects=False)(y)
 
         if not batched:
