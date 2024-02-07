@@ -106,8 +106,6 @@ class KerasFunBase(CvFunBase):
 
             @custom_vmap
             def forward(y):
-                print(f"custom batching rule {y.shape=}")
-
                 return call_tf(self.fwd.mod.call, has_side_effects=False)(y)
 
             @forward.def_vmap
@@ -116,11 +114,9 @@ class KerasFunBase(CvFunBase):
 
                 assert x_batched
 
-                print(f"custom batching rule {axis_size=}  {axis_size=}  ")
+                return forward(y.reshape((axis_size * y.shape[1], *y.shape[2:]))), True
 
-                return forward(x), True
-
-            out = call_tf(self.fwd.mod.call, has_side_effects=False)(y)
+            out = forward(y)
 
         if not batched:
             out = out.reshape((-1,))

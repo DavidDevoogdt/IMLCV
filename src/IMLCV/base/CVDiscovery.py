@@ -646,7 +646,7 @@ class Transformer:
         return a.replace(cv=rgb)
 
     def __mul__(self, other):
-        assert isinstance(other, Transformer), "can only multiply with another transformer"
+        # assert isinstance(other, Transformer), "can only multiply with another transformer"
 
         trans: list[Transformer] = []
 
@@ -664,8 +664,14 @@ class Transformer:
 
 
 class CombineTransformer(Transformer):
-    def __init__(self, transformers: list[Transformer], **kwargs) -> None:
+    def __init__(self, transformers: list[Transformer], **fit_kwargs) -> None:
         self.transformers = transformers
+
+        self.outdim = transformers[-1].outdim
+        self.descriptor = transformers[0].descriptor
+        self.pre_scale = transformers[0].pre_scale
+        self.post_scale = transformers[-1].post_scale
+        self.fit_kwargs = fit_kwargs
 
     def _fit(
         self,
@@ -682,7 +688,7 @@ class CombineTransformer(Transformer):
 
             x, x_t, trans_t = t._fit(x, x_t, dlo, chunk_size=chunk_size, **t.fit_kwargs, **fit_kwargs)
 
-            if t is None:
+            if trans is None:
                 trans = trans_t
             else:
                 trans *= trans_t

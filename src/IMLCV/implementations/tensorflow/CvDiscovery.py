@@ -59,11 +59,13 @@ class TranformerUMAP(Transformer):
         x = CV.stack(*x)
         if x_t is not None:
             x_t = CV.stack(*x_t)
-        # nl = sum(nl[1:], nl[0])
+            x_train = CV.stack(x, x_t)
+        else:
+            x_train = x
 
-        x = un_atomize.compute_cv_trans(x, None)[0]
+        x_train = un_atomize.compute_cv_trans(x_train, None)[0]
 
-        dims = x.shape[1:]
+        dims = x_train.shape[1:]
 
         kwargs["n_components"] = self.outdim
         kwargs["n_neighbors"] = n_neighbors
@@ -105,12 +107,12 @@ class TranformerUMAP(Transformer):
         else:
             reducer = umap.UMAP(**kwargs)
 
-        reducer.fit_transform(X=x.cv)
+        reducer.fit_transform(X=x_train.cv)
 
         assert parametric
         f = CvTrans(trans=(KerasFunBase.create(fwd=reducer.encoder, bwd=reducer.decoder),))
 
-        cv_0 = f.compute_cv_trans(x)[0].unstack()
-        cv_tau = f.compute_cv_trans(x_t)[0].unstack() if x_t is not None else None
+        cv_0 = f.compute_cv_trans(x, chunk_size=chunk_size)[0].unstack()
+        cv_tau = f.compute_cv_trans(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
 
         return cv_0, cv_tau, un_atomize * f
