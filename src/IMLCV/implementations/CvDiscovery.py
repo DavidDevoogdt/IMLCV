@@ -536,11 +536,12 @@ class TransoformerLDA(Transformer):
 
             _g = CvTrans.from_cv_function(_scale_trans, alpha=alpha, scale_factor=scale_factor)
 
-            cv = _g.compute_cv_trans(cv)[0]
+            cv = _g.compute_cv_trans(cv)[0].unstack()
+            cv_t = _g.compute_cv_trans(cv_t)[0].unstack()
 
             full_trans = un_atomize * _f * _g
 
-        return cv, full_trans
+        return cv, cv_t, full_trans
 
 
 def _transform(cv: CV, nl: NeighbourList | None, _, mask):
@@ -917,7 +918,7 @@ class TransformerMAF(Transformer):
                 if norm < 1e-7:
                     break
 
-            w, r = scipy.linalg.eigh(a=u.T @ C_1 @ u, b=u.T @ C_0 @ u, subset_by_index=[n - self.outdim, n - 1])
+            w, r = scipy.linalg.eigh(a=u.T @ C_1 @ u, b=u.T @ C_0 @ u)
 
             print(f"got {w=}  ")
 

@@ -108,7 +108,7 @@ class TranformerUMAP(Transformer):
         reducer.fit_transform(X=x.cv)
 
         assert parametric
-        f = CvTrans(trans=(KerasFunBase(fwd=reducer.encoder, bwd=reducer.decoder),))
+        f = CvTrans(trans=(KerasFunBase.create(fwd=reducer.encoder, bwd=reducer.decoder),))
 
         cv_0 = f.compute_cv_trans(x)[0].unstack()
         cv_tau = f.compute_cv_trans(x_t)[0].unstack() if x_t is not None else None
