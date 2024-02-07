@@ -48,16 +48,11 @@ class Transformer:
 
     def pre_fit(
         self,
-        z: list[SystemParams],
-        nl: list[NeighbourList] | None,
+        dlo: Rounds.data_loader_output,
         chunk_size=None,
         p_map=True,
-    ) -> tuple[list[CV], CvFlow]:
+    ) -> tuple[list[CV], list[CV] | None, CvFlow]:
         f = self.descriptor
-
-        stack_dims = tuple([z_i.batch_dim for z_i in z])
-        z = SystemParams.stack(*z)
-        nl = NeighbourList.stack(*nl) if nl is not None else None
 
         def _f(sp, nl):
             return f.compute_cv_flow(sp, nl, chunk_size)[0]
@@ -65,19 +60,37 @@ class Transformer:
         if p_map:
             _f = padded_pmap(_f)
 
-        x: CV = _f(z, nl)
-        x = x.replace(_stack_dims=stack_dims)
+        def _g(sp_list, nl_list):
+            stack_dims = tuple([z_i.batch_dim for z_i in sp_list])
+            z = SystemParams.stack(*sp_list)
+            nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
+
+            x: CV = _f(z, nl)
+            x = x.replace(_stack_dims=stack_dims)
+
+            return x
+
+        x = _g(dlo.sp, dlo.nl)
+
+        x_t = None
+        if dlo.time_series:
+            x_t = _g(dlo.sp_t, dlo.nl_t)
 
         if self.pre_scale:
             g = scale_cv_trans(x, lower=0, upper=1)
 
             x, _, _ = g.compute_cv_trans(x)
 
+            if x_t is not None:
+                x_t, _, _ = g.compute_cv_trans(x_t)
+
             f = f * g
 
         x = x.unstack()
+        if x_t is not None:
+            x_t = x_t.unstack()
 
-        return x, f
+        return x, x_t, f
 
     def fit(
         self,
@@ -99,9 +112,8 @@ class Transformer:
 
         print("starting pre_fit")
 
-        x, f = self.pre_fit(
-            sp_list,
-            nl_list,
+        x, x_t, f = self.pre_fit(
+            dlo,
             chunk_size=chunk_size,
             p_map=p_map,
         )
@@ -112,15 +124,33 @@ class Transformer:
                 NeighbourList.stack(*nl_list),
                 chunk_size=chunk_size,
             )
+
             assert jnp.allclose(x_2.cv, CV.stack(*x).cv)
 
+            if x_t is not None:
+                x_t_2, _ = f.compute_cv_flow(
+                    SystemParams.stack(*dlo.sp_t),
+                    NeighbourList.stack(*dlo.nl_t),
+                    chunk_size=chunk_size,
+                )
+
+                assert jnp.allclose(x_t_2.cv, CV.stack(*x_t).cv)
+
         print("starting fit")
-        y, g = self._fit(
+        y, y_t, g = self._fit(
             x,
+            x_t,
             dlo,
             chunk_size=chunk_size,
             **self.fit_kwargs,
         )
+
+        assert len(y) == len(sp_list), "y and sp_list must have the same length"
+
+        y = CV.stack(*y)
+        if y_t is not None:
+            assert len(y_t) == len(dlo.sp_t), "y_t and sp_t must have the same length"
+            y_t = CV.stack(*y_t)
 
         print(f"{y.stack_dims=}")
 
@@ -128,9 +158,16 @@ class Transformer:
             print("faulty stack dims, replacing")
             y = y.replace(_stack_dim=[a.shape[0] for a in sp_list])
 
+        if y_t is not None:
+            if y_t.stack_dims is None:
+                y_t = y_t.replace(_stack_dim=[a.shape[0] for a in dlo.sp_t])
+
         if test:
             y_2, _, _ = g.compute_cv_trans(CV.stack(*x), NeighbourList.stack(*nl_list), chunk_size=chunk_size)
             assert jnp.allclose(y_2.cv, y.cv)
+
+            if y_t is not None:
+                y_t_2, _, _ = g.compute_cv_trans(CV.stack(*x_t), NeighbourList.stack(*dlo.nl_t), chunk_size=chunk_size)
 
         # remove outliers from the data
         _, mask = CvMetric.bounds_from_cv(y, percentile=1.0)
@@ -163,18 +200,10 @@ class Transformer:
             assert jnp.allclose(cv_full.cv, z.cv)
 
         if plot:
-            # sp = SystemParams.stack(*sp_list)
-            # nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
-
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery.pdf"),
                 old_cv=dlo.collective_variable,
                 new_cv=new_collective_variable,
-                # sps=sp,
-                # nl=nl if nl is not None else None,
-                # chunk_size=chunk_size,
-                # cv_data_old=CV.stack(*dlo.cv)[mask],
-                # cv_data_new=z_masked,
                 cv_data_old=CV.stack(*dlo.cv),
                 cv_data_new=z,
                 margin=0.1,
@@ -185,10 +214,11 @@ class Transformer:
     def _fit(
         self,
         x: list[CV],
+        x_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
         chunk_size=None,
         **fit_kwargs,
-    ) -> tuple[CV, CvTrans]:
+    ) -> tuple[CV, CV | None, CvTrans]:
         raise NotImplementedError
 
     def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:
@@ -621,15 +651,58 @@ class Transformer:
 
         return a.replace(cv=rgb)
 
+    def __mul__(self, other):
+        assert isinstance(other, Transformer), "can only multiply with another transformer"
+
+        trans: list[Transformer] = []
+
+        if isinstance(self, CombineTransformer):
+            trans.extend(self.transformers)
+        else:
+            trans.append(self)
+
+        if isinstance(other, CombineTransformer):
+            trans.extend(other.transformers)
+        else:
+            trans.append(other)
+
+        return CombineTransformer(trans)
+
+
+class CombineTransformer(Transformer):
+    def __init__(self, transformers: list[Transformer], **kwargs) -> None:
+        self.transformers = transformers
+
+    def _fit(
+        self,
+        x: list[CV],
+        x_t: list[CV] | None,
+        dlo: Rounds.data_loader_output,
+        chunk_size=None,
+        **fit_kwargs,
+    ) -> tuple[list[CV], list[CV] | None, CvTrans]:
+        trans = None
+
+        for i, t in enumerate(self.transformers):
+            print(f"fitting transformer {i+1}/{len(self.transformers)}")
+
+            x, x_t, trans_t = t._fit(x, x_t, dlo, chunk_size=chunk_size, **t.fit_kwargs, **fit_kwargs)
+
+            if t is None:
+                trans = trans_t
+            else:
+                trans *= trans_t
+
+        return x, x_t, trans
+
 
 class IdentityTransformer(Transformer):
     def _fit(
         self,
         x: list[CV],
+        x_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
         chunk_size=None,
         **fit_kwargs,
-    ) -> tuple[CV, CvTrans]:
-        cv = CV.stack(*x)
-
-        return cv, identity_trans
+    ) -> tuple[list[CV], list[CV] | None, CvTrans]:
+        return x, x_t, identity_trans

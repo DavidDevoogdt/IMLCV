@@ -1423,16 +1423,20 @@ class NeighbourList(PyTreeNode):
 
         return a, b
 
+    @staticmethod
+    def _nl_split_z(z_array, z_unique, num_z_unique, p):
+        bool_masks = [jnp.array(z_array) == zu for zu in z_unique]
+
+        arg_split = [jnp.argsort(~bm, kind="stable")[0:nzu] for bm, nzu in zip(bool_masks, num_z_unique)]
+        p = [jax.tree_map(lambda pi: pi[a], tree=p) for a in arg_split]
+
+        return jnp.array(bool_masks), arg_split, p
+
     def nl_split_z(self, p):
         if self.batched:
             return vmap(NeighbourList.nl_split_z)(self, p)
 
-        bool_masks = [jnp.array(self.z_array) == zu for zu in self.z_unique]
-
-        arg_split = [jnp.argsort(~bm, kind="stable")[0:nzu] for bm, nzu in zip(bool_masks, self.num_z_unique)]
-        p = [jax.tree_map(lambda pi: pi[a], tree=p) for a in arg_split]
-
-        return jnp.array(bool_masks), arg_split, p
+        return NeighbourList._nl_split_z(self.z_array, self.z_unique, self.num_z_unique, p)
 
     def batch(self):
         if self.batched:

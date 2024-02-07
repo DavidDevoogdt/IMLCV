@@ -149,6 +149,7 @@ class ThermoLIB:
         pmap=True,
         only_finished=True,
         bounds_percentile=1,
+        vmax=100 * kjmol,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -192,6 +193,7 @@ class ThermoLIB:
                 map=False,
                 traj=trajs_plot,
                 margin=margin,
+                vmax=vmax,
             )
 
         c = CV.stack(*trajs)
@@ -269,6 +271,7 @@ class ThermoLIB:
         use_prev_fs=False,
         collective_variable=None,
         only_finished=True,
+        vmax=100 * kjmol,
         **plot_kwargs,
     ):
         if fes is None:
@@ -283,6 +286,7 @@ class ThermoLIB:
                 min_traj_length=min_traj_length,
                 margin=margin,
                 only_finished=only_finished,
+                vmax=vmax,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij
@@ -388,6 +392,7 @@ class ThermoLIB:
                         stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
                         stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
                         margin=margin,
+                        vmax=vmax,
                         **plot_kwargs,
                     ),
                 )
@@ -400,6 +405,7 @@ class ThermoLIB:
                         stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
                         stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
                         margin=margin,
+                        vmax=vmax,
                         **plot_kwargs,
                     ),
                 )
@@ -414,6 +420,7 @@ class ThermoLIB:
                     stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
                     margin=margin,
+                    vmax=vmax,
                     **plot_kwargs,
                 ),
             )
@@ -426,6 +433,7 @@ class ThermoLIB:
                     stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
                     margin=margin,
+                    vmax=vmax,
                     **plot_kwargs,
                 ),
             )

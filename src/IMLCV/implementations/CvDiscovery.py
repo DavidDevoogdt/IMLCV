@@ -21,6 +21,7 @@ from jax import Array
 from jax import jit
 from jax import random
 from jax import vmap
+from molmod.units import nanosecond
 from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 
@@ -185,6 +186,7 @@ class TranformerAutoEncoder(Transformer):
     def _fit(
         self,
         cv: list[CV],
+        cv_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
         nunits=250,
         nlayers=3,
@@ -346,7 +348,11 @@ class TranformerAutoEncoder(Transformer):
 
         f_enc = CvTrans(trans=(CvFun(forward=forward),))
 
-        return f_enc.compute_cv_trans(cv)[0], un_atomize * f_enc
+        cv = f_enc.compute_cv_trans(cv)[0].unstack()
+        if cv_t is not None:
+            cv_t = f_enc.compute_cv_trans(cv_t)[0].unstack()
+
+        return cv, cv_t, un_atomize * f_enc
 
 
 def _LDA_trans(cv: CV, nl: NeighbourList | None, _, alpha, outdim, solver):
@@ -597,6 +603,7 @@ class TransformerMAF(Transformer):
     def _fit(
         self,
         x: list[CV],
+        x_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
         lag_n=100,
         shrinkage="BC",
@@ -610,25 +617,19 @@ class TransformerMAF(Transformer):
         slow_feature_analysis=False,
         correct_bias=False,
         pre_selction_epsilon=1e-14,
+        kinetic_distance=False,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
-        cv = CV.stack(*x)
-        cv, _, _ = un_atomize.compute_cv_trans(cv)
+        assert dlo.time_series
+        assert x_t is not None
+
+        cv_0 = CV.stack(*x)
+        cv_tau = CV.stack(*x_t)
 
         trans = un_atomize
 
-        X = []
-        Y = []
-
-        for cv_i in CV.unstack(cv):
-            X.append(cv_i[:-lag_n])
-            Y.append(cv_i[lag_n:])
-
-        cv_0 = CV.stack(*X)
-        cv_tau = CV.stack(*Y)
-
-        del X
-        del Y
+        cv_0, _, _ = un_atomize.compute_cv_trans(cv_0)
+        cv_tau, _, _ = un_atomize.compute_cv_trans(cv_tau)
 
         cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon)
         cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
@@ -886,7 +887,7 @@ class TransformerMAF(Transformer):
 
             @jax.jit
             def lamb(x):
-                a = jnp.trace(x.T @ C_0 @ x)
+                a = jnp.trace(x.T @ (C_0 + C_1) @ x)
                 b = jnp.trace(x.T @ C_1 @ x)
 
                 return b / a
@@ -899,7 +900,7 @@ class TransformerMAF(Transformer):
             for b in range(100):
                 lambd_prev = lambd
 
-                w, u = scipy.linalg.eigh(a=C_1 - lambd * C_0, subset_by_index=[n - self.outdim, n - 1])
+                w, u = scipy.linalg.eigh(a=C_1 - lambd * (C_0 + C_1), subset_by_index=[n - self.outdim, n - 1])
                 u = jnp.array(u)
 
                 lambd = lamb(u)
@@ -917,21 +918,30 @@ class TransformerMAF(Transformer):
             u = u[:, ::-1]
             u = jnp.array(u)
 
-            print(f"got {w=} {v=}")
-
-        print(f"eigenvalue are {w}")
+            # print(f"got {w=} {v=}")
 
         if add_1:
             u = u[:-1, :]
+            w = w[:-1]
+
+        print(f"eigenvalue are {w}")
+        print(f" timescales  { -dlo.tau / jnp.log(w)  / nanosecond   } ")
+
+        trans_mat = q @ u
+        if kinetic_distance:
+            trans_mat = trans_mat @ jnp.diag(w)
 
         tica_selection = CvTrans.from_cv_function(
             _tranform_maf,
             static_argnames=["add_1"],
             add_1=False,
-            q=q @ u,
+            q=trans_mat,
             pi=pi,
         )
-        trans *= tica_selection
-        cv, _, _ = trans.compute_cv_trans(cv)
 
-        return cv, trans
+        trans *= tica_selection
+
+        cv_0 = trans.compute_cv_trans(cv_0)[0].unstack()
+        cv_tau = trans.compute_cv_trans(cv_tau)[0].unstack()
+
+        return cv_0, cv_tau, trans

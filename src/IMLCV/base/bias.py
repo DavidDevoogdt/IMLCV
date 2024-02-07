@@ -357,18 +357,15 @@ class Bias(PyTreeNode, ABC):
         if inverted:
             bias = -bias
 
+            vmin, vmax = -vmax, -vmin
+
         if offset:
             bias -= bias[~np.isnan(bias)].min()
         else:
             vrange = vmax - vmin
 
-            if inverted:
-                vmin = bias[~np.isnan(bias)].min()
-                vmax = vmin + vrange
-
-            else:
-                vmax = bias[~np.isnan(bias)].max()
-                vmin = vmax - vrange
+            vmax = bias[~np.isnan(bias)].max()
+            vmin = vmax - vrange
 
         bias = bias.reshape([len(mg_i) for mg_i in mg])
 

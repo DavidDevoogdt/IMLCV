@@ -707,6 +707,7 @@ def sinkhorn_divergence_2(
 
     assert x1.atomic
     assert x2.atomic
+
     assert not x1.batched
     assert not x2.batched
 
@@ -784,12 +785,10 @@ def sinkhorn_divergence_2(
         return lx.linear_solve(fn_operator, op_t.mv(b), solver).value
 
     def get_divergence(p1, p2):
-        n = p1.shape[0]
-
         return sinkhorn_divergence.sinkhorn_divergence(
             PointCloud,
-            x=jnp.reshape(p1, (n, -1)),
-            y=jnp.reshape(p2, (n, -1)),
+            x=jnp.reshape(p1, (p1.shape[0], -1)),
+            y=jnp.reshape(p2, (p2.shape[0], -1)),
             epsilon=alpha,
             sinkhorn_kwargs={
                 "threshold": 1e-4,
@@ -809,18 +808,6 @@ def sinkhorn_divergence_2(
     return divergences
 
 
-# @partial(
-#     jit,
-#     static_argnames=[
-#         "alpha_rematch",
-#         "output",
-#         "normalize",
-#         "sum_divergence",
-#         "ddiv_arg",
-#         "ridge",
-#         "sinkhorn_iterations"
-#     ],
-# )
 def _sinkhorn_divergence_trans_2(
     cv: CV,
     nl: NeighbourList | None,
@@ -854,8 +841,15 @@ def _sinkhorn_divergence_trans_2(
             _stack_dims=cv._stack_dims,
         )
 
-    def get_div(pi, cv):
-        return CV.combine(*[f(pii, cv, nlii, nl) for pii, nlii in zip(pi, nli)])
+    if pi.batched:
+
+        def get_div(pi, cv):
+            return CV.combine(*[f(pii, cv, nlii, nl) for pii, nlii in zip(pi, nli)])
+
+    else:
+
+        def get_div(pi, cv):
+            return f(pi, cv, nli, nl)
 
     if output == "ddiv":
         div = jax.jacrev(get_div, argnums=ddiv_arg)(pi, cv).cv
@@ -907,6 +901,7 @@ def get_sinkhorn_divergence_2(
     ddiv_arg=0,
     ridge=1e-5,
     sinkhorn_iterations=500,
+    merge=False,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 

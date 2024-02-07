@@ -44,6 +44,7 @@ class TranformerUMAP(Transformer):
     def _fit(
         self,
         x: list[CV],
+        x_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
         decoder=False,
         nunits=256,
@@ -66,15 +67,6 @@ class TranformerUMAP(Transformer):
         kwargs["n_neighbors"] = n_neighbors
         kwargs["densmap"] = densmap
 
-        # kwargs["metric"] = "precomputed"
-
-        # if metric is None:
-        #     pl = PeriodicLayer(bbox=self.bounding_box, periodicity=self.periodicity)
-
-        #     kwargs["output_metric"] = pl.metric
-        # else:
-        #     kwargs["output_metric"] = metric
-
         if parametric:
             from tensorflow import keras
 
@@ -90,8 +82,6 @@ class TranformerUMAP(Transformer):
                 ],
                 keras.layers.Dense(units=self.outdim),
             ]
-            # if metric is None:
-            #     layers.append(pl)
 
             encoder = keras.Sequential(layers)
 
@@ -118,4 +108,7 @@ class TranformerUMAP(Transformer):
         assert parametric
         f = CvTrans(trans=(KerasFunBase(fwd=reducer.encoder, bwd=reducer.decoder),))
 
-        return f.compute_cv_trans(x)[0], un_atomize * f
+        cv_0 = f.compute_cv_trans(x)[0].unstack()
+        cv_tau = f.compute_cv_trans(x_t)[0].unstack() if x_t is not None else None
+
+        return cv_0, cv_tau, un_atomize * f

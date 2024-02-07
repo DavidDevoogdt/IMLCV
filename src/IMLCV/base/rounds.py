@@ -185,6 +185,7 @@ class Rounds(ABC):
         repeat=None,
         minkowski_reduce=True,
         r_cut=None,
+        only_finished=False,
     ):
         from ase.io.extxyz import write_extxyz
 
@@ -198,6 +199,7 @@ class Rounds(ABC):
                 num=num,
                 minkowski_reduce=minkowski_reduce,
                 r_cut=r_cut,
+                only_finished=only_finished,
             ),
         ):
             with open(
@@ -528,19 +530,49 @@ class Rounds(ABC):
         sti: StaticMdInfo
         ti: list[TrajectoryInfo]
         collective_variable: CollectiveVariable
+        sp_t: list[SystemParams] | None = None
+        nl_t: list[NeighbourList] | None = None
+        cv_t: list[CV] | None = None
+        ti_t: list[TrajectoryInfo] | None = None
         time_series: bool = False
+        tau: float | None = (None,)
         bias: list[Bias] | None = None
 
         def __iter__(self):
-            for spi, nli, cvi, ti in zip(self.sp, self.nl, self.cv, self.ti):
-                yield Rounds.data_loader_output(
-                    sp=[spi],
-                    nl=[nli],
-                    cv=[cvi],
-                    ti=[ti],
-                    sti=self.sti,
-                    collective_variable=self.collective_variable,
-                )
+            if self.time_series:
+                for spi, nli, cvi, ti, spi_t, nli_t, cvi_t, ti_t in zip(
+                    self.sp,
+                    self.nl,
+                    self.cv,
+                    self.ti,
+                    self.sp_t,
+                    self.nl_t,
+                    self.cv_t,
+                    self.ti_t,
+                ):
+                    yield Rounds.data_loader_output(
+                        sp=[spi],
+                        nl=[nli],
+                        cv=[cvi],
+                        ti=[ti],
+                        sp_t=[spi_t],
+                        nl_t=[nli_t],
+                        cv_t=[cvi_t],
+                        ti_t=[ti_t],
+                        sti=self.sti,
+                        collective_variable=self.collective_variable,
+                    )
+
+            else:
+                for spi, nli, cvi, ti in zip(self.sp, self.nl, self.cv, self.ti):
+                    yield Rounds.data_loader_output(
+                        sp=[spi],
+                        nl=[nli],
+                        cv=[cvi],
+                        ti=[ti],
+                        sti=self.sti,
+                        collective_variable=self.collective_variable,
+                    )
 
         def __add__(self, other):
             assert isinstance(other, Rounds.data_loader_output)
@@ -605,6 +637,8 @@ class Rounds(ABC):
         get_bias_list=False,
         num_cv_rounds=1,
         only_finished=True,
+        uniform=False,
+        lag_n=1,
     ) -> data_loader_output:
         weights = []
 
@@ -615,6 +649,10 @@ class Rounds(ABC):
         sp: list[SystemParams] = []
         cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
+
+        if not time_series:
+            lag_n = 0
+
         if get_bias_list:
             bias_list: list[Bias] = []
 
@@ -649,7 +687,7 @@ class Rounds(ABC):
                 only_finished=only_finished,
             ):
                 if min_traj_length is not None:
-                    if traj_info.ti._size < min_traj_length:
+                    if traj_info.ti._size < min_traj_length or traj_info.ti._size <= lag_n:
                         # print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
                         continue
                     # else:
@@ -727,6 +765,9 @@ class Rounds(ABC):
         assert len(sp) != 0
 
         def choose(key, probs: Array, out: int, len: int):
+            if uniform:
+                raise NotImplementedError
+
             if len is None:
                 len = probs.shape[0]
 
@@ -803,9 +844,14 @@ class Rounds(ABC):
 
         out_sp: list[SystemParams] = []
         out_cv: list[CV] = []
-        out_ti = []
+        out_ti: list[TrajectoryInfo] = []
 
-        total = sum([a.shape[0] for a in sp])
+        if time_series:
+            out_sp_t = []
+            out_cv_t = []
+            out_ti_t = []
+
+        total = sum([a.shape[0] - lag_n for a in sp])
 
         if out == -1:
             out = total
@@ -814,119 +860,178 @@ class Rounds(ABC):
             print(f"not enough data, returning {total} data points instead of {out}")
             out = total
 
-        if time_series:
-            if out == -1:
-                skip_step = 1
-            else:
-                skip_step = round(total / out)
+        if split_data:
+            frac = out / total
 
-                if skip_step == 0:
-                    skip_step = 1
-
-            for sp_n, cv_n, ti_n in zip(sp, cv, ti):
-                out_sp.append(sp_n[::skip_step])
-                out_cv.append(cv_n[::skip_step])
-                out_ti.append(ti_n[::skip_step])
-
-        else:
-            if split_data:
-                frac = out / total
-
-                for n, wi in enumerate(weights):
-                    if wi is None:
-                        probs = None
-                    else:
-                        wi -= jnp.mean(wi)
-                        wi = jnp.exp(-wi)
-                        probs = wi / jnp.sum(wi)
-
-                    key, indices = choose(key, probs, out=int(frac * sp[n].shape[0]), len=sp[n].shape[0])
-
-                    out_sp.append(sp[n][indices])
-                    out_cv.append(cv[n][indices])
-                    out_ti.append(ti[n][indices])
-
-            else:
-                if weights[0] is None:
+            for n, wi in enumerate(weights):
+                if wi is None:
                     probs = None
                 else:
-                    ws = jnp.hstack(weights)
-                    ws -= jnp.mean(ws)
-                    probs = jnp.exp(-ws)
-                    probs /= jnp.sum(probs)
+                    wi -= jnp.mean(wi)
+                    wi = jnp.exp(-wi)
+                    probs = wi / jnp.sum(wi)
 
-                key, indices = choose(key, probs, out=int(out), len=total)
+                key, indices = choose(key, probs, out=int(frac * (sp[n].shape[0] - lag_n)), len=sp[n].shape[0] - lag_n)
 
-                indices = jnp.sort(indices)
+                out_sp.append(sp[n][indices])
+                out_cv.append(cv[n][indices])
+                out_ti.append(ti[n][indices])
 
-                count = 0
+                if time_series:
+                    out_sp_t.append(sp[n][indices + lag_n])
+                    out_cv_t.append(cv[n][indices + lag_n])
+                    out_ti_t.append(ti[n][indices + lag_n])
 
-                sp_trimmed = []
-                cv_trimmed = []
-                ti_trimmed = []
+        else:
+            if weights[0] is None:
+                probs = None
+            else:
+                ws = jnp.hstack([wi[:-lag_n] for wi in weights])
+                ws -= jnp.mean(ws)
+                probs = jnp.exp(-ws)
+                probs /= jnp.sum(probs)
 
-                for n, (sp_n, cv_n, ti_n) in enumerate(zip(sp, cv, ti)):
-                    n_i = sp_n.shape[0]
+            key, indices = choose(key, probs, out=int(out), len=total)
 
-                    index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
-                    sp_trimmed.append(sp_n[index])
+            indices = jnp.sort(indices)
 
-                    cv_trimmed.append(cv_n[index])
-                    ti_trimmed.append(ti_n[index])
+            count = 0
 
-                    count += n_i
+            sp_trimmed = []
+            cv_trimmed = []
+            ti_trimmed = []
 
-                count = 0
+            if time_series:
+                sp_trimmed_t = []
+                cv_trimmed_t = []
+                ti_trimmed_t = []
 
-                out_sp.append(SystemParams.stack(*sp_trimmed))
-                out_cv.append(CV.stack(*cv_trimmed))
-                out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
-                bias = None
+            for n, (sp_n, cv_n, ti_n) in enumerate(zip(sp, cv, ti)):
+                n_i = sp_n.shape[0] - lag_n
+
+                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
+                sp_trimmed.append(sp_n[index])
+
+                cv_trimmed.append(cv_n[index])
+                ti_trimmed.append(ti_n[index])
+
+                if time_series:
+                    sp_trimmed_t.append(sp_n[index + lag_n])
+                    cv_trimmed_t.append(cv_n[index + lag_n])
+                    ti_trimmed_t.append(ti_n[index + lag_n])
+
+                count += n_i
+
+            out_sp.append(SystemParams.stack(*sp_trimmed))
+            out_cv.append(CV.stack(*cv_trimmed))
+            out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
+
+            if time_series:
+                out_sp_t.append(SystemParams.stack(*sp_trimmed_t))
+                out_cv_t.append(CV.stack(*cv_trimmed_t))
+                out_ti_t.append(TrajectoryInfo.stack(*ti_trimmed_t))
+
+            bias = None
 
         out_nl = None
+
+        if time_series:
+            out_nl_t = None
+
         if new_r_cut is not None:
-            # much faster if stacked
-            if len(out_sp) >= 2:
-                out_sp_merged = SystemParams.stack(*out_sp)
-            else:
-                out_sp_merged = out_sp[0]
 
-            out_nl_stacked = out_sp_merged.get_neighbour_list(
-                r_cut=new_r_cut,
-                z_array=sti.atomic_numbers,
-                chunk_size=chunk_size,
-            )
+            def _out_nl(out_sp, new_r_cut):
+                # much faster if stacked
+                if len(out_sp) >= 2:
+                    out_sp_merged = SystemParams.stack(*out_sp)
+                else:
+                    out_sp_merged = out_sp[0]
 
-            if len(out_sp) >= 2:
-                ind = 0
-                out_nl = []
-                for osp in out_sp:
-                    out_nl.append(out_nl_stacked[ind : ind + osp.shape[0]])
-                    ind += osp.shape[0]
-            else:
-                out_nl = [out_nl_stacked]
+                out_nl_stacked = out_sp_merged.get_neighbour_list(
+                    r_cut=new_r_cut,
+                    z_array=sti.atomic_numbers,
+                    chunk_size=chunk_size,
+                )
+
+                if len(out_sp) >= 2:
+                    ind = 0
+                    out_nl = []
+                    for osp in out_sp:
+                        out_nl.append(out_nl_stacked[ind : ind + osp.shape[0]])
+                        ind += osp.shape[0]
+                else:
+                    out_nl = [out_nl_stacked]
+
+                return out_nl
+
+            out_nl = _out_nl(out_sp, new_r_cut)
+            if time_series:
+                out_nl_t = _out_nl(out_sp_t, new_r_cut)
 
         if recalc_cv:
-            # print(f"old cvs {out_cv=}")
 
-            if len(out_sp) >= 2:
-                out_sp_merged = SystemParams.stack(*out_sp)
-                out_nl_merged = NeighbourList.stack(*out_nl)
-            else:
-                out_sp_merged = out_sp[0]
-                out_nl_merged = out_nl[0]
+            def _out_cv(out_sp, out_nl):
+                if len(out_sp) >= 2:
+                    out_sp_merged = SystemParams.stack(*out_sp)
+                    out_nl_merged = NeighbourList.stack(*out_nl)
+                else:
+                    out_sp_merged = out_sp[0]
+                    out_nl_merged = out_nl[0]
 
-            out_cv_stacked = padded_pmap(Partial(colvar.compute_cv, chunk_size=chunk_size))(
-                out_sp_merged,
-                out_nl_merged,
-            )[0]
+                out_cv_stacked = padded_pmap(Partial(colvar.compute_cv, chunk_size=chunk_size))(
+                    out_sp_merged,
+                    out_nl_merged,
+                )[0]
 
-            if len(out_sp) >= 2:
-                out_cv = out_cv_stacked.replace(_stack_dims=[a.shape[0] for a in out_sp]).unstack()
-            else:
-                out_cv = [out_cv_stacked]
+                if len(out_sp) >= 2:
+                    out_cv = out_cv_stacked.replace(_stack_dims=[a.shape[0] for a in out_sp]).unstack()
+                else:
+                    out_cv = [out_cv_stacked]
 
-            # print(f"new cvs {out_cv=}")
+                return out_cv
+
+            out_cv = _out_cv(out_sp, out_nl)
+
+            if time_series:
+                out_cv_t = _out_cv(out_sp_t, out_nl_t)
+
+        if time_series:
+            tau = None
+
+            # consistency check
+            for tii, ti_ti in zip(out_ti, out_ti_t):
+                tii: TrajectoryInfo
+                ti_ti: TrajectoryInfo
+
+                dt = ti_ti.t - tii.t
+
+                if tau is None:
+                    tau = dt[0]
+
+                if not jnp.allclose(dt, tau):
+                    print(f"dt = {dt}, tau = {tau}  ")
+
+                    raise "time steps are not equal"
+
+            from molmod.units import femtosecond
+
+            print(f"tau = {tau/femtosecond:.2f} fs, lag_time*timestep = {lag_n* sti.timestep/ femtosecond:.2f} fs")
+
+            return Rounds.data_loader_output(
+                sp=out_sp,
+                nl=out_nl,
+                cv=out_cv,
+                ti=out_ti,
+                sti=sti,
+                collective_variable=colvar,
+                time_series=time_series,
+                bias=bias_list if get_bias_list else None,
+                sp_t=out_sp_t,
+                nl_t=out_nl_t,
+                cv_t=out_cv_t,
+                ti_t=out_ti_t,
+                tau=tau,
+            )
 
         return Rounds.data_loader_output(
             sp=out_sp,
@@ -1037,10 +1142,18 @@ class Rounds(ABC):
         num: int = 3,
         r_cut=None,
         minkowski_reduce=True,
+        only_finished=False,
+        ignore_invalid=False,
     ):
         from molmod import angstrom
 
-        for round, trajejctory in self.iter(stop=r, c=c, num=num, ignore_invalid=True):
+        for round, trajejctory in self.iter(
+            stop=r,
+            c=c,
+            num=num,
+            ignore_invalid=ignore_invalid,
+            only_finished=only_finished,
+        ):
             # traj = trajejctory.ti
 
             sp = trajejctory.ti.sp
