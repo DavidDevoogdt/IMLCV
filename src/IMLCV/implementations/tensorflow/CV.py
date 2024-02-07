@@ -97,10 +97,10 @@ class KerasFunBase(CvFunBase):
 
         if reverse:
             assert self.bwd is not None, "No backward model defined"
-            out = call_tf(self.bwd.call, has_side_effects=False)(y)
+            out = call_tf(self.bwd.mod.call, has_side_effects=False)(y)
         else:
             assert self.fwd is not None
-            out = call_tf(self.fwd.call, has_side_effects=False)(y)
+            out = call_tf(self.fwd.mod.call, has_side_effects=False)(y)
 
         if not batched:
             out = out.reshape((-1,))

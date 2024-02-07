@@ -139,7 +139,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
         x = jnp.linspace(0, r_cut, num=num)
         y = g(x)
 
-        return jnp.trapz(y=y, x=x)
+        return jax.scipy.integrate.trapezoid(y=y, x=x)
 
     l_vec = jnp.arange(0, l_max + 1)
     n_vec = jnp.arange(0, n_max + 1)

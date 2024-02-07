@@ -436,6 +436,7 @@ class TransoformerLDA(Transformer):
     def _fit(
         self,
         cv_list: list[CV],
+        cv_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
         kernel=False,
         optimizer=None,
@@ -887,7 +888,7 @@ class TransformerMAF(Transformer):
 
             @jax.jit
             def lamb(x):
-                a = jnp.trace(x.T @ (C_0 + C_1) @ x)
+                a = jnp.trace(x.T @ C_0 @ x)
                 b = jnp.trace(x.T @ C_1 @ x)
 
                 return b / a
@@ -900,25 +901,32 @@ class TransformerMAF(Transformer):
             for b in range(100):
                 lambd_prev = lambd
 
-                w, u = scipy.linalg.eigh(a=C_1 - lambd * (C_0 + C_1), subset_by_index=[n - self.outdim, n - 1])
+                w, u = scipy.linalg.eigh(a=C_1 - lambd * C_0, subset_by_index=[n - self.outdim, n - 1])
                 u = jnp.array(u)
 
                 lambd = lamb(u)
 
-                w, v = scipy.linalg.eigh(a=u.T @ C_0 @ u)
-                u = u @ v
+                # fix invariance
+                # w_v, v = scipy.linalg.eigh(a=u.T @ C_0 @ u)
+                # # u = u @ v
 
                 norm = lambd - lambd_prev
 
                 print(f"{b}: lambda {lambd} dlambda {norm} ")
 
-                if norm < 1e-10:
+                if norm < 1e-7:
                     break
+
+            w, r = scipy.linalg.eigh(a=u.T @ C_1 @ u, b=u.T @ C_0 @ u, subset_by_index=[n - self.outdim, n - 1])
+
+            print(f"got {w=}  ")
+
+            u = u @ r
 
             u = u[:, ::-1]
             u = jnp.array(u)
 
-            # print(f"got {w=} {v=}")
+            w = w[::-1]
 
         if add_1:
             u = u[:-1, :]

@@ -57,6 +57,8 @@ class TranformerUMAP(Transformer):
         **kwargs,
     ):
         x = CV.stack(*x)
+        if x_t is not None:
+            x_t = CV.stack(*x_t)
         # nl = sum(nl[1:], nl[0])
 
         x = un_atomize.compute_cv_trans(x, None)[0]

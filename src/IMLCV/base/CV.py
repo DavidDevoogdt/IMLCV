@@ -5,6 +5,7 @@ import itertools
 from abc import abstractmethod
 from dataclasses import KW_ONLY
 from functools import partial
+from heapq import merge
 from pathlib import Path
 from typing import Callable
 
