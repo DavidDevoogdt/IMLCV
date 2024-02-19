@@ -155,9 +155,7 @@ def test_cv_discovery(
 
         tf = TranformerAutoEncoder(outdim=out_dim, descriptor=descriptor, **kwargs)
     elif cvd == "UMAP":
-        from keras.api._v2 import keras as KerasAPI
-
-        keras: KerasAPI = import_module("tensorflow.keras")
+        # from keras.api._v2 import keras as KerasAPI
 
         kwargs = dict(
             n_neighbors=20,
@@ -166,9 +164,9 @@ def test_cv_discovery(
             nlayers=2,
             metric="l2",
             densmap=False,
-            parametric_reconstruction=True,
-            parametric_reconstruction_loss_fcn=keras.losses.MSE,
-            decoder=True,
+            # parametric_reconstruction=True,
+            # parametric_reconstruction_loss_fcn=keras.losses.MSE,
+            # decoder=True,
             n_training_epochs=1,
             batch_size=50,
             n_epochs=5,  # only for test cases

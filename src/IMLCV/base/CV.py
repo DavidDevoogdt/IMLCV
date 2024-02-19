@@ -20,7 +20,7 @@ import jsonpickle
 from flax import linen as nn
 from flax.struct import field
 from flax.struct import PyTreeNode
-from IMLCV import Unpickler
+from IMLCV import unpickler
 from jax import Array
 from jax import jacfwd
 from jax import jit
@@ -2202,40 +2202,6 @@ class CvFun(CvFunBase, PyTreeNode):
             assert self.forward is not None
             return jax.jit(Partial(self.forward, **self.static_kwargs))(x, nl, c, **self.kwargs)
 
-    # def __eq__(self, other):
-    #     if not isinstance(other, CvFun):
-    #         return False
-
-    #     if not self.kwargs.keys() == self.kwargs.keys():
-    #         return False
-
-    #     if not self.forward == other.forward:
-    #         return False
-
-    #     if not self.backward == other.backward:
-    #         return False
-
-    #     if not self.cv_input == other.cv_input:
-    #         return False
-
-    #     if not self.conditioners == other.conditioners:
-    #         return False
-
-    #     for k in self.kwargs.keys():
-    #         if self.kwargs[k] is None:
-    #             if not other.kwargs[k] is None:
-    #                 return False
-    #         elif isinstance(self.kwargs[k], jax.Array):
-    #             if not isinstance(other.kwargs[k], jax.Array):
-    #                 return False
-    #             if not (self.kwargs[k] == other.kwargs[k]).all():
-    #                 return False
-    #         else:
-    #             if not self.kwargs[k] == other.kwargs[k]:
-    #                 return False
-
-    #     return True
-
 
 class CvFunNn(nn.Module, _CvFunBase):
     """used to instantiate flax linen CvTrans"""
@@ -2762,7 +2728,7 @@ class CvFlow(PyTreeNode):
 
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read(), context=Unpickler())
+                self = jsonpickle.decode(f.read(), context=unpickler)
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
@@ -2902,7 +2868,7 @@ class CollectiveVariable(PyTreeNode):
 
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read(), context=Unpickler())
+                self = jsonpickle.decode(f.read(), context=unpickler)
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)

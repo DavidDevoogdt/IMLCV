@@ -263,8 +263,8 @@ def get_slurm_provider(
         worker_init += "module load CP2K/2023.1-foss-2022b \n"
 
     elif env == "stevin":
-        worker_init += "module load CP2K/7.1-foss-2020a \n"
-    worker_init += "module unload SciPy-bundle Python \n"
+        worker_init += "module load CP2K/2023.1-foss-2023a \n"
+    worker_init += "module unload SciPy-bundle \n"
     # worker_init += "module load texlive \n"
 
     if not parsl_cores:

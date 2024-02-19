@@ -1,10 +1,20 @@
+import tempfile
+from ast import mod
+from dataclasses import KW_ONLY
 from functools import partial
+from typing import Callable
 
+import haiku as hk
+import ivy
 import jax
 import jax.numpy as jnp
 import numpy as np
 import umap
+from equinox import Partial
+from flax.struct import field
+from flax.struct import PyTreeNode
 from IMLCV.base.CV import CV
+from IMLCV.base.CV import CvFunBase
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
@@ -14,8 +24,60 @@ from IMLCV.implementations.tensorflow.CV import KerasFunBase
 from IMLCV.implementations.tensorflow.CV import PeriodicLayer
 from jax import jit
 from jax import vmap
+from matplotlib.pyplot import cla
 from pynndescent import NNDescent
 from umap.umap_ import nearest_neighbors
+
+
+def umap_function(x: CV, nl: NeighbourList, c, enc):
+    assert not x.batched
+
+    print(f"{x.cv.shape=}")
+
+    cv = enc(x.batch().cv)
+    cv = cv.reshape(cv.shape[1:])
+
+    return x.replace(cv=cv)
+
+
+def umap_encoder(x, nlayers, nunits, outdim):
+    for i in range(nlayers):
+        x = hk.Linear(nunits)(x)
+        x = jnp.tanh(x)
+
+    return hk.Linear(outdim)(x)
+
+
+class hkFunBase(CvFunBase, PyTreeNode):
+    _: KW_ONLY
+    fwd_params: dict
+    fwd_kwargs: dict = field(pytree_node=False)
+
+    bwd_params: dict | None = field(pytree_node=True, default=None)
+    bwd_kwargs: dict | None = field(pytree_node=False, default=None)
+
+    def _calc(self, x: CV, nl: NeighbourList, reverse=False, conditioners: list[CV] | None = None) -> CV:
+        assert conditioners is None
+        assert not reverse
+
+        batched = x.batched
+        if not batched:
+            y = x.cv.reshape((1, -1))
+        else:
+            y = x.cv
+
+        if reverse:
+            assert self.bwd is not None, "No backward model defined"
+            raise NotImplementedError
+
+        else:
+            fwd = hk.transform(Partial(umap_encoder, **self.fwd_kwargs))
+            out = fwd.apply(self.fwd_params, None, y)
+
+        if not batched:
+            out = out.reshape((-1,))
+
+        return x.replace(cv=out)
 
 
 class TranformerUMAP(Transformer):
@@ -57,15 +119,16 @@ class TranformerUMAP(Transformer):
         **kwargs,
     ):
         x = CV.stack(*x)
+        x = un_atomize.compute_cv_trans(x, None)[0]
         if x_t is not None:
             x_t = CV.stack(*x_t)
-            x_train = CV.stack(x, x_t)
-        else:
-            x_train = x
+            x_t = un_atomize.compute_cv_trans(x_t, None)[0]
 
-        x_train = un_atomize.compute_cv_trans(x_train, None)[0]
+        x_train = x
 
-        dims = x_train.shape[1:]
+        print(f"{x_train.cv.shape=}")
+
+        dims = x_train.shape[1]
 
         kwargs["n_components"] = self.outdim
         kwargs["n_neighbors"] = n_neighbors
@@ -87,11 +150,10 @@ class TranformerUMAP(Transformer):
                 keras.layers.Dense(units=self.outdim),
             ]
 
-            encoder = keras.Sequential(layers)
-
-            kwargs["encoder"] = encoder
+            kwargs["encoder"] = keras.Sequential(layers)
 
             if decoder:
+                raise NotImplementedError
                 decoder = keras.Sequential(
                     [
                         keras.layers.InputLayer(input_shape=(self.outdim)),
@@ -107,10 +169,29 @@ class TranformerUMAP(Transformer):
         else:
             reducer = umap.UMAP(**kwargs)
 
-        reducer.fit_transform(X=x_train.cv)
+        trans_1 = reducer.fit_transform(X=x_train.cv)
+
+        fwd_kwargs = dict(
+            nlayers=nlayers,
+            nunits=nunits,
+            outdim=self.outdim,
+        )
+
+        hk_encoder = hk.transform(Partial(umap_encoder, **fwd_kwargs))
+
+        params = {}
+
+        for i, layer in enumerate(reducer.encoder.layers):
+            w, b = layer.get_weights()
+            name = f"linear_{i}" if i != 0 else "linear"
+            params[name] = {"w": jnp.array(w), "b": jnp.array(b)}
+
+        trans_2 = hk_encoder.apply(params, None, x_train.cv)
+
+        assert jnp.allclose(trans_1, trans_2, atol=1e-4, rtol=1e-4)
 
         assert parametric
-        f = CvTrans(trans=(KerasFunBase.create(fwd=reducer.encoder, bwd=reducer.decoder),))
+        f = CvTrans.from_cv_fun(hkFunBase(fwd_params=params, fwd_kwargs=fwd_kwargs))
 
         cv_0 = f.compute_cv_trans(x, chunk_size=chunk_size)[0].unstack()
         cv_tau = f.compute_cv_trans(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None

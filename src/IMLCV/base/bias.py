@@ -20,7 +20,7 @@ import numpy as np
 import yaff
 from flax.struct import field
 from flax.struct import PyTreeNode
-from IMLCV import Unpickler
+from IMLCV import unpickler
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -168,7 +168,7 @@ class Energy:
 
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read(), context=Unpickler())
+                self = jsonpickle.decode(f.read(), context=unpickler)
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
@@ -649,7 +649,7 @@ class Bias(PyTreeNode, ABC):
         filename = Path(filename)
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read(), context=Unpickler())
+                self = jsonpickle.decode(f.read(), context=unpickler)
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)

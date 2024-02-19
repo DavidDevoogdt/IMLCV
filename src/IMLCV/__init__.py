@@ -30,7 +30,9 @@ from jsonpickle.handlers import BaseHandler
 from jsonpickle.ext.numpy import register_handlers, register
 import numpy as np
 import jax.numpy as jnp
+import parsl
 
+logging.getLogger("parsl").setLevel(logging.WARNING)
 
 KEY = random.PRNGKey(0)
 LOGLEVEL = logging.CRITICAL
@@ -49,7 +51,6 @@ logging.getLogger("absl").addFilter(
         "call_tf works best with a TensorFlow function that does not capture variables or tensors from the context.",
     ),
 )
-
 
 register_handlers()
 
@@ -83,3 +84,6 @@ class Unpickler(jsonpickle.Unpickler):
             instance.__init__(**instance.__dict__)
 
         return out
+
+
+unpickler = Unpickler(on_missing="warn")

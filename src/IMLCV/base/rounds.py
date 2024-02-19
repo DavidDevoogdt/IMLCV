@@ -13,6 +13,7 @@ import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
+import scipy.linalg
 from equinox import Partial
 from filelock import FileLock
 from IMLCV.base.bias import Bias
@@ -537,42 +538,41 @@ class Rounds(ABC):
         time_series: bool = False
         tau: float | None = (None,)
         bias: list[Bias] | None = None
+        ground_bias: Bias | None = None
 
         def __iter__(self):
-            if self.time_series:
-                for spi, nli, cvi, ti, spi_t, nli_t, cvi_t, ti_t in zip(
-                    self.sp,
-                    self.nl,
-                    self.cv,
-                    self.ti,
-                    self.sp_t,
-                    self.nl_t,
-                    self.cv_t,
-                    self.ti_t,
-                ):
-                    yield Rounds.data_loader_output(
-                        sp=[spi],
-                        nl=[nli],
-                        cv=[cvi],
-                        ti=[ti],
-                        sp_t=[spi_t],
-                        nl_t=[nli_t],
-                        cv_t=[cvi_t],
-                        ti_t=[ti_t],
-                        sti=self.sti,
-                        collective_variable=self.collective_variable,
-                    )
+            for i in range(len(self.sp)):
+                d = dict(
+                    sti=self.sti,
+                    time_series=self.time_series,
+                    tau=self.tau,
+                    ground_bias=self.ground_bias,
+                    collective_variable=self.collective_variable,
+                )
 
-            else:
-                for spi, nli, cvi, ti in zip(self.sp, self.nl, self.cv, self.ti):
-                    yield Rounds.data_loader_output(
-                        sp=[spi],
-                        nl=[nli],
-                        cv=[cvi],
-                        ti=[ti],
-                        sti=self.sti,
-                        collective_variable=self.collective_variable,
-                    )
+                if self.sp is not None:
+                    d["sp"] = [self.sp[i]]
+                if self.nl is not None:
+                    d["nl"] = [self.nl[i]]
+                if self.cv is not None:
+                    d["cv"] = [self.cv[i]]
+                if self.ti is not None:
+                    d["ti"] = [self.ti[i]]
+
+                if self.time_series:
+                    if self.sp_t is not None:
+                        d["sp_t"] = [self.sp_t[i]]
+                    if self.nl_t is not None:
+                        d["nl_t"] = [self.nl_t[i]]
+                    if self.cv_t is not None:
+                        d["cv_t"] = [self.cv_t[i]]
+                    if self.ti_t is not None:
+                        d["ti_t"] = [self.ti_t[i]]
+
+                if self.bias is not None:
+                    d["bias"] = [self.bias[i]]
+
+                yield Rounds.data_loader_output(**d)
 
         def __add__(self, other):
             assert isinstance(other, Rounds.data_loader_output)
@@ -585,34 +585,318 @@ class Rounds(ABC):
                 collective_variable=self.collective_variable,
             )
 
-        def weights(self, norm: str | None = None):
+        def weights(self, norm=True, method="FES", n_grid=40) -> list[jax.Array]:
+            # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
+
             beta = 1 / (self.sti.T * boltzmann)
 
             weights = []
 
-            for ti_i in self.ti:
-                if ti_i.e_bias is None:
-                    weights.append(None)
-                    print("no e_bias")
-                    continue
+            if method == "FES":
+                grid = self.collective_variable.metric.grid(n=n_grid)
+                grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
 
-                u = beta * ti_i.e_bias
+            for i, ti_i in enumerate(self.ti):
+                if self.bias is not None:
+                    if ti_i.e_bias is None:
+                        weights.append(None)
+                        print("no e_bias")
+                        continue
 
-                if norm is None:
-                    pass
-                elif norm == "max":
-                    u -= jnp.max(u)
+                    if method == "FES":
+                        u = ti_i.e_bias
+                        mean_u = jnp.max(u)
+
+                        v = self.ground_bias.compute_from_cv(cvs=grid)[0]
+                        u_grid = self.bias[i].compute_from_cv(cvs=grid)[0]
+                        mean_v = jnp.max(v)
+
+                        w = (
+                            jnp.exp(beta * (u - mean_u))
+                            * jnp.sum(jnp.exp(beta * (v - mean_v) - beta * (u_grid - mean_u)))
+                            / jnp.sum(jnp.exp(beta * (v - mean_v)))
+                        )
+
+                    elif method == "e_pot":
+                        mean_u = jnp.mean(ti_i.e_bias)
+                        e_pot_mean = jnp.mean(ti_i.e_pot)
+
+                        w = (
+                            jnp.exp(beta * (ti_i.e_bias - mean_u))
+                            * jnp.sum(jnp.exp(-beta * (ti_i.e_pot - e_pot_mean + ti_i.e_bias - mean_u)))
+                            / jnp.sum(jnp.exp(-beta * (ti_i.e_pot - e_pot_mean)))
+                        )
+
+                    w /= jnp.sum(w) / ti_i._size
+
                 else:
-                    raise
+                    w = jnp.ones((ti_i._size,))
+                    w /= jnp.sum(w)
 
-                w = jnp.exp(u)
-
-                if norm:
-                    if (n := np.sum(w)) != 0:
-                        w /= n
                 weights.append(w)
 
+            if norm:
+                tot = jnp.sum(jnp.hstack(weights))
+                weights = [w / tot for w in weights]
+
             return weights
+
+        @staticmethod
+        def _transform(cv, nl, _, pi, add_1, q):
+            cv_v = (cv.cv - pi) @ q
+
+            if add_1:
+                cv_v = jnp.hstack([cv_v, jnp.array([1])])
+
+            return CV(cv=cv_v, _stack_dims=cv._stack_dims)
+
+        @staticmethod
+        def _whiten(cv_0: CV, cv_tau=None, w=None, add_1=False, eps=1e-10):
+            if w is None:
+                w = jnp.ones((cv_0.shape[0],))
+                w /= jnp.sum(w)
+
+            x = cv_0.cv
+
+            if cv_tau is None:
+                pi = jnp.einsum("ni,n->i", x, w)
+                C0 = jnp.einsum("ni,n,nj->ij", x, w, x) - jnp.einsum("i,j->ij", pi, pi)
+            else:
+                x_t = cv_tau.cv
+                pi = jnp.einsum("ni,n->i", 0.5 * (x + x_t), w)
+                C0 = 0.5 * (jnp.einsum("ni,n,nj->ij", x, w, x) + jnp.einsum("ni,n,nj->ij", x_t, w, x_t)) - jnp.einsum(
+                    "i,j->ij",
+                    pi,
+                    pi,
+                )
+
+            l, q = jnp.linalg.eigh(C0)
+            # l,q = scipy.linalg.eigh(C0, subset_by_value=(eps,np.inf))
+
+            mask = l >= eps
+
+            print(f"{jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
+
+            q = q[:, mask] @ jnp.diag(l[mask] ** (-1 / 2))
+
+            transform_maf = CvTrans.from_cv_function(
+                Rounds.data_loader_output._transform,
+                static_argnames=["add_1"],
+                add_1=add_1,
+                q=q,
+                pi=pi,
+            )
+
+            if cv_tau is not None:
+                cv_0, _, _ = transform_maf.compute_cv_trans(cv_0)
+                cv_tau = transform_maf.compute_cv_trans(cv_tau)[0]
+                return cv_0, cv_tau, transform_maf, pi, q
+
+            cv_0 = transform_maf.compute_cv_trans(cv_0)[0]
+
+            return cv_0, transform_maf, pi, q
+
+        @staticmethod
+        def _get_covariance(cv_0: CV, cv_1: CV = None, w=None, calc_pi=False, symmetric=True):
+            if w is None:
+                w = jnp.ones((cv_0.shape[0],))
+                w /= jnp.sum(w)
+
+            X = cv_0.cv
+            Y = cv_1.cv
+
+            if symmetric:
+                pi = None
+                if calc_pi:
+                    pi = jnp.einsum("ni,n->i", 0.5 * (X + Y), w)
+
+                    X = X - pi
+                    Y = Y - pi
+
+                C0 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, X) + jnp.einsum("ni,n,nj->ij", Y, w, Y))
+                C1 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, Y) + jnp.einsum("ni,n,nj->ij", Y, w, X))
+
+                return C0, C1, pi
+
+            pi_0 = None
+            pi_1 = None
+
+            if calc_pi:
+                pi_0 = jnp.einsum("ni,n->i", X, w)
+                pi_1 = jnp.einsum("ni,n->i", Y, w)
+
+                X = X - pi_0
+                Y = Y - pi_1
+
+            C00 = jnp.einsum("ni,n,nj->ij", X, w, X)
+            C01 = jnp.einsum("ni,n,nj->ij", X, w, Y)
+            C11 = jnp.einsum("ni,n,nj->ij", Y, w, Y)
+
+            return C00, C01, C11, pi_0, pi_1
+
+        def koopman_weights(self, cv_0: CV = None, cv_tau: CV = None, w=None, eps=1e-10):
+            # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
+            # https://pubs.aip.org/aip/jcp/article-abstract/146/15/154104/152394/Variational-Koopman-models-Slow-collective?redirectedFrom=fulltext
+
+            assert self.time_series
+            if cv_0 is None:
+                cv_0 = CV.stack(*self.cv)
+
+            if cv_tau is None:
+                cv_tau = CV.stack(*self.cv_t)
+
+            if w is None:
+                w = jnp.ones((cv_0.shape[0],))
+                w /= jnp.sum(w)
+
+            cv0_white, transform_maf, pi, q = Rounds.data_loader_output._whiten(
+                cv_0=cv_0,
+                w=w,
+                add_1=True,
+                eps=eps,
+            )
+            cv_tau_white = transform_maf.compute_cv_trans(cv_tau)[0]
+
+            C_00, C_01, C_11, pi_0, pi_1 = Rounds.data_loader_output._get_covariance(
+                cv_0=cv0_white,
+                cv_1=cv_tau_white,
+                w=w,
+                symmetric=False,
+                calc_pi=False,
+            )
+
+            # assert jnp.allclose(C_00, jnp.eye(C_00.shape[0]), atol=1e-6), f"{C_00=}, but should be identity"
+
+            # eigenvalue of K.T
+            eigval, u = jnp.linalg.eig(a=C_01.T)
+
+            if jnp.sum(p := jnp.abs(eigval) >= 1 + 1e-10) != 0:
+                print(
+                    f" {jnp.sum(p)}/ {p.shape[0]} eigvals to large  {eigval[p]=}. Consider chosing a larger lag time {self.tau=}",
+                )
+
+            idx = jnp.argsort(jnp.abs(eigval - 1))[0]
+            assert jnp.abs(eigval[idx] - 1) < 1e-6, f"{eigval[idx]=}, but should be 1"
+
+            w_k = jnp.einsum("ni,i->n", cv0_white.cv, jnp.real(u[:, idx]))
+
+            if not (w_k > 0).all():
+                print(
+                    f"  { jnp.sum( w_k<= 0 ) }/{w_k.shape[0]} negative weights,  mean {  jnp.mean( w_k[w_k<= 0]) }, min { jnp.min( w_k[w_k<= 0] ) }. Setting to zero and reestimating",
+                )
+                print(f"{w_k[w_k<=0]=}")
+
+                w_k = jnp.where(w_k < 0, jnp.zeros_like(w_k), w_k)
+
+            w_k /= jnp.sum(w_k)
+
+            return w_k
+
+        def koopman_model(
+            self,
+            cv_0: CV = None,
+            cv_tau: CV = None,
+            method="tica",
+            koopman_weight=True,
+            w=None,
+            eps=1e-10,
+        ):
+            assert method in ["tica", "tcca"]
+
+            if cv_0 is None:
+                cv_0 = CV.stack(*self.cv)
+
+            if cv_tau is None:
+                cv_tau = CV.stack(*self.cv_t)
+
+            if method == "tica":
+                if koopman_weight:
+                    w = self.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w, eps=eps)
+
+                cv0_white, cv_tau_white, transform_maf, pi, q = Rounds.data_loader_output._whiten(
+                    cv_0=cv_0,
+                    cv_tau=cv_tau,
+                    w=w,
+                    add_1=True,
+                    eps=eps,
+                )
+                C_00, C_01, _ = Rounds.data_loader_output._get_covariance(
+                    cv_0=cv0_white,
+                    cv_1=cv_tau_white,
+                    w=w,
+                    calc_pi=False,
+                    symmetric=True,
+                )
+
+                K = C_01
+
+                k, u = jnp.linalg.eigh(K)
+
+                idx = jnp.argsort(jnp.abs(k - 1))
+
+                assert jnp.allclose(k[idx[0]], 1, atol=1e-6), f"{k[idx[0]]=}, but should be 1"
+
+                M = q @ (u[:-1,][:, idx[1:]])
+
+                f = CvTrans.from_cv_function(
+                    Rounds.data_loader_output._transform,
+                    static_argnames=["add_1"],
+                    add_1=False,
+                    q=M,
+                    pi=pi,
+                )
+
+                return k[idx[1:]], f, pi, M
+
+            if method == "tcca":
+                cv0_white, transform_maf_0, pi_0, q_0 = Rounds.data_loader_output._whiten(
+                    cv_0=cv_0,
+                    w=w,
+                    add_1=True,
+                    eps=eps,
+                )
+                cv_tau_white, transform_maf_1, pi_1, q_1 = Rounds.data_loader_output._whiten(
+                    cv_0=cv_tau,
+                    w=w,
+                    add_1=True,
+                    eps=eps,
+                )
+
+                C_00, C_01, C_11, _, _ = Rounds.data_loader_output._get_covariance(
+                    cv_0=cv0_white,
+                    cv_1=cv_tau_white,
+                    w=w,
+                    symmetric=False,
+                    calc_pi=False,
+                )
+
+                K = C_01
+                U, s, Vh = jnp.linalg.svd(K)
+
+                print(s)
+
+                assert jnp.allclose(s[0], 1, atol=1e-6), f"{k[0]=}, but should be 1"
+
+                U = U[:-1, :][:, 1:]
+                Vh = Vh[:, :-1][1:, :]
+
+                f = CvTrans.from_cv_function(
+                    Rounds.data_loader_output._transform,
+                    static_argnames=["add_1"],
+                    add_1=False,
+                    q=q_0 @ U,
+                    pi=pi_0,
+                )
+
+                g = CvTrans.from_cv_function(
+                    Rounds.data_loader_output._transform,
+                    static_argnames=["add_1"],
+                    add_1=False,
+                    q=q_1 @ Vh,
+                    pi=pi_1,
+                )
+
+                return s[1:], f, g, pi_0, q_0 @ U, pi_1, q_1 @ Vh
 
     def data_loader(
         self,
@@ -634,11 +918,12 @@ class Rounds(ABC):
         get_colvar=True,
         min_traj_length=None,
         recalc_cv=False,
-        get_bias_list=False,
+        get_bias_list=True,
         num_cv_rounds=1,
         only_finished=True,
         uniform=False,
         lag_n=1,
+        colvar=None,
     ) -> data_loader_output:
         weights = []
 
@@ -668,13 +953,16 @@ class Rounds(ABC):
 
             cvrnds = range(max(0, cv_round - num_cv_rounds), cv_round + 1)
             recalc_cv = True
+            ground_bias = None
         else:
             cvrnds.append(cv_round)
+            ground_bias = self.get_bias(c=cv_round, r=stop)
 
         if get_colvar or recalc_cv:
-            colvar = self.get_collective_variable(c=cv_round)
-        else:
-            colvar = None
+            if colvar is None:
+                colvar = self.get_collective_variable(c=cv_round)
+        # else:
+        #     colvar = None
 
         for cv_round in cvrnds:
             for round_info, traj_info in self.iter(
@@ -1031,6 +1319,7 @@ class Rounds(ABC):
                 cv_t=out_cv_t,
                 ti_t=out_ti_t,
                 tau=tau,
+                ground_bias=ground_bias,
             )
 
         return Rounds.data_loader_output(
@@ -1042,6 +1331,7 @@ class Rounds(ABC):
             collective_variable=colvar,
             time_series=time_series,
             bias=bias_list if get_bias_list else None,
+            ground_bias=ground_bias,
         )
 
     def copy_from_previous_round(

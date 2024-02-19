@@ -56,14 +56,13 @@ class tfl_module(PyTreeNode):
     def __getstate__(self):
         # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model
 
-        mod_str = ""
-        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+        with tempfile.NamedTemporaryFile(suffix=".keras", delete=True) as fd:
             tfl.keras.models.save_model(self.mod, fd.name, overwrite=True)
             mod_str = fd.read()
         return {"mod_str": mod_str}
 
     def __setstate__(self, state):
-        with tempfile.NamedTemporaryFile(suffix=".hdf5", delete=True) as fd:
+        with tempfile.NamedTemporaryFile(suffix=".keras", delete=True) as fd:
             fd.write(state["mod_str"])
             fd.flush()
 

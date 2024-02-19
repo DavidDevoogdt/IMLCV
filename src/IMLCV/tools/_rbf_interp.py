@@ -155,8 +155,8 @@ class RBFInterpolator(PyTreeNode):
     powers: jax.Array
     metric: CvMetric
     d_shape: tuple[int] = field(pytree_node=False)
-    d_dtype: jnp.dtype = field(pytree_node=False)
     kernel: str = field(pytree_node=False)
+    d_dtype: jnp.dtype | None = field(pytree_node=False, default=None)
 
     @classmethod
     def create(
@@ -175,7 +175,7 @@ class RBFInterpolator(PyTreeNode):
             raise NotImplementedError("Complex-valued data is not supported. ")
 
         # d_dtype = jnp.complex64 if jnp.iscomplexobj(d) else jnp.float32
-        d_dtype = d.dtype
+        # d_dtype = d.dtype
 
         # d = jnp.asarray(d, dtype=d_dtype)
         if d.shape[0] != ny:
@@ -255,7 +255,7 @@ class RBFInterpolator(PyTreeNode):
             y=y,
             d=d,
             d_shape=d_shape,
-            d_dtype=d_dtype,
+            # d_dtype=d_dtype,
             smoothing=smoothing,
             kernel=kernel,
             epsilon=epsilon,
@@ -343,3 +343,12 @@ class RBFInterpolator(PyTreeNode):
             return out.reshape((nx, -1))
         else:
             return out.reshape((-1,))
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        if "d_dtype" in state:
+            del state["d_dtype"]
+
+        self.__init__(**state)

@@ -22,7 +22,7 @@ import yaff.log
 import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling.iterative
-from IMLCV import Unpickler
+from IMLCV import unpickler
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import Energy
 from IMLCV.base.bias import EnergyResult
@@ -561,7 +561,7 @@ class MDEngine(ABC):
 
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read(), context=Unpickler())
+                self = jsonpickle.decode(f.read(), context=unpickler)
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)

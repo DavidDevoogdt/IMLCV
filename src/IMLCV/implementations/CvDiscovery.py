@@ -640,314 +640,156 @@ class TransformerMAF(Transformer):
 
         print(f"{cv_0.shape=}")
 
-        def get_covs(cv_0: CV, cv_tau: CV, w=None, sym=False, add_1=False, shrink_output=False):
-            # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
+        w = None
 
-            X = cv_0.cv
-            Y = cv_tau.cv
-
-            if w is None:
-                w = jnp.ones((cv_0.shape[0],)) / cv_0.shape[0]
-
-            if sym:
-                pi = jnp.einsum("ni,n->i", 0.5 * (X + Y), w)
-                C_0 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, X) + jnp.einsum("ni,n,nj->ij", Y, w, Y))
-                C_1 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, Y) + jnp.einsum("ni,n,nj->ij", Y, w, X))
-
-            else:
-                pi = jnp.einsum("ni,n->i", X, w)
-                C_0 = jnp.einsum("ni,n,nj->ij", X, w, X)
-                C_1 = jnp.einsum("ni,n,nj->ij", X, w, Y)
-
-            C_0 -= jnp.einsum("i,j->ij", pi, pi)
-            C_1 -= jnp.einsum("i,j->ij", pi, pi)
-
-            eps = 1e-8
-
-            qr = False
-
-            if qr:
-                q1, r1, p1 = scipy.linalg.qr(a=C_0, pivoting=True)
-
-                l1 = jnp.diag(r1)
-                mask1 = jnp.abs(jnp.diag(r1)) > eps
-
-                q1 = q1[:, mask1]
-
-                print(f"{q1.shape=}")
-
-                q2, r2, p2 = scipy.linalg.qr(a=q1.T @ C_1 @ q1, pivoting=True)
-
-                l2 = jnp.diag(r2)
-                mask2 = jnp.abs(jnp.diag(r2)) > eps
-
-                q2 = q2[:, mask2]
-
-                print(f"{q2.shape=} ")
-
-                q = q1 @ q2  # @q3
-
-            else:
-                # first remove dimensions with very low variance
-                l1, q1 = scipy.linalg.eigh(a=C_0, subset_by_value=[eps, onp.inf])
-                mask1 = l1 > eps
-
-                l1 = l1[mask1]
-
-                q1 = q1[:, mask1]
-
-                print(f"{q1.shape=} ")
-
-                if not sym:
-                    l2, q2 = scipy.linalg.eig(a=q1.T @ C_1 @ q1, b=q1.T @ C_0 @ q1)
-                else:
-                    l2, q2 = scipy.linalg.eigh(a=q1.T @ C_1 @ q1, subset_by_value=[eps, onp.inf])
-
-                mask2 = l2 > eps
-                q2 = q2[:, mask2]
-
-                print(f"{q2.shape=}  ")
-
-                q = q1 @ q2
-
-            q = jnp.array(q)
-
-            transform_maf = CvTrans.from_cv_function(
-                _tranform_maf,
-                static_argnames=["add_1"],
-                add_1=add_1,
-                q=q,
-                pi=pi,
-            )
-
-            cv_0, _, _ = transform_maf.compute_cv_trans(cv_0)
-            cv_tau, _, _ = transform_maf.compute_cv_trans(cv_tau)
-
-            X = cv_0.cv
-            Y = cv_tau.cv
-            if w is None:
-                w = jnp.eye(cv_0.shape[0]) / cv_0.shape[0]
-
-            # already mean free
-            if sym:
-                C_0 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, X) + jnp.einsum("ni,n,nj->ij", Y, w, Y))
-                C_1 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, Y) + jnp.einsum("ni,n,nj->ij", Y, w, X))
-
-            else:
-                C_0 = jnp.einsum("ni,n,nj->ij", X, w, X)
-                C_1 = jnp.einsum("ni,n,nj->ij", X, w, Y)
-
-            # if shrink_output:
-            #     f_shrink = shrink(C_0, n=cv_0.shape[0])
-            #     C_0 = f_shrink(C_0)
-            #     # C_1 = f_shrink(C_1)
-
-            return C_0, C_1, cv_0, cv_tau, transform_maf, pi, q
-
-        def get_koopman_weights(cv_0_i, cv_tau_i, w=None, shrink=False):
-            C_0, C_1, cv_0_new, cv_tau_new, _, _, _ = get_covs(
-                cv_0_i,
-                cv_tau_i,
-                w=w if w is not None else None,
-                sym=False,
-                add_1=True,
-                shrink_output=shrink,
-            )
-
-            # eigenvalue of K.T
-            eigval, u = scipy.linalg.eig(a=C_1.T, b=C_0.T)  # C_1 is not symmetric
-            idx = jnp.argsort(jnp.abs(eigval - 1))[0]
-
-            if not shrink:
-                assert jnp.all(jnp.abs(eigval[idx] - 1) < 1e-5), f"eigenvalue not 1 but {eigval[idx]}"
-
-                if not jnp.all(
-                    jnp.abs(eigval) < 1 + 1e-5,
-                ):
-                    print(
-                        f"largest eigenvalue has norm larger than 1: { jnp.sort(jnp.abs(eigval))[-5:]}, falling back to normal weighing",
-                    )
-
-                    if w is None:
-                        w = jnp.ones(shape=(cv_0_new.shape[0],))
-                        w /= jnp.sum(w)
-                    return w
-
-            else:
-                print(f"eigenvalue is {eigval[idx]}")
-
-            u = jnp.real(u[:, idx] / jnp.sum(cv_0_new.cv @ u[:, idx]))
-            w_n = jnp.real(cv_0_new.cv @ u)
-
-            if (nn := jnp.sum(w_n < 0)) != 0:
-                print(f" {nn}/{w.shape[0]} koopman weights are negative")
-                # print(f"vals={w[w<0]}")
-                w_n = w_n.at[w_n < 0].set(0)
-
-            if w is not None:
-                w_n *= w
-
-            return w_n
-
-        # also add bias weights
         if correct_bias:
-            w_k = []
-            for a in dlo.weights():
-                # s = jnp.sum(a[:-lag_n])
-                out = a[:-lag_n]
-
-                # if s != 0:
-                #     out /= s
-                w_k.append(out)
-
-        else:
-            w_k = [jnp.ones((cv_0_i.shape[0],)) for cv_0_i in CV.unstack(cv_0)]
+            w = jnp.hstack(dlo.weights(norm=True))
 
         if weights == "koopman":
-            w = jnp.hstack(w_k)
-            w = get_koopman_weights(cv_0, cv_tau, w=w)
+            w = dlo.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w)
 
-        else:
-            w = jnp.hstack(w_k)
-
-        w /= jnp.sum(w)
-
-        # decorrelateion part 2
-        shrink_output = False
-
-        add_1 = solver == "eig"
-
-        C_0, C_1, cv_0_new, cv_tau_new, tr, pi, q = get_covs(
-            cv_0,
-            cv_tau,
-            w=w,
-            sym=True,
-            add_1=add_1,
-            shrink_output=shrink_output,
+        k, f, g, pi_0, q_0, pi_1, q_1 = dlo.koopman_model(
+            cv_0=cv_0,
+            cv_tau=cv_tau,
+            eps=1e-10,
+            method="tcca",
         )
-
-        # trans *= tr
-
-        if solver == "eig":
-            #   https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
-
-            print("calculating eigenvalues")
-            n = C_0.shape[0]
-            w, u = scipy.linalg.eigh(a=C_1, b=C_0, subset_by_index=[n - self.outdim - 1, n - 1])
-
-            if weights == "koopman":
-                if not shrink_output:
-                    assert jnp.abs(w[-1] - 1) < 1e-5, "last eigenvalue should be 1"
-
-            u = u[:, :-1]
-            u = u[:, ::-1]
-            u = jnp.array(u)
-        elif solver == "opt":
-            if optimizer is None:
-                optimizer = pymanopt.optimizers.TrustRegions(
-                    max_iterations=max_iterations,
-                    min_gradient_norm=min_gradient_norm,
-                    min_step_size=min_step_size,
-                )
-            manifold = pymanopt.manifolds.stiefel.Stiefel(n=C_0.shape[0], p=self.outdim)
-
-            @pymanopt.function.jax(manifold)
-            @jit
-            def cost(x):
-                a = jnp.trace(x.T @ C_0 @ x)
-                b = jnp.trace(x.T @ C_1 @ x)
-
-                if slow_feature_analysis:
-                    out = b - a
-                else:
-                    if harmonic:
-                        out = a / b
-                    else:
-                        out = -(b / a)
-
-                return out
-
-            problem = pymanopt.Problem(manifold, cost)
-            result = optimizer.run(problem)
-
-            u = jnp.array(result.point)
-
-            print(u.shape)
-            w = jnp.einsum("ji,jk,ki->i", u, C_1, u) / jnp.einsum("ji,jk,ki->i", u, C_0, u)
-            print(w.shape)
-            idx = jnp.argsort(w)
-
-            w = w[idx]
-            u = u[:, idx]
-
-            print(u.shape)
-
-        elif solver == "itr":
-            # taken from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4270008
-            # TODO: https://daggerfs.com/assets/pdf/tnn_traceratio.pdf this is even better
-
-            n = C_0.shape[0]
-
-            @jax.jit
-            def lamb(x):
-                a = jnp.trace(x.T @ C_0 @ x)
-                b = jnp.trace(x.T @ C_1 @ x)
-
-                return b / a
-
-            u = jnp.zeros((C_0.shape[0], self.outdim))
-            u = u.at[0, 0].set(1)
-            u = u.at[1, 1].set(1)
-
-            lambd = lamb(u)
-            for b in range(100):
-                lambd_prev = lambd
-
-                w, u = scipy.linalg.eigh(a=C_1 - lambd * C_0, subset_by_index=[n - self.outdim, n - 1])
-                u = jnp.array(u)
-
-                lambd = lamb(u)
-
-                # fix invariance
-                # w_v, v = scipy.linalg.eigh(a=u.T @ C_0 @ u)
-                # # u = u @ v
-
-                norm = lambd - lambd_prev
-
-                print(f"{b}: lambda {lambd} dlambda {norm} ")
-
-                if norm < 1e-7:
-                    break
-
-            w, r = scipy.linalg.eigh(a=u.T @ C_1 @ u, b=u.T @ C_0 @ u)
-
-            print(f"got {w=}  ")
-
-            u = u @ r
-
-            u = u[:, ::-1]
-            u = jnp.array(u)
-
-            w = w[::-1]
-
-        if add_1:
-            u = u[:-1, :]
-            w = w[:-1]
-
-        print(f"eigenvalue are {w}")
-        print(f" timescales  { -dlo.tau / jnp.log(w)  / nanosecond   } ns")
-
-        trans_mat = q @ u
-        if kinetic_distance:
-            trans_mat = trans_mat @ jnp.diag(w)
 
         tica_selection = CvTrans.from_cv_function(
             _tranform_maf,
             static_argnames=["add_1"],
             add_1=False,
-            q=trans_mat,
-            pi=pi,
+            q=q_0[:, 0 : self.outdim],
+            pi=pi_0,
         )
+
+        print(f"{k[0:10]=}")
+
+        # add_1 = solver == "eig"
+
+        # C_0, C_1, cv_0_new, cv_tau_new, pi, q = dlo._get_covariance(
+        #     cv_0=cv_0,
+        #     cv_1=cv_tau,
+        #     w=w,
+        #     symmetric=True,
+        #     add_1=add_1,
+        # )
+
+        # if solver == "eig":
+        #     #  https://pubs.aip.org/aip/jcp/article-abstract/146/15/154104/152394/Variational-Koopman-models-Slow-collective?redirectedFrom=fulltext
+
+        #     print("calculating eigenvalues")
+        #     n = C_0.shape[0]
+        #     w, u = scipy.linalg.eigh(a=C_1, b=C_0, subset_by_index=[n - self.outdim - 1, n - 1])
+
+        #     # if weights == "koopman":
+        #     #     assert jnp.abs(w[-1] - 1) < 1e-5, "last eigenvalue should be 1"
+
+        #     u = u[:, :-1]
+        #     u = u[:, ::-1]
+        #     u = jnp.array(u)
+        # elif solver == "opt":
+        #     if optimizer is None:
+        #         optimizer = pymanopt.optimizers.TrustRegions(
+        #             max_iterations=max_iterations,
+        #             min_gradient_norm=min_gradient_norm,
+        #             min_step_size=min_step_size,
+        #         )
+        #     manifold = pymanopt.manifolds.stiefel.Stiefel(n=C_0.shape[0], p=self.outdim)
+
+        #     @pymanopt.function.jax(manifold)
+        #     @jit
+        #     def cost(x):
+        #         a = jnp.trace(x.T @ C_0 @ x)
+        #         b = jnp.trace(x.T @ C_1 @ x)
+
+        #         if slow_feature_analysis:
+        #             out = b - a
+        #         else:
+        #             if harmonic:
+        #                 out = a / b
+        #             else:
+        #                 out = -(b / a)
+
+        #         return out
+
+        #     problem = pymanopt.Problem(manifold, cost)
+        #     result = optimizer.run(problem)
+
+        #     u = jnp.array(result.point)
+
+        #     print(u.shape)
+        #     w = jnp.einsum("ji,jk,ki->i", u, C_1, u) / jnp.einsum("ji,jk,ki->i", u, C_0, u)
+        #     print(w.shape)
+        #     idx = jnp.argsort(w)
+
+        #     w = w[idx]
+        #     u = u[:, idx]
+
+        #     print(u.shape)
+
+        # elif solver == "itr":
+        #     # taken from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4270008
+        #     # TODO: https://daggerfs.com/assets/pdf/tnn_traceratio.pdf this is even better
+
+        #     n = C_0.shape[0]
+
+        #     @jax.jit
+        #     def lamb(x):
+        #         a = jnp.trace(x.T @ C_0 @ x)
+        #         b = jnp.trace(x.T @ C_1 @ x)
+
+        #         return b / a
+
+        #     u = jnp.zeros((C_0.shape[0], self.outdim))
+        #     u = u.at[0, 0].set(1)
+        #     u = u.at[1, 1].set(1)
+
+        #     lambd = lamb(u)
+        #     for b in range(100):
+        #         lambd_prev = lambd
+
+        #         w, u = scipy.linalg.eigh(a=C_1 - lambd * C_0, subset_by_index=[n - self.outdim, n - 1])
+        #         u = jnp.array(u)
+
+        #         lambd = lamb(u)
+
+        #         # fix invariance
+        #         w, v = scipy.linalg.eigh(a=u.T @ C_1 @ u, b=u.T @ C_0 @ u)
+        #         u = u @ v
+
+        #         norm = lambd - lambd_prev
+
+        #         print(f"{b}: lambda {lambd} dlambda {norm}, ")
+
+        #         if norm < 1e-10:
+        #             break
+
+        #     print(f"got {w=}  ")
+        #     u = u[:, ::-1]
+        #     u = jnp.array(u)
+
+        #     w = w[::-1]
+
+        # if add_1:
+        #     u = u[:-1, :]
+        #     w = w[:-1]
+
+        # print(f"eigenvalue are {w}")
+        # print(f"timescales  { -dlo.tau / jnp.log(w)  / nanosecond   } ns")
+
+        # trans_mat = q @ u
+        # if kinetic_distance:
+        #     # https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.6b00762
+        #     trans_mat = trans_mat @ jnp.diag(jnp.sqrt(w / 2))
+
+        # tica_selection = CvTrans.from_cv_function(
+        #     _tranform_maf,
+        #     static_argnames=["add_1"],
+        #     add_1=False,
+        #     q=trans_mat,
+        #     pi=pi,
+        # )
 
         trans *= tica_selection
 
