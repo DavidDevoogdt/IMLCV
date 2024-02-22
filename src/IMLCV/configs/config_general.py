@@ -1,4 +1,3 @@
-import os
 import platform
 import re
 from pathlib import Path
@@ -93,5 +92,5 @@ def get_cp2k():
     if env == "hortense":
         return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.psmp"
     if env == "stevin":
-        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt "
+        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.psmp"
     raise ValueError(f"unknow {env=} for cp2k ")

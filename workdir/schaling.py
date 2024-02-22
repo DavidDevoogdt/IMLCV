@@ -1,8 +1,6 @@
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 import numpy as np
-from jax import vmap
 
 # arr = np.array(
 #     [

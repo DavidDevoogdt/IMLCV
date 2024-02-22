@@ -4,8 +4,6 @@ import itertools
 
 import jax
 import jax.numpy as jnp
-from IMLCV.base.bias import Bias
-from IMLCV.base.bias import CompositeBias
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
@@ -13,16 +11,12 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.base.MdEngine import EnergyResult
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.MdEngine import TrajectoryInfo
 from IMLCV.base.Observable import ThermoLIB
 from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.bias import BiasMTD
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.bias import RbfBias
 from molmod.constants import boltzmann
-from molmod.units import kjmol
 
 
 class Scheme:
@@ -310,7 +304,12 @@ class Scheme:
             f=original_collective_variable.f * cv_trans,
             metric=CvMetric.create(
                 periodicities=[False] * cv_new.shape[1],
-                bounding_box=jnp.array([jnp.min(cv_grid_strict.cv, axis=0), jnp.max(cv_grid_strict.cv, axis=0)]).T,
+                bounding_box=jnp.array(
+                    [
+                        jnp.min(cv_grid_strict.cv, axis=0),
+                        jnp.max(cv_grid_strict.cv, axis=0),
+                    ]
+                ).T,
             ),
         )
 
@@ -327,9 +326,15 @@ class Scheme:
 
         if plot:
             self.md.bias.plot(name=self.rounds.path(self.rounds.cv) / "transformed_bias.pdf")
-            self.md.bias.plot(name=self.rounds.path(self.rounds.cv) / "transformed_bias_inverted.pdf", inverted=True)
+            self.md.bias.plot(
+                name=self.rounds.path(self.rounds.cv) / "transformed_bias_inverted.pdf",
+                inverted=True,
+            )
 
-            fes_offset_bias.plot(name=self.rounds.path(self.rounds.cv) / "fes_offset_bias.pdf", inverted=True)
+            fes_offset_bias.plot(
+                name=self.rounds.path(self.rounds.cv) / "fes_offset_bias.pdf",
+                inverted=True,
+            )
 
         if copy_samples:
             self.rounds.copy_from_previous_round(cv_trans=cv_trans, chunk_size=chunk_size, num_copy=num_copy)

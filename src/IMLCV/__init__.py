@@ -30,7 +30,6 @@ from jsonpickle.handlers import BaseHandler
 from jsonpickle.ext.numpy import register_handlers, register
 import numpy as np
 import jax.numpy as jnp
-import parsl
 
 logging.getLogger("parsl").setLevel(logging.WARNING)
 

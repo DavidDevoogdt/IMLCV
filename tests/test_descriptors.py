@@ -11,8 +11,6 @@ import numpy as onp
 import pytest
 import scipy.special
 from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import sb_descriptor
@@ -28,7 +26,6 @@ from IMLCV.tools.bessel_callback import yv
 from IMLCV.tools.soap_kernel import p_inl_sb
 from jax import grad
 from jax import vmap
-from jax.tree_util import Partial
 
 
 def get_sps(

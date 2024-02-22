@@ -1,5 +1,4 @@
 import dataclasses
-from functools import partial
 
 import distrax
 import jax
@@ -7,7 +6,6 @@ import jax.numpy as jnp
 import lineax as lx
 import numba
 import numpy as np
-import ott
 from equinox import Partial
 from flax.linen.linear import Dense
 from IMLCV.base.CV import _CvTrans
@@ -23,12 +21,10 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
 from jax import Array
-from jax import jit
 from jax import vmap
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
 from ott.solvers.linear import implicit_differentiation
-from ott.solvers.linear import lineax_implicit
 from ott.solvers.linear import sinkhorn
 
 ######################################
@@ -455,7 +451,12 @@ def sinkhorn_divergence(
         return x1.cv, jnp.array(nl1.nl_split_z(())[0])
 
     @jax.jit
-    def get_P(x1: CV, nl1: NeighbourList, x2: CV | None = None, nl2: NeighbourList | None = None):
+    def get_P(
+        x1: CV,
+        nl1: NeighbourList,
+        x2: CV | None = None,
+        nl2: NeighbourList | None = None,
+    ):
         p1, b1 = get_b_p(x1, nl1)
 
         if x2 is None:
@@ -1094,18 +1095,101 @@ def affine_2d(old: Array, new: Array):
 
     A = jnp.array(
         [
-            [old[0, 0], old[0, 1], 1, 0, 0, 0, -old[0, 0] * new[0, 0], -old[0, 1] * new[0, 0]],
-            [old[1, 0], old[1, 1], 1, 0, 0, 0, -old[1, 0] * new[1, 0], -old[1, 1] * new[1, 0]],
-            [old[2, 0], old[2, 1], 1, 0, 0, 0, -old[2, 0] * new[2, 0], -old[2, 1] * new[2, 0]],
-            [old[3, 0], old[3, 1], 1, 0, 0, 0, -old[3, 0] * new[3, 0], -old[3, 1] * new[3, 0]],
-            [0, 0, 0, old[0, 0], old[0, 1], 1, -old[0, 0] * new[0, 1], -old[0, 1] * new[0, 1]],
-            [0, 0, 0, old[1, 0], old[1, 1], 1, -old[1, 0] * new[1, 1], -old[1, 1] * new[1, 1]],
-            [0, 0, 0, old[2, 0], old[2, 1], 1, -old[2, 0] * new[2, 1], -old[2, 1] * new[2, 1]],
-            [0, 0, 0, old[3, 0], old[3, 1], 1, -old[3, 0] * new[3, 1], -old[3, 1] * new[3, 1]],
+            [
+                old[0, 0],
+                old[0, 1],
+                1,
+                0,
+                0,
+                0,
+                -old[0, 0] * new[0, 0],
+                -old[0, 1] * new[0, 0],
+            ],
+            [
+                old[1, 0],
+                old[1, 1],
+                1,
+                0,
+                0,
+                0,
+                -old[1, 0] * new[1, 0],
+                -old[1, 1] * new[1, 0],
+            ],
+            [
+                old[2, 0],
+                old[2, 1],
+                1,
+                0,
+                0,
+                0,
+                -old[2, 0] * new[2, 0],
+                -old[2, 1] * new[2, 0],
+            ],
+            [
+                old[3, 0],
+                old[3, 1],
+                1,
+                0,
+                0,
+                0,
+                -old[3, 0] * new[3, 0],
+                -old[3, 1] * new[3, 0],
+            ],
+            [
+                0,
+                0,
+                0,
+                old[0, 0],
+                old[0, 1],
+                1,
+                -old[0, 0] * new[0, 1],
+                -old[0, 1] * new[0, 1],
+            ],
+            [
+                0,
+                0,
+                0,
+                old[1, 0],
+                old[1, 1],
+                1,
+                -old[1, 0] * new[1, 1],
+                -old[1, 1] * new[1, 1],
+            ],
+            [
+                0,
+                0,
+                0,
+                old[2, 0],
+                old[2, 1],
+                1,
+                -old[2, 0] * new[2, 1],
+                -old[2, 1] * new[2, 1],
+            ],
+            [
+                0,
+                0,
+                0,
+                old[3, 0],
+                old[3, 1],
+                1,
+                -old[3, 0] * new[3, 1],
+                -old[3, 1] * new[3, 1],
+            ],
         ],
     )
 
-    X = jnp.array([new[0, 0], new[1, 0], new[2, 0], new[3, 0], new[0, 1], new[1, 1], new[2, 1], new[3, 1]])
+    X = jnp.array(
+        [
+            new[0, 0],
+            new[1, 0],
+            new[2, 0],
+            new[3, 0],
+            new[0, 1],
+            new[1, 1],
+            new[2, 1],
+            new[3, 1],
+        ]
+    )
 
     C = jnp.linalg.solve(A, X)
 

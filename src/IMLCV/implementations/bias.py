@@ -5,20 +5,14 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
 import scipy
-import yaff
 from flax.struct import field
-from flax.struct import PyTreeNode
 from IMLCV.base.bias import Bias
-from IMLCV.base.bias import BiasModify
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.tools._rbf_interp import RBFInterpolator
 from jax import Array
-from molmod.units import kjmol
-from molmod.units import nanometer
-from molmod.units import picosecond
 from typing_extensions import Self
 
 ######################################
@@ -270,7 +264,13 @@ class RbfBias(Bias):
             degree=degree,
         )
 
-        return clz(collective_variable=cvs, start=start, step=step, rbf=rbf, finalized=finalized)
+        return clz(
+            collective_variable=cvs,
+            start=start,
+            step=step,
+            rbf=rbf,
+            finalized=finalized,
+        )
 
     def _compute(self, cvs: CV):
         out = self.rbf(cvs)

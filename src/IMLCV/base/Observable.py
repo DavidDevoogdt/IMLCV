@@ -1,10 +1,8 @@
 import itertools
-from functools import partial
 
 import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
-from IMLCV.base.bias import BiasF
 from IMLCV.base.bias import BiasModify
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
@@ -67,7 +65,6 @@ class ThermoLIB:
     ):
         from IMLCV.base.CV import padded_pmap
         from IMLCV.base.bias import Bias
-        import jax
 
         class _ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:

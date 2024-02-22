@@ -13,7 +13,6 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
-from IMLCV.configs.config_general import config
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import BiasMTD
 from IMLCV.implementations.bias import HarmonicBias
@@ -99,7 +98,10 @@ def test_RBF_bias(kernel):
         return cv.replace(cv=cv.cv[0] ** 3 + cv.cv[1])
 
     # reevaluation of thermolib histo
-    bin_centers1, bin_centers2 = 0.5 * (bins[0][:-1] + bins[0][1:]), 0.5 * (bins[1][:-1] + bins[1][1:])
+    bin_centers1, bin_centers2 = (
+        0.5 * (bins[0][:-1] + bins[0][1:]),
+        0.5 * (bins[1][:-1] + bins[1][1:]),
+    )
     xc, yc = jnp.meshgrid(bin_centers1, bin_centers2, indexing="ij")
     xcf = jnp.reshape(xc, (-1))
     ycf = jnp.reshape(yc, (-1))

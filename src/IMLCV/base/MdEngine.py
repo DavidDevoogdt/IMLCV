@@ -4,7 +4,6 @@ Currently, the MD is done with YAFF/OpenMM
 """
 from __future__ import annotations
 
-import json
 import tempfile
 from abc import ABC
 from abc import abstractmethod
@@ -18,10 +17,6 @@ import cloudpickle
 import h5py
 import jax.numpy as jnp
 import jsonpickle
-import yaff.log
-import yaff.pes.bias
-import yaff.pes.ext
-import yaff.sampling.iterative
 from IMLCV import unpickler
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import Energy
@@ -34,7 +29,6 @@ from molmod.periodic import periodic
 from molmod.units import angstrom
 from molmod.units import bar
 from molmod.units import kjmol
-from molmod.units import second
 from typing_extensions import Self
 
 ######################################

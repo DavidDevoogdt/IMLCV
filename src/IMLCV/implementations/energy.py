@@ -17,6 +17,7 @@ from IMLCV.base.bias import EnergyResult
 from IMLCV.configs.config_general import get_cp2k
 from molmod.units import angstrom
 from molmod.units import electronvolt
+from IMLCV.configs.config_general import ROOT_DIR
 
 yaff.log.set_level(yaff.log.silent)
 
@@ -192,33 +193,49 @@ class Cp2kEnergy(AseEnergy):
         **kwargs,
     ):
         self.atoms = atoms
-        self.cp2k_inp = os.path.abspath(input_file)
+        self.cp2k_inp = input_file  # = os.path.abspath(input_file)
         self.input_kwargs = input_kwargs
         self.kwargs = kwargs
         super().__init__(atoms)
 
         self.rp = cp2k_path
 
-    def _calculator(self):
-        def relative(target: Path, origin: Path):
-            """return path of target relative to origin"""
-            try:
-                return Path(target).resolve().relative_to(Path(origin).resolve())
-            except ValueError:  # target does not start with origin
-                # recursion with origin (eventually origin is root so try will succeed)
-                return Path("..").joinpath(relative(target, Path(origin).parent))
+    # def replace_paths(self,old_path:Path, new_path: Path):
+    #     len_old = len(old_path.parts)
 
+    #     self.cp2k_inp = new_path.joinpath( *new_path.parts , *Path(self.cp2k_inp).parts[len_old:])
+
+    #     for key, val in self.input_kwargs.items():
+    #         self.input_kwargs[key] = new_path.joinpath( *new_path.parts , *Path(val).parts[len_old:])
+
+    @staticmethod
+    def _relative(target: Path, origin: Path):
+        """return path of target relative to origin"""
+        try:
+            return Path(target).resolve().relative_to(Path(origin).resolve())
+        except ValueError:  # target does not start with origin
+            # recursion with origin (eventually origin is root so try will succeed)
+            return Path("..").joinpath(Cp2kEnergy._relative(target, Path(origin).parent))
+
+    def _calculator(self):
         rp = Path.cwd()
         rp.mkdir(parents=True, exist_ok=True)
         print(f"saving CP2K output in {rp}")
 
         new_dict = {}
         for key, val in self.input_kwargs.items():
-            assert Path(val).exists(), f"recieved {val=},{key=}, resolved to {Path(val)}"
-            new_dict[key] = relative(val, rp)
+            p = ROOT_DIR.joinpath(*val.parts)
 
-        with open(self.cp2k_inp) as f:
+            assert p.exists(), f"recieved {val=},{key=}, resolved to {p}"
+            new_dict[key] = Cp2kEnergy._relative(p, rp)
+
+        inp = ROOT_DIR.joinpath(*Path(self.cp2k_inp).parts)
+
+        print(f"{ROOT_DIR=} {inp=} {new_dict=} {rp=}")
+
+        with open(inp) as f:
             inp = "".join(f.readlines()).format(**new_dict)
+
         params = self.default_parameters.copy()
         params.update(**{"inp": inp, **self.kwargs})
 
@@ -264,9 +281,20 @@ class Cp2kEnergy(AseEnergy):
 
         atoms_dict, cp2k_inp, input_kwargs, kwargs = state
 
+        if (p := Path(cp2k_inp)).is_absolute():
+            n = p.parts.index("src")
+            cp2k_inp = Path(*p.parts[n + 2 :])
+            assert (ROOT_DIR / cp2k_inp).exists(), f"cannot find {ROOT_DIR/cp2k_inp}"
+
+            print(f"setting {cp2k_inp}  instead of absoulte path {p}")
+
+            for key, val in input_kwargs.items():
+                n = val.parts.index("src")
+                input_kwargs[key] = Path(*val.parts[n + 2 :])
+
         self.__init__(
-            ase.Atoms.fromdict(atoms_dict),
-            cp2k_inp,
-            input_kwargs,
+            atoms=ase.Atoms.fromdict(atoms_dict),
+            input_file=cp2k_inp,
+            input_kwargs=input_kwargs,
             **kwargs,
         )

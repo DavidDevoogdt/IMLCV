@@ -13,7 +13,6 @@ import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
-import scipy.linalg
 from equinox import Partial
 from filelock import FileLock
 from IMLCV.base.bias import Bias
@@ -617,6 +616,8 @@ class Rounds(ABC):
                             / jnp.sum(jnp.exp(beta * (v - mean_v)))
                         )
 
+                        w /= jnp.sum(w) / ti_i._size
+
                     elif method == "e_pot":
                         mean_u = jnp.mean(ti_i.e_bias)
                         e_pot_mean = jnp.mean(ti_i.e_pot)
@@ -627,7 +628,11 @@ class Rounds(ABC):
                             / jnp.sum(jnp.exp(-beta * (ti_i.e_pot - e_pot_mean)))
                         )
 
-                    w /= jnp.sum(w) / ti_i._size
+                        w /= jnp.sum(w) / ti_i._size
+                    elif method == "raw":
+                        w = jnp.exp(beta * (ti_i.e_bias - jnp.max(ti_i.e_bias)))
+
+                        w /= jnp.sum(w)
 
                 else:
                     w = jnp.ones((ti_i._size,))
@@ -651,14 +656,25 @@ class Rounds(ABC):
             return CV(cv=cv_v, _stack_dims=cv._stack_dims)
 
         @staticmethod
-        def _whiten(cv_0: CV, cv_tau=None, w=None, add_1=False, eps=1e-10):
+        def _whiten(
+            cv_0: CV,
+            cv_tau=None,
+            symmetric=False,
+            w=None,
+            add_1=False,
+            eps=1e-10,
+            max_features=2000,
+        ):
             if w is None:
                 w = jnp.ones((cv_0.shape[0],))
                 w /= jnp.sum(w)
 
+            if symmetric:
+                assert cv_tau is None
+
             x = cv_0.cv
 
-            if cv_tau is None:
+            if not symmetric:
                 pi = jnp.einsum("ni,n->i", x, w)
                 C0 = jnp.einsum("ni,n,nj->ij", x, w, x) - jnp.einsum("i,j->ij", pi, pi)
             else:
@@ -674,10 +690,13 @@ class Rounds(ABC):
             # l,q = scipy.linalg.eigh(C0, subset_by_value=(eps,np.inf))
 
             mask = l >= eps
-
             print(f"{jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
 
             q = q[:, mask] @ jnp.diag(l[mask] ** (-1 / 2))
+
+            if jnp.sum(mask) > max_features:
+                print(f"reducing to {max_features=}")
+                q = q[:, -max_features:]
 
             transform_maf = CvTrans.from_cv_function(
                 Rounds.data_loader_output._transform,
@@ -734,7 +753,15 @@ class Rounds(ABC):
 
             return C00, C01, C11, pi_0, pi_1
 
-        def koopman_weights(self, cv_0: CV = None, cv_tau: CV = None, w=None, eps=1e-10):
+        def koopman_weights(
+            self,
+            cv_0: CV = None,
+            cv_tau: CV = None,
+            w=None,
+            eps=1e-10,
+            max_features=2000,
+            add_1=True,
+        ):
             # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
             # https://pubs.aip.org/aip/jcp/article-abstract/146/15/154104/152394/Variational-Koopman-models-Slow-collective?redirectedFrom=fulltext
 
@@ -752,8 +779,9 @@ class Rounds(ABC):
             cv0_white, transform_maf, pi, q = Rounds.data_loader_output._whiten(
                 cv_0=cv_0,
                 w=w,
-                add_1=True,
+                add_1=add_1,
                 eps=eps,
+                max_features=max_features,
             )
             cv_tau_white = transform_maf.compute_cv_trans(cv_tau)[0]
 
@@ -765,18 +793,22 @@ class Rounds(ABC):
                 calc_pi=False,
             )
 
-            # assert jnp.allclose(C_00, jnp.eye(C_00.shape[0]), atol=1e-6), f"{C_00=}, but should be identity"
-
             # eigenvalue of K.T
             eigval, u = jnp.linalg.eig(a=C_01.T)
 
-            if jnp.sum(p := jnp.abs(eigval) >= 1 + 1e-10) != 0:
-                print(
-                    f" {jnp.sum(p)}/ {p.shape[0]} eigvals to large  {eigval[p]=}. Consider chosing a larger lag time {self.tau=}",
-                )
+            assert (
+                jnp.sum(p := jnp.abs(eigval) >= 1 + 1e-10) != 0
+            ), f" {jnp.sum(p)}/ {p.shape[0]} eigvals to large {eigval[p]=}."
 
-            idx = jnp.argsort(jnp.abs(eigval - 1))[0]
-            assert jnp.abs(eigval[idx] - 1) < 1e-6, f"{eigval[idx]=}, but should be 1"
+            print(eigval)
+
+            if add_1:
+                idx = jnp.argsort(jnp.abs(eigval - 1))[0]
+                assert jnp.abs(eigval[idx] - 1) < 1e-6, f"{eigval[idx]=}, but should be 1"
+            else:
+                idx = jnp.argmax(jnp.real(eigval))
+                print(f"largest eigval = {eigval[idx]}")
+                assert jnp.allclose(jnp.imag(eigval[idx]), 0)
 
             w_k = jnp.einsum("ni,i->n", cv0_white.cv, jnp.real(u[:, idx]))
 
@@ -798,9 +830,14 @@ class Rounds(ABC):
             cv_tau: CV = None,
             method="tica",
             koopman_weight=True,
+            symmetric_tica=True,
             w=None,
             eps=1e-10,
+            max_features=2000,
+            out_dim=None,
+            add_1=False,
         ):
+            # TODO: https://www.mdpi.com/2079-3197/6/1/22
             assert method in ["tica", "tcca"]
 
             if cv_0 is None:
@@ -813,30 +850,44 @@ class Rounds(ABC):
                 if koopman_weight:
                     w = self.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w, eps=eps)
 
-                cv0_white, cv_tau_white, transform_maf, pi, q = Rounds.data_loader_output._whiten(
+                (
+                    cv0_white,
+                    cv_tau_white,
+                    transform_maf,
+                    pi,
+                    q,
+                ) = Rounds.data_loader_output._whiten(
                     cv_0=cv_0,
                     cv_tau=cv_tau,
+                    symmetric=symmetric_tica,
                     w=w,
-                    add_1=True,
+                    add_1=add_1,
                     eps=eps,
+                    max_features=max_features,
                 )
-                C_00, C_01, _ = Rounds.data_loader_output._get_covariance(
+
+                _, C_01, _ = Rounds.data_loader_output._get_covariance(
                     cv_0=cv0_white,
                     cv_1=cv_tau_white,
                     w=w,
                     calc_pi=False,
-                    symmetric=True,
+                    symmetric=symmetric_tica,
                 )
 
-                K = C_01
+                if symmetric_tica:
+                    k, u = jnp.linalg.eigh(C_01)
+                else:
+                    k, u = jnp.linalg.eig(C_01)
 
-                k, u = jnp.linalg.eigh(K)
+                if add_1:
+                    assert jnp.allclose(k[0], 1, atol=1e-6), f"{k[0]=}, but should be 1"
+                    M = q @ (u[:-1,][:, 1:])
+                    k = k[1:]
+                else:
+                    M = q @ u
 
-                idx = jnp.argsort(jnp.abs(k - 1))
-
-                assert jnp.allclose(k[idx[0]], 1, atol=1e-6), f"{k[idx[0]]=}, but should be 1"
-
-                M = q @ (u[:-1,][:, idx[1:]])
+                if out_dim is not None:
+                    M = M[:, out_dim]
 
                 f = CvTrans.from_cv_function(
                     Rounds.data_loader_output._transform,
@@ -846,20 +897,33 @@ class Rounds(ABC):
                     pi=pi,
                 )
 
-                return k[idx[1:]], f, pi, M
+                return k, f, pi, M, cv0_white @ M, cv_tau_white @ M
 
             if method == "tcca":
-                cv0_white, transform_maf_0, pi_0, q_0 = Rounds.data_loader_output._whiten(
+                (
+                    cv0_white,
+                    transform_maf_0,
+                    pi_0,
+                    q_0,
+                ) = Rounds.data_loader_output._whiten(
                     cv_0=cv_0,
                     w=w,
-                    add_1=True,
+                    add_1=add_1,
                     eps=eps,
+                    max_features=max_features,
                 )
-                cv_tau_white, transform_maf_1, pi_1, q_1 = Rounds.data_loader_output._whiten(
+
+                (
+                    cv_tau_white,
+                    transform_maf_1,
+                    pi_1,
+                    q_1,
+                ) = Rounds.data_loader_output._whiten(
                     cv_0=cv_tau,
                     w=w,
-                    add_1=True,
+                    add_1=add_1,
                     eps=eps,
+                    max_features=max_features,
                 )
 
                 C_00, C_01, C_11, _, _ = Rounds.data_loader_output._get_covariance(
@@ -871,20 +935,25 @@ class Rounds(ABC):
                 )
 
                 K = C_01
+
                 U, s, Vh = jnp.linalg.svd(K)
 
-                print(s)
+                if add_1:
+                    U = U[:-1, :][:, 1:]
+                    Vh = Vh[:, :-1][1:, :]
+                    s = s[1:]
 
-                assert jnp.allclose(s[0], 1, atol=1e-6), f"{k[0]=}, but should be 1"
-
-                U = U[:-1, :][:, 1:]
-                Vh = Vh[:, :-1][1:, :]
+                q_0 = q_0 @ U
+                q_1 = q_1 @ Vh
+                if out_dim is not None:
+                    q_0 = q_0[:, out_dim]
+                    q_1 = q_1[:, out_dim]
 
                 f = CvTrans.from_cv_function(
                     Rounds.data_loader_output._transform,
                     static_argnames=["add_1"],
                     add_1=False,
-                    q=q_0 @ U,
+                    q=q_0,
                     pi=pi_0,
                 )
 
@@ -892,11 +961,14 @@ class Rounds(ABC):
                     Rounds.data_loader_output._transform,
                     static_argnames=["add_1"],
                     add_1=False,
-                    q=q_1 @ Vh,
+                    q=q_1,
                     pi=pi_1,
                 )
 
-                return s[1:], f, g, pi_0, q_0 @ U, pi_1, q_1 @ Vh
+                cv_0_out = f.compute_cv_trans(cv_0)[0]
+                cv_tau_out = f.compute_cv_trans(cv_tau)[0]
+
+                return s, f, g, pi_0, q_0, pi_1, q_1, w, cv_0_out, cv_tau_out
 
     def data_loader(
         self,
@@ -956,7 +1028,12 @@ class Rounds(ABC):
             ground_bias = None
         else:
             cvrnds.append(cv_round)
-            ground_bias = self.get_bias(c=cv_round, r=stop)
+
+            try:
+                ground_bias = self.get_bias(c=cv_round, r=stop)
+            except Exception as e:
+                print(f"could not load ground bias {e=}")
+                ground_bias = None
 
         if get_colvar or recalc_cv:
             if colvar is None:
@@ -1159,7 +1236,12 @@ class Rounds(ABC):
                     wi = jnp.exp(-wi)
                     probs = wi / jnp.sum(wi)
 
-                key, indices = choose(key, probs, out=int(frac * (sp[n].shape[0] - lag_n)), len=sp[n].shape[0] - lag_n)
+                key, indices = choose(
+                    key,
+                    probs,
+                    out=int(frac * (sp[n].shape[0] - lag_n)),
+                    len=sp[n].shape[0] - lag_n,
+                )
 
                 out_sp.append(sp[n][indices])
                 out_cv.append(cv[n][indices])
@@ -1754,14 +1836,18 @@ class Rounds(ABC):
                 min_traj_length=min_traj_length,
                 recalc_cv=recalc_cv,
                 only_finished=only_finished,
+                get_bias_list=False,
             )
 
             cv_stack = data.cv[0]
             sp_stack = data.sp[0]
             # print(f"{cv_stack=}")
         else:
-            assert sp0.shape[0] == len(
-                biases,
+            assert (
+                sp0.shape[0]
+                == len(
+                    biases,
+                )
             ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
 
         for i, bias in enumerate(biases):
@@ -1840,7 +1926,12 @@ class Rounds(ABC):
         for i, future in tasks:
             try:
                 d = future.result()
-                self.add_md(d=d, bias=self.rel_path(Path(future.outputs[0].filename)), i=i, c=cv_round)
+                self.add_md(
+                    d=d,
+                    bias=self.rel_path(Path(future.outputs[0].filename)),
+                    i=i,
+                    c=cv_round,
+                )
             except Exception as e:
                 print(f"got exception {e} while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
 
@@ -1929,7 +2020,12 @@ class Rounds(ABC):
         for i, future in tasks:
             try:
                 d = future.result()
-                self.add_md(d=d, bias=self.rel_path(Path(future.outputs[0].filename)), i=i, c=cv_round)
+                self.add_md(
+                    d=d,
+                    bias=self.rel_path(Path(future.outputs[0].filename)),
+                    i=i,
+                    c=cv_round,
+                )
             except Exception as e:
                 print(f"got exception {e} while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
 

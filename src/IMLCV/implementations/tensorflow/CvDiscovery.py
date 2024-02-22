@@ -1,14 +1,7 @@
-import tempfile
-from ast import mod
 from dataclasses import KW_ONLY
-from functools import partial
-from typing import Callable
 
 import haiku as hk
-import ivy
-import jax
 import jax.numpy as jnp
-import numpy as np
 import umap
 from equinox import Partial
 from flax.struct import field
@@ -20,13 +13,6 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import un_atomize
-from IMLCV.implementations.tensorflow.CV import KerasFunBase
-from IMLCV.implementations.tensorflow.CV import PeriodicLayer
-from jax import jit
-from jax import vmap
-from matplotlib.pyplot import cla
-from pynndescent import NNDescent
-from umap.umap_ import nearest_neighbors
 
 
 def umap_function(x: CV, nl: NeighbourList, c, enc):
@@ -56,7 +42,13 @@ class hkFunBase(CvFunBase, PyTreeNode):
     bwd_params: dict | None = field(pytree_node=True, default=None)
     bwd_kwargs: dict | None = field(pytree_node=False, default=None)
 
-    def _calc(self, x: CV, nl: NeighbourList, reverse=False, conditioners: list[CV] | None = None) -> CV:
+    def _calc(
+        self,
+        x: CV,
+        nl: NeighbourList,
+        reverse=False,
+        conditioners: list[CV] | None = None,
+    ) -> CV:
         assert conditioners is None
         assert not reverse
 

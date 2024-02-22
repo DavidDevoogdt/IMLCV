@@ -15,7 +15,6 @@ from IMLCV.base.CV import SystemParams
 from IMLCV.tools.bessel_callback import ive
 from IMLCV.tools.bessel_callback import spherical_jn
 from jax import Array
-from jax import jit
 from jax import lax
 from jax import vmap
 from scipy.special import legendre as sp_legendre

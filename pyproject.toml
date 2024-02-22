@@ -12,3 +12,10 @@ version_scheme = "no-guess-dev"
 [tool.black]
 line-length = 120
 target-version = ['py310']
+
+[tool.ruff]
+# Exclude a variety of commonly ignored directories.
+
+# Same as Black.
+line-length = 120
+lint.ignore = ["E741"]

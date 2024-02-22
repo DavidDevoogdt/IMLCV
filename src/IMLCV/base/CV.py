@@ -5,7 +5,6 @@ import itertools
 from abc import abstractmethod
 from dataclasses import KW_ONLY
 from functools import partial
-from heapq import merge
 from pathlib import Path
 from typing import Callable
 
@@ -2163,8 +2162,10 @@ class _CvFunBase:
         return self.__dict__
 
     def __setstate__(self, statedict: dict):
-        # if "static_kwarg_names" in statedict:
-        # statedict["static_kwargs"] = statedict.pop("kwargs")
+        if "static_kwarg_names" in statedict:
+            statedict["static_kwargs"] = {k: statedict.pop(k) for k in statedict["static_kwarg_names"]}
+
+            statedict.pop("static_kwarg_names")
 
         self.__init__(**statedict)
 
@@ -2455,6 +2456,7 @@ class _CvTrans:
         f: Callable[[CV, NeighbourList | None, CV | None], CV],
         jacfun: Callable = None,
         static_argnames=None,
+        check_input: bool = True,
         **kwargs,
     ) -> CvTrans:
         static_kwargs = {}
@@ -2464,6 +2466,31 @@ class _CvTrans:
                 static_kwargs[a] = kwargs.pop(a)
 
         kw = dict(forward=f, kwargs=kwargs, static_kwargs=static_kwargs)
+
+        if check_input:
+
+            @jax.jit
+            def _f(x):
+                return x
+
+            for k, v in list(kw["kwargs"].items()):
+                try:
+                    _f(v)
+                except Exception as e:
+                    print(
+                        f"{k} of type {type(v)} is not a valid jax type and should be added to static_argnames. exception: {e}"
+                    )
+                    raise
+
+            for k, v in list(kw["static_kwargs"].items()):
+                try:
+                    hash(v)
+                    assert v == v
+                except Exception as e:
+                    print(
+                        f"{k} of type {type(v)} is not hashable, consider to make it hashable or not a static argument. exception: {e}"
+                    )
+                    raise
 
         if jacfun is not None:
             kw["jacfun"] = jacfun

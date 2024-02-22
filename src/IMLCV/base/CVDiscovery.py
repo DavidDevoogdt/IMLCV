@@ -161,7 +161,11 @@ class Transformer:
             assert jnp.allclose(y_2.cv, y.cv)
 
             if y_t is not None:
-                y_t_2, _, _ = g.compute_cv_trans(CV.stack(*x_t), NeighbourList.stack(*dlo.nl_t), chunk_size=chunk_size)
+                y_t_2, _, _ = g.compute_cv_trans(
+                    CV.stack(*x_t),
+                    NeighbourList.stack(*dlo.nl_t),
+                    chunk_size=chunk_size,
+                )
 
         # remove outliers from the data
         _, mask = CvMetric.bounds_from_cv(y, percentile=1.0)
@@ -312,7 +316,16 @@ class Transformer:
                 elif dim == 3:
                     f = Transformer._plot_3d
 
-                f(fig, axes, data_proc, rgb, labels[in_out][0:dim], metric=metrics[in_out], margin=margin, **kwargs)
+                f(
+                    fig,
+                    axes,
+                    data_proc,
+                    rgb,
+                    labels[in_out][0:dim],
+                    metric=metrics[in_out],
+                    margin=margin,
+                    **kwargs,
+                )
 
             do_plot(indim, 0, ls)
             do_plot(outdim, 1, rs)
@@ -380,7 +393,16 @@ class Transformer:
             ax_down.set_title(data_titles[1])
 
     @staticmethod
-    def _plot_1d(fig: Figure, grid: gridspec, data, colors, labels, metric: CvMetric, margin=None, **scatter_kwargs):
+    def _plot_1d(
+        fig: Figure,
+        grid: gridspec,
+        data,
+        colors,
+        labels,
+        metric: CvMetric,
+        margin=None,
+        **scatter_kwargs,
+    ):
         gs = grid.subgridspec(
             ncols=1,
             nrows=2,
@@ -415,7 +437,16 @@ class Transformer:
             ax_histx.set_xlim(-margin, 1 + margin)
 
     @staticmethod
-    def _plot_2d(fig: Figure, grid: gridspec, data, colors, labels, metric: CvMetric, margin=None, **scatter_kwargs):
+    def _plot_2d(
+        fig: Figure,
+        grid: gridspec,
+        data,
+        colors,
+        labels,
+        metric: CvMetric,
+        margin=None,
+        **scatter_kwargs,
+    ):
         gs = grid.subgridspec(
             ncols=2,
             nrows=2,
@@ -430,7 +461,7 @@ class Transformer:
         ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
 
         ax.scatter(
-            *[data[:, l] for l in range(2)],
+            *[data[:, col] for col in range(2)],
             c=colors,
             **scatter_kwargs,
         )
@@ -460,8 +491,22 @@ class Transformer:
             b.spines["bottom"].set_visible(False)
             b.spines["left"].set_visible(False)
 
-        ax_histx.tick_params(top=False, bottom=False, left=False, right=False, labelleft=False, labelbottom=False)
-        ax_histy.tick_params(top=False, bottom=False, left=False, right=False, labelleft=False, labelbottom=False)
+        ax_histx.tick_params(
+            top=False,
+            bottom=False,
+            left=False,
+            right=False,
+            labelleft=False,
+            labelbottom=False,
+        )
+        ax_histy.tick_params(
+            top=False,
+            bottom=False,
+            left=False,
+            right=False,
+            labelleft=False,
+            labelbottom=False,
+        )
 
         ax.locator_params(nbins=3)
 
@@ -470,7 +515,16 @@ class Transformer:
             ax.set_ylim(*y_lim)
 
     @staticmethod
-    def _plot_3d(fig: Figure, grid: gridspec, data, colors, labels, metric: CvMetric, margin=None, **scatter_kwargs):
+    def _plot_3d(
+        fig: Figure,
+        grid: gridspec,
+        data,
+        colors,
+        labels,
+        metric: CvMetric,
+        margin=None,
+        **scatter_kwargs,
+    ):
         gs = grid.subgridspec(
             ncols=2,
             nrows=1,

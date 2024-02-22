@@ -1,8 +1,6 @@
 import tempfile
 from importlib import import_module
-from typing import Callable
 
-import jax
 import numpy as np
 import tensorflow as tfl
 from flax.struct import field

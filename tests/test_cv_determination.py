@@ -1,8 +1,6 @@
 import shutil
-from importlib import import_module
 from pathlib import Path
 
-import jax
 import jax.numpy as jnp
 import pytest
 from IMLCV.base.bias import NoneBias

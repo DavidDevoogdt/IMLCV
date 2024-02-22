@@ -251,7 +251,12 @@ def get_slurm_provider(
             print("setting python env for hortense")
             py_env = f"source {ROOT_DIR}/micromamba/envs/py310/bin/activate; which python"
         else:
-            py_env = f"source {ROOT_DIR}/Miniconda3/bin/activate; which python"
+            py_env = """
+export MAMBA_EXE=$VSC_HOME/IMLCV/bin/micromamba
+export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV/micromamba
+eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
+micromamba activate py311
+which python"""
 
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
@@ -264,7 +269,7 @@ def get_slurm_provider(
 
     elif env == "stevin":
         worker_init += "module load CP2K/2023.1-foss-2023a \n"
-    worker_init += "module unload SciPy-bundle \n"
+    worker_init += "module unload SciPy-bundle Python\n"
     # worker_init += "module load texlive \n"
 
     if not parsl_cores:

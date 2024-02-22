@@ -2,8 +2,6 @@ import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
 import jax.scipy.optimize
-import jaxopt.objective
-import pytest
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFunInput
 from IMLCV.base.CV import CvTrans
@@ -12,7 +10,6 @@ from IMLCV.base.CV import NormalizingFlow
 from IMLCV.base.CV import SystemParams
 from IMLCV.implementations.CV import DistraxRealNVP
 from IMLCV.implementations.CV import RealNVP
-from IMLCV.implementations.CV import sb_descriptor
 from jax import vmap
 
 ######################################

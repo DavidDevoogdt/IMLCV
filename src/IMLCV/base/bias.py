@@ -629,7 +629,12 @@ class Bias(PyTreeNode, ABC):
 
         bias, _ = self.compute_from_cv(cv_grid)
 
-        return RbfBias.create(cv=cv_grid, cvs=self.collective_variable, vals=bias, kernel="thin_plate_spline")
+        return RbfBias.create(
+            cv=cv_grid,
+            cvs=self.collective_variable,
+            vals=bias,
+            kernel="thin_plate_spline",
+        )
 
     def save(self, filename: str | Path):
         if isinstance(filename, str):
@@ -778,7 +783,13 @@ class BiasF(Bias):
     pytree_kwargs: dict = field(default_factory=dict)
 
     @classmethod
-    def create(clz, cvs: CollectiveVariable, g: Callable = _constant, kwargs: dict = {}, pytree_kwargs: dict = {}) -> Self:  # type: ignore[override]
+    def create(
+        clz,
+        cvs: CollectiveVariable,
+        g: Callable = _constant,
+        kwargs: dict = {},
+        pytree_kwargs: dict = {},
+    ) -> Self:  # type: ignore[override]
         return BiasF(
             collective_variable=cvs,
             g=g,

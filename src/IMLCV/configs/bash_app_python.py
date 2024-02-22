@@ -79,7 +79,10 @@ def bash_app_python(
                 i,
             )
 
-            stdout = rename_num(execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)), i)
+            stdout = rename_num(
+                execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)),
+                i,
+            )
 
             stderr = rename_num(
                 execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),

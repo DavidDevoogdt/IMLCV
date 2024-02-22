@@ -4,7 +4,6 @@ from itertools import combinations_with_replacement
 
 import jax
 import jax.numpy as jnp
-import jax.numpy as np
 from flax.struct import field
 from flax.struct import PyTreeNode
 from IMLCV.base.CV import CV
@@ -13,10 +12,8 @@ from IMLCV.tools._rbfinterp_pythran import _build_evaluation_coefficients
 from IMLCV.tools._rbfinterp_pythran import _build_system
 from IMLCV.tools._rbfinterp_pythran import _polynomial_matrix
 from IMLCV.tools._rbfinterp_pythran import cv_vals
-from jax import Array
 from numpy.linalg import LinAlgError
 from scipy.linalg.lapack import dgesv
-from scipy.spatial import KDTree
 from scipy.special import comb
 
 __all__ = ["RBFInterpolator", "cv_vals"]

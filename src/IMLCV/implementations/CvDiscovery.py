@@ -2,10 +2,8 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import numpy as onp
 import optax
 import pymanopt
-import scipy.linalg
 from flax import linen as nn
 from flax.training import train_state
 from IMLCV.base.CV import CV
@@ -620,6 +618,7 @@ class TransformerMAF(Transformer):
         slow_feature_analysis=False,
         correct_bias=False,
         pre_selction_epsilon=1e-14,
+        max_features=2000,
         kinetic_distance=False,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
@@ -642,28 +641,33 @@ class TransformerMAF(Transformer):
 
         w = None
 
+        # if correct_bias:
+        #     w = jnp.hstack(dlo.weights(norm=True))
+
+        # if weights == "koopman":
+        #     w = dlo.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w)
         if correct_bias:
-            w = jnp.hstack(dlo.weights(norm=True))
+            w = jnp.hstack(dlo.weights(method="raw"))
 
-        if weights == "koopman":
-            w = dlo.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w)
-
-        k, f, g, pi_0, q_0, pi_1, q_1 = dlo.koopman_model(
+        k, tica_selection, g, pi_0, q_0, pi_1, q_1, cv_0, cv_tau = dlo.koopman_model(
             cv_0=cv_0,
             cv_tau=cv_tau,
             eps=1e-10,
             method="tcca",
+            max_features=max_features,
+            w=w,
+            outdim=self.outdim,
         )
 
-        tica_selection = CvTrans.from_cv_function(
-            _tranform_maf,
-            static_argnames=["add_1"],
-            add_1=False,
-            q=q_0[:, 0 : self.outdim],
-            pi=pi_0,
-        )
+        # tica_selection = CvTrans.from_cv_function(
+        #     _tranform_maf,
+        #     static_argnames=["add_1"],
+        #     add_1=False,
+        #     q=q_0[:, 0 : self.outdim],
+        #     pi=pi_0,
+        # )
 
-        print(f"{k[0:10]=}")
+        print(f"timescales {-dlo.tau / jnp.log(k) / nanosecond} ns")
 
         # add_1 = solver == "eig"
 
@@ -793,7 +797,7 @@ class TransformerMAF(Transformer):
 
         trans *= tica_selection
 
-        cv_0 = trans.compute_cv_trans(cv_0)[0].unstack()
-        cv_tau = trans.compute_cv_trans(cv_tau)[0].unstack()
+        cv_0 = cv_0.unstack()
+        cv_tau = cv_tau.unstack()
 
         return cv_0, cv_tau, trans

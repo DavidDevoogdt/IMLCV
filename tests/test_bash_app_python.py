@@ -3,7 +3,6 @@ import pytest
 from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import SystemParams
 from IMLCV.configs.bash_app_python import bash_app_python
-from IMLCV.configs.config_general import config
 from IMLCV.implementations.CV import dihedral
 
 
@@ -62,8 +61,6 @@ def _f_MPI(i):
 
 @pytest.mark.skip(reason="not installed")
 def test_parallel_MPI(tmp_path, config_test):
-    from mpi4py import MPI
-
     i_enum = 5
 
     futs = [bash_app_python(_f_MPI, precommand="mpirun -n 4")(i, execution_folder=tmp_path) for i in range(i_enum)]
