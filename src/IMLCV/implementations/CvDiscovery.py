@@ -571,54 +571,15 @@ def _tica_selection_2(cv: CV, nl: NeighbourList | None, _, u):
 class TransformerMAF(Transformer):
     # Maximum Autocorrelation Factors
 
-    def __init__(
-        self,
-        outdim: int,
-        lag_n=1,
-        optimizer=None,
-        min_gradient_norm: float = 1e-5,
-        min_step_size: float = 1e-5,
-        max_iterations=50,
-        shrinkage="BC",
-        weights="bias",
-        solver="eig",
-        slow_feature_analysis=False,
-        harmonic=False,
-        **kwargs,
-    ):
-        super().__init__(
-            outdim=outdim,
-            lag_n=lag_n,
-            optimizer=optimizer,
-            min_gradient_norm=min_gradient_norm,
-            min_step_size=min_step_size,
-            max_iterations=max_iterations,
-            shrinkage=shrinkage,
-            solver=solver,
-            weights=weights,
-            harmonic=harmonic,
-            slow_feature_analysis=slow_feature_analysis,
-            **kwargs,
-        )
-
     def _fit(
         self,
         x: list[CV],
         x_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
-        lag_n=100,
-        shrinkage="BC",
-        solver="eig",
-        weights=None,
-        optimizer=None,
-        min_gradient_norm: float = 1e-5,
-        min_step_size: float = 1e-5,
-        max_iterations=50,
-        harmonic=False,
-        slow_feature_analysis=False,
         correct_bias=False,
         pre_selction_epsilon=1e-14,
         max_features=2000,
+        weight_method="diff",
         kinetic_distance=False,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
@@ -641,13 +602,8 @@ class TransformerMAF(Transformer):
 
         w = None
 
-        # if correct_bias:
-        #     w = jnp.hstack(dlo.weights(norm=True))
-
-        # if weights == "koopman":
-        #     w = dlo.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w)
         if correct_bias:
-            w = jnp.hstack(dlo.weights(method="raw"))
+            w = jnp.hstack(dlo.weights(method=weight_method))
 
         k, tica_selection, g, pi_0, q_0, pi_1, q_1, cv_0, cv_tau = dlo.koopman_model(
             cv_0=cv_0,
@@ -656,144 +612,10 @@ class TransformerMAF(Transformer):
             method="tcca",
             max_features=max_features,
             w=w,
-            outdim=self.outdim,
+            out_dim=self.outdim,
         )
 
-        # tica_selection = CvTrans.from_cv_function(
-        #     _tranform_maf,
-        #     static_argnames=["add_1"],
-        #     add_1=False,
-        #     q=q_0[:, 0 : self.outdim],
-        #     pi=pi_0,
-        # )
-
         print(f"timescales {-dlo.tau / jnp.log(k) / nanosecond} ns")
-
-        # add_1 = solver == "eig"
-
-        # C_0, C_1, cv_0_new, cv_tau_new, pi, q = dlo._get_covariance(
-        #     cv_0=cv_0,
-        #     cv_1=cv_tau,
-        #     w=w,
-        #     symmetric=True,
-        #     add_1=add_1,
-        # )
-
-        # if solver == "eig":
-        #     #  https://pubs.aip.org/aip/jcp/article-abstract/146/15/154104/152394/Variational-Koopman-models-Slow-collective?redirectedFrom=fulltext
-
-        #     print("calculating eigenvalues")
-        #     n = C_0.shape[0]
-        #     w, u = scipy.linalg.eigh(a=C_1, b=C_0, subset_by_index=[n - self.outdim - 1, n - 1])
-
-        #     # if weights == "koopman":
-        #     #     assert jnp.abs(w[-1] - 1) < 1e-5, "last eigenvalue should be 1"
-
-        #     u = u[:, :-1]
-        #     u = u[:, ::-1]
-        #     u = jnp.array(u)
-        # elif solver == "opt":
-        #     if optimizer is None:
-        #         optimizer = pymanopt.optimizers.TrustRegions(
-        #             max_iterations=max_iterations,
-        #             min_gradient_norm=min_gradient_norm,
-        #             min_step_size=min_step_size,
-        #         )
-        #     manifold = pymanopt.manifolds.stiefel.Stiefel(n=C_0.shape[0], p=self.outdim)
-
-        #     @pymanopt.function.jax(manifold)
-        #     @jit
-        #     def cost(x):
-        #         a = jnp.trace(x.T @ C_0 @ x)
-        #         b = jnp.trace(x.T @ C_1 @ x)
-
-        #         if slow_feature_analysis:
-        #             out = b - a
-        #         else:
-        #             if harmonic:
-        #                 out = a / b
-        #             else:
-        #                 out = -(b / a)
-
-        #         return out
-
-        #     problem = pymanopt.Problem(manifold, cost)
-        #     result = optimizer.run(problem)
-
-        #     u = jnp.array(result.point)
-
-        #     print(u.shape)
-        #     w = jnp.einsum("ji,jk,ki->i", u, C_1, u) / jnp.einsum("ji,jk,ki->i", u, C_0, u)
-        #     print(w.shape)
-        #     idx = jnp.argsort(w)
-
-        #     w = w[idx]
-        #     u = u[:, idx]
-
-        #     print(u.shape)
-
-        # elif solver == "itr":
-        #     # taken from https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4270008
-        #     # TODO: https://daggerfs.com/assets/pdf/tnn_traceratio.pdf this is even better
-
-        #     n = C_0.shape[0]
-
-        #     @jax.jit
-        #     def lamb(x):
-        #         a = jnp.trace(x.T @ C_0 @ x)
-        #         b = jnp.trace(x.T @ C_1 @ x)
-
-        #         return b / a
-
-        #     u = jnp.zeros((C_0.shape[0], self.outdim))
-        #     u = u.at[0, 0].set(1)
-        #     u = u.at[1, 1].set(1)
-
-        #     lambd = lamb(u)
-        #     for b in range(100):
-        #         lambd_prev = lambd
-
-        #         w, u = scipy.linalg.eigh(a=C_1 - lambd * C_0, subset_by_index=[n - self.outdim, n - 1])
-        #         u = jnp.array(u)
-
-        #         lambd = lamb(u)
-
-        #         # fix invariance
-        #         w, v = scipy.linalg.eigh(a=u.T @ C_1 @ u, b=u.T @ C_0 @ u)
-        #         u = u @ v
-
-        #         norm = lambd - lambd_prev
-
-        #         print(f"{b}: lambda {lambd} dlambda {norm}, ")
-
-        #         if norm < 1e-10:
-        #             break
-
-        #     print(f"got {w=}  ")
-        #     u = u[:, ::-1]
-        #     u = jnp.array(u)
-
-        #     w = w[::-1]
-
-        # if add_1:
-        #     u = u[:-1, :]
-        #     w = w[:-1]
-
-        # print(f"eigenvalue are {w}")
-        # print(f"timescales  { -dlo.tau / jnp.log(w)  / nanosecond   } ns")
-
-        # trans_mat = q @ u
-        # if kinetic_distance:
-        #     # https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.6b00762
-        #     trans_mat = trans_mat @ jnp.diag(jnp.sqrt(w / 2))
-
-        # tica_selection = CvTrans.from_cv_function(
-        #     _tranform_maf,
-        #     static_argnames=["add_1"],
-        #     add_1=False,
-        #     q=trans_mat,
-        #     pi=pi,
-        # )
 
         trans *= tica_selection
 

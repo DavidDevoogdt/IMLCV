@@ -26,7 +26,6 @@ from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
 from ott.solvers.linear import implicit_differentiation
 from ott.solvers.linear import sinkhorn
-
 ######################################
 #       CV transformations           #
 ######################################
@@ -701,8 +700,10 @@ def sinkhorn_divergence_2(
     normalize=True,
     sum_divergence=False,
     ridge=1e-5,
-    sinkhorn_iterations=100,
+    sinkhorn_iterations=20,
     use_dankskin=False,
+    r_cond_svd=1e-10,
+    method="jvp",
 ) -> Array:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -737,53 +738,113 @@ def sinkhorn_divergence_2(
     b1, _, p1 = nl1.nl_split_z(x1)
     _, _, p2 = nl2.nl_split_z(x2)
 
-    class ComposedTranpsoseLinearOperator(lx.ComposedLinearOperator):
-        def transpose(self):
-            return self
-
-    def solve_lineax(
+    def solve_lineax_svd(
         lin,
-        b: jnp.ndarray,
+        b: Array,
         lin_t=None,
         symmetric: bool = False,
-    ) -> jnp.ndarray:
-        input_structure = jax.eval_shape(lambda: b)
-        kwargs = {}
-        kwargs.setdefault("rtol", 1e-6)
-        kwargs.setdefault("atol", 1e-6)
+        ridge_identity: float = 0.0,
+        ridge_kernel: float = 0.0,
+        r_cond_svd: float = 1e-10,
+        method="jvp",
+    ) -> Array:
+        def lin_reg(x, symmetric, lin, lin_t, ridge_kernel, ridge_identity):
+            op = lin if symmetric else lambda x: lin_t(lin(x))
 
-        ridge_kernel = ridge
-        ridge_identity = ridge
+            if ridge_kernel == 0 and ridge_identity == 0:
+                return op(x)
 
-        if ridge_kernel > 0.0 or ridge_identity > 0.0:
+            return op(x) + ridge_kernel * jnp.sum(x) + ridge_identity * x
 
-            def lin_reg(x):
-                return lin(x) + ridge_kernel * jnp.sum(x) + ridge_identity * x
-
-            def lin_t_reg(x):
-                return lin_t(x) + ridge_kernel * jnp.sum(x) + ridge_identity * x
-
-        else:
-            lin_reg, lin_t_reg = lin, lin_t
-
-        solver = lx.CG(**kwargs)
-        if symmetric:
-            fn_operator = lx.FunctionLinearOperator(
-                lin_reg,
-                input_structure,
-                tags=[lx.symmetric_tag, lx.positive_semidefinite_tag],
-            )
-            return lx.linear_solve(fn_operator, b, solver).value
-
-        op = lx.FunctionLinearOperator(lin_reg, input_structure)
-        op_t = lx.FunctionLinearOperator(lin_t_reg, input_structure)
-
-        fn_operator = lx.TaggedLinearOperator(
-            ComposedTranpsoseLinearOperator(op_t, op),
-            tags=[lx.positive_semidefinite_tag],
+        fun = Partial(
+            lin_reg,
+            symmetric=symmetric,
+            lin=lin,
+            lin_t=lin_t,
+            ridge_kernel=ridge_kernel,
+            ridge_identity=ridge_identity,
         )
 
-        return lx.linear_solve(fn_operator, op_t.mv(b), solver).value
+        fun, aux_args = jax.closure_convert(fun, b)
+
+        def _solve(fun, r_cond_svd, aux_args, b):
+            input_structure = jax.eval_shape(lambda: b)
+
+            solver = lx.SVD(rcond=r_cond_svd)
+
+            def _f(x):
+                return fun(x, *aux_args)
+
+            fn_operator = lx.FunctionLinearOperator(
+                _f,
+                input_structure,
+                tags=[lx.positive_semidefinite_tag, lx.symmetric_tag],
+            )
+
+            return lx.linear_solve(fn_operator, b, solver).value
+
+        if method == "jvp":
+            _solve = jax.custom_jvp(_solve, nondiff_argnums=(0, 1))
+
+            @_solve.defjvp
+            def _solve_jvp(fun, r_cond_svd, primals, tangents):
+                (aux_args, b) = primals
+                (aux_args_dot, b_dot) = tangents
+
+                y = _solve(fun, r_cond_svd, aux_args, b)
+
+                solver = lx.SVD(rcond=r_cond_svd)
+
+                def _f(x, _):
+                    return fun(x, *aux_args)
+
+                jac_operator = lx.JacobianLinearOperator(_f, y)
+
+                dy = lx.linear_solve(jac_operator, b_dot, solver).value
+
+                return y, dy
+
+        elif method == "vjp":
+            _solve = jax.custom_vjp(_solve, nondiff_argnums=(0, 1))
+
+            def _solve_fwd(fun, r_cond_svd, aux_args, b):
+                y = _solve(fun, r_cond_svd, aux_args, b)
+                return y, (aux_args, y)
+
+            def _solve_rev(fun, r_cond_svd, args, b_dot):
+                aux_args, y = args
+                solver = lx.SVD(rcond=r_cond_svd)
+
+                def _f(x, _):
+                    return fun(x, *aux_args)
+
+                jac_operator = lx.JacobianLinearOperator(_f, y)
+                y_dot = lx.linear_solve(jac_operator, b_dot, solver).value
+
+                print(f"{y_dot=}")
+
+                return (y_dot, None)
+
+            _solve.defvjp(_solve_fwd, _solve_rev)
+
+        return _solve(fun, r_cond_svd, aux_args, b)
+
+    sinkhorn_kwargs = {
+        "threshold": 1e-4,
+        "implicit_diff": implicit_differentiation.ImplicitDiff(
+            solver=solve_lineax_svd,  # solve_jax_cg, solve_lineax_svd,
+            solver_kwargs={
+                "ridge_identity": ridge,
+                "ridge_kernel": ridge,
+                "r_cond_svd": r_cond_svd,
+            },
+        ),
+        "use_danskin": use_dankskin,
+    }
+
+    if sinkhorn_iterations is not None:
+        sinkhorn_kwargs["min_iterations"] = sinkhorn_iterations
+        sinkhorn_kwargs["max_iterations"] = sinkhorn_iterations
 
     def get_divergence(p1, p2):
         return sinkhorn_divergence.sinkhorn_divergence(
@@ -791,16 +852,17 @@ def sinkhorn_divergence_2(
             x=jnp.reshape(p1, (p1.shape[0], -1)),
             y=jnp.reshape(p2, (p2.shape[0], -1)),
             epsilon=alpha,
-            sinkhorn_kwargs={
-                "threshold": 1e-4,
-                "implicit_diff": implicit_differentiation.ImplicitDiff(solver=solve_lineax),
-                "use_danskin": use_dankskin,
-            },
+            sinkhorn_kwargs=sinkhorn_kwargs,
         ).divergence
 
-    divergences = jnp.array([get_divergence(p1_z.cv, p2_z.cv) for p1_z, p2_z in zip(p1, p2)])
+    divergences = []
+    for p1_z, p2_z in zip(p1, p2):
+        divergences.append(get_divergence(p1_z.cv, p2_z.cv))
+
+    divergences = jnp.array(divergences)
 
     if sum_divergence:
+        raise NotImplementedError
         # weigh according to number of atoms
         w = jnp.sum(b1, axis=1)
         w /= jnp.sum(w)
@@ -821,7 +883,9 @@ def _sinkhorn_divergence_trans_2(
     sum_divergence,
     ddiv_arg=0,
     ridge=1e-5,
-    sinkhorn_iterations=500,
+    sinkhorn_iterations=20,
+    r_cond_svd=1e-10,
+    method="jvp",
 ):
     assert nl is not None, "Neigbourlist required for rematch"
 
@@ -837,7 +901,9 @@ def _sinkhorn_divergence_trans_2(
                 sum_divergence=sum_divergence,
                 ridge=ridge,
                 sinkhorn_iterations=sinkhorn_iterations,
-                use_dankskin=ddiv_arg != 1,
+                use_dankskin=False,
+                r_cond_svd=r_cond_svd,
+                method=method,
             ),
             _stack_dims=cv._stack_dims,
         )
@@ -901,8 +967,10 @@ def get_sinkhorn_divergence_2(
     sum_divergence=False,
     ddiv_arg=0,
     ridge=1e-5,
-    sinkhorn_iterations=500,
+    sinkhorn_iterations=10,
     merge=False,
+    r_cond_svd=1e-10,
+    method="jvp",
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -910,7 +978,7 @@ def get_sinkhorn_divergence_2(
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
-        jacfun=jax.jacrev if output == "ddiv" and ddiv_arg == 0 else jax.jacrev,
+        jacfun=jax.jacrev,
         static_argnames=[
             "alpha_rematch",
             "output",
@@ -919,6 +987,8 @@ def get_sinkhorn_divergence_2(
             "ddiv_arg",
             "ridge",
             "sinkhorn_iterations",
+            "r_cond_svd",
+            "method",
         ],
         nli=nli,
         pi=pi,
@@ -929,6 +999,8 @@ def get_sinkhorn_divergence_2(
         ddiv_arg=ddiv_arg,
         ridge=ridge,
         sinkhorn_iterations=sinkhorn_iterations,
+        r_cond_svd=r_cond_svd,
+        method=method,
     )
 
 

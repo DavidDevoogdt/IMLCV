@@ -354,11 +354,6 @@ class Bias(PyTreeNode, ABC):
 
         bias, _ = self.compute_from_cv(cv_grid)
 
-        if inverted:
-            bias = -bias
-
-            vmin, vmax = -vmax, -vmin
-
         if offset:
             bias -= bias[~np.isnan(bias)].min()
         else:
@@ -366,6 +361,10 @@ class Bias(PyTreeNode, ABC):
 
             vmax = bias[~np.isnan(bias)].max()
             vmin = vmax - vrange
+
+        if inverted:
+            bias = -bias
+            vmin, vmax = -vmax, -vmin
 
         bias = bias.reshape([len(mg_i) for mg_i in mg])
 
