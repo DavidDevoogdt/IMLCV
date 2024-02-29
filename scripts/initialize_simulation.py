@@ -7,6 +7,8 @@ from pathlib import Path
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import config
 
+from IMLCV.configs.config_general import DEFAULT_LABELS
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="CLI interface to set simulation params",
@@ -252,7 +254,7 @@ if __name__ == "__main__":
             walltime=args.walltime,
             cpu_cluster=args.bootstrap_cluster,
         )
-        bash_app_python(executors=["default"], function=app)(
+        bash_app_python(executors=DEFAULT_LABELS, function=app)(
             args=args,
             execution_folder=args.folder,
         ).result()

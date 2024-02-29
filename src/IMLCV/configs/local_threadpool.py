@@ -14,15 +14,10 @@ def get_config(path_internal, ref_threads=2):
             working_dir=str(path_internal),
         ),
         ThreadPoolExecutor(
-            label="model",
-            max_threads=4,
-            working_dir=str(path_internal),
-        ),
-        ThreadPoolExecutor(
             label="reference",
             max_threads=ref_threads,
             working_dir=str(path_internal),
         ),
     ]
 
-    return executors
+    return executors, [["default"], ["trainig"], ["reference"]]

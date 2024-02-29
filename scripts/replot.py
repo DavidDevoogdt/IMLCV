@@ -3,6 +3,7 @@ import argparse
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import config
 from IMLCV.configs.config_general import ROOT_DIR
+from IMLCV.configs.config_general import DEFAULT_LABELS
 
 
 def f(args):
@@ -38,7 +39,7 @@ if __name__ == "__main__":
 
     config()
 
-    bash_app_python(f, executors=["default"])(
+    bash_app_python(f, executors=DEFAULT_LABELS)(
         args,
         stdout=str(folder / "replot.stdout"),
         stderr=str(folder / "replot.stderr"),

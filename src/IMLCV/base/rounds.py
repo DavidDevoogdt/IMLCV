@@ -33,6 +33,7 @@ from jax.random import PRNGKey
 from jax.random import split
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
+from IMLCV.configs.config_general import DEFAULT_LABELS, REFERENCE_LABELS
 
 
 @dataclass
@@ -595,7 +596,7 @@ class Rounds(ABC):
                 grid = self.collective_variable.metric.grid(n=n_grid)
                 grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
 
-            for i, ti_i in enumerate(self.ti):
+            for i, (ti_i, ti_t_i) in enumerate(zip(self.ti, self.ti_t)):
                 if self.bias is not None:
                     if ti_i.e_bias is None:
                         weights.append(None)
@@ -616,7 +617,7 @@ class Rounds(ABC):
                             / jnp.sum(jnp.exp(beta * (v - mean_v)))
                         )
 
-                        w /= jnp.sum(w) / ti_i._size
+                        w /= jnp.sum(w)
 
                     elif method == "e_pot":
                         mean_u = jnp.mean(ti_i.e_bias)
@@ -628,12 +629,20 @@ class Rounds(ABC):
                             / jnp.sum(jnp.exp(-beta * (ti_i.e_pot - e_pot_mean)))
                         )
 
-                        w /= jnp.sum(w) / ti_i._size
+                        w /= jnp.sum(w)
                     elif method == "raw":
                         w = jnp.exp(beta * (ti_i.e_bias - jnp.max(ti_i.e_bias)))
 
                         w /= jnp.sum(w)
 
+                    elif method == "diff":
+                        w = jnp.exp(beta * (ti_t_i.e_bias - ti_i.e_bias))
+                        w /= jnp.sum(w)
+
+                    else:
+                        raise NotImplementedError
+
+                    w *= ti_i._size
                 else:
                     w = jnp.ones((ti_i._size,))
                     w /= jnp.sum(w)
@@ -653,7 +662,7 @@ class Rounds(ABC):
             if add_1:
                 cv_v = jnp.hstack([cv_v, jnp.array([1])])
 
-            return CV(cv=cv_v, _stack_dims=cv._stack_dims)
+            return cv.replace(cv=cv_v)
 
         @staticmethod
         def _whiten(
@@ -946,8 +955,8 @@ class Rounds(ABC):
                 q_0 = q_0 @ U
                 q_1 = q_1 @ Vh
                 if out_dim is not None:
-                    q_0 = q_0[:, out_dim]
-                    q_1 = q_1[:, out_dim]
+                    q_0 = q_0[:, :out_dim]
+                    q_1 = q_1[:, :out_dim]
 
                 f = CvTrans.from_cv_function(
                     Rounds.data_loader_output._transform,
@@ -968,7 +977,7 @@ class Rounds(ABC):
                 cv_0_out = f.compute_cv_trans(cv_0)[0]
                 cv_tau_out = f.compute_cv_trans(cv_tau)[0]
 
-                return s, f, g, pi_0, q_0, pi_1, q_1, w, cv_0_out, cv_tau_out
+                return s, f, g, pi_0, q_0, pi_1, q_1, cv_0_out, cv_tau_out
 
     def data_loader(
         self,
@@ -1894,7 +1903,7 @@ class Rounds(ABC):
 
             # print(f"starting trajectory {i} in {cvi=} {spi=}  ")
 
-            future = bash_app_python(Rounds.run_md, pass_files=True, executors=["reference"])(
+            future = bash_app_python(Rounds.run_md, pass_files=True, executors=REFERENCE_LABELS)(
                 sp=spi,  # type: ignore
                 inputs=[File(common_md_name), File(str(b_name))],
                 outputs=[File(str(b_name_new)), File(str(traj_name))],
@@ -1905,7 +1914,7 @@ class Rounds(ABC):
             if plot:
                 plot_file = path_name / "plot.pdf"
 
-                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=["default"])(
+                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=DEFAULT_LABELS)(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
@@ -1988,7 +1997,7 @@ class Rounds(ABC):
 
             traj_name = path_name / "trajectory_info.h5"
 
-            future = bash_app_python(Rounds.run_md, pass_files=True, executors=["reference"])(
+            future = bash_app_python(Rounds.run_md, pass_files=True, executors=REFERENCE_LABELS)(
                 sp=None,  # type: ignore
                 inputs=[File(common_md_name), File(str(b_name))],
                 outputs=[File(str(b_name_new)), File(str(traj_name))],
@@ -1999,7 +2008,7 @@ class Rounds(ABC):
             if plot:
                 plot_file = path_name / "plot.pdf"
 
-                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=["default"])(
+                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=DEFAULT_LABELS)(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],

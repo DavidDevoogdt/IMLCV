@@ -13,6 +13,10 @@ print(f"{ROOT_DIR=}")
 
 py_env = " which python"
 
+DEFAULT_LABELS = []
+REFERENCE_LABELS = []
+TRAINING_LABELS = []
+
 
 def get_platform():
     node = platform.node()
@@ -60,9 +64,11 @@ def config(
         path_internal = ROOT_DIR / ".runinfo"
 
     if env == "local":
-        execs = get_config_local(path_internal, ref_threads=local_ref_threads)
+        execs, [default_labels, trainig_labels, reference_labels] = get_config_local(
+            path_internal, ref_threads=local_ref_threads
+        )
     elif env == "hortense" or env == "stevin":
-        execs = config_ugent(
+        execs, [default_labels, trainig_labels, reference_labels] = config_ugent(
             env=env,
             path_internal=path_internal,
             singlepoint_nodes=singlepoint_nodes,
@@ -84,6 +90,10 @@ def config(
         initialize_logging=initialize_logging,
     )
 
+    DEFAULT_LABELS.extend(default_labels)
+    REFERENCE_LABELS.extend(reference_labels)
+    TRAINING_LABELS.extend(trainig_labels)
+
     parsl.load(config=config)
 
 
@@ -92,5 +102,10 @@ def get_cp2k():
     if env == "hortense":
         return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.psmp"
     if env == "stevin":
-        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.psmp"
+        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt"
     raise ValueError(f"unknow {env=} for cp2k ")
+
+
+# -mca pml ucx -mca btl ^uct
+# export OMPI_MCA_btl=^openib
+# mca_base_component_show_load_errors 0

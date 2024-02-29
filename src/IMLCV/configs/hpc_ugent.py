@@ -249,28 +249,30 @@ def get_slurm_provider(
     if py_env is None:
         if env == "hortense":
             print("setting python env for hortense")
-            py_env = f"source {ROOT_DIR}/micromamba/envs/py310/bin/activate; which python"
-        else:
+            py_env = f"""
+source {ROOT_DIR}/micromamba/envs/py310/bin/activate; which python
+            """
+        elif env == "stevin":
             py_env = """
 export MAMBA_EXE=$VSC_HOME/IMLCV/bin/micromamba
 export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py311
-which python"""
+which python
+"""
 
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
 
     assert open_mp_threads_per_core is None, "open_mp_threads_per_core is not tested yet"
 
-    worker_init = f"{py_env}; \n"
+    worker_init = f"{py_env}\n"
     if env == "hortense":
         worker_init += "module load CP2K/2023.1-foss-2022b \n"
 
     elif env == "stevin":
-        worker_init += "module load CP2K/2023.1-foss-2023a \n"
+        worker_init += "module load CP2K/7.1-foss-2020a \n"
     worker_init += "module unload SciPy-bundle Python\n"
-    # worker_init += "module load texlive \n"
 
     if not parsl_cores:
         if open_mp_threads_per_core is None:
@@ -285,13 +287,16 @@ which python"""
         worker_init += f"export SLURM_NTASKS={cores}\n"
         worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_core}\n"
 
-        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={open_mp_threads_per_core}'\n"
+        # give all cores to xla
+        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
 
     else:
         assert open_mp_threads_per_core is None, "parsl doens't use openmp cores"
         total_cores = cores
 
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
+
+    worker_init += "mpirun -report-bindings -np ${SLURM_NTASKS} echo -n \n"
 
     if memory_per_core is not None:
         if mem is None:
@@ -373,70 +378,81 @@ def config(
     memory_per_core=None,
     min_memery_per_node=None,
     path_internal: Path | None = None,
-    cpu_cluster=None,
-    gpu_cluster=None,
+    cpu_cluster: str | list[str] | None = None,
+    gpu_cluster: str | list[str] | None = None,
     py_env=None,
     account=None,
     use_work_queue=False,
     default_on_threads=False,
 ):
-    if env == "hortense":
-        if cpu_cluster is not None:
-            assert cpu_cluster in [
-                "cpu_milan",
-                "cpu_rome",
-                "cpu_rome_512",
-                "cpu_rome_all",
-                "debug_rome",
-            ]
-        if gpu_cluster is not None:
-            assert gpu_cluster in [
-                "gpu_rome_a100",
-                "gpu_rome_a100_401",
-                "gpu_rome_a100_80",
-            ]
+    def get_kwargs(cpu_cluster=None, gpu_cluster=None):
+        if env == "hortense":
+            if cpu_cluster is not None:
+                assert cpu_cluster in [
+                    "cpu_milan",
+                    "cpu_rome",
+                    "cpu_rome_512",
+                    "cpu_rome_all",
+                    "debug_rome",
+                ]
+            if gpu_cluster is not None:
+                assert gpu_cluster in [
+                    "gpu_rome_a100",
+                    "gpu_rome_a100_401",
+                    "gpu_rome_a100_80",
+                ]
 
-        kw = {
-            "cpu_cluster": "dodrio",
-            "account": account,
-            "cpu_part": "cpu_rome" if cpu_cluster is None else cpu_cluster,
-            "gpu_part": "gpu_rome_a100" if gpu_cluster is None else gpu_cluster,
-            "path_internal": path_internal,
-        }
+            kw = {
+                "cpu_cluster": "dodrio",
+                "account": account,
+                "cpu_part": "cpu_rome" if cpu_cluster is None else cpu_cluster,
+                "gpu_part": "gpu_rome_a100" if gpu_cluster is None else gpu_cluster,
+                "path_internal": path_internal,
+            }
 
-    elif env == "stevin":
-        if cpu_cluster is not None:
-            assert cpu_cluster in [
-                "slaking",
-                "swalot",
-                "skitty",
-                "victini",
-                "kirlia",
-                "doduo",
-                "donphan",
-                "gallade",
-            ]
+        elif env == "stevin":
+            if cpu_cluster is not None:
+                assert cpu_cluster in [
+                    "slaking",
+                    "swalot",
+                    "skitty",
+                    "victini",
+                    "kirlia",
+                    "doduo",
+                    "donphan",
+                    "gallade",
+                ]
 
-        if gpu_cluster is not None:
-            assert gpu_cluster in ["joltik", "accelgor"]
+            if gpu_cluster is not None:
+                assert gpu_cluster in ["joltik", "accelgor"]
 
-        cpu = "doduo" if cpu_cluster is None else cpu_cluster
-        gpu = "accelgor" if gpu_cluster is None else gpu_cluster
-        kw = {
-            "cpu_cluster": cpu,
-            "cpu_part": cpu,
-            "gpu_cluster": gpu,
-            "gpu_part": gpu,
-            "path_internal": path_internal,
-        }
-    kw["env"] = env
-    kw["py_env"] = py_env
-    kw["use_work_queue"] = use_work_queue
+            cpu = "doduo" if cpu_cluster is None else cpu_cluster
+            gpu = "accelgor" if gpu_cluster is None else gpu_cluster
+            kw = {
+                "cpu_cluster": cpu,
+                "cpu_part": cpu,
+                "gpu_cluster": gpu,
+                "gpu_part": gpu,
+                "path_internal": path_internal,
+            }
+        kw["env"] = env
+        kw["py_env"] = py_env
+        kw["use_work_queue"] = use_work_queue
+
+        return kw
+
+    if not isinstance(cpu_cluster, list) and cpu_cluster is not None:
+        cpu_cluster = [cpu_cluster]
+
+    if not isinstance(gpu_cluster, list) and gpu_cluster is not None:
+        gpu_cluster = [gpu_cluster]
 
     if bootstrap:
+        assert not isinstance(cpu_cluster, list), "bootstrap does not support multiple clusters"
+
         execs = [
             get_slurm_provider(
-                **kw,
+                **get_kwargs(cpu_cluster),
                 label="default",
                 init_blocks=1,
                 min_blocks=1,
@@ -450,53 +466,84 @@ def config(
         ]
 
     else:
-        if not default_on_threads:
-            # general tasks
-            default = get_slurm_provider(
-                label="default",
-                init_blocks=1,
-                min_blocks=1,
-                max_blocks=512,
-                parallelism=1,
-                cores=4,
-                parsl_cores=True,
-                walltime="02:00:00",
-                **kw,
-            )
-        else:
+        default_labels = []
+        trainig_labels = []
+        reference_labels = []
+
+        execs = []
+
+        if default_on_threads:
             default = ThreadPoolExecutor(
                 label="default",
                 max_threads=4,
                 working_dir=str(path_internal / "default"),
             )
+            execs.append(default)
 
-        gpu_part = get_slurm_provider(
-            gpu=True,
-            label="training",
-            init_blocks=0,
-            min_blocks=0,
-            max_blocks=4,
-            parallelism=1,
-            cores=12,
-            parsl_cores=False,
-            walltime="02:00:00",
-            **kw,
-        )
+        if not isinstance(cpu_cluster, list):
+            cpu_cluster = [cpu_cluster]
 
-        reference = get_slurm_provider(
-            label="reference",
-            memory_per_core=memory_per_core,
-            mem=min_memery_per_node,
-            init_blocks=0,
-            min_blocks=0,
-            max_blocks=64,
-            parallelism=1,
-            cores=singlepoint_nodes,
-            parsl_cores=False,
-            walltime=walltime,
-            **kw,
-        )
+        if gpu_cluster is not None:
+            for gpu in gpu_cluster:
+                kw = get_kwargs(gpu_cluster=gpu)
 
-        execs = [default, gpu_part, reference]
+                label = f"training_{gpu}"
 
-    return execs
+                gpu_part = get_slurm_provider(
+                    gpu=True,
+                    label=label,
+                    init_blocks=0,
+                    min_blocks=0,
+                    max_blocks=4,
+                    parallelism=1,
+                    cores=12,
+                    parsl_cores=False,
+                    walltime="02:00:00",
+                    **kw,
+                )
+                execs.append(gpu_part)
+                trainig_labels.append(label)
+
+        if cpu_cluster is not None:
+            for cpu in cpu_cluster:
+                kw = get_kwargs(cpu_cluster=cpu)
+
+                label = f"reference_{cpu}"
+
+                reference = get_slurm_provider(
+                    label=label,
+                    memory_per_core=memory_per_core,
+                    mem=min_memery_per_node,
+                    init_blocks=0,
+                    min_blocks=0,
+                    max_blocks=64,
+                    parallelism=1,
+                    cores=singlepoint_nodes,
+                    parsl_cores=False,
+                    walltime=walltime,
+                    **kw,
+                )
+
+                execs.append(reference)
+                reference_labels.append(label)
+
+                if default_on_threads:
+                    # general tasks
+                    label = f"default_{cpu}"
+
+                    default = get_slurm_provider(
+                        label=label,
+                        init_blocks=1,
+                        min_blocks=1,
+                        max_blocks=512,
+                        parallelism=1,
+                        cores=4,
+                        parsl_cores=True,
+                        walltime="02:00:00",
+                        **kw,
+                    )
+
+                    execs.append(default)
+                    default_labels.append(label)
+
+    return execs, [default_labels, trainig_labels, reference_labels]

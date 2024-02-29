@@ -12,6 +12,7 @@ from parsl import bash_app
 from parsl import File
 from parsl import python_app
 from parsl.dataflow.futures import AppFuture
+from IMLCV.configs.config_general import DEFAULT_LABELS
 
 
 # @typeguard.typechecked
@@ -147,7 +148,7 @@ def bash_app_python(
 
             load.__name__ = f"{func.__name__}_load"
 
-            return python_app(load, executors=["default"])(
+            return python_app(load, executors=DEFAULT_LABELS)(
                 inputs=future.outputs,
                 outputs=outp,
             )
