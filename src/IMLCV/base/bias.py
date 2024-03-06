@@ -34,6 +34,7 @@ from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
 from typing_extensions import Self
+from jax.tree_util import tree_flatten
 
 
 yaff.log.set_level(yaff.log.silent)
@@ -684,9 +685,30 @@ class Bias(PyTreeNode, ABC):
             )
             raise e
 
-    # def __eq__(self, other):
-    #     print(f"comparing bias {self=}, {other=}")
-    #     return hash(self) == hash(other)
+    def __eq__(self, other):
+        if not isinstance(other, Bias):
+            return False
+
+        self_val, self_tree = tree_flatten(self)
+        other_val, other_tree = tree_flatten(other)
+
+        if not self_tree == other_tree:
+            return False
+
+        for a, b in zip(self_val, other_val):
+            a = jnp.array(a)
+            b = jnp.array(b)
+
+            if not a.shape == b.shape:
+                return False
+
+            if not a.dtype == b.dtype:
+                return False
+
+            if not jnp.allclose(a, b):
+                return False
+
+        return True
 
 
 class CompositeBias(Bias):
@@ -704,6 +726,8 @@ class CompositeBias(Bias):
         for b in biases:
             if collective_variable is None:
                 collective_variable = b.collective_variable
+            else:
+                assert collective_variable == b.collective_variable, "encountered 2 different collective variables"
 
             if b is NoneBias:
                 continue

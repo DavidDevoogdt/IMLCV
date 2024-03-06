@@ -39,9 +39,9 @@ class HarmonicBias(Bias):
 
     q0: CV
     k: Array
-    k_max: Array | None = field(pytree_node=False, default=None)
-    y0: Array | None = field(pytree_node=False, default=None)
-    r0: Array | None = field(pytree_node=False, default=None)
+    k_max: Array | None = field(default=None)
+    y0: Array | None = field(default=None)
+    r0: Array | None = field(default=None)
 
     @classmethod
     def create(
@@ -233,7 +233,7 @@ class RbfBias(Bias):
     values are caluclated in bin centers
     """
 
-    rbf: RBFInterpolator = field(pytree_node=True)
+    rbf: RBFInterpolator
 
     @classmethod
     def create(

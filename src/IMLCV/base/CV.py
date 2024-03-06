@@ -259,23 +259,22 @@ class SystemParams(PyTreeNode):
         return self.coordinates.shape
 
     def __add__(self, other):
-        assert isinstance(other, SystemParams), f"{other=} is not { SystemParams} "
-        if self.cell is None:
-            assert other.cell is None
-
-        s = self.batch()
-        o = other.batch()
-
-        assert s.shape[1:] == o.shape[1:]
-
-        return SystemParams(
-            coordinates=jnp.vstack([s.coordinates, o.coordinates]),
-            cell=None if self.cell is None else jnp.vstack([s.cell, o.cell]),
-        )
+        return SystemParams.stack(self, other)
 
     @staticmethod
     def stack(*sps: SystemParams) -> SystemParams:
-        return sum(sps[1:], sps[0])
+        sps = [sp.batch() for sp in sps]
+        has_cell = sps[0].cell is not None
+        s = sps[0].shape[1:]
+
+        for sp in sps:
+            assert (sp.cell is not None) == has_cell
+            assert sp.shape[1:] == s
+
+        return SystemParams(
+            coordinates=jnp.vstack([s.coordinates for s in sps]),
+            cell=jnp.vstack([s.cell for s in sps]) if has_cell else None,
+        )
 
     def batch(self) -> SystemParams:
         if self.batched:
@@ -1458,114 +1457,114 @@ class NeighbourList(PyTreeNode):
         )
 
     def __add__(self, other):
-        assert isinstance(other, NeighbourList)
-
-        if not self.batched:
-            self = self.batch()
-
-        if not other.batched:
-            other = other.batch()
-
-        assert self.r_cut == other.r_cut
-        assert self.r_skin == other.r_skin
-        if self.z_array is None:  # pragma: no cover
-            assert other.z_array is None
-        else:
-            assert jnp.all(self.z_array == other.z_array)
-
-        if self.z_unique is None:
-            assert other.z_unique is None
-        else:
-            assert jnp.all(self.z_unique == other.z_unique)
-
-        if self.atom_indices is not None:
-            assert other.atom_indices is not None
-
-        if self.nxyz is None:
-            assert other.nxyz is None
-            nxyz = None
-        else:
-            nxyz = [max(a, b) for a, b in zip(self.nxyz, other.nxyz)]
-
-        if self.sp_orig is None:
-            assert other.sp_orig is None
-
-        if self.ijk_indices is None:
-            assert other.ijk_indices is None
-
-        if self.op_cell is None:
-            assert other.op_cell is None
-
-        if self.op_coor is None:
-            assert other.op_coor is None
-
-        if self.op_center is None:
-            assert other.op_center is None
-
-        if self.num_z_unique is None:
-            assert other.num_z_unique is None
-        else:
-            assert jnp.all(self.num_z_unique == other.num_z_unique)
-
-        op_cell = None
-        op_coor = None
-        op_center = None
-        ijk_indices = None
-        atom_indices = None
-
-        if self.atom_indices is not None or self.ijk_indices is not None:  # depends on number of neighbours
-            if self.atom_indices is not None:
-                m = jnp.max(
-                    jnp.array([self.atom_indices.shape[-1], other.atom_indices.shape[-1]]),
-                )
-            else:
-                m = jnp.max(
-                    jnp.array([self.ijk_indices.shape[-2], other.ijk_indices.shape[-2]]),
-                )
-
-            @vmap
-            def _p(a):
-                n = m - a.shape[-1]
-
-                return jnp.pad(
-                    array=a,
-                    pad_width=((0, 0), (0, n)),
-                    constant_values=-1,
-                )
-
-            if self.atom_indices is not None:
-                atom_indices = jnp.vstack([_p(self.atom_indices), _p(other.atom_indices)])
-
-            if self.ijk_indices is not None:
-                _p = vmap(_p, in_axes=(-1), out_axes=(-1))
-                ijk_indices = jnp.vstack([_p(self.ijk_indices), _p(other.ijk_indices)])
-
-        if self.op_cell is not None:
-            op_cell = jnp.vstack([self.op_cell, other.op_cell])
-        if self.op_coor is not None:
-            op_coor = jnp.vstack([self.op_coor, other.op_coor])
-
-        if self.op_center is not None:
-            op_center = jnp.vstack([self.op_center, other.op_center])
-
-        return NeighbourList(
-            r_cut=self.r_cut,
-            r_skin=self.r_skin,
-            atom_indices=atom_indices,
-            z_array=self.z_array,
-            z_unique=self.z_unique,
-            nxyz=nxyz,
-            sp_orig=self.sp_orig + other.sp_orig if self.sp_orig is not None else None,
-            ijk_indices=ijk_indices,
-            op_cell=op_cell,
-            op_coor=op_coor,
-            op_center=op_center,
-            num_z_unique=self.num_z_unique,
-        )
+        return NeighbourList.stack(self, other)
 
     @staticmethod
     def stack(*nls: NeighbourList) -> NeighbourList:
-        return sum(nls[1:], nls[0])
+        nls = [nli.batch() for nli in nls]
+
+        nl_0 = nls[0]
+
+        nxyz_none = nl_0.nxyz is None
+
+        nxyz = nl_0.nxyz
+
+        z_array = nl_0.z_array
+        z_unique = nl_0.z_unique
+        num_z_unique = nl_0.num_z_unique
+
+        sp_orig_none = nl_0.sp_orig is None
+        ijk_indices_none = nl_0.ijk_indices is None
+        op_cell_none = nl_0.op_cell is None
+        op_coor_none = nl_0.op_coor is None
+        op_center_none = nl_0.op_center is None
+        atom_indices_none = nl_0.atom_indices is None
+
+        m = nl_0.atom_indices.shape[-1] if not atom_indices_none else None
+
+        r_cut = jnp.max(jnp.array([nli.r_cut for nli in nls]))
+
+        def c(a, b):
+            if a is None:
+                assert b is None
+            else:
+                assert jnp.all(a == b)
+
+        # consistency checks
+        for nl_i in nls:
+            assert nl_i.r_cut + nl_i.r_skin >= r_cut
+
+            c(z_array, nl_i.z_array)
+            c(z_unique, nl_i.z_unique)
+            c(num_z_unique, nl_i.num_z_unique)
+
+            assert sp_orig_none == (nl_i.sp_orig is None)
+            assert ijk_indices_none == (nl_i.ijk_indices is None)
+            assert op_cell_none == (nl_i.op_cell is None)
+            assert op_coor_none == (nl_i.op_coor is None)
+            assert op_center_none == (nl_i.op_center is None)
+            assert atom_indices_none == (nl_i.atom_indices is None)
+
+            if not nxyz_none:
+                nxyz = [max(a, b) for a, b in zip(nxyz, nl_i.nxyz)]
+
+            if not atom_indices_none:  #
+                m = jnp.max(
+                    jnp.array([m, nl_i.atom_indices.shape[-1]]),
+                )
+
+        r_skin = jnp.min(jnp.array([nli.r_cut + nli.r_skin - r_cut for nli in nls]))
+
+        @vmap
+        def _p(a: jax.Array):
+            # pad to size of largest neighbourlist
+            n = m - a.shape[-1]
+
+            return jnp.pad(
+                array=a,
+                pad_width=((0, 0), (0, n)),
+                constant_values=-1,
+            )
+
+        op_cell = None if atom_indices_none else []
+        op_coor = None if op_coor_none else []
+        op_center = None if op_center_none else []
+        ijk_indices = None if ijk_indices_none else []
+        atom_indices = None if atom_indices_none else []
+
+        for nl_i in nls:
+            if not atom_indices_none:
+                atom_indices.append(_p(nl_i.atom_indices))
+
+            if not ijk_indices_none:
+                ijk_indices.append(vmap(_p, in_axes=(-1), out_axes=(-1))(nl_i.ijk_indices))
+
+            if not op_cell_none:
+                op_cell.append(nl_i.op_cell)
+
+            if not op_coor_none:
+                op_coor.append(nl_i.op_coor)
+
+            if not op_center_none:
+                op_center.append(nl_i.op_center)
+
+        # toto
+        sp_orig = SystemParams.stack(*[nl_i.sp_orig for nl_i in nls]) if not sp_orig_none else None
+
+        return NeighbourList(
+            r_cut=r_cut,
+            r_skin=r_skin,
+            atom_indices=jnp.vstack(atom_indices) if not atom_indices_none else None,
+            z_array=z_array,
+            z_unique=z_unique,
+            nxyz=nxyz,
+            sp_orig=sp_orig,
+            ijk_indices=jnp.vstack(ijk_indices) if not ijk_indices_none else None,
+            op_cell=jnp.vstack(op_cell) if not op_cell_none else None,
+            op_coor=jnp.vstack(op_coor) if not op_coor_none else None,
+            op_center=jnp.vstack(op_center) if not op_center_none else None,
+            num_z_unique=num_z_unique,
+        )
 
 
 class CV(PyTreeNode):
@@ -2910,3 +2909,28 @@ class CollectiveVariable(PyTreeNode):
 
     def __setstate__(self, statedict: dict):
         self.__init__(**statedict)
+
+    def __eq__(self, other):
+        if not isinstance(other, CollectiveVariable):
+            return False
+
+        self_val, self_tree = tree_flatten(self)
+        other_val, other_tree = tree_flatten(other)
+
+        if not self_tree == other_tree:
+            return False
+
+        for a, b in zip(self_val, other_val):
+            a = jnp.array(a)
+            b = jnp.array(b)
+
+            if not a.shape == b.shape:
+                return False
+
+            if not a.dtype == b.dtype:
+                return False
+
+            if not jnp.allclose(a, b):
+                return False
+
+        return True

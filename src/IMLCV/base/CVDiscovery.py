@@ -20,8 +20,6 @@ from IMLCV.implementations.CV import scale_cv_trans
 from matplotlib import gridspec
 from matplotlib.figure import Figure
 
-# from jax_dataclasses import copy_and_mutate
-
 
 class Transformer:
     def __init__(
@@ -200,10 +198,8 @@ class Transformer:
         if plot:
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery.pdf"),
-                old_cv=dlo.collective_variable,
-                new_cv=new_collective_variable,
-                cv_data_old=CV.stack(*dlo.cv),
-                cv_data_new=z,
+                collective_variables=[dlo.collective_variable, new_collective_variable],
+                cv_data=[CV.stack(*dlo.cv), z],
                 margin=0.1,
             )
 
@@ -228,15 +224,11 @@ class Transformer:
 
     @staticmethod
     def plot_app(
-        old_cv: CollectiveVariable,
-        new_cv: CollectiveVariable,
+        collective_variables: list[CollectiveVariable],
+        cv_data: list[CV] | list[list[CV]],
+        duplicate_cv_data=True,
         name: str | Path | None = None,
         labels=None,
-        sps: SystemParams = None,
-        nl: NeighbourList = None,
-        chunk_size: int | None = None,
-        cv_data_old: CV | None = None,
-        cv_data_new: CV | None = None,
         cv_titles=None,
         data_titles=None,
         color_trajectories=False,
@@ -244,31 +236,18 @@ class Transformer:
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
-        cv_data: list[CV] = []
+        ncv = len(collective_variables)
 
-        metrics = [old_cv.metric, new_cv.metric]
+        if duplicate_cv_data:
+            cv_data = [cv_data] * ncv
 
-        if cv_data_old is None:
-            cv_data.append(old_cv.compute_cv(sps, nl, chunk_size=chunk_size)[0])
-        else:
-            cv_data.append(cv_data_old)
-
-        if cv_data_new is None:
-            cv_data.append(new_cv.compute_cv(sps, nl, chunk_size=chunk_size)[0])
-        else:
-            cv_data.append(cv_data_new)
+        metrics = [colvar.metric for colvar in collective_variables]
 
         if cv_titles is None:
-            cv_titles = ["Old CV", "New CV"]
+            cv_titles = [f"cv_{i}" for i in range(ncv)]
 
-        # if data_titles is None:
-        #     data_titles = ["Old Data", "New Data"]
-
-        # plot setting
-        kwargs = {
-            "s": 0.3,
-            "edgecolor": "none",
-        }
+        if data_titles is None:
+            data_titles = [f"data_{i}" for i in range(ncv)]
 
         if labels is None:
             labels = [
@@ -276,59 +255,61 @@ class Transformer:
                 ["cv_1 [a.u.]", "cv_2 [a.u.]", "cv_3 [a.u.]"],
             ]
 
-        indim = cv_data[0].shape[1]
-        outdim = cv_data[1].shape[1]
-
-        inoutdims = [indim, outdim]
+        inoutdims = [cv_data[n][n].shape[1] for n in range(ncv)]
 
         plt.rc("text", usetex=False)
         plt.rc("font", family="DejaVu Sans", size=16)
 
         fig = plt.figure(figsize=(6, 6))
+        rgb_data = [
+            Transformer._get_color_data(
+                cv_data[n][n],
+                inoutdims[n],
+                color_trajectories,
+                metric=metrics[n],
+                margin=margin,
+            ).cv
+            for n in range(ncv)
+        ]
 
-        for in_out_color, ls, rs in Transformer._grid_spec_iterator(
+        for data_in, in_out, axes in Transformer._grid_spec_iterator(
             fig=fig,
-            indim=indim,
-            outdim=outdim,
+            dims=inoutdims,
             cv_titles=cv_titles,
             data_titles=data_titles,
         ):
-            rgb = Transformer._get_color_data(
-                cv_data[in_out_color],
-                inoutdims[in_out_color],
-                color_trajectories,
-                metric=metrics[in_out_color],
+            dim = inoutdims[in_out]
+
+            data_proc = cv_data[data_in][in_out].cv
+            if dim == 1:
+                x = []
+                for i, ai in enumerate(cv_data[data_in][in_out].unstack()):
+                    x.append(ai.cv * 0 + i)
+
+                data_proc = jnp.hstack([data_proc, jnp.vstack(x)])
+
+                f = Transformer._plot_1d
+            elif dim == 2:
+                f = Transformer._plot_2d
+            elif dim == 3:
+                f = Transformer._plot_3d
+
+            # plot setting
+            kwargs = {
+                "s": (300 / data_proc.shape[0]) ** (0.5),
+                "edgecolor": "none",
+            }
+
+            f(
+                fig,
+                axes,
+                data_proc,
+                rgb_data[data_in],
+                labels[0:dim],
+                metric=metrics[in_out],
                 margin=margin,
-            ).cv
-
-            def do_plot(dim, in_out, axes):
-                data_proc = cv_data[in_out].cv
-                if dim == 1:
-                    x = []
-                    for i, ai in enumerate(cv_data[in_out].unstack()):
-                        x.append(ai.cv * 0 + i)
-
-                    data_proc = jnp.hstack([data_proc, jnp.vstack(x)])
-
-                    f = Transformer._plot_1d
-                elif dim == 2:
-                    f = Transformer._plot_2d
-                elif dim == 3:
-                    f = Transformer._plot_3d
-
-                f(
-                    fig,
-                    axes,
-                    data_proc,
-                    rgb,
-                    labels[in_out][0:dim],
-                    metric=metrics[in_out],
-                    margin=margin,
-                    **kwargs,
-                )
-
-            do_plot(indim, 0, ls)
-            do_plot(outdim, 1, rs)
+                **kwargs,
+            )
 
         if name is None:
             plt.show()
@@ -348,49 +329,49 @@ class Transformer:
     @staticmethod
     def _grid_spec_iterator(
         fig: Figure,
-        indim,
-        outdim,
+        dims,
         cv_titles,
         data_titles=None,
     ) -> Iterator[tuple[list[int], int, list[plt.Axes], list[plt.Axes]]]:
-        width_in = 1 if indim < 3 else 2
-        width_out = 1 if outdim < 3 else 2
+        widths = [1 if i < 3 else 2 for i in dims]
 
         spec = fig.add_gridspec(
-            nrows=3,
-            ncols=3,
-            width_ratios=[0.01, width_in, width_out],
-            height_ratios=[0.01, 1, 1],
-            wspace=0.3,
-            hspace=0.2,
+            nrows=len(dims) + 1,
+            ncols=len(dims) + 1,
+            width_ratios=[0.3, *widths],
+            height_ratios=[0, *[1 for _ in dims]],
+            wspace=0.1,
+            hspace=0.1,
         )
 
-        yield 0, spec[1, 1], spec[1, 2]
-        yield 1, spec[2, 1], spec[2, 2]
+        for data_in in range(len(dims)):
+            for cv_in in range(len(dims)):
+                yield data_in, cv_in, spec[data_in + 1, cv_in + 1]
 
-        def add_ax(sp):
-            ax = fig.add_subplot(sp)
+        for i in range(len(dims)):
+            s = spec[0, i + 1]
+            pos = s.get_position(fig)
 
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.spines["right"].set_visible(False)
-            ax.spines["top"].set_visible(False)
-            ax.spines["bottom"].set_visible(False)
-            ax.spines["left"].set_visible(False)
-            return ax
+            fig.text(
+                x=(pos.x0 + pos.x1) / 2,
+                y=(pos.y0 + pos.y1) / 2,
+                s=cv_titles[i],
+                ha="center",
+                va="center",
+            )
 
-        ax_left = add_ax(spec[0, 1])
-        ax_left.set_title(cv_titles[0])
+            if data_titles is not None:
+                s = spec[i + 1, 0]
+                pos = s.get_position(fig)
 
-        ax_right = add_ax(spec[0, 2])
-        ax_right.set_title(cv_titles[1])
-
-        if data_titles is not None:
-            ax_up = add_ax(spec[1, 0])
-            ax_up.set_title(data_titles[0])
-
-            ax_down = add_ax(spec[2, 0])
-            ax_down.set_title(data_titles[1])
+                fig.text(
+                    x=(pos.x0 + pos.x1) / 2,
+                    y=(pos.y0 + pos.y1) / 2,
+                    s=data_titles[i],
+                    ha="center",
+                    va="center",
+                    rotation=90,
+                )
 
     @staticmethod
     def _plot_1d(
@@ -508,7 +489,10 @@ class Transformer:
             labelbottom=False,
         )
 
-        ax.locator_params(nbins=3)
+        ax.locator_params(nbins=4)
+
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
 
         if margin is not None:
             ax.set_xlim(*x_lim)
@@ -696,7 +680,6 @@ class Transformer:
             rgb.append(hsluv_to_rgb(s))
 
         rgb = jnp.array(rgb)
-
         return a.replace(cv=rgb)
 
     def __mul__(self, other):

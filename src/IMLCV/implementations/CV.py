@@ -23,9 +23,12 @@ from IMLCV.base.CV import SystemParams
 from jax import Array
 from jax import vmap
 from ott.geometry.pointcloud import PointCloud
+from ott.geometry.geometry import Geometry
 from ott.problems.linear import linear_problem
 from ott.solvers.linear import implicit_differentiation
-from ott.solvers.linear import sinkhorn
+from ott.solvers.linear import sinkhorn, solve
+from functools import partial
+
 ######################################
 #       CV transformations           #
 ######################################
@@ -699,11 +702,12 @@ def sinkhorn_divergence_2(
     alpha=1e-2,
     normalize=True,
     sum_divergence=False,
-    ridge=1e-5,
-    sinkhorn_iterations=20,
+    ridge=0,
+    sinkhorn_iterations=None,
     use_dankskin=False,
     r_cond_svd=1e-10,
-    method="jvp",
+    method=None,
+    op=None,
 ) -> Array:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -713,7 +717,7 @@ def sinkhorn_divergence_2(
     assert not x1.batched
     assert not x2.batched
 
-    eps = 100 * jnp.finfo(x1.cv.dtype).eps
+    eps = 10 * jnp.finfo(x1.cv.dtype).eps
 
     def p_norm(x: CV):
         p = x.cv
@@ -733,10 +737,11 @@ def sinkhorn_divergence_2(
         x1 = p_norm(x1)
         x2 = p_norm(x2)
 
-    from ott.tools import sinkhorn_divergence
+    src_mask, _, p1 = nl1.nl_split_z(x1)
+    tgt_mask, _, p2 = nl2.nl_split_z(x2)
 
-    b1, _, p1 = nl1.nl_split_z(x1)
-    _, _, p2 = nl2.nl_split_z(x2)
+    # src_mask = jnp.array(src_mask)
+    # tgt_mask = jnp.array(tgt_mask)
 
     def solve_lineax_svd(
         lin,
@@ -783,6 +788,8 @@ def sinkhorn_divergence_2(
 
             return lx.linear_solve(fn_operator, b, solver).value
 
+        # methods to differentiate through the solver
+        # They're not needed as the the derivatives are taken as jacrev(solve) jacfwd(jacrev(solve)) below, but are needed for 3rd order derivatives
         if method == "jvp":
             _solve = jax.custom_jvp(_solve, nondiff_argnums=(0, 1))
 
@@ -821,8 +828,6 @@ def sinkhorn_divergence_2(
                 jac_operator = lx.JacobianLinearOperator(_f, y)
                 y_dot = lx.linear_solve(jac_operator, b_dot, solver).value
 
-                print(f"{y_dot=}")
-
                 return (y_dot, None)
 
             _solve.defvjp(_solve_fwd, _solve_rev)
@@ -837,6 +842,7 @@ def sinkhorn_divergence_2(
                 "ridge_identity": ridge,
                 "ridge_kernel": ridge,
                 "r_cond_svd": r_cond_svd,
+                "method": method,
             },
         ),
         "use_danskin": use_dankskin,
@@ -847,24 +853,87 @@ def sinkhorn_divergence_2(
         sinkhorn_kwargs["max_iterations"] = sinkhorn_iterations
 
     def get_divergence(p1, p2):
-        return sinkhorn_divergence.sinkhorn_divergence(
-            PointCloud,
+        cost_xy = PointCloud(
             x=jnp.reshape(p1, (p1.shape[0], -1)),
             y=jnp.reshape(p2, (p2.shape[0], -1)),
             epsilon=alpha,
-            sinkhorn_kwargs=sinkhorn_kwargs,
-        ).divergence
+        ).cost_matrix
 
-    divergences = []
-    for p1_z, p2_z in zip(p1, p2):
-        divergences.append(get_divergence(p1_z.cv, p2_z.cv))
+        cost_xx = PointCloud(
+            x=jnp.reshape(p1, (p1.shape[0], -1)),
+            y=jnp.reshape(p1, (p1.shape[0], -1)),
+            epsilon=alpha,
+        ).cost_matrix
 
-    divergences = jnp.array(divergences)
+        cost_yy = PointCloud(
+            x=jnp.reshape(p2, (p2.shape[0], -1)),
+            y=jnp.reshape(p2, (p2.shape[0], -1)),
+            epsilon=alpha,
+        ).cost_matrix
+
+        num_a, num_b = p1.shape[0], p2.shape[0]
+
+        a = jnp.ones(num_a) / num_a
+        b = jnp.ones(num_b) / num_b
+
+        # raw sinkhorn optimal transport cost
+        def _f(cost, a, b):
+            geom = Geometry(cost, epsilon=alpha)
+            return solve(geom, a, b, **sinkhorn_kwargs).reg_ot_cost
+
+        @partial(jax.custom_jvp, nondiff_argnums=(0,))
+        def f(_f, cost, a, b):
+            return _f(cost, a, b)
+
+        @partial(jax.custom_jvp, nondiff_argnums=(0,))
+        def df(_f, cost, a, b):
+            return jax.jacrev(_f, argnums=0)(cost, a, b)
+
+        def ddf(_f, cost, a, b):
+            # jacfwd(jacrev(_f)) needed to avoid predefined  number of sinkhorn iterations
+            return jax.hessian(_f)(cost, a, b)
+
+        @f.defjvp
+        def f_jvp(_f, primals, tangents):
+            (cost, a, b) = primals
+            (cost_dot, _, _) = tangents
+
+            y = f(_f, cost, a, b)
+            dy = df(_f, cost, a, b)
+
+            return y, jnp.einsum("ij,ij->", dy, cost_dot)
+
+        @df.defjvp
+        def df_jvp(f, primals, tangents):
+            (cost, a, b) = primals
+            (cost_dot, _, _) = tangents
+
+            dy = df(_f, cost, a, b)
+            ddy = ddf(_f, cost, a, b)
+
+            return dy, jnp.einsum("ijkl,kl->ij", ddy, cost_dot)
+
+        if op == "jacrev":
+            fun = partial(df, _f)
+
+        else:
+            fun = partial(f, _f)
+
+        out_xy = fun(cost_xy, a, b)
+        out_xx = fun(cost_xx, a, a)
+        out_yy = fun(cost_yy, b, b)
+
+        div = out_xy - 0.5 * (out_xx + out_yy) + 0.5 * alpha * (jnp.sum(a) - jnp.sum(b)) ** 2
+
+        return div
+
+    # this is not vmappable because it has different lengths. The src_mask and tgt_mask in ott jax geometry do not produce the desired results
+    divergences = jnp.array([get_divergence(p1_i.cv, p2_i.cv) for p1_i, p2_i in zip(p1, p2)])
 
     if sum_divergence:
         raise NotImplementedError
         # weigh according to number of atoms
-        w = jnp.sum(b1, axis=1)
+        w = jnp.sum(src_mask, axis=1)
         w /= jnp.sum(w)
         divergences = jnp.dot(divergences, w)
 
@@ -876,56 +945,68 @@ def _sinkhorn_divergence_trans_2(
     nl: NeighbourList | None,
     _,
     nli: NeighbourList,
-    pi,
+    pi: CV,
     alpha_rematch,
     output,
     normalize,
     sum_divergence,
     ddiv_arg=0,
-    ridge=1e-5,
-    sinkhorn_iterations=20,
+    ridge=0,
+    sinkhorn_iterations=None,
     r_cond_svd=1e-10,
-    method="jvp",
+    method=None,
+    op=None,
 ):
     assert nl is not None, "Neigbourlist required for rematch"
 
     def f(pii, cv, nlii, nl):
-        return CV(
-            cv=sinkhorn_divergence_2(
-                x1=cv,
-                x2=pii,
-                nl1=nl,
-                nl2=nlii,
-                alpha=alpha_rematch,
-                normalize=normalize,
-                sum_divergence=sum_divergence,
-                ridge=ridge,
-                sinkhorn_iterations=sinkhorn_iterations,
-                use_dankskin=False,
-                r_cond_svd=r_cond_svd,
-                method=method,
-            ),
-            _stack_dims=cv._stack_dims,
+        return sinkhorn_divergence_2(
+            x1=cv,
+            x2=pii,
+            nl1=nl,
+            nl2=nlii,
+            alpha=alpha_rematch,
+            normalize=normalize,
+            sum_divergence=sum_divergence,
+            ridge=ridge,
+            sinkhorn_iterations=sinkhorn_iterations,
+            use_dankskin=False,
+            r_cond_svd=r_cond_svd,
+            method=method,
+            op=op,
         )
 
-    if pi.batched:
+    def get_div(pi, cv):
+        if pi.batched:
+            cv_arr = vmap(f, in_axes=(0, None, 0, None))(pi, cv, nli, nl)
+        else:
+            cv_arr = f(pi, cv, nli, nl)
 
-        def get_div(pi, cv):
-            return CV.combine(*[f(pii, cv, nlii, nl) for pii, nlii in zip(pi, nli)])
+        if pi.batched:
+            _combine_dims = [cv_arr.shape[1]] * cv_arr.shape[0]
+            cv_arr = jnp.hstack(cv_arr)
 
-    else:
+        else:
+            _combine_dims = None
 
-        def get_div(pi, cv):
-            return f(pi, cv, nli, nl)
+        _stack_dims = cv._stack_dims
+
+        return CV(
+            cv=cv_arr,
+            _stack_dims=_stack_dims,
+            _combine_dims=_combine_dims,
+            atomic=False,
+        )
 
     if output == "ddiv":
         div = jax.jacrev(get_div, argnums=ddiv_arg)(pi, cv).cv
+
     elif output == "both":
         assert not sum_divergence, "not implemented"
 
         # taken from https://github.com/google/jax/pull/762
-        def value_and_jacrev(f, x):
-            y, pullback = jax.vjp(f, x)
+        def value_and_jacrev(g, x):
+            y, pullback = jax.vjp(g, x)
             basis = y.replace(cv=jnp.eye(y.cv.size, dtype=y.cv.dtype))
             (jac,) = jax.vmap(pullback)(basis)
             return y, jac
@@ -966,11 +1047,12 @@ def get_sinkhorn_divergence_2(
     normalize=True,
     sum_divergence=False,
     ddiv_arg=0,
-    ridge=1e-5,
-    sinkhorn_iterations=10,
+    ridge=0,
+    sinkhorn_iterations=None,
     merge=False,
     r_cond_svd=1e-10,
-    method="jvp",
+    method=None,
+    op=None,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -989,6 +1071,7 @@ def get_sinkhorn_divergence_2(
             "sinkhorn_iterations",
             "r_cond_svd",
             "method",
+            "op",
         ],
         nli=nli,
         pi=pi,
@@ -1001,6 +1084,7 @@ def get_sinkhorn_divergence_2(
         sinkhorn_iterations=sinkhorn_iterations,
         r_cond_svd=r_cond_svd,
         method=method,
+        op=op,
     )
 
 
@@ -1167,101 +1251,18 @@ def affine_2d(old: Array, new: Array):
 
     A = jnp.array(
         [
-            [
-                old[0, 0],
-                old[0, 1],
-                1,
-                0,
-                0,
-                0,
-                -old[0, 0] * new[0, 0],
-                -old[0, 1] * new[0, 0],
-            ],
-            [
-                old[1, 0],
-                old[1, 1],
-                1,
-                0,
-                0,
-                0,
-                -old[1, 0] * new[1, 0],
-                -old[1, 1] * new[1, 0],
-            ],
-            [
-                old[2, 0],
-                old[2, 1],
-                1,
-                0,
-                0,
-                0,
-                -old[2, 0] * new[2, 0],
-                -old[2, 1] * new[2, 0],
-            ],
-            [
-                old[3, 0],
-                old[3, 1],
-                1,
-                0,
-                0,
-                0,
-                -old[3, 0] * new[3, 0],
-                -old[3, 1] * new[3, 0],
-            ],
-            [
-                0,
-                0,
-                0,
-                old[0, 0],
-                old[0, 1],
-                1,
-                -old[0, 0] * new[0, 1],
-                -old[0, 1] * new[0, 1],
-            ],
-            [
-                0,
-                0,
-                0,
-                old[1, 0],
-                old[1, 1],
-                1,
-                -old[1, 0] * new[1, 1],
-                -old[1, 1] * new[1, 1],
-            ],
-            [
-                0,
-                0,
-                0,
-                old[2, 0],
-                old[2, 1],
-                1,
-                -old[2, 0] * new[2, 1],
-                -old[2, 1] * new[2, 1],
-            ],
-            [
-                0,
-                0,
-                0,
-                old[3, 0],
-                old[3, 1],
-                1,
-                -old[3, 0] * new[3, 1],
-                -old[3, 1] * new[3, 1],
-            ],
+            [old[0, 0], old[0, 1], 1, 0, 0, 0, -old[0, 0] * new[0, 0], -old[0, 1] * new[0, 0]],
+            [old[1, 0], old[1, 1], 1, 0, 0, 0, -old[1, 0] * new[1, 0], -old[1, 1] * new[1, 0]],
+            [old[2, 0], old[2, 1], 1, 0, 0, 0, -old[2, 0] * new[2, 0], -old[2, 1] * new[2, 0]],
+            [old[3, 0], old[3, 1], 1, 0, 0, 0, -old[3, 0] * new[3, 0], -old[3, 1] * new[3, 0]],
+            [0, 0, 0, old[0, 0], old[0, 1], 1, -old[0, 0] * new[0, 1], -old[0, 1] * new[0, 1]],
+            [0, 0, 0, old[1, 0], old[1, 1], 1, -old[1, 0] * new[1, 1], -old[1, 1] * new[1, 1]],
+            [0, 0, 0, old[2, 0], old[2, 1], 1, -old[2, 0] * new[2, 1], -old[2, 1] * new[2, 1]],
+            [0, 0, 0, old[3, 0], old[3, 1], 1, -old[3, 0] * new[3, 1], -old[3, 1] * new[3, 1]],
         ],
     )
 
-    X = jnp.array(
-        [
-            new[0, 0],
-            new[1, 0],
-            new[2, 0],
-            new[3, 0],
-            new[0, 1],
-            new[1, 1],
-            new[2, 1],
-            new[3, 1],
-        ]
-    )
+    X = jnp.array([new[0, 0], new[1, 0], new[2, 0], new[3, 0], new[0, 1], new[1, 1], new[2, 1], new[3, 1]])
 
     C = jnp.linalg.solve(A, X)
 
@@ -1298,13 +1299,53 @@ def _cv_slice(cv: CV, nl: NeighbourList, _, indices):
     return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
 
 
-def get_non_constant_trans(c: CV, epsilon=1e-14):
+def get_non_constant_trans(c: CV, epsilon=1e-14, max_functions=None):
     assert c.batched
-    mask = jnp.linalg.norm(c.cv - jnp.mean(c.cv, axis=0), axis=0) > epsilon
+
+    norm = jnp.linalg.norm(c.cv - jnp.mean(c.cv, axis=0), axis=0)
+
+    mask = norm > epsilon
+
+    if max_functions is not None:
+        if jnp.sum(mask) > max_functions:
+            idx = jnp.argsort(norm)[-(max_functions + 1)]
+            mask = norm > norm[idx]
+            print(f"Settings eps={norm[idx]}")
+
     args = jnp.argwhere(mask).reshape((-1,))
     trans = CvTrans.from_cv_function(_cv_slice, indices=args)
 
     return trans.compute_cv_trans(c)[0], trans
+
+
+def get_feature_cov(c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None) -> tuple[CV, CV, CvTrans]:
+    c0 = c_0.cv
+    c1 = c_tau.cv
+    mu0 = jnp.mean(c0, axis=0)
+    mu1 = jnp.mean(c1, axis=0)
+
+    c0 = c0 - mu0
+    c1 = c1 - mu1
+
+    sigma0 = jnp.mean(c0 * c0, axis=0)  # jnp.var(c0, axis=0)
+    sigma1 = jnp.mean(c1 * c1, axis=0)  # jnp.var(c1, axis=0)
+
+    cov = jnp.mean(c0 * c1, axis=0) / jnp.sqrt(sigma0 * sigma1)
+
+    mask = cov > epsilon
+
+    print(jnp.sort(cov))
+
+    if max_functions is not None:
+        if jnp.sum(mask) > max_functions:
+            idx = jnp.argsort(cov)[-(max_functions + 1)]
+            mask = cov > cov[idx]
+            print(f"Settings eps={cov[idx]}")
+
+    args = jnp.argwhere(mask).reshape((-1,))
+    trans = CvTrans.from_cv_function(_cv_slice, indices=args)
+
+    return trans.compute_cv_trans(c_0)[0], trans.compute_cv_trans(c_tau)[0], trans
 
 
 ######################################

@@ -249,8 +249,12 @@ def get_slurm_provider(
     if py_env is None:
         if env == "hortense":
             print("setting python env for hortense")
-            py_env = f"""
-source {ROOT_DIR}/micromamba/envs/py310/bin/activate; which python
+            py_env = """
+export MAMBA_EXE=$VSC_HOME/IMLCV_scratch/bin/micromamba
+export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV_scratch/micromamba
+eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
+micromamba activate py311
+which python
             """
         elif env == "stevin":
             py_env = """

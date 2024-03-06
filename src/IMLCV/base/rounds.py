@@ -47,6 +47,9 @@ class TrajectoryInformation:
     finished: bool = False
 
     def get_bias(self) -> Bias | None:
+        if self.name_bias is None:
+            return None
+
         try:
             assert self.name_bias is not None
             return Bias.load(self.folder / self.name_bias)
@@ -222,6 +225,8 @@ class Rounds(ABC):
         for cv_c in self.path().glob("cv_*"):
             c = cv_c.parts[-1][3:]
 
+            print(f"recovering {c=}")
+
             self.add_cv(c=c)
 
             for round_r in cv_c.glob("round_*"):
@@ -255,23 +260,23 @@ class Rounds(ABC):
         if not dir.exists():
             dir.mkdir(parents=True)
 
+        if "valid" not in attr:
+            if (p := (self.path(c=c) / "invalid")).exists():
+                attr["valid"] = False
+            else:
+                attr["valid"] = True
+
+        if "name_cv" not in attr:
+            if (p := (self.path(c=c) / "cv.json")).exists():
+                attr["name_cv"] = self.rel_path(p)
+            elif (p := (self.path(c=c) / "cv")).exists():
+                attr["name_cv"] = self.rel_path(p)
+            else:
+                raise
+
         with self.lock:
             f = self.h5file
             f.create_group(f"{c}")
-
-            if "valid" not in attr:
-                if (p := (self.path(c=c) / "invalid")).exists():
-                    attr["valid"] = False
-                else:
-                    attr["valid"] = True
-
-            if "name_cv" not in attr:
-                if (p := (self.path(c=c) / "cv.json")).exists():
-                    attr["name_cv"] = self.rel_path(p)
-                elif (p := (self.path(c=c) / "cv")).exists():
-                    attr["name_cv"] = self.rel_path(p)
-                else:
-                    raise
 
             for key in attr:
                 if attr[key] is not None:
@@ -312,27 +317,27 @@ class Rounds(ABC):
             assert stic is not None
             stic.save(p)
 
+        if "valid" not in attr:
+            if (p := (self.path(c=c, r=r) / "invalid")).exists():
+                attr["valid"] = False
+            else:
+                attr["valid"] = True
+
+        if "name_bias" not in attr:
+            if (p := (self.path(c=c, r=r) / "bias.json")).exists():
+                attr["name_bias"] = self.rel_path(p)
+            elif (p := (self.path(c=c, r=r) / "bias")).exists():
+                attr["name_bias"] = self.rel_path(p)
+
+        if "name_md" not in attr:
+            if (p := (self.path(c=c, r=r) / "engine.json")).exists():
+                attr["name_md"] = self.rel_path(p)
+            elif (p := (self.path(c=c, r=r) / "engine")).exists():
+                attr["name_md"] = self.rel_path(p)
+
         with self.lock:
             f = self.h5file
             f[f"{c}"].create_group(f"{r}")
-
-            if "valid" not in attr:
-                if (p := (self.path(c=c, r=r) / "invalid")).exists():
-                    attr["valid"] = False
-                else:
-                    attr["valid"] = True
-
-            if "name_bias" not in attr:
-                if (p := (self.path(c=c, r=r) / "bias.json")).exists():
-                    attr["name_bias"] = self.rel_path(p)
-                elif (p := (self.path(c=c, r=r) / "bias")).exists():
-                    attr["name_bias"] = self.rel_path(p)
-
-            if "name_md" not in attr:
-                if (p := (self.path(c=c, r=r) / "engine.json")).exists():
-                    attr["name_md"] = self.rel_path(p)
-                elif (p := (self.path(c=c, r=r) / "engine")).exists():
-                    attr["name_md"] = self.rel_path(p)
 
             for key in attr:
                 if attr[key] is not None:
@@ -368,7 +373,8 @@ class Rounds(ABC):
         name_bias = directory / "bias.json"
         md.save(name_md)
         md.bias.save(name_bias)
-        md.bias.collective_variable
+
+        # assert md.bias.collective_variable == self.get_collective_variable(c=c)
 
         attr = {}
 
@@ -406,30 +412,30 @@ class Rounds(ABC):
             assert d is not None
             d.save(filename=p)
 
+        # check if in recover mode
+
+        if attrs is None:
+            attrs = {}
+
+        if "valid" not in attrs:
+            if (p := self.path(c=c, r=r, i=i) / "invalid").exists():
+                attrs["valid"] = False
+            else:
+                attrs["valid"] = True
+
+        if "finished" not in attrs:
+            if not (p := self.path(c=c, r=r, i=i) / "finished").exists():
+                attrs["finished"] = False
+            else:
+                attrs["finished"] = True
+
+        if bias is not None:
+            attrs["name_bias"] = bias
+
         with self.lock:
             f = self.h5file
             if f"{i}" not in f[f"{c}/{r}"]:
                 f.create_group(f"{c}/{r}/{i}")
-
-            # check if in recover mode
-
-            if attrs is None:
-                attrs = {}
-
-            if "valid" not in attrs:
-                if (p := self.path(c=c, r=r, i=i) / "invalid").exists():
-                    attrs["valid"] = False
-                else:
-                    attrs["valid"] = True
-
-            if "finished" not in attrs:
-                if not (p := self.path(c=c, r=r, i=i) / "finished").exists():
-                    attrs["finished"] = False
-                else:
-                    attrs["finished"] = True
-
-            if bias is not None:
-                attrs["name_bias"] = bias
 
             # copy
             for key, val in attrs.items():
@@ -576,14 +582,47 @@ class Rounds(ABC):
 
         def __add__(self, other):
             assert isinstance(other, Rounds.data_loader_output)
-            return Rounds.data_loader_output(
-                sp=[*self.sp, *other.sp],
-                nl=[*self.nl, *other.nl] if self.nl is not None else None,
-                cv=[*self.cv, *other.cv],
-                ti=[*self.ti, *other.ti],
+
+            assert self.time_series == other.time_series
+            assert (
+                self.collective_variable == other.collective_variable
+            ), "dlo cannot be added because the collective variables are different"
+            if self.tau is not None:
+                assert self.tau == other.tau
+            else:
+                assert other.tau is None
+
+            kwargs = dict(
                 sti=self.sti,
+                time_series=self.time_series,
+                tau=self.tau,
+                ground_bias=None,
                 collective_variable=self.collective_variable,
             )
+
+            kwargs["sp"] = [*self.sp, *other.sp]
+            kwargs["nl"] = [*self.nl, *other.nl] if self.nl is not None else None
+            kwargs["cv"] = [*self.cv, *other.cv]
+            kwargs["ti"] = [*self.ti, *other.ti]
+
+            if self.time_series:
+                kwargs["sp_t"] = [*self.sp_t, *other.sp_t] if self.sp_t is not None else None
+                kwargs["nl_t"] = [*self.nl_t, *other.nl_t] if self.nl_t is not None else None
+                kwargs["cv_t"] = [*self.cv_t, *other.cv_t] if self.cv_t is not None else None
+                kwargs["ti_t"] = [*self.ti_t, *other.ti]
+
+            if self.bias is not None:
+                assert other.bias is not None
+                kwargs["bias"] = [*self.bias, *other.bias]
+
+            if self.ground_bias is not None and other.ground_bias is not None:
+                if self.ground_bias == other.ground_bias:
+                    kwargs["ground_bias"] = self.ground_bias
+
+                else:
+                    print("ground_bias not the same, omitting")
+
+            return Rounds.data_loader_output(**kwargs)
 
         def weights(self, norm=True, method="FES", n_grid=40) -> list[jax.Array]:
             # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
@@ -855,6 +894,8 @@ class Rounds(ABC):
             if cv_tau is None:
                 cv_tau = CV.stack(*self.cv_t)
 
+            print(f"{cv_0.shape=}, {cv_tau.shape=}")
+
             if method == "tica":
                 if koopman_weight:
                     w = self.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w, eps=eps)
@@ -1005,6 +1046,7 @@ class Rounds(ABC):
         uniform=False,
         lag_n=1,
         colvar=None,
+        check_dtau=True,
     ) -> data_loader_output:
         weights = []
 
@@ -1140,7 +1182,7 @@ class Rounds(ABC):
 
         def choose(key, probs: Array, out: int, len: int):
             if uniform:
-                raise NotImplementedError
+                return key, jnp.arange(0, len, round(len / out))
 
             if len is None:
                 len = probs.shape[0]
@@ -1390,7 +1432,7 @@ class Rounds(ABC):
                 if not jnp.allclose(dt, tau):
                     print(f"dt = {dt}, tau = {tau}  ")
 
-                    raise "time steps are not equal"
+                    print("WARNING:time steps are not equal")
 
             from molmod.units import femtosecond
 
