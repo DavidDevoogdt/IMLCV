@@ -89,7 +89,7 @@ def _dihedral(sp: SystemParams, _nl, _c, numbers):
     return CV(cv=jnp.arctan2(y, x))
 
 
-def dihedral(numbers: list[int] | Array):
+def dihedral(numbers: tuple[int] | Array):
     """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
     angle-from-four-points-in-cartesian- coordinates-in-python.
 

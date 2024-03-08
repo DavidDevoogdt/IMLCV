@@ -28,7 +28,7 @@ def test_parallel(tmp_path, config_test):
 @pytest.mark.skip(reason="slow")
 def test_py_env(tmp_path, config_test):
     def _f(sp):
-        d_flow: CvFlow = dihedral([0, 1, 2, 3])
+        d_flow: CvFlow = dihedral((0, 1, 2, 3))
 
         return d_flow.compute_cv_flow(sp, None)[0]
 

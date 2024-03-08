@@ -30,7 +30,7 @@ from molmod.units import kelvin
 
 def test_harmonic():
     cvs = CollectiveVariable(
-        f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+        f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
         metric=CvMetric.create(
             periodicities=[True, True],
             bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]],
@@ -125,7 +125,7 @@ def test_combine_bias():
     T = 300 * kelvin
 
     cv0 = CollectiveVariable(
-        f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+        f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
         metric=CvMetric.create(
             periodicities=[True, True],
             bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
@@ -244,7 +244,7 @@ def test_FES_bias(tmpdir, config_test, choice):
 
 def test_reparametrize():
     cvs = CollectiveVariable(
-        f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+        f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
         metric=CvMetric.create(
             periodicities=[True, True],
             bounding_box=[[0, 2 * np.pi], [0, 2 * np.pi]],

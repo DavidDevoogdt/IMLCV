@@ -1558,7 +1558,7 @@ class NeighbourList(PyTreeNode):
             atom_indices=jnp.vstack(atom_indices) if not atom_indices_none else None,
             z_array=z_array,
             z_unique=z_unique,
-            nxyz=tuple(nxyz),
+            nxyz=tuple(nxyz) if not nxyz_none else None,
             sp_orig=sp_orig,
             ijk_indices=jnp.vstack(ijk_indices) if not ijk_indices_none else None,
             op_cell=jnp.vstack(op_cell) if not op_cell_none else None,

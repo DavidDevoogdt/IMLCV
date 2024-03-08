@@ -54,7 +54,7 @@ def alanine_dipeptide_yaff(
 
     if cv == "backbone_dihedrals":
         cv0 = CollectiveVariable(
-            f=(dihedral(numbers=[4, 6, 8, 14]) + dihedral(numbers=[6, 8, 14, 16])),
+            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
             metric=CvMetric.create(
                 periodicities=[True, True],
                 bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
