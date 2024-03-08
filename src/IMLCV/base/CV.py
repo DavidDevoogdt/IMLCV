@@ -1014,15 +1014,16 @@ class SystemParams(PyTreeNode):
 
 class NeighbourList(PyTreeNode):
     atom_indices: Array
-    r_cut: float = field(pytree_node=False)
-    r_skin: float = field(pytree_node=False)
-
     op_cell: Array | None
     op_coor: Array | None
     op_center: Array | None
+    sp_orig: SystemParams | None
 
-    sp_orig: SystemParams | None = field()
+    r_cut: float = field(pytree_node=False)
+    r_skin: float = field(pytree_node=False)
+
     ijk_indices: Array | None = field(default=None)
+
     nxyz: tuple[int] | None = field(pytree_node=False, default=None)
     z_array: tuple[int] | None = field(pytree_node=False, default=None)
     z_unique: tuple[int] | None = field(pytree_node=False, default=None)
@@ -1552,12 +1553,12 @@ class NeighbourList(PyTreeNode):
         sp_orig = SystemParams.stack(*[nl_i.sp_orig for nl_i in nls]) if not sp_orig_none else None
 
         return NeighbourList(
-            r_cut=r_cut,
-            r_skin=r_skin,
+            r_cut=float(r_cut),
+            r_skin=float(r_skin),
             atom_indices=jnp.vstack(atom_indices) if not atom_indices_none else None,
             z_array=z_array,
             z_unique=z_unique,
-            nxyz=nxyz,
+            nxyz=tuple(nxyz),
             sp_orig=sp_orig,
             ijk_indices=jnp.vstack(ijk_indices) if not ijk_indices_none else None,
             op_cell=jnp.vstack(op_cell) if not op_cell_none else None,
@@ -2932,5 +2933,4 @@ class CollectiveVariable(PyTreeNode):
 
             if not jnp.allclose(a, b):
                 return False
-
         return True

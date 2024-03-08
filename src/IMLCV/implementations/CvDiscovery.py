@@ -3,7 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import optax
-import pymanopt
+
 from flax import linen as nn
 from flax.training import train_state
 from IMLCV.base.CV import CV
@@ -486,6 +486,8 @@ class TransoformerLDA(Transformer):
             full_trans = un_atomize * lda_cv * lda_rescale
 
         elif method == "pymanopt":
+            import pymanopt
+
             assert isinstance(cv_list, list)
             if optimizer is None:
                 optimizer = pymanopt.optimizers.TrustRegions(

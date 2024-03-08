@@ -406,7 +406,10 @@ class Transformer:
 
         in_xlim = jnp.logical_and(data[:, 0] > -margin, data[:, 0] < 1 + margin)
         n_points = jnp.sum(in_xlim)
-        n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+        if n_points != 0:
+            n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+        else:
+            n_bins = 10
 
         ax.set_xlabel(labels[0])
         ax.set_ylabel("trajectory")

@@ -48,9 +48,9 @@ def config(
     path_internal: Path | None = None,
     cpu_cluster=None,
     gpu_cluster=None,
-    initialize_logging=True,
+    initialize_logging=False,
     account=None,
-    use_work_queue=False,
+    executor="htex",
     default_on_threads=False,
 ):
     if parsl.DataFlowKernelLoader._dfk is not None:
@@ -79,13 +79,13 @@ def config(
             cpu_cluster=cpu_cluster,
             gpu_cluster=gpu_cluster,
             account=account,
-            use_work_queue=use_work_queue,
+            executor=executor,
             default_on_threads=default_on_threads,
         )
 
     config = Config(
         executors=execs,
-        usage_tracking=True,
+        usage_tracking=False,
         run_dir=str(path_internal),
         initialize_logging=initialize_logging,
     )
@@ -100,7 +100,7 @@ def config(
 def get_cp2k():
     env = get_platform()
     if env == "hortense":
-        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.psmp"
+        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt"
     if env == "stevin":
         return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt"
     raise ValueError(f"unknow {env=} for cp2k ")

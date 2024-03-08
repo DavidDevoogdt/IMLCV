@@ -189,6 +189,7 @@ def test_cv_discovery(
     _cv_discovery_asserts(scheme0, out_dim, r_cut, pdf_file)
 
 
+@pytest.mark.skip(reason="pymanopt temporarily disabled")
 def test_LDA_CV(tmpdir, config_test, out_dim=1, r_cut=3 * angstrom):
     rnds = get_LDA_CV_round(tmpdir)
 

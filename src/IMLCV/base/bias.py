@@ -324,7 +324,7 @@ class Bias(PyTreeNode, ABC):
 
     def plot(
         self,
-        name,
+        name: str | None = None,
         x_unit: str | None = None,
         y_unit: str | None = None,
         n=50,
@@ -443,7 +443,10 @@ class Bias(PyTreeNode, ABC):
 
                     n_points += jnp.sum(in_xlim)
 
-                n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+                if n_points != 0:
+                    n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+                else:
+                    n_bins = 10
 
                 ax2.hist(
                     x_list,
@@ -615,10 +618,13 @@ class Bias(PyTreeNode, ABC):
         else:
             raise ValueError
 
-        Path(name).parent.mkdir(parents=True, exist_ok=True)
+        if name is not None:
+            Path(name).parent.mkdir(parents=True, exist_ok=True)
 
-        plt.savefig(name)
-        plt.close(fig=fig)  # write out
+            plt.savefig(name)
+            plt.close(fig=fig)  # write out
+        else:
+            plt.show()
 
     def resample(self, cv_grid: CV | None = None, n=None, margin=0.2) -> Bias:
         from IMLCV.implementations.bias import RbfBias
@@ -724,13 +730,15 @@ class CompositeBias(Bias):
         biases_new = []
 
         for b in biases:
+            if b is NoneBias:
+                continue
+
             if collective_variable is None:
                 collective_variable = b.collective_variable
             else:
-                assert collective_variable == b.collective_variable, "encountered 2 different collective variables"
-
-            if b is NoneBias:
-                continue
+                assert (
+                    collective_variable == b.collective_variable
+                ), f"encountered 2 different collective variables {collective_variable=}  {b.collective_variable=} "
 
             biases_new.append(b)
 

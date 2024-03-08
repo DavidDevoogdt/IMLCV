@@ -78,18 +78,16 @@ class ThermoLIB:
             def __call__(self, *cv):
                 print(".", end="")
 
-                colvar = CV.combine(
+                cvs = CV.combine(
                     *[
                         CV(
                             cv=jnp.array(
-                                cvi.reshape(
-                                    (-1, 1),
-                                ),
+                                cvi.reshape((-1, 1)),
                                 dtype=jnp.float64,
-                            ),
+                            )
                         )
                         for cvi in cv
-                    ],
+                    ]
                 )
 
                 def _get_bias(cvs):
@@ -103,7 +101,7 @@ class ThermoLIB:
                 if pmap:
                     _get_bias = padded_pmap(_get_bias)
 
-                out = _get_bias(colvar)
+                out = _get_bias(cvs)
 
                 return np.array(jnp.reshape(out, cv[0].shape), dtype=np.double)
 

@@ -14,6 +14,7 @@ from parsl.jobs.states import JobState
 from parsl.providers.base import JobStatus
 from parsl.providers.slurm.template import template_string
 from parsl.utils import wtime_to_minutes
+from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 
@@ -240,7 +241,7 @@ def get_slurm_provider(
     min_blocks=1,
     max_blocks=1,
     parallelism=1,
-    use_work_queue: bool = True,
+    executor="htex",
     wq_timeout: int = 120,  # in seconds
     gpu_part="gpu_rome_a100",
     cpu_part="cpu_rome",
@@ -255,6 +256,7 @@ export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV_scratch/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py311
 which python
+export OMPI_MCA_pml=ucx
             """
         elif env == "stevin":
             py_env = """
@@ -263,6 +265,7 @@ export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py311
 which python
+export OMPI_MCA_pml=ucx
 """
 
     if gpu_cluster is None:
@@ -272,10 +275,10 @@ which python
 
     worker_init = f"{py_env}\n"
     if env == "hortense":
-        worker_init += "module load CP2K/2023.1-foss-2022b \n"
+        worker_init += "module load CP2K/7.1-foss-2020b\n"
 
     elif env == "stevin":
-        worker_init += "module load CP2K/7.1-foss-2020a \n"
+        worker_init += "module load CP2K/7.1-foss-2020a\n"
     worker_init += "module unload SciPy-bundle Python\n"
 
     if not parsl_cores:
@@ -335,7 +338,9 @@ which python
 
     provider = SlurmProviderVSC(**vsc_kwargs)
 
-    if use_work_queue:
+    print(f"{executor=}")
+
+    if executor == "work_queue":
         worker_options = [
             f"--cores={cores}",
             f"--gpus={0 if not gpu else 1}",
@@ -363,14 +368,29 @@ which python
             port=0,
             max_retries=1,  # do not retry task
             worker_options=" ".join(worker_options),
+            coprocess=True,
         )
-    else:
+
+    elif executor == "task_vine":
+        executor: ParslExecutor = TaskVineExecutor(
+            label=label,
+            factory_config=TaskVineFactoryConfig(
+                cores=cores,
+                gpus=0 if not gpu else 1,
+                scratch_dir=str(Path(path_internal) / label),
+            ),
+            provider=provider,
+        )
+
+    elif executor == "htex":
         executor: ParslExecutor = HighThroughputExecutor(
             label=label,
             working_dir=str(Path(path_internal) / label),
             cores_per_worker=cores,
             provider=provider,
         )
+    else:
+        raise ValueError(f"unknown executor {executor=}")
     return executor
 
 
@@ -386,7 +406,7 @@ def config(
     gpu_cluster: str | list[str] | None = None,
     py_env=None,
     account=None,
-    use_work_queue=False,
+    executor="htex",
     default_on_threads=False,
 ):
     def get_kwargs(cpu_cluster=None, gpu_cluster=None):
@@ -441,7 +461,7 @@ def config(
             }
         kw["env"] = env
         kw["py_env"] = py_env
-        kw["use_work_queue"] = use_work_queue
+        kw["executor"] = executor
 
         return kw
 
@@ -459,10 +479,6 @@ def config(
                 **get_kwargs(cpu_cluster),
                 label="default",
                 init_blocks=1,
-                min_blocks=1,
-                max_blocks=1,
-                parallelism=0,
-                cores=4,
                 parsl_cores=True,
                 mem=10,
                 walltime="72:00:00",

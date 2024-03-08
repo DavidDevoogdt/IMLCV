@@ -1704,9 +1704,18 @@ class Rounds(ABC):
 
             if i is not None:
                 assert r is not None, "also provide round"
-                f2 = f[f"/{i}"]
+                f3 = f2[f"{i}"]
+            else:
+                f3 = f2
 
-            return f2.attrs[name]
+            try:
+                return f3.attrs[name]
+            except Exception as e:
+                print(f"could not get {name=} {c=} {r=} {i=} ")
+
+                print(f"{f3.attrs.keys()=}")
+
+                raise e
 
     @property
     def T(self):
