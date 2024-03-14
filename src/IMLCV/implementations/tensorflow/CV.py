@@ -1,5 +1,4 @@
 import tempfile
-from importlib import import_module
 
 import numpy as np
 import tensorflow as tfl
