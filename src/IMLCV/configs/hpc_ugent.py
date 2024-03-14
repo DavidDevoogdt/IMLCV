@@ -408,6 +408,7 @@ def config(
     account=None,
     executor="htex",
     default_on_threads=False,
+    default_threads=4,
 ):
     def get_kwargs(cpu_cluster=None, gpu_cluster=None):
         if env == "hortense":
@@ -495,7 +496,7 @@ def config(
         if default_on_threads:
             default = ThreadPoolExecutor(
                 label="default",
-                max_threads=4,
+                max_threads=default_threads,
                 working_dir=str(path_internal / "default"),
             )
             execs.append(default)

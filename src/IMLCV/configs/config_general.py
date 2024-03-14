@@ -81,6 +81,7 @@ def config(
             account=account,
             executor=executor,
             default_on_threads=default_on_threads,
+            default_threads=local_ref_threads,
         )
 
     config = Config(

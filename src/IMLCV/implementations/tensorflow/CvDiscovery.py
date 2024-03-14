@@ -131,7 +131,7 @@ class TranformerUMAP(Transformer):
 
             act = keras.activations.tanh
             layers = [
-                keras.layers.InputLayer(input_shape=dims),
+                keras.layers.InputLayer(input_shape=(dims,)),
                 *[
                     keras.layers.Dense(
                         units=nunits,
