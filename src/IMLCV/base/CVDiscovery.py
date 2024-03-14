@@ -12,7 +12,6 @@ from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
-from IMLCV.base.CV import padded_pmap
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import identity_trans
@@ -46,41 +45,22 @@ class Transformer:
     ) -> tuple[list[CV], list[CV] | None, CvFlow]:
         f = self.descriptor
 
-        def _f(sp, nl):
-            return f.compute_cv_flow(sp, nl, chunk_size)[0]
-
-        if p_map:
-            _f = padded_pmap(_f)
-
-        def _g(sp_list, nl_list):
-            stack_dims = tuple([z_i.batch_dim for z_i in sp_list])
-            z = SystemParams.stack(*sp_list)
-            nl = NeighbourList.stack(*nl_list) if nl_list is not None else None
-
-            x: CV = _f(z, nl)
-            x = x.replace(_stack_dims=stack_dims)
-
-            return x
-
-        x = _g(dlo.sp, dlo.nl)
-
-        x_t = None
-        if dlo.time_series:
-            x_t = _g(dlo.sp_t, dlo.nl_t)
+        x, x_t = dlo.apply_cv_flow(
+            f,
+            chunk_size=chunk_size,
+            pmap=p_map,
+        )
 
         if self.pre_scale:
-            g = scale_cv_trans(x, lower=0, upper=1)
-
-            x, _, _ = g.compute_cv_trans(x)
-
-            if x_t is not None:
-                x_t, _, _ = g.compute_cv_trans(x_t)
-
+            g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
+            x, x_t = dlo.apply_cv_trans(
+                g,
+                x,
+                x_t,
+                chunk_size=chunk_size,
+                pmap=p_map,
+            )
             f = f * g
-
-        x = x.unstack()
-        if x_t is not None:
-            x_t = x_t.unstack()
 
         return x, x_t, f
 
@@ -95,12 +75,10 @@ class Transformer:
         margin=0.05,
         jac=jax.jacrev,
         test=False,
+        check_nan=True,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
-
-        sp_list = dlo.sp
-        nl_list = dlo.nl
 
         print("starting pre_fit")
 
@@ -110,10 +88,13 @@ class Transformer:
             p_map=p_map,
         )
 
+        if check_nan:
+            dlo, x, x_t = dlo.filter_nans(x, x_t)
+
         if test:
             x_2, _ = f.compute_cv_flow(
-                SystemParams.stack(*sp_list),
-                NeighbourList.stack(*nl_list),
+                SystemParams.stack(*dlo.sp),
+                NeighbourList.stack(*dlo.nl),
                 chunk_size=chunk_size,
             )
 
@@ -137,25 +118,19 @@ class Transformer:
             **self.fit_kwargs,
         )
 
-        assert len(y) == len(sp_list), "y and sp_list must have the same length"
+        if check_nan:
+            dlo, y, y_t = dlo.filter_nans(y, y_t)
 
         y = CV.stack(*y)
         if y_t is not None:
-            assert len(y_t) == len(dlo.sp_t), "y_t and sp_t must have the same length"
             y_t = CV.stack(*y_t)
+
+            assert y_t.stack_dims == y.stack_dims, "y and y_t must have the same stack_dims"
 
         print(f"{y.stack_dims=}")
 
-        if y.stack_dims is None:
-            print("faulty stack dims, replacing")
-            y = y.replace(_stack_dim=[a.shape[0] for a in sp_list])
-
-        if y_t is not None:
-            if y_t.stack_dims is None:
-                y_t = y_t.replace(_stack_dim=[a.shape[0] for a in dlo.sp_t])
-
         if test:
-            y_2, _, _ = g.compute_cv_trans(CV.stack(*x), NeighbourList.stack(*nl_list), chunk_size=chunk_size)
+            y_2, _, _ = g.compute_cv_trans(CV.stack(*x), NeighbourList.stack(*dlo.nl), chunk_size=chunk_size)
             assert jnp.allclose(y_2.cv, y.cv)
 
             if y_t is not None:
@@ -188,8 +163,8 @@ class Transformer:
 
         if test:
             cv_full, _ = new_collective_variable.compute_cv(
-                SystemParams.stack(*sp_list),
-                NeighbourList.stack(*nl_list),
+                SystemParams.stack(*dlo.sp),
+                NeighbourList.stack(*dlo.nl),
                 chunk_size=chunk_size,
             )
 
@@ -212,7 +187,7 @@ class Transformer:
         dlo: Rounds.data_loader_output,
         chunk_size=None,
         **fit_kwargs,
-    ) -> tuple[CV, CV | None, CvTrans]:
+    ) -> tuple[list[CV], list[CV] | None, CvTrans]:
         raise NotImplementedError
 
     def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:

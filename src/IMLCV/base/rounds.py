@@ -19,7 +19,7 @@ from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvTrans
+from IMLCV.base.CV import CvTrans, CvFlow
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import padded_pmap
 from IMLCV.base.CV import SystemParams
@@ -34,6 +34,7 @@ from jax.random import split
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 from IMLCV.configs.config_general import DEFAULT_LABELS, REFERENCE_LABELS
+from typing import Callable, Any
 
 
 @dataclass
@@ -740,6 +741,11 @@ class Rounds(ABC):
             mask = l >= eps
             print(f"{jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
 
+            if sum(mask) == 0:
+                print(f"all eigenvalues are smaller than {eps=}, keeping features")
+                print(f"{l=}")
+                mask = jnp.ones_like(mask, dtype=bool)
+
             q = q[:, mask] @ jnp.diag(l[mask] ** (-1 / 2))
 
             if jnp.sum(mask) > max_features:
@@ -1019,6 +1025,141 @@ class Rounds(ABC):
                 cv_tau_out = f.compute_cv_trans(cv_tau)[0]
 
                 return s, f, g, pi_0, q_0, pi_1, q_1, cv_0_out, cv_tau_out
+
+        def filter_nans(
+            self, x: list[CV] | None = None, x_t: list[CV] | None = None
+        ) -> tuple[Rounds.data_loader_output, CV, CV]:
+            if x is None:
+                x = self.cv
+
+            x = CV.stack(*x)
+
+            if x_t is None:
+                x_t = self.cv_t
+
+            if self.time_series:
+                x_t = CV.stack(*x_t)
+
+            nanmask = jax.vmap(jnp.any)(jnp.isnan(x.cv))
+            if x_t is not None:
+                nanmask = jnp.logical_or(nanmask, jax.vmap(jnp.any)(jnp.isnan(x_t.cv)))
+
+            mask = None
+
+            if not jnp.any(nanmask):
+                return self, x.unstack(), x_t.unstack() if x_t is not None else None
+
+            print(f"found {jnp.sum(nanmask)}/{len(nanmask)} nans in the cv data, removing")
+            x = x[~nanmask]
+            if x_t is not None:
+                x_t = x_t[~nanmask]
+
+            mask = [m.cv for m in CV(cv=~nanmask, _stack_dims=x.stack_dims).unstack()]
+
+            dlo = Rounds.data_loader_output(
+                sp=[sp_i[m_i] for sp_i, m_i in zip(self.sp, mask)],
+                nl=[nl_i[m_i] for nl_i, m_i in zip(self.nl, mask)],
+                sp_t=[sp_i[m_i] for sp_i, m_i in zip(self.sp_t, mask)] if self.sp_t is not None else None,
+                nl_t=[nl_i[m_i] for nl_i, m_i in zip(self.nl_t, mask)] if self.nl_t is not None else None,
+                cv=[cv_i[m_i] for cv_i, m_i in zip(self.cv, mask)],
+                cv_t=[cv_i[m_i] for cv_i, m_i in zip(self.cv_t, mask)] if self.cv_t is not None else None,
+                time_series=self.time_series,
+                tau=self.tau,
+                bias=self.bias,
+                ti=[ti_i[m_i] for ti_i, m_i in zip(self.ti, mask)] if self.ti is not None else None,
+                ti_t=[ti_t_i[m_i] for ti_t_i, m_i in zip(self.ti_t, mask)] if self.ti_t is not None else None,
+                collective_variable=self.collective_variable,
+                sti=self.sti,
+                ground_bias=self.ground_bias,
+            )
+
+            return dlo, x.unstack(), x_t.unstack() if x_t is not None else None
+
+        def apply_cv_trans(
+            self,
+            cv_trans: CvTrans,
+            x: list[CV] | None = None,
+            x_t: list[CV] | None = None,
+            chunk_size=None,
+            pmap=True,
+        ) -> tuple[list[CV], list[CV] | None]:
+            if x is None:
+                x = self.cv
+
+            if x_t is None:
+                x_t = self.cv_t
+
+            f = Partial(
+                cv_trans.compute_cv_trans,
+                chunk_size=chunk_size,
+            )
+
+            if pmap:
+                f = padded_pmap(f)
+
+            f: Callable[[CV, NeighbourList], tuple[CV, Any, Any]]
+
+            if self.time_series:
+                y = CV.stack(*x, *x_t)
+                nl = NeighbourList.stack(*self.nl, *self.nl_t)
+            else:
+                y = CV.stack(*x)
+                nl = NeighbourList.stack(*self.nl)
+
+            z, _, _ = f(y, nl)
+
+            if self.time_series:
+                z, z_t = z.unstack()
+            else:
+                z_t = None
+
+            return z.unstack(), z_t.unstack() if z_t is not None else None
+
+        def apply_cv_flow(
+            self,
+            flow: CvFlow,
+            x: list[SystemParams] | None = None,
+            x_t: list[SystemParams] | None = None,
+            chunk_size=None,
+            pmap=True,
+        ) -> tuple[list[CV], list[CV] | None]:
+            if x is None:
+                x = self.sp
+
+            if x_t is None:
+                x_t = self.sp_t
+
+            _stack_dims = tuple(sp_i.batch_dim for sp_i in x)
+            tot = sum(_stack_dims)
+
+            f = Partial(
+                flow.compute_cv_flow,
+                chunk_size=chunk_size,
+            )
+
+            if pmap:
+                f = padded_pmap(f)
+
+            f: Callable[[SystemParams, NeighbourList], tuple[CV, Any]]
+
+            if self.time_series:
+                y = SystemParams.stack(*x, *x_t)
+                nl = NeighbourList.stack(*self.nl, *self.nl_t)
+            else:
+                y = SystemParams.stack(*x)
+                nl = NeighbourList.stack(*self.nl)
+
+            z, _ = f(y, nl)
+
+            if self.time_series:
+                z, z_t = z[0:tot], z[tot:]
+            else:
+                z_t = None
+
+            return (
+                z.replace(_stack_dims=_stack_dims).unstack(),
+                z_t.replace(_stack_dims=_stack_dims).unstack() if z_t is not None else None,
+            )
 
     def data_loader(
         self,

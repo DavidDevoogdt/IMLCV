@@ -217,6 +217,9 @@ class TrajectoryInfo:
 
     @staticmethod
     def stack(*ti: TrajectoryInfo) -> TrajectoryInfo:
+        if len(ti) == 1:
+            return ti
+
         return TrajectoryInfo(
             _positions=jnp.vstack([t._positions[0 : t._size, :] for t in ti]),
             _cell=jnp.vstack([t._cell[0 : t._size, :] for t in ti]) if ti[0]._cell is not None else None,

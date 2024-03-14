@@ -39,7 +39,7 @@ class YaffEnergy(Energy):
     def cell(self, cell):
         if cell is not None:
             cell = np.array(cell, dtype=np.double)
-        self.ff.update_rvecs(cell)
+            self.ff.update_rvecs(cell)
 
     @property
     def coordinates(self):

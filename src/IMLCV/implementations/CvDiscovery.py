@@ -350,7 +350,7 @@ class TranformerAutoEncoder(Transformer):
         if cv_t is not None:
             cv_t = f_enc.compute_cv_trans(cv_t)[0].unstack()
 
-        return cv, cv_t, un_atomize * f_enc
+        return cv.unstack(), cv_t.unstack(), un_atomize * f_enc
 
 
 def _LDA_trans(cv: CV, nl: NeighbourList | None, _, alpha, outdim, solver):
@@ -542,7 +542,7 @@ class TransoformerLDA(Transformer):
 
             full_trans = un_atomize * _f * _g
 
-        return cv, cv_t, full_trans
+        return cv.unstack(), cv_t.unstack(), full_trans
 
 
 def _transform(cv: CV, nl: NeighbourList | None, _, mask):
@@ -624,7 +624,4 @@ class TransformerMAF(Transformer):
 
         trans *= tica_selection
 
-        cv_0 = cv_0.unstack()
-        cv_tau = cv_tau.unstack()
-
-        return cv_0, cv_tau, trans
+        return cv_0.unstack(), cv_tau.unstack(), trans

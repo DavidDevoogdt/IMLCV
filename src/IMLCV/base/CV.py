@@ -1029,6 +1029,14 @@ class NeighbourList(PyTreeNode):
     z_unique: tuple[int] | None = field(pytree_node=False, default=None)
     num_z_unique: tuple[int] | None = field(pytree_node=False, default=None)
 
+    _padding_bools: Array | None = field(default=None)
+
+    @property
+    def padding_bools(self):
+        if self._padding_bools is None:
+            return self.atom_indices != -1
+        return self._padding_bools
+
     @jax.jit
     def canonicalized_sp(self, sp: SystemParams) -> SystemParams:
         app_can = SystemParams.apply_canonicalize
@@ -1130,7 +1138,7 @@ class NeighbourList(PyTreeNode):
         if exclude_self:
             bools = jnp.logical_and(bools, r**2 != 0.0)
 
-        bools = jnp.logical_and(bools, ind != -1)
+        bools = jnp.logical_and(bools, self.padding_bools)
 
         if func is None:
             return bools, None
@@ -1396,6 +1404,7 @@ class NeighbourList(PyTreeNode):
             r_skin=self.r_skin,
             sp_orig=self.sp_orig[slices],
             nxyz=self.nxyz,
+            _padding_bools=self._padding_bools[slices, :] if self._padding_bools is not None else None,
         )
 
     @jax.jit
@@ -1449,6 +1458,7 @@ class NeighbourList(PyTreeNode):
             op_cell=jnp.expand_dims(self.op_cell, axis=0) if self.op_cell is not None else None,
             op_coor=jnp.expand_dims(self.op_coor, axis=0) if self.op_coor is not None else None,
             op_center=jnp.expand_dims(self.op_center, axis=0) if self.op_center is not None else None,
+            _padding_bools=jnp.expand_dims(self._padding_bools, axis=0) if self._padding_bools is not None else None,
             z_array=self.z_array,
             z_unique=self.z_unique,
             num_z_unique=self.num_z_unique,
@@ -1516,15 +1526,15 @@ class NeighbourList(PyTreeNode):
 
         r_skin = jnp.min(jnp.array([nli.r_cut + nli.r_skin - r_cut for nli in nls]))
 
-        @vmap
-        def _p(a: jax.Array):
+        @partial(vmap, in_axes=(0, None))
+        def _p(a: jax.Array, constant_value=None):
             # pad to size of largest neighbourlist
             n = m - a.shape[-1]
 
             return jnp.pad(
                 array=a,
                 pad_width=((0, 0), (0, n)),
-                constant_values=-1,
+                constant_values=constant_value if constant_value is not None else a[0, 0],
             )
 
         op_cell = None if atom_indices_none else []
@@ -1532,13 +1542,21 @@ class NeighbourList(PyTreeNode):
         op_center = None if op_center_none else []
         ijk_indices = None if ijk_indices_none else []
         atom_indices = None if atom_indices_none else []
+        padding_bools = None if atom_indices_none else []
 
         for nl_i in nls:
             if not atom_indices_none:
-                atom_indices.append(_p(nl_i.atom_indices))
+                atom_indices.append(_p(nl_i.atom_indices, None))
+                padding_bools.append(_p(nl_i.padding_bools, False))
 
             if not ijk_indices_none:
-                ijk_indices.append(vmap(_p, in_axes=(-1), out_axes=(-1))(nl_i.ijk_indices))
+                ijk_indices.append(
+                    vmap(
+                        _p,
+                        in_axes=-1,
+                        out_axes=-1,
+                    )(nl_i.ijk_indices, None),
+                )
 
             if not op_cell_none:
                 op_cell.append(nl_i.op_cell)
@@ -1565,6 +1583,7 @@ class NeighbourList(PyTreeNode):
             op_coor=jnp.vstack(op_coor) if not op_coor_none else None,
             op_center=jnp.vstack(op_center) if not op_center_none else None,
             num_z_unique=num_z_unique,
+            _padding_bools=jnp.vstack(padding_bools) if not atom_indices_none else None,
         )
 
 
@@ -2048,20 +2067,8 @@ class CvMetric(PyTreeNode):
 ######################################
 
 
-# U = TypeVar("U")  # Declare type variable "U"
-
-# Callable = Callable[[Callable[[Any], U], Any], Callable[[Any], U]]
-
-
 def jac_compose(jac1: CV | SystemParams, jac2: CV) -> CV:
     return jac2.replace(cv=jnp.einsum("ij,jnm->inm", jac2.cv, jac1.cv))
-
-    # return jac2.replace(
-    #     cv=jac1.replace(
-    #         sp=jnp.einsum("ij,jnm->inm", jac2.cv,jac1.coordinates),
-    #         cell=jnp.einsum("ij,jnm->inm", jac2.cv,jac1.cell) if jac2.cell is not None else None,
-    #     )
-    # )
 
 
 class CvFunInput(PyTreeNode):
@@ -2398,24 +2405,6 @@ class CombinedCvFunNN(nn.Module, _CombinedCvFun):
     classes: tuple[tuple[CvFunNn]]
 
 
-def _from_array_function(
-    x: CV,
-    nl: NeighbourList | None,
-    conditioners: list[CV] | None = None,
-    array_func=None,
-    atomic=False,
-    **kwargs,
-):
-    assert conditioners is None, "implement this"
-
-    if x.batched:
-        out = vmap(array_func)(x.cv, nl, None, **kwargs)
-    else:
-        out = array_func(x.cv, nl, None, **kwargs)
-
-    return x.replace(cv=out, atomic=atomic)
-
-
 def _duplicate_trans(x: CV | SystemParams, nl: NeighbourList | None, _, n):
     if isinstance(x, SystemParams):
         return [x] * n
@@ -2441,15 +2430,6 @@ class _CvTrans:
     @property
     def _cv_trans(self) -> type[_CvTrans]:
         return self.__class__
-
-    @staticmethod
-    def from_array_function(
-        f: Callable[[Array, NeighbourList | None, None], Array],
-        jacfun: Callable = None,
-        atomic=False,
-        **kwargs,
-    ):
-        return CvTrans.from_cv_function(f=_from_array_function, array_func=f, atomic=atomic, jacfun=jacfun, **kwargs)
 
     @staticmethod
     def from_cv_function(
@@ -2478,9 +2458,9 @@ class _CvTrans:
                     _f(v)
                 except Exception as e:
                     print(
-                        f"{k} of type {type(v)} is not a valid jax type and should be added to static_argnames. exception: {e}"
+                        f"Error: {k} of type {type(v)} is not a valid jax type and should be added to static_argnames."
                     )
-                    raise
+                    raise e
 
             for k, v in list(kw["static_kwargs"].items()):
                 try:
@@ -2488,7 +2468,7 @@ class _CvTrans:
                     assert v == v
                 except Exception as e:
                     print(
-                        f"{k} of type {type(v)} is not hashable, consider to make it hashable or not a static argument. exception: {e}"
+                        f"Error: {k} of type {type(v)} is not hashable, consider to make it hashable or not a static argument. exception: {e}"
                     )
                     raise
 

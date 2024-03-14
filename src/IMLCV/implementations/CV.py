@@ -339,8 +339,8 @@ def _scale_cv_trans(x, nl, _, upper, lower, mini, diff):
 
 def scale_cv_trans(array: CV, lower=0, upper=1):
     "axis 0 is batch axis"
-    maxi = jnp.max(array.cv, axis=0)
-    mini = jnp.min(array.cv, axis=0)
+    maxi = jnp.nanmax(array.cv, axis=0)
+    mini = jnp.nanmin(array.cv, axis=0)
 
     diff = maxi - mini
     diff = jnp.where(diff == 0, 1, diff)
@@ -1327,10 +1327,13 @@ def get_feature_cov(c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None) -> tu
     c0 = c0 - mu0
     c1 = c1 - mu1
 
-    sigma0 = jnp.mean(c0 * c0, axis=0)  # jnp.var(c0, axis=0)
-    sigma1 = jnp.mean(c1 * c1, axis=0)  # jnp.var(c1, axis=0)
+    sigma0 = jnp.mean(c0 * c0, axis=0)
+    sigma1 = jnp.mean(c1 * c1, axis=0)
 
-    cov = jnp.mean(c0 * c1, axis=0) / jnp.sqrt(sigma0 * sigma1)
+    sigma0_inv = jnp.where(sigma0 == 0.0, 0.0, 1 / jnp.sqrt(sigma0))
+    sigma1_inv = jnp.where(sigma1 == 0.0, 0.0, 1 / jnp.sqrt(sigma1))
+
+    cov = jnp.mean(c0 * c1, axis=0) * jnp.sqrt(sigma0_inv * sigma1_inv)
 
     mask = cov > epsilon
 

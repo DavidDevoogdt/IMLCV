@@ -188,4 +188,4 @@ class TranformerUMAP(Transformer):
         cv_0 = f.compute_cv_trans(x, chunk_size=chunk_size)[0].unstack()
         cv_tau = f.compute_cv_trans(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
 
-        return cv_0, cv_tau, un_atomize * f
+        return cv_0.unstack(), cv_tau.unstack(), un_atomize * f
