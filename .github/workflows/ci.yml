@@ -60,9 +60,8 @@ jobs:
     strategy:
       matrix:
         python:
-          - "3.10" # oldes supportted
-          # - "3.11"
-          - "3.11" # newest stable
+          - "3.10" # oldest supported
+          - "3.12" # newest stable
         platform:
           - ubuntu-latest
           # - macos-latest

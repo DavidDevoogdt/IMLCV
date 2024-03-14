@@ -8,13 +8,14 @@ import parsl.providers.slurm.slurm
 from parsl import HighThroughputExecutor
 from parsl import WorkQueueExecutor
 from parsl.channels import LocalChannel
-from parsl.executors import ThreadPoolExecutor
 from parsl.executors.base import ParslExecutor
 from parsl.jobs.states import JobState
 from parsl.providers.base import JobStatus
 from parsl.providers.slurm.template import template_string
 from parsl.utils import wtime_to_minutes
 from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig
+from parsl.providers import LocalProvider
+from parsl.launchers import SingleNodeLauncher
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 
@@ -246,6 +247,8 @@ def get_slurm_provider(
     gpu_part="gpu_rome_a100",
     cpu_part="cpu_rome",
     py_env=None,
+    provider="slurm",
+    launcher=SingleNodeLauncher(),
 ):
     if py_env is None:
         if env == "hortense":
@@ -305,38 +308,45 @@ export OMPI_MCA_pml=ucx
 
     worker_init += "mpirun -report-bindings -np ${SLURM_NTASKS} echo -n \n"
 
-    if memory_per_core is not None:
-        if mem is None:
-            mem = total_cores * memory_per_core
-        else:
-            if mem < total_cores * memory_per_core:
-                mem = total_cores * memory_per_core
-
-    vsc_kwargs = {
-        "cluster": cpu_cluster if not gpu else gpu_cluster,
-        "partition": cpu_part if not gpu else gpu_part,
-        "account": account,
+    common_kwargs = {
         "channel": channel,
-        "exclusive": False,
-        "cmd_timeout": 60,
-        "worker_init": worker_init,
-        "cores_per_node": total_cores,
-        "mem_per_node": mem,
-        "walltime": walltime,
         "init_blocks": init_blocks,
         "min_blocks": min_blocks,
         "max_blocks": max_blocks,
         "parallelism": parallelism,
-        # "label": label,
         "nodes_per_block": 1,
+        "worker_init": worker_init,
+        "launcher": launcher,
+        "cmd_timeout": 60,
     }
 
-    if gpu:
-        vsc_kwargs[
-            "scheduler_options"
-        ] = f"#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu={cores}\n#SBATCH --export=None"  # request gpu
+    if provider == "slurm":
+        if memory_per_core is not None:
+            if mem is None:
+                mem = total_cores * memory_per_core
+            else:
+                if mem < total_cores * memory_per_core:
+                    mem = total_cores * memory_per_core
 
-    provider = SlurmProviderVSC(**vsc_kwargs)
+        vsc_kwargs = {
+            "cluster": cpu_cluster if not gpu else gpu_cluster,
+            "partition": cpu_part if not gpu else gpu_part,
+            "account": account,
+            "exclusive": False,
+            "cores_per_node": total_cores,
+            "mem_per_node": mem,
+            "walltime": walltime,
+        }
+
+        if gpu:
+            vsc_kwargs[
+                "scheduler_options"
+            ] = f"#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu={cores}\n#SBATCH --export=None"  # request gpu
+        provider = SlurmProviderVSC(**common_kwargs, **vsc_kwargs)
+    elif provider == "local":
+        provider = LocalProvider(
+            **common_kwargs,
+        )
 
     print(f"{executor=}")
 
@@ -494,12 +504,25 @@ def config(
         execs = []
 
         if default_on_threads:
-            default = ThreadPoolExecutor(
-                label="default",
-                max_threads=default_threads,
-                working_dir=str(path_internal / "default"),
+            label = "default"
+            default = get_slurm_provider(
+                label=label,
+                init_blocks=1,
+                min_blocks=1,
+                max_blocks=10,
+                parallelism=1,
+                cores=default_threads,
+                parsl_cores=True,
+                walltime="02:00:00",
+                env=env,
+                path_internal=path_internal,
+                cpu_cluster=None,
+                gpu_cluster=None,
+                provider="local",
             )
+
             execs.append(default)
+            default_labels.append(label)
 
         if not isinstance(cpu_cluster, list):
             cpu_cluster = [cpu_cluster]
@@ -548,7 +571,7 @@ def config(
                 execs.append(reference)
                 reference_labels.append(label)
 
-                if default_on_threads:
+                if not default_on_threads:
                     # general tasks
                     label = f"default_{cpu}"
 
