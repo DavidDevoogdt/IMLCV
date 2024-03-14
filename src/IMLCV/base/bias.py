@@ -327,7 +327,7 @@ class Bias(PyTreeNode, ABC):
         name: str | None = None,
         x_unit: str | None = None,
         y_unit: str | None = None,
-        n=50,
+        n=100,
         traj: list[CV] | None = None,
         vmin=0,
         vmax=100 * kjmol,
