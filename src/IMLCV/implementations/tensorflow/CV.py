@@ -10,9 +10,8 @@ from IMLCV.base.CV import CvFunBase
 from IMLCV.base.CV import NeighbourList
 from jax.custom_batching import custom_vmap
 from jax.experimental.jax2tf import call_tf
-from keras.api._v2 import keras as KerasAPI
 
-keras: KerasAPI = import_module("tensorflow.keras")
+import tf_keras as keras
 
 
 class PeriodicLayer(keras.layers.Layer):

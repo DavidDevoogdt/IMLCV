@@ -153,8 +153,6 @@ def test_cv_discovery(
 
         tf = TranformerAutoEncoder(outdim=out_dim, descriptor=descriptor, **kwargs)
     elif cvd == "UMAP":
-        # from keras.api._v2 import keras as KerasAPI
-
         kwargs = dict(
             n_neighbors=20,
             min_dist=0.5,

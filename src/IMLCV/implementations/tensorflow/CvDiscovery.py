@@ -128,7 +128,7 @@ class TranformerUMAP(Transformer):
 
         if parametric:
             # import tensorflow as tf
-            import keras
+            import tf_keras as keras
 
             act = keras.activations.tanh
             layers = [
