@@ -13,6 +13,7 @@ from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import un_atomize
+import numpy
 
 
 def umap_function(x: CV, nl: NeighbourList, c, enc):
@@ -132,7 +133,7 @@ class TranformerUMAP(Transformer):
 
             act = keras.activations.tanh
             layers = [
-                keras.layers.InputLayer(input_shape=(dims,)),
+                keras.layers.InputLayer(input_shape=dims),
                 *[
                     keras.layers.Dense(
                         units=nunits,
@@ -162,7 +163,7 @@ class TranformerUMAP(Transformer):
         else:
             reducer = umap.UMAP(**kwargs)
 
-        trans_1 = reducer.fit_transform(X=x_train.cv)
+        trans_1 = reducer.fit_transform(X=numpy.asarray(x_train.cv, copy=True))
 
         fwd_kwargs = dict(
             nlayers=nlayers,
