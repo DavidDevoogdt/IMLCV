@@ -3,6 +3,7 @@ from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import SystemParams
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.CV import dihedral
+import pytest
 
 
 def f_test_parallel(i):
@@ -37,6 +38,7 @@ def f_test_py_env(sp):
     return d_flow.compute_cv_flow(sp, None)[0]
 
 
+@pytest.mark.skip(reason="MPI not installed")
 def test_py_env(tmp_path, config_test):
     n = 4
     sp = SystemParams(
@@ -71,6 +73,7 @@ def _f_MPI(i):
     return i, rank
 
 
+@pytest.mark.skip(reason="MPI not installed")
 def test_parallel_MPI(tmp_path, config_test):
     i_enum = 5
 
