@@ -14,6 +14,7 @@ from parsl import python_app
 from parsl.dataflow.futures import AppFuture
 from IMLCV.configs.config_general import DEFAULT_LABELS
 import jax
+from parsl import AUTO_LOGNAME
 
 
 # @typeguard.typechecked
@@ -24,6 +25,7 @@ def bash_app_python(
     uses_mpi=False,
     pickle_extension="json",
     pass_files=False,
+    auto_log=False,
 ):
     def decorator(func):
         def wrapper(
@@ -82,15 +84,23 @@ def bash_app_python(
                 i,
             )
 
-            stdout = rename_num(
-                execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)),
-                i,
-            )
+            if not auto_log:
+                stdout = str(
+                    rename_num(
+                        execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)),
+                        i,
+                    )
+                )
 
-            stderr = rename_num(
-                execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
-                i,
-            )
+                stderr = str(
+                    rename_num(
+                        execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
+                        i,
+                    )
+                )
+            else:
+                stdout = AUTO_LOGNAME
+                stderr = AUTO_LOGNAME
 
             if not execution_folder.exists():
                 execution_folder.mkdir(exist_ok=True, parents=True)
@@ -129,8 +139,8 @@ def bash_app_python(
             future: AppFuture = bash_app(function=fun, executors=executors)(
                 inputs=[*inp, File(str(file_in)), File(str(execution_folder))],
                 outputs=[*outp, File(str(file_out))],
-                stdout=str(stdout),
-                stderr=str(stderr),
+                stdout=stdout,
+                stderr=stderr,
                 *args,
                 **kwargs,
             )

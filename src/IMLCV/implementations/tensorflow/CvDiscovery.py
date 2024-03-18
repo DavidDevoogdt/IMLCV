@@ -121,7 +121,7 @@ class TranformerUMAP(Transformer):
 
         print(f"{x_train.cv.shape=}")
 
-        dims = x_train.shape[1]
+        dims = (x_train.shape[1],)
 
         kwargs["n_components"] = self.outdim
         kwargs["n_neighbors"] = n_neighbors
@@ -159,6 +159,7 @@ class TranformerUMAP(Transformer):
 
             reducer = umap.parametric_umap.ParametricUMAP(
                 **kwargs,
+                dims=dims,
             )
         else:
             reducer = umap.UMAP(**kwargs)
