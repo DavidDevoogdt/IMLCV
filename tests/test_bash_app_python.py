@@ -1,44 +1,44 @@
 import jax.numpy as jnp
-import pytest
 from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import SystemParams
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.CV import dihedral
 
 
+def test_parallel_f(i):
+    from time import sleep
+
+    print(f"i: {i}")
+
+    sleep(2)
+
+    return 2 * i
+
+
 def test_parallel(tmp_path, config_test):
-    def _f(i):
-        from time import sleep
-
-        print(f"i: {i}")
-
-        sleep(2)
-
-        return 2 * i
-
     n = 4
 
-    futs = [bash_app_python(_f)(i, execution_folder=tmp_path) for i in range(n)]
+    futs = [bash_app_python(test_parallel_f)(i, execution_folder=tmp_path) for i in range(n)]
 
     res = [f.result() for f in futs]
 
     assert res == [0, 2, 4, 6]
 
 
-@pytest.mark.skip(reason="slow")
+def test_py_env_f(sp):
+    d_flow: CvFlow = dihedral((0, 1, 2, 3))
+
+    return d_flow.compute_cv_flow(sp, None)[0]
+
+
 def test_py_env(tmp_path, config_test):
-    def _f(sp):
-        d_flow: CvFlow = dihedral((0, 1, 2, 3))
-
-        return d_flow.compute_cv_flow(sp, None)[0]
-
     n = 4
     sp = SystemParams(
         coordinates=jnp.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]),
         cell=None,
     )
 
-    futs = [bash_app_python(_f)(sp, execution_folder=tmp_path) for i in range(n)]
+    futs = [bash_app_python(test_py_env_f)(sp, execution_folder=tmp_path) for i in range(n)]
 
     for f in futs:
         assert jnp.allclose(f.result().cv, 0.95531662)
@@ -59,7 +59,6 @@ def _f_MPI(i):
     return i, rank
 
 
-@pytest.mark.skip(reason="not installed")
 def test_parallel_MPI(tmp_path, config_test):
     i_enum = 5
 
