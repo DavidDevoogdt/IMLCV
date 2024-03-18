@@ -322,6 +322,10 @@ class Bias(PyTreeNode, ABC):
         """function that calculates the bias potential."""
         raise NotImplementedError
 
+    @staticmethod
+    def static_plot(bias, **kwargs):
+        bias.plot(**kwargs)
+
     def plot(
         self,
         name: str | None = None,

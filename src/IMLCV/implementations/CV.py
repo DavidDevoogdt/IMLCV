@@ -1330,8 +1330,8 @@ def get_feature_cov(c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None) -> tu
     sigma0 = jnp.mean(c0 * c0, axis=0)
     sigma1 = jnp.mean(c1 * c1, axis=0)
 
-    sigma0_inv = jnp.where(sigma0 == 0.0, 0.0, 1 / jnp.sqrt(sigma0))
-    sigma1_inv = jnp.where(sigma1 == 0.0, 0.0, 1 / jnp.sqrt(sigma1))
+    sigma0_inv = jnp.where(sigma0 == 0.0, 0.0, 1 / sigma0)
+    sigma1_inv = jnp.where(sigma1 == 0.0, 0.0, 1 / sigma1)
 
     cov = jnp.mean(c0 * c1, axis=0) * jnp.sqrt(sigma0_inv * sigma1_inv)
 

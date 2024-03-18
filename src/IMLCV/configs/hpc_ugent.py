@@ -14,6 +14,7 @@ from parsl.providers.base import JobStatus
 from parsl.providers.slurm.template import template_string
 from parsl.utils import wtime_to_minutes
 from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig
+from parsl.executors.threads import ThreadPoolExecutor
 from parsl.providers import LocalProvider
 from parsl.launchers import SingleNodeLauncher
 
@@ -274,7 +275,7 @@ export OMPI_MCA_pml=ucx
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
 
-    assert open_mp_threads_per_core is None, "open_mp_threads_per_core is not tested yet"
+    # assert open_mp_threads_per_core is None, "open_mp_threads_per_core is not tested yet"
 
     worker_init = f"{py_env}\n"
     if env == "hortense":
@@ -317,7 +318,6 @@ export OMPI_MCA_pml=ucx
         "nodes_per_block": 1,
         "worker_init": worker_init,
         "launcher": launcher,
-        "cmd_timeout": 60,
     }
 
     if provider == "slurm":
@@ -336,6 +336,7 @@ export OMPI_MCA_pml=ucx
             "cores_per_node": total_cores,
             "mem_per_node": mem,
             "walltime": walltime,
+            "cmd_timeout": 60,
         }
 
         if gpu:
@@ -346,6 +347,7 @@ export OMPI_MCA_pml=ucx
     elif provider == "local":
         provider = LocalProvider(
             **common_kwargs,
+            cmd_timeout=1,
         )
 
     print(f"{executor=}")
@@ -419,6 +421,8 @@ def config(
     executor="htex",
     default_on_threads=False,
     default_threads=4,
+    training_on_threads=False,
+    trainig_cores=12,
 ):
     def get_kwargs(cpu_cluster=None, gpu_cluster=None):
         if env == "hortense":
@@ -505,21 +509,29 @@ def config(
 
         if default_on_threads:
             label = "default"
-            default = get_slurm_provider(
+
+            default = ThreadPoolExecutor(
                 label=label,
-                init_blocks=1,
-                min_blocks=1,
-                max_blocks=10,
-                parallelism=1,
-                cores=default_threads,
-                parsl_cores=True,
-                walltime="02:00:00",
-                env=env,
-                path_internal=path_internal,
-                cpu_cluster=None,
-                gpu_cluster=None,
-                provider="local",
+                max_threads=default_threads,
+                working_dir=str(Path(path_internal) / label),
             )
+
+            # default = get_slurm_provider(
+            #     label=label,
+            #     init_blocks=1,
+            #     min_blocks=1,
+            #     max_blocks=10,
+            #     parallelism=1,
+            #     cores=1,
+            #     open_mp_threads_per_core=default_threads,
+            #     parsl_cores=False,
+            #     walltime="02:00:00",
+            #     env=env,
+            #     path_internal=path_internal,
+            #     cpu_cluster=None,
+            #     gpu_cluster=None,
+            #     provider="local",
+            # )
 
             execs.append(default)
             default_labels.append(label)
@@ -527,26 +539,58 @@ def config(
         if not isinstance(cpu_cluster, list):
             cpu_cluster = [cpu_cluster]
 
-        if gpu_cluster is not None:
-            for gpu in gpu_cluster:
-                kw = get_kwargs(gpu_cluster=gpu)
+        if training_on_threads:
+            label = "training"
 
-                label = f"training_{gpu}"
+            training = ThreadPoolExecutor(
+                label=label,
+                max_threads=trainig_cores,
+                working_dir=str(Path(path_internal) / label),
+            )
 
-                gpu_part = get_slurm_provider(
-                    gpu=True,
-                    label=label,
-                    init_blocks=0,
-                    min_blocks=0,
-                    max_blocks=4,
-                    parallelism=1,
-                    cores=12,
-                    parsl_cores=False,
-                    walltime="02:00:00",
-                    **kw,
-                )
-                execs.append(gpu_part)
-                trainig_labels.append(label)
+            execs.append(training)
+            trainig_labels.append(label)
+
+        else:
+            if gpu_cluster is not None:
+                for gpu in gpu_cluster:
+                    kw = get_kwargs(gpu_cluster=gpu)
+
+                    label = f"training_{gpu}"
+
+                    gpu_part = get_slurm_provider(
+                        gpu=True,
+                        label=label,
+                        init_blocks=0,
+                        min_blocks=0,
+                        max_blocks=4,
+                        parallelism=1,
+                        cores=trainig_cores,
+                        parsl_cores=False,
+                        walltime="02:00:00",
+                        **kw,
+                    )
+                    execs.append(gpu_part)
+                    trainig_labels.append(label)
+            else:
+                for cpu in cpu_cluster:
+                    kw = get_kwargs(cpu_cluster=cpu)
+
+                    label = f"training_{cpu}"
+
+                    cpu_part = get_slurm_provider(
+                        label=label,
+                        init_blocks=0,
+                        min_blocks=0,
+                        max_blocks=4,
+                        parallelism=1,
+                        cores=trainig_cores,
+                        parsl_cores=False,
+                        walltime="02:00:00",
+                        **kw,
+                    )
+                    execs.append(cpu_part)
+                    trainig_labels.append(label)
 
         if cpu_cluster is not None:
             for cpu in cpu_cluster:

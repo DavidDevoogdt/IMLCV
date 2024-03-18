@@ -215,7 +215,8 @@ class Scheme:
     def update_CV(
         self,
         transformer: Transformer,
-        dlo: Rounds.data_loader_output,
+        dlo_kwargs={},
+        dlo: Rounds.data_loader_output | None = None,
         chunk_size=None,
         plot=True,
         new_r_cut=None,
@@ -227,6 +228,17 @@ class Scheme:
     ):
         if cv_round_from is None:
             cv_round_from = self.rounds.cv
+
+        if "chunk_size" in dlo_kwargs:
+            chunk_size = dlo_kwargs["chunk_size"]
+            dlo_kwargs.pop("chunk_size")
+
+        if dlo is None:
+            dlo = self.rounds.data_loader(
+                cv_round=cv_round_from,
+                chunk_size=chunk_size,
+                **dlo_kwargs,
+            )
 
         cvs_new, new_collective_variable = transformer.fit(
             dlo=dlo,
@@ -346,8 +358,3 @@ class Scheme:
     @classmethod
     def load(cls, filename):
         raise NotImplementedError
-
-
-######################################
-#           Test                     #
-######################################

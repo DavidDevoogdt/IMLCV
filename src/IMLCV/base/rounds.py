@@ -35,6 +35,7 @@ from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 from IMLCV.configs.config_general import DEFAULT_LABELS, REFERENCE_LABELS
 from typing import Callable, Any
+import scipy.linalg
 
 
 @dataclass
@@ -543,7 +544,7 @@ class Rounds(ABC):
         cv_t: list[CV] | None = None
         ti_t: list[TrajectoryInfo] | None = None
         time_series: bool = False
-        tau: float | None = (None,)
+        tau: float | None = None
         bias: list[Bias] | None = None
         ground_bias: Bias | None = None
 
@@ -735,8 +736,10 @@ class Rounds(ABC):
                     pi,
                 )
 
-            l, q = jnp.linalg.eigh(C0)
-            # l,q = scipy.linalg.eigh(C0, subset_by_value=(eps,np.inf))
+            # TODO: tends to hang here due to parsl forking. see https://github.com/google/jax/issues/1805#issuecomment-561244991 and https://github.com/Parsl/parsl/issues/2343
+            # l, q = jnp.linalg.eigh(C0)
+            l, q = scipy.linalg.eigh(C0, subset_by_value=(eps, np.inf))
+            l, q = jnp.array(l), jnp.array(q)
 
             mask = l >= eps
             print(f"{jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
@@ -1670,23 +1673,23 @@ class Rounds(ABC):
             # bias.save(round_path / "bias.json")
             traj_info
 
-            new_traj_info = TrajectoryInfo(
-                _positions=traj_info.positions,
-                _cell=traj_info.cell,
-                _charges=traj_info.charges,
-                _e_pot=traj_info.e_pot,
-                _e_pot_gpos=traj_info.e_pot_gpos,
-                _e_pot_vtens=traj_info.e_pot_vtens,
-                _e_bias=None,
-                _e_bias_gpos=None,
-                _e_bias_vtens=None,
-                _cv=new_cv.cv,
-                _T=traj_info._T,
-                _P=traj_info._P,
-                _err=traj_info._err,
-                _t=traj_info._t,
-                _capacity=traj_info._capacity,
-                _size=traj_info._size,
+            new_traj_info = TrajectoryInfo.create(
+                positions=traj_info.positions,
+                cell=traj_info.cell,
+                charges=traj_info.charges,
+                e_pot=traj_info.e_pot,
+                e_pot_gpos=traj_info.e_pot_gpos,
+                e_pot_vtens=traj_info.e_pot_vtens,
+                e_bias=None,
+                e_bias_gpos=None,
+                e_bias_vtens=None,
+                cv=new_cv.cv,
+                T=traj_info._T,
+                P=traj_info._P,
+                err=traj_info._err,
+                t=traj_info._t,
+                capacity=traj_info._capacity,
+                size=traj_info._size,
             )
 
             self.add_md(

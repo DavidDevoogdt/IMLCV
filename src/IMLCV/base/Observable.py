@@ -180,7 +180,8 @@ class ThermoLIB:
                 only_finished=only_finished,
             ).cv
 
-            bash_app_python(self.common_bias.plot, executors=DEFAULT_LABELS)(
+            bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                bias=self.common_bias,
                 outputs=[File(f"{directory}/combined.png")],  # png because heavy file
                 name="combined.png",
                 execution_folder=directory,
@@ -379,7 +380,8 @@ class ThermoLIB:
 
             if use_prev_fs:
                 pf.append(
-                    bash_app_python(fesBias.plot, executors=DEFAULT_LABELS)(
+                    bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                        bias=fesBias,
                         outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
                         execution_folder=fold,
                         name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.pdf",
@@ -394,7 +396,8 @@ class ThermoLIB:
                 )
 
                 pf.append(
-                    bash_app_python(fesBias.plot, executors=DEFAULT_LABELS)(
+                    bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                        bias=fesBias,
                         outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.pdf")],
                         name=f"diff_FES_bias_{self.rnd}_{choice}.pdf",
                         execution_folder=fold,
@@ -407,7 +410,8 @@ class ThermoLIB:
                 )
 
             pf.append(
-                bash_app_python(fes_bias_tot.plot, executors=DEFAULT_LABELS)(
+                bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                    bias=fes_bias_tot,
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.pdf")],
                     execution_folder=fold,
                     name=f"FES_bias_{self.rnd}_inverted_{choice}.pdf",
@@ -422,7 +426,8 @@ class ThermoLIB:
             )
 
             pf.append(
-                bash_app_python(fes_bias_tot.plot, executors=DEFAULT_LABELS)(
+                bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                    bias=fes_bias_tot,
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.pdf")],
                     execution_folder=fold,
                     name=f"FES_bias_{self.rnd}_{choice}.pdf",

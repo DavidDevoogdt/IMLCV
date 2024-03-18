@@ -52,6 +52,7 @@ def config(
     account=None,
     executor="htex",
     default_on_threads=False,
+    training_cores=32,
 ):
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
@@ -82,6 +83,7 @@ def config(
             executor=executor,
             default_on_threads=default_on_threads,
             default_threads=local_ref_threads,
+            trainig_cores=training_cores,
         )
 
     config = Config(

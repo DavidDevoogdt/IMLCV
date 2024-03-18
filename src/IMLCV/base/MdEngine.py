@@ -1,6 +1,6 @@
 """MD engine class peforms MD simulations in a given NVT/NPT ensemble.
 
-Currently, the MD is done with YAFF/OpenMM
+Currently, the MD is done with YAFF
 """
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import tempfile
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
-from dataclasses import field
 from dataclasses import fields
 from pathlib import Path
 from time import time
@@ -30,6 +29,11 @@ from molmod.units import angstrom
 from molmod.units import bar
 from molmod.units import kjmol
 from typing_extensions import Self
+
+from flax.struct import PyTreeNode, field
+from jax import jit
+
+from jax.lax import dynamic_update_slice_in_dim
 
 ######################################
 #             Trajectory             #
@@ -134,8 +138,7 @@ class StaticMdInfo:
             return StaticMdInfo._load(hf=hf)
 
 
-@dataclass
-class TrajectoryInfo:
+class TrajectoryInfo(PyTreeNode):
     _positions: Array
     _cell: Array | None = None
     _charges: Array | None = None
@@ -156,6 +159,10 @@ class TrajectoryInfo:
 
     _t: Array | None = None
 
+    _capacity: int = -1
+    _size: int = -1
+
+    # static values
     _items_scal = ["_t", "_e_pot", "_e_bias", "_T", "_P", "_err"]
     _items_vec = [
         "_positions",
@@ -168,33 +175,69 @@ class TrajectoryInfo:
         "_cv",
     ]
 
-    _capacity: int = -1
-    _size: int = -1
+    def create(
+        positions: Array,
+        cell: Array | None = None,
+        charges: Array | None = None,
+        e_pot: Array | None = None,
+        e_pot_gpos: Array | None = None,
+        e_pot_vtens: Array | None = None,
+        e_bias: Array | None = None,
+        e_bias_gpos: Array | None = None,
+        e_bias_vtens: Array | None = None,
+        cv: Array | None = None,
+        T: Array | None = None,
+        P: Array | None = None,
+        err: Array | None = None,
+        t: Array | None = None,
+        capacity: int = -1,
+        size: int = -1,
+    ) -> TrajectoryInfo:
+        if capacity == -1:
+            capacity = 1
+        if size == -1:
+            size = 1
 
-    # https://stackoverflow.com/questions/7133885/fastest-way-to-grow-a-numpy-numeric-array
-    def __post_init__(self):
-        if self._capacity == -1:
-            self._capacity = 1
-        if self._size == -1:
-            self._size = 1
+        dict = {
+            "_positions": positions,
+            "_cell": cell,
+            "_charges": charges,
+            "_e_pot": e_pot,
+            "_e_pot_gpos": e_pot_gpos,
+            "_e_pot_vtens": e_pot_vtens,
+            "_e_bias": e_bias,
+            "_e_bias_gpos": e_bias_gpos,
+            "_e_bias_vtens": e_bias_vtens,
+            "_cv": cv,
+            "_T": T,
+            "_P": P,
+            "_err": err,
+            "_t": t,
+            "_capacity": int(capacity),
+            "_size": int(size),
+        }
 
         # batch
-        if len(self._positions.shape) == 2:
-            for name in [*self._items_vec, *self._items_scal]:
-                prop = self.__getattribute__(name)
+        if len(positions.shape) == 2:
+            for name in [*TrajectoryInfo._items_vec, *TrajectoryInfo._items_scal]:
+                prop = dict[name]
                 if prop is not None:
-                    self.__setattr__(name, jnp.array([prop]))
+                    dict[name] = jnp.expand_dims(prop, 0)  # jnp.array([prop])
 
         # test wether cell is truly not None
-        if self._cell is not None:
-            if self._cell.shape[-2] == 0:
-                self._cell = None
+        if dict["_cell"] is not None:
+            if dict["_cell"].shape[-2] == 0:
+                dict["_cell"] = None
+
+        return TrajectoryInfo(**dict)
 
     def __getitem__(self, slices):
         "gets slice from indices. the output is truncated to the to include only items wihtin _size"
 
         slz = (jnp.ones(self._capacity, dtype=jnp.int32).cumsum() - 1)[slices]
         slz = slz[slz <= self._size]
+
+        # dynamic_slice_in_dim
 
         return TrajectoryInfo(
             _positions=self._positions[slz, :],
@@ -215,74 +258,112 @@ class TrajectoryInfo:
             _size=jnp.size(slz),
         )
 
+    @jit
+    def _stack(ti_out, *ti: TrajectoryInfo):
+        index = ti_out._size
+
+        d = {
+            "_positions": ti_out._positions,
+            "_cell": ti_out._cell,
+            "_charges": ti_out._charges,
+            "_e_pot": ti_out._e_pot,
+            "_e_pot_gpos": ti_out._e_pot_gpos,
+            "_e_pot_vtens": ti_out._e_pot_vtens,
+            "_e_bias": ti_out._e_bias,
+            "_e_bias_gpos": ti_out._e_bias_gpos,
+            "_e_bias_vtens": ti_out._e_bias_vtens,
+            "_cv": ti_out._cv,
+            "_T": ti_out._T,
+            "_P": ti_out._P,
+            "_err": ti_out._err,
+            "_t": ti_out._t,
+        }
+
+        @jit
+        def upd(arr_in, arr, index):
+            if arr is not None:
+                return dynamic_update_slice_in_dim(arr_in, arr, index, 0)
+            return None
+
+        for t in ti:
+            # d = update_dict(d, index, t)
+
+            d["_positions"] = upd(d["_positions"], t._positions, index)
+            d["_cell"] = upd(d["_cell"], t._cell, index)
+            d["_charges"] = upd(d["_charges"], t._charges, index)
+            d["_e_pot"] = upd(d["_e_pot"], t._e_pot, index)
+            d["_e_pot_gpos"] = upd(d["_e_pot_gpos"], t._e_pot_gpos, index)
+            d["_e_pot_vtens"] = upd(d["_e_pot_vtens"], t._e_pot_vtens, index)
+            d["_e_bias"] = upd(d["_e_bias"], t._e_bias, index)
+            d["_e_bias_gpos"] = upd(d["_e_bias_gpos"], t._e_bias_gpos, index)
+            d["_e_bias_vtens"] = upd(d["_e_bias_vtens"], t._e_bias_vtens, index)
+            d["_cv"] = upd(d["_cv"], t._cv, index)
+            d["_T"] = upd(d["_T"], t._T, index)
+            d["_P"] = upd(d["_P"], t._P, index)
+            d["_err"] = upd(d["_err"], t._err, index)
+            d["_t"] = upd(d["_t"], t._t, index)
+
+            index += t._size
+
+        return TrajectoryInfo(**d, _capacity=ti_out._capacity, _size=index)
+
     @staticmethod
     def stack(*ti: TrajectoryInfo) -> TrajectoryInfo:
         if len(ti) == 1:
             return ti
+        tot_size = sum([t._size for t in ti])
 
-        return TrajectoryInfo(
-            _positions=jnp.vstack([t._positions[0 : t._size, :] for t in ti]),
-            _cell=jnp.vstack([t._cell[0 : t._size, :] for t in ti]) if ti[0]._cell is not None else None,
-            _charges=jnp.vstack([t._charges[0 : t._size, :] for t in ti]) if ti[0]._charges is not None else None,
-            _e_pot=jnp.hstack([t._e_pot[0 : t._size,] for t in ti]) if ti[0]._e_pot is not None else None,
-            _e_pot_gpos=jnp.vstack([t._e_pot_gpos[0 : t._size, :] for t in ti])
-            if ti[0]._e_pot_gpos is not None
-            else None,
-            _e_pot_vtens=jnp.vstack([t._e_pot_vtens[0 : t._size, :] for t in ti])
-            if ti[0]._e_pot_vtens is not None
-            else None,
-            _e_bias=jnp.hstack([t._e_bias[0 : t._size,] for t in ti]) if ti[0]._e_bias is not None else None,
-            _e_bias_gpos=jnp.vstack([t._e_bias_gpos[0 : t._size, :] for t in ti])
-            if ti[0]._e_bias_gpos is not None
-            else None,
-            _e_bias_vtens=jnp.vstack([t._e_bias_vtens[0 : t._size, :] for t in ti])
-            if ti[0]._e_bias_vtens is not None
-            else None,
-            _cv=jnp.vstack([t._cv[0 : t._size, :] for t in ti]) if ti[0]._cv is not None else None,
-            _T=jnp.hstack([t._T[0 : t._size,] for t in ti]) if ti[0]._T is not None else None,
-            _P=jnp.hstack([t._P[0 : t._size,] for t in ti]) if ti[0]._P is not None else None,
-            _err=jnp.hstack([t._err[0 : t._size,] for t in ti]) if ti[0]._err is not None else None,
-            _t=jnp.hstack([t._t[0 : t._size,] for t in ti]) if ti[0]._t is not None else None,
-            _capacity=sum([t._size for t in ti]),
-            _size=sum([t._size for t in ti]),
-        )
+        ti_out = ti[0]
+
+        while ti_out._capacity <= tot_size:
+            ti_out = ti_out._expand_capacity()
+
+        return ti_out._stack(*ti[1:])
 
     def __add__(self, ti: TrajectoryInfo) -> TrajectoryInfo:
         return TrajectoryInfo.stack(self, ti)
 
-    def _expand_capacity(self):
+    def _expand_capacity(self) -> TrajectoryInfo:
         nc = min(self._capacity * 2, self._capacity + 1000)
         delta = nc - self._capacity
-        self._capacity = nc
+
+        dict = {
+            "_capacity": nc,
+            "_size": self._size,
+        }
+
+        for name in self._items_vec:
+            prop = self.__dict__[name]
+
+            if prop is not None:
+                dict[name] = jnp.vstack((prop, jnp.zeros((delta, *prop.shape[1:]))))
+
+        for name in self._items_scal:
+            prop = self.__dict__[name]
+            if prop is not None:
+                dict[name] = jnp.hstack([prop, jnp.zeros(delta)])
+
+        return TrajectoryInfo(**dict)
+
+    def _shrink_capacity(self) -> TrajectoryInfo:
+        dict = {}
 
         for name in self._items_vec:
             prop = self.__getattribute__(name)
             if prop is not None:
-                self.__setattr__(
-                    name,
-                    jnp.vstack((prop, jnp.zeros((delta, *prop.shape[1:])))),
-                )
-        for name in self._items_scal:
-            prop = self.__getattribute__(name)
-            if prop is not None:
-                self.__setattr__(
-                    name,
-                    jnp.hstack([prop, jnp.zeros(delta)]),
-                )
+                dict[name] = prop[: self._size, :]
 
-    def _shrink_capacity(self):
-        for name in self._items_vec:
-            prop = self.__getattribute__(name)
-            if prop is not None:
-                self.__setattr__(name, prop[: self._size, :])
         for name in self._items_scal:
             prop = self.__getattribute__(name)
             if prop is not None:
-                self.__setattr__(name, prop[: self._size])
-        self._capacity = self._size
+                dict[name] = prop[: self._size]
+
+        dict["_capacity"] = self._size
+
+        return TrajectoryInfo(**dict)
 
     def save(self, filename: str | Path):
-        self._shrink_capacity()
+        ti = self._shrink_capacity()
 
         if isinstance(filename, str):
             filename = Path(filename)
@@ -291,7 +372,7 @@ class TrajectoryInfo:
             filename.parent.mkdir(parents=True, exist_ok=True)
 
         with h5py.File(str(filename), "w") as hf:
-            self._save(hf=hf)
+            ti._save(hf=hf)
 
     def _save(self, hf: h5py.File):
         for name in [*self._items_scal, *self._items_vec]:
@@ -322,7 +403,6 @@ class TrajectoryInfo:
             attrs[key] = val
 
         return TrajectoryInfo(
-            # static_info=tic,
             **props,
             **attrs,
         )
@@ -627,7 +707,7 @@ class MDEngine(ABC):
                     with open(inv, "w+"):
                         pass
 
-        self.trajectory_info._shrink_capacity()
+        # self.trajectory_info =  self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
             self.trajectory_info.save(self.trajectory_file)
 
@@ -637,8 +717,8 @@ class MDEngine(ABC):
 
     def get_trajectory(self) -> TrajectoryInfo:
         assert self.trajectory_info is not None
-        self.trajectory_info._shrink_capacity()
-        return self.trajectory_info
+
+        return self.trajectory_info._shrink_capacity()
 
     def save_step(self, T=None, P=None, t=None, err=None, canonicalize=False):
         if canonicalize:
@@ -646,20 +726,20 @@ class MDEngine(ABC):
         else:
             sp = self.sp
 
-        ti = TrajectoryInfo(
-            _positions=sp.coordinates,
-            _cell=sp.cell,
-            _e_pot=self.last_ener.energy,
-            _e_pot_gpos=self.last_ener.gpos,
-            _e_bias=self.last_bias.energy,
-            _e_bias_gpos=self.last_bias.gpos,
-            _e_pot_vtens=self.last_ener.vtens,
-            _e_bias_vtens=self.last_bias.vtens,
-            _cv=self.last_cv.cv,
-            _T=T,
-            _P=P,
-            _t=t,
-            _err=err,
+        ti = TrajectoryInfo.create(
+            positions=sp.coordinates,
+            cell=sp.cell,
+            e_pot=self.last_ener.energy,
+            e_pot_gpos=self.last_ener.gpos,
+            e_bias=self.last_bias.energy,
+            e_bias_gpos=self.last_bias.gpos,
+            e_pot_vtens=self.last_ener.vtens,
+            e_bias_vtens=self.last_bias.vtens,
+            cv=self.last_cv.cv,
+            T=T,
+            P=P,
+            t=t,
+            err=err,
         )
 
         if self.step == 1:

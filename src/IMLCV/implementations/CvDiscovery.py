@@ -12,7 +12,7 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.CV import get_feature_cov
+from IMLCV.implementations.CV import get_non_constant_trans
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -579,7 +579,7 @@ class TransformerMAF(Transformer):
         x_t: list[CV] | None,
         dlo: Rounds.data_loader_output,
         correct_bias=False,
-        pre_selction_epsilon=1e-14,
+        pre_selction_epsilon=1e-10,
         max_features=2000,
         max_functions=3000,
         weight_method="diff",
@@ -597,11 +597,16 @@ class TransformerMAF(Transformer):
         cv_0, _, _ = un_atomize.compute_cv_trans(cv_0)
         cv_tau, _, _ = un_atomize.compute_cv_trans(cv_tau)
 
-        cv_0, cv_tau, transform = get_feature_cov(
-            cv_0, cv_tau, max_functions=max_functions, epsilon=pre_selction_epsilon
-        )
+        cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon, max_functions=max_functions)
+        cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
 
         trans *= transform
+
+        # cv_0, cv_tau, transform = get_feature_cov(
+        #     cv_0, cv_tau, max_functions=max_functions, epsilon=pre_selction_epsilon
+        # )
+
+        # trans *= transform
 
         print(f"{cv_0.shape=} {cv_tau.shape=}")
 

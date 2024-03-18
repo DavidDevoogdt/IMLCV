@@ -13,6 +13,7 @@ from parsl import File
 from parsl import python_app
 from parsl.dataflow.futures import AppFuture
 from IMLCV.configs.config_general import DEFAULT_LABELS
+import jax
 
 
 # @typeguard.typechecked
@@ -20,7 +21,7 @@ def bash_app_python(
     function=None,
     executors="all",
     precommand="",  # command to run before the python command
-    pickle_extension="cloudpickle",
+    pickle_extension="json",
     pass_files=False,
 ):
     def decorator(func):
@@ -205,6 +206,7 @@ if __name__ == "__main__":
         print(f"working in folder {os.getcwd()}")
         if use_mpi:
             print(f"using mpi with {num_ranks} ranks")
+        print(f"working with {jax.device_count()} devices")
 
         file_in = Path(args.file_in)
 
