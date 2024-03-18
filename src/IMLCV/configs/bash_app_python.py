@@ -21,6 +21,7 @@ def bash_app_python(
     function=None,
     executors="all",
     precommand="",  # command to run before the python command
+    uses_mpi=False,
     pickle_extension="json",
     pass_files=False,
 ):
@@ -121,7 +122,7 @@ def bash_app_python(
                     with open(filename, "rb+") as f:
                         cloudpickle.dump((func, args, kwargs), f)
 
-                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }"
+                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }  {'--uses_mpi' if uses_mpi else ''}"
 
             fun.__name__ = func.__name__
 
@@ -176,6 +177,13 @@ if __name__ == "__main__":
         type=str,
         help="path to file f containing pickle.dump((func, args, kwargs), f)",
     )
+
+    parser.add_argument(
+        "--uses_mpi",
+        action="store_true",
+        help="Wether or not this is launchded with mpi",
+    )
+
     parser.add_argument("--folder", type=str, help="working directory")
     args = parser.parse_args()
 
@@ -183,28 +191,23 @@ if __name__ == "__main__":
     os.chdir(args.folder)
 
     rank = 0
-    use_mpi = False
+    args.uses_mpi = False
 
-    try:
+    if args.uses_mpi:
         from mpi4py import MPI
-
-        # MPI.pickle.__init__(pickle.dumps, pickle.loads)
 
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         num_ranks = comm.Get_size()
 
-        if num_ranks > 1:
-            use_mpi = True
-    except ImportError:
-        pass
+        assert num_ranks > 1, "MPI is not installed"
 
     if rank == 0:
         print("#" * 20)
         print(f"got input {sys.argv}")
         print(f"task started at {datetime.now():%d/%m/%Y %H:%M:%S }")
         print(f"working in folder {os.getcwd()}")
-        if use_mpi:
+        if args.uses_mpi:
             print(f"using mpi with {num_ranks} ranks")
         print(f"working with {jax.device_count()} devices")
 
@@ -223,14 +226,14 @@ if __name__ == "__main__":
         fargs = None
         fkwargs = None
 
-    if use_mpi:
+    if args.uses_mpi:
         func = comm.bcast(func, root=0)
         fargs = comm.bcast(fargs, root=0)
         fkwargs = comm.bcast(fkwargs, root=0)
 
     a = func(*fargs, **fkwargs)
 
-    if use_mpi:
+    if args.uses_mpi:
         a = comm.gather(a, root=0)
 
     if rank == 0:

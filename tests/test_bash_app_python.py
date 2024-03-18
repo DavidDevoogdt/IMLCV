@@ -73,12 +73,17 @@ def _f_MPI(i):
     return i, rank
 
 
-@pytest.mark.skip(reason="MPI not installed")
+# @pytest.mark.skip(reason="MPI not installed")
 def test_parallel_MPI(tmp_path, config_test):
     i_enum = 5
 
     futs = [
-        bash_app_python(_f_MPI, pickle_extension="cloudpickle", precommand="mpirun -n 4")(i, execution_folder=tmp_path)
+        bash_app_python(
+            _f_MPI,
+            pickle_extension="cloudpickle",
+            precommand="mpirun -n 4",
+            uses_mpi=True,
+        )(i, execution_folder=tmp_path)
         for i in range(i_enum)
     ]
 
