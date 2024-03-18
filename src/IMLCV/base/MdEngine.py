@@ -359,6 +359,7 @@ class TrajectoryInfo(PyTreeNode):
                 dict[name] = prop[: self._size]
 
         dict["_capacity"] = self._size
+        dict["_size"] = self._size
 
         return TrajectoryInfo(**dict)
 
