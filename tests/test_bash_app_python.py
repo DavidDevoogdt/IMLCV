@@ -73,7 +73,7 @@ def _f_MPI(i):
     return i, rank
 
 
-# @pytest.mark.skip(reason="MPI not installed")
+@pytest.mark.skip(reason="MPI not installed")
 def test_parallel_MPI(tmp_path, config_test):
     i_enum = 5
 

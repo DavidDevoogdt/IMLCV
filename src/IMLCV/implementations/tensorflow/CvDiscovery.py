@@ -163,7 +163,7 @@ class TranformerUMAP(Transformer):
         else:
             reducer = umap.UMAP(**kwargs)
 
-        trans_1 = reducer.fit_transform(X=numpy.asarray(x_train.cv, copy=True))
+        trans_1 = reducer.fit_transform(X=numpy.array(x_train.cv))
 
         fwd_kwargs = dict(
             nlayers=nlayers,
