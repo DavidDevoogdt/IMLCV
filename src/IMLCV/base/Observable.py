@@ -20,6 +20,8 @@ from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
 from IMLCV.configs.config_general import DEFAULT_LABELS
+from jax import jit
+from jax.tree_util import Partial
 
 
 class ThermoLIB:
@@ -67,6 +69,19 @@ class ThermoLIB:
         from IMLCV.base.CV import padded_pmap
         from IMLCV.base.bias import Bias
 
+        @jit
+        def _get_bias(bias: Bias, *cv: CV):
+            cvs = CV.combine(*cv)
+
+            f = Partial(bias.compute_from_cv, diff=False, chunk_size=chunk_size)
+
+            if pmap:
+                out = padded_pmap(f)
+
+            out, _ = f(cvs)
+
+            return out
+
         class _ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:
                 self.bias = bias
@@ -81,29 +96,23 @@ class ThermoLIB:
                 cvs = CV.combine(
                     *[
                         CV(
-                            cv=jnp.array(
-                                cvi.reshape((-1, 1)),
+                            cv=jnp.asarray(
+                                cvi,
                                 dtype=jnp.float64,
-                            )
+                            ).reshape((-1, 1))
                         )
                         for cvi in cv
                     ]
                 )
 
-                def _get_bias(cvs):
-                    out, _ = self.bias.compute_from_cv(
-                        cvs=cvs,
-                        diff=False,
-                        chunk_size=chunk_size,
-                    )
-                    return out
+                f = Partial(_get_bias, self.bias)
 
                 if pmap:
-                    _get_bias = padded_pmap(_get_bias)
+                    out = padded_pmap(f)
 
-                out = _get_bias(cvs)
+                out = f(cvs)
 
-                return np.array(jnp.reshape(out, cv[0].shape), dtype=np.double)
+                return np.asarray(jnp.reshape(out, cv[0].shape), dtype=np.double)
 
             def print_pars(self, *pars_units):
                 pass

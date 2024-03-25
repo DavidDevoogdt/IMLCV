@@ -18,6 +18,10 @@ from IMLCV.implementations.CV import identity_trans
 from IMLCV.implementations.CV import scale_cv_trans
 from matplotlib import gridspec
 from matplotlib.figure import Figure
+from IMLCV.base.bias import NoneBias
+from molmod.units import kjmol
+from IMLCV.implementations.bias import _clip
+from IMLCV.base.bias import BiasModify
 
 
 class Transformer:
@@ -71,11 +75,14 @@ class Transformer:
         plot=True,
         plot_folder: str | Path | None = None,
         p_map=True,
-        percentile=1,
-        margin=0.05,
+        percentile=5.0,
+        margin=0.01,
         jac=jax.jacrev,
         test=False,
         check_nan=True,
+        transform_FES=True,
+        FES_ngrid=20,
+        max_fes_bias=100 * kjmol,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
@@ -89,9 +96,11 @@ class Transformer:
         )
 
         if check_nan:
+            print("checking pre_fit nans")
             dlo, x, x_t = dlo.filter_nans(x, x_t)
 
         if test:
+            print("testing pre_fit")
             x_2, _ = f.compute_cv_flow(
                 SystemParams.stack(*dlo.sp),
                 NeighbourList.stack(*dlo.nl),
@@ -119,6 +128,7 @@ class Transformer:
         )
 
         if check_nan:
+            print("checking fit nans")
             dlo, y, y_t = dlo.filter_nans(y, y_t)
 
         y = CV.stack(*y)
@@ -141,15 +151,23 @@ class Transformer:
                 )
 
         # remove outliers from the data
-        _, mask = CvMetric.bounds_from_cv(y, percentile=1.0)
+        _, mask = CvMetric.bounds_from_cv(y, percentile=percentile)
         y_masked = y[mask]
 
         print("starting post_fit")
         z_masked, h = self.post_fit(y_masked)
         z, _, _ = h.compute_cv_trans(y)
 
+        mini = jnp.min(z_masked.cv, axis=0)
+        maxi = jnp.max(z_masked.cv, axis=0)
+
+        diff = maxi - mini
+
+        mini_margin = mini - diff * (percentile / 200 + margin)
+        maxi_margin = maxi + diff * (percentile / 200 + margin)
+
         new_bounding_box = jnp.vstack(
-            [jnp.min(z_masked.cv, axis=0), jnp.max(z_masked.cv, axis=0)],
+            [mini_margin, maxi_margin],
         ).T
 
         new_collective_variable = CollectiveVariable(
@@ -160,6 +178,32 @@ class Transformer:
                 bounding_box=new_bounding_box,
             ),
         )
+
+        if transform_FES:
+            print("transforming FES")
+            bias = dlo.get_transformed_fes(
+                weights=dlo.weights(),
+                new_cv=z,
+                old_cv=dlo.cv,
+                n_grid=FES_ngrid,
+                new_colvar=new_collective_variable,
+            )
+
+            bias = BiasModify.create(
+                bias=bias,
+                fun=_clip,
+                kwargs={"a_min": -max_fes_bias, "a_max": 0},
+            )
+
+            if plot:
+                bias.plot(
+                    name=str(plot_folder / "transformed_fes.pdf"),
+                    margin=0.1,
+                    inverted=True,
+                )
+
+        else:
+            bias = NoneBias.create(new_collective_variable)
 
         if test:
             cv_full, _ = new_collective_variable.compute_cv(
@@ -178,7 +222,7 @@ class Transformer:
                 margin=0.1,
             )
 
-        return z, new_collective_variable
+        return z, new_collective_variable, bias
 
     def _fit(
         self,

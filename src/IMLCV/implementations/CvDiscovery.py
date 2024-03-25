@@ -12,7 +12,7 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.CV import get_non_constant_trans
+from IMLCV.implementations.CV import get_feature_cov
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -582,8 +582,10 @@ class TransformerMAF(Transformer):
         pre_selction_epsilon=1e-10,
         max_features=2000,
         max_functions=3000,
-        weight_method="diff",
+        weight_method="FES2",
+        koopman_weighting=False,
         kinetic_distance=False,
+        method="tcca",
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         assert dlo.time_series
@@ -597,32 +599,33 @@ class TransformerMAF(Transformer):
         cv_0, _, _ = un_atomize.compute_cv_trans(cv_0)
         cv_tau, _, _ = un_atomize.compute_cv_trans(cv_tau)
 
-        cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon, max_functions=max_functions)
-        cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
+        # cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon, max_functions=max_functions)
+        # cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
+
+        cv_0, cv_tau, transform = get_feature_cov(
+            cv_0,
+            cv_tau,
+            max_functions=max_functions,
+            epsilon=pre_selction_epsilon,
+            abs_val=False,
+        )
 
         trans *= transform
-
-        # cv_0, cv_tau, transform = get_feature_cov(
-        #     cv_0, cv_tau, max_functions=max_functions, epsilon=pre_selction_epsilon
-        # )
-
-        # trans *= transform
-
-        print(f"{cv_0.shape=} {cv_tau.shape=}")
 
         w = None
 
         if correct_bias:
-            w = jnp.hstack(dlo.weights(method=weight_method))
+            w = dlo.weights(method=weight_method)
 
         k, tica_selection, g, pi_0, q_0, pi_1, q_1, cv_0, cv_tau = dlo.koopman_model(
-            cv_0=cv_0,
-            cv_tau=cv_tau,
+            cv_0=cv_0.unstack(),
+            cv_tau=cv_tau.unstack(),
             eps=1e-10,
-            method="tcca",
+            method=method,
             max_features=max_features,
             w=w,
             out_dim=self.outdim,
+            koopman_weight=koopman_weighting,
         )
 
         print(f"timescales {-dlo.tau / jnp.log(k) / nanosecond} ns")

@@ -139,16 +139,16 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             hooks=hooks,
         )
 
-        i = None
+        i_screenlog = None
 
         for i, h in enumerate(self._verlet.hooks):
             if isinstance(h, yaff.sampling.VerletScreenLog):
-                i = i
+                i_screenlog = i
 
                 break
 
-        if i is not None:
-            self._verlet.hooks.pop(i)
+        if i_screenlog is not None:
+            self._verlet.hooks.pop(i_screenlog)
 
         self._verlet_initialized = True
 
@@ -169,7 +169,7 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
 class YaffFF(yaff.pes.ForceField):
     def __init__(
         self,
-        md_engine: MDEngine,
+        md_engine: YaffEngine,
         name="IMLCV_YAFF_forcepart",
         additional_parts=[],
     ):

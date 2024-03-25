@@ -26,6 +26,7 @@ def bash_app_python(
     pickle_extension="json",
     pass_files=False,
     auto_log=False,
+    profile=False,
 ):
     def decorator(func):
         def wrapper(
@@ -132,7 +133,7 @@ def bash_app_python(
                     with open(filename, "rb+") as f:
                         cloudpickle.dump((func, args, kwargs), f)
 
-                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }  {'--uses_mpi' if uses_mpi else ''}"
+                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }  {'--uses_mpi' if uses_mpi else ''}   {'--profile' if profile else ''} "
 
             fun.__name__ = func.__name__
 
@@ -194,6 +195,12 @@ if __name__ == "__main__":
         help="Wether or not this is launchded with mpi",
     )
 
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Wether or not tho profile program",
+    )
+
     parser.add_argument("--folder", type=str, help="working directory")
     args = parser.parse_args()
 
@@ -219,7 +226,7 @@ if __name__ == "__main__":
         print(f"working in folder {os.getcwd()}")
         if args.uses_mpi:
             print(f"using mpi with {num_ranks} ranks")
-        print(f"working with {jax.device_count()} devices")
+        print(f"working with {jax.local_device_count()} devices")
 
         file_in = Path(args.file_in)
 
@@ -241,7 +248,17 @@ if __name__ == "__main__":
         fargs = comm.bcast(fargs, root=0)
         fkwargs = comm.bcast(fkwargs, root=0)
 
-    a = func(*fargs, **fkwargs)
+    if args.profile:
+        import cProfile
+        import pstats
+
+        with cProfile.Profile() as pr:
+            a = func(*fargs, **fkwargs)
+
+            ps = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE).print_stats()
+
+    else:
+        a = func(*fargs, **fkwargs)
 
     if args.uses_mpi:
         a = comm.gather(a, root=0)

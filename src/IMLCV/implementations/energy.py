@@ -23,7 +23,10 @@ yaff.log.set_level(yaff.log.silent)
 
 
 class YaffEnergy(Energy):
-    def __init__(self, f: Callable[[], yaff.ForceField]) -> None:
+    def __init__(
+        self,
+        f: Callable[[], yaff.ForceField],
+    ) -> None:
         super().__init__()
         self.f = f
         self.ff: yaff.ForceField = f()
@@ -33,21 +36,24 @@ class YaffEnergy(Energy):
         out = self.ff.system.cell.rvecs[:]  # empty cell represented as array with shape (0,3)
         if out.size == 0:
             return None
-        return out
+        return jnp.asarray(out)
 
     @cell.setter
     def cell(self, cell):
-        if cell is not None:
-            cell = np.array(cell, dtype=np.double)
-            self.ff.update_rvecs(cell)
+        if cell is None:
+            return
+
+        cell = np.asarray(cell, dtype=np.double)
+
+        self.ff.update_rvecs(cell)
 
     @property
     def coordinates(self):
-        return jnp.array(self.ff.system.pos[:])
+        return jnp.asarray(self.ff.system.pos[:])
 
     @coordinates.setter
     def coordinates(self, coordinates):
-        self.ff.update_pos(np.array(coordinates))
+        self.ff.update_pos(np.asarray(coordinates))
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
@@ -90,10 +96,16 @@ class AseEnergy(Energy):
 
     @property
     def cell(self):
+        cell = self.atoms.get_cell()
+        if cell.rank == 0:
+            return None
+
         return jnp.array(self.atoms.get_cell()[:] * angstrom)
 
     @cell.setter
     def cell(self, cell):
+        if cell is None:
+            return
         self.atoms.set_cell(ase.geometry.Cell(np.array(cell[:]) / angstrom))
 
     @property

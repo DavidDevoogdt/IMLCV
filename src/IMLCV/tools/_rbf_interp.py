@@ -249,7 +249,7 @@ class RBFInterpolator(PyTreeNode):
 
         return RBFInterpolator(
             _coeffs=coeffs,
-            y=y,
+            y=y.replace(_stack_dims=None),
             d=d,
             d_shape=d_shape,
             # d_dtype=d_dtype,
@@ -347,5 +347,8 @@ class RBFInterpolator(PyTreeNode):
     def __setstate__(self, state):
         if "d_dtype" in state:
             del state["d_dtype"]
+
+        if state["y"]._stack_dims is not None:
+            state["y"] = state["y"].replace(_stack_dims=None)
 
         self.__init__(**state)

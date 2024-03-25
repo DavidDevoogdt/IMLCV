@@ -143,6 +143,8 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     l_vec = jnp.arange(0, l_max + 1)
     n_vec = jnp.arange(0, n_max + 1)
 
+    print("Check indexing of meshgrid for SOAP!")
+
     indices = jnp.array(jnp.meshgrid(n_vec, n_vec))
 
     S = jnp.apply_along_axis(S_nm, axis=0, arr=indices)

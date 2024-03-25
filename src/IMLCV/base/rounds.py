@@ -17,6 +17,7 @@ from equinox import Partial
 from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
+from IMLCV.implementations.bias import RbfBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvTrans, CvFlow
@@ -36,6 +37,8 @@ from parsl.data_provider.files import File
 from IMLCV.configs.config_general import DEFAULT_LABELS, REFERENCE_LABELS
 from typing import Callable, Any
 import scipy.linalg
+from jax import vmap
+from functools import partial
 
 
 @dataclass
@@ -626,73 +629,91 @@ class Rounds(ABC):
 
             return Rounds.data_loader_output(**kwargs)
 
+        def _histogram(self, n_grid=40):
+            grid = self.collective_variable.metric.grid(n=n_grid)
+            mid = [a[:-1] + (a[1:] - a[:-1]) / 2 for a in grid]
+
+            cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing="ij")])
+
+            @partial(vmap, in_axes=(0, None))
+            def closest(data, mid):
+                return jnp.argmin(jnp.sum((mid - data) ** 2, axis=1))
+
+            @partial(vmap, in_axes=(None, 0, None))
+            def get_histo(data_nums, nums, weights=None):
+                b = data_nums == nums
+
+                if weights is not None:
+                    b *= weights
+
+                return jnp.sum(b)
+
+            nums = closest(cv_mid.cv, cv_mid.cv)
+
+            return cv_mid, nums, closest, get_histo
+
         def weights(self, norm=True, method="FES", n_grid=40) -> list[jax.Array]:
             # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
 
+            data = CV.stack(*self.cv)
             beta = 1 / (self.sti.T * boltzmann)
 
-            weights = []
+            weights_u = None
 
-            if method == "FES":
-                grid = self.collective_variable.metric.grid(n=n_grid)
-                grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
+            # apply correction exp(beta*U - F) = p, and account for number of data points
+            for ti_i in self.ti:
+                # free_energy, _ = self.ground_bias.compute_from_cv(cvs=ti_i.CV)
 
-            for i, (ti_i, ti_t_i) in enumerate(zip(self.ti, self.ti_t)):
-                if self.bias is not None:
-                    if ti_i.e_bias is None:
-                        weights.append(None)
-                        print("no e_bias")
-                        continue
-
-                    if method == "FES":
-                        u = ti_i.e_bias
-                        mean_u = jnp.max(u)
-
-                        v = self.ground_bias.compute_from_cv(cvs=grid)[0]
-                        u_grid = self.bias[i].compute_from_cv(cvs=grid)[0]
-                        mean_v = jnp.max(v)
-
-                        w = (
-                            jnp.exp(beta * (u - mean_u))
-                            * jnp.sum(jnp.exp(beta * (v - mean_v) - beta * (u_grid - mean_u)))
-                            / jnp.sum(jnp.exp(beta * (v - mean_v)))
-                        )
-
-                        w /= jnp.sum(w)
-
-                    elif method == "e_pot":
-                        mean_u = jnp.mean(ti_i.e_bias)
-                        e_pot_mean = jnp.mean(ti_i.e_pot)
-
-                        w = (
-                            jnp.exp(beta * (ti_i.e_bias - mean_u))
-                            * jnp.sum(jnp.exp(-beta * (ti_i.e_pot - e_pot_mean + ti_i.e_bias - mean_u)))
-                            / jnp.sum(jnp.exp(-beta * (ti_i.e_pot - e_pot_mean)))
-                        )
-
-                        w /= jnp.sum(w)
-                    elif method == "raw":
-                        w = jnp.exp(beta * (ti_i.e_bias - jnp.max(ti_i.e_bias)))
-
-                        w /= jnp.sum(w)
-
-                    elif method == "diff":
-                        w = jnp.exp(beta * (ti_t_i.e_bias - ti_i.e_bias))
-                        w /= jnp.sum(w)
-
-                    else:
-                        raise NotImplementedError
-
-                    w *= ti_i._size
+                if ti_i.e_bias is None:
+                    b = jnp.zeros((ti_i.cv.shape[0],))
                 else:
-                    w = jnp.ones((ti_i._size,))
-                    w /= jnp.sum(w)
+                    b = ti_i.e_bias  # - free_energy
+                    b -= jnp.max(b)
 
-                weights.append(w)
+                p_grid = jnp.exp(beta * b)
+                p_grid /= jnp.mean(p_grid)
 
-            if norm:
-                tot = jnp.sum(jnp.hstack(weights))
-                weights = [w / tot for w in weights]
+                if weights_u is None:
+                    weights_u = [p_grid]
+                else:
+                    weights_u.append(p_grid)
+
+            w_u = jnp.hstack(weights_u)
+
+            # norm based on FES
+
+            cv_mid, nums, closest, get_histo = self._histogram(n_grid=n_grid)
+
+            grid_nums = closest(data.cv, cv_mid.cv)
+            hist = get_histo(grid_nums, nums, w_u)
+
+            p_grid = jnp.exp(beta * self.ground_bias.compute_from_cv(cvs=cv_mid)[0]) / hist
+
+            p = w_u * p_grid[grid_nums]
+            p /= jnp.sum(p)
+
+            print(f"{p_grid.shape=} {p.shape=}")
+
+            # nums = closest(cv_mid.cv, cv_mid.cv)
+            # data_nums = closest(data.cv, cv_mid.cv)
+
+            # @partial(vmap, in_axes=(None, 0, None))
+            # def get_histo(data_nums, nums, weights=None):
+            #     b = data_nums == nums
+
+            #     if weights is not None:
+            #         b *= weights
+
+            #     return jnp.sum(b)
+
+            # hist = get_histo(data_nums, nums, w_u)
+
+            # # f = -U, p = exp(-\beta F)
+            # w = jnp.exp(beta * self.ground_bias.compute_from_cv(cvs=cv_mid)[0]) / hist
+            # p = w_u * w[data_nums]
+            # p /= jnp.sum(p)
+
+            weights = [d.cv.reshape((-1,)) for d in data.replace(cv=jnp.expand_dims(p, 1)).unstack()]
 
             return weights
 
@@ -720,7 +741,7 @@ class Rounds(ABC):
                 w /= jnp.sum(w)
 
             if symmetric:
-                assert cv_tau is None
+                assert cv_tau is not None
 
             x = cv_0.cv
 
@@ -814,7 +835,7 @@ class Rounds(ABC):
             self,
             cv_0: CV = None,
             cv_tau: CV = None,
-            w=None,
+            w: list[jnp.Array] | None = None,
             eps=1e-10,
             max_features=2000,
             add_1=True,
@@ -823,15 +844,23 @@ class Rounds(ABC):
             # https://pubs.aip.org/aip/jcp/article-abstract/146/15/154104/152394/Variational-Koopman-models-Slow-collective?redirectedFrom=fulltext
 
             assert self.time_series
+
             if cv_0 is None:
-                cv_0 = CV.stack(*self.cv)
+                cv_0 = self.cv
+            cv_0 = CV.stack(*cv_0)
 
             if cv_tau is None:
-                cv_tau = CV.stack(*self.cv_t)
+                cv_tau = self.cv_t
+
+            if cv_tau is not None:
+                cv_tau = CV.stack(*cv_tau)
 
             if w is None:
                 w = jnp.ones((cv_0.shape[0],))
-                w /= jnp.sum(w)
+            else:
+                w = jnp.hstack(w)
+
+            w /= jnp.sum(w)
 
             cv0_white, transform_maf, pi, q = Rounds.data_loader_output._whiten(
                 cv_0=cv_0,
@@ -853,42 +882,38 @@ class Rounds(ABC):
             # eigenvalue of K.T
             eigval, u = jnp.linalg.eig(a=C_01.T)
 
-            assert (
-                jnp.sum(p := jnp.abs(eigval) >= 1 + 1e-10) != 0
-            ), f" {jnp.sum(p)}/ {p.shape[0]} eigvals to large {eigval[p]=}."
-
-            print(eigval)
+            if jnp.any(p := jnp.abs(eigval) >= 1 + 1e-10):
+                print(f" {jnp.sum(p)}/ {p.shape[0]} eigvals too large {eigval[p]=}.")
 
             if add_1:
                 idx = jnp.argsort(jnp.abs(eigval - 1))[0]
-                assert jnp.abs(eigval[idx] - 1) < 1e-6, f"{eigval[idx]=}, but should be 1"
+                assert jnp.abs(eigval[idx] - 1) < 1e-10, f"{eigval[idx]=}, but should be 1"
             else:
                 idx = jnp.argmax(jnp.real(eigval))
                 print(f"largest eigval = {eigval[idx]}")
                 assert jnp.allclose(jnp.imag(eigval[idx]), 0)
 
-            w_k = jnp.einsum("ni,i->n", cv0_white.cv, jnp.real(u[:, idx]))
+            print(f"idx = {idx}, {eigval[idx]=}, {u[:, idx]=}")
+
+            w_k = jnp.einsum("ni,i->n", cv0_white.cv, u[:, idx])
+
+            w_k /= jnp.sum(w_k)
 
             if not (w_k > 0).all():
                 print(
                     f"  { jnp.sum( w_k<= 0 ) }/{w_k.shape[0]} negative weights,  mean {  jnp.mean( w_k[w_k<= 0]) }, min { jnp.min( w_k[w_k<= 0] ) }. Setting to zero and reestimating",
                 )
-                print(f"{w_k[w_k<=0]=}")
-
-                w_k = jnp.where(w_k < 0, jnp.zeros_like(w_k), w_k)
-
-            w_k /= jnp.sum(w_k)
 
             return w_k
 
         def koopman_model(
             self,
-            cv_0: CV = None,
-            cv_tau: CV = None,
+            cv_0: list[CV] = None,
+            cv_tau: list[CV] = None,
             method="tica",
             koopman_weight=True,
             symmetric_tica=True,
-            w=None,
+            w: list[jnp.Array] | None = None,
             eps=1e-10,
             max_features=2000,
             out_dim=None,
@@ -898,10 +923,17 @@ class Rounds(ABC):
             assert method in ["tica", "tcca"]
 
             if cv_0 is None:
-                cv_0 = CV.stack(*self.cv)
+                cv_0 = self.cv
+            cv_0 = CV.stack(*cv_0)
 
             if cv_tau is None:
-                cv_tau = CV.stack(*self.cv_t)
+                cv_tau = self.cv_t
+
+            if cv_tau is not None:
+                cv_tau = CV.stack(*cv_tau)
+
+            if w is not None:
+                w = jnp.hstack(w)
 
             print(f"{cv_0.shape=}, {cv_tau.shape=}")
 
@@ -1002,8 +1034,16 @@ class Rounds(ABC):
                     Vh = Vh[:, :-1][1:, :]
                     s = s[1:]
 
+                msk = s >= 1
+                if jnp.any(msk):
+                    print(f"{jnp.sum(msk)}/{msk.shape[0]} singular values larger than 1. Removing them.")
+
+                    U = U[:, ~msk]
+                    Vh = Vh[~msk, :]
+                    s = s[~msk]
+
                 q_0 = q_0 @ U
-                q_1 = q_1 @ Vh
+                q_1 = q_1 @ jnp.transpose(Vh)
                 if out_dim is not None:
                     q_0 = q_0[:, :out_dim]
                     q_1 = q_1[:, :out_dim]
@@ -1154,6 +1194,8 @@ class Rounds(ABC):
 
             z, _ = f(y, nl)
 
+            del y, nl
+
             if self.time_series:
                 z, z_t = z[0:tot], z[tot:]
             else:
@@ -1162,6 +1204,96 @@ class Rounds(ABC):
             return (
                 z.replace(_stack_dims=_stack_dims).unstack(),
                 z_t.replace(_stack_dims=_stack_dims).unstack() if z_t is not None else None,
+            )
+
+        def _get_fes_bias_from_weights(self, weights: list[jax.Array], n_grid=40) -> RbfBias:
+            beta = 1 / (self.sti.T * boltzmann)
+
+            cv = CV.stack(*self.cv)
+
+            p = jnp.hstack(weights)
+
+            cv_mid, nums, closest, get_histo = self._histogram(n_grid=n_grid)
+            grid_nums = closest(cv.cv, cv_mid.cv)
+
+            # hist = get_histo(grid_nums, nums, w_u)  # weight per grid element
+
+            @partial(vmap, in_axes=(None, 0, None))
+            def fes_weight(data_num, num, p):
+                b = data_num == num
+                p = jnp.where(b, p, 0)
+                return jnp.sum(p)
+
+            p_grid = fes_weight(
+                grid_nums,
+                nums,
+                p,
+            )
+
+            mask = p_grid != 0
+
+            p_grid = p_grid[mask]
+
+            fes_grid = -jnp.log(p_grid) / beta
+            fes_grid -= jnp.min(fes_grid)
+
+            return RbfBias.create(
+                cvs=self.collective_variable,
+                cv=cv_mid[mask],
+                kernel="thin_plate_spline",
+                vals=-fes_grid,
+            )
+
+        def get_transformed_fes(
+            self,
+            weights,
+            new_cv: list[CV],
+            old_cv: list[CV],
+            new_colvar: CollectiveVariable,
+            n_grid=40,
+        ) -> RbfBias:
+            beta = 1 / (self.sti.T * boltzmann)
+
+            new_cv = CV.stack(*new_cv)
+            old_cv = CV.stack(*old_cv)
+
+            p = jnp.hstack(weights)
+
+            cv_mid, nums, closest, get_histo = self._histogram(n_grid=n_grid)
+            new_grid_nums = closest(new_cv.cv, cv_mid.cv)
+            # old_grid_nums = closest(old_cv.cv, cv_mid.cv)
+
+            @partial(vmap, in_axes=(0, None, None))
+            def mat(
+                nums_new,
+                data_nums_new,
+                p,
+            ):
+                b = data_nums_new == nums_new
+
+                return jnp.sum(jnp.where(b, p, 0))
+
+            p_grid = mat(
+                nums,
+                new_grid_nums,
+                p,
+            )
+
+            mask = p_grid != 0
+
+            p_grid = p_grid[mask]
+
+            fes_grid = -jnp.log(p_grid) / beta
+            fes_grid -= jnp.min(fes_grid)
+
+            if new_colvar is None:
+                new_colvar = self.collective_variable
+
+            return RbfBias.create(
+                cvs=new_colvar,
+                cv=cv_mid[mask],
+                kernel="thin_plate_spline",
+                vals=-fes_grid,
             )
 
     def data_loader(
@@ -1229,6 +1361,9 @@ class Rounds(ABC):
             except Exception as e:
                 print(f"could not load ground bias {e=}")
                 ground_bias = None
+
+        if colvar is not None:
+            recalc_cv = True
 
         if get_colvar or recalc_cv:
             if colvar is None:
@@ -1488,12 +1623,12 @@ class Rounds(ABC):
                 count += n_i
 
             out_sp.append(SystemParams.stack(*sp_trimmed))
-            out_cv.append(CV.stack(*cv_trimmed))
+            out_cv.append(CV.stack(*cv_trimmed).replace(_stack_dims=None))
             out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
 
             if time_series:
                 out_sp_t.append(SystemParams.stack(*sp_trimmed_t))
-                out_cv_t.append(CV.stack(*cv_trimmed_t))
+                out_cv_t.append(CV.stack(*cv_trimmed_t).replace(_stack_dims=None))
                 out_ti_t.append(TrajectoryInfo.stack(*ti_trimmed_t))
 
             bias = None
@@ -2001,6 +2136,7 @@ class Rounds(ABC):
         min_traj_length=None,
         recalc_cv=False,
         only_finished=True,
+        profile=False,
     ):
         if cv_round is None:
             cv_round = self.cv
@@ -2043,15 +2179,18 @@ class Rounds(ABC):
                 get_bias_list=False,
             )
 
+            print(f"{data.weights()=}")
+
+            w = data.weights()[0]
+
+            print(f"{w=}")
+
             cv_stack = data.cv[0]
             sp_stack = data.sp[0]
             # print(f"{cv_stack=}")
         else:
             assert (
-                sp0.shape[0]
-                == len(
-                    biases,
-                )
+                sp0.shape[0] == len(biases)
             ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
 
         for i, bias in enumerate(biases):
@@ -2071,7 +2210,7 @@ class Rounds(ABC):
                 biases, _ = bias.compute_from_cv(cvs=cv_stack)
                 biases -= jnp.min(biases)
 
-                probs = jnp.exp(
+                probs = w * jnp.exp(
                     -biases / (md_engine.static_trajectory_info.T * boltzmann),
                 )
                 probs = probs / jnp.sum(probs)
@@ -2098,7 +2237,12 @@ class Rounds(ABC):
 
             # print(f"starting trajectory {i} in {cvi=} {spi=}  ")
 
-            future = bash_app_python(Rounds.run_md, pass_files=True, executors=REFERENCE_LABELS)(
+            future = bash_app_python(
+                Rounds.run_md,
+                pass_files=True,
+                executors=REFERENCE_LABELS,
+                profile=profile,
+            )(
                 sp=spi,  # type: ignore
                 inputs=[File(common_md_name), File(str(b_name))],
                 outputs=[File(str(b_name_new)), File(str(traj_name))],

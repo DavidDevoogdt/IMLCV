@@ -1318,7 +1318,7 @@ def get_non_constant_trans(c: CV, epsilon=1e-14, max_functions=None):
     return trans.compute_cv_trans(c)[0], trans
 
 
-def get_feature_cov(c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None) -> tuple[CV, CV, CvTrans]:
+def get_feature_cov(c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None, abs_val=True) -> tuple[CV, CV, CvTrans]:
     c0 = c_0.cv
     c1 = c_tau.cv
     mu0 = jnp.mean(c0, axis=0)
@@ -1334,6 +1334,9 @@ def get_feature_cov(c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None) -> tu
     sigma1_inv = jnp.where(sigma1 == 0.0, 0.0, 1 / sigma1)
 
     cov = jnp.mean(c0 * c1, axis=0) * jnp.sqrt(sigma0_inv * sigma1_inv)
+
+    if abs_val:
+        cov = jnp.abs(cov)
 
     mask = cov > epsilon
 

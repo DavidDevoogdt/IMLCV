@@ -146,6 +146,7 @@ class Scheme:
         recalc_cv=False,
         only_finished=True,
         plot_umbrella=None,
+        max_bias=None,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -207,6 +208,7 @@ class Scheme:
                     min_traj_length=steps if enforce_min_traj_length else None,
                     margin=plot_margin,
                     only_finished=only_finished,
+                    max_bias=max_bias,
                     **plot_kwargs,
                 )
 
@@ -225,6 +227,7 @@ class Scheme:
         jac=jax.jacrev,
         cv_round_from=None,
         test=False,
+        max_bias=None,
     ):
         if cv_round_from is None:
             cv_round_from = self.rounds.cv
@@ -240,20 +243,21 @@ class Scheme:
                 **dlo_kwargs,
             )
 
-        cvs_new, new_collective_variable = transformer.fit(
+        cvs_new, new_collective_variable, new_bias = transformer.fit(
             dlo=dlo,
             chunk_size=chunk_size,
             plot=plot,
             plot_folder=self.rounds.path(c=self.rounds.cv + 1),
             jac=jac,
             test=test,
+            max_fes_bias=max_bias,
         )
 
         # update state
 
         self.rounds.add_cv_from_cv(new_collective_variable)
 
-        self.md.bias = NoneBias.create(new_collective_variable)
+        self.md.bias = new_bias
         self.md.static_trajectory_info.r_cut = new_r_cut
         self.rounds.add_round_from_md(self.md)
 
@@ -293,7 +297,7 @@ class Scheme:
         def cv_grid(margin):
             # take reasonable margin
             grid = original_collective_variable.metric.grid(n=50, endpoints=True, margin=margin)
-            grid = jnp.reshape(jnp.array(jnp.meshgrid(*grid)), (len(grid), -1)).T
+            grid = jnp.reshape(jnp.array(jnp.meshgrid(*grid, indexing="ij")), (len(grid), -1)).T
             cv = CV(cv=grid)
             return cv
 

@@ -281,7 +281,7 @@ class TrajectoryInfo(PyTreeNode):
 
         @jit
         def upd(arr_in, arr, index):
-            if arr is not None:
+            if arr_in is not None and arr is not None:
                 return dynamic_update_slice_in_dim(arr_in, arr, index, 0)
             return None
 
@@ -364,7 +364,8 @@ class TrajectoryInfo(PyTreeNode):
         return TrajectoryInfo(**dict)
 
     def save(self, filename: str | Path):
-        ti = self._shrink_capacity()
+        # ti = self._shrink_capacity()
+        self = self
 
         if isinstance(filename, str):
             filename = Path(filename)
@@ -373,7 +374,7 @@ class TrajectoryInfo(PyTreeNode):
             filename.parent.mkdir(parents=True, exist_ok=True)
 
         with h5py.File(str(filename), "w") as hf:
-            ti._save(hf=hf)
+            self._save(hf=hf)
 
     def _save(self, hf: h5py.File):
         for name in [*self._items_scal, *self._items_vec]:

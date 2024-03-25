@@ -34,7 +34,6 @@ from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
 from typing_extensions import Self
-from jax.tree_util import tree_flatten
 
 
 yaff.log.set_level(yaff.log.silent)
@@ -635,7 +634,7 @@ class Bias(PyTreeNode, ABC):
 
         if cv_grid is None:
             grid = self.collective_variable.metric.grid(n=n, margin=margin)
-            cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
+            cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid, indexing="ij")])
 
         bias, _ = self.compute_from_cv(cv_grid)
 
@@ -695,30 +694,30 @@ class Bias(PyTreeNode, ABC):
             )
             raise e
 
-    def __eq__(self, other):
-        if not isinstance(other, Bias):
-            return False
+    # def __eq__(self, other):
+    #     if not isinstance(other, Bias):
+    #         return False
 
-        self_val, self_tree = tree_flatten(self)
-        other_val, other_tree = tree_flatten(other)
+    #     self_val, self_tree = tree_flatten(self)
+    #     other_val, other_tree = tree_flatten(other)
 
-        if not self_tree == other_tree:
-            return False
+    #     if not self_tree == other_tree:
+    #         return False
 
-        for a, b in zip(self_val, other_val):
-            a = jnp.array(a)
-            b = jnp.array(b)
+    #     for a, b in zip(self_val, other_val):
+    #         a = jnp.array(a)
+    #         b = jnp.array(b)
 
-            if not a.shape == b.shape:
-                return False
+    #         if not a.shape == b.shape:
+    #             return False
 
-            if not a.dtype == b.dtype:
-                return False
+    #         if not a.dtype == b.dtype:
+    #             return False
 
-            if not jnp.allclose(a, b):
-                return False
+    #         if not jnp.allclose(a, b):
+    #             return False
 
-        return True
+    #     return True
 
 
 class CompositeBias(Bias):
@@ -784,11 +783,11 @@ class BiasModify(Bias):
 
     fun: Callable = field(pytree_node=False)
     bias: Bias
-    kwargs: dict = field(pytree_node=False, default_factory=dict)
-    pytree_kwargs: dict = field(default_factory=dict)
+    kwargs: dict = field(default_factory=dict)
+    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
 
     @classmethod
-    def create(clz, fun: Callable, bias: Bias, kwargs: dict = {}, pytree_kwargs: dict = {}) -> Self:  # type: ignore[override]
+    def create(clz, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}) -> Self:  # type: ignore[override]
         return BiasModify(
             collective_variable=bias.collective_variable,
             fun=fun,
@@ -796,12 +795,12 @@ class BiasModify(Bias):
             step=None,
             finalized=False,
             kwargs=kwargs,
-            pytree_kwargs=pytree_kwargs,
+            static_kwargs=static_kwargs,
             bias=bias,
         )
 
     def _compute(self, cvs):
-        return self.fun(self.bias._compute(cvs), **self.kwargs, **self.pytree_kwargs)
+        return self.fun(self.bias._compute(cvs), **self.kwargs, **self.static_kwargs)
 
     def update_bias(
         self,
@@ -809,13 +808,23 @@ class BiasModify(Bias):
     ) -> Bias:
         return self.replace(bias=self.bias.update_bias(md))
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        if "pytree_kwargs" in statedict:
+            kw = statedict.pop("pytree_kwargs")
+            statedict["static_kwargs"] = kw
+
+        super().__setstate__(statedict)
+
 
 class BiasF(Bias):
     """Bias according to CV."""
 
     g: Callable = field(pytree_node=False, default=_constant)
-    kwargs: dict = field(pytree_node=False, default_factory=dict)
-    pytree_kwargs: dict = field(default_factory=dict)
+    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
+    kwargs: dict = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -823,7 +832,7 @@ class BiasF(Bias):
         cvs: CollectiveVariable,
         g: Callable = _constant,
         kwargs: dict = {},
-        pytree_kwargs: dict = {},
+        static_kwargs: dict = {},
     ) -> Self:  # type: ignore[override]
         return BiasF(
             collective_variable=cvs,
@@ -832,11 +841,11 @@ class BiasF(Bias):
             step=None,
             finalized=False,
             kwargs=kwargs,
-            pytree_kwargs=pytree_kwargs,
+            static_kwargs=static_kwargs,
         )
 
     def _compute(self, cvs):
-        return self.g(cvs, **self.kwargs, **self.pytree_kwargs)
+        return self.g(cvs, **self.kwargs, **self.static_kwargs)
 
 
 class NoneBias(BiasF):

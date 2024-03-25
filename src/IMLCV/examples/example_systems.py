@@ -35,7 +35,6 @@ DATA_ROOT = ROOT_DIR / "data"
 def alanine_dipeptide_yaff(
     cv="backbone_dihedrals",
     bias: Callable[[CollectiveVariable], Bias] | None = None,
-    write_step=1,
 ):
     T = 300 * kelvin
 
@@ -43,7 +42,7 @@ def alanine_dipeptide_yaff(
         T=T,
         timestep=2.0 * units.femtosecond,
         timecon_thermo=100.0 * units.femtosecond,
-        write_step=1,
+        write_step=100,
         atomic_numbers=jnp.array(
             [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
             dtype=int,
@@ -251,7 +250,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
     r_cut = 5 * angstrom
 
     tic = StaticMdInfo(
-        write_step=1,
+        write_step=10,
         T=300 * units.kelvin,
         P=1.0 * units.bar,
         timestep=2.0 * units.femtosecond,

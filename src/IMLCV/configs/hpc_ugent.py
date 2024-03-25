@@ -604,7 +604,7 @@ def config(
                     mem=min_memery_per_node,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=64,
+                    max_blocks=80,
                     parallelism=1,
                     cores=singlepoint_nodes,
                     parsl_cores=False,
