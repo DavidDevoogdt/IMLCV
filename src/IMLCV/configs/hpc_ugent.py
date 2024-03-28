@@ -244,7 +244,7 @@ def get_slurm_provider(
     max_blocks=1,
     parallelism=1,
     executor="htex",
-    wq_timeout: int = 120,  # in seconds
+    wq_timeout: int = 600,  # in seconds
     gpu_part="gpu_rome_a100",
     cpu_part="cpu_rome",
     py_env=None,
@@ -260,7 +260,6 @@ export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV_scratch/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py311
 which python
-export OMPI_MCA_pml=ucx
             """
         elif env == "stevin":
             py_env = """
@@ -269,7 +268,6 @@ export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py311
 which python
-export OMPI_MCA_pml=ucx
 """
 
     if gpu_cluster is None:
@@ -279,10 +277,10 @@ export OMPI_MCA_pml=ucx
 
     worker_init = f"{py_env}\n"
     if env == "hortense":
-        worker_init += "module load CP2K/7.1-foss-2020b\n"
+        worker_init += "module load CP2K/2023.1-foss-2022b\n"
 
     elif env == "stevin":
-        worker_init += "module load CP2K/7.1-foss-2020a\n"
+        worker_init += "module load CP2K/2023.1-foss-2022b\n"
     worker_init += "module unload SciPy-bundle Python\n"
 
     if not parsl_cores:
@@ -376,11 +374,12 @@ export OMPI_MCA_pml=ucx
             working_dir=str(Path(path_internal) / label),
             provider=provider,
             shared_fs=True,
-            autocategory=False,
+            autolabel=True,
+            autocategory=True,
             port=0,
             max_retries=1,  # do not retry task
             worker_options=" ".join(worker_options),
-            coprocess=True,
+            coprocess=False,
         )
 
     elif executor == "task_vine":

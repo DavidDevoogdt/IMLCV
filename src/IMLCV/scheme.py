@@ -130,7 +130,7 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
-        samples_per_bin=100,
+        samples_per_bin=200,
         init_max_grad=None,
         max_grad=None,
         plot=True,
@@ -209,6 +209,7 @@ class Scheme:
                     margin=plot_margin,
                     only_finished=only_finished,
                     max_bias=max_bias,
+                    use_prev_fs=i > 1,
                     **plot_kwargs,
                 )
 
@@ -228,6 +229,9 @@ class Scheme:
         cv_round_from=None,
         test=False,
         max_bias=None,
+        transform_bias=False,
+        samples_per_bin=100,
+        min_samples_per_bin=20,
     ):
         if cv_round_from is None:
             cv_round_from = self.rounds.cv
@@ -251,6 +255,9 @@ class Scheme:
             jac=jac,
             test=test,
             max_fes_bias=max_bias,
+            transform_FES=transform_bias,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
         )
 
         # update state

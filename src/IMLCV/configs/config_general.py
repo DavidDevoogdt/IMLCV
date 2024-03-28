@@ -50,7 +50,7 @@ def config(
     gpu_cluster=None,
     initialize_logging=False,
     account=None,
-    executor="htex",
+    executor="work_queue",
     default_on_threads=False,
     training_cores=32,
 ):
@@ -103,9 +103,9 @@ def config(
 def get_cp2k():
     env = get_platform()
     if env == "hortense":
-        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt"
+        return "export OMP_NUM_THREADS=1; mpirun  -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi  cp2k_shell.psmp"
     if env == "stevin":
-        return "export OMP_NUM_THREADS=1; mpirun  cp2k_shell.popt"
+        return "export OMP_NUM_THREADS=1; mpirun -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi cp2k_shell.psmp"
     raise ValueError(f"unknow {env=} for cp2k ")
 
 

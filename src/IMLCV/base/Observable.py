@@ -214,7 +214,7 @@ class ThermoLIB:
             bounding_box = self.collective_variable.metric.bounding_box
 
         if n is None:
-            n = int((c.batch_dim / samples_per_bin) ** (1 / c.dim))
+            n = CvMetric.get_n(samples_per_bin, c.batch_dim, c.dim)
 
         assert n >= 4, "sample more points"
 
@@ -265,7 +265,7 @@ class ThermoLIB:
         rbf_kernel="thin_plate_spline",
         rbf_degree=None,
         smoothing_threshold=5 * kjmol,
-        samples_per_bin=200,
+        samples_per_bin=100,
         chunk_size=None,
         resample_bias=True,
         update_bounding_box=True,  # make boudning box bigger for FES calculation

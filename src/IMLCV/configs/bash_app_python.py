@@ -20,7 +20,7 @@ from parsl import AUTO_LOGNAME
 # @typeguard.typechecked
 def bash_app_python(
     function=None,
-    executors="all",
+    executors=None,
     precommand="",  # command to run before the python command
     uses_mpi=False,
     pickle_extension="json",
@@ -28,6 +28,9 @@ def bash_app_python(
     auto_log=False,
     profile=False,
 ):
+    if executors is None:
+        executors = DEFAULT_LABELS
+
     def decorator(func):
         def wrapper(
             *args,

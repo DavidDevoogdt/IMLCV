@@ -20,8 +20,6 @@ from matplotlib import gridspec
 from matplotlib.figure import Figure
 from IMLCV.base.bias import NoneBias
 from molmod.units import kjmol
-from IMLCV.implementations.bias import _clip
-from IMLCV.base.bias import BiasModify
 
 
 class Transformer:
@@ -81,8 +79,9 @@ class Transformer:
         test=False,
         check_nan=True,
         transform_FES=True,
-        FES_ngrid=20,
         max_fes_bias=100 * kjmol,
+        samples_per_bin=50,
+        min_samples_per_bin=15,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
@@ -182,17 +181,12 @@ class Transformer:
         if transform_FES:
             print("transforming FES")
             bias = dlo.get_transformed_fes(
-                weights=dlo.weights(),
+                # weights=dlo.weights(),
                 new_cv=z,
-                old_cv=dlo.cv,
-                n_grid=FES_ngrid,
                 new_colvar=new_collective_variable,
-            )
-
-            bias = BiasModify.create(
-                bias=bias,
-                fun=_clip,
-                kwargs={"a_min": -max_fes_bias, "a_max": 0},
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                max_bias=max_fes_bias,
             )
 
             if plot:
@@ -219,6 +213,7 @@ class Transformer:
                 name=str(plot_folder / "cvdiscovery.pdf"),
                 collective_variables=[dlo.collective_variable, new_collective_variable],
                 cv_data=[CV.stack(*dlo.cv), z],
+                # weight=dlo.weights(),
                 margin=0.1,
             )
 
@@ -245,6 +240,7 @@ class Transformer:
     def plot_app(
         collective_variables: list[CollectiveVariable],
         cv_data: list[CV] | list[list[CV]],
+        weight: list[jax.Array] | list[list[jax.Array]] | None = None,
         duplicate_cv_data=True,
         name: str | Path | None = None,
         labels=None,
@@ -252,6 +248,7 @@ class Transformer:
         data_titles=None,
         color_trajectories=False,
         margin=0.1,
+        max_points=10000,
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
@@ -259,6 +256,11 @@ class Transformer:
 
         if duplicate_cv_data:
             cv_data = [cv_data] * ncv
+            if weight is not None:
+                weight = [weight] * ncv
+
+        if weight is not None:
+            weight = [jnp.hstack(w) for w in weight]
 
         metrics = [colvar.metric for colvar in collective_variables]
 
@@ -273,6 +275,10 @@ class Transformer:
                 ["cv_1 [a.u.]", "cv_2 [a.u.]", "cv_3 [a.u.]"],
                 ["cv_1 [a.u.]", "cv_2 [a.u.]", "cv_3 [a.u.]"],
             ]
+
+        # if weight is not None:
+        #     assert len(weight) == ncv
+        #     weight = jnp.hstack(weight)
 
         inoutdims = [cv_data[n][n].shape[1] for n in range(ncv)]
 
@@ -326,6 +332,7 @@ class Transformer:
                 rgb_data[data_in],
                 labels[0:dim],
                 metric=metrics[in_out],
+                weight=weight[data_in] if weight is not None else None,
                 margin=margin,
                 **kwargs,
             )
@@ -400,6 +407,7 @@ class Transformer:
         colors,
         labels,
         metric: CvMetric,
+        weight=None,
         margin=None,
         **scatter_kwargs,
     ):
@@ -448,6 +456,7 @@ class Transformer:
         labels,
         metric: CvMetric,
         margin=None,
+        weight=None,
         **scatter_kwargs,
     ):
         gs = grid.subgridspec(
@@ -484,8 +493,8 @@ class Transformer:
         n_points = jnp.sum(jnp.logical_and(in_xlim, in_ylim))
         n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
 
-        ax_histx.hist(data[:, 0], bins=n_bins, range=x_lim)
-        ax_histy.hist(data[:, 1], bins=n_bins, range=y_lim, orientation="horizontal")
+        ax_histx.hist(data[:, 0], bins=n_bins, range=x_lim, weights=weight)
+        ax_histy.hist(data[:, 1], bins=n_bins, range=y_lim, weights=weight, orientation="horizontal")
         ax_histy.tick_params(axis="x", rotation=-90)
 
         for b in [ax_histx, ax_histy]:
@@ -528,6 +537,7 @@ class Transformer:
         colors,
         labels,
         metric: CvMetric,
+        weight=None,
         margin=None,
         **scatter_kwargs,
     ):

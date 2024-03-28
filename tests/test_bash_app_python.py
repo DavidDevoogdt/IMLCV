@@ -22,7 +22,6 @@ def test_parallel(tmp_path, config_test):
     futs = [
         bash_app_python(
             f_test_parallel,
-            pickle_extension="cloudpickle",
             auto_log=True,
         )(i, execution_folder=tmp_path)
         for i in range(n)
@@ -50,7 +49,6 @@ def test_py_env(tmp_path, config_test):
     futs = [
         bash_app_python(
             f_test_py_env,
-            pickle_extension="cloudpickle",
             auto_log=True,
         )(sp, execution_folder=tmp_path)
         for i in range(n)
@@ -82,7 +80,6 @@ def test_parallel_MPI(tmp_path, config_test):
     futs = [
         bash_app_python(
             _f_MPI,
-            pickle_extension="cloudpickle",
             precommand="mpirun -n 4",
             uses_mpi=True,
             auto_log=True,

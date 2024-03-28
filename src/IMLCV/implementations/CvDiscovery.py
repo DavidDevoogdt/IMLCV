@@ -12,7 +12,7 @@ from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import Rounds
-from IMLCV.implementations.CV import get_feature_cov
+from IMLCV.implementations.CV import get_non_constant_trans
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -581,7 +581,7 @@ class TransformerMAF(Transformer):
         correct_bias=False,
         pre_selction_epsilon=1e-10,
         max_features=2000,
-        max_functions=3000,
+        max_functions=2500,
         weight_method="FES2",
         koopman_weighting=False,
         kinetic_distance=False,
@@ -591,31 +591,41 @@ class TransformerMAF(Transformer):
         assert dlo.time_series
         assert x_t is not None
 
+        print("stacking")
+
         cv_0 = CV.stack(*x)
         cv_tau = CV.stack(*x_t)
 
         trans = un_atomize
 
+        print("unatomizing")
+
         cv_0, _, _ = un_atomize.compute_cv_trans(cv_0)
         cv_tau, _, _ = un_atomize.compute_cv_trans(cv_tau)
 
-        # cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon, max_functions=max_functions)
-        # cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
+        cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon, max_functions=max_functions)
+        cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
 
-        cv_0, cv_tau, transform = get_feature_cov(
-            cv_0,
-            cv_tau,
-            max_functions=max_functions,
-            epsilon=pre_selction_epsilon,
-            abs_val=False,
-        )
+        print("getting feature cov")
+
+        # cv_0, cv_tau, transform = get_feature_cov(
+        #     cv_0,
+        #     cv_tau,
+        #     max_functions=max_functions,
+        #     epsilon=pre_selction_epsilon,
+        #     abs_val=False,
+        # )
 
         trans *= transform
 
         w = None
 
+        print("getting weights")
+
         if correct_bias:
-            w = dlo.weights(method=weight_method)
+            w = dlo.weights()
+
+        print("getting koopman")
 
         k, tica_selection, g, pi_0, q_0, pi_1, q_1, cv_0, cv_tau = dlo.koopman_model(
             cv_0=cv_0.unstack(),
@@ -628,7 +638,9 @@ class TransformerMAF(Transformer):
             koopman_weight=koopman_weighting,
         )
 
-        print(f"timescales {-dlo.tau / jnp.log(k) / nanosecond} ns")
+        ts = -dlo.tau / jnp.log(k) / nanosecond
+
+        print(f"timescales {  ts[: jnp.min(self.outdim+5,len(ts))  ]   } ns")
 
         trans *= tica_selection
 

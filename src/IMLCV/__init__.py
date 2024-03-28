@@ -31,6 +31,7 @@ from jsonpickle.ext.numpy import register_handlers, register
 import numpy as np
 import jax.numpy as jnp
 
+
 logging.getLogger("parsl").setLevel(logging.WARNING)
 
 KEY = random.PRNGKey(0)

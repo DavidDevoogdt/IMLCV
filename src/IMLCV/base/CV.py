@@ -28,6 +28,8 @@ from jax import vmap
 from jax.tree_util import Partial
 from jax.tree_util import tree_flatten
 from jax.tree_util import tree_unflatten
+import re
+
 
 ######################################
 #        Data types                  #
@@ -2004,7 +2006,11 @@ class CvMetric(PyTreeNode):
             bounding_box=bounding_box,
         )
 
-    def grid(self, n, endpoints=None, margin=0.1):
+    @staticmethod
+    def get_n(samples_per_bin, samples, n_dims):
+        return int((samples / samples_per_bin) ** (1 / n_dims))
+
+    def grid(self, n, bounds=None, endpoints=None, margin=0.1):
         """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
 
         Args:
@@ -2022,12 +2028,16 @@ class CvMetric(PyTreeNode):
         elif isinstance(endpoints, bool):
             endpoints = jnp.full(self.periodicities.shape, endpoints)
 
-        b = self.bounding_box
+        if bounds is None:
+            b = self.bounding_box
 
-        if margin is not None:
-            diff = (b[:, 1] - b[:, 0]) * margin
-            b = b.at[:, 0].set(b[:, 0] - diff)
-            b = b.at[:, 1].set(b[:, 1] + diff)
+            if margin is not None:
+                diff = (b[:, 1] - b[:, 0]) * margin
+                b = b.at[:, 0].set(b[:, 0] - diff)
+                b = b.at[:, 1].set(b[:, 1] + diff)
+
+        else:
+            b = bounds
 
         assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), "give proper boundaries"
         grid = [jnp.linspace(row[0], row[1], n, endpoint=bool(endpoints[i])) for i, row in enumerate(b)]
@@ -2209,6 +2219,15 @@ class CvFun(CvFunBase, PyTreeNode):
         else:
             assert self.forward is not None
             return jax.jit(Partial(self.forward, **self.static_kwargs))(x, nl, c, **self.kwargs)
+
+    # def __eq__(self,other):
+    #     if not isinstance(other, CvFun):
+    #         return False
+
+    #     if self.forward.__qualname__ != other.forward.__qualname__:
+    #         return False
+
+    #     if self.backward.__qualname__ != other.backward.__qualname__:
 
 
 class CvFunNn(nn.Module, _CvFunBase):
@@ -2898,7 +2917,8 @@ class CollectiveVariable(PyTreeNode):
         self_val, self_tree = tree_flatten(self)
         other_val, other_tree = tree_flatten(other)
 
-        if not self_tree == other_tree:
+        # remove location of functions with regex
+        if re.sub("at 0x[0-9a-f]*>", "", str(self_tree)) != re.sub("at 0x[0-9a-f]*>", "", str(other_tree)):
             return False
 
         for a, b in zip(self_val, other_val):

@@ -1318,29 +1318,42 @@ def get_non_constant_trans(c: CV, epsilon=1e-14, max_functions=None):
     return trans.compute_cv_trans(c)[0], trans
 
 
-def get_feature_cov(c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None, abs_val=True) -> tuple[CV, CV, CvTrans]:
-    c0 = c_0.cv
-    c1 = c_tau.cv
-    mu0 = jnp.mean(c0, axis=0)
-    mu1 = jnp.mean(c1, axis=0)
+def get_feature_cov(
+    c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None, abs_val=True, chunk_size=1000
+) -> tuple[CV, CV, CvTrans]:
+    mu_x = jnp.mean(c_0.cv, axis=0)
+    mu_y = jnp.mean(c_tau.cv, axis=0)
 
-    c0 = c0 - mu0
-    c1 = c1 - mu1
+    @jax.vmap
+    def get_cov(x, y, mu_x, mu_y):
+        x, y = x.T, y.T
 
-    sigma0 = jnp.mean(c0 * c0, axis=0)
-    sigma1 = jnp.mean(c1 * c1, axis=0)
+        x = x - mu_x
+        y = y - mu_y
 
-    sigma0_inv = jnp.where(sigma0 == 0.0, 0.0, 1 / sigma0)
-    sigma1_inv = jnp.where(sigma1 == 0.0, 0.0, 1 / sigma1)
+        sigma_x = jnp.mean(x**2)
+        sigma_y = jnp.mean(y**2)
 
-    cov = jnp.mean(c0 * c1, axis=0) * jnp.sqrt(sigma0_inv * sigma1_inv)
+        sigma_x_inv = jnp.where(sigma_x == 0.0, 0.0, 1 / sigma_x)
+        sigma_y_inv = jnp.where(sigma_y == 0.0, 0.0, 1 / sigma_y)
+
+        sigma_xy = jnp.mean(x * y)
+
+        return sigma_xy * jnp.sqrt(sigma_x_inv * sigma_y_inv)
+
+    cov = chunk_map(get_cov, chunk_size=chunk_size)(
+        c_0.cv.T,
+        c_tau.cv.T,
+        mu_x,
+        mu_y,
+    )
+
+    print(f"{cov=}")
 
     if abs_val:
         cov = jnp.abs(cov)
 
     mask = cov > epsilon
-
-    print(jnp.sort(cov))
 
     if max_functions is not None:
         if jnp.sum(mask) > max_functions:
