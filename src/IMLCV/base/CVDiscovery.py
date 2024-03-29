@@ -149,7 +149,7 @@ class Transformer:
                     chunk_size=chunk_size,
                 )
 
-        dlo_weights = dlo.weights()
+        dlo_weights = jnp.hstack(dlo.weights())
 
         # remove outliers from the data
         _, mask = CvMetric.bounds_from_cv(

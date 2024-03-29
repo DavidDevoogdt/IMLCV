@@ -124,6 +124,7 @@ class Scheme:
     def inner_loop(
         self,
         rnds=10,
+        convergence_kl=0.2,
         init=500,
         steps=5e4,
         K=None,
@@ -197,6 +198,8 @@ class Scheme:
                 self.new_metric(plot=plot)
                 update_metric = False
             else:
+                prev_bias = self.md.bias
+
                 self.FESBias(
                     plot=plot,
                     samples_per_bin=samples_per_bin,
@@ -213,6 +216,14 @@ class Scheme:
                 )
 
             self.rounds.add_round_from_md(self.md, cv=cv_round)
+
+            kl_div = self.md.bias.kl_divergence(prev_bias, T=self.rounds.T, symmetric=True)
+
+            print(f"{kl_div=}")
+
+            if kl_div < convergence_kl:
+                break
+        print("done")
 
     def update_CV(
         self,

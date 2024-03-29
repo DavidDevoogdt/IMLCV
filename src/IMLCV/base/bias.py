@@ -721,6 +721,27 @@ class Bias(PyTreeNode, ABC):
 
         return bounds
 
+    def kl_divergence(self, other: Bias, T: float, symmetric=True, sign=1.0, n=100):
+        _, cvs, _ = self.collective_variable.metric.grid(n=n, margin=0.1)
+
+        p_self = jnp.exp(sign * self.compute_from_cv(cvs)[0] / (T * boltzmann))
+        p_self /= jnp.sum(p_self)
+
+        p_other = jnp.exp(sign * other.compute_from_cv(cvs)[0] / (T * boltzmann))
+        p_other /= jnp.sum(p_other)
+
+        @vmap
+        def f(x, y):
+            return jnp.where(x == 0, 0, x * jnp.log(x / y))
+
+        kl = jnp.sum(f(p_self, p_other))
+
+        if symmetric:
+            kl += jnp.sum(f(p_other, p_self))
+            kl *= 0.5
+
+        return kl
+
     # def __eq__(self, other):
     #     if not isinstance(other, Bias):
     #         return False
