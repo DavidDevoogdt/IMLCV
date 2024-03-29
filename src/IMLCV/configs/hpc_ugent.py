@@ -244,7 +244,7 @@ def get_slurm_provider(
     max_blocks=1,
     parallelism=1,
     executor="htex",
-    wq_timeout: int = 600,  # in seconds
+    wq_timeout: int = 60,  # in seconds
     gpu_part="gpu_rome_a100",
     cpu_part="cpu_rome",
     py_env=None,
@@ -374,8 +374,8 @@ which python
             working_dir=str(Path(path_internal) / label),
             provider=provider,
             shared_fs=True,
-            autolabel=True,
-            autocategory=True,
+            autolabel=False,
+            autocategory=False,
             port=0,
             max_retries=1,  # do not retry task
             worker_options=" ".join(worker_options),

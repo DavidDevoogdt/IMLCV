@@ -35,6 +35,8 @@ from molmod.units import electronvolt
 from molmod.units import kjmol
 from typing_extensions import Self
 
+from molmod.constants import boltzmann
+
 
 yaff.log.set_level(yaff.log.silent)
 
@@ -347,15 +349,13 @@ class Bias(PyTreeNode, ABC):
     ):
         """plot bias."""
         if bins is None:
-            bins = self.collective_variable.metric.grid(
+            bins, _, _ = self.collective_variable.metric.grid(
                 n=n,
                 endpoints=True,
                 margin=margin,
             )
         mg = np.meshgrid(*bins, indexing="xy")
-
         cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*bins)])
-
         bias, _ = self.compute_from_cv(cv_grid)
 
         if offset:
@@ -633,8 +633,7 @@ class Bias(PyTreeNode, ABC):
         from IMLCV.implementations.bias import RbfBias
 
         if cv_grid is None:
-            grid = self.collective_variable.metric.grid(n=n, margin=margin)
-            cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid, indexing="ij")])
+            _, cv_grid, _ = self.collective_variable.metric.grid(n=n, margin=margin)
 
         bias, _ = self.compute_from_cv(cv_grid)
 
@@ -693,6 +692,34 @@ class Bias(PyTreeNode, ABC):
                 f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
             )
             raise e
+
+    def bounds_from_bias(self, T, sign=1.0, margin=1e-10, n=50):
+        margin = 1e-10
+
+        colvar = self.collective_variable
+        bins, grid, _ = colvar.metric.grid(n=50, margin=0.1)
+
+        beta = 1 / (boltzmann * T)
+
+        probs = jnp.exp(beta * self.compute_from_cv(grid)[0])
+        probs /= jnp.sum(probs)
+        probs = probs.reshape((n,) * colvar.n)
+
+        limits = []
+
+        for i in range(colvar.n):
+            p_i = jax.vmap(jnp.sum, in_axes=i)(probs)
+
+            cum_p_i = jnp.cumsum(p_i)
+
+            index_0 = jnp.min(jnp.argwhere(cum_p_i >= margin))
+            index_1 = jnp.max(jnp.argwhere(cum_p_i <= 1 - margin))
+
+            limits.append([bins[i][index_0], bins[i][index_1]])
+
+        bounds = jnp.array(limits)
+
+        return bounds
 
     # def __eq__(self, other):
     #     if not isinstance(other, Bias):

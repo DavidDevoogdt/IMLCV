@@ -490,7 +490,7 @@ class Rounds(ABC):
 
         for r0 in range(max(stop - (num - 1), start), stop + 1):
             t_r = time.time()
-            _r = self.round_information(c=c, r=r0)
+            _r = self._round_information(c=c, r=r0)
             load_r_time += time.time() - t_r
 
             if not _r.valid and not ignore_invalid:
@@ -506,7 +506,7 @@ class Rounds(ABC):
             for i in rn:
                 t_i = time.time()
                 try:
-                    _r_i = self.get_trajectory_information(c=c, r=r0, i=i)
+                    _r_i = self._trajectory_information(c=c, r=r0, i=i)
                 except Exception as e:
                     print(f"could not load {c=} {r0=} {i=} {e=}, skipping")
                     continue
@@ -640,10 +640,7 @@ class Rounds(ABC):
             if collective_variable is None:
                 collective_variable = self.collective_variable
 
-            grid = collective_variable.metric.grid(n=n_grid, bounds=grid_bounds)
-
-            mid = [a[:-1] + (a[1:] - a[:-1]) / 2 for a in grid]
-            cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing="ij")])
+            _, _, cv_mid = collective_variable.metric.grid(n=n_grid, bounds=grid_bounds)
 
             @partial(vmap, in_axes=(0, None))
             def closest(data, mid):
@@ -1416,7 +1413,7 @@ class Rounds(ABC):
         weights = []
 
         if new_r_cut == -1:
-            new_r_cut = self.round_information(c=cv_round).tic.r_cut
+            new_r_cut = self._round_information(c=cv_round).tic.r_cut
 
         sti: StaticMdInfo | None = None
         sp: list[SystemParams] = []
@@ -1853,7 +1850,7 @@ class Rounds(ABC):
         if cv_round is None:
             cv_round = self.cv - 1
 
-        current_round = self.round_information()
+        current_round = self._round_information()
         # bias = self.get_bias()
         col_var = self.get_collective_variable()
 
@@ -1982,7 +1979,7 @@ class Rounds(ABC):
 
             yield atoms, round, trajejctory
 
-    def get_trajectory_information(
+    def _trajectory_information(
         self,
         r: int,
         i: int,
@@ -2008,7 +2005,7 @@ class Rounds(ABC):
             folder=self.folder,
         )
 
-    def round_information(
+    def _round_information(
         self,
         c: int | None = None,
         r: int | None = None,
@@ -2087,11 +2084,11 @@ class Rounds(ABC):
 
     @property
     def T(self):
-        return self.round_information().tic.T
+        return self._round_information().tic.T
 
     @property
     def P(self):
-        return self.round_information().tic.P
+        return self._round_information().tic.P
 
     @property
     def round(self):
@@ -2122,7 +2119,7 @@ class Rounds(ABC):
 
         if r is None:
             r = self.get_round(c=c)
-        return self.round_information(r=r).num
+        return self._round_information(r=r).num
 
     def invalidate_data(self, c=None, r=None, i=None):
         if c is None:
@@ -2391,7 +2388,7 @@ class Rounds(ABC):
         tasks: list[tuple[int, AppFuture]] | None = None
         plot_tasks = []
 
-        ri = self.round_information(c=cv_round, r=round)
+        ri = self._round_information(c=cv_round, r=round)
 
         for i in ri.num_vals:
             path_name = self.path(c=cv_round, r=round, i=i)

@@ -149,8 +149,14 @@ class Transformer:
                     chunk_size=chunk_size,
                 )
 
+        dlo_weights = dlo.weights()
+
         # remove outliers from the data
-        _, mask = CvMetric.bounds_from_cv(y, percentile=percentile)
+        _, mask = CvMetric.bounds_from_cv(
+            y,
+            percentile=percentile,
+            weights=dlo_weights,
+        )
         y_masked = y[mask]
 
         print("starting post_fit")
@@ -181,7 +187,6 @@ class Transformer:
         if transform_FES:
             print("transforming FES")
             bias = dlo.get_transformed_fes(
-                # weights=dlo.weights(),
                 new_cv=z,
                 new_colvar=new_collective_variable,
                 samples_per_bin=samples_per_bin,

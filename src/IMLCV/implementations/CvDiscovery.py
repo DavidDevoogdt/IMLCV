@@ -640,7 +640,7 @@ class TransformerMAF(Transformer):
 
         ts = -dlo.tau / jnp.log(k) / nanosecond
 
-        print(f"timescales {  ts[: jnp.min(self.outdim+5,len(ts))  ]   } ns")
+        print(f"timescales {  ts[: min(self.outdim+5,len(ts))  ]   } ns")
 
         trans *= tica_selection
 

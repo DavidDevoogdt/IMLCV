@@ -84,7 +84,7 @@ def test_RBF_bias(kernel):
     def a(sp, nl, _):
         return CV(cv=sp.coordinates)
 
-    cv = CollectiveVariable(
+    collective_variable = CollectiveVariable(
         f=CvFlow.from_function(f=a),
         metric=CvMetric.create(
             periodicities=[False, False],
@@ -92,25 +92,14 @@ def test_RBF_bias(kernel):
         ),
     )
 
-    bins = cv.metric.grid(n=n)
+    _, _, center_cvs = collective_variable.metric.grid(n=n)
 
     def f(cv: CV, _nl, _cond):
         return cv.replace(cv=cv.cv[0] ** 3 + cv.cv[1])
 
-    # reevaluation of thermolib histo
-    bin_centers1, bin_centers2 = (
-        0.5 * (bins[0][:-1] + bins[0][1:]),
-        0.5 * (bins[1][:-1] + bins[1][1:]),
-    )
-    xc, yc = jnp.meshgrid(bin_centers1, bin_centers2, indexing="ij")
-    xcf = jnp.reshape(xc, (-1))
-    ycf = jnp.reshape(yc, (-1))
-
-    center_cvs = CV(jnp.stack([xcf, ycf], axis=1))
-
     val, _, _ = CvTrans.from_cv_function(f).compute_cv_trans(center_cvs)
 
-    bias = RbfBias.create(cvs=cv, cv=center_cvs, vals=val.cv, kernel=kernel)
+    bias = RbfBias.create(cvs=collective_variable, cv=center_cvs, vals=val.cv, kernel=kernel)
 
     val2, _ = bias.compute_from_cv(center_cvs)
     assert jnp.allclose(val.cv, val2)
@@ -261,8 +250,7 @@ def test_reparametrize():
     n = 20
     margin = 0.1
 
-    grid = bias.collective_variable.metric.grid(n=n, margin=margin)
-    cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*grid)])
+    _, cv_grid, _ = bias.collective_variable.metric.grid(n=n, margin=margin)
 
     new_bias = bias.resample(cv_grid=cv_grid)
 

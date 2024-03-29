@@ -2042,7 +2042,15 @@ class CvMetric(PyTreeNode):
         assert not (jnp.abs(b[:, 1] - b[:, 0]) < 1e-12).any(), "give proper boundaries"
         grid = [jnp.linspace(row[0], row[1], n, endpoint=bool(endpoints[i])) for i, row in enumerate(b)]
 
-        return grid
+        # turn meshgrid into linear cv
+        cv = CV(cv=jnp.reshape(jnp.array(jnp.meshgrid(*grid, indexing="ij")), (len(grid), -1)).T)
+
+        # get the midpoints
+
+        mid = [a[:-1] + (a[1:] - a[:-1]) / 2 for a in grid]
+        cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing="ij")])
+
+        return grid, cv, cv_mid
 
     @property
     def ndim(self):
@@ -2055,11 +2063,26 @@ class CvMetric(PyTreeNode):
         self.__init__(**statedict)
 
     @staticmethod
-    def bounds_from_cv(cv: CV, percentile=1.0, margin=None):
+    def bounds_from_cv(cv: CV, percentile=1.0, weights=None, margin=None):
         if margin is None:
             margin = percentile / 100 * 2
 
-        bounds = jnp.percentile(cv.cv, jnp.array([percentile, 100 - percentile]), axis=0).T
+        if weights is None:
+            bounds = jnp.percentile(cv.cv, jnp.array([percentile, 100 - percentile]), axis=0).T
+        else:
+            i = 0
+
+            bounds = []
+            for i in range(cv.cv.shape[1]):
+                a = cv.cv[:, i].argsort()
+                p_i = jnp.cumsum(weights[a])
+
+                index_0 = jnp.min(jnp.argwhere(p_i > margin))
+                index_1 = jnp.max(jnp.argwhere(p_i < 1 - margin))
+
+                bounds.append([cv.cv[a[index_0], i], cv.cv[a[index_1], i]])
+
+            bounds = jnp.array(bounds)
 
         bounds_margin = (bounds[:, 1] - bounds[:, 0]) * margin
         bounds = bounds.at[:, 0].set(bounds[:, 0] - bounds_margin)

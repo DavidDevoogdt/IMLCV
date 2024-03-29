@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 
 import jax
 import jax.numpy as jnp
@@ -74,7 +73,7 @@ class Scheme:
         only_finished=True,
     ):
         m = self.md.bias.collective_variable.metric
-        grid = m.grid(n)
+        _, cv_grid, _ = m.grid(n)
 
         if k is None:
             # 0.1*N *Kb*T
@@ -93,11 +92,11 @@ class Scheme:
         biases = [
             HarmonicBias.create(
                 self.md.bias.collective_variable,
-                CV(cv=jnp.array(cv)),
+                cv,
                 k,
                 k_max=max_grad,
             )
-            for cv in itertools.product(*grid)
+            for cv in cv_grid
         ]
 
         if self.rounds.cv == 0 and self.rounds.round == 0:
@@ -301,13 +300,6 @@ class Scheme:
     ):
         original_collective_variable = self.md.bias.collective_variable
 
-        def cv_grid(margin):
-            # take reasonable margin
-            grid = original_collective_variable.metric.grid(n=50, endpoints=True, margin=margin)
-            grid = jnp.reshape(jnp.array(jnp.meshgrid(*grid, indexing="ij")), (len(grid), -1)).T
-            cv = CV(cv=grid)
-            return cv
-
         @jax.vmap
         def f(cv):
             bias_inter, _ = self.md.bias.compute_from_cv(cv, chunk_size=chunk_size)
@@ -315,13 +307,13 @@ class Scheme:
 
             return bias_inter, v, log_jac
 
-        cv_orig = cv_grid(margin=0.4)
+        _, cv_orig, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.4)
         bias_inter, cv_new, log_jac = f(cv_orig)
 
         FES_offset = -boltzmann * self.md.static_trajectory_info.T * log_jac
 
         # determine metrix based on no margin extension
-        cv_grid_strict = cv_grid(margin=0)
+        _, cv_grid_strict, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.0)
 
         new_collective_variable = CollectiveVariable(
             f=original_collective_variable.f * cv_trans,
