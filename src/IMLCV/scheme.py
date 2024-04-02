@@ -2,19 +2,14 @@ from __future__ import annotations
 
 
 import jax
-import jax.numpy as jnp
 from IMLCV.base.bias import NoneBias
-from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvMetric
-from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import ThermoLIB
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.bias import HarmonicBias
-from IMLCV.implementations.bias import RbfBias
 from molmod.constants import boltzmann
 
 
@@ -124,7 +119,7 @@ class Scheme:
     def inner_loop(
         self,
         rnds=10,
-        convergence_kl=0.2,
+        convergence_kl=0.1,
         init=500,
         steps=5e4,
         K=None,
@@ -239,9 +234,10 @@ class Scheme:
         cv_round_from=None,
         test=False,
         max_bias=None,
-        transform_bias=False,
+        transform_bias=True,
         samples_per_bin=100,
         min_samples_per_bin=20,
+        percentile=1e-2,
     ):
         if cv_round_from is None:
             cv_round_from = self.rounds.cv
@@ -268,6 +264,7 @@ class Scheme:
             transform_FES=transform_bias,
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
+            percentile=percentile,
         )
 
         # update state
@@ -300,71 +297,71 @@ class Scheme:
                 self.rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new), cv_round=cv_round_from)
                 self.rounds.add_round_from_md(self.md)
 
-    def transform_CV(
-        self,
-        cv_trans: CvTrans,
-        copy_samples=True,
-        plot=True,
-        num_copy=2,
-        chunk_size=None,
-        kernel="thin_plate_spline",
-    ):
-        original_collective_variable = self.md.bias.collective_variable
+    # def transform_CV(
+    #     self,
+    #     cv_trans: CvTrans,
+    #     copy_samples=True,
+    #     plot=True,
+    #     num_copy=2,
+    #     chunk_size=None,
+    #     kernel="thin_plate_spline",
+    # ):
+    #     original_collective_variable = self.md.bias.collective_variable
 
-        @jax.vmap
-        def f(cv):
-            bias_inter, _ = self.md.bias.compute_from_cv(cv, chunk_size=chunk_size)
-            v, _, log_jac = cv_trans.compute_cv_trans(cv, log_Jf=True)
+    #     @jax.vmap
+    #     def f(cv):
+    #         bias_inter, _ = self.md.bias.compute_from_cv(cv, chunk_size=chunk_size)
+    #         v, _, log_jac = cv_trans.compute_cv_trans(cv, log_Jf=True)
 
-            return bias_inter, v, log_jac
+    #         return bias_inter, v, log_jac
 
-        _, cv_orig, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.4)
-        bias_inter, cv_new, log_jac = f(cv_orig)
+    #     _, cv_orig, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.4)
+    #     bias_inter, cv_new, log_jac = f(cv_orig)
 
-        FES_offset = -boltzmann * self.md.static_trajectory_info.T * log_jac
+    #     FES_offset = -boltzmann * self.md.static_trajectory_info.T * log_jac
 
-        # determine metrix based on no margin extension
-        _, cv_grid_strict, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.0)
+    #     # determine metrix based on no margin extension
+    #     _, cv_grid_strict, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.0)
 
-        new_collective_variable = CollectiveVariable(
-            f=original_collective_variable.f * cv_trans,
-            metric=CvMetric.create(
-                periodicities=[False] * cv_new.shape[1],
-                bounding_box=jnp.array(
-                    [
-                        jnp.min(cv_grid_strict.cv, axis=0),
-                        jnp.max(cv_grid_strict.cv, axis=0),
-                    ]
-                ).T,
-            ),
-        )
+    #     new_collective_variable = CollectiveVariable(
+    #         f=original_collective_variable.f * cv_trans,
+    #         metric=CvMetric.create(
+    #             periodicities=[False] * cv_new.shape[1],
+    #             bounding_box=jnp.array(
+    #                 [
+    #                     jnp.min(cv_grid_strict.cv, axis=0),
+    #                     jnp.max(cv_grid_strict.cv, axis=0),
+    #                 ]
+    #             ).T,
+    #         ),
+    #     )
 
-        fes_offset_bias = RbfBias.create(cvs=new_collective_variable, cv=cv_new, vals=FES_offset, kernel=kernel)
-        self.md.bias = RbfBias.create(
-            cvs=new_collective_variable,
-            cv=cv_new,
-            vals=FES_offset + bias_inter,
-            kernel="thin_plate_spline",
-        )
+    #     fes_offset_bias = RbfBias.create(cvs=new_collective_variable, cv=cv_new, vals=FES_offset, kernel=kernel)
+    #     self.md.bias = RbfBias.create(
+    #         cvs=new_collective_variable,
+    #         cv=cv_new,
+    #         vals=FES_offset + bias_inter,
+    #         kernel="thin_plate_spline",
+    #     )
 
-        self.rounds.add_cv_from_cv(new_collective_variable)
-        self.rounds.add_round_from_md(self.md)
+    #     self.rounds.add_cv_from_cv(new_collective_variable)
+    #     self.rounds.add_round_from_md(self.md)
 
-        if plot:
-            self.md.bias.plot(name=self.rounds.path(self.rounds.cv) / "transformed_bias.pdf")
-            self.md.bias.plot(
-                name=self.rounds.path(self.rounds.cv) / "transformed_bias_inverted.pdf",
-                inverted=True,
-            )
+    #     if plot:
+    #         self.md.bias.plot(name=self.rounds.path(self.rounds.cv) / "transformed_bias.pdf")
+    #         self.md.bias.plot(
+    #             name=self.rounds.path(self.rounds.cv) / "transformed_bias_inverted.pdf",
+    #             inverted=True,
+    #         )
 
-            fes_offset_bias.plot(
-                name=self.rounds.path(self.rounds.cv) / "fes_offset_bias.pdf",
-                inverted=True,
-            )
+    #         fes_offset_bias.plot(
+    #             name=self.rounds.path(self.rounds.cv) / "fes_offset_bias.pdf",
+    #             inverted=True,
+    #         )
 
-        if copy_samples:
-            self.rounds.copy_from_previous_round(cv_trans=cv_trans, chunk_size=chunk_size, num_copy=num_copy)
-            self.rounds.add_round_from_md(self.md)
+    #     if copy_samples:
+    #         self.rounds.copy_from_previous_round(cv_trans=cv_trans, chunk_size=chunk_size, num_copy=num_copy)
+    #         self.rounds.add_round_from_md(self.md)
 
     def save(self, filename):
         raise NotImplementedError

@@ -41,6 +41,7 @@ from jax import vmap
 from functools import partial
 from IMLCV.implementations.bias import _clip
 from IMLCV.base.bias import BiasModify
+from IMLCV.base.CV import chunk_map
 
 
 @dataclass
@@ -662,10 +663,11 @@ class Rounds(ABC):
         def weights(
             self,
             correct_U=False,
-            samples_per_bin=100,
-            n_max=40,
+            samples_per_bin=10,
+            n_max=100,
             ground_bias=None,
             sign=1,
+            time_series=False,
         ) -> list[jax.Array]:
             # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
 
@@ -709,9 +711,9 @@ class Rounds(ABC):
                 print(f"reducing {n=} to {n_max=}")
 
             grid_bounds, mask = CvMetric.bounds_from_cv(data, margin=0.1)
-
             cv_mid, nums, closest, get_histo = self._histogram(n_grid=n, grid_bounds=grid_bounds)
 
+            # def p_from_data(data):
             grid_nums = closest(data.cv, cv_mid.cv)
             hist = get_histo(grid_nums, nums, w_u)
 
@@ -722,9 +724,19 @@ class Rounds(ABC):
             p = w_u * p_grid[grid_nums]
             p /= jnp.sum(p)
 
+            # return p
+
+            # p = p_from_data(data)
             weights = [d.cv.reshape((-1,)) for d in data.replace(cv=jnp.expand_dims(p, 1)).unstack()]
 
+            # if not time_series:
             return weights
+
+            # cv_t = CV.stack(*self.cv_t)
+            # p_t = p_from_data(cv_t)
+            # weights_t = [d.cv.reshape((-1,)) for d in cv_t.replace(cv=jnp.expand_dims(p_t, 1)).unstack()]
+
+            # return weights, weights_t
 
         @staticmethod
         def _transform(cv, nl, _, pi, add_1, q):
@@ -849,6 +861,7 @@ class Rounds(ABC):
             eps=1e-10,
             max_features=2000,
             add_1=True,
+            test=False,
         ):
             # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
             # https://pubs.aip.org/aip/jcp/article-abstract/146/15/154104/152394/Variational-Koopman-models-Slow-collective?redirectedFrom=fulltext
@@ -893,11 +906,11 @@ class Rounds(ABC):
             # eigenvalue of K.T
             eigval, u = jnp.linalg.eig(a=C_01.T)
 
-            if jnp.any(p := jnp.abs(eigval) >= 1 + 1e-10):
-                print(f" {jnp.sum(p)}/ {p.shape[0]} eigvals too large {eigval[p]=}.")
+            p = jnp.abs(eigval) > 1 + 1e-10
+            in_bounds = jnp.all(p)
 
-                eigval = eigval[~p]
-                u = u[:, ~p]
+            if not in_bounds:
+                print(f" {jnp.sum(p)}/ {p.shape[0]} eigvals too large {eigval[p]=}.")
 
             if add_1:
                 idx = jnp.argsort(jnp.abs(eigval - 1))[0]
@@ -909,9 +922,7 @@ class Rounds(ABC):
 
             print(f"idx = {idx}, {eigval[idx]=}, {u[:, idx]=}")
 
-            # w_k = jnp.einsum("ni,n,i->n", cv0_white.cv, w, u[:, idx])
-
-            w_k = jnp.einsum("ni,i->n", cv0_white.cv, u[:, idx])
+            w_k = jnp.einsum("ni,n,i->n", cv0_white.cv, w, u[:, idx])
 
             if not (w_k > 0).all():
                 print(
@@ -1289,12 +1300,13 @@ class Rounds(ABC):
             self,
             new_cv: list[CV],
             new_colvar: CollectiveVariable,
-            samples_per_bin=100,
-            min_samples_per_bin: int = 0,
-            n_max=40,
-            chunk_size=250,
+            samples_per_bin=50,
+            min_samples_per_bin: int = 5,
+            n_max=100,
+            chunk_size=1,
             smoothing=0.0,
             max_bias=None,
+            pmap=True,
         ) -> RbfBias:
             old_cv = CV.stack(*self.cv)
             new_cv = CV.stack(*new_cv)
@@ -1339,7 +1351,7 @@ class Rounds(ABC):
                 b = jnp.logical_and(grid_nums_old == old_num, b0)
                 return jnp.sum(b)
 
-            def prob(new_num):
+            def prob(new_num, grid_nums_new, nums_old, p_grid_old):
                 b = grid_nums_new == new_num
                 bins = f(b, nums_old)
 
@@ -1349,12 +1361,17 @@ class Rounds(ABC):
                 return bins_sum, jnp.sum(p_bins * p_grid_old)
 
             # takes a lot of memory somehow
-            # num_grid_new, p_grid_new = vmap(prob)(nums_new)
 
-            num_grid_new, p_grid_new = jax.lax.map(
-                prob,
-                nums_new,
-            )
+            prob = Partial(prob, grid_nums_new=grid_nums_new, nums_old=nums_old, p_grid_old=p_grid_old)
+            prob = vmap(prob)
+
+            if chunk_size is not None:
+                prob = chunk_map(prob, chunk_size=chunk_size)
+
+            if pmap:
+                prob = padded_pmap(prob)
+
+            num_grid_new, p_grid_new = prob(nums_new)
 
             mask = num_grid_new >= min_samples_per_bin
 

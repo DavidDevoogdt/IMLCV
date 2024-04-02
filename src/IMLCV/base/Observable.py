@@ -70,9 +70,7 @@ class ThermoLIB:
         from IMLCV.base.bias import Bias
 
         @jit
-        def _get_bias(bias: Bias, *cv: CV):
-            cvs = CV.combine(*cv)
-
+        def _get_bias(bias: Bias, cvs: CV):
             f = Partial(bias.compute_from_cv, diff=False, chunk_size=chunk_size)
 
             if pmap:
@@ -106,9 +104,6 @@ class ThermoLIB:
                 )
 
                 f = Partial(_get_bias, self.bias)
-
-                if pmap:
-                    out = padded_pmap(f)
 
                 out = f(cvs)
 
@@ -224,7 +219,11 @@ class ThermoLIB:
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
-        histo = bash_app_python(ThermoLIB._get_histos, executors=DEFAULT_LABELS)(
+        histo = bash_app_python(
+            ThermoLIB._get_histos,
+            # profile=True,
+            executors=DEFAULT_LABELS,
+        )(
             bins=bins,
             temp=temp,
             trajs=trajs,

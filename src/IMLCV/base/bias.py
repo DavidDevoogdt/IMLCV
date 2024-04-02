@@ -848,7 +848,7 @@ class BiasModify(Bias):
         )
 
     def _compute(self, cvs):
-        return self.fun(self.bias._compute(cvs), **self.kwargs, **self.static_kwargs)
+        return jnp.reshape(self.fun(self.bias._compute(cvs), **self.kwargs, **self.static_kwargs), ())
 
     def update_bias(
         self,

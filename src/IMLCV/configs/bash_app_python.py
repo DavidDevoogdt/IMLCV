@@ -258,7 +258,8 @@ if __name__ == "__main__":
         with cProfile.Profile() as pr:
             a = func(*fargs, **fkwargs)
 
-            ps = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE).print_stats()
+        ps = pstats.Stats(pr)
+        ps.sort_stats(pstats.SortKey.CUMULATIVE).print_stats()
 
     else:
         a = func(*fargs, **fkwargs)

@@ -81,7 +81,7 @@ class Transformer:
         transform_FES=True,
         max_fes_bias=100 * kjmol,
         samples_per_bin=50,
-        min_samples_per_bin=15,
+        min_samples_per_bin=5,
     ) -> tuple[CV, CollectiveVariable]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"

@@ -30,7 +30,6 @@ from jax.tree_util import tree_flatten
 from jax.tree_util import tree_unflatten
 import re
 
-
 ######################################
 #        Data types                  #
 ######################################
@@ -106,46 +105,6 @@ def padded_pmap(f, n_devices: int | None = None):
         out_tree = tree_unflatten(tree_def, out_tree)
 
         return out_tree
-
-    # def apply_pmap_fn(
-    #     *args: PyTreeNode,
-    #     n_devices: int | None = None,
-    # ):
-    #     if n_devices is None:
-    #         n_devices = jax.device_count("cpu")
-
-    #     if n_devices == 1:
-    #         # print(f"only 1 device found, skipping parallel mapping")
-    #         # still vmap it
-    #         return f(*args)
-
-    #     p = None
-
-    #     # pad the input args
-    #     in_tree, tree_def = tree_flatten(args)
-
-    #     for i in range(len(in_tree)):
-    #         if p is None:
-    #             p = get_shape(n_devices, in_tree[i].shape[0])
-    #         else:
-    #             assert p == get_shape(n_devices, in_tree[i].shape[0]), "inconsisitent batch dims"
-
-    #         in_tree[i] = n_pad(in_tree[i], n_devices, p)
-
-    #     in_tree = tree_unflatten(tree_def, in_tree)
-
-    #     out_tree = pmap(f)(*in_tree)
-
-    #     del in_tree  # for memory purposes
-
-    #     out_tree, tree_def = tree_flatten(out_tree)
-
-    #     for i in range(len(out_tree)):
-    #         out_tree[i] = n_unpad(out_tree[i], p)
-
-    #     out_tree = tree_unflatten(tree_def, out_tree)
-
-    #     return out_tree
 
     return partial(apply_pmap_fn, n_devices=n_devices)
 
@@ -1908,18 +1867,18 @@ class CvMetric(PyTreeNode):
             periodicities = [False for _ in bounding_box]
 
         if isinstance(periodicities, list):
-            periodicities = jnp.array(periodicities)
+            periodicities = jnp.array(periodicities, dtype=jnp.bool)
 
         assert periodicities.ndim == 1
 
         if bounding_box is None:
             assert periodicities is not None
 
-            bounding_box = jnp.zeros((len(periodicities), 2))
+            bounding_box = jnp.zeros((len(periodicities), 2), dtype=jnp.float64)
             bounding_box = bounding_box.at[:, 1].set(1.0)
         else:
             if isinstance(bounding_box, list):
-                bounding_box = jnp.array(bounding_box)
+                bounding_box = jnp.array(bounding_box, dtype=jnp.float64)
 
             if bounding_box.ndim == 1:
                 bounding_box = jnp.reshape(bounding_box, (1, 2))
@@ -2033,9 +1992,9 @@ class CvMetric(PyTreeNode):
 
             if margin is not None:
                 diff = (b[:, 1] - b[:, 0]) * margin
+
                 b = b.at[:, 0].set(b[:, 0] - diff)
                 b = b.at[:, 1].set(b[:, 1] + diff)
-
         else:
             b = bounds
 
@@ -2063,7 +2022,7 @@ class CvMetric(PyTreeNode):
         self.__init__(**statedict)
 
     @staticmethod
-    def bounds_from_cv(cv: CV, percentile=1.0, weights=None, margin=None):
+    def bounds_from_cv(cv: CV, percentile=0.1, weights=None, margin=None):
         if margin is None:
             margin = percentile / 100 * 2
 
@@ -2242,15 +2201,6 @@ class CvFun(CvFunBase, PyTreeNode):
         else:
             assert self.forward is not None
             return jax.jit(Partial(self.forward, **self.static_kwargs))(x, nl, c, **self.kwargs)
-
-    # def __eq__(self,other):
-    #     if not isinstance(other, CvFun):
-    #         return False
-
-    #     if self.forward.__qualname__ != other.forward.__qualname__:
-    #         return False
-
-    #     if self.backward.__qualname__ != other.backward.__qualname__:
 
 
 class CvFunNn(nn.Module, _CvFunBase):
