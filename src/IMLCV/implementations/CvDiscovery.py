@@ -11,7 +11,6 @@ from IMLCV.base.CV import CvFun
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import get_non_constant_trans
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
@@ -22,6 +21,7 @@ from jax import vmap
 from molmod.units import nanosecond
 from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from IMLCV.base.rounds import data_loader_output
 
 # https://arxiv.org/pdf/1602.08776.pdf appendix b
 
@@ -185,7 +185,7 @@ class TranformerAutoEncoder(Transformer):
         self,
         cv: list[CV],
         cv_t: list[CV] | None,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         nunits=250,
         nlayers=3,
         lr=1e-4,
@@ -435,7 +435,7 @@ class TransoformerLDA(Transformer):
         self,
         cv_list: list[CV],
         cv_t: list[CV] | None,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         kernel=False,
         optimizer=None,
         chunk_size=None,
@@ -577,7 +577,7 @@ class TransformerMAF(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         correct_bias=False,
         pre_selction_epsilon=1e-10,
         max_features=2000,

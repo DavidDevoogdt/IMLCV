@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Iterable
@@ -9,7 +8,6 @@ from functools import partial
 from pathlib import Path
 from typing import Callable
 from typing import TYPE_CHECKING
-
 import cloudpickle
 import jax
 import jax.numpy as jnp
@@ -33,9 +31,8 @@ from jax.tree_util import Partial
 from molmod.units import angstrom
 from molmod.units import electronvolt
 from molmod.units import kjmol
-from typing_extensions import Self
-
 from molmod.constants import boltzmann
+from typing_extensions import Self
 
 
 yaff.log.set_level(yaff.log.silent)
@@ -583,7 +580,10 @@ class Bias(PyTreeNode, ABC):
 
                     n_points += jnp.sum(jnp.logical_and(in_xlim, in_ylim))
 
-                n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+                if n_points != 0:
+                    n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
+                else:
+                    n_bins = 10
 
                 ax_histx.hist(
                     x_list,

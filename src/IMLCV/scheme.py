@@ -2,8 +2,6 @@ from __future__ import annotations
 
 
 import jax
-from IMLCV.base.bias import NoneBias
-from IMLCV.base.CV import CV
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
@@ -11,6 +9,7 @@ from IMLCV.base.Observable import ThermoLIB
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.bias import HarmonicBias
 from molmod.constants import boltzmann
+from IMLCV.base.rounds import data_loader_output
 
 
 class Scheme:
@@ -27,7 +26,7 @@ class Scheme:
         folder="output",
     ) -> None:
         self.md = Engine
-        self.rounds = Rounds(
+        self.rounds = Rounds.create(
             folder=folder,
         )
         self.rounds.add_cv_from_cv(self.md.bias.collective_variable)
@@ -48,7 +47,7 @@ class Scheme:
     def FESBias(self, cv_round: int | None = None, chunk_size=None, **plotkwargs):
         """replace the current md bias with the computed FES from current
         round."""
-        obs = ThermoLIB(self.rounds, cv_round=cv_round)
+        obs = ThermoLIB.create(self.rounds, cv_round=cv_round)
         fesBias = obs.fes_bias(chunk_size=chunk_size, **plotkwargs)
         self.md = self.md.new_bias(fesBias)
 
@@ -112,7 +111,7 @@ class Scheme:
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):
-        o = ThermoLIB(self.rounds, cv_round=cv_round)
+        o = ThermoLIB.create(rounds=self.rounds, cv_round=cv_round)
 
         self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
 
@@ -142,6 +141,7 @@ class Scheme:
         only_finished=True,
         plot_umbrella=None,
         max_bias=None,
+        n_max_fes=40,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -207,6 +207,7 @@ class Scheme:
                     only_finished=only_finished,
                     max_bias=max_bias,
                     use_prev_fs=i > 1,
+                    n_max=n_max_fes,
                     **plot_kwargs,
                 )
 
@@ -224,7 +225,7 @@ class Scheme:
         self,
         transformer: Transformer,
         dlo_kwargs={},
-        dlo: Rounds.data_loader_output | None = None,
+        dlo: data_loader_output | None = None,
         chunk_size=None,
         plot=True,
         new_r_cut=None,
@@ -237,131 +238,31 @@ class Scheme:
         transform_bias=True,
         samples_per_bin=100,
         min_samples_per_bin=20,
-        percentile=1e-2,
+        percentile=1e-1,
+        use_executor=True,
     ):
-        if cv_round_from is None:
-            cv_round_from = self.rounds.cv
-
-        if "chunk_size" in dlo_kwargs:
-            chunk_size = dlo_kwargs["chunk_size"]
-            dlo_kwargs.pop("chunk_size")
-
-        if dlo is None:
-            dlo = self.rounds.data_loader(
-                cv_round=cv_round_from,
-                chunk_size=chunk_size,
-                **dlo_kwargs,
-            )
-
-        cvs_new, new_collective_variable, new_bias = transformer.fit(
+        md = self.rounds.update_CV(
+            md=self.md,
+            transformer=transformer,
+            dlo_kwargs=dlo_kwargs,
             dlo=dlo,
             chunk_size=chunk_size,
             plot=plot,
-            plot_folder=self.rounds.path(c=self.rounds.cv + 1),
+            new_r_cut=new_r_cut,
+            save_samples=save_samples,
+            save_multiple_cvs=save_multiple_cvs,
             jac=jac,
+            cv_round_from=cv_round_from,
             test=test,
-            max_fes_bias=max_bias,
-            transform_FES=transform_bias,
+            max_bias=max_bias,
+            transform_bias=transform_bias,
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
             percentile=percentile,
+            use_executor=use_executor,
         )
 
-        # update state
-
-        self.rounds.add_cv_from_cv(new_collective_variable)
-
-        self.md.bias = new_bias
-        self.md.static_trajectory_info.r_cut = new_r_cut
-        self.rounds.add_round_from_md(self.md)
-
-        if save_samples:
-            first = True
-
-            if save_multiple_cvs:
-                for dlo_i, cv_new_i in zip(iter(dlo), CV.unstack(cvs_new)):
-                    if not first:
-                        self.md.bias = NoneBias.create(new_collective_variable)
-                        self.rounds.add_cv_from_cv(new_collective_variable)
-                        self.md.static_trajectory_info.r_cut = new_r_cut
-                        self.rounds.add_round_from_md(self.md)
-
-                    self.rounds.copy_from_previous_round(dlo=dlo_i, new_cvs=[cv_new_i], cv_round=cv_round_from)
-                    self.rounds.add_round_from_md(self.md)
-
-                    first = False
-
-            else:
-                print(f"{ len(dlo.cv)}, { len( CV.unstack(cvs_new))=  } ")
-
-                self.rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new), cv_round=cv_round_from)
-                self.rounds.add_round_from_md(self.md)
-
-    # def transform_CV(
-    #     self,
-    #     cv_trans: CvTrans,
-    #     copy_samples=True,
-    #     plot=True,
-    #     num_copy=2,
-    #     chunk_size=None,
-    #     kernel="thin_plate_spline",
-    # ):
-    #     original_collective_variable = self.md.bias.collective_variable
-
-    #     @jax.vmap
-    #     def f(cv):
-    #         bias_inter, _ = self.md.bias.compute_from_cv(cv, chunk_size=chunk_size)
-    #         v, _, log_jac = cv_trans.compute_cv_trans(cv, log_Jf=True)
-
-    #         return bias_inter, v, log_jac
-
-    #     _, cv_orig, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.4)
-    #     bias_inter, cv_new, log_jac = f(cv_orig)
-
-    #     FES_offset = -boltzmann * self.md.static_trajectory_info.T * log_jac
-
-    #     # determine metrix based on no margin extension
-    #     _, cv_grid_strict, _ = original_collective_variable.metric.grid(n=50, endpoints=True, margin=0.0)
-
-    #     new_collective_variable = CollectiveVariable(
-    #         f=original_collective_variable.f * cv_trans,
-    #         metric=CvMetric.create(
-    #             periodicities=[False] * cv_new.shape[1],
-    #             bounding_box=jnp.array(
-    #                 [
-    #                     jnp.min(cv_grid_strict.cv, axis=0),
-    #                     jnp.max(cv_grid_strict.cv, axis=0),
-    #                 ]
-    #             ).T,
-    #         ),
-    #     )
-
-    #     fes_offset_bias = RbfBias.create(cvs=new_collective_variable, cv=cv_new, vals=FES_offset, kernel=kernel)
-    #     self.md.bias = RbfBias.create(
-    #         cvs=new_collective_variable,
-    #         cv=cv_new,
-    #         vals=FES_offset + bias_inter,
-    #         kernel="thin_plate_spline",
-    #     )
-
-    #     self.rounds.add_cv_from_cv(new_collective_variable)
-    #     self.rounds.add_round_from_md(self.md)
-
-    #     if plot:
-    #         self.md.bias.plot(name=self.rounds.path(self.rounds.cv) / "transformed_bias.pdf")
-    #         self.md.bias.plot(
-    #             name=self.rounds.path(self.rounds.cv) / "transformed_bias_inverted.pdf",
-    #             inverted=True,
-    #         )
-
-    #         fes_offset_bias.plot(
-    #             name=self.rounds.path(self.rounds.cv) / "fes_offset_bias.pdf",
-    #             inverted=True,
-    #         )
-
-    #     if copy_samples:
-    #         self.rounds.copy_from_previous_round(cv_trans=cv_trans, chunk_size=chunk_size, num_copy=num_copy)
-    #         self.rounds.add_round_from_md(self.md)
+        self.md = md
 
     def save(self, filename):
         raise NotImplementedError

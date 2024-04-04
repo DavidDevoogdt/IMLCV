@@ -212,7 +212,7 @@ def test_FES_bias(tmpdir, config_test, choice):
 
     from IMLCV.scheme import Scheme
 
-    rnds = Rounds(folder=folder, new_folder=False)
+    rnds = Rounds.create(folder=folder, new_folder=False)
 
     scheme0 = Scheme.from_rounds(rnds)
 

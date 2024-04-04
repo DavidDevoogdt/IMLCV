@@ -11,10 +11,10 @@ def f(args):
     from IMLCV.configs.config_general import config
 
     config()
-    rounds = Rounds(folder=args.folder, new_folder=False)
+    rounds = Rounds.create(folder=args.folder, new_folder=False)
 
     # folder = ROOT_DIR / "IMLCV" / "examples" / "output" / "CsPbI3_plot"
-    # rounds = Rounds(folder=  folder, copy=True)
+    # rounds = Rounds.create(folder=  folder, copy=True)
 
     rounds.write_xyz(r=args.round, num=5, repeat=args.repeat)
 

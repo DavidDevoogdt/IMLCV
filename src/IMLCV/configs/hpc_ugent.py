@@ -82,10 +82,14 @@ class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
         if self.mem_per_node is not None:
             scheduler_options += f"#SBATCH --mem={self.mem_per_node}g\n"
             worker_init += f"export PARSL_MEMORY_GB={self.mem_per_node}\n"
+
         if self.cores_per_node is not None:
             cpus_per_task = math.floor(self.cores_per_node / tasks_per_node)
-            scheduler_options += f"#SBATCH --cpus-per-task={cpus_per_task}"
-            worker_init += f"export PARSL_CORES={cpus_per_task}\n"
+        else:
+            cpus_per_task = 1
+
+        #     scheduler_options += f"#SBATCH --cpus-per-task={cpus_per_task}"
+        #     worker_init += f"export PARSL_CORES={cpus_per_task}\n"
 
         job_name = f"{job_name}.{time.time()}"
 
@@ -95,7 +99,7 @@ class SlurmProviderVSC(parsl.providers.slurm.slurm.SlurmProvider):
         job_config = {}
         job_config["submit_script_dir"] = self.channel.script_dir
         job_config["nodes"] = self.nodes_per_block
-        job_config["tasks_per_node"] = tasks_per_node
+        job_config["tasks_per_node"] = tasks_per_node * cpus_per_task
         job_config["walltime"] = wtime_to_minutes(self.walltime)
         job_config["scheduler_options"] = scheduler_options
         job_config["worker_init"] = worker_init
@@ -233,8 +237,9 @@ def get_slurm_provider(
     account=None,
     channel=LocalChannel(),
     gpu=False,
-    cores=None,
-    open_mp_threads_per_core: int | None = None,
+    parsl_tasks_per_block=None,
+    threads_per_core: int | None = None,
+    use_open_mp=False,
     parsl_cores=False,
     mem=None,
     memory_per_core=None,
@@ -250,6 +255,7 @@ def get_slurm_provider(
     py_env=None,
     provider="slurm",
     launcher=SingleNodeLauncher(),
+    load_cp2k=False,
 ):
     if py_env is None:
         if env == "hortense":
@@ -273,39 +279,48 @@ which python
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
 
-    # assert open_mp_threads_per_core is None, "open_mp_threads_per_core is not tested yet"
+    # assert threads_per_core is None, "threads_per_core is not tested yet"
 
     worker_init = f"{py_env}\n"
-    if env == "hortense":
-        worker_init += "module load CP2K/2023.1-foss-2022b\n"
 
-    elif env == "stevin":
+    if env == "hortense" and load_cp2k:
         worker_init += "module load CP2K/2023.1-foss-2022b\n"
-    worker_init += "module unload SciPy-bundle Python\n"
+        worker_init += "module unload SciPy-bundle Python\n"
+
+    elif env == "stevin" and load_cp2k:
+        worker_init += "module load CP2K/2023.1-foss-2022b\n"
+        worker_init += "module unload SciPy-bundle Python\n"
 
     if not parsl_cores:
-        if open_mp_threads_per_core is None:
-            open_mp_threads_per_core = 1
+        if threads_per_core is None:
+            threads_per_core = 1
 
-        total_cores = cores * open_mp_threads_per_core
+        total_cores = parsl_tasks_per_block * threads_per_core
 
-        worker_init += "unset SLURM_CPUS_PER_TASK\n"
-        worker_init += f"export SLURM_CPUS_PER_TASK={open_mp_threads_per_core}\n"
-        worker_init += f"export SLURM_NTASKS_PER_NODE={cores}\n"
-        worker_init += f"export SLURM_TASKS_PER_NODE={cores}\n"
-        worker_init += f"export SLURM_NTASKS={cores}\n"
-        worker_init += f"export OMP_NUM_THREADS={open_mp_threads_per_core}\n"
+        # if not use_open_mp:
+        #     # worker_init += "unset SLURM_CPUS_PER_TASK\n"
+        #     # worker_init += f"export SLURM_CPUS_PER_TASK={1}\n"
+        #     # worker_init += f"export SLURM_NTASKS_PER_NODE={total_cores}\n"
+        #     # worker_init += f"export SLURM_TASKS_PER_NODE={total_cores}\n"
+        #     worker_init += f"export OMP_NUM_THREADS={ 1   }\n"
+
+        # else:
+        #     worker_init += f"export SLURM_CPUS_PER_TASK={1}\n"
+        #     worker_init += f"export SLURM_NTASKS_PER_NODE={parsl_tasks_per_block}\n"
+        #     worker_init += f"export SLURM_TASKS_PER_NODE={parsl_tasks_per_block}\n"
+
+        worker_init += f"export OMP_NUM_THREADS={threads_per_core if use_open_mp else 1   }\n"
 
         # give all cores to xla
-        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
+        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
 
     else:
-        assert open_mp_threads_per_core is None, "parsl doens't use openmp cores"
-        total_cores = cores
+        assert threads_per_core is None, "parsl doens't use openmp cores"
+        total_cores = parsl_tasks_per_block
 
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
 
-    worker_init += "mpirun -report-bindings -np ${SLURM_NTASKS} echo -n \n"
+    worker_init += f"mpirun -report-bindings -np ${total_cores} echo -n \n"
 
     common_kwargs = {
         "channel": channel,
@@ -340,7 +355,7 @@ which python
         if gpu:
             vsc_kwargs[
                 "scheduler_options"
-            ] = f"#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu={cores}\n#SBATCH --export=None"  # request gpu
+            ] = f"#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu={parsl_tasks_per_block}\n#SBATCH --export=None"  # request gpu
         provider = SlurmProviderVSC(**common_kwargs, **vsc_kwargs)
     elif provider == "local":
         provider = LocalProvider(
@@ -352,7 +367,7 @@ which python
 
     if executor == "work_queue":
         worker_options = [
-            f"--cores={cores}",
+            f"--cores={threads_per_core}",
             f"--gpus={0 if not gpu else 1}",
         ]
         if hasattr(provider, "walltime"):
@@ -370,7 +385,7 @@ which python
 
         executor: ParslExecutor = WorkQueueExecutor(
             label=label,
-            # env={"OMP_NUM_THREADS":f"open_mp_threads_per_core",},
+            # env={"OMP_NUM_THREADS":f"threads_per_core",},
             working_dir=str(Path(path_internal) / label),
             provider=provider,
             shared_fs=True,
@@ -386,7 +401,7 @@ which python
         executor: ParslExecutor = TaskVineExecutor(
             label=label,
             factory_config=TaskVineFactoryConfig(
-                cores=cores,
+                cores=parsl_tasks_per_block,
                 gpus=0 if not gpu else 1,
                 scratch_dir=str(Path(path_internal) / label),
             ),
@@ -397,7 +412,7 @@ which python
         executor: ParslExecutor = HighThroughputExecutor(
             label=label,
             working_dir=str(Path(path_internal) / label),
-            cores_per_worker=cores,
+            cores_per_worker=threads_per_core,
             provider=provider,
         )
     else:
@@ -522,7 +537,7 @@ def config(
             #     max_blocks=10,
             #     parallelism=1,
             #     cores=1,
-            #     open_mp_threads_per_core=default_threads,
+            #     threads_per_core=default_threads,
             #     parsl_cores=False,
             #     walltime="02:00:00",
             #     env=env,
@@ -564,7 +579,8 @@ def config(
                         min_blocks=0,
                         max_blocks=4,
                         parallelism=1,
-                        cores=trainig_cores,
+                        parsl_tasks_per_block=1,
+                        threads_per_core=trainig_cores,
                         parsl_cores=False,
                         walltime="02:00:00",
                         **kw,
@@ -583,7 +599,8 @@ def config(
                         min_blocks=0,
                         max_blocks=4,
                         parallelism=1,
-                        cores=trainig_cores,
+                        parsl_tasks_per_block=1,
+                        threads_per_core=trainig_cores,
                         parsl_cores=False,
                         walltime="02:00:00",
                         **kw,
@@ -605,9 +622,11 @@ def config(
                     min_blocks=0,
                     max_blocks=80,
                     parallelism=1,
-                    cores=singlepoint_nodes,
+                    parsl_tasks_per_block=1,
+                    threads_per_core=singlepoint_nodes,
                     parsl_cores=False,
                     walltime=walltime,
+                    load_cp2k=True,
                     **kw,
                 )
 
@@ -624,8 +643,9 @@ def config(
                         min_blocks=1,
                         max_blocks=512,
                         parallelism=1,
-                        cores=4,
-                        parsl_cores=True,
+                        parsl_tasks_per_block=1,
+                        threads_per_core=default_threads,
+                        parsl_cores=False,
                         walltime="02:00:00",
                         **kw,
                     )

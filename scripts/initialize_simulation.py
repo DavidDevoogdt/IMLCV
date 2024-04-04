@@ -214,7 +214,7 @@ if __name__ == "__main__":
         else:
             from IMLCV.base.rounds import Rounds
 
-            rnds = Rounds(folder=args.folder, new_folder=False)
+            rnds = Rounds.create(folder=args.folder, new_folder=False)
 
             if rnds.round != -1:
                 args.n_steps_init = 0

@@ -41,7 +41,7 @@ def bash_app_python(
             outputs=[],
             **kwargs,
         ):
-            # merge in and outputs
+            # merge in and outputsdirector
             inp = [*inputs, *kwargs.pop("inputs", [])]
             outp = [*outputs, *kwargs.pop("outputs", [])]
 

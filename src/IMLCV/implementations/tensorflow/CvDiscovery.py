@@ -11,9 +11,9 @@ from IMLCV.base.CV import CvFunBase
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import un_atomize
 import numpy
+from IMLCV.base.rounds import data_loader_output
 
 
 def umap_function(x: CV, nl: NeighbourList, c, enc):
@@ -100,7 +100,7 @@ class TranformerUMAP(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         decoder=False,
         nunits=256,
         nlayers=3,

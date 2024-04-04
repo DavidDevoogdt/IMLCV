@@ -29,7 +29,7 @@ def get_rounds_ala(tmpdir) -> Rounds:
         with zipfile.ZipFile(p, "r") as zip_ref:
             zip_ref.extractall(folder)
 
-        rnds = Rounds(folder=folder, new_folder=False)
+        rnds = Rounds.create(folder=folder, new_folder=False)
     else:
         mde = alanine_dipeptide_yaff()
 
@@ -58,12 +58,12 @@ def get_LDA_CV_round(tmpdir, lda_steps=1000) -> Rounds:
         with zipfile.ZipFile(p, "r") as zip_ref:
             zip_ref.extractall(folder)
 
-        rnds = Rounds(folder=folder, new_folder=False)
+        rnds = Rounds.create(folder=folder, new_folder=False)
     else:
         mde = alanine_dipeptide_yaff()
         refs = alanine_dipeptide_refs()
 
-        rnds = Rounds(folder=folder)
+        rnds = Rounds.create(folder=folder)
         rnds.add_cv_from_cv(cv=NoneCV())
         rnds.add_round_from_md(mde)
 

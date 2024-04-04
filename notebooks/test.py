@@ -5,7 +5,7 @@ from IMLCV.scheme import Scheme
 
 if __name__ == "__main__":
     folder = Path.cwd() / "notebooks" / "alanine_dipeptide_tica_017"
-    rnds = Rounds(folder=folder, new_folder=False)
+    rnds = Rounds.create(folder=folder, new_folder=False)
     scheme0 = Scheme.from_rounds(rnds)
 
     from IMLCV.configs.config_general import config

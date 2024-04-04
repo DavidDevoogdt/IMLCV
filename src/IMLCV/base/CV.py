@@ -277,9 +277,13 @@ class SystemParams(PyTreeNode):
         nxyz: tuple[int] | None = None,
         chunk_size=None,
         max_neighs=None,
+        verbose=False,
     ) -> tuple[bool, NeighbourList | None]:
         if r_cut is None:
             return False, None, None, None
+
+        if verbose:
+            print("canonicalize")
 
         sp, (op_cell, op_coor, _) = self.canonicalize()
 
@@ -308,6 +312,9 @@ class SystemParams(PyTreeNode):
             bounds = jnp.nan_to_num(bounds)
 
             return bounds
+
+        if verbose:
+            print("num neighbour cells")
 
         # cannot be jitted
         if sp.cell is not None:
@@ -414,6 +421,10 @@ class SystemParams(PyTreeNode):
 
                 idx = jnp.argsort(r)[0:take_num]
                 n = jnp.sum(r < r_cut + r_skin)
+
+                if take_num == 0:
+                    return n
+
                 return n, r[idx], atoms[idx], None, center_op
 
             _, (r, atoms, indices) = vmap(
@@ -437,17 +448,27 @@ class SystemParams(PyTreeNode):
             )(bx, by, bz)
 
             r = jnp.reshape(r, (-1,))
+
+            n = jnp.sum(r < r_cut + r_skin)
+
+            if take_num == 0:
+                return n
+
             atoms = jnp.reshape(atoms, (-1))
             indices = jnp.reshape(indices, (-1, 3))
 
             idx = jnp.argsort(r)[0:take_num]
 
-            n = jnp.sum(r < r_cut + r_skin)
-
             return n, r[idx], atoms[idx], indices[idx, :], center_op
 
         @partial(jax.jit, static_argnames=["take_num"])
         def _f(sp: SystemParams, take_num):
+            if take_num == 0:
+                n = res(sp, sp.coordinates, take_num)
+                num_neighs = jnp.max(n)
+
+                return num_neighs
+
             n, r, a, ijk, center_op = res(sp, sp.coordinates, take_num)
             num_neighs = jnp.max(n)
 
@@ -459,18 +480,27 @@ class SystemParams(PyTreeNode):
                 f = padded_pmap(chunk_map(vmap(f), chunk_size=chunk_size))
             return f
 
+        if verbose:
+            print("obtaining num neihgs")
+
         # not jittable
         if num_neighs is None:
-            nn, _, _, _, _ = get_f(1)(sp)
+            nn = get_f(0)(sp)
             if sp.batched:
                 nn = jnp.max(nn)  # ingore: type
 
             num_neighs = int(nn)
 
+        if verbose:
+            print(f"obtaining neighs {num_neighs=}")
+
         nn, r, a, ijk, center_op = get_f(num_neighs)(sp)
 
         if sp.batched:
             nn = jnp.max(nn)  # ingore: type
+
+        if verbose:
+            print("got new Neighbourlist")
 
         b = jnp.logical_and(b, nn <= num_neighs)
 
@@ -500,6 +530,7 @@ class SystemParams(PyTreeNode):
         z_array: list[int] | Array,
         r_skin=1.0,
         chunk_size=None,
+        verbose=False,
     ) -> NeighbourList | None:
         def to_tuple(a):
             if a is None:
@@ -516,6 +547,7 @@ class SystemParams(PyTreeNode):
             z_unique=to_tuple(zu),
             num_z_unique=to_tuple(nzu),
             chunk_size=chunk_size,
+            verbose=verbose,
         )
         return nl
 

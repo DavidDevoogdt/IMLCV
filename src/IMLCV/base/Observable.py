@@ -19,66 +19,104 @@ from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
-from IMLCV.configs.config_general import DEFAULT_LABELS
-from jax import jit
+from IMLCV.configs.config_general import DEFAULT_LABELS, TRAINING_LABELS
 from jax.tree_util import Partial
+from dataclasses import dataclass
+from typing import Self
+from IMLCV.base.rounds import data_loader_output
 
 
+@dataclass(kw_only=True)
 class ThermoLIB:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
-    time_per_bin = 2 * picosecond
+    cv_round: int
+    rounds: Rounds
+    rnd: int
+    common_bias: Bias
+    collective_variable: CollectiveVariable
 
-    def __init__(
-        self,
+    time_per_bin: float = 2 * picosecond
+
+    @staticmethod
+    def create(
         rounds: Rounds,
         rnd=None,
         cv_round: int | None = None,
-        cv: CollectiveVariable | None = None,
-    ) -> None:
-        self.rounds = rounds
-
+        collective_variable: CollectiveVariable | None = None,
+    ) -> Self:
         if cv_round is None:
-            self.cv_round = rounds.cv
-        else:
-            self.cv_round = cv_round
+            cv_round = rounds.cv
 
         if rnd is None:
-            rnd = rounds.get_round(c=self.cv_round)
+            rnd = rounds.get_round(c=cv_round)
 
-        self.rnd = rnd
-        self.common_bias = self.rounds.get_bias(c=cv_round, r=self.rnd)
+        common_bias = rounds.get_bias(c=cv_round, r=rnd)
 
-        if cv is None:
-            b = self.rounds.get_bias(c=self.cv_round, r=self.rnd)
+        if collective_variable is None:
+            b = rounds.get_bias(c=cv_round, r=rnd)
+            collective_variable = b.collective_variable
 
-            self.collective_variable = b.collective_variable
-        else:
-            self.collective_variable = cv
+        return ThermoLIB(
+            cv_round=cv_round,
+            rnd=rnd,
+            rounds=rounds,
+            common_bias=common_bias,
+            collective_variable=collective_variable,
+        )
 
     @staticmethod
-    def _get_histos(
-        bins,
-        temp,
-        trajs,
-        biases: list[Bias],
+    def _fes_nd_thermolib(
+        dlo_kwargs,
+        dlo: data_loader_output | None = None,
+        update_bounding_box=True,
+        bounds_percentile=1,
+        samples_per_bin=200,
+        n=None,
+        n_max=30,
+        temp=None,
         chunk_size=None,
         pmap=True,
+        rounds=None,
     ):
+        if dlo is None:
+            dlo = rounds.data_loader(**dlo_kwargs)
+
+        if temp is None:
+            temp = dlo.sti.T
+
+        trajs = dlo.cv
+        biases = dlo.bias
+
+        c = CV.stack(*trajs)
+
+        if update_bounding_box:
+            bounds, _ = CvMetric.bounds_from_cv(c, bounds_percentile)
+
+            # print(f"old bounds: {self.collective_variable.metric.bounding_box=}  new bounds {bounds}  ")
+
+            bounding_box = bounds
+        else:
+            bounding_box = dlo.collective_variable.metric.bounding_box
+
+        if n is None:
+            n = CvMetric.get_n(samples_per_bin, c.batch_dim, c.dim)
+
+            print(f"n: {n}")
+
+        assert n >= 4, "sample more points"
+
+        if n > n_max:
+            print(f"truncating number of bins {n=} to {n_max=}")
+            n = n_max
+
+        # TODO: use metric grid to generate bins and center
+
+        bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
+
         from IMLCV.base.CV import padded_pmap
         from IMLCV.base.bias import Bias
-
-        @jit
-        def _get_bias(bias: Bias, cvs: CV):
-            f = Partial(bias.compute_from_cv, diff=False, chunk_size=chunk_size)
-
-            if pmap:
-                out = padded_pmap(f)
-
-            out, _ = f(cvs)
-
-            return out
 
         class _ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:
@@ -91,21 +129,13 @@ class ThermoLIB:
             def __call__(self, *cv):
                 print(".", end="")
 
-                cvs = CV.combine(
-                    *[
-                        CV(
-                            cv=jnp.asarray(
-                                cvi,
-                                dtype=jnp.float64,
-                            ).reshape((-1, 1))
-                        )
-                        for cvi in cv
-                    ]
-                )
+                cvs = CV.combine(*[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv])
+                f = Partial(self.bias.compute_from_cv, diff=False, chunk_size=chunk_size)
 
-                f = Partial(_get_bias, self.bias)
+                if pmap:
+                    f = padded_pmap(f)
 
-                out = f(cvs)
+                out, _ = f(cvs)
 
                 return np.asarray(jnp.reshape(out, cv[0].shape), dtype=np.double)
 
@@ -129,7 +159,19 @@ class ThermoLIB:
             verbosity="high",
         )
 
-        return histo
+        fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
+        fes.set_ref()
+
+        # xy indexing
+        # construc list with centers CVs
+        bin_centers = [0.5 * (x[:-1] + x[1:]) for x in bins]
+        Ngrid = np.array([len(bi) for bi in bin_centers])
+        grid = []
+        for idx in itertools.product(*(range(x) for x in Ngrid)):
+            center = [bin_centers[j][k] for j, k in enumerate(idx)]
+            grid.append((idx, CV(cv=jnp.array(center))))
+
+        return fes, grid, bounding_box
 
     def fes_nd_thermolib(
         self,
@@ -157,21 +199,17 @@ class ThermoLIB:
         if directory is None:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
-        if dlo is None:
-            dlo = self.rounds.data_loader(
-                num=num_rnds,
-                cv_round=self.cv_round,
-                start=start_r,
-                split_data=True,
-                new_r_cut=None,
-                min_traj_length=min_traj_length,
-                chunk_size=chunk_size,
-                get_bias_list=True,
-                only_finished=only_finished,
-            )
-
-        trajs = dlo.cv
-        biases = dlo.bias
+        dlo_kwargs = {
+            "num": num_rnds,
+            "cv_round": self.cv_round,
+            "start": start_r,
+            "split_data": True,
+            "new_r_cut": None,
+            "min_traj_length": min_traj_length,
+            # "chunk_size": chunk_size,
+            "get_bias_list": True,
+            "only_finished": only_finished,
+        }
 
         if plot:
             trajs_plot = self.rounds.data_loader(
@@ -197,55 +235,37 @@ class ThermoLIB:
                 vmax=vmax,
             )
 
-        c = CV.stack(*trajs)
+        # return ThermoLIB._fes_nd_thermolib(
+        #     dlo_kwargs=dlo_kwargs,
+        #     dlo=dlo,
+        #     update_bounding_box=update_bounding_box,
+        #     bounds_percentile=bounds_percentile,
+        #     samples_per_bin=samples_per_bin,
+        #     n=n,
+        #     n_max=n_max,
+        #     temp=temp,
+        #     chunk_size=chunk_size,
+        #     pmap=pmap,
+        #     rounds=self.rounds,
+        # )
 
-        if update_bounding_box:
-            bounds, _ = CvMetric.bounds_from_cv(c, bounds_percentile)
-
-            # print(f"old bounds: {self.collective_variable.metric.bounding_box=}  new bounds {bounds}  ")
-
-            bounding_box = bounds
-        else:
-            bounding_box = self.collective_variable.metric.bounding_box
-
-        if n is None:
-            n = CvMetric.get_n(samples_per_bin, c.batch_dim, c.dim)
-
-        assert n >= 4, "sample more points"
-
-        if n > n_max:
-            print(f"truncating number of bins {n=} to {n_max=}")
-            n = n_max
-
-        bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
-
-        histo = bash_app_python(
-            ThermoLIB._get_histos,
-            # profile=True,
-            executors=DEFAULT_LABELS,
+        return bash_app_python(
+            ThermoLIB._fes_nd_thermolib,
+            executors=TRAINING_LABELS,
         )(
-            bins=bins,
+            dlo_kwargs=dlo_kwargs,
+            dlo=dlo,
+            update_bounding_box=update_bounding_box,
+            bounds_percentile=bounds_percentile,
+            samples_per_bin=samples_per_bin,
+            n=n,
+            n_max=n_max,
             temp=temp,
-            trajs=trajs,
-            biases=biases,
-            chunk_size=chunk_size,
             execution_folder=directory,
+            chunk_size=chunk_size,
             pmap=pmap,
+            rounds=self.rounds,
         ).result()
-
-        fes = FreeEnergyHypersurfaceND.from_histogram(histo, temp)
-        fes.set_ref()
-
-        # xy indexing
-        # construc list with centers CVs
-        bin_centers = [0.5 * (x[:-1] + x[1:]) for x in bins]
-        Ngrid = np.array([len(bi) for bi in bin_centers])
-        grid = []
-        for idx in itertools.product(*(range(x) for x in Ngrid)):
-            center = [bin_centers[j][k] for j, k in enumerate(idx)]
-            grid.append((idx, CV(cv=jnp.array(center))))
-
-        return fes, grid, bounding_box
 
     def new_metric(self, plot=False, r=None):
         assert isinstance(self.rounds, Rounds)
@@ -277,6 +297,7 @@ class ThermoLIB:
         collective_variable=None,
         only_finished=True,
         vmax=100 * kjmol,
+        pmap=True,
         **plot_kwargs,
     ):
         if fes is None:
@@ -292,6 +313,7 @@ class ThermoLIB:
                 margin=margin,
                 only_finished=only_finished,
                 vmax=vmax,
+                pmap=pmap,
             )
 
         # fes is in 'xy'- indexing convention, convert to ij

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Iterator
 
@@ -13,13 +15,18 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
-from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.CV import identity_trans
 from IMLCV.implementations.CV import scale_cv_trans
 from matplotlib import gridspec
 from matplotlib.figure import Figure
-from IMLCV.base.bias import NoneBias
+from IMLCV.base.bias import NoneBias, Bias
 from molmod.units import kjmol
+from typing import Self
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from IMLCV.base.rounds import data_loader_output
 
 
 class Transformer:
@@ -41,7 +48,7 @@ class Transformer:
 
     def pre_fit(
         self,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         chunk_size=None,
         p_map=True,
     ) -> tuple[list[CV], list[CV] | None, CvFlow]:
@@ -66,9 +73,15 @@ class Transformer:
 
         return x, x_t, f
 
+    @staticmethod
+    def static_fit(transformer: Self, **kwargs):
+        print("fit Transformer")
+
+        return transformer.fit(**kwargs)
+
     def fit(
         self,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output | None,
         chunk_size=None,
         plot=True,
         plot_folder: str | Path | None = None,
@@ -82,9 +95,15 @@ class Transformer:
         max_fes_bias=100 * kjmol,
         samples_per_bin=50,
         min_samples_per_bin=5,
-    ) -> tuple[CV, CollectiveVariable]:
+        verbose=True,
+    ) -> tuple[CV, CollectiveVariable, Bias]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
+
+        # if dlo is None:
+        #     print("loading data")
+
+        #     dlo = rounds.data_loader(**dlo_kwargs, verbose=verbose)
 
         print("starting pre_fit")
 
@@ -228,7 +247,7 @@ class Transformer:
         self,
         x: list[CV],
         x_t: list[CV] | None,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         chunk_size=None,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:
@@ -751,7 +770,7 @@ class CombineTransformer(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         chunk_size=None,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:
@@ -775,7 +794,7 @@ class IdentityTransformer(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
-        dlo: Rounds.data_loader_output,
+        dlo: data_loader_output,
         chunk_size=None,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:

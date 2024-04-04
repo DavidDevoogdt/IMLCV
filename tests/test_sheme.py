@@ -24,7 +24,7 @@ def test_ala(tmpdir, config_test, steps=100):
     with zipfile.ZipFile(p, "r") as zip_ref:
         zip_ref.extractall(folder)
 
-    rnds = Rounds(folder=folder, new_folder=False)
+    rnds = Rounds.create(folder=folder, new_folder=False)
     scheme0 = Scheme.from_rounds(rnds)
 
     scheme0.FESBias()

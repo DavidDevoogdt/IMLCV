@@ -55,6 +55,11 @@ logging.getLogger("absl").addFilter(
 register_handlers()
 
 
+moved_functions = {
+    "IMLCV.base.rounds.Rounds.data_loader_output._transform": "IMLCV.base.rounds.data_loader_output._transform",
+}
+
+
 class JaxHandler(BaseHandler):
     "flattens the jax array to numpy array, which is already handled by jsonpickle"
 
@@ -84,6 +89,12 @@ class Unpickler(jsonpickle.Unpickler):
             instance.__init__(**instance.__dict__)
 
         return out
+
+    def _restore_function(self, obj):
+        if obj["py/function"] in moved_functions:
+            obj["py/function"] = moved_functions[obj["py/function"]]
+
+        return super()._restore_function(obj)
 
 
 unpickler = Unpickler(on_missing="warn")
