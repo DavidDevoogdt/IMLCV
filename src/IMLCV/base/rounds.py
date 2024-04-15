@@ -9,12 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import ase
-import h5py
 import jax
 import jax.numpy as jnp
 import numpy as np
 from equinox import Partial
-from filelock import FileLock
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import CompositeBias
 from IMLCV.implementations.bias import RbfBias
@@ -92,8 +90,6 @@ class RoundInformation:
 @dataclass
 class Rounds(ABC):
     folder: Path
-    lock: FileLock
-    h5file: h5py.File | None = None
 
     @staticmethod
     def create(
@@ -153,13 +149,7 @@ class Rounds(ABC):
 
         folder = p
 
-        rnds = Rounds(
-            folder=p,
-            lock=FileLock(str((folder / "results.h5.lock").resolve())),
-        )
-
-        rnds._make_file()
-        rnds.recover()
+        rnds = Rounds(folder=p)
 
         return rnds
 
@@ -172,19 +162,6 @@ class Rounds(ABC):
 
     def __setstate__(self, state):
         self.folder = state
-        self.lock = FileLock(str((self.folder / "results.h5.lock").resolve()))
-        self.h5file = h5py.File(self.h5file_name, mode="r+")
-
-    def _make_file(self):
-        # todo: make backup
-        if (p := Path(self.h5file_name)).exists():
-            os.remove(p)
-
-        self.h5file = h5py.File(self.h5file_name, mode="w")
-
-    @property
-    def h5file_name(self):
-        return self.full_path("results.h5")
 
     def full_path(self, name: str | Path) -> str:
         return str((self.folder / name).resolve())
@@ -245,74 +222,96 @@ class Rounds(ABC):
     #             storage                #
     ######################################
 
-    def recover(self):
-        f = self.h5file
+    def _c_vals(self):
+        cvs = []
 
         for cv_c in self.path().glob("cv_*"):
             c = cv_c.parts[-1][3:]
 
-            print(f"recovering {c=}")
+            cvs.append(int(c))
 
-            self.add_cv(c=c)
+        cvs.sort()
 
-            for round_r in cv_c.glob("round_*"):
-                r = round_r.parts[-1][6:]
+        if len(cvs) == 0:
+            cvs.append(-1)
 
-                if r not in f[f"{c}"].keys():
-                    if not (p := self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
-                        print(f"could not find {p}")
-                        continue
+        return cvs
 
-                    self.add_round(c=c, r=r)
+    def _r_vals(self, c=None):
+        if c is None:
+            c = self.cv
 
-                for md_i in round_r.glob("md_*"):
-                    i = md_i.parts[-1][3:]
+        rounds = []
 
-                    if i in f[f"{c}/{r}"].keys():
-                        continue
-                    if not (md_i / "trajectory_info.h5").exists():
-                        continue
+        for round_r in self.path(c=c).glob("round_*"):
+            r = round_r.parts[-1][6:]
 
-                    self.add_md(c=c, i=i, r=r)
+            if not (p := self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
+                print(f"could not find {p}")
+                continue
+
+            rounds.append(int(r))
+
+        rounds.sort()
+
+        if len(rounds) == 0:
+            rounds.append(-1)
+
+        return rounds
+
+    def _i_vals(self, c=None, r=None):
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+        i_s = []
+
+        for md_i in self.path(c=c, r=r).glob("md_*"):
+            i = md_i.parts[-1][3:]
+
+            if not (md_i / "trajectory_info.h5").exists():
+                continue
+
+            i_s.append(int(i))
+
+        i_s.sort()
+
+        return i_s
+
+    def _name_md(self, c, r):
+        if (p := (self.path(c=c, r=r) / "engine.json")).exists():
+            return self.rel_path(p)
+        elif (p := (self.path(c=c, r=r) / "engine")).exists():
+            return self.rel_path(p)
+        raise ValueError(f"could not find md {c=} {r=}")
+
+    def _name_bias(self, c, r, i=None):
+        if (p := (self.path(c=c, r=r, i=i) / "bias.json")).exists():
+            return self.rel_path(p)
+        elif (p := (self.path(c=c, r=r, i=i) / "bias")).exists():
+            return self.rel_path(p)
+
+        raise ValueError(f"could not find bias {c=} {r=}")
+
+    def _num_vals(self, c, r=None):
+        if r is not None:
+            return len(self._i_vals(c, r))
+
+        return len(self._r_vals(c))
 
     def add_cv(self, c=None, attr=None):
         if c is None:
             c = self.cv + 1
 
-        if attr is None:
-            attr = {}
-
         dir = self.path(c=c)
         if not dir.exists():
             dir.mkdir(parents=True)
 
-        if "valid" not in attr:
-            if (p := (self.path(c=c) / "invalid")).exists():
-                attr["valid"] = False
-            else:
-                attr["valid"] = True
-
-        if "name_cv" not in attr:
-            if (p := (self.path(c=c) / "cv.json")).exists():
-                attr["name_cv"] = self.rel_path(p)
-            elif (p := (self.path(c=c) / "cv")).exists():
-                attr["name_cv"] = self.rel_path(p)
-            else:
-                raise
-
-        with self.lock:
-            f = self.h5file
-            f.create_group(f"{c}")
-
-            for key in attr:
-                if attr[key] is not None:
-                    f[f"{c}"].attrs[key] = attr[key]
-
-            f[f"{c}"].attrs["num"] = 0
-            f[f"{c}"].attrs["num_vals"] = np.array([], dtype=np.int32)
-
-    def add_cv_from_cv(self, cv: CollectiveVariable):
-        c = self.cv + 1
+    def add_cv_from_cv(self, cv: CollectiveVariable, c=None):
+        if c is None:
+            c = self.cv + 1
 
         attr = {}
 
@@ -325,15 +324,12 @@ class Rounds(ABC):
         attr["name_cv"] = self.rel_path(self.path(c=c) / "cv.json")
         self.add_cv(attr=attr, c=c)
 
-    def add_round(self, stic: StaticMdInfo | None = None, c=None, r=None, attr=None):
+    def add_round(self, stic: StaticMdInfo | None = None, c=None, r=None):
         if c is None:
             c = self.cv
 
         if r is None:
             r = self.get_round(c=c) + 1
-
-        if attr is None:
-            attr = {}
 
         dir = self.path(c=c, r=r)
         if not dir.exists():
@@ -343,41 +339,6 @@ class Rounds(ABC):
             assert stic is not None
             stic.save(p)
 
-        if "valid" not in attr:
-            if (p := (self.path(c=c, r=r) / "invalid")).exists():
-                attr["valid"] = False
-            else:
-                attr["valid"] = True
-
-        if "name_bias" not in attr:
-            if (p := (self.path(c=c, r=r) / "bias.json")).exists():
-                attr["name_bias"] = self.rel_path(p)
-            elif (p := (self.path(c=c, r=r) / "bias")).exists():
-                attr["name_bias"] = self.rel_path(p)
-
-        if "name_md" not in attr:
-            if (p := (self.path(c=c, r=r) / "engine.json")).exists():
-                attr["name_md"] = self.rel_path(p)
-            elif (p := (self.path(c=c, r=r) / "engine")).exists():
-                attr["name_md"] = self.rel_path(p)
-
-        with self.lock:
-            f = self.h5file
-            f[f"{c}"].create_group(f"{r}")
-
-            for key in attr:
-                if attr[key] is not None:
-                    f[f"{c}/{r}"].attrs[key] = attr[key]
-
-            f[f"{c}/{r}"].attrs["num"] = 0
-            f[f"{c}/{r}"].attrs["num_vals"] = np.array([], dtype=np.int32)
-
-            # update c
-            f[f"{c}"].attrs["num"] += 1
-            f[f"{c}"].attrs["num_vals"] = np.append(f[f"{c}"].attrs["num_vals"], int(r))
-
-            self.h5file.flush()
-
     def add_round_from_md(self, md: MDEngine, cv: int | None = None, r: int | None = None):
         if cv is None:
             c = self.cv
@@ -385,9 +346,7 @@ class Rounds(ABC):
             c = cv
 
         if r is None:
-            r = self._get_attr(c=c, name="num")
-
-        # r = self.round + 1
+            r = self._r_vals(c=c)[-1] + 1
 
         assert c != -1, "run add_cv first"
 
@@ -400,20 +359,12 @@ class Rounds(ABC):
         md.save(name_md)
         md.bias.save(name_bias)
 
-        # assert md.bias.collective_variable == self.get_collective_variable(c=c)
-
-        attr = {}
-
-        attr["name_md"] = self.rel_path(name_md)
-        attr["name_bias"] = self.rel_path(name_bias)
-
-        self.add_round(attr=attr, stic=md.static_trajectory_info, r=r, c=c)
+        self.add_round(stic=md.static_trajectory_info, r=r, c=c)
 
     def add_md(
         self,
         i,
         d: TrajectoryInfo | None = None,
-        attrs=None,
         bias: str | None = None,
         r=None,
         c=None,
@@ -438,44 +389,6 @@ class Rounds(ABC):
             assert d is not None
             d.save(filename=p)
 
-        # check if in recover mode
-
-        if attrs is None:
-            attrs = {}
-
-        if "valid" not in attrs:
-            if (p := self.path(c=c, r=r, i=i) / "invalid").exists():
-                attrs["valid"] = False
-            else:
-                attrs["valid"] = True
-
-        if "finished" not in attrs:
-            if not (p := self.path(c=c, r=r, i=i) / "finished").exists():
-                attrs["finished"] = False
-            else:
-                attrs["finished"] = True
-
-        if bias is not None:
-            attrs["name_bias"] = bias
-
-        with self.lock:
-            f = self.h5file
-            if f"{i}" not in f[f"{c}/{r}"]:
-                f.create_group(f"{c}/{r}/{i}")
-
-            # copy
-            for key, val in attrs.items():
-                if val is not None:
-                    f[f"{c}/{r}/{i}"].attrs[key] = val
-
-            f[f"{c}/{r}"].attrs["num"] += 1
-            f[f"{c}/{r}"].attrs["num_vals"] = np.append(
-                f[f"{c}/{r}"].attrs["num_vals"],
-                int(i),
-            )
-
-            self.h5file.flush()
-
     ######################################
     #             retrieval              #
     ######################################
@@ -499,7 +412,7 @@ class Rounds(ABC):
             c = self.cv
 
         if stop is None:
-            stop = self._get_attr(c=c, name="num") - 1
+            stop = self._num_vals(c=c) - 1
 
         if start is None:
             start = 0
@@ -1171,18 +1084,12 @@ class Rounds(ABC):
         if c is None:
             c = self.cv
 
-        with self.lock:
-            f = self.h5file
-            d = f[f"{c}/{r}/{i}"]
-
-            ti = TrajectoryInfo.load(self.path(c=c, r=r, i=i) / "trajectory_info.h5")
-            r_attr = {key: d.attrs[key] for key in d.attrs}
-
-            self.h5file.flush()
+        ti = TrajectoryInfo.load(self.path(c=c, r=r, i=i) / "trajectory_info.h5")
 
         return TrajectoryInformation(
             ti=ti,
-            **r_attr,
+            valid=self.is_valid(c=c, r=r, i=i),
+            finished=self.is_finished(c=c, r=r, i=i),
             round=r,
             num=i,
             folder=self.folder,
@@ -1199,71 +1106,23 @@ class Rounds(ABC):
         if r is None:
             r = self.get_round(c=c)
 
-        with self.lock:
-            f = self.h5file
+        folder = self.path(c=c, r=r)
+        stic = StaticMdInfo.load(folder / "static_trajectory_info.h5")
 
-            folder = self.path(c=c, r=r)
-
-            stic = StaticMdInfo.load(folder / "static_trajectory_info.h5")
-
-            d = f[f"{c}/{r}"].attrs
-            r_attr = {key: d[key] for key in d}
+        mdi = self._i_vals(c, r)
 
         return RoundInformation(
             round=int(r),
             folder=self.folder,
             tic=stic,
-            **r_attr,
+            num_vals=np.array(mdi, dtype=np.int32),
+            num=len(mdi),
+            valid=self.is_valid(c=c, r=r),
         )
 
     ######################################
     #           Properties               #
     ######################################
-    def _set_attr(self, name, value, c=None, r=None, i=None):
-        with self.lock:
-            f = self.h5file
-            if c is None:
-                c = self.cv
-
-            f = f[f"{c}"]
-            if r is not None:
-                f = f[f"{r}"]
-
-            if i is not None:
-                assert r is not None, "also provide round"
-                f = f[f"{i}"]
-
-            f.attrs[name] = value
-
-            self.h5file.flush()
-
-    def _get_attr(self, name, c=None, r=None, i=None):
-        with self.lock:
-            f = self.h5file
-            if c is None:
-                c = self.cv
-
-            f = f[f"{c}"]
-
-            if r is not None:
-                f2 = f[f"{r}"]
-            else:
-                f2 = f
-
-            if i is not None:
-                assert r is not None, "also provide round"
-                f3 = f2[f"{i}"]
-            else:
-                f3 = f2
-
-            try:
-                return f3.attrs[name]
-            except Exception as e:
-                print(f"could not get {name=} {c=} {r=} {i=} ")
-
-                print(f"{f3.attrs.keys()=}")
-
-                raise e
 
     @property
     def T(self):
@@ -1275,24 +1134,21 @@ class Rounds(ABC):
 
     @property
     def round(self):
-        c = self.cv
-        with self.lock:
-            f = self.h5file
-            l = [int(i) for i in f[f"{c}"]]
-            l.sort()
-            return l[-1]
+        return self.get_round()
 
     def get_round(self, c=None):
-        return self._get_attr(c=c, name="num") - 1
+        if c is None:
+            c = self.cv
+
+        try:
+            return self._r_vals(c)[-1]
+        except Exception:
+            return -1
 
     @property
     def cv(self):
         try:
-            with self.lock:
-                f = self.h5file
-                l = [int(i) for i in f]
-                l.sort()
-                return l[-1]
+            return self._c_vals()[-1]
         except Exception:
             return -1
 
@@ -1318,8 +1174,6 @@ class Rounds(ABC):
             with open(p, "w+"):
                 pass
 
-        self._set_attr(name="valid", value=False, c=c, r=r, i=i)
-
     def finish_data(self, c=None, r=None, i=None):
         if c is None:
             c = self.cv
@@ -1334,8 +1188,6 @@ class Rounds(ABC):
             with open(p, "w+"):
                 pass
 
-        self._set_attr(name="finished", value=True, c=c, r=r, i=i)
-
     def is_valid(self, c=None, r=None, i=None):
         if c is None:
             c = self.cv
@@ -1343,7 +1195,7 @@ class Rounds(ABC):
         if r is None:
             r = self.get_round(c=c)
 
-        return (self.path(c=c, r=r, i=i) / "invalid").exists()
+        return not (self.path(c=c, r=r, i=i) / "invalid").exists()
 
     def is_finished(self, c=None, r=None, i=None):
         if c is None:
@@ -1368,7 +1220,7 @@ class Rounds(ABC):
         if r is None:
             r = self.get_round(c=c)
 
-        bn = self._get_attr("name_bias", c=c, r=r, i=i)
+        bn = self._name_bias(c=c, r=r, i=i)
 
         return Bias.load(self.full_path(bn))
 
@@ -1379,7 +1231,7 @@ class Rounds(ABC):
         if r is None:
             r = self.get_round(c=c)
 
-        name = self._get_attr("name_md", c=c, r=r)
+        name = self._name_md(c=c, r=r)
         return MDEngine.load(self.full_path(name), filename=None)
 
     ######################################
@@ -1415,14 +1267,8 @@ class Rounds(ABC):
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
 
-        with self.lock:
-            f = self.h5file
-            common_bias_name = self.full_path(
-                f[f"{cv_round}/{round}"].attrs["name_bias"],
-            )
-            common_md_name = self.full_path(
-                f[f"{cv_round}/{round}"].attrs["name_md"],
-            )
+        common_bias_name = self.full_path(self._name_bias(c=cv_round, r=round))
+        common_md_name = self.full_path(self._name_md(c=cv_round, r=round))
         from parsl.dataflow.dflow import AppFuture
 
         tasks: list[tuple[int, AppFuture]] | None = None
@@ -1527,14 +1373,17 @@ class Rounds(ABC):
         for i, future in tasks:
             try:
                 d = future.result()
-                self.add_md(
-                    d=d,
-                    bias=self.rel_path(Path(future.outputs[0].filename)),
-                    i=i,
-                    c=cv_round,
-                )
+
             except Exception as e:
                 print(f"got exception {e} while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
+                continue
+
+            self.add_md(
+                d=d,
+                bias=self.rel_path(Path(future.outputs[0].filename)),
+                i=i,
+                c=cv_round,
+            )
 
         # wait for plots to finish
         if plot and wait_for_plots:
@@ -1558,11 +1407,7 @@ class Rounds(ABC):
         if round is None:
             round = self.get_round(c=cv_round)
 
-        with self.lock:
-            f = self.h5file
-            common_md_name = self.full_path(
-                f[f"{cv_round}/{round}"].attrs["name_md"],
-            )
+        common_md_name = self.full_path(self._name_md(c=cv_round, r=round))
 
         md_engine = MDEngine.load(common_md_name)
 
@@ -1774,7 +1619,7 @@ class Rounds(ABC):
                 percentile=percentile,
             )
 
-        self.md = md
+        return md
 
     @staticmethod
     def _update_CV(
@@ -1804,7 +1649,7 @@ class Rounds(ABC):
             dlo=dlo,
             chunk_size=chunk_size,
             plot=plot,
-            plot_folder=rounds.path(c=rounds.cv + 1),
+            plot_folder=rounds.path(c=rounds.cv),
             jac=jac,
             test=test,
             max_fes_bias=max_bias,
@@ -1816,7 +1661,7 @@ class Rounds(ABC):
 
         # update state
 
-        rounds.add_cv_from_cv(new_collective_variable)
+        rounds.add_cv_from_cv(new_collective_variable, c=cv_round_from + 1)
         md.bias = new_bias
         md.static_trajectory_info.r_cut = new_r_cut
         rounds.add_round_from_md(md)

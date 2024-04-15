@@ -218,6 +218,7 @@ class Transformer:
                     name=str(plot_folder / "transformed_fes.pdf"),
                     margin=0.1,
                     inverted=True,
+                    vmax=max_fes_bias,
                 )
 
         else:

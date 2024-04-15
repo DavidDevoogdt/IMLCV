@@ -582,7 +582,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=trainig_cores,
                         parsl_cores=False,
-                        walltime="02:00:00",
+                        walltime="04:00:00",
                         **kw,
                     )
                     execs.append(gpu_part)
@@ -602,7 +602,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=trainig_cores,
                         parsl_cores=False,
-                        walltime="02:00:00",
+                        walltime="04:00:00",
                         **kw,
                     )
                     execs.append(cpu_part)
@@ -646,7 +646,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=default_threads,
                         parsl_cores=False,
-                        walltime="02:00:00",
+                        walltime="04:00:00",
                         **kw,
                     )
 

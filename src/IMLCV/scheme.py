@@ -10,8 +10,12 @@ from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.bias import HarmonicBias
 from molmod.constants import boltzmann
 from IMLCV.base.rounds import data_loader_output
+from IMLCV.base.bias import NoneBias
+from dataclasses import dataclass
+from pathlib import Path
 
 
+@dataclass
 class Scheme:
     """base class that implements iterative scheme.
 
@@ -20,29 +24,39 @@ class Scheme:
         CVs: list of CV instances.
     """
 
-    def __init__(
-        self,
-        Engine: MDEngine,
-        folder="output",
-    ) -> None:
-        self.md = Engine
-        self.rounds = Rounds.create(
-            folder=folder,
-        )
-        self.rounds.add_cv_from_cv(self.md.bias.collective_variable)
-        self.rounds.add_round_from_md(self.md)
+    md: MDEngine
+    rounds: Rounds
 
     @staticmethod
     def from_rounds(rounds: Rounds, md=None) -> Scheme:
-        self = Scheme.__new__(Scheme)
         if md is None:
-            self.md = rounds.get_engine()
-        else:
-            self.md = md
+            md = rounds.get_engine()
 
-        self.rounds = rounds
+        return Scheme(md=md, rounds=rounds)
 
-        return self
+    @staticmethod
+    def from_refs(
+        mde: MDEngine,
+        folder: Path,
+        refs: list[SystemParams] | None = None,
+        steps=2e3,
+    ) -> Scheme:
+        cv = mde.bias.collective_variable
+
+        rnds = Rounds.create(folder=folder)
+        rnds.add_cv_from_cv(cv=cv)
+
+        rnds.add_round_from_md(mde, r=0)
+
+        biases = []
+        for _ in refs:
+            biases.append(NoneBias.create(collective_variable=cv))
+
+        rnds.run_par(biases=biases, steps=steps, sp0=refs, plot=False)
+
+        rnds.add_round_from_md(mde)
+
+        return Scheme(rounds=rnds, md=mde)
 
     def FESBias(self, cv_round: int | None = None, chunk_size=None, **plotkwargs):
         """replace the current md bias with the computed FES from current
