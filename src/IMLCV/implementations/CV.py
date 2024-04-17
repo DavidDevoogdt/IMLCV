@@ -38,7 +38,12 @@ def _identity_trans(x, nl, _):
     return x
 
 
+def _zero_cv(x, nl, _):
+    return CV(cv=jnp.array([0.0]))
+
+
 identity_trans = _CvTrans.from_cv_function(_identity_trans)
+zero_trans = _CvTrans.from_cv_function(_zero_cv)
 
 
 def _Volume(sp: SystemParams, *_):
@@ -288,7 +293,7 @@ def soap_descriptor(
 
 def NoneCV() -> CollectiveVariable:
     return CollectiveVariable(
-        f=CvFlow.from_function(lambda sp, nl, c: CV(cv=jnp.array([0.0]))),
+        f=zero_trans,
         metric=CvMetric.create(periodicities=[None]),
     )
 

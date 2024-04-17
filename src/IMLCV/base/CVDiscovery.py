@@ -93,6 +93,7 @@ class Transformer:
         check_nan=True,
         transform_FES=True,
         max_fes_bias=100 * kjmol,
+        n_max=30,
         samples_per_bin=50,
         min_samples_per_bin=5,
         verbose=True,
@@ -211,6 +212,7 @@ class Transformer:
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
                 max_bias=max_fes_bias,
+                n_max=n_max,
             )
 
             if plot:

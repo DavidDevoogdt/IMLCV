@@ -41,7 +41,6 @@ from IMLCV.implementations.bias import _clip
 from IMLCV.base.bias import BiasModify
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.bias import NoneBias
-
 from IMLCV.base.CVDiscovery import Transformer
 
 
@@ -89,6 +88,39 @@ class RoundInformation:
 
 @dataclass
 class Rounds(ABC):
+    """
+    Class that bundle all the information in a folder structure. The structure is shown below. Files within parentheses are not always present optional.
+
+
+    folder/
+        cv_0/
+            cv.json
+            round 0/
+                static_trajectory info.h5
+                bias.json
+                engine.json
+                (invalid)
+                md_0/
+                    trajectory_info.h5
+                    bias.json
+                    (bias_new.json)
+                    (invalid)
+                    (finished)
+
+                md_1
+                    ..
+                ...
+            round 1/
+                ...
+            ...
+        cv_1/
+            ...
+        ...
+
+
+
+    """
+
     folder: Path
 
     @staticmethod
@@ -97,35 +129,6 @@ class Rounds(ABC):
         copy=True,
         new_folder=True,
     ) -> Rounds:
-        """
-        this class saves all relevant info in a hdf5 container. It is build as follows:
-        root
-            cv_0
-                round 0
-                    attrs:
-                        - name_bias
-                        - name_md
-                        - valid
-                        - num
-                    static_trajectory info
-                        data, see static_trajectory info._save
-                    0:
-                        attrs:
-                            - valid
-                            - num
-                        trajectory_info
-                            data, see trajectory info._save
-                    1:
-                        ..
-                    ...
-                round 1
-                    ...
-                ...
-            cv_1
-                ...
-            ...
-        """
-
         folder = Path(folder)
 
         # only consider folder if it has reults file in it
@@ -285,15 +288,20 @@ class Rounds(ABC):
             return self.rel_path(p)
         elif (p := (self.path(c=c, r=r) / "engine")).exists():
             return self.rel_path(p)
-        raise ValueError(f"could not find md {c=} {r=}")
+
+        return None
 
     def _name_bias(self, c, r, i=None):
-        if (p := (self.path(c=c, r=r, i=i) / "bias.json")).exists():
+        if (p := (self.path(c=c, r=r, i=i) / "bias_new.json")).exists():
+            return self.rel_path(p)
+        elif (p := (self.path(c=c, r=r, i=i) / "bias_new")).exists():
+            return self.rel_path(p)
+        elif (p := (self.path(c=c, r=r, i=i) / "bias.json")).exists():
             return self.rel_path(p)
         elif (p := (self.path(c=c, r=r, i=i) / "bias")).exists():
             return self.rel_path(p)
 
-        raise ValueError(f"could not find bias {c=} {r=}")
+        return None
 
     def _num_vals(self, c, r=None):
         if r is not None:
@@ -301,7 +309,7 @@ class Rounds(ABC):
 
         return len(self._r_vals(c))
 
-    def add_cv(self, c=None, attr=None):
+    def add_cv(self, c=None):
         if c is None:
             c = self.cv + 1
 
@@ -313,7 +321,7 @@ class Rounds(ABC):
         if c is None:
             c = self.cv + 1
 
-        attr = {}
+        # attr = {}
 
         directory = self.path(c=c)
         if not os.path.isdir(directory):
@@ -321,8 +329,11 @@ class Rounds(ABC):
 
         cv.save(self.path(c=c) / "cv.json")
 
-        attr["name_cv"] = self.rel_path(self.path(c=c) / "cv.json")
-        self.add_cv(attr=attr, c=c)
+        # attr["name_cv"] = self.rel_path(self.path(c=c) / "cv.json")
+        self.add_cv(
+            # (attr=attr,
+            c=c
+        )
 
     def add_round(self, stic: StaticMdInfo | None = None, c=None, r=None):
         if c is None:
@@ -375,15 +386,15 @@ class Rounds(ABC):
         if r is None:
             r = self.get_round(c=c)
 
-        if bias is None:
-            if (p := (self.path(c=c, r=r, i=i) / "new_bias.json")).exists():
-                bias = self.rel_path(p)
-            elif (p := (self.path(c=c, r=r, i=i) / "new_bias")).exists():
-                bias = self.rel_path(p)
-            elif (p := (self.path(c=c, r=r, i=i) / "bias.json")).exists():
-                bias = self.rel_path(p)
-            elif (p := (self.path(c=c, r=r, i=i) / "bias")).exists():
-                bias = self.rel_path(p)
+        # if bias is None:
+        #     if (p := (self.path(c=c, r=r, i=i) / "new_bias.json")).exists():
+        #         bias = self.rel_path(p)
+        #     elif (p := (self.path(c=c, r=r, i=i) / "new_bias")).exists():
+        #         bias = self.rel_path(p)
+        #     elif (p := (self.path(c=c, r=r, i=i) / "bias.json")).exists():
+        #         bias = self.rel_path(p)
+        #     elif (p := (self.path(c=c, r=r, i=i) / "bias")).exists():
+        #         bias = self.rel_path(p)
 
         if not (p := self.path(c=c, r=r, i=i) / "trajectory_info.h5").exists():
             assert d is not None
@@ -499,6 +510,9 @@ class Rounds(ABC):
     ) -> data_loader_output:
         weights = []
 
+        if cv_round is None:
+            cv_round = self.cv
+
         if new_r_cut == -1:
             new_r_cut = self._round_information(c=cv_round).tic.r_cut
 
@@ -520,20 +534,17 @@ class Rounds(ABC):
         cvrnds = []
 
         if num_cv_rounds != 1:
-            if cv_round is None:
-                cv_round = self.cv
-
             cvrnds = range(max(0, cv_round - num_cv_rounds), cv_round + 1)
             recalc_cv = True
-            ground_bias = None
+
         else:
             cvrnds.append(cv_round)
 
-            try:
-                ground_bias = self.get_bias(c=cv_round, r=stop)
-            except Exception as e:
-                print(f"could not load ground bias {e=}")
-                ground_bias = None
+        try:
+            ground_bias = self.get_bias(c=cv_round, r=stop)
+        except Exception as e:
+            print(f"could not load ground bias {e=}")
+            ground_bias = None
 
         if colvar is not None:
             recalc_cv = True
@@ -541,8 +552,6 @@ class Rounds(ABC):
         if get_colvar or recalc_cv:
             if colvar is None:
                 colvar = self.get_collective_variable(c=cv_round)
-        # else:
-        #     colvar = None
 
         if verbose:
             print("obtaining raw data")
@@ -947,7 +956,6 @@ class Rounds(ABC):
             cv_round = self.cv - 1
 
         current_round = self._round_information()
-        # bias = self.get_bias()
         col_var = self.get_collective_variable()
 
         if dlo is None:
@@ -1012,7 +1020,7 @@ class Rounds(ABC):
             self.add_md(
                 i=i,
                 d=new_traj_info,
-                attrs=None,
+                # attrs=None,
                 bias=None,  # self.rel_path(round_path / "bias.json"),
             )
 
@@ -1090,6 +1098,7 @@ class Rounds(ABC):
             ti=ti,
             valid=self.is_valid(c=c, r=r, i=i),
             finished=self.is_finished(c=c, r=r, i=i),
+            name_bias=self._name_bias(c=c, r=r, i=i),
             round=r,
             num=i,
             folder=self.folder,
@@ -1118,6 +1127,8 @@ class Rounds(ABC):
             num_vals=np.array(mdi, dtype=np.int32),
             num=len(mdi),
             valid=self.is_valid(c=c, r=r),
+            name_bias=self._name_bias(c=c, r=r),
+            name_md=self._name_md(c=c, r=r),
         )
 
     ######################################
@@ -1376,6 +1387,8 @@ class Rounds(ABC):
 
             except Exception as e:
                 print(f"got exception {e} while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
+
+                # raise e
                 continue
 
             self.add_md(
@@ -1550,6 +1563,7 @@ class Rounds(ABC):
         save_multiple_cvs=False,
         jac=jax.jacrev,
         cv_round_from=None,
+        cv_round_to=None,
         test=False,
         max_bias=None,
         transform_bias=True,
@@ -1557,6 +1571,7 @@ class Rounds(ABC):
         min_samples_per_bin=20,
         percentile=1e-1,
         use_executor=True,
+        n_max=30,
     ):
         if cv_round_from is None:
             cv_round_from = self.cv
@@ -1570,6 +1585,9 @@ class Rounds(ABC):
 
         if chunk_size is not None:
             dlo_kwargs["chunk_size"] = chunk_size
+
+        if cv_round_to is None:
+            cv_round_to = cv_round_from + 1
 
         if use_executor:
             md = bash_app_python(
@@ -1594,7 +1612,9 @@ class Rounds(ABC):
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
                 percentile=percentile,
-                execution_folder=self.path(c=self.cv + 1),
+                execution_folder=self.path(c=cv_round_to),
+                cv_round_to=cv_round_to,
+                n_max=n_max,
             ).result()
 
         else:
@@ -1617,6 +1637,8 @@ class Rounds(ABC):
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
                 percentile=percentile,
+                cv_round_to=cv_round_to,
+                n_max=n_max,
             )
 
         return md
@@ -1635,12 +1657,14 @@ class Rounds(ABC):
         save_multiple_cvs=False,
         jac=jax.jacrev,
         cv_round_from=None,
+        cv_round_to=None,
         test=False,
         max_bias=None,
         transform_bias=True,
         samples_per_bin=100,
         min_samples_per_bin=20,
         percentile=1e-1,
+        n_max=30,
     ):
         if dlo is None:
             dlo = rounds.data_loader(**dlo_kwargs, verbose=True)
@@ -1649,7 +1673,7 @@ class Rounds(ABC):
             dlo=dlo,
             chunk_size=chunk_size,
             plot=plot,
-            plot_folder=rounds.path(c=rounds.cv),
+            plot_folder=rounds.path(c=cv_round_to),
             jac=jac,
             test=test,
             max_fes_bias=max_bias,
@@ -1657,6 +1681,7 @@ class Rounds(ABC):
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
             percentile=percentile,
+            n_max=n_max,
         )
 
         # update state
@@ -1819,6 +1844,7 @@ class data_loader_output:
         samples_per_bin=10,
         n_max=100,
         ground_bias=None,
+        use_ground_bias=True,
         sign=1,
         time_series=False,
     ) -> list[jax.Array]:
@@ -1870,7 +1896,10 @@ class data_loader_output:
         grid_nums = closest(data.cv, cv_mid.cv)
         hist = get_histo(grid_nums, nums, w_u)
 
-        p_grid = jnp.exp(sign * beta * ground_bias.compute_from_cv(cvs=cv_mid)[0])
+        if use_ground_bias:
+            p_grid = jnp.exp(sign * beta * ground_bias.compute_from_cv(cvs=cv_mid)[0])
+        else:
+            p_grid = jnp.ones((cv_mid.cv.shape[0],))
 
         p_grid /= hist
 

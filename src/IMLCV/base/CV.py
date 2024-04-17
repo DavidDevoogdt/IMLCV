@@ -2001,7 +2001,7 @@ class CvMetric(PyTreeNode):
     def get_n(samples_per_bin, samples, n_dims):
         return int((samples / samples_per_bin) ** (1 / n_dims))
 
-    def grid(self, n, bounds=None, endpoints=None, margin=0.1):
+    def grid(self, n=30, bounds=None, endpoints=None, margin=0.1):
         """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
 
         Args:
@@ -2025,8 +2025,11 @@ class CvMetric(PyTreeNode):
             if margin is not None:
                 diff = (b[:, 1] - b[:, 0]) * margin
 
+                # diff = jnp.where(self.periodicities, 0, diff)
+
                 b = b.at[:, 0].set(b[:, 0] - diff)
                 b = b.at[:, 1].set(b[:, 1] + diff)
+
         else:
             b = bounds
 

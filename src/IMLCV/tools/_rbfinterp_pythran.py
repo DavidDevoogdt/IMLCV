@@ -48,13 +48,29 @@ NAME_TO_FUNC = {
 }
 
 
-def scale(val, metric):
+def scale(val, metric: CvMetric):
     return val / (metric.bounding_box[:, 1] - metric.bounding_box[:, 0]) * 2
 
 
 def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
-    return jnp.linalg.norm(
-        scale(metric.min_cv(x.cv) - metric.min_cv(y.cv), metric=metric) * eps,
+    # periodic dimensions are mapped to circle first, and then the distance is calculated
+
+    x_min = metric.min_cv(x.cv)
+    y_min = metric.min_cv(y.cv)
+
+    x_min = scale(x_min, metric=metric)
+    y_min = scale(y_min, metric=metric)
+
+    return jnp.sqrt(
+        jnp.sum(
+            jnp.where(
+                metric.periodicities,
+                (jnp.sin(x_min * jnp.pi) - jnp.sin(y_min * jnp.pi)) ** 2
+                + (jnp.cos(x_min * jnp.pi) - jnp.cos(y_min * jnp.pi)) ** 2,
+                (x_min - y_min) ** 2,
+            )
+            * eps**2
+        )
     )
 
 

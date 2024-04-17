@@ -320,7 +320,8 @@ which python
 
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
 
-    worker_init += f"mpirun -report-bindings -np ${total_cores} echo -n \n"
+    if load_cp2k:
+        worker_init += f"mpirun -report-bindings -np ${total_cores} echo -n \n"
 
     common_kwargs = {
         "channel": channel,

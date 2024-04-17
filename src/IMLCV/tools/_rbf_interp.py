@@ -198,6 +198,11 @@ class RBFInterpolator(PyTreeNode):
         if kernel not in _AVAILABLE:
             raise ValueError(f"`kernel` must be one of {_AVAILABLE}.")
 
+        if metric.periodicities.any():
+            if kernel != "multiquadric" and kernel != "linear":
+                print(f" The chosen kernel {kernel} is not suitable for periodic data. Switching to linear kernel")
+                kernel = "linear"
+
         if epsilon is None:
             if kernel in _SCALE_INVARIANT:
                 epsilon = 1.0

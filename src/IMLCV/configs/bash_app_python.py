@@ -5,6 +5,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+import jax
+
+
 import cloudpickle
 import jsonpickle
 from IMLCV import unpickler
@@ -13,7 +17,6 @@ from parsl import File
 from parsl import python_app
 from parsl.dataflow.futures import AppFuture
 from IMLCV.configs.config_general import DEFAULT_LABELS
-import jax
 from parsl import AUTO_LOGNAME
 
 
@@ -210,6 +213,11 @@ if __name__ == "__main__":
     cwd = os.getcwd()
     os.chdir(args.folder)
 
+    try:
+        jax.distributed.initialize()
+    except Exception as e:
+        print(e)
+
     rank = 0
     args.uses_mpi = False
 
@@ -229,7 +237,7 @@ if __name__ == "__main__":
         print(f"working in folder {os.getcwd()}")
         if args.uses_mpi:
             print(f"using mpi with {num_ranks} ranks")
-        print(f"working with {jax.local_device_count()} devices")
+        print(f"working with {jax.local_device_count()=} {jax.device_count()=}")
 
         file_in = Path(args.file_in)
 

@@ -250,7 +250,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
     r_cut = 5 * angstrom
 
     tic = StaticMdInfo(
-        write_step=10,
+        write_step=1,
         T=300 * units.kelvin,
         P=1.0 * units.bar,
         timestep=2.0 * units.femtosecond,

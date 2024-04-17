@@ -155,7 +155,8 @@ class Scheme:
         only_finished=True,
         plot_umbrella=None,
         max_bias=None,
-        n_max_fes=40,
+        n_max_fes=30,
+        # resample_num=20,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -183,6 +184,16 @@ class Scheme:
             self.md.static_trajectory_info.max_grad = max_grad
 
         i_0 = self.rounds.get_round(c=cv_round)
+
+        if i_0 >= 2:
+            prev_bias = self.rounds.get_bias(c=cv_round, r=i_0 - 1)
+            bias = self.rounds.get_bias(c=cv_round, r=i_0)
+
+            kl_div = bias.kl_divergence(prev_bias, T=self.rounds.T, symmetric=True)
+
+            if kl_div < convergence_kl:
+                print("already converged")
+                return
 
         print(f"{i_0=}")
 
@@ -254,6 +265,7 @@ class Scheme:
         min_samples_per_bin=20,
         percentile=1e-1,
         use_executor=True,
+        n_max=30,
     ):
         md = self.rounds.update_CV(
             md=self.md,
@@ -274,13 +286,7 @@ class Scheme:
             min_samples_per_bin=min_samples_per_bin,
             percentile=percentile,
             use_executor=use_executor,
+            n_max=n_max,
         )
 
         self.md = md
-
-    def save(self, filename):
-        raise NotImplementedError
-
-    @classmethod
-    def load(cls, filename):
-        raise NotImplementedError

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import itertools
 
 import jax.numpy as jnp
@@ -22,7 +24,6 @@ from thermolib.thermodynamics.histogram import HistogramND
 from IMLCV.configs.config_general import DEFAULT_LABELS, TRAINING_LABELS
 from jax.tree_util import Partial
 from dataclasses import dataclass
-from typing import Self
 from IMLCV.base.rounds import data_loader_output
 
 
@@ -45,7 +46,7 @@ class ThermoLIB:
         rnd=None,
         cv_round: int | None = None,
         collective_variable: CollectiveVariable | None = None,
-    ) -> Self:
+    ) -> ThermoLIB:
         if cv_round is None:
             cv_round = rounds.cv
 
@@ -90,13 +91,22 @@ class ThermoLIB:
         biases = dlo.bias
 
         c = CV.stack(*trajs)
+        # c = dlo.collective_variable.metric.periodic_wrap(c)
 
         if update_bounding_box:
             bounds, _ = CvMetric.bounds_from_cv(c, bounds_percentile)
 
-            # print(f"old bounds: {self.collective_variable.metric.bounding_box=}  new bounds {bounds}  ")
+            # # do not update periodic bounds
+            bounding_box = jnp.where(
+                dlo.collective_variable.metric.periodicities,
+                dlo.collective_variable.metric.bounding_box,
+                bounds,
+            )
 
-            bounding_box = bounds
+            print(f"updated bounding box: {bounding_box}")
+
+            # bounding_box = bounds
+
         else:
             bounding_box = dlo.collective_variable.metric.bounding_box
 
@@ -112,11 +122,11 @@ class ThermoLIB:
             n = n_max
 
         # TODO: use metric grid to generate bins and center
+        # bins, cv_grid, mid_cv_grid = dlo.collective_variable.metric.grid(n, endpoints=True)
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
         from IMLCV.base.CV import padded_pmap
-        from IMLCV.base.bias import Bias
 
         class _ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:
@@ -145,6 +155,7 @@ class ThermoLIB:
         bias_wrapped = [_ThermoBiasND(bias=b, chunk_size=chunk_size, num=i) for i, b in enumerate(biases)]
 
         histo = HistogramND.from_wham(
+            # bins=[np.array(b, dtype=np.double) for b in bins],
             bins=bins,
             trajectories=[
                 np.array(
@@ -281,7 +292,7 @@ class ThermoLIB:
         choice="rbf",
         num_rnds=4,
         start_r=0,
-        rbf_kernel="thin_plate_spline",
+        rbf_kernel="linear",
         rbf_degree=None,
         smoothing_threshold=5 * kjmol,
         samples_per_bin=100,
@@ -298,6 +309,7 @@ class ThermoLIB:
         only_finished=True,
         vmax=100 * kjmol,
         pmap=True,
+        resample_num=30,
         **plot_kwargs,
     ):
         if fes is None:
@@ -394,7 +406,10 @@ class ThermoLIB:
             fes_bias_tot = fesBias
 
         if resample_bias:
-            fes_bias_tot = fes_bias_tot.resample(cv_grid=cv_grid)
+            fes_bias_tot = fes_bias_tot.resample(
+                cv_grid=cv_grid,
+                n=n_max,
+            )
 
         # clip value of bias to min and max of computed FES
         fes_bias_tot = BiasModify.create(
