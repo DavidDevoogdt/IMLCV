@@ -582,11 +582,10 @@ class TransformerMAF(Transformer):
         pre_selction_epsilon=1e-10,
         max_features=2000,
         max_functions=2500,
-        weight_method="FES2",
         koopman_weighting=False,
         kinetic_distance=False,
         method="tcca",
-        use_ground_bias=True,
+        use_ground_bias=False,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         assert dlo.time_series
@@ -624,20 +623,36 @@ class TransformerMAF(Transformer):
         print("getting weights")
 
         if correct_bias:
-            w = dlo.weights(correct_U=False, use_ground_bias=use_ground_bias, n_max=100)
+            w = dlo.weights(correct_U=False, use_ground_bias=use_ground_bias, n_max=60)
+
+            w_stack = jnp.hstack(w)
+            print(f"weights {w_stack=} {jnp.mean(w_stack)=}, {jnp.std(w_stack)=} ")
 
         print("getting koopman")
 
-        k, tica_selection, g, pi_0, q_0, pi_1, q_1, cv_0, cv_tau = dlo.koopman_model(
-            cv_0=cv_0.unstack(),
-            cv_tau=cv_tau.unstack(),
-            eps=1e-10,
-            method=method,
-            max_features=max_features,
-            w=w,
-            out_dim=self.outdim,
-            koopman_weight=koopman_weighting,
-        )
+        if method == "tcca":
+            k, tica_selection, g, pi_0, q_0, pi_1, q_1, cv_0, cv_tau = dlo.koopman_model(
+                cv_0=cv_0.unstack(),
+                cv_tau=cv_tau.unstack(),
+                eps=1e-10,
+                method=method,
+                max_features=max_features,
+                w=w,
+                out_dim=self.outdim,
+                koopman_weight=koopman_weighting,
+            )
+
+        elif method == "tica":
+            k, tica_selection, pi_0, q_0, cv_0, cv_tau = dlo.koopman_model(
+                cv_0=cv_0.unstack(),
+                cv_tau=cv_tau.unstack(),
+                eps=1e-10,
+                method=method,
+                max_features=max_features,
+                w=w,
+                out_dim=self.outdim,
+                koopman_weight=koopman_weighting,
+            )
 
         ts = -dlo.tau / jnp.log(k) / nanosecond
 

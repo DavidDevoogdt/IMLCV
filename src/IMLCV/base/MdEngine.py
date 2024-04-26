@@ -310,21 +310,24 @@ class TrajectoryInfo(PyTreeNode):
     @staticmethod
     def stack(*ti: TrajectoryInfo) -> TrajectoryInfo:
         if len(ti) == 1:
-            return ti
+            return ti[0]
+
         tot_size = sum([t._size for t in ti])
 
         ti_out = ti[0]
 
-        while ti_out._capacity <= tot_size:
-            ti_out = ti_out._expand_capacity()
+        if ti_out._capacity <= tot_size:
+            ti_out = ti_out._expand_capacity(nc=tot_size + 10)
 
         return ti_out._stack(*ti[1:])
 
     def __add__(self, ti: TrajectoryInfo) -> TrajectoryInfo:
         return TrajectoryInfo.stack(self, ti)
 
-    def _expand_capacity(self) -> TrajectoryInfo:
-        nc = min(self._capacity * 2, self._capacity + 1000)
+    def _expand_capacity(self, nc=None) -> TrajectoryInfo:
+        if nc is None:
+            nc = min(self._capacity * 2, self._capacity + 1000)
+
         delta = nc - self._capacity
 
         dict = {

@@ -42,6 +42,7 @@ from IMLCV.base.bias import BiasModify
 from IMLCV.base.CV import chunk_map
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.CVDiscovery import Transformer
+from molmod.units import kjmol
 
 
 @dataclass
@@ -486,10 +487,7 @@ class Rounds(ABC):
         split_data=False,
         new_r_cut=-1,
         cv_round=None,
-        filter_bias=False,
-        filter_energy=False,
         ignore_invalid=False,
-        energy_threshold=None,
         md_trajs: list[int] | None = None,
         start: int | None = None,
         stop: int | None = None,
@@ -507,8 +505,10 @@ class Rounds(ABC):
         colvar=None,
         check_dtau=True,
         verbose=False,
+        weight=True,
+        T_scale=3,
     ) -> data_loader_output:
-        weights = []
+        # weights = []
 
         if cv_round is None:
             cv_round = self.cv
@@ -526,8 +526,6 @@ class Rounds(ABC):
 
         if get_bias_list:
             bias_list: list[Bias] = []
-
-        min_energy = None
 
         out = int(out)
 
@@ -571,7 +569,7 @@ class Rounds(ABC):
                         # print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
                         continue
                     # else:
-                    # print("adding trajectory")
+                    # print("adding traweights=jectory")
 
                 if sti is None:
                     sti = round_info.tic
@@ -596,48 +594,10 @@ class Rounds(ABC):
 
                     cv0, _ = colvar.compute_cv(sp=sp0, nl=nlr)
 
-                e = None
-
-                if filter_bias:
-                    if (b0 := traj_info.ti.e_bias) is None:
-                        # map cvs
-                        bias = traj_info.get_bias()
-
-                        b0, _ = bias.compute_from_cv(cvs=cv0)
-
-                    e = b0
-
-                if filter_energy:
-                    if (e0 := traj_info.ti.e_pot) is None:
-                        raise ValueError("e_pot is None")
-
-                    if e is None:
-                        e = e0
-                    else:
-                        e = e + e0
-
-                if energy_threshold is not None:
-                    if (e0 := traj_info.ti.e_pot) is None:
-                        raise ValueError("e_pot is None")
-
-                    if min_energy is None:
-                        min_energy = e0.min()
-                    else:
-                        min_energy = min(min_energy, e0.min())
-
                 sp.append(sp0)
                 cv.append(cv0)
                 if get_bias_list:
                     bias_list.append(traj_info.get_bias())
-
-                if e is None:
-                    weights.append(None)
-                else:
-                    beta = 1 / (round_info.tic.T * boltzmann)
-                    weight = -beta * e
-
-                    # weight = jnp.exp(-beta * e)
-                    weights.append(weight)
 
         assert sti is not None
         assert len(sp) != 0
@@ -663,38 +623,10 @@ class Rounds(ABC):
 
         key = PRNGKey(0)
 
-        if energy_threshold is not None:
-            raise
-            sp_new: list[SystemParams] = []
-            cv_new: list[CV] = []
-            ti_new: list[TrajectoryInfo] = []
-            new_weights = []
-
-            for n in range(len(sp)):
-                indices = jnp.where(ti[n].e_pot - min_energy < energy_threshold)[0]
-
-                if len(indices) == 0:
-                    continue
-
-                if time_series:
-                    print("energy threshold surpassed in time_series, removing the data")
-                    continue
-
-                sp_new.append(sp[n][indices])
-                cv_new.append(cv[n][indices])
-                ti_new.append(ti[n][indices])
-                new_weights.append(weights[n])
-
-            sp = sp_new
-            ti = ti_new
-            cv = cv_new
-            weights = new_weights
-
         if T_max_over_T is not None:
             sp_new: list[SystemParams] = []
             cv_new: list[CV] = []
             ti_new: list[TrajectoryInfo] = []
-            new_weights = []
             if get_bias_list:
                 new_bias_list = []
 
@@ -709,16 +641,42 @@ class Rounds(ABC):
 
                 cv_new.append(cv[n])
                 ti_new.append(ti[n])
-                new_weights.append(weights[n])
                 if get_bias_list:
                     new_bias_list.append(bias_list[n])
 
             sp = sp_new
             ti = ti_new
             cv = cv_new
-            weights = new_weights
             if get_bias_list:
                 bias_list = new_bias_list
+
+        # get weights
+        if verbose:
+            print("getting weights")
+
+        dlo = data_loader_output(
+            sp=sp,
+            cv=cv,
+            ti=ti,
+            sti=sti,
+            nl=None,
+            collective_variable=colvar,
+            # time_series=time_series,
+            ground_bias=ground_bias,
+        )
+
+        if weight:
+            # select points according to free energy divided by histogram count
+            weights = dlo.weights(
+                use_ground_bias=True,
+                correct_U=False,
+                T_scale=T_scale,
+                chunk_size=chunk_size,
+            )
+        else:
+            weights = [None] * len(sp)
+
+        # select the requested number of points and time lagged data
 
         out_sp: list[SystemParams] = []
         out_cv: list[CV] = []
@@ -748,14 +706,19 @@ class Rounds(ABC):
                 if wi is None:
                     probs = None
                 else:
-                    wi -= jnp.mean(wi)
-                    wi = jnp.exp(-wi)
+                    if lag_n != 0:
+                        wi = wi[:-lag_n]
+
                     probs = wi / jnp.sum(wi)
+
+                ni = int(frac * (sp[n].shape[0] - lag_n))
+                if ni == 0 and (sp[n].shape[0] - lag_n) > 0:
+                    ni = 1
 
                 key, indices = choose(
                     key,
                     probs,
-                    out=int(frac * (sp[n].shape[0] - lag_n)),
+                    out=ni,
                     len=sp[n].shape[0] - lag_n,
                 )
 
@@ -772,14 +735,16 @@ class Rounds(ABC):
             if weights[0] is None:
                 probs = None
             else:
-                ws = jnp.hstack([wi[:-lag_n] for wi in weights])
-                ws -= jnp.mean(ws)
-                probs = jnp.exp(-ws)
-                probs /= jnp.sum(probs)
+                if lag_n == 0:
+                    wi = jnp.hstack(weights)
+                else:
+                    wi = jnp.hstack([wi[:-lag_n] for wi in weights])
+
+                probs = wi / jnp.sum(wi)
 
             key, indices = choose(key, probs, out=int(out), len=total)
 
-            indices = jnp.sort(indices)
+            # indices = jnp.sort(indices)
 
             count = 0
 
@@ -808,22 +773,23 @@ class Rounds(ABC):
 
                 count += n_i
 
-            out_sp.append(SystemParams.stack(*sp_trimmed))
-            out_cv.append(CV.stack(*cv_trimmed).replace(_stack_dims=None))
-            out_ti.append(TrajectoryInfo.stack(*ti_trimmed))
+            out_sp = sp_trimmed
+            out_cv = cv_trimmed
+            out_ti = ti_trimmed
 
             if time_series:
-                out_sp_t.append(SystemParams.stack(*sp_trimmed_t))
-                out_cv_t.append(CV.stack(*cv_trimmed_t).replace(_stack_dims=None))
-                out_ti_t.append(TrajectoryInfo.stack(*ti_trimmed_t))
+                out_sp_t = sp_trimmed_t
+                out_cv_t = cv_trimmed_t
+                out_ti_t = ti_trimmed_t
 
-            bias = None
+            # bias = None
 
         out_nl = None
 
         if time_series:
             out_nl_t = None
 
+        # get neighbourlist
         if new_r_cut is not None:
             if verbose:
                 print(f"getting neighbourlist wiht {new_r_cut=}")
@@ -858,6 +824,7 @@ class Rounds(ABC):
             if time_series:
                 out_nl_t = _out_nl(out_sp_t, new_r_cut)
 
+        # get CV if not already calculated
         if recalc_cv:
             print("recalculating CV")
 
@@ -886,6 +853,7 @@ class Rounds(ABC):
             if time_series:
                 out_cv_t = _out_cv(out_sp_t, out_nl_t)
 
+        # return data
         if time_series:
             tau = None
 
@@ -962,8 +930,6 @@ class Rounds(ABC):
             dlo = self.data_loader(
                 num=num_copy,
                 out=out,
-                filter_bias=filter_bias,
-                filter_energy=filter_energy,
                 split_data=split_data,
                 new_r_cut=current_round.tic.r_cut,
                 md_trajs=md_trajs,
@@ -1259,8 +1225,6 @@ class Rounds(ABC):
         plot=True,
         KEY=42,
         sp0: SystemParams | None = None,
-        filter_e_pot=False,
-        correct_previous_bias=False,
         ignore_invalid=False,
         md_trajs: list[int] | None = None,
         cv_round: int | None = None,
@@ -1293,8 +1257,6 @@ class Rounds(ABC):
                 num=4,
                 out=10000,
                 split_data=False,
-                filter_bias=correct_previous_bias,
-                filter_energy=filter_e_pot,
                 new_r_cut=None,
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
@@ -1326,10 +1288,7 @@ class Rounds(ABC):
 
             if not sp0_provided:
                 # reweigh data points according to new bias
-                probs = dlo_data.weights(
-                    ground_bias=bias,
-                    sign=-1,
-                )[0]
+                probs = dlo_data.weights(ground_bias=bias, sign=-1, correct_U=False)[0]
 
                 probs = probs / jnp.sum(probs)
 
@@ -1572,6 +1531,7 @@ class Rounds(ABC):
         percentile=1e-1,
         use_executor=True,
         n_max=30,
+        vmax=100 * kjmol,
     ):
         if cv_round_from is None:
             cv_round_from = self.cv
@@ -1615,6 +1575,7 @@ class Rounds(ABC):
                 execution_folder=self.path(c=cv_round_to),
                 cv_round_to=cv_round_to,
                 n_max=n_max,
+                vmax=vmax,
             ).result()
 
         else:
@@ -1639,6 +1600,7 @@ class Rounds(ABC):
                 percentile=percentile,
                 cv_round_to=cv_round_to,
                 n_max=n_max,
+                vmax=vmax,
             )
 
         return md
@@ -1665,6 +1627,7 @@ class Rounds(ABC):
         min_samples_per_bin=20,
         percentile=1e-1,
         n_max=30,
+        vmax=100 * kjmol,
     ):
         if dlo is None:
             dlo = rounds.data_loader(**dlo_kwargs, verbose=True)
@@ -1682,6 +1645,8 @@ class Rounds(ABC):
             min_samples_per_bin=min_samples_per_bin,
             percentile=percentile,
             n_max=n_max,
+            cv_titles=[f"{cv_round_from}", f"{cv_round_to}"],
+            vmax=vmax,
         )
 
         # update state
@@ -1810,29 +1775,44 @@ class data_loader_output:
 
         return data_loader_output(**kwargs)
 
+    @staticmethod
     def _histogram(
-        self,
+        collective_variable: CollectiveVariable,
         n_grid=40,
-        collective_variable: CollectiveVariable | None = None,
         grid_bounds=None,
+        chunk_size=None,
+        chunk_size_mid=1,
     ):
-        if collective_variable is None:
-            collective_variable = self.collective_variable
-
         _, _, cv_mid = collective_variable.metric.grid(n=n_grid, bounds=grid_bounds)
 
-        @partial(vmap, in_axes=(0, None))
         def closest(data, mid):
-            return jnp.argmin(jnp.sum((mid - data) ** 2, axis=1))
+            @vmap
+            def _closest(data):
+                return jnp.argmin(jnp.sum((mid - data) ** 2, axis=1))
 
-        @partial(vmap, in_axes=(None, 0, None))
+            if chunk_size is not None:
+                _closest = chunk_map(_closest, chunk_size)
+
+            return _closest(data)
+
         def get_histo(data_nums, nums, weights=None):
-            b = data_nums == nums
+            @vmap
+            def _f(num):
+                @vmap
+                def __f(a, b=None):
+                    if b is not None:
+                        return jnp.sum((a == num) * b)
+                    return jnp.sum(a == num)
 
-            if weights is not None:
-                b *= weights
+                if chunk_size is not None:
+                    __f = chunk_map(__f, chunk_size)
 
-            return jnp.sum(b)
+                return jnp.sum(__f(data_nums, weights))
+
+            if chunk_size_mid is not None:
+                _f = chunk_map(_f, chunk_size_mid)
+
+            return _f(nums)
 
         nums = closest(cv_mid.cv, cv_mid.cv)
 
@@ -1841,12 +1821,15 @@ class data_loader_output:
     def weights(
         self,
         correct_U=False,
-        samples_per_bin=10,
-        n_max=100,
+        samples_per_bin=30,
+        n_max=50,
         ground_bias=None,
         use_ground_bias=True,
         sign=1,
         time_series=False,
+        hist_eps=1e-15,
+        T_scale=1,
+        chunk_size=None,
     ) -> list[jax.Array]:
         # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
 
@@ -1857,26 +1840,16 @@ class data_loader_output:
             ground_bias = self.ground_bias
 
         if correct_U:
-            weights_u = None
-            # apply correction exp(beta*U - F) = p, and account for number of data points
+            energies = []
+
             for ti_i in self.ti:
-                # free_energy, _ = self.ground_bias.compute_from_cv(cvs=ti_i.CV)
+                energies.append(ti_i.e_pot)
 
-                if ti_i.e_bias is None:
-                    b = jnp.zeros((ti_i.cv.shape[0],))
-                else:
-                    b = ti_i.e_bias  # - free_energy
-                    b -= jnp.max(b)
+            energies = jnp.hstack(energies)
+            energies -= jnp.min(energies)
 
-                p_grid = jnp.exp(beta * b)
-                p_grid /= jnp.mean(p_grid)
-
-                if weights_u is None:
-                    weights_u = [p_grid]
-                else:
-                    weights_u.append(p_grid)
-
-            w_u = jnp.hstack(weights_u)
+            w_u = jnp.exp(-beta * energies)
+            w_u /= jnp.mean(w_u)
 
         else:
             w_u = jnp.ones((data.shape[0],))
@@ -1887,38 +1860,33 @@ class data_loader_output:
 
         if n > n_max:
             n = n_max
-            print(f"reducing {n=} to {n_max=}")
+            # print(f"reducing {n=} to {n_max=}")
 
-        grid_bounds, mask = CvMetric.bounds_from_cv(data, margin=0.1)
-        cv_mid, nums, closest, get_histo = self._histogram(n_grid=n, grid_bounds=grid_bounds)
+        grid_bounds, mask = CvMetric.bounds_from_cv(data, margin=0.1, chunk_size=chunk_size)
 
-        # def p_from_data(data):
+        cv_mid, nums, closest, get_histo = data_loader_output._histogram(
+            collective_variable=self.collective_variable,
+            n_grid=n,
+            grid_bounds=grid_bounds,
+            chunk_size=chunk_size,
+        )
+
         grid_nums = closest(data.cv, cv_mid.cv)
         hist = get_histo(grid_nums, nums, w_u)
 
         if use_ground_bias:
-            p_grid = jnp.exp(sign * beta * ground_bias.compute_from_cv(cvs=cv_mid)[0])
+            p_grid = jnp.exp(sign * beta * ground_bias.compute_from_cv(cvs=cv_mid, chunk_size=chunk_size)[0] / T_scale)
         else:
             p_grid = jnp.ones((cv_mid.cv.shape[0],))
 
-        p_grid /= hist
+        p_grid = jnp.where(hist <= hist_eps, 0, p_grid / hist)
 
         p = w_u * p_grid[grid_nums]
         p /= jnp.sum(p)
 
-        # return p
-
-        # p = p_from_data(data)
         weights = [d.cv.reshape((-1,)) for d in data.replace(cv=jnp.expand_dims(p, 1)).unstack()]
 
-        # if not time_series:
         return weights
-
-        # cv_t = CV.stack(*self.cv_t)
-        # p_t = p_from_data(cv_t)
-        # weights_t = [d.cv.reshape((-1,)) for d in cv_t.replace(cv=jnp.expand_dims(p_t, 1)).unstack()]
-
-        # return weights, weights_t
 
     @staticmethod
     def _transform(cv, nl, _, pi, add_1, q):
@@ -2126,7 +2094,7 @@ class data_loader_output:
         eps=1e-10,
         max_features=2000,
         out_dim=None,
-        add_1=False,
+        add_1=True,
     ):
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
         assert method in ["tica", "tcca"]
@@ -2146,10 +2114,10 @@ class data_loader_output:
 
         print(f"{cv_0.shape=}, {cv_tau.shape=}")
 
-        if method == "tica":
-            if koopman_weight:
-                w = self.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w, eps=eps)
+        if koopman_weight:
+            w = self.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w, eps=eps)
 
+        if method == "tica":
             (
                 cv0_white,
                 cv_tau_white,
@@ -2179,6 +2147,10 @@ class data_loader_output:
             else:
                 k, u = jnp.linalg.eig(C_01)
 
+            # reverse order
+            k = k[::-1]
+            u = u[:, ::-1]
+
             if add_1:
                 assert jnp.allclose(k[0], 1, atol=1e-6), f"{k[0]=}, but should be 1"
                 M = q @ (u[:-1,][:, 1:])
@@ -2187,7 +2159,7 @@ class data_loader_output:
                 M = q @ u
 
             if out_dim is not None:
-                M = M[:, out_dim]
+                M = M[:, :out_dim]
 
             f = CvTrans.from_cv_function(
                 data_loader_output._transform,
@@ -2197,7 +2169,10 @@ class data_loader_output:
                 pi=pi,
             )
 
-            return k, f, pi, M, cv0_white @ M, cv_tau_white @ M
+            cv_0_out = f.compute_cv_trans(cv_0)[0]
+            cv_tau_out = f.compute_cv_trans(cv_tau)[0]
+
+            return k, f, pi, M, cv_0_out, cv_tau_out
 
         if method == "tcca":
             (
@@ -2290,16 +2265,19 @@ class data_loader_output:
         if self.time_series:
             x_t = CV.stack(*x_t)
 
-        nanmask = jax.vmap(jnp.any)(jnp.isnan(x.cv))
+        nanmask = jnp.logical_and(jax.vmap(jnp.any)(jnp.isnan(x.cv)), jax.vmap(jnp.any)(jnp.isinf(x.cv)))
+
         if x_t is not None:
-            nanmask = jnp.logical_or(nanmask, jax.vmap(jnp.any)(jnp.isnan(x_t.cv)))
+            nanmask = jnp.logical_or(
+                nanmask, jnp.logical_and(jax.vmap(jnp.any)(jnp.isnan(x_t.cv)), jax.vmap(jnp.any)(jnp.isinf(x_t.cv)))
+            )
 
         mask = None
 
         if not jnp.any(nanmask):
             return self, x.unstack(), x_t.unstack() if x_t is not None else None
 
-        print(f"found {jnp.sum(nanmask)}/{len(nanmask)} nans in the cv data, removing")
+        print(f"found {jnp.sum(nanmask)}/{len(nanmask)} nans or infs in the cv data, removing")
         x = x[~nanmask]
         if x_t is not None:
             x_t = x_t[~nanmask]
@@ -2413,38 +2391,51 @@ class data_loader_output:
             z_t.replace(_stack_dims=_stack_dims).unstack() if z_t is not None else None,
         )
 
+    @staticmethod
     def _get_fes_bias_from_weights(
-        self,
+        T,
         weights: list[jax.Array],
-        cv: list[CV] | None = None,
-        collective_variable: CollectiveVariable | None = None,
+        collective_variable: CollectiveVariable,
+        cv: list[CV],
         samples_per_bin=50,
         min_samples_per_bin: int | None = 10,
-        n_max=40,
+        n_max=60,
+        n_grid=None,
+        max_bias=None,
     ) -> RbfBias:
-        beta = 1 / (self.sti.T * boltzmann)
-
-        if collective_variable is None:
-            collective_variable = self.collective_variable
-
-        if cv is None:
-            cv = self.cv
+        beta = 1 / (T * boltzmann)
 
         cv = CV.stack(*cv)
         p = jnp.hstack(weights)
-        n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=cv.shape[0], n_dims=cv.shape[1])
+
+        if n_grid is None:
+            n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=cv.shape[0], n_dims=cv.shape[1])
 
         if n_grid > n_max:
             print(f"reducing n_grid from {n_grid} to {n_max}")
             n_grid = n_max
 
+        if n_grid <= 1:
+            return RbfBias.create(
+                cvs=collective_variable,
+                cv=cv,
+                kernel="thin_plate_spline",
+                vals=jnp.zeros((cv.shape[0],)),
+            )
+
         grid_bounds, mask = CvMetric.bounds_from_cv(cv, margin=0.1)
-        cv_mid, nums, closest, get_histo = self._histogram(
+
+        # # do not update periodic bounds
+        grid_bounds = jnp.where(
+            collective_variable.metric.periodicities,
+            collective_variable.metric.bounding_box,
+            grid_bounds,
+        )
+
+        cv_mid, nums, closest, get_histo = data_loader_output._histogram(
             n_grid=n_grid, grid_bounds=grid_bounds, collective_variable=collective_variable
         )
         grid_nums = closest(cv.cv, cv_mid.cv)
-
-        # hist = get_histo(grid_nums, nums, w_u)  # weight per grid element
 
         @partial(vmap, in_axes=(None, 0, None))
         def fes_weight(data_num, num, p):
@@ -2469,11 +2460,20 @@ class data_loader_output:
         fes_grid = -jnp.log(p_grid) / beta
         fes_grid -= jnp.min(fes_grid)
 
-        return RbfBias.create(
+        bias = RbfBias.create(
             cvs=collective_variable,
             cv=cv_mid[mask],
             kernel="thin_plate_spline",
             vals=-fes_grid,
+        )
+
+        if max_bias is None:
+            max_bias = jnp.max(fes_grid)
+
+        return BiasModify.create(
+            bias=bias,
+            fun=_clip,
+            kwargs={"a_min": -max_bias, "a_max": 0.0},
         )
 
     def get_transformed_fes(
@@ -2482,25 +2482,20 @@ class data_loader_output:
         new_colvar: CollectiveVariable,
         samples_per_bin=50,
         min_samples_per_bin: int = 5,
-        n_max=100,
         chunk_size=1,
         smoothing=0.0,
         max_bias=None,
         pmap=True,
+        n_grid_old=50,
+        n_grid_new=30,
     ) -> RbfBias:
         old_cv = CV.stack(*self.cv)
         new_cv = CV.stack(*new_cv)
 
-        n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=new_cv.shape[0], n_dims=new_cv.shape[1])
-
-        if n_grid > n_max:
-            print(f"reducing n_grid from {n_grid} to {n_max}")
-            n_grid = n_max
-
         # get bins for new CV
         grid_bounds_new, _ = CvMetric.bounds_from_cv(new_cv, margin=0.1)
-        cv_mid_new, nums_new, closest_new, get_histo_new = self._histogram(
-            n_grid=n_grid,
+        cv_mid_new, nums_new, closest_new, get_histo_new = data_loader_output._histogram(
+            n_grid=n_grid_new,
             grid_bounds=grid_bounds_new,
             collective_variable=new_colvar,
         )
@@ -2508,8 +2503,8 @@ class data_loader_output:
 
         # get bins for old CV
         grid_bounds_old, _ = CvMetric.bounds_from_cv(old_cv, margin=0.1)
-        cv_mid_old, nums_old, closest_old, get_histo_old = self._histogram(
-            n_grid=n_grid,
+        cv_mid_old, nums_old, closest_old, get_histo_old = data_loader_output._histogram(
+            n_grid=n_grid_old,
             grid_bounds=grid_bounds_old,
             collective_variable=self.collective_variable,
         )
@@ -2553,19 +2548,18 @@ class data_loader_output:
 
         num_grid_new, p_grid_new = prob(nums_new)
 
-        mask = num_grid_new >= min_samples_per_bin
+        # mask = num_grid_new >= min_samples_per_bin
 
         # print(f"{jnp.sum(mask)}/{mask.shape[0]} bins with samples")
 
-        p_grid_new = p_grid_new[mask]
+        # p_grid_new = p_grid_new  # [mask]
 
         fes_grid = -jnp.log(p_grid_new) / beta
-
         fes_grid -= jnp.min(fes_grid)
 
         bias = RbfBias.create(
             cvs=new_colvar,
-            cv=cv_mid_new[mask],
+            cv=cv_mid_new,  # [mask],
             kernel="thin_plate_spline",
             vals=-fes_grid,
             smoothing=smoothing,
@@ -2574,11 +2568,13 @@ class data_loader_output:
         if max_bias is None:
             max_bias = jnp.max(fes_grid)
 
-        return BiasModify.create(
+        bias = BiasModify.create(
             bias=bias,
             fun=_clip,
             kwargs={"a_min": -max_bias, "a_max": 0.0},
         )
+
+        return bias
 
     def transform_FES(
         self,

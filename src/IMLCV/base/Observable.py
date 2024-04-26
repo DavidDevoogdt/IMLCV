@@ -217,7 +217,6 @@ class ThermoLIB:
             "split_data": True,
             "new_r_cut": None,
             "min_traj_length": min_traj_length,
-            # "chunk_size": chunk_size,
             "get_bias_list": True,
             "only_finished": only_finished,
         }

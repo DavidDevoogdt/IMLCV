@@ -13,6 +13,7 @@ from IMLCV.base.rounds import data_loader_output
 from IMLCV.base.bias import NoneBias
 from dataclasses import dataclass
 from pathlib import Path
+from molmod.units import kjmol
 
 
 @dataclass
@@ -266,6 +267,7 @@ class Scheme:
         percentile=1e-1,
         use_executor=True,
         n_max=30,
+        vmax=100 * kjmol,
     ):
         md = self.rounds.update_CV(
             md=self.md,
@@ -287,6 +289,7 @@ class Scheme:
             percentile=percentile,
             use_executor=use_executor,
             n_max=n_max,
+            vmax=vmax,
         )
 
         self.md = md

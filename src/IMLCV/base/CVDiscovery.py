@@ -23,6 +23,7 @@ from IMLCV.base.bias import NoneBias, Bias
 from molmod.units import kjmol
 from typing import Self
 from typing import TYPE_CHECKING
+from molmod.constants import boltzmann
 
 
 if TYPE_CHECKING:
@@ -97,14 +98,12 @@ class Transformer:
         samples_per_bin=50,
         min_samples_per_bin=5,
         verbose=True,
+        cv_titles=None,
+        vmax=100 * kjmol,
+        n_grid_new=30,
     ) -> tuple[CV, CollectiveVariable, Bias]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
-
-        # if dlo is None:
-        #     print("loading data")
-
-        #     dlo = rounds.data_loader(**dlo_kwargs, verbose=verbose)
 
         print("starting pre_fit")
 
@@ -183,6 +182,8 @@ class Transformer:
         z_masked, h = self.post_fit(y_masked)
         z, _, _ = h.compute_cv_trans(y)
 
+        z: CV
+
         mini = jnp.min(z_masked.cv, axis=0)
         maxi = jnp.max(z_masked.cv, axis=0)
 
@@ -206,13 +207,17 @@ class Transformer:
 
         if transform_FES:
             print("transforming FES")
-            bias = dlo.get_transformed_fes(
-                new_cv=z,
-                new_colvar=new_collective_variable,
+            from IMLCV.base.rounds import data_loader_output
+
+            bias: Bias = data_loader_output._get_fes_bias_from_weights(
+                dlo.sti.T,
+                weights=dlo_weights,
+                collective_variable=new_collective_variable,
+                cv=z.unstack(),
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
+                n_max=40,
                 max_bias=max_fes_bias,
-                n_max=n_max,
             )
 
             if plot:
@@ -240,8 +245,14 @@ class Transformer:
                 name=str(plot_folder / "cvdiscovery.pdf"),
                 collective_variables=[dlo.collective_variable, new_collective_variable],
                 cv_data=[CV.stack(*dlo.cv), z],
-                # weight=dlo.weights(),
+                weight=dlo.weights(),
                 margin=0.1,
+                T=dlo.sti.T,
+                plot_FES=True,
+                cv_titles=cv_titles,
+                vmax=vmax,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
             )
 
         return z, new_collective_variable, bias
@@ -276,8 +287,15 @@ class Transformer:
         color_trajectories=False,
         margin=0.1,
         max_points=10000,
+        plot_FES=False,
+        T: float | None = None,
+        vmax=100 * kjmol,
+        samples_per_bin=50,
+        min_samples_per_bin=5,
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
+
+        """data sorted according to data,then cv"""
 
         ncv = len(collective_variables)
 
@@ -289,12 +307,38 @@ class Transformer:
         if weight is not None:
             weight = [jnp.hstack(w) for w in weight]
 
+        if plot_FES:
+            assert weight is not None, "weight must be specified if plot_FES=True"
+            assert T is not None, "T must be specified if plot_FES=True"
+
+            from IMLCV.base.rounds import data_loader_output
+
+            fesses = []
+
+            for j, (wj, cvdj) in enumerate(zip(weight, cv_data)):
+                fes_i = []
+
+                for i, (cvi, cvdata_i) in enumerate(zip(collective_variables, cvdj)):
+                    fes_ij = data_loader_output._get_fes_bias_from_weights(
+                        T=T,
+                        collective_variable=cvi,
+                        cv=cvdata_i,
+                        weights=wj,
+                        samples_per_bin=samples_per_bin,
+                        min_samples_per_bin=min_samples_per_bin,
+                        max_bias=vmax,
+                    )
+
+                    fes_i.append(fes_ij)
+
+                fesses.append(fes_i)
+
         metrics = [colvar.metric for colvar in collective_variables]
 
         if cv_titles is None:
             cv_titles = [f"cv_{i}" for i in range(ncv)]
 
-        if data_titles is None:
+        if data_titles is None and not duplicate_cv_data:
             data_titles = [f"data_{i}" for i in range(ncv)]
 
         if labels is None:
@@ -303,11 +347,9 @@ class Transformer:
                 ["cv_1 [a.u.]", "cv_2 [a.u.]", "cv_3 [a.u.]"],
             ]
 
-        # if weight is not None:
-        #     assert len(weight) == ncv
-        #     weight = jnp.hstack(weight)
-
         inoutdims = [cv_data[n][n].shape[1] for n in range(ncv)]
+
+        print(f"{inoutdims=}")
 
         plt.rc("text", usetex=False)
         plt.rc("font", family="DejaVu Sans", size=16)
@@ -324,7 +366,7 @@ class Transformer:
             for n in range(ncv)
         ]
 
-        for data_in, in_out, axes in Transformer._grid_spec_iterator(
+        for data_in, in_out, axes, colorbar_spec in Transformer._grid_spec_iterator(
             fig=fig,
             dims=inoutdims,
             cv_titles=cv_titles,
@@ -353,14 +395,19 @@ class Transformer:
             }
 
             f(
-                fig,
-                axes,
-                data_proc,
-                rgb_data[data_in],
-                labels[0:dim],
+                fig=fig,
+                grid=axes,
+                data=data_proc,
+                colors=rgb_data[data_in],
+                labels=labels[0:dim],
                 metric=metrics[in_out],
                 weight=weight[data_in] if weight is not None else None,
                 margin=margin,
+                plot_FES=plot_FES,
+                FES=fesses[data_in][in_out] if plot_FES else None,
+                vmax=vmax,
+                colorbar_spec=colorbar_spec,
+                T=T,
                 **kwargs,
             )
 
@@ -390,16 +437,93 @@ class Transformer:
 
         spec = fig.add_gridspec(
             nrows=len(dims) + 1,
-            ncols=len(dims) + 1,
-            width_ratios=[0.3, *widths],
-            height_ratios=[0, *[1 for _ in dims]],
+            ncols=len(dims) + 2,
+            width_ratios=[0.3, *widths, 0.5],
+            height_ratios=[0.1, *[1 for _ in dims]],
             wspace=0.1,
             hspace=0.1,
         )
 
         for data_in in range(len(dims)):
             for cv_in in range(len(dims)):
-                yield data_in, cv_in, spec[data_in + 1, cv_in + 1]
+                yield (
+                    data_in,
+                    cv_in,
+                    spec[data_in + 1, cv_in + 1],
+                    spec[1:, -1] if (data_in == 0 and cv_in == 0) else None,
+                )
+
+        # indicate CV data pair
+        for i in range(1, len(dims) + 1):
+            s = spec[i, i]
+            pos = s.get_position(fig)
+
+            fig.patches.extend(
+                [
+                    plt.Rectangle(
+                        (pos.x0, pos.y0),
+                        pos.x1 - pos.x0,
+                        pos.y1 - pos.y0,
+                        fill=True,
+                        color="lightblue",
+                        zorder=-10,
+                        transform=fig.transFigure,
+                        figure=fig,
+                    )
+                ]
+            )
+
+        # indicate discovered CV
+        if data_titles is not None:
+            for i in range(1, len(dims)):
+                if int(data_titles[i]) == int(data_titles[i - 1]) + 1:
+                    s = spec[i, i + 1]
+                    pos = s.get_position(fig)
+
+                    fig.patches.extend(
+                        [
+                            plt.Rectangle(
+                                (pos.x0, pos.y0),
+                                pos.x1 - pos.x0,
+                                pos.y1 - pos.y0,
+                                fill=True,
+                                color="lightgreen",
+                                zorder=-10,
+                                transform=fig.transFigure,
+                                figure=fig,
+                            )
+                        ]
+                    )
+
+        offset = 0.05
+
+        s0 = spec[0, 1]
+        pos0 = s0.get_position(fig)
+        s1 = spec[0, len(dims)]
+        pos1 = s1.get_position(fig)
+
+        fig.text(
+            x=(pos0.x0 + pos1.x1) / 2,
+            y=(pos0.y0 + pos1.y1) / 2 + offset,
+            s="Collective Variables",
+            ha="center",
+            va="center",
+        )
+
+        if data_titles is not None:
+            s0 = spec[1, 0]
+            pos0 = s0.get_position(fig)
+            s1 = spec[len(dims), 0]
+            pos1 = s1.get_position(fig)
+
+            fig.text(
+                x=(pos0.x0 + pos1.x1) / 2 - offset,
+                y=(pos0.y0 + pos1.y1) / 2,
+                s="Data",
+                ha="center",
+                va="center",
+                rotation=90,
+            )
 
         for i in range(len(dims)):
             s = spec[0, i + 1]
@@ -429,13 +553,17 @@ class Transformer:
     @staticmethod
     def _plot_1d(
         fig: Figure,
-        grid: gridspec,
+        grid: gridspec.GridSpec,
         data,
         colors,
         labels,
         metric: CvMetric,
         weight=None,
         margin=None,
+        plot_FES=True,
+        FES: Bias | None = None,
+        colorbar_spec=None,
+        T=None,
         **scatter_kwargs,
     ):
         gs = grid.subgridspec(
@@ -477,13 +605,19 @@ class Transformer:
     @staticmethod
     def _plot_2d(
         fig: Figure,
-        grid: gridspec,
+        grid: gridspec.GridSpec,
         data,
         colors,
         labels,
         metric: CvMetric,
         margin=None,
         weight=None,
+        plot_FES=True,
+        FES: Bias | None = None,
+        vmin=0,
+        vmax=100 * kjmol,
+        colorbar_spec: gridspec.GridSpec | None = None,
+        T=None,
         **scatter_kwargs,
     ):
         gs = grid.subgridspec(
@@ -499,12 +633,6 @@ class Transformer:
         ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
         ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
 
-        ax.scatter(
-            *[data[:, col] for col in range(2)],
-            c=colors,
-            **scatter_kwargs,
-        )
-
         m = (metric.bounding_box[:, 1] - metric.bounding_box[:, 0]) * margin
 
         x_l = metric.bounding_box[0, :]
@@ -515,13 +643,159 @@ class Transformer:
         x_lim = [x_l[0] - m_x, x_l[1] + m_x]
         y_lim = [y_l[0] - m_y, y_l[1] + m_y]
 
+        extent = [x_lim[0], x_lim[1], y_lim[0], y_lim[1]]
+
+        if plot_FES:
+            assert FES is not None, "FES must be specified if plot_FES=True"
+
+            bins, cv_grid, _ = metric.grid(
+                n=50,
+                endpoints=True,
+                margin=margin,
+                indexing="xy",
+            )
+
+            bias, _ = FES.compute_from_cv(cv_grid)
+
+            bias = bias.reshape(len(bins[0]), len(bins[1]))
+
+            # offset = False
+            # inverted = True
+
+            # if offset:
+            #     vrange = vmax - vmin
+
+            #     vmax = bias[~np.isnan(bias)].max()
+            #     vmin = vmax - vrange
+            # #     bias -= bias[~np.isnan(bias)].min()
+            # # else:
+
+            # if inverted:
+            # bias = -bias
+            #     vmin, vmax = -vmax, -vmin
+
+            p = ax.imshow(
+                -bias / (kjmol),
+                cmap=plt.get_cmap("jet"),
+                origin="lower",
+                extent=extent,
+                vmin=vmin / kjmol,
+                vmax=vmax / kjmol,
+                aspect="auto",
+            )
+
+            if colorbar_spec is not None:
+                cb_gs = colorbar_spec.subgridspec(
+                    ncols=2,
+                    nrows=3,
+                    width_ratios=[1, 2],
+                    height_ratios=[0.25, 0.5, 0.25],
+                    wspace=0.02,
+                    hspace=0.02,
+                )
+
+                ax_cbar = fig.add_subplot(cb_gs[1, 0])
+
+                fig.colorbar(
+                    p,
+                    orientation="vertical",
+                    cax=ax_cbar,
+                    ticks=[vmin / kjmol, (vmin + vmax) / (2 * kjmol), vmax / kjmol],
+                )
+                ax_cbar.set_ylabel("Free Energy [kJ/mol]")
+
+        ax.scatter(
+            *[data[:, col] for col in range(2)],
+            c=colors,
+            **scatter_kwargs,
+        )
+
         in_xlim = jnp.logical_and(data[:, 0] > x_lim[0], data[:, 0] < x_lim[1])
         in_ylim = jnp.logical_and(data[:, 1] > y_lim[0], data[:, 1] < y_lim[1])
         n_points = jnp.sum(jnp.logical_and(in_xlim, in_ylim))
         n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
 
-        ax_histx.hist(data[:, 0], bins=n_bins, range=x_lim, weights=weight)
-        ax_histy.hist(data[:, 1], bins=n_bins, range=y_lim, weights=weight, orientation="horizontal")
+        x_bins = jnp.linspace(x_lim[0], x_lim[1], n_bins + 1)
+        y_bins = jnp.linspace(y_lim[0], y_lim[1], n_bins + 1)
+
+        bins_x_center = (x_bins[1:] + x_bins[:-1]) / 2
+        bins_y_center = (y_bins[1:] + y_bins[:-1]) / 2
+
+        H, _ = jnp.histogramdd(data, bins=n_bins, range=[x_lim, y_lim])
+
+        if weight is None:
+            # raw number of points
+
+            x_count = jnp.sum(H, axis=1)
+            x_count /= jnp.sum(x_count)
+
+            y_count = jnp.sum(H, axis=0)
+            y_count /= jnp.sum(y_count)
+
+            ax_histx.plot(bins_x_center, x_count, color="tab:blue")
+            ax_histy.plot(y_count, bins_y_center, color="tab:blue")
+
+            ax_histx.set_ylim(0, 1)
+            ax_histy.set_xlim(0, 1)
+
+        else:
+            # TODO: https://matplotlib.org/stable/gallery/lines_bars_and_markers/multicolored_line.html
+
+            # weighted according to the FES
+            H_w, _ = jnp.histogramdd(data, bins=n_bins, range=[x_lim, y_lim], weights=weight)
+            H_w /= H  # every bin is average of probs
+
+            assert T is not None, "T must be specified if weight is not None"
+
+            xw_prob = jnp.nansum(H_w, axis=1)
+
+            x_fes = -boltzmann * T * jnp.log(xw_prob)
+            x_fes -= x_fes.min()
+
+            yw_prob = jnp.nansum(H_w, axis=0)
+
+            y_fes = -boltzmann * T * jnp.log(yw_prob)
+            y_fes -= y_fes.min()
+
+            from matplotlib.collections import LineCollection
+
+            norm = plt.Normalize(vmin / kjmol, vmax / kjmol)
+
+            # x plot
+            points_x = np.array([bins_x_center, x_fes / kjmol]).T.reshape(-1, 1, 2)
+            segments_x = np.concatenate([points_x[:-1], points_x[1:]], axis=1)
+
+            lc_x = LineCollection(
+                segments_x,
+                cmap=plt.get_cmap("jet"),
+                norm=norm,
+            )
+            # Set the values used for colormapping
+            lc_x.set_array((x_fes[:-1] + x_fes[1:]) / (2 * kjmol))
+            lc_x.set_linewidth(1)
+            _ = ax_histx.add_collection(lc_x)
+
+            ax_histx.set_ylim(vmin / kjmol, vmax / kjmol)
+
+            # y plot
+            points_y = np.array([y_fes / kjmol, bins_y_center]).T.reshape(-1, 1, 2)
+            segments_y = np.concatenate([points_y[:-1], points_y[1:]], axis=1)
+
+            lc_y = LineCollection(
+                segments_y,
+                cmap=plt.get_cmap("jet"),
+                norm=norm,
+            )
+            # Set the values used for colormapping
+            lc_y.set_array((y_fes[:-1] + y_fes[1:]) / (2 * kjmol))
+            lc_y.set_linewidth(1)
+            _ = ax_histy.add_collection(lc_y)
+
+            ax_histy.set_xlim(vmin / kjmol, vmax / kjmol)
+
+            ax_histx.patch.set_alpha(0)
+            ax_histy.patch.set_alpha(0)
+
         ax_histy.tick_params(axis="x", rotation=-90)
 
         for b in [ax_histx, ax_histy]:
@@ -552,6 +826,8 @@ class Transformer:
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
+        ax.tick_params(axis="both", length=1)
+
         if margin is not None:
             ax.set_xlim(*x_lim)
             ax.set_ylim(*y_lim)
@@ -559,13 +835,17 @@ class Transformer:
     @staticmethod
     def _plot_3d(
         fig: Figure,
-        grid: gridspec,
+        grid: gridspec.GridSpec,
         data,
         colors,
         labels,
         metric: CvMetric,
         weight=None,
         margin=None,
+        plot_FES=True,
+        FES: Bias | None = None,
+        colorbar_spec: gridspec.GridSpec | None = None,
+        T=None,
         **scatter_kwargs,
     ):
         gs = grid.subgridspec(
@@ -612,7 +892,7 @@ class Transformer:
             Z = (Z - Z.min()) / (Z.max() - Z.min())
 
             kw = {
-                "facecolors": plt.cm.Greys(Z),
+                "facecolors": plt.cm.jet(Z),
                 "shade": True,
                 "alpha": 1.0,
                 "zorder": 0,

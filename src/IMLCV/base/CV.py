@@ -278,6 +278,7 @@ class SystemParams(PyTreeNode):
         chunk_size=None,
         max_neighs=None,
         verbose=False,
+        chunk_size_inner=2,
     ) -> tuple[bool, NeighbourList | None]:
         if r_cut is None:
             return False, None, None, None
@@ -427,35 +428,33 @@ class SystemParams(PyTreeNode):
 
                 return n, r[idx], atoms[idx], None, center_op
 
-            _, (r, atoms, indices) = vmap(
-                vmap(
-                    vmap(
-                        lambda i, j, k: _apply_g_inner(
-                            sp=sp_center,
-                            func=func,
-                            r_cut=jnp.inf,
-                            ijk=(i, j, k),
-                            exclude_self=False,
-                        ),
-                        in_axes=(0, None, None),
-                        out_axes=0,
-                    ),
-                    in_axes=(None, 0, None),
-                    out_axes=1,
-                ),
-                in_axes=(None, None, 0),
-                out_axes=2,
-            )(bx, by, bz)
+            @vmap
+            def __f(i, j, k):
+                return _apply_g_inner(
+                    sp=sp_center,
+                    func=func,
+                    r_cut=jnp.inf,
+                    ijk=(i, j, k),
+                    exclude_self=False,
+                )
+
+            grid_x, grid_y, grid_z = jnp.meshgrid(bx, by, bz, indexing="ij")
+
+            grid_x = jnp.reshape(grid_x, (-1,))
+            grid_y = jnp.reshape(grid_y, (-1,))
+            grid_z = jnp.reshape(grid_z, (-1,))
+
+            _, (r, atoms, indices) = chunk_map(__f, chunk_size=chunk_size_inner)(grid_x, grid_y, grid_z)
 
             r = jnp.reshape(r, (-1,))
+
+            atoms = jnp.reshape(atoms, (-1))
+            indices = jnp.reshape(indices, (-1, 3))
 
             n = jnp.sum(r < r_cut + r_skin)
 
             if take_num == 0:
                 return n
-
-            atoms = jnp.reshape(atoms, (-1))
-            indices = jnp.reshape(indices, (-1, 3))
 
             idx = jnp.argsort(r)[0:take_num]
 
@@ -481,7 +480,7 @@ class SystemParams(PyTreeNode):
             return f
 
         if verbose:
-            print("obtaining num neihgs")
+            print(f"obtaining num neihgs { new_nxyz=}")
 
         # not jittable
         if num_neighs is None:
@@ -2001,7 +2000,7 @@ class CvMetric(PyTreeNode):
     def get_n(samples_per_bin, samples, n_dims):
         return int((samples / samples_per_bin) ** (1 / n_dims))
 
-    def grid(self, n=30, bounds=None, endpoints=None, margin=0.1):
+    def grid(self, n=30, bounds=None, endpoints=None, margin=0.1, indexing="ij"):
         """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
 
         Args:
@@ -2037,12 +2036,12 @@ class CvMetric(PyTreeNode):
         grid = [jnp.linspace(row[0], row[1], n, endpoint=bool(endpoints[i])) for i, row in enumerate(b)]
 
         # turn meshgrid into linear cv
-        cv = CV(cv=jnp.reshape(jnp.array(jnp.meshgrid(*grid, indexing="ij")), (len(grid), -1)).T)
+        cv = CV(cv=jnp.reshape(jnp.array(jnp.meshgrid(*grid, indexing=indexing)), (len(grid), -1)).T)
 
         # get the midpoints
 
         mid = [a[:-1] + (a[1:] - a[:-1]) / 2 for a in grid]
-        cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing="ij")])
+        cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing=indexing)])
 
         return grid, cv, cv_mid
 
@@ -2057,7 +2056,7 @@ class CvMetric(PyTreeNode):
         self.__init__(**statedict)
 
     @staticmethod
-    def bounds_from_cv(cv: CV, percentile=0.1, weights=None, margin=None):
+    def bounds_from_cv(cv: CV, percentile=0.1, weights=None, margin=None, chunk_size=None):
         if margin is None:
             margin = percentile / 100 * 2
 
@@ -2085,6 +2084,9 @@ class CvMetric(PyTreeNode):
         @vmap
         def get_mask(x):
             return jnp.logical_and(jnp.all(x > bounds[:, 0]), jnp.all(x < bounds[:, 1]))
+
+        if chunk_size is not None:
+            get_mask = chunk_map(get_mask, chunk_size=chunk_size)
 
         return bounds, get_mask(cv.cv)
 
