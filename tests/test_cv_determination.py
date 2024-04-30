@@ -8,7 +8,7 @@ from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import alanine_dipeptide_refs
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
-from IMLCV.implementations.CV import NoneCV
+from IMLCV.implementations.CV import NoneCV, SystemParams, NeighbourList, CV
 from IMLCV.implementations.CV import sb_descriptor
 from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder
 from IMLCV.implementations.CvDiscovery import TransoformerLDA
@@ -113,9 +113,13 @@ def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut, pdf_file: Path):
         new_r_cut=r_cut,
     )
 
-    cv_recomputed, _ = b.collective_variable.compute_cv(dlo.sp[0], dlo.nl[0], jacobian=False)
+    cv_recomputed, _ = b.collective_variable.compute_cv(
+        SystemParams.stack(*dlo.sp),
+        NeighbourList.stack(*dlo.nl),
+        jacobian=False,
+    )
 
-    assert jnp.allclose(cv_recomputed.cv, dlo.cv[0].cv, atol=1e-5)
+    assert jnp.allclose(cv_recomputed.cv, CV.stack(*dlo.cv).cv, atol=1e-5)
 
     assert pdf_file.exists()
 

@@ -286,7 +286,7 @@ class SystemParams(PyTreeNode):
         if verbose:
             print("canonicalize")
 
-        sp, (op_cell, op_coor, _) = self.canonicalize()
+        sp, (op_cell, op_coor, _) = SystemParams.canonicalize(self, chunk_size=chunk_size)
 
         b = True
 
@@ -941,10 +941,10 @@ class SystemParams(PyTreeNode):
 
         return SystemParams(sp.coordinates + wrap_op @ sp.cell, sp.cell)
 
-    @partial(jit, static_argnames=["min", "qr"])
-    def canonicalize(self, min=False, qr=False) -> tuple[SystemParams, Array, Array]:
+    # @partial(jit, static_argnames=["min", "qr","chunk_size"])
+    def canonicalize(self, min=False, qr=False, chunk_size=None) -> tuple[SystemParams, Array, Array]:
         if self.batched:
-            return vmap(lambda sp: sp.canonicalize(min=min, qr=qr))(self)
+            return chunk_map(vmap(lambda sp: sp.canonicalize(min=min, qr=qr)), chunk_size=chunk_size)(self)
 
         mr, op_cell = self.minkowski_reduce()
 

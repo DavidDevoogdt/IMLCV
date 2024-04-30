@@ -139,7 +139,8 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
-        samples_per_bin=200,
+        samples_per_bin=20,
+        min_samples_per_bin=2,
         init_max_grad=None,
         max_grad=None,
         plot=True,
@@ -224,6 +225,7 @@ class Scheme:
                 self.FESBias(
                     plot=plot,
                     samples_per_bin=samples_per_bin,
+                    min_samples_per_bin=min_samples_per_bin,
                     choice=choice,
                     num_rnds=fes_bias_rnds,
                     cv_round=cv_round,

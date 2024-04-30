@@ -586,6 +586,7 @@ class TransformerMAF(Transformer):
         kinetic_distance=False,
         method="tcca",
         use_ground_bias=False,
+        T_scale=3,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         assert dlo.time_series
@@ -623,10 +624,7 @@ class TransformerMAF(Transformer):
         print("getting weights")
 
         if correct_bias:
-            w = dlo.weights(correct_U=False, use_ground_bias=use_ground_bias, n_max=60)
-
-            w_stack = jnp.hstack(w)
-            print(f"weights {w_stack=} {jnp.mean(w_stack)=}, {jnp.std(w_stack)=} ")
+            w = dlo.weights(correct_U=False, use_ground_bias=use_ground_bias, n_max=60, T_scale=T_scale)
 
         print("getting koopman")
 

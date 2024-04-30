@@ -432,7 +432,10 @@ class Rounds(ABC):
         if md_trajs is not None:
             assert num == 1
 
-        for r0 in range(max(stop - (num - 1), start), stop + 1):
+        low = max(stop - (num - 1), start)
+        high = stop + 1
+
+        for r0 in range(low, high):
             t_r = time.time()
             _r = self._round_information(c=c, r=r0)
             load_r_time += time.time() - t_r
@@ -513,13 +516,15 @@ class Rounds(ABC):
         if cv_round is None:
             cv_round = self.cv
 
-        if new_r_cut == -1:
-            new_r_cut = self._round_information(c=cv_round).tic.r_cut
+        sti = self._round_information(c=cv_round).tic
 
-        sti: StaticMdInfo | None = None
+        if new_r_cut == -1:
+            new_r_cut = sti.r_cut
+
         sp: list[SystemParams] = []
         cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
+        weights: list[Array] = []
 
         if not time_series:
             lag_n = 0
@@ -554,12 +559,33 @@ class Rounds(ABC):
         if verbose:
             print("obtaining raw data")
 
-        for cv_round in cvrnds:
+        for cvi in cvrnds:
+            sti_c: StaticMdInfo | None = None
+            sp_c: list[SystemParams] = []
+            cv_c: list[CV] = []
+            ti_c: list[TrajectoryInfo] = []
+
+            weight_c = weight
+
+            try:
+                ground_bias_c = self.get_bias(c=cvi, r=stop)
+            except Exception as e:
+                print(f"could not load ground bias {e=}")
+                ground_bias_c = None
+                weight_c = False
+
+            try:
+                colvar_c = self.get_collective_variable(c=cvi)
+            except Exception as e:
+                print(f"could not load collective variable {e=}")
+                colvar_c = None
+                weight_c = False
+
             for round_info, traj_info in self.iter(
                 start=start,
                 stop=stop,
                 num=num,
-                c=cv_round,
+                c=cvi,
                 ignore_invalid=ignore_invalid,
                 md_trajs=md_trajs,
                 only_finished=only_finished,
@@ -571,13 +597,22 @@ class Rounds(ABC):
                     # else:
                     # print("adding traweights=jectory")
 
-                if sti is None:
-                    sti = round_info.tic
+                if sti_c is None:
+                    sti_c = round_info.tic
 
-                ti.append(traj_info.ti)
+                ti_c.append(traj_info.ti)
+
                 sp0 = traj_info.ti.sp
+                cv0 = traj_info.ti.CV
 
-                if (cv0 := traj_info.ti.CV) is None:
+                if sp0.shape[0] != cv0.shape[0]:
+                    print(
+                        f"shapes do not match {sp0.shape=} {cv0.shape=} {traj_info.ti._size=} {traj_info.ti._positions.shape=} {traj_info.ti._cell.shape=}  {traj_info.ti._cv.shape=} "
+                    )
+
+                    raise
+
+                if cv0 is None:
                     if colvar is None:
                         bias = traj_info.get_bias()
                         colvar = bias.collective_variable
@@ -594,13 +629,48 @@ class Rounds(ABC):
 
                     cv0, _ = colvar.compute_cv(sp=sp0, nl=nlr)
 
-                sp.append(sp0)
-                cv.append(cv0)
+                sp_c.append(sp0)
+                cv_c.append(cv0)
                 if get_bias_list:
                     bias_list.append(traj_info.get_bias())
 
-        assert sti is not None
-        assert len(sp) != 0
+            if len(sp_c) == 0:
+                continue
+
+            if weight_c:
+                if verbose:
+                    print(f"getting weights for cv_round {cvi}")
+
+                dlo = data_loader_output(
+                    sp=sp_c,
+                    cv=cv_c,
+                    ti=ti_c,
+                    sti=sti_c,
+                    nl=None,
+                    collective_variable=colvar_c,
+                    # time_series=time_series,
+                    ground_bias=ground_bias_c,
+                )
+                # select points according to free energy divided by histogram count
+                wc = dlo.weights(
+                    use_ground_bias=True,
+                    correct_U=False,
+                    T_scale=T_scale,
+                    chunk_size=chunk_size,
+                )
+
+                n = sum([len(wi) for wi in wc])
+                wc = [wc[i] * n for i in range(len(wc))]
+
+            else:
+                wc = [jnp.ones((spi.shape[0])) for spi in sp_c]
+
+            sp.extend(sp_c)
+            cv.extend(cv_c)
+            ti.extend(ti_c)
+            weights.extend(wc)
+
+        assert len(sp) != 0, "no data found"
 
         def choose(key, probs: Array, out: int, len: int):
             if uniform:
@@ -650,31 +720,15 @@ class Rounds(ABC):
             if get_bias_list:
                 bias_list = new_bias_list
 
+        print(f"len(sp) = {len(sp)}")
+
+        for j, k in zip(sp, cv):
+            if j.shape[0] != k.shape[0]:
+                print(f"shapes do not match {j.shape=} {k.shape=}")
+
         # get weights
         if verbose:
             print("getting weights")
-
-        dlo = data_loader_output(
-            sp=sp,
-            cv=cv,
-            ti=ti,
-            sti=sti,
-            nl=None,
-            collective_variable=colvar,
-            # time_series=time_series,
-            ground_bias=ground_bias,
-        )
-
-        if weight:
-            # select points according to free energy divided by histogram count
-            weights = dlo.weights(
-                use_ground_bias=True,
-                correct_U=False,
-                T_scale=T_scale,
-                chunk_size=chunk_size,
-            )
-        else:
-            weights = [None] * len(sp)
 
         # select the requested number of points and time lagged data
 
@@ -687,7 +741,10 @@ class Rounds(ABC):
             out_cv_t = []
             out_ti_t = []
 
-        total = sum([a.shape[0] - lag_n for a in sp])
+        if get_bias_list:
+            out_biases = []
+
+        total = sum([max(a.shape[0] - lag_n, 0) for a in sp])
 
         if out == -1:
             out = total
@@ -742,6 +799,8 @@ class Rounds(ABC):
 
                 probs = wi / jnp.sum(wi)
 
+                print(f"probs = {probs.shape}  {out=} {total=} ")
+
             key, indices = choose(key, probs, out=int(out), len=total)
 
             # indices = jnp.sort(indices)
@@ -752,6 +811,8 @@ class Rounds(ABC):
             cv_trimmed = []
             ti_trimmed = []
 
+            out_biases = []
+
             if time_series:
                 sp_trimmed_t = []
                 cv_trimmed_t = []
@@ -761,6 +822,11 @@ class Rounds(ABC):
                 n_i = sp_n.shape[0] - lag_n
 
                 index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
+
+                if len(index) == 0:
+                    count += n_i
+                    continue
+
                 sp_trimmed.append(sp_n[index])
 
                 cv_trimmed.append(cv_n[index])
@@ -770,6 +836,9 @@ class Rounds(ABC):
                     sp_trimmed_t.append(sp_n[index + lag_n])
                     cv_trimmed_t.append(cv_n[index + lag_n])
                     ti_trimmed_t.append(ti_n[index + lag_n])
+
+                if get_bias_list:
+                    out_biases.append(bias_list[n])
 
                 count += n_i
 
@@ -782,76 +851,15 @@ class Rounds(ABC):
                 out_cv_t = cv_trimmed_t
                 out_ti_t = ti_trimmed_t
 
+            if get_bias_list:
+                bias_list = out_biases
+
             # bias = None
 
         out_nl = None
 
         if time_series:
             out_nl_t = None
-
-        # get neighbourlist
-        if new_r_cut is not None:
-            if verbose:
-                print(f"getting neighbourlist wiht {new_r_cut=}")
-
-            def _out_nl(out_sp, new_r_cut):
-                # much faster if stacked
-                if len(out_sp) >= 2:
-                    out_sp_merged = SystemParams.stack(*out_sp)
-                else:
-                    out_sp_merged = out_sp[0]
-
-                out_nl_stacked = out_sp_merged.get_neighbour_list(
-                    r_cut=new_r_cut,
-                    r_skin=0,
-                    z_array=sti.atomic_numbers,
-                    chunk_size=chunk_size,
-                    verbose=verbose,
-                )
-
-                if len(out_sp) >= 2:
-                    ind = 0
-                    out_nl = []
-                    for osp in out_sp:
-                        out_nl.append(out_nl_stacked[ind : ind + osp.shape[0]])
-                        ind += osp.shape[0]
-                else:
-                    out_nl = [out_nl_stacked]
-
-                return out_nl
-
-            out_nl = _out_nl(out_sp, new_r_cut)
-            if time_series:
-                out_nl_t = _out_nl(out_sp_t, new_r_cut)
-
-        # get CV if not already calculated
-        if recalc_cv:
-            print("recalculating CV")
-
-            def _out_cv(out_sp, out_nl):
-                if len(out_sp) >= 2:
-                    out_sp_merged = SystemParams.stack(*out_sp)
-                    out_nl_merged = NeighbourList.stack(*out_nl)
-                else:
-                    out_sp_merged = out_sp[0]
-                    out_nl_merged = out_nl[0]
-
-                out_cv_stacked = padded_pmap(Partial(colvar.compute_cv, chunk_size=chunk_size))(
-                    out_sp_merged,
-                    out_nl_merged,
-                )[0]
-
-                if len(out_sp) >= 2:
-                    out_cv = out_cv_stacked.replace(_stack_dims=[a.shape[0] for a in out_sp]).unstack()
-                else:
-                    out_cv = [out_cv_stacked]
-
-                return out_cv
-
-            out_cv = _out_cv(out_sp, out_nl)
-
-            if time_series:
-                out_cv_t = _out_cv(out_sp_t, out_nl_t)
 
         # return data
         if time_series:
@@ -876,7 +884,7 @@ class Rounds(ABC):
 
             print(f"tau = {tau/femtosecond:.2f} fs, lag_time*timestep = {lag_n* sti.timestep/ femtosecond:.2f} fs")
 
-            return data_loader_output(
+            dlo = data_loader_output(
                 sp=out_sp,
                 nl=out_nl,
                 cv=out_cv,
@@ -892,18 +900,30 @@ class Rounds(ABC):
                 tau=tau,
                 ground_bias=ground_bias,
             )
+        else:
+            dlo = data_loader_output(
+                sp=out_sp,
+                nl=out_nl,
+                cv=out_cv,
+                ti=out_ti,
+                sti=sti,
+                collective_variable=colvar,
+                time_series=time_series,
+                bias=bias_list if get_bias_list else None,
+                ground_bias=ground_bias,
+            )
 
-        return data_loader_output(
-            sp=out_sp,
-            nl=out_nl,
-            cv=out_cv,
-            ti=out_ti,
-            sti=sti,
-            collective_variable=colvar,
-            time_series=time_series,
-            bias=bias_list if get_bias_list else None,
-            ground_bias=ground_bias,
-        )
+        if new_r_cut is not None:
+            dlo = dlo.calc_neighbours(
+                r_cut=new_r_cut,
+                chunk_size=chunk_size,
+                verbose=verbose,
+            )
+
+        if recalc_cv:
+            dlo = dlo.recalc(chunk_size=chunk_size)
+
+        return dlo
 
     def copy_from_previous_round(
         self,
@@ -917,7 +937,7 @@ class Rounds(ABC):
         md_trajs: list[int] | None = None,
         dlo: data_loader_output | None = None,
         new_cvs: list[CV] | None = None,
-        invalidate: bool = True,
+        invalidate: bool = False,
         cv_round=None,
     ):
         if cv_round is None:
@@ -989,6 +1009,8 @@ class Rounds(ABC):
                 # attrs=None,
                 bias=None,  # self.rel_path(round_path / "bias.json"),
             )
+
+            self.finish_data(c=self.cv, r=0, i=i)
 
             if invalidate:
                 self.invalidate_data(c=self.cv, r=self.round, i=i)
@@ -1265,9 +1287,11 @@ class Rounds(ABC):
                 recalc_cv=recalc_cv,
                 only_finished=only_finished,
                 get_bias_list=False,
+                weight=True,
+                T_scale=5,
             )
 
-            sp_stack = dlo_data.sp[0]
+            sp_stack = SystemParams.stack(*dlo_data.sp)
         else:
             assert (
                 sp0.shape[0] == len(biases)
@@ -1288,7 +1312,7 @@ class Rounds(ABC):
 
             if not sp0_provided:
                 # reweigh data points according to new bias
-                probs = dlo_data.weights(ground_bias=bias, sign=-1, correct_U=False)[0]
+                probs = jnp.hstack(dlo_data.weights(ground_bias=bias, sign=-1, correct_U=False))
 
                 probs = probs / jnp.sum(probs)
 
@@ -2397,8 +2421,8 @@ class data_loader_output:
         weights: list[jax.Array],
         collective_variable: CollectiveVariable,
         cv: list[CV],
-        samples_per_bin=50,
-        min_samples_per_bin: int | None = 10,
+        samples_per_bin=10,
+        min_samples_per_bin: int | None = 3,
         n_max=60,
         n_grid=None,
         max_bias=None,
@@ -2618,4 +2642,74 @@ class data_loader_output:
             bias=new_FES_bias,
             fun=_clip,
             kwargs={"a_min": -max_bias, "a_max": 0.0},
+        )
+
+    def recalc(self, chunk_size=None, pmap=True) -> data_loader_output:
+        x, x_t = self.apply_cv_flow(
+            self.collective_variable.f,
+            chunk_size=chunk_size,
+            pmap=pmap,
+        )
+
+        return data_loader_output(
+            sp=self.sp,
+            nl=self.nl,
+            cv=x,
+            sti=self.sti,
+            ti=self.ti,
+            collective_variable=self.collective_variable,
+            sp_t=self.sp_t,
+            nl_t=self.nl_t,
+            cv_t=x_t,
+            time_series=self.time_series,
+            tau=self.tau,
+            bias=self.bias,
+            ground_bias=self.ground_bias,
+        )
+
+    def calc_neighbours(self, r_cut, chunk_size=None, verbose=False) -> data_loader_output:
+        def _out_nl(out_sp):
+            # much faster if stacked
+            if len(out_sp) >= 2:
+                out_sp_merged = SystemParams.stack(*out_sp)
+            else:
+                out_sp_merged = out_sp[0]
+
+            out_nl_stacked = out_sp_merged.get_neighbour_list(
+                r_cut=r_cut,
+                r_skin=0,
+                z_array=self.sti.atomic_numbers,
+                chunk_size=chunk_size,
+                verbose=verbose,
+            )
+
+            if len(out_sp) >= 2:
+                ind = 0
+                out_nl = []
+                for osp in out_sp:
+                    out_nl.append(out_nl_stacked[ind : ind + osp.shape[0]])
+                    ind += osp.shape[0]
+            else:
+                out_nl = [out_nl_stacked]
+
+            return out_nl
+
+        out_nl = _out_nl(self.sp)
+        if self.time_series:
+            out_nl_t = _out_nl(self.sp_t)
+
+        return data_loader_output(
+            sp=self.sp,
+            nl=out_nl,
+            cv=self.cv,
+            sti=self.sti,
+            ti=self.ti,
+            collective_variable=self.collective_variable,
+            sp_t=self.sp_t,
+            nl_t=out_nl_t if self.time_series else None,
+            cv_t=self.cv_t,
+            time_series=self.time_series,
+            tau=self.tau,
+            bias=self.bias,
+            ground_bias=self.ground_bias,
         )
