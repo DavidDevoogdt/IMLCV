@@ -1215,13 +1215,7 @@ def _affine_trans(x: CV, nl, _, C):
 
     u = (C[0] * x.cv[0] + C[1] * x.cv[1] + C[2]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
     v = (C[3] * x.cv[0] + C[4] * x.cv[1] + C[5]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
-    return CV(
-        cv=jnp.array([u, v]),
-        mapped=x.mapped,
-        _combine_dims=x._combine_dims,
-        _stack_dims=x._stack_dims,
-        atomic=x.atomic,
-    )
+    return x.replace(cv=jnp.array([u, v]))
 
 
 def affine_2d(old: Array, new: Array):

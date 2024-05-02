@@ -14,6 +14,7 @@ from IMLCV.base.bias import NoneBias
 from dataclasses import dataclass
 from pathlib import Path
 from molmod.units import kjmol
+from IMLCV.base.CV import CvTrans
 
 
 @dataclass
@@ -292,6 +293,28 @@ class Scheme:
             use_executor=use_executor,
             n_max=n_max,
             vmax=vmax,
+        )
+
+        self.md = md
+
+    def transform_CV(
+        self,
+        cv_trans: CvTrans,
+        dlo_kwargs=None,
+        dlo: data_loader_output | None = None,
+        chunk_size=None,
+        new_r_cut=None,
+        plot=True,
+    ):
+        md = self.rounds.transform_CV(
+            md=self.md,
+            cv_trans=cv_trans,
+            chunk_size=chunk_size,
+            dlo=dlo,
+            dlo_kwargs=dlo_kwargs,
+            cv_round_from=None,
+            new_r_cut=new_r_cut,
+            plot=plot,
         )
 
         self.md = md

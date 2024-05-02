@@ -428,6 +428,26 @@ class SystemParams(PyTreeNode):
 
                 return n, r[idx], atoms[idx], None, center_op
 
+            # _, (r, atoms, indices) = vmap(
+            #     vmap(
+            #         vmap(
+            #             lambda i, j, k: _apply_g_inner(
+            #                 sp=sp_center,
+            #                 func=func,
+            #                 r_cut=jnp.inf,
+            #                 ijk=(i, j, k),
+            #                 exclude_self=False,
+            #             ),
+            #             in_axes=(0, None, None),
+            #             out_axes=0,
+            #         ),
+            #         in_axes=(None, 0, None),
+            #         out_axes=1,
+            #     ),
+            #     in_axes=(None, None, 0),
+            #     out_axes=2,
+            # )(bx, by, bz)
+
             @vmap
             def __f(i, j, k):
                 return _apply_g_inner(

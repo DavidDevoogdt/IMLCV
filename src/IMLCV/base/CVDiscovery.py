@@ -708,6 +708,8 @@ class Transformer:
 
             bias = bias.reshape(len(bins[0]), len(bins[1]))
 
+            bias -= jnp.max(bias)
+
             p = ax.imshow(
                 -bias / (kjmol),
                 cmap=plt.get_cmap("jet"),
@@ -786,8 +788,8 @@ class Transformer:
                     cmap=plt.get_cmap("jet"),
                 )
 
-                ax_histy.set_xlim(x_lim[0], x_lim[1])
-                ax_histy.set_ylim(vmin / kjmol, vmax / kjmol)
+                ax_histx.set_xlim(x_lim[0], x_lim[1])
+                ax_histx.set_ylim(vmin / kjmol, vmax / kjmol)
 
                 ax_histy.scatter(
                     -y_fes / kjmol,

@@ -33,7 +33,7 @@ from jax.random import split
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 from IMLCV.configs.config_general import DEFAULT_LABELS, REFERENCE_LABELS, TRAINING_LABELS
-from typing import Callable, Any
+from typing import Callable
 import scipy.linalg
 from jax import vmap
 from functools import partial
@@ -510,6 +510,7 @@ class Rounds(ABC):
         verbose=False,
         weight=True,
         T_scale=3,
+        macro_chunk=10000,
     ) -> data_loader_output:
         # weights = []
 
@@ -697,6 +698,7 @@ class Rounds(ABC):
             sp_new: list[SystemParams] = []
             cv_new: list[CV] = []
             ti_new: list[TrajectoryInfo] = []
+            weights_new: list[Array] = []
             if get_bias_list:
                 new_bias_list = []
 
@@ -714,9 +716,12 @@ class Rounds(ABC):
                 if get_bias_list:
                     new_bias_list.append(bias_list[n])
 
+                weights_new.append(weights[n])
+
             sp = sp_new
             ti = ti_new
             cv = cv_new
+            weights = weights_new
             if get_bias_list:
                 bias_list = new_bias_list
 
@@ -725,10 +730,6 @@ class Rounds(ABC):
         for j, k in zip(sp, cv):
             if j.shape[0] != k.shape[0]:
                 print(f"shapes do not match {j.shape=} {k.shape=}")
-
-        # get weights
-        if verbose:
-            print("getting weights")
 
         # select the requested number of points and time lagged data
 
@@ -918,102 +919,17 @@ class Rounds(ABC):
                 r_cut=new_r_cut,
                 chunk_size=chunk_size,
                 verbose=verbose,
+                macro_chunk=macro_chunk,
             )
 
         if recalc_cv:
-            dlo = dlo.recalc(chunk_size=chunk_size)
+            dlo = dlo.recalc(
+                chunk_size=chunk_size,
+                verbose=verbose,
+                macro_chunk=macro_chunk,
+            )
 
         return dlo
-
-    def copy_from_previous_round(
-        self,
-        num_copy=2,
-        out=-1,
-        cv_trans: None | CvTrans = None,
-        chunk_size=None,
-        filter_bias=True,
-        filter_energy=True,
-        split_data=True,
-        md_trajs: list[int] | None = None,
-        dlo: data_loader_output | None = None,
-        new_cvs: list[CV] | None = None,
-        invalidate: bool = False,
-        cv_round=None,
-    ):
-        if cv_round is None:
-            cv_round = self.cv - 1
-
-        current_round = self._round_information()
-        col_var = self.get_collective_variable()
-
-        if dlo is None:
-            dlo = self.data_loader(
-                num=num_copy,
-                out=out,
-                split_data=split_data,
-                new_r_cut=current_round.tic.r_cut,
-                md_trajs=md_trajs,
-                cv_round=cv_round,
-            )
-
-        if new_cvs is None:
-            new_cvs = []
-            for i, (sp, nl, cv, traj_info) in enumerate(zip(dlo.sp, dlo.nl, dlo.cv, dlo.ti)):
-                # # TODO: tranform biasses probabilitically or with jacobian determinant
-                sp: SystemParams
-                nl: NeighbourList
-                cv: CV
-                traj_info: TrajectoryInfo
-
-                if cv_trans is not None:
-                    new_cvs.append(cv_trans.compute_cv_trans(x=cv, nl=nl, chunk_size=chunk_size)[0])
-                else:
-                    new_cvs.append(col_var.compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)[0])
-
-        for i, (sp, nl, cv, traj_info, new_cv) in enumerate(zip(dlo.sp, dlo.nl, dlo.cv, dlo.ti, new_cvs)):
-            # # TODO: tranform biasses probabilitically or with jacobian determinant
-            sp: SystemParams
-            nl: NeighbourList
-            cv: CV
-            traj_info: TrajectoryInfo
-            new_cv: CV
-
-            round_path = self.path(c=self.cv, r=0, i=i)
-            round_path.mkdir(parents=True, exist_ok=True)
-
-            # bias.save(round_path / "bias.json")
-            traj_info
-
-            new_traj_info = TrajectoryInfo.create(
-                positions=traj_info.positions,
-                cell=traj_info.cell,
-                charges=traj_info.charges,
-                e_pot=traj_info.e_pot,
-                e_pot_gpos=traj_info.e_pot_gpos,
-                e_pot_vtens=traj_info.e_pot_vtens,
-                e_bias=None,
-                e_bias_gpos=None,
-                e_bias_vtens=None,
-                cv=new_cv.cv,
-                T=traj_info._T,
-                P=traj_info._P,
-                err=traj_info._err,
-                t=traj_info._t,
-                capacity=traj_info._capacity,
-                size=traj_info._size,
-            )
-
-            self.add_md(
-                i=i,
-                d=new_traj_info,
-                # attrs=None,
-                bias=None,  # self.rel_path(round_path / "bias.json"),
-            )
-
-            self.finish_data(c=self.cv, r=0, i=i)
-
-            if invalidate:
-                self.invalidate_data(c=self.cv, r=self.round, i=i)
 
     def iter_ase_atoms(
         self,
@@ -1537,7 +1453,7 @@ class Rounds(ABC):
         self,
         md: MDEngine,
         transformer: Transformer,
-        dlo_kwargs={},
+        dlo_kwargs=None,
         dlo: data_loader_output | None = None,
         chunk_size=None,
         plot=True,
@@ -1571,7 +1487,10 @@ class Rounds(ABC):
             dlo_kwargs["chunk_size"] = chunk_size
 
         if cv_round_to is None:
-            cv_round_to = cv_round_from + 1
+            cv_round_to = self.cv + 1
+
+        if dlo_kwargs is None:
+            dlo_kwargs = {}
 
         if use_executor:
             md = bash_app_python(
@@ -1674,10 +1593,100 @@ class Rounds(ABC):
         )
 
         # update state
+        return rounds.__update_CV(
+            md=md,
+            new_collective_variable=new_collective_variable,
+            new_bias=new_bias,
+            cv_round_from=cv_round_from,
+            cvs_new=cvs_new,
+            dlo=dlo,
+            new_r_cut=new_r_cut,
+            save_samples=save_samples,
+            save_multiple_cvs=save_multiple_cvs,
+        )
+
+    def transform_CV(
+        self,
+        md: MDEngine,
+        cv_trans: CvTrans,
+        dlo_kwargs=None,
+        dlo: data_loader_output | None = None,
+        chunk_size=None,
+        cv_round_from=None,
+        cv_round_to=None,
+        new_r_cut=None,
+        plot=True,
+        vmax=100 * kjmol,
+        verbose=True,
+    ):
+        if cv_round_from is None:
+            cv_round_from = self.cv
+
+        if cv_round_to is None:
+            cv_round_to = self.cv + 1
+
+        if dlo is None:
+            if dlo_kwargs is None:
+                dlo_kwargs = {}
+
+            dlo_kwargs["new_r_cut"] = None
+            dlo_kwargs["cv_round"] = cv_round_from
+            dlo_kwargs["weight"] = False
+
+            dlo = self.data_loader(**dlo_kwargs, verbose=True)
+
+        bias = dlo.transform_FES(trans=cv_trans, max_bias=vmax)
+        collective_variable = bias.collective_variable
+
+        x, _ = dlo.apply_cv_trans(cv_trans=cv_trans, chunk_size=chunk_size, verbose=verbose)
+
+        x = CV.stack(*x)
+
+        if plot:
+            Transformer.plot_app(
+                collective_variables=[md.bias.collective_variable, collective_variable],
+                cv_data=[CV.stack(*dlo.cv), x],
+                duplicate_cv_data=True,
+                T=dlo.sti.T,
+                plot_FES=True,
+                weight=dlo.weights(),
+                name=self.path(c=cv_round_to) / "transformed_FES.png",
+                cv_titles=[cv_round_from, cv_round_to],
+                data_titles=[cv_round_from, cv_round_to],
+                vmax=vmax,
+            )
+
+        md = self.__update_CV(
+            md=md,
+            new_collective_variable=collective_variable,
+            new_bias=bias,
+            cv_round_from=cv_round_from,
+            cvs_new=x,
+            dlo=dlo,
+            new_r_cut=new_r_cut,
+        )
+
+        return md
+
+    def __update_CV(
+        rounds: Rounds,
+        md: MDEngine,
+        new_collective_variable: CollectiveVariable,
+        new_bias: Bias,
+        cv_round_from: int,
+        cvs_new: list[CV],
+        dlo: data_loader_output,
+        new_r_cut=None,
+        save_samples=True,
+        save_multiple_cvs=False,
+    ):
+        if new_r_cut is None:
+            new_r_cut = dlo.sti.r_cut
 
         rounds.add_cv_from_cv(new_collective_variable, c=cv_round_from + 1)
         md.bias = new_bias
         md.static_trajectory_info.r_cut = new_r_cut
+
         rounds.add_round_from_md(md)
 
         if save_samples:
@@ -1702,6 +1711,87 @@ class Rounds(ABC):
                 rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new), cv_round=cv_round_from)
                 rounds.add_round_from_md(md)
         return md
+
+    def copy_from_previous_round(
+        self,
+        num_copy=2,
+        out=-1,
+        cv_trans: None | CvTrans = None,
+        chunk_size=None,
+        split_data=True,
+        md_trajs: list[int] | None = None,
+        dlo: data_loader_output | None = None,
+        new_cvs: list[CV] | None = None,
+        invalidate: bool = False,
+        cv_round=None,
+    ):
+        if cv_round is None:
+            cv_round = self.cv - 1
+
+        current_round = self._round_information()
+        col_var = self.get_collective_variable()
+
+        if dlo is None:
+            dlo = self.data_loader(
+                num=num_copy,
+                out=out,
+                split_data=split_data,
+                new_r_cut=current_round.tic.r_cut,
+                md_trajs=md_trajs,
+                cv_round=cv_round,
+            )
+
+        if new_cvs is None:
+            new_cvs = []
+            for i, (sp, nl, cv, traj_info) in enumerate(zip(dlo.sp, dlo.nl, dlo.cv, dlo.ti)):
+                # # TODO: tranform biasses probabilitically or with jacobian determinant
+                sp: SystemParams
+                nl: NeighbourList
+                cv: CV
+                traj_info: TrajectoryInfo
+
+                if cv_trans is not None:
+                    new_cvs.append(cv_trans.compute_cv_trans(x=cv, nl=nl, chunk_size=chunk_size)[0])
+                else:
+                    new_cvs.append(col_var.compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)[0])
+
+        for i in range(len(dlo.cv)):
+            round_path = self.path(c=self.cv, r=0, i=i)
+            round_path.mkdir(parents=True, exist_ok=True)
+
+            # bias.save(round_path / "bias.json")
+            traj_info = dlo.ti[i]
+
+            new_traj_info = TrajectoryInfo.create(
+                positions=traj_info.positions,
+                cell=traj_info.cell,
+                charges=traj_info.charges,
+                e_pot=traj_info.e_pot,
+                e_pot_gpos=traj_info.e_pot_gpos,
+                e_pot_vtens=traj_info.e_pot_vtens,
+                e_bias=None,
+                e_bias_gpos=None,
+                e_bias_vtens=None,
+                cv=dlo.cv[i].cv,
+                T=traj_info._T,
+                P=traj_info._P,
+                err=traj_info._err,
+                t=traj_info._t,
+                capacity=traj_info._capacity,
+                size=traj_info._size,
+            )
+
+            self.add_md(
+                i=i,
+                d=new_traj_info,
+                # attrs=None,
+                bias=None,  # self.rel_path(round_path / "bias.json"),
+            )
+
+            self.finish_data(c=self.cv, r=0, i=i)
+
+            if invalidate:
+                self.invalidate_data(c=self.cv, r=self.round, i=i)
 
 
 @dataclass(repr=False)
@@ -2333,7 +2423,9 @@ class data_loader_output:
         x: list[CV] | None = None,
         x_t: list[CV] | None = None,
         chunk_size=None,
+        macro_chunk=10000,
         pmap=True,
+        verbose=False,
     ) -> tuple[list[CV], list[CV] | None]:
         if x is None:
             x = self.cv
@@ -2341,31 +2433,34 @@ class data_loader_output:
         if x_t is None:
             x_t = self.cv_t
 
-        f = Partial(
-            cv_trans.compute_cv_trans,
-            chunk_size=chunk_size,
-        )
+        def f(x, nl):
+            return cv_trans.compute_cv_trans(x, nl, chunk_size=chunk_size)[0]
 
         if pmap:
             f = padded_pmap(f)
 
-        f: Callable[[CV, NeighbourList], tuple[CV, Any, Any]]
-
         if self.time_series:
-            y = CV.stack(*x, *x_t)
-            nl = NeighbourList.stack(*self.nl, *self.nl_t)
+            y = [*x, *x_t]
+            nl = [*self.nl, *self.nl_t] if self.nl is not None else None
         else:
-            y = CV.stack(*x)
-            nl = NeighbourList.stack(*self.nl)
+            y = [*x]
+            nl = [*self.nl] if self.nl is not None else None
 
-        z, _, _ = f(y, nl)
+        z = data_loader_output._macro_chunk(
+            f,
+            CV.stack,
+            y,
+            nl,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
+        )
 
         if self.time_series:
-            z, z_t = z.unstack()
+            z, z_t = z[0 : len(self.cv)], z[len(self.cv) :]
         else:
             z_t = None
 
-        return z.unstack(), z_t.unstack() if z_t is not None else None
+        return z, z_t
 
     def apply_cv_flow(
         self,
@@ -2373,7 +2468,9 @@ class data_loader_output:
         x: list[SystemParams] | None = None,
         x_t: list[SystemParams] | None = None,
         chunk_size=None,
+        macro_chunk=10000,
         pmap=True,
+        verbose=False,
     ) -> tuple[list[CV], list[CV] | None]:
         if x is None:
             x = self.sp
@@ -2381,39 +2478,102 @@ class data_loader_output:
         if x_t is None:
             x_t = self.sp_t
 
-        _stack_dims = tuple(sp_i.batch_dim for sp_i in x)
-        tot = sum(_stack_dims)
-
-        f = Partial(
-            flow.compute_cv_flow,
-            chunk_size=chunk_size,
-        )
+        def f(x, nl):
+            return flow.compute_cv_flow(x, nl, chunk_size=chunk_size)[0]
 
         if pmap:
             f = padded_pmap(f)
 
-        f: Callable[[SystemParams, NeighbourList], tuple[CV, Any]]
+        # f: Callable[[SystemParams, NeighbourList], tuple[CV, Any]]
+
+        if verbose:
+            print(f"apply_cv_func: stacking {len(x)} {len(x_t) if x_t is not None else 0} ")
 
         if self.time_series:
-            y = SystemParams.stack(*x, *x_t)
-            nl = NeighbourList.stack(*self.nl, *self.nl_t)
+            y = [*x, *x_t]
+            nl = [*self.nl, *self.nl_t] if self.nl is not None else None
         else:
-            y = SystemParams.stack(*x)
-            nl = NeighbourList.stack(*self.nl)
+            y = [*x]
+            nl = [*self.nl] if self.nl is not None else None
 
-        z, _ = f(y, nl)
-
-        del y, nl
+        z = data_loader_output._macro_chunk(
+            f,
+            SystemParams.stack,
+            y,
+            nl,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
+        )
 
         if self.time_series:
-            z, z_t = z[0:tot], z[tot:]
+            z, z_t = z[0 : len(self.sp)], z[len(self.sp) :]
         else:
             z_t = None
 
-        return (
-            z.replace(_stack_dims=_stack_dims).unstack(),
-            z_t.replace(_stack_dims=_stack_dims).unstack() if z_t is not None else None,
-        )
+        return z, z_t
+
+    @staticmethod
+    def _macro_chunk(
+        f: Callable[[SystemParams | CV, NeighbourList], CV],
+        op: SystemParams.stack | CV.stack,
+        y: list[SystemParams | CV],
+        nl: list[NeighbourList] | None,
+        macro_chunk=10000,
+        verbose=False,
+    ):
+        # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
+
+        if macro_chunk is None:
+            stack_dims = [nli.shape[0] for nli in nl]
+
+            z = f(SystemParams.stack(*y), NeighbourList.stack(*nl))
+
+            z = z.replace(_stack_dims=stack_dims).unstack()
+
+        else:
+            n = 0
+
+            z = []
+
+            y_chunk = []
+            nl_chunk = [] if nl is not None else None
+
+            tot_chunk = 0
+            stack_dims_chunk = []
+
+            while n < len(y):
+                s = y[n].shape[0]
+
+                y_chunk.append(y[n])
+                nl_chunk.append(nl[n]) if nl is not None else None
+
+                tot_chunk += s
+                stack_dims_chunk.append(s)
+
+                if tot_chunk > macro_chunk or n == len(y) - 1:
+                    if verbose:
+                        print(f"apply_cv_func: chunk {n}/{len(y)}, {tot_chunk=}")
+
+                    z_chunk = f(
+                        op(*y_chunk),
+                        NeighbourList.stack(*nl_chunk) if nl is not None else None,
+                    )
+
+                    z_chunk = z_chunk.replace(_stack_dims=stack_dims_chunk).unstack()
+
+                    z.extend(z_chunk)
+
+                    y_chunk = []
+                    nl_chunk = [] if nl is not None else None
+                    stack_dims_chunk = []
+
+                    tot_chunk = 0
+
+                n += 1
+
+        print(f"{len(z)=}")
+
+        return z
 
     @staticmethod
     def _get_fes_bias_from_weights(
@@ -2436,7 +2596,7 @@ class data_loader_output:
             n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=cv.shape[0], n_dims=cv.shape[1])
 
         if n_grid > n_max:
-            print(f"reducing n_grid from {n_grid} to {n_max}")
+            # print(f"reducing n_grid from {n_grid} to {n_max}")
             n_grid = n_max
 
         if n_grid <= 1:
@@ -2603,25 +2763,35 @@ class data_loader_output:
     def transform_FES(
         self,
         trans: CvTrans,
-        T: float,
-        max_bias=None,
+        T: float | None = None,
+        max_bias=100 * kjmol,
+        n_grid=25,
     ):
-        _, cv_grid, _ = self.collective_variable.metric.grid(n=40)
+        if T is None:
+            T = self.sti.T
+
+        _, cv_grid, _ = self.collective_variable.metric.grid(n=n_grid)
         new_cv_grid, _, log_det = trans.compute_cv_trans(cv_grid, log_Jf=True)
 
         FES_bias_vals, _ = self.ground_bias.compute_from_cv(cv_grid)
-        new_FES_bias_vals = FES_bias_vals + T * boltzmann * log_det
 
-        new_FES_bias_vals -= jnp.min(new_FES_bias_vals)
+        new_FES_bias_vals = FES_bias_vals + T * boltzmann * log_det
+        new_FES_bias_vals -= jnp.max(new_FES_bias_vals)
+
+        weight = jnp.exp(new_FES_bias_vals / (T * boltzmann))
+        weight /= jnp.sum(weight)
 
         bounds, _ = self.collective_variable.metric.bounds_from_cv(
             new_cv_grid,
+            weights=weight,
             percentile=1e-5,
-            margin=0.1,
+            # margin=0.1,
         )
 
+        print(f"{bounds=}")
+
         new_collective_variable = CollectiveVariable(
-            f=self.collective_variable * trans,
+            f=self.collective_variable.f * trans,
             metric=CvMetric.create(
                 bounding_box=bounds,
                 periodicities=self.collective_variable.metric.periodicities,
@@ -2636,7 +2806,7 @@ class data_loader_output:
         )
 
         if max_bias is None:
-            max_bias = jnp.max(new_FES_bias_vals)
+            max_bias = -jnp.min(new_FES_bias_vals)
 
         return BiasModify.create(
             bias=new_FES_bias,
@@ -2644,11 +2814,13 @@ class data_loader_output:
             kwargs={"a_min": -max_bias, "a_max": 0.0},
         )
 
-    def recalc(self, chunk_size=None, pmap=True) -> data_loader_output:
+    def recalc(self, chunk_size=None, macro_chunk=10000, pmap=True, verbose=False) -> data_loader_output:
         x, x_t = self.apply_cv_flow(
             self.collective_variable.f,
             chunk_size=chunk_size,
             pmap=pmap,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
         )
 
         return data_loader_output(
@@ -2667,46 +2839,66 @@ class data_loader_output:
             ground_bias=self.ground_bias,
         )
 
-    def calc_neighbours(self, r_cut, chunk_size=None, verbose=False) -> data_loader_output:
-        def _out_nl(out_sp):
-            # much faster if stacked
-            if len(out_sp) >= 2:
-                out_sp_merged = SystemParams.stack(*out_sp)
-            else:
-                out_sp_merged = out_sp[0]
-
-            out_nl_stacked = out_sp_merged.get_neighbour_list(
-                r_cut=r_cut,
-                r_skin=0,
-                z_array=self.sti.atomic_numbers,
-                chunk_size=chunk_size,
-                verbose=verbose,
-            )
-
-            if len(out_sp) >= 2:
-                ind = 0
-                out_nl = []
-                for osp in out_sp:
-                    out_nl.append(out_nl_stacked[ind : ind + osp.shape[0]])
-                    ind += osp.shape[0]
-            else:
-                out_nl = [out_nl_stacked]
-
-            return out_nl
-
-        out_nl = _out_nl(self.sp)
+    def calc_neighbours(self, r_cut, chunk_size=None, macro_chunk=10000, verbose=False) -> data_loader_output:
         if self.time_series:
-            out_nl_t = _out_nl(self.sp_t)
+            y = [*self.sp, *self.sp_t]
+        else:
+            y = [*self.sp]
+
+        n = 0
+
+        nl = []
+
+        y_chunk = []
+
+        tot_chunk = 0
+        stack_dims_chunk = []
+
+        while n < len(y):
+            s = y[n].shape[0]
+
+            y_chunk.append(y[n])
+
+            tot_chunk += s
+            stack_dims_chunk.append(s)
+
+            if tot_chunk > macro_chunk or n == len(y) - 1:
+                if verbose:
+                    print(f"get nl: [sp] {n}/{len(y)}, {tot_chunk=}")
+
+                nl_chunk = SystemParams.stack(*y_chunk).get_neighbour_list(
+                    r_cut=r_cut,
+                    r_skin=0,
+                    z_array=self.sti.atomic_numbers,
+                    chunk_size=chunk_size,
+                    verbose=verbose,
+                )
+
+                ind = 0
+                for sdc in stack_dims_chunk:
+                    nl.append(nl_chunk[ind : ind + sdc])
+                    ind += sdc
+
+                y_chunk = []
+                stack_dims_chunk = []
+                tot_chunk = 0
+
+            n += 1
+
+        if self.time_series:
+            nl, nl_t = nl[0 : len(self.sp)], nl[len(self.sp) :]
+        else:
+            nl_t = None
 
         return data_loader_output(
             sp=self.sp,
-            nl=out_nl,
+            nl=nl,
             cv=self.cv,
             sti=self.sti,
             ti=self.ti,
             collective_variable=self.collective_variable,
             sp_t=self.sp_t,
-            nl_t=out_nl_t if self.time_series else None,
+            nl_t=nl_t,
             cv_t=self.cv_t,
             time_series=self.time_series,
             tau=self.tau,
