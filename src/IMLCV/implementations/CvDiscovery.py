@@ -192,6 +192,7 @@ class TranformerAutoEncoder(Transformer):
         num_epochs=100,
         batch_size=32,
         chunk_size=None,
+        verbose=True,
         **kwargs,
     ):
         # import wandb
@@ -445,6 +446,7 @@ class TransoformerLDA(Transformer):
         min_gradient_norm: float = 1e-3,
         min_step_size: float = 1e-3,
         max_iterations=25,
+        verbose=True,
         **kwargs,
     ):
         # nl_list = dlo.nl
@@ -587,6 +589,7 @@ class TransformerMAF(Transformer):
         method="tcca",
         use_ground_bias=False,
         T_scale=3,
+        verbose=True,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         assert dlo.time_series

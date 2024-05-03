@@ -109,6 +109,7 @@ class TranformerUMAP(Transformer):
         n_neighbors=20,
         # metric=None,
         chunk_size=None,
+        verbose=True,
         **kwargs,
     ):
         x = CV.stack(*x)

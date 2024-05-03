@@ -271,6 +271,7 @@ class Scheme:
         use_executor=True,
         n_max=30,
         vmax=100 * kjmol,
+        macro_chunk=10000,
     ):
         md = self.rounds.update_CV(
             md=self.md,
@@ -293,6 +294,7 @@ class Scheme:
             use_executor=use_executor,
             n_max=n_max,
             vmax=vmax,
+            macro_chunk=macro_chunk,
         )
 
         self.md = md

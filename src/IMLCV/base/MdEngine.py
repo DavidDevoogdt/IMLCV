@@ -814,6 +814,9 @@ class MDEngine(ABC):
 
         return cv, ener
 
+    def __getstate__(self):
+        return self.__dict__
+
     def __setstate__(self, statedict: dict):
         try:
             f_names = [f.name for f in fields(self.__class__)]

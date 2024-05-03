@@ -51,6 +51,8 @@ class Transformer:
         dlo: data_loader_output,
         chunk_size=None,
         p_map=True,
+        verbose=False,
+        macro_chunk=10000,
     ) -> tuple[list[CV], list[CV] | None, CvFlow]:
         f = self.descriptor
 
@@ -68,6 +70,8 @@ class Transformer:
                 x_t,
                 chunk_size=chunk_size,
                 pmap=p_map,
+                verbose=verbose,
+                macro_chunk=macro_chunk,
             )
             f = f * g
 
@@ -100,6 +104,7 @@ class Transformer:
         cv_titles=None,
         vmax=100 * kjmol,
         n_grid_new=30,
+        macro_chunk=10000,
     ) -> tuple[CV, CollectiveVariable, Bias]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
@@ -112,6 +117,8 @@ class Transformer:
             dlo,
             chunk_size=chunk_size,
             p_map=p_map,
+            verbose=verbose,
+            macro_chunk=macro_chunk,
         )
 
         if check_nan:
@@ -264,6 +271,7 @@ class Transformer:
         x_t: list[CV] | None,
         dlo: data_loader_output,
         chunk_size=None,
+        verbose=True,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:
         raise NotImplementedError
@@ -1070,6 +1078,7 @@ class CombineTransformer(Transformer):
         x_t: list[CV] | None,
         dlo: data_loader_output,
         chunk_size=None,
+        verbose=True,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:
         trans = None
@@ -1094,6 +1103,7 @@ class IdentityTransformer(Transformer):
         x_t: list[CV] | None,
         dlo: data_loader_output,
         chunk_size=None,
+        verbose=True,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:
         return x, x_t, identity_trans

@@ -915,6 +915,9 @@ class Rounds(ABC):
             )
 
         if new_r_cut is not None:
+            if verbose:
+                print("getting Neighbourr List")
+
             dlo = dlo.calc_neighbours(
                 r_cut=new_r_cut,
                 chunk_size=chunk_size,
@@ -923,6 +926,8 @@ class Rounds(ABC):
             )
 
         if recalc_cv:
+            if verbose:
+                print("recalculating CV")
             dlo = dlo.recalc(
                 chunk_size=chunk_size,
                 verbose=verbose,
@@ -1472,13 +1477,19 @@ class Rounds(ABC):
         use_executor=True,
         n_max=30,
         vmax=100 * kjmol,
+        macro_chunk=10000,
     ):
         if cv_round_from is None:
             cv_round_from = self.cv
 
+        if dlo_kwargs is None:
+            dlo_kwargs = {}
+
         if "chunk_size" in dlo_kwargs:
-            chunk_size = dlo_kwargs["chunk_size"]
-            dlo_kwargs.pop("chunk_size")
+            chunk_size = dlo_kwargs.pop("chunk_size")
+
+        if "macro_chunk" in dlo_kwargs:
+            macro_chunk = dlo_kwargs.pop("macro_chunk")
 
         if cv_round_from is not None:
             dlo_kwargs["cv_round"] = cv_round_from
@@ -1489,64 +1500,37 @@ class Rounds(ABC):
         if cv_round_to is None:
             cv_round_to = self.cv + 1
 
-        if dlo_kwargs is None:
-            dlo_kwargs = {}
+        kw = dict(
+            rounds=self,
+            md=md,
+            transformer=transformer,
+            dlo_kwargs=dlo_kwargs,
+            dlo=dlo,
+            chunk_size=chunk_size,
+            plot=plot,
+            new_r_cut=new_r_cut,
+            save_samples=save_samples,
+            save_multiple_cvs=save_multiple_cvs,
+            jac=jac,
+            cv_round_from=cv_round_from,
+            cv_round_to=cv_round_to,
+            test=test,
+            max_bias=max_bias,
+            transform_bias=transform_bias,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
+            percentile=percentile,
+            n_max=n_max,
+            vmax=vmax,
+            macro_chunk=macro_chunk,
+        )
 
         if use_executor:
-            md = bash_app_python(
-                Rounds._update_CV,
-                executors=TRAINING_LABELS,
-            )(
-                rounds=self,
-                md=md,
-                transformer=transformer,
-                dlo_kwargs=dlo_kwargs,
-                dlo=dlo,
-                chunk_size=chunk_size,
-                plot=plot,
-                new_r_cut=new_r_cut,
-                save_samples=save_samples,
-                save_multiple_cvs=save_multiple_cvs,
-                jac=jac,
-                cv_round_from=cv_round_from,
-                test=test,
-                max_bias=max_bias,
-                transform_bias=transform_bias,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
-                percentile=percentile,
-                execution_folder=self.path(c=cv_round_to),
-                cv_round_to=cv_round_to,
-                n_max=n_max,
-                vmax=vmax,
+            return bash_app_python(Rounds._update_CV, executors=TRAINING_LABELS)(
+                execution_folder=self.path(c=cv_round_to), **kw
             ).result()
 
-        else:
-            md = Rounds._update_CV(
-                rounds=self,
-                md=md,
-                transformer=transformer,
-                dlo_kwargs=dlo_kwargs,
-                dlo=dlo,
-                chunk_size=chunk_size,
-                plot=plot,
-                new_r_cut=new_r_cut,
-                save_samples=save_samples,
-                save_multiple_cvs=save_multiple_cvs,
-                jac=jac,
-                cv_round_from=cv_round_from,
-                test=test,
-                max_bias=max_bias,
-                transform_bias=transform_bias,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
-                percentile=percentile,
-                cv_round_to=cv_round_to,
-                n_max=n_max,
-                vmax=vmax,
-            )
-
-        return md
+        return Rounds._update_CV(**kw)
 
     @staticmethod
     def _update_CV(
@@ -1556,6 +1540,7 @@ class Rounds(ABC):
         dlo_kwargs={},
         dlo: data_loader_output | None = None,
         chunk_size=None,
+        macro_chunk=10000,
         plot=True,
         new_r_cut=None,
         save_samples=True,
@@ -1573,7 +1558,7 @@ class Rounds(ABC):
         vmax=100 * kjmol,
     ):
         if dlo is None:
-            dlo = rounds.data_loader(**dlo_kwargs, verbose=True)
+            dlo = rounds.data_loader(**dlo_kwargs, macro_chunk=macro_chunk, verbose=True)
 
         cvs_new, new_collective_variable, new_bias = transformer.fit(
             dlo=dlo,
@@ -1590,6 +1575,7 @@ class Rounds(ABC):
             n_max=n_max,
             cv_titles=[f"{cv_round_from}", f"{cv_round_to}"],
             vmax=vmax,
+            macro_chunk=macro_chunk,
         )
 
         # update state
@@ -1700,60 +1686,33 @@ class Rounds(ABC):
                         md.static_trajectory_info.r_cut = new_r_cut
                         rounds.add_round_from_md(md)
 
-                    rounds.copy_from_previous_round(dlo=dlo_i, new_cvs=[cv_new_i], cv_round=cv_round_from)
+                    rounds._copy_from_previous_round(
+                        dlo=dlo_i,
+                        new_cvs=[cv_new_i],
+                        cv_round=cv_round_from,
+                    )
                     rounds.add_round_from_md(md)
 
                     first = False
 
             else:
-                print(f"{ len(dlo.cv)}, { len( CV.unstack(cvs_new))=  } ")
-
-                rounds.copy_from_previous_round(dlo=dlo, new_cvs=CV.unstack(cvs_new), cv_round=cv_round_from)
+                rounds._copy_from_previous_round(
+                    dlo=dlo,
+                    new_cvs=CV.unstack(cvs_new),
+                    cv_round=cv_round_from,
+                )
                 rounds.add_round_from_md(md)
         return md
 
-    def copy_from_previous_round(
+    def _copy_from_previous_round(
         self,
-        num_copy=2,
-        out=-1,
-        cv_trans: None | CvTrans = None,
-        chunk_size=None,
-        split_data=True,
-        md_trajs: list[int] | None = None,
-        dlo: data_loader_output | None = None,
-        new_cvs: list[CV] | None = None,
+        dlo: data_loader_output,
+        new_cvs: list[CV],
         invalidate: bool = False,
-        cv_round=None,
+        cv_round: int | None = None,
     ):
         if cv_round is None:
             cv_round = self.cv - 1
-
-        current_round = self._round_information()
-        col_var = self.get_collective_variable()
-
-        if dlo is None:
-            dlo = self.data_loader(
-                num=num_copy,
-                out=out,
-                split_data=split_data,
-                new_r_cut=current_round.tic.r_cut,
-                md_trajs=md_trajs,
-                cv_round=cv_round,
-            )
-
-        if new_cvs is None:
-            new_cvs = []
-            for i, (sp, nl, cv, traj_info) in enumerate(zip(dlo.sp, dlo.nl, dlo.cv, dlo.ti)):
-                # # TODO: tranform biasses probabilitically or with jacobian determinant
-                sp: SystemParams
-                nl: NeighbourList
-                cv: CV
-                traj_info: TrajectoryInfo
-
-                if cv_trans is not None:
-                    new_cvs.append(cv_trans.compute_cv_trans(x=cv, nl=nl, chunk_size=chunk_size)[0])
-                else:
-                    new_cvs.append(col_var.compute_cv(sp=sp, nl=nl, chunk_size=chunk_size)[0])
 
         for i in range(len(dlo.cv)):
             round_path = self.path(c=self.cv, r=0, i=i)
@@ -1772,7 +1731,7 @@ class Rounds(ABC):
                 e_bias=None,
                 e_bias_gpos=None,
                 e_bias_vtens=None,
-                cv=dlo.cv[i].cv,
+                cv=new_cvs[i].cv,
                 T=traj_info._T,
                 P=traj_info._P,
                 err=traj_info._err,
@@ -1784,8 +1743,7 @@ class Rounds(ABC):
             self.add_md(
                 i=i,
                 d=new_traj_info,
-                # attrs=None,
-                bias=None,  # self.rel_path(round_path / "bias.json"),
+                bias=None,
             )
 
             self.finish_data(c=self.cv, r=0, i=i)

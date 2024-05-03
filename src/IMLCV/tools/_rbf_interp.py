@@ -349,7 +349,7 @@ class RBFInterpolator(PyTreeNode):
     def __getstate__(self):
         return self.__dict__
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict):
         if "d_dtype" in state:
             del state["d_dtype"]
 

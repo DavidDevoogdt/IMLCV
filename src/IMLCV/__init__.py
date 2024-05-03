@@ -26,12 +26,13 @@ import jax
 
 from jax import random
 import jax._src.tree_util
-from flax.struct import PyTreeNode
 import jsonpickle
 from jsonpickle.handlers import BaseHandler
+from jsonpickle import tags
 from jsonpickle.ext.numpy import register_handlers, register
 import numpy as np
 import jax.numpy as jnp
+from flax.struct import PyTreeNode
 
 
 logging.getLogger("parsl").setLevel(logging.WARNING)
@@ -80,17 +81,23 @@ register(jax.Array, JaxHandler, base=True)
 
 class Unpickler(jsonpickle.Unpickler):
     def _restore_object_instance_variables(self, obj, instance):
-        update = False
+        update_state = hasattr(instance, "__setstate__") and tags.STATE not in obj
 
-        if isinstance(instance, PyTreeNode):
-            update = True
+        re_init = update_state or isinstance(instance, PyTreeNode)
 
-        out = super()._restore_object_instance_variables(obj, instance)
+        instance = super()._restore_object_instance_variables(obj, instance)
 
-        if update:
+        if update_state:
+            print(f"Warning: {obj[tags.OBJECT]} has no state saved, trying to restore it")
+
+            instance.__setstate__(instance.__dict__)
+
+        if re_init:
+            # re-init the object to make sure it's in a consistent state
+            # sometimes jax objects are not properly initialized
             instance.__init__(**instance.__dict__)
 
-        return out
+        return instance
 
     def _restore_function(self, obj):
         if obj["py/function"] in moved_functions:

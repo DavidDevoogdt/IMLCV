@@ -268,11 +268,7 @@ class SystemParams(PyTreeNode):
 
     def _get_neighbour_list(
         self,
-        r_cut,
-        r_skin: float = 0.0,
-        z_array: tuple[int] | None = None,
-        z_unique: tuple[int] | None = None,
-        num_z_unique: tuple[int] | None = None,
+        info: NeighbourListInfo,
         num_neighs: int | None = None,
         nxyz: tuple[int] | None = None,
         chunk_size=None,
@@ -280,7 +276,7 @@ class SystemParams(PyTreeNode):
         verbose=False,
         chunk_size_inner=2,
     ) -> tuple[bool, NeighbourList | None]:
-        if r_cut is None:
+        if info.r_cut is None:
             return False, None, None, None
 
         if verbose:
@@ -323,13 +319,13 @@ class SystemParams(PyTreeNode):
             if sp.batched:
                 new_nxyz = jnp.max(
                     vmap(
-                        lambda sp: _get_num_per_images(sp.cell, r_cut + r_skin),
+                        lambda sp: _get_num_per_images(sp.cell, info.r_cut + info.r_skin),
                     )(sp),
                     axis=0,
                 )
 
             else:
-                new_nxyz = _get_num_per_images(sp.cell, r_cut + r_skin)
+                new_nxyz = _get_num_per_images(sp.cell, info.r_cut + info.r_skin)
 
             if nxyz is None:
                 nxyz = [int(i) for i in new_nxyz.tolist()]
@@ -404,7 +400,7 @@ class SystemParams(PyTreeNode):
 
         @partial(vmap, in_axes=(None, 0, None))
         @partial(jax.jit, static_argnames=["take_num"])
-        def res(sp, center_coordinates, take_num=0):
+        def res(sp: SystemParams, center_coordinates, take_num=0):
             if center_coordinates is not None:
                 sp_center = SystemParams(sp.coordinates - center_coordinates, sp.cell)
             else:
@@ -421,7 +417,7 @@ class SystemParams(PyTreeNode):
                 )
 
                 idx = jnp.argsort(r)[0:take_num]
-                n = jnp.sum(r < r_cut + r_skin)
+                n = jnp.sum(r < info.r_cut + info.r_skin)
 
                 if take_num == 0:
                     return n
@@ -471,7 +467,7 @@ class SystemParams(PyTreeNode):
             atoms = jnp.reshape(atoms, (-1))
             indices = jnp.reshape(indices, (-1, 3))
 
-            n = jnp.sum(r < r_cut + r_skin)
+            n = jnp.sum(r < info.r_cut + info.r_skin)
 
             if take_num == 0:
                 return n
@@ -528,13 +524,9 @@ class SystemParams(PyTreeNode):
             nn,
             new_nxyz,
             NeighbourList(
-                r_cut=r_cut,
-                r_skin=r_skin,
+                info=info,
                 atom_indices=a,
                 ijk_indices=ijk,
-                z_array=z_array,
-                z_unique=z_unique,
-                num_z_unique=num_z_unique,
                 sp_orig=self,
                 nxyz=nxyz,
                 op_cell=op_cell,
@@ -551,20 +543,14 @@ class SystemParams(PyTreeNode):
         chunk_size=None,
         verbose=False,
     ) -> NeighbourList | None:
-        def to_tuple(a):
-            if a is None:
-                return None
-            return tuple([int(ai) for ai in a])
-
-        zu = jnp.unique(jnp.array(z_array)) if z_array is not None else None
-        nzu = vmap(lambda zu: jnp.sum(jnp.array(z_array) == zu))(zu) if zu is not None else None
-
-        b, _, _, nl = self._get_neighbour_list(
+        info = NeighbourListInfo.create(
             r_cut=r_cut,
             r_skin=r_skin,
-            z_array=to_tuple(z_array),
-            z_unique=to_tuple(zu),
-            num_z_unique=to_tuple(nzu),
+            z_array=z_array,
+        )
+
+        b, _, _, nl = self._get_neighbour_list(
+            info=info,
             chunk_size=chunk_size,
             verbose=verbose,
         )
@@ -1024,24 +1010,78 @@ class SystemParams(PyTreeNode):
         return SystemParams(coordinates=jnp.concatenate(coor, axis=0), cell=jnp.array(n) @ self.cell)
 
 
+class NeighbourListInfo(PyTreeNode):
+    # esssential information
+    r_cut: float = field(pytree_node=False)
+    r_skin: float = field(pytree_node=False)
+
+    z_array: tuple[int] | None = field(pytree_node=False, default=None)
+    z_unique: tuple[int] | None = field(pytree_node=False, default=None)
+    num_z_unique: tuple[int] | None = field(pytree_node=False, default=None)
+
+    def create(
+        r_cut,
+        z_array,
+        r_skin=None,
+    ):
+        def to_tuple(a):
+            if a is None:
+                return None
+            return tuple([int(ai) for ai in a])
+
+        zu = jnp.unique(jnp.array(z_array)) if z_array is not None else None
+        nzu = vmap(lambda zu: jnp.sum(jnp.array(z_array) == zu))(zu) if zu is not None else None
+
+        if r_skin is None:
+            r_skin = 0.0
+
+        return NeighbourListInfo(
+            r_cut=r_cut,
+            r_skin=r_skin,
+            z_array=to_tuple(z_array),
+            z_unique=to_tuple(zu),
+            num_z_unique=to_tuple(nzu),
+        )
+
+
 class NeighbourList(PyTreeNode):
+    info: NeighbourListInfo
+
     atom_indices: Array
     op_cell: Array | None
     op_coor: Array | None
     op_center: Array | None
     sp_orig: SystemParams | None
 
-    r_cut: float = field(pytree_node=False)
-    r_skin: float = field(pytree_node=False)
-
     ijk_indices: Array | None = field(default=None)
-
     nxyz: tuple[int] | None = field(pytree_node=False, default=None)
-    z_array: tuple[int] | None = field(pytree_node=False, default=None)
-    z_unique: tuple[int] | None = field(pytree_node=False, default=None)
-    num_z_unique: tuple[int] | None = field(pytree_node=False, default=None)
-
     _padding_bools: Array | None = field(default=None)
+
+    @staticmethod
+    def create(
+        r_cut,
+        atom_indices,
+        r_skin=None,
+        ijk_indices=None,
+        z_array=None,
+        nxyz=None,
+        op_cell=None,
+        op_coor=None,
+        op_center=None,
+        sp_orig=None,
+    ):
+        info = NeighbourListInfo.create(r_cut=r_cut, z_array=z_array, r_skin=r_skin)
+
+        return NeighbourList(
+            info=info,
+            atom_indices=atom_indices,
+            ijk_indices=ijk_indices,
+            nxyz=nxyz,
+            op_cell=op_cell,
+            op_coor=op_coor,
+            op_center=op_center,
+            sp_orig=sp_orig,
+        )
 
     @property
     def padding_bools(self):
@@ -1139,7 +1179,7 @@ class NeighbourList(PyTreeNode):
             )(self=self, sp=sp)
 
         if r_cut is None:
-            r_cut = self.r_cut
+            r_cut = self.info.r_cut
 
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
@@ -1204,7 +1244,7 @@ class NeighbourList(PyTreeNode):
 
                 return _red(bools=b)
 
-            return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
+            return _f(jnp.array(self.info.z_unique), jnp.array(self.info.z_array))
 
         if not split_z:
             return _get(bools)
@@ -1220,7 +1260,7 @@ class NeighbourList(PyTreeNode):
 
             return _get(jnp.logical_and(_b(at), bools))
 
-        return sel(jnp.array(self.z_unique), jnp.array(self.z_array)[ind])
+        return sel(jnp.array(self.info.z_unique), jnp.array(self.info.z_array)[ind])
 
         # return _apply_fun_neighbour(sp, self)
 
@@ -1355,12 +1395,12 @@ class NeighbourList(PyTreeNode):
 
                 return _red(bools=b)
 
-            return _f(jnp.array(self.z_unique), jnp.array(self.z_array))
+            return _f(jnp.array(self.info.z_unique), jnp.array(self.info.z_array))
 
         if not split_z:
             return get(bools)
 
-        assert self.z_array is not None, "provide z_array to neighbourlist"
+        assert self.info.z_array is not None, "provide z_array to neighbourlist"
 
         @partial(vmap, in_axes=(None, 0, None), out_axes=2)
         @partial(vmap, in_axes=(0, None, None), out_axes=1)
@@ -1379,9 +1419,9 @@ class NeighbourList(PyTreeNode):
             return get(jnp.logical_and(_b(at), bools))
 
         return sel(
-            jnp.array(self.z_unique),
-            jnp.array(self.z_unique),
-            jnp.array(self.z_array)[self.atom_indices],
+            jnp.array(self.info.z_unique),
+            jnp.array(self.info.z_unique),
+            jnp.array(self.info.z_array)[self.atom_indices],
         )
 
     @property
@@ -1404,16 +1444,12 @@ class NeighbourList(PyTreeNode):
 
     def __getitem__(self, slices):
         return NeighbourList(
-            r_cut=self.r_cut,
             atom_indices=self.atom_indices[slices, :] if self.atom_indices is not None else None,
             ijk_indices=self.ijk_indices[slices, :] if self.ijk_indices is not None else None,
             op_cell=self.op_cell[slices, :, :] if self.op_cell is not None else None,
             op_coor=self.op_coor[slices, :, :] if self.op_coor is not None else None,
             op_center=self.op_center[slices, :] if self.op_center is not None else None,
-            z_array=self.z_array,
-            z_unique=self.z_unique,
-            num_z_unique=self.num_z_unique,
-            r_skin=self.r_skin,
+            info=self.info,
             sp_orig=self.sp_orig[slices],
             nxyz=self.nxyz,
             _padding_bools=self._padding_bools[slices, :] if self._padding_bools is not None else None,
@@ -1428,16 +1464,16 @@ class NeighbourList(PyTreeNode):
             jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
         )
 
-        return max_displacement > self.r_skin
+        return max_displacement > self.info.r_skin
 
     @jax.jit
     def update(self, sp: SystemParams) -> tuple[bool, NeighbourList]:
         a, _, _, b = sp._get_neighbour_list(
-            r_cut=self.r_cut,
-            r_skin=self.r_skin,
-            z_array=self.z_array,
-            z_unique=self.z_unique,
-            num_z_unique=self.num_z_unique,
+            r_cut=self.info.r_cut,
+            r_skin=self.info.r_skin,
+            z_array=self.info.z_array,
+            z_unique=self.info.z_unique,
+            num_z_unique=self.info.num_z_unique,
             num_neighs=self.num_neigh,
             nxyz=self.nxyz,
         )
@@ -1457,24 +1493,20 @@ class NeighbourList(PyTreeNode):
         if self.batched:
             return vmap(NeighbourList.nl_split_z)(self, p)
 
-        return NeighbourList._nl_split_z(self.z_array, self.z_unique, self.num_z_unique, p)
+        return NeighbourList._nl_split_z(self.info.z_array, self.info.z_unique, self.info.num_z_unique, p)
 
     def batch(self):
         if self.batched:
             return self
 
         return NeighbourList(
-            r_cut=self.r_cut,
             atom_indices=jnp.expand_dims(self.atom_indices, axis=0),
             ijk_indices=jnp.expand_dims(self.ijk_indices, axis=0) if self.ijk_indices is not None else None,
             op_cell=jnp.expand_dims(self.op_cell, axis=0) if self.op_cell is not None else None,
             op_coor=jnp.expand_dims(self.op_coor, axis=0) if self.op_coor is not None else None,
             op_center=jnp.expand_dims(self.op_center, axis=0) if self.op_center is not None else None,
             _padding_bools=jnp.expand_dims(self._padding_bools, axis=0) if self._padding_bools is not None else None,
-            z_array=self.z_array,
-            z_unique=self.z_unique,
-            num_z_unique=self.num_z_unique,
-            r_skin=self.r_skin,
+            info=self.info,
             sp_orig=self.sp_orig,
             nxyz=self.nxyz,
         )
@@ -1492,9 +1524,9 @@ class NeighbourList(PyTreeNode):
 
         nxyz = nl_0.nxyz
 
-        z_array = nl_0.z_array
-        z_unique = nl_0.z_unique
-        num_z_unique = nl_0.num_z_unique
+        z_array = nl_0.info.z_array
+        z_unique = nl_0.info.z_unique
+        num_z_unique = nl_0.info.num_z_unique
 
         sp_orig_none = nl_0.sp_orig is None
         ijk_indices_none = nl_0.ijk_indices is None
@@ -1505,7 +1537,7 @@ class NeighbourList(PyTreeNode):
 
         m = nl_0.atom_indices.shape[-1] if not atom_indices_none else None
 
-        r_cut = jnp.max(jnp.array([nli.r_cut for nli in nls]))
+        r_cut = jnp.max(jnp.array([nli.info.r_cut for nli in nls]))
 
         def c(a, b):
             if a is None:
@@ -1515,11 +1547,11 @@ class NeighbourList(PyTreeNode):
 
         # consistency checks
         for nl_i in nls:
-            assert nl_i.r_cut + nl_i.r_skin >= r_cut
+            assert nl_i.info.r_cut + nl_i.info.r_skin >= r_cut
 
-            c(z_array, nl_i.z_array)
-            c(z_unique, nl_i.z_unique)
-            c(num_z_unique, nl_i.num_z_unique)
+            c(z_array, nl_i.info.z_array)
+            c(z_unique, nl_i.info.z_unique)
+            c(num_z_unique, nl_i.info.num_z_unique)
 
             assert sp_orig_none == (nl_i.sp_orig is None)
             assert ijk_indices_none == (nl_i.ijk_indices is None)
@@ -1536,7 +1568,7 @@ class NeighbourList(PyTreeNode):
                     jnp.array([m, nl_i.atom_indices.shape[-1]]),
                 )
 
-        r_skin = jnp.min(jnp.array([nli.r_cut + nli.r_skin - r_cut for nli in nls]))
+        r_skin = jnp.min(jnp.array([nli.info.r_cut + nli.info.r_skin - r_cut for nli in nls]))
 
         @partial(vmap, in_axes=(0, None))
         def _p(a: jax.Array, constant_value=None):
@@ -1583,20 +1615,33 @@ class NeighbourList(PyTreeNode):
         sp_orig = SystemParams.stack(*[nl_i.sp_orig for nl_i in nls]) if not sp_orig_none else None
 
         return NeighbourList(
-            r_cut=float(r_cut),
-            r_skin=float(r_skin),
+            info=NeighbourListInfo.create(r_cut, z_array, r_skin=r_skin),
             atom_indices=jnp.vstack(atom_indices) if not atom_indices_none else None,
-            z_array=z_array,
-            z_unique=z_unique,
             nxyz=tuple(nxyz) if not nxyz_none else None,
             sp_orig=sp_orig,
             ijk_indices=jnp.vstack(ijk_indices) if not ijk_indices_none else None,
             op_cell=jnp.vstack(op_cell) if not op_cell_none else None,
             op_coor=jnp.vstack(op_coor) if not op_coor_none else None,
             op_center=jnp.vstack(op_center) if not op_center_none else None,
-            num_z_unique=num_z_unique,
             _padding_bools=jnp.vstack(padding_bools) if not atom_indices_none else None,
         )
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        sd = statedict
+
+        if "r_cut" in sd:
+            r_cut = sd.pop("r_cut")
+            r_skin = sd.pop("r_skin")
+            z_array = sd.pop("z_array")
+            _ = sd.pop("z_unique")
+            _ = sd.pop("num_z_unique")
+
+            sd["info"] = NeighbourListInfo.create(r_cut, z_array, r_skin=r_skin)
+
+        self.__init__(**sd)
 
 
 class CV(PyTreeNode):
@@ -2069,12 +2114,6 @@ class CvMetric(PyTreeNode):
     def ndim(self):
         return len(self.periodicities)
 
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, statedict: dict):
-        self.__init__(**statedict)
-
     @staticmethod
     def bounds_from_cv(cv: CV, percentile=0.1, weights=None, margin=None, chunk_size=None):
         if margin is None:
@@ -2109,6 +2148,12 @@ class CvMetric(PyTreeNode):
             get_mask = chunk_map(get_mask, chunk_size=chunk_size)
 
         return bounds, get_mask(cv.cv)
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
 
 
 ######################################
@@ -2833,9 +2878,9 @@ class CvFlow(PyTreeNode):
 
             if not b:
                 nl0 = x0.get_neighbour_list(
-                    r_cut=nl0.r_cut,
-                    r_skin=nl0.r_skin,
-                    z_array=nl0.z_array,
+                    r_cut=nl0.info.r_cut,
+                    r_skin=nl0.info.r_skin,
+                    z_array=nl0.info.z_array,
                 )
 
         sp0 = _l(x0, nl0)

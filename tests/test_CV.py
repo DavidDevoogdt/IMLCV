@@ -148,7 +148,7 @@ def _permute_sp_rand(
         cell=sp0.cell + jax.random.normal(k3, (3, 3)) * eps,
     )
 
-    nl1 = sp1.get_neighbour_list(r_cut=nl0.r_cut, z_array=nl0.z_array)
+    nl1 = sp1.get_neighbour_list(r_cut=nl0.info, z_array=nl0.z_array)
     return prng, sp1, nl1
 
 
@@ -250,7 +250,7 @@ def test_neigh():
 
     # test 2: campare equivalent sp
     rng, sp2 = _get_equival_sp(sp, rng)
-    nl2 = sp2.get_neighbour_list(r_cut=nl.r_cut, z_array=nl.z_array)
+    nl2 = sp2.get_neighbour_list(r_cut=nl.info.r_cut, z_array=nl.z_array)
 
     s2 = nl2.apply_fun_neighbour(sp=sp2, func=func, r_cut=r_cut)
 
