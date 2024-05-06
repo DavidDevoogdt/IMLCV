@@ -6,7 +6,7 @@ import pytest
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import BiasF
 from IMLCV.base.bias import CompositeBias
-from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.CV import CollectiveVariable, NeighbourListInfo
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import CvMetric
@@ -217,10 +217,13 @@ def test_FES_bias(tmpdir, config_test, choice):
     scheme0 = Scheme.from_rounds(rnds)
 
     sp = scheme0.md.sp
-    nl = sp.get_neighbour_list(
-        scheme0.md.static_trajectory_info.r_cut,
+
+    info = NeighbourListInfo.create(
+        r_cut=scheme0.md.static_trajectory_info.r_cut,
         z_array=scheme0.md.static_trajectory_info.atomic_numbers,
     )
+
+    nl = sp.get_neighbour_list(info=info)
 
     scheme0.FESBias(
         plot=False,

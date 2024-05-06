@@ -195,7 +195,7 @@ class Scheme:
             kl_div = bias.kl_divergence(prev_bias, T=self.rounds.T, symmetric=True)
 
             if kl_div < convergence_kl:
-                print("already converged")
+                print(f"already converged {kl_div=}")
                 return
 
         print(f"{i_0=}")

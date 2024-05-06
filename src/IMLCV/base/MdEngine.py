@@ -21,7 +21,7 @@ from IMLCV.base.bias import Bias
 from IMLCV.base.bias import Energy
 from IMLCV.base.bias import EnergyResult
 from IMLCV.base.CV import CV
-from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import NeighbourList, NeighbourListInfo
 from IMLCV.base.CV import SystemParams
 from jax import Array
 from molmod.periodic import periodic
@@ -87,6 +87,13 @@ class StaticMdInfo:
     @property
     def barostat(self):
         return self.P is not None
+
+    @property
+    def neighbour_list_info(self) -> NeighbourListInfo:
+        return NeighbourListInfo.create(
+            r_cut=self.r_cut,
+            z_array=self.atomic_numbers,
+        )
 
     def __post_init__(self):
         if self.thermostat:
@@ -603,11 +610,13 @@ class MDEngine(ABC):
             return None
 
         def _nl():
-            return self.sp.get_neighbour_list(
+            info = NeighbourListInfo.create(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,
                 r_skin=1.0 * angstrom,
             )
+
+            return self.sp.get_neighbour_list(info)
 
         # only first time
         if self._nl is None:

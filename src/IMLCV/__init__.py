@@ -85,10 +85,10 @@ class Unpickler(jsonpickle.Unpickler):
 
         re_init = update_state or isinstance(instance, PyTreeNode)
 
-        instance = super()._restore_object_instance_variables(obj, instance)
+        out = super()._restore_object_instance_variables(obj, instance)
 
         if update_state:
-            print(f"Warning: {obj[tags.OBJECT]} has no state saved, trying to restore it")
+            # print(f"Warning: {obj[tags.OBJECT]} has no state saved, trying to restore it")
 
             instance.__setstate__(instance.__dict__)
 
@@ -97,9 +97,10 @@ class Unpickler(jsonpickle.Unpickler):
             # sometimes jax objects are not properly initialized
             instance.__init__(**instance.__dict__)
 
-        return instance
+        return out
 
     def _restore_function(self, obj):
+        # load moved function instead of original
         if obj["py/function"] in moved_functions:
             obj["py/function"] = moved_functions[obj["py/function"]]
 

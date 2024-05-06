@@ -343,6 +343,7 @@ class Bias(PyTreeNode, ABC):
         plot_bias=True,
         colors: Array | None = None,
         offset=False,
+        dpi=600,
     ):
         """plot bias."""
         if bins is None:
@@ -518,7 +519,7 @@ class Bias(PyTreeNode, ABC):
             if plot_bias:
                 p = ax.imshow(
                     bias / (kjmol),
-                    cmap=plt.get_cmap("rainbow"),
+                    cmap=plt.get_cmap("jet"),
                     origin="lower",
                     extent=extent,
                     vmin=vmin / kjmol,
@@ -624,7 +625,7 @@ class Bias(PyTreeNode, ABC):
         if name is not None:
             Path(name).parent.mkdir(parents=True, exist_ok=True)
 
-            plt.savefig(name)
+            plt.savefig(name, dpi=dpi)
             plt.close(fig=fig)  # write out
         else:
             plt.show()

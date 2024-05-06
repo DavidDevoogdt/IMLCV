@@ -431,9 +431,9 @@ class ThermoLIB:
                 pf.append(
                     bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
                         bias=fesBias,
-                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.png")],
                         execution_folder=fold,
-                        name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.pdf",
+                        name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.png",
                         inverted=True,
                         label="Free Energy [kJ/mol]",
                         stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
@@ -447,8 +447,8 @@ class ThermoLIB:
                 pf.append(
                     bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
                         bias=fesBias,
-                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.pdf")],
-                        name=f"diff_FES_bias_{self.rnd}_{choice}.pdf",
+                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.png")],
+                        name=f"diff_FES_bias_{self.rnd}_{choice}.png",
                         execution_folder=fold,
                         stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
                         stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
@@ -461,9 +461,9 @@ class ThermoLIB:
             pf.append(
                 bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
                     bias=fes_bias_tot,
-                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.pdf")],
+                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.png")],
                     execution_folder=fold,
-                    name=f"FES_bias_{self.rnd}_inverted_{choice}.pdf",
+                    name=f"FES_bias_{self.rnd}_inverted_{choice}.png",
                     inverted=True,
                     label="Free Energy [kJ/mol]",
                     stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
@@ -477,9 +477,9 @@ class ThermoLIB:
             pf.append(
                 bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
                     bias=fes_bias_tot,
-                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.pdf")],
+                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.png")],
                     execution_folder=fold,
-                    name=f"FES_bias_{self.rnd}_{choice}.pdf",
+                    name=f"FES_bias_{self.rnd}_{choice}.png",
                     stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
                     margin=margin,

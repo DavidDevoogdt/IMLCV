@@ -8,7 +8,7 @@ from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import alanine_dipeptide_refs
 from IMLCV.examples.example_systems import alanine_dipeptide_yaff
-from IMLCV.implementations.CV import NoneCV, SystemParams, NeighbourList, CV
+from IMLCV.implementations.CV import NoneCV, SystemParams, NeighbourList, CV, NeighbourListInfo
 from IMLCV.implementations.CV import sb_descriptor
 from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder
 from IMLCV.implementations.CvDiscovery import TransoformerLDA
@@ -85,12 +85,14 @@ def get_LDA_CV_round(tmpdir, lda_steps=1000) -> Rounds:
 def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut, pdf_file: Path):
     b = scheme0.md.bias
 
-    # test single datapoint
-    sp = scheme0.md.sp
-    nl = scheme0.md.sp.get_neighbour_list(
+    info = NeighbourListInfo.create(
         r_cut=r_cut,
         z_array=scheme0.md.static_trajectory_info.atomic_numbers,
     )
+
+    # test single datapoint
+    sp = scheme0.md.sp
+    nl = scheme0.md.sp.get_neighbour_list(info=info)
 
     cv, dcv = b.collective_variable.compute_cv(sp, nl, jacobian=True)
 
@@ -186,7 +188,7 @@ def test_cv_discovery(
         plot=True,
     )
 
-    pdf_file = rnds.path(rnds.cv) / "cvdiscovery.pdf"
+    pdf_file = rnds.path(rnds.cv) / "cvdiscovery.png"
 
     _cv_discovery_asserts(scheme0, out_dim, r_cut, pdf_file)
 
@@ -217,7 +219,7 @@ def test_LDA_CV(tmpdir, config_test, out_dim=1, r_cut=3 * angstrom):
         plot=True,
     )
 
-    pdf_file = rnds.path(rnds.cv) / "cvdiscovery.pdf"
+    pdf_file = rnds.path(rnds.cv) / "cvdiscovery.png"
 
     _cv_discovery_asserts(scheme0, out_dim, r_cut, pdf_file)
 

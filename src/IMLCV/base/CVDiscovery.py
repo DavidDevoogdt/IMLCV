@@ -60,6 +60,8 @@ class Transformer:
             f,
             chunk_size=chunk_size,
             pmap=p_map,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
         )
 
         if self.pre_scale:
@@ -230,7 +232,7 @@ class Transformer:
 
             if plot:
                 bias.plot(
-                    name=str(plot_folder / "transformed_fes.pdf"),
+                    name=str(plot_folder / "transformed_fes.png"),
                     margin=0.1,
                     inverted=True,
                     vmax=max_fes_bias,
@@ -250,7 +252,7 @@ class Transformer:
 
         if plot:
             Transformer.plot_app(
-                name=str(plot_folder / "cvdiscovery.pdf"),
+                name=str(plot_folder / "cvdiscovery.png"),
                 collective_variables=[dlo.collective_variable, new_collective_variable],
                 cv_data=[CV.stack(*dlo.cv), z],
                 weight=dlo.weights(),
@@ -471,7 +473,7 @@ class Transformer:
                 print(f"{name.suffix} should be pdf or png, changing to pdf")
 
                 name = Path(
-                    f"{name}.pdf",
+                    f"{name}.png",
                 )
 
             name.parent.mkdir(parents=True, exist_ok=True)

@@ -19,7 +19,7 @@ from IMLCV.implementations.bias import RbfBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV, CvMetric
 from IMLCV.base.CV import CvTrans, CvFlow
-from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import NeighbourList, NeighbourListInfo
 from IMLCV.base.CV import padded_pmap
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine
@@ -330,11 +330,7 @@ class Rounds(ABC):
 
         cv.save(self.path(c=c) / "cv.json")
 
-        # attr["name_cv"] = self.rel_path(self.path(c=c) / "cv.json")
-        self.add_cv(
-            # (attr=attr,
-            c=c
-        )
+        self.add_cv(c=c)
 
     def add_round(self, stic: StaticMdInfo | None = None, c=None, r=None):
         if c is None:
@@ -386,16 +382,6 @@ class Rounds(ABC):
 
         if r is None:
             r = self.get_round(c=c)
-
-        # if bias is None:
-        #     if (p := (self.path(c=c, r=r, i=i) / "new_bias.json")).exists():
-        #         bias = self.rel_path(p)
-        #     elif (p := (self.path(c=c, r=r, i=i) / "new_bias")).exists():
-        #         bias = self.rel_path(p)
-        #     elif (p := (self.path(c=c, r=r, i=i) / "bias.json")).exists():
-        #         bias = self.rel_path(p)
-        #     elif (p := (self.path(c=c, r=r, i=i) / "bias")).exists():
-        #         bias = self.rel_path(p)
 
         if not (p := self.path(c=c, r=r, i=i) / "trajectory_info.h5").exists():
             assert d is not None
@@ -618,10 +604,14 @@ class Rounds(ABC):
                         bias = traj_info.get_bias()
                         colvar = bias.collective_variable
 
+                    info = NeighbourListInfo.create(
+                        r_cut=round_info.tic.r_cut,
+                        z_array=round_info.tic.atomic_numbers,
+                    )
+
                     nlr = (
                         sp0.get_neighbour_list(
-                            r_cut=round_info.tic.r_cut,
-                            z_array=round_info.tic.atomic_numbers,
+                            info=info,
                             chunk_size=chunk_size,
                         )
                         if round_info.tic.r_cut is not None
@@ -1265,7 +1255,7 @@ class Rounds(ABC):
             )
 
             if plot:
-                plot_file = path_name / "plot.pdf"
+                plot_file = path_name / "plot.png"
 
                 plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=DEFAULT_LABELS)(
                     traj=future,
@@ -1360,7 +1350,7 @@ class Rounds(ABC):
             )
 
             if plot:
-                plot_file = path_name / "plot.pdf"
+                plot_file = path_name / "plot.png"
 
                 plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=DEFAULT_LABELS)(
                     traj=future,
@@ -1440,11 +1430,16 @@ class Rounds(ABC):
                 traj = traj[traj._t > st.equilibration]
 
         cvs = traj.CV
+
+        info = NeighbourListInfo.create(
+            r_cut=st.r_cut,
+            z_array=st.atomic_numbers,
+        )
+
         if cvs is None:
             sp = traj.sp
             nl = sp.get_neighbour_list(
-                r_cut=st.r_cut,
-                z_array=st.atomic_numbers,
+                info=info,
             )
             cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
 
@@ -1556,9 +1551,10 @@ class Rounds(ABC):
         percentile=1e-1,
         n_max=30,
         vmax=100 * kjmol,
+        verbose=True,
     ):
         if dlo is None:
-            dlo = rounds.data_loader(**dlo_kwargs, macro_chunk=macro_chunk, verbose=True)
+            dlo = rounds.data_loader(**dlo_kwargs, macro_chunk=macro_chunk, verbose=verbose)
 
         cvs_new, new_collective_variable, new_bias = transformer.fit(
             dlo=dlo,
@@ -1576,6 +1572,7 @@ class Rounds(ABC):
             cv_titles=[f"{cv_round_from}", f"{cv_round_to}"],
             vmax=vmax,
             macro_chunk=macro_chunk,
+            verbose=verbose,
         )
 
         # update state
@@ -1892,7 +1889,7 @@ class data_loader_output:
 
     def weights(
         self,
-        correct_U=False,
+        correct_U=True,
         samples_per_bin=30,
         n_max=50,
         ground_bias=None,
@@ -1920,7 +1917,7 @@ class data_loader_output:
             energies = jnp.hstack(energies)
             energies -= jnp.min(energies)
 
-            w_u = jnp.exp(-beta * energies)
+            w_u = jnp.exp(-beta * energies / T_scale)
             w_u /= jnp.mean(w_u)
 
         else:
@@ -2510,7 +2507,7 @@ class data_loader_output:
 
                 if tot_chunk > macro_chunk or n == len(y) - 1:
                     if verbose:
-                        print(f"apply_cv_func: chunk {n}/{len(y)}, {tot_chunk=}")
+                        print(f"apply_cv_func: chunk {n+1}/{len(y)}, {tot_chunk=}")
 
                     z_chunk = f(
                         op(*y_chunk),
@@ -2812,6 +2809,12 @@ class data_loader_output:
         tot_chunk = 0
         stack_dims_chunk = []
 
+        nl_info = NeighbourListInfo.create(
+            r_cut=r_cut,
+            r_skin=0,
+            z_array=self.sti.atomic_numbers,
+        )
+
         while n < len(y):
             s = y[n].shape[0]
 
@@ -2825,9 +2828,7 @@ class data_loader_output:
                     print(f"get nl: [sp] {n}/{len(y)}, {tot_chunk=}")
 
                 nl_chunk = SystemParams.stack(*y_chunk).get_neighbour_list(
-                    r_cut=r_cut,
-                    r_skin=0,
-                    z_array=self.sti.atomic_numbers,
+                    info=nl_info,
                     chunk_size=chunk_size,
                     verbose=verbose,
                 )

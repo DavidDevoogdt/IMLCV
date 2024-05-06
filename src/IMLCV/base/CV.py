@@ -537,18 +537,10 @@ class SystemParams(PyTreeNode):
 
     def get_neighbour_list(
         self,
-        r_cut,
-        z_array: list[int] | Array,
-        r_skin=1.0,
+        info: NeighbourListInfo,
         chunk_size=None,
         verbose=False,
     ) -> NeighbourList | None:
-        info = NeighbourListInfo.create(
-            r_cut=r_cut,
-            r_skin=r_skin,
-            z_array=z_array,
-        )
-
         b, _, _, nl = self._get_neighbour_list(
             info=info,
             chunk_size=chunk_size,
@@ -1036,12 +1028,26 @@ class NeighbourListInfo(PyTreeNode):
             r_skin = 0.0
 
         return NeighbourListInfo(
-            r_cut=r_cut,
-            r_skin=r_skin,
+            r_cut=float(r_cut),
+            r_skin=float(r_skin),
             z_array=to_tuple(z_array),
             z_unique=to_tuple(zu),
             num_z_unique=to_tuple(nzu),
         )
+
+    def nl_split_z(self, p):
+        bool_masks = [jnp.array(self.z_array) == zu for zu in self.z_unique]
+
+        arg_split = [jnp.argsort(~bm, kind="stable")[0:nzu] for bm, nzu in zip(bool_masks, self.num_z_unique)]
+        p = [jax.tree_map(lambda pi: pi[a], tree=p) for a in arg_split]
+
+        return jnp.array(bool_masks), arg_split, p
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__init__(**state)
 
 
 class NeighbourList(PyTreeNode):
@@ -1469,31 +1475,20 @@ class NeighbourList(PyTreeNode):
     @jax.jit
     def update(self, sp: SystemParams) -> tuple[bool, NeighbourList]:
         a, _, _, b = sp._get_neighbour_list(
-            r_cut=self.info.r_cut,
-            r_skin=self.info.r_skin,
-            z_array=self.info.z_array,
-            z_unique=self.info.z_unique,
-            num_z_unique=self.info.num_z_unique,
+            info=self.info,
             num_neighs=self.num_neigh,
             nxyz=self.nxyz,
         )
 
         return a, b
 
-    @staticmethod
-    def _nl_split_z(z_array, z_unique, num_z_unique, p):
-        bool_masks = [jnp.array(z_array) == zu for zu in z_unique]
-
-        arg_split = [jnp.argsort(~bm, kind="stable")[0:nzu] for bm, nzu in zip(bool_masks, num_z_unique)]
-        p = [jax.tree_map(lambda pi: pi[a], tree=p) for a in arg_split]
-
-        return jnp.array(bool_masks), arg_split, p
-
     def nl_split_z(self, p):
-        if self.batched:
-            return vmap(NeighbourList.nl_split_z)(self, p)
+        f = self.info.nl_split_z
 
-        return NeighbourList._nl_split_z(self.info.z_array, self.info.z_unique, self.info.num_z_unique, p)
+        if self.batched:
+            return vmap(f)
+
+        return f(p)
 
     def batch(self):
         if self.batched:
@@ -1615,7 +1610,11 @@ class NeighbourList(PyTreeNode):
         sp_orig = SystemParams.stack(*[nl_i.sp_orig for nl_i in nls]) if not sp_orig_none else None
 
         return NeighbourList(
-            info=NeighbourListInfo.create(r_cut, z_array, r_skin=r_skin),
+            info=NeighbourListInfo.create(
+                r_cut,
+                z_array,
+                r_skin=r_skin,
+            ),
             atom_indices=jnp.vstack(atom_indices) if not atom_indices_none else None,
             nxyz=tuple(nxyz) if not nxyz_none else None,
             sp_orig=sp_orig,
@@ -2877,11 +2876,7 @@ class CvFlow(PyTreeNode):
             )
 
             if not b:
-                nl0 = x0.get_neighbour_list(
-                    r_cut=nl0.info.r_cut,
-                    r_skin=nl0.info.r_skin,
-                    z_array=nl0.info.z_array,
-                )
+                nl0 = x0.get_neighbour_list(r_cut=nl0.info)
 
         sp0 = _l(x0, nl0)
         return sp0

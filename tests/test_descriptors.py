@@ -11,7 +11,7 @@ import numpy as onp
 import pytest
 import scipy.special
 from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import SystemParams
+from IMLCV.base.CV import SystemParams, NeighbourListInfo
 from IMLCV.implementations.CV import get_sinkhorn_divergence
 from IMLCV.implementations.CV import sb_descriptor
 from IMLCV.implementations.CV import soap_descriptor
@@ -78,9 +78,9 @@ def get_sps(
 
     z_array = jax.random.randint(key, (n,), 0, 5)
 
-    nl1 = sp1.get_neighbour_list(r_cut=r_cut, z_array=z_array)
-    nl2 = sp2.get_neighbour_list(r_cut=r_cut, z_array=z_array[perm])
-    nl3 = sp3.get_neighbour_list(r_cut=r_cut, z_array=z_array)
+    nl1 = sp1.get_neighbour_list(info=NeighbourListInfo.create(r_cut=r_cut, z_array=z_array))
+    nl2 = sp2.get_neighbour_list(info=NeighbourListInfo.create(r_cut=r_cut, z_array=z_array[perm]))
+    nl3 = sp3.get_neighbour_list(info=NeighbourListInfo.create(r_cut=r_cut, z_array=z_array))
     return sp1, sp2, sp3, nl1, nl2, nl3
 
 
