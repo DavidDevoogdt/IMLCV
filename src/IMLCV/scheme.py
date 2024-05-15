@@ -161,8 +161,7 @@ class Scheme:
         plot_umbrella=None,
         max_bias=None,
         n_max_fes=30,
-        use_thermolib=False,
-        # resample_num=20,
+        thermolib=False,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -241,7 +240,7 @@ class Scheme:
                     max_bias=max_bias,
                     use_prev_fs=i > 1,
                     n_max=n_max_fes,
-                    use_thermolib=use_thermolib,
+                    thermolib=thermolib,
                     **plot_kwargs,
                 )
 

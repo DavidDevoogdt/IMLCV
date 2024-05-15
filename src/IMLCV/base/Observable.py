@@ -290,23 +290,21 @@ class ThermoLIB:
         vmax=100 * kjmol,
         pmap=True,
         resample_num=30,
-        thermolib=False,
+        thermolib=True,
+        lag_n=10,
         **plot_kwargs,
     ):
-        directory = self.rounds.path(c=self.cv_round, r=self.rnd)
-
         if plot:
+            directory = self.rounds.path(c=self.cv_round, r=self.rnd)
+
             trajs_plot = self.rounds.data_loader(
                 num=1,
                 ignore_invalid=False,
                 cv_round=self.cv_round,
-                start=self.rnd,
-                stop=self.rnd,
                 split_data=True,
                 new_r_cut=None,
                 min_traj_length=min_traj_length,
                 only_finished=only_finished,
-                weight=False,
             ).cv
 
             bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
@@ -429,35 +427,39 @@ class ThermoLIB:
                 fun=_clip,
                 kwargs={"a_min": fs_min, "a_max": fs_max},
             )
-
         else:
             use_prev_fs = False
 
+            print("estimating bias from koopman Theory!")
+
             dlo = self.rounds.data_loader(
-                num=num_rnds,
+                num=10,
+                out=-1,
+                lag_n=lag_n,
                 cv_round=self.cv_round,
                 start=start_r,
-                split_data=False,
                 new_r_cut=None,
+                min_traj_length=min_traj_length,
                 only_finished=only_finished,
                 time_series=True,
-                lag_n=10,
             )
 
+            # get weights based on koopman theory. the CVs are binned with indicators
             weights = dlo.weights(
-                chunk_size=chunk_size,
-                n_max=n_max,
-                samples_per_bin=samples_per_bin,
                 koopman=True,
+                correct_U=True,
+                correct_FES=False,
+                indicator_CVs=True,
+                n_max=n_max,
+                add_1=True,
             )
 
             fes_bias_tot = dlo._get_fes_bias_from_weights(
-                T=dlo.sti.T,
                 weights=weights,
-                collective_variable=dlo.collective_variable,
                 cv=dlo.cv,
-                max_bias=max_bias,
-                n_max=n_max,
+                n_grid=n_max,
+                T=dlo.sti.T,
+                collective_variable=dlo.collective_variable,
             )
 
         if plot:

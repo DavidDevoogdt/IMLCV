@@ -147,7 +147,7 @@ class Transformer:
                 assert jnp.allclose(x_t_2.cv, CV.stack(*x_t).cv)
 
         print("starting fit")
-        y, y_t, g = self._fit(
+        y, y_t, g, w = self._fit(
             x,
             x_t,
             dlo,
@@ -178,7 +178,10 @@ class Transformer:
                     chunk_size=chunk_size,
                 )
 
-        dlo_weights = jnp.hstack(dlo.weights())
+        if w is not None:
+            dlo_weights = jnp.hstack(w)
+        else:
+            dlo_weights = jnp.hstack(dlo.weights())
 
         # remove outliers from the data
         _, mask = CvMetric.bounds_from_cv(
@@ -255,7 +258,7 @@ class Transformer:
                 name=str(plot_folder / "cvdiscovery.png"),
                 collective_variables=[dlo.collective_variable, new_collective_variable],
                 cv_data=[CV.stack(*dlo.cv), z],
-                weight=dlo.weights(),
+                weight=[dlo_weights],
                 margin=0.1,
                 T=dlo.sti.T,
                 plot_FES=True,
@@ -275,7 +278,7 @@ class Transformer:
         chunk_size=None,
         verbose=True,
         **fit_kwargs,
-    ) -> tuple[list[CV], list[CV] | None, CvTrans]:
+    ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
         raise NotImplementedError
 
     def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:
@@ -1088,7 +1091,7 @@ class CombineTransformer(Transformer):
         for i, t in enumerate(self.transformers):
             print(f"fitting transformer {i+1}/{len(self.transformers)}")
 
-            x, x_t, trans_t = t._fit(x, x_t, dlo, chunk_size=chunk_size, **t.fit_kwargs, **fit_kwargs)
+            x, x_t, trans_t, _ = t._fit(x, x_t, dlo, chunk_size=chunk_size, **t.fit_kwargs, **fit_kwargs)
 
             if trans is None:
                 trans = trans_t
@@ -1107,5 +1110,5 @@ class IdentityTransformer(Transformer):
         chunk_size=None,
         verbose=True,
         **fit_kwargs,
-    ) -> tuple[list[CV], list[CV] | None, CvTrans]:
-        return x, x_t, identity_trans
+    ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
+        return x, x_t, identity_trans, None

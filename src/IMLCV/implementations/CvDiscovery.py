@@ -351,7 +351,7 @@ class TranformerAutoEncoder(Transformer):
         if cv_t is not None:
             cv_t = f_enc.compute_cv_trans(cv_t)[0].unstack()
 
-        return cv, cv_t, un_atomize * f_enc
+        return cv, cv_t, un_atomize * f_enc, None
 
 
 def _LDA_trans(cv: CV, nl: NeighbourList | None, _, alpha, outdim, solver):
@@ -544,7 +544,7 @@ class TransoformerLDA(Transformer):
 
             full_trans = un_atomize * _f * _g
 
-        return cv.unstack(), cv_t.unstack(), full_trans
+        return cv.unstack(), cv_t.unstack(), full_trans, None
 
 
 def _transform(cv: CV, nl: NeighbourList | None, _, mask):
@@ -633,34 +633,20 @@ class TransformerMAF(Transformer):
 
         print("getting koopman")
 
-        if method == "tcca":
-            k, tica_selection, g, pi_0, q_0, pi_1, q_1, cv_0, cv_tau = dlo.koopman_model(
-                cv_0=cv_0.unstack(),
-                cv_tau=cv_tau.unstack(),
-                eps=1e-10,
-                method=method,
-                max_features=max_features,
-                w=w,
-                out_dim=self.outdim,
-                koopman_weight=koopman_weighting,
-            )
+        km = dlo.koopman_model(
+            cv_0=cv_0.unstack(),
+            cv_tau=cv_tau.unstack(),
+            eps=1e-10,
+            method=method,
+            max_features=max_features,
+            w=w,
+            koopman_weight=koopman_weighting,
+        )
 
-        elif method == "tica":
-            k, tica_selection, pi_0, q_0, cv_0, cv_tau = dlo.koopman_model(
-                cv_0=cv_0.unstack(),
-                cv_tau=cv_tau.unstack(),
-                eps=1e-10,
-                method=method,
-                max_features=max_features,
-                w=w,
-                out_dim=self.outdim,
-                koopman_weight=koopman_weighting,
-            )
-
-        ts = -dlo.tau / jnp.log(k) / nanosecond
+        ts = km.timescales() / nanosecond
 
         print(f"timescales {  ts[: min(self.outdim+5,len(ts))  ]   } ns")
 
-        trans *= tica_selection
+        trans *= km.f(out_dim=self.outdim)
 
-        return cv_0.unstack(), cv_tau.unstack(), trans
+        return trans.compute_cv_trans(x=cv_0)[0].unstack(), trans.compute_cv_trans(x=cv_tau)[0].unstack(), trans, km.w
