@@ -1001,6 +1001,15 @@ class SystemParams(PyTreeNode):
 
         return SystemParams(coordinates=jnp.concatenate(coor, axis=0), cell=jnp.array(n) @ self.cell)
 
+    def volume(self):
+        if self.cell is None:
+            return None
+
+        if self.batched:
+            return vmap(SystemParams.volume)(self)
+
+        return jnp.abs(jnp.linalg.det(self.cell))
+
 
 class NeighbourListInfo(PyTreeNode):
     # esssential information

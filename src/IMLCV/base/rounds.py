@@ -34,7 +34,6 @@ from molmod.constants import boltzmann
 from parsl.data_provider.files import File
 from IMLCV.configs.config_general import DEFAULT_LABELS, REFERENCE_LABELS, TRAINING_LABELS
 from typing import Callable
-import scipy.linalg
 from jax import vmap
 from functools import partial
 from IMLCV.implementations.bias import _clip
@@ -43,6 +42,7 @@ from IMLCV.base.CV import chunk_map
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.CVDiscovery import Transformer
 from molmod.units import kjmol
+from flax.struct import PyTreeNode
 
 
 @dataclass
@@ -497,6 +497,7 @@ class Rounds(ABC):
         weight=True,
         T_scale=3,
         macro_chunk=10000,
+        koopman=False,
     ) -> data_loader_output:
         # weights = []
 
@@ -628,7 +629,7 @@ class Rounds(ABC):
             if len(sp_c) == 0:
                 continue
 
-            if weight_c:
+            if weight_c and out != -1:
                 if verbose:
                     print(f"getting weights for cv_round {cvi}")
 
@@ -639,13 +640,12 @@ class Rounds(ABC):
                     sti=sti_c,
                     nl=None,
                     collective_variable=colvar_c,
-                    # time_series=time_series,
                     ground_bias=ground_bias_c,
                 )
                 # select points according to free energy divided by histogram count
                 wc = dlo.weights(
-                    use_ground_bias=True,
                     correct_U=False,
+                    use_ground_bias=True,
                     T_scale=T_scale,
                     chunk_size=chunk_size,
                 )
@@ -1199,8 +1199,20 @@ class Rounds(ABC):
                 only_finished=only_finished,
                 get_bias_list=False,
                 weight=True,
-                T_scale=5,
+                T_scale=3,
             )
+
+            # get the weights of the points
+            w_0 = jnp.hstack(
+                dlo_data.weights(
+                    correct_U=False,
+                    use_ground_bias=True,
+                    correct_FES=True,
+                    T_scale=1,
+                )
+            )
+
+            cv_stack = CV.stack(*dlo_data.cv)
 
             sp_stack = SystemParams.stack(*dlo_data.sp)
         else:
@@ -1223,8 +1235,8 @@ class Rounds(ABC):
 
             if not sp0_provided:
                 # reweigh data points according to new bias
-                probs = jnp.hstack(dlo_data.weights(ground_bias=bias, sign=-1, correct_U=False))
 
+                probs = w_0 * jnp.exp(-bias.compute_from_cv(cvs=cv_stack)[0] / (dlo_data.sti.T * boltzmann))
                 probs = probs / jnp.sum(probs)
 
                 KEY, k = jax.random.split(KEY, 2)
@@ -1871,6 +1883,7 @@ class data_loader_output:
                 def __f(a, b=None):
                     if b is not None:
                         return jnp.sum((a == num) * b)
+
                     return jnp.sum(a == num)
 
                 if chunk_size is not None:
@@ -1899,39 +1912,68 @@ class data_loader_output:
         hist_eps=1e-15,
         T_scale=1,
         chunk_size=None,
+        koopman=False,
+        indicator_CVs=False,
+        cv0: list[CV] | None = None,
+        cv_t: list[CV] | None = None,
+        correct_FES=False,
+        add_1=True,
     ) -> list[jax.Array]:
         # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
 
-        data = CV.stack(*self.cv)
-        beta = 1 / (self.sti.T * boltzmann)
+        beta = 1 / (self.sti.T * boltzmann * T_scale)
 
         if ground_bias is None:
             ground_bias = self.ground_bias
 
+        if cv0 is None:
+            cv0 = CV.stack(*self.cv)
+        else:
+            cv0 = CV.stack(*cv0)
+
+        if cv_t is None:
+            cv_t = CV.stack(*self.cv_t) if self.time_series else None
+        else:
+            cv_t = CV.stack(*cv_t)
+
+        # correct biases to ground bias level
         if correct_U:
-            energies = []
+            # norml reweighing to ground bias
+            probs = []
 
-            for ti_i in self.ti:
-                energies.append(ti_i.e_pot)
+            for n in range(len(self.ti)):
+                # get bias, correct to FES
 
-            energies = jnp.hstack(energies)
-            energies -= jnp.min(energies)
+                if self.ti[n].e_bias is None:
+                    U = jnp.zeros(self.ti[n].e_pot.shape)
+                else:
+                    U = self.ti[n].e_bias
 
-            w_u = jnp.exp(-beta * energies / T_scale)
-            w_u /= jnp.mean(w_u)
+                U -= jnp.mean(U)
+
+                p = jnp.exp(beta * U)
+                p /= jnp.mean(p)
+
+                probs.append(p)
+
+            # get bias releative to ground state
+            w_u = jnp.hstack(probs)
+            w_u /= jnp.sum(w_u)
 
         else:
-            w_u = jnp.ones((data.shape[0],))
+            w_u = jnp.ones((cv0.shape[0],))
 
-        # norm based on FES
+        # do koopman rewighting in thesystem ofsetted by ground bias
 
-        n = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=data.shape[0], n_dims=data.shape[1])
+        w_u /= jnp.sum(w_u)
+
+        # correct for histogram count
+        n = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=cv0.shape[0], n_dims=cv0.shape[1])
 
         if n > n_max:
             n = n_max
-            # print(f"reducing {n=} to {n_max=}")
 
-        grid_bounds, mask = CvMetric.bounds_from_cv(data, margin=0.1, chunk_size=chunk_size)
+        grid_bounds, mask = CvMetric.bounds_from_cv(cv0, margin=0.1, chunk_size=chunk_size)
 
         cv_mid, nums, closest, get_histo = data_loader_output._histogram(
             collective_variable=self.collective_variable,
@@ -1940,20 +1982,67 @@ class data_loader_output:
             chunk_size=chunk_size,
         )
 
-        grid_nums = closest(data.cv, cv_mid.cv)
-        hist = get_histo(grid_nums, nums, w_u)
+        grid_nums = closest(cv0.cv, cv_mid.cv)
 
-        if use_ground_bias:
-            p_grid = jnp.exp(sign * beta * ground_bias.compute_from_cv(cvs=cv_mid, chunk_size=chunk_size)[0] / T_scale)
-        else:
-            p_grid = jnp.ones((cv_mid.cv.shape[0],))
+        if correct_FES:
+            # reweight to FES
+            p_grid = jnp.exp(sign * beta * ground_bias.compute_from_cv(cvs=cv_mid, chunk_size=chunk_size)[0])
+            hist = get_histo(grid_nums, nums, w_u)
+            mask = jnp.where(hist <= hist_eps, True, False)
+            w_u = w_u * jnp.where(mask, 0, p_grid / hist)[grid_nums]
+        # else:
+        #     # divide by nu;ber in given bin
+        #     p_grid = jnp.ones((cv_mid.cv.shape[0],))
+        #     hist = get_histo(grid_nums, nums)
 
-        p_grid = jnp.where(hist <= hist_eps, 0, p_grid / hist)
+        if koopman and self.time_series:
+            # correction for sampling density on grid. which is a result of the procedure
 
-        p = w_u * p_grid[grid_nums]
-        p /= jnp.sum(p)
+            assert T_scale == 1, "T_scale cannot be adapted for koopman weighing"
 
-        weights = [d.cv.reshape((-1,)) for d in data.replace(cv=jnp.expand_dims(p, 1)).unstack()]
+            print("koopman weighing")
+
+            if indicator_CVs:
+                grid_nums_t = closest(CV.stack(*self.cv_t).cv, cv_mid.cv)
+
+                # only use cells wiht both x and y element
+
+                hist = get_histo(grid_nums, nums)
+                hist_t = get_histo(grid_nums_t, nums)
+                mask = jnp.logical_or(hist == 0, hist_t == 0)
+
+                @jax.vmap
+                def _set(indicator_0: jax.Array, nums: jax.Array):
+                    indicator_0 = indicator_0.at[nums].set(1)
+                    return indicator_0[jnp.logical_not(mask)]
+
+                grid_nums = closest(cv0.cv, cv_mid.cv)
+                grid_nums_t = closest(CV.stack(*self.cv_t).cv, cv_mid.cv)
+
+                x0 = CV(cv=_set(jnp.zeros((grid_nums.shape[0], cv_mid.cv.shape[0])), grid_nums))
+                xt = CV(cv=_set(jnp.zeros((grid_nums_t.shape[0], cv_mid.cv.shape[0])), grid_nums_t))
+
+            else:
+                x0 = cv0
+                xt = CV.stack(*self.cv_t)
+
+            # construct koopman model
+            km = self.koopman_model(
+                cv_0=x0,
+                cv_tau=xt,
+                w=w_u,
+                add_1=add_1,
+                method="tcca",
+                symmetric=False,
+                # out_dim=10,
+            )
+
+            w_u = km.koopman_weight()
+
+        w_u /= jnp.sum(w_u)
+
+        # trick: cast weights as CV, unstack and reshape
+        weights = [d.cv.reshape((-1,)) for d in cv0.replace(cv=jnp.expand_dims(w_u, 1)).unstack()]
 
         return weights
 
@@ -1969,16 +2058,17 @@ class data_loader_output:
     @staticmethod
     def _whiten(
         cv_0: CV,
-        cv_tau=None,
+        cv_tau: CV | None = None,
         symmetric=False,
         w=None,
         add_1=False,
         eps=1e-10,
         max_features=2000,
+        canoncial_signs=True,
     ):
         if w is None:
             w = jnp.ones((cv_0.shape[0],))
-            w /= jnp.sum(w)
+        w /= jnp.sum(w)
 
         if symmetric:
             assert cv_tau is not None
@@ -1999,43 +2089,41 @@ class data_loader_output:
 
         # TODO: tends to hang here due to parsl forking. see https://github.com/google/jax/issues/1805#issuecomment-561244991 and https://github.com/Parsl/parsl/issues/2343
         # l, q = jnp.linalg.eigh(C0)
-        l, q = scipy.linalg.eigh(C0, subset_by_value=(eps, np.inf))
-        l, q = jnp.array(l), jnp.array(q)
+
+        l, q = jnp.linalg.eigh(C0)
 
         mask = l >= eps
         print(f"{jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
 
-        if sum(mask) == 0:
-            print(f"all eigenvalues are smaller than {eps=}, keeping features")
-            print(f"{l=}")
-            mask = jnp.ones_like(mask, dtype=bool)
+        l = jnp.where(mask, l, 0)
 
-        q = q[:, mask] @ jnp.diag(l[mask] ** (-1 / 2))
+        if canoncial_signs:
+            signs = jax.vmap(lambda q: jnp.sign(q[jnp.argmax(jnp.abs(q))]), in_axes=1)(q)
+            q = q @ jnp.diag(signs)
 
-        if max_features is not None:
-            if jnp.sum(mask) > max_features:
-                print(f"reducing to {max_features=}")
-                q = q[:, -max_features:]
+        l_inv_sqrt = jnp.where(l > eps, 1 / jnp.sqrt(l), 0)
 
         transform_maf = CvTrans.from_cv_function(
             data_loader_output._transform,
             static_argnames=["add_1"],
             add_1=add_1,
-            q=q,
+            q=q @ jnp.diag(l_inv_sqrt),
             pi=pi,
         )
 
         if cv_tau is not None:
             cv_0, _, _ = transform_maf.compute_cv_trans(cv_0)
-            cv_tau = transform_maf.compute_cv_trans(cv_tau)[0]
-            return cv_0, cv_tau, transform_maf, pi, q
+            cv_tau, _, _ = transform_maf.compute_cv_trans(cv_tau)
+            return cv_0, cv_tau, transform_maf, pi, q, l, mask
 
-        cv_0 = transform_maf.compute_cv_trans(cv_0)[0]
+        cv_0, _, _ = transform_maf.compute_cv_trans(cv_0)
 
-        return cv_0, transform_maf, pi, q
+        return cv_0, transform_maf, pi, q, l, mask
 
     @staticmethod
-    def _get_covariance(cv_0: CV, cv_1: CV = None, w=None, calc_pi=False, symmetric=True):
+    def _get_covariance(
+        cv_0: CV, cv_1: CV = None, w=None, calc_pi=False, symmetric=True
+    ) -> data_loader_output._Covariances:
         if w is None:
             w = jnp.ones((cv_0.shape[0],))
             w /= jnp.sum(w)
@@ -2054,7 +2142,7 @@ class data_loader_output:
             C0 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, X) + jnp.einsum("ni,n,nj->ij", Y, w, Y))
             C1 = 0.5 * (jnp.einsum("ni,n,nj->ij", X, w, Y) + jnp.einsum("ni,n,nj->ij", Y, w, X))
 
-            return C0, C1, pi
+            return data_loader_output._Covariances(C00=C0, C11=C0, C01=C1, pi_0=pi, pi_1=pi)
 
         pi_0 = None
         pi_1 = None
@@ -2070,101 +2158,388 @@ class data_loader_output:
         C01 = jnp.einsum("ni,n,nj->ij", X, w, Y)
         C11 = jnp.einsum("ni,n,nj->ij", Y, w, Y)
 
-        return C00, C01, C11, pi_0, pi_1
+        return data_loader_output._Covariances(C00=C00, C01=C01, C11=C11, pi_0=pi_0, pi_1=pi_1)
 
-    def koopman_weights(
-        self,
-        cv_0: CV = None,
-        cv_tau: CV = None,
-        w: list[jax.Array] | None = None,
-        eps=1e-10,
-        max_features=2000,
-        add_1=True,
-        test=False,
-    ):
-        # see  https://publications.imp.fu-berlin.de/1997/1/17_JCP_WuEtAl_KoopmanReweighting.pdf
-        # https://pubs.aip.org/aip/jcp/article-abstract/146/15/154104/152394/Variational-Koopman-models-Slow-collective?redirectedFrom=fulltext
+    class _Covariances(PyTreeNode):
+        C00: jax.Array
+        C01: jax.Array
+        C11: jax.Array
+        pi_0: jax.Array
+        pi_1: jax.Array
 
-        assert self.time_series
+    class _KoopmanModel(PyTreeNode):
+        pi_0: jax.Array
+        pi_1: jax.Array
+        q_0: jax.Array
+        q_1: jax.Array
+        l_0: jax.Array
+        l_1: jax.Array
 
-        if cv_0 is None:
-            cv_0 = self.cv
-        cv_0 = CV.stack(*cv_0)
+        U: jax.Array
+        s: jax.Array
+        Vh: jax.Array
 
-        if cv_tau is None:
-            cv_tau = self.cv_t
+        cv_0: CV
+        cv_tau: CV
 
-        if cv_tau is not None:
-            cv_tau = CV.stack(*cv_tau)
+        w: jax.Array | None = None
+        eps: float = 1e-10
 
-        if w is None:
-            w = jnp.ones((cv_0.shape[0],))
-        else:
-            w = jnp.hstack(w)
+        add_1: bool = False
+        max_features: int = 2000
+        out_dim: int | None = None
+        method: str = "tcca"
 
-        w /= jnp.sum(w)
+        tau: float | None = None
 
-        cv0_white, cv_tau_white, transform_maf, pi, q = data_loader_output._whiten(
-            cv_0=cv_0,
-            cv_tau=cv_tau,
-            w=w,
-            add_1=add_1,
-            eps=eps,
-            max_features=max_features,
-        )
-        # cv_tau_white = transform_maf.compute_cv_trans(cv_tau)[0]
-
-        C_00, C_01, C_11, pi_0, pi_1 = data_loader_output._get_covariance(
-            cv_0=cv0_white,
-            cv_1=cv_tau_white,
-            w=w,
+        @staticmethod
+        def create(
+            w,
+            cv_0: CV,
+            cv_tau: CV,
+            add_1=False,
+            eps=1e-10,
+            method="tcca",
             symmetric=False,
-            calc_pi=False,
-        )
+            out_dim=None,
+            koopman_weight=False,
+            max_features=None,
+            tau=None,
+        ):
+            if max_features is None:
+                max_features = cv_0.shape[1]
 
-        # eigenvalue of K.T
-        eigval, u = jnp.linalg.eig(a=C_01.T)
+            if method == "tica":
+                (cv0_white, cv_tau_white, transform_maf, pi, q, l, mask) = data_loader_output._whiten(
+                    cv_0=cv_0,
+                    cv_tau=cv_tau,
+                    symmetric=symmetric,
+                    w=w,
+                    add_1=add_1,
+                    eps=eps,
+                    max_features=max_features,
+                )
 
-        p = jnp.abs(eigval) > 1 + 1e-10
-        in_bounds = jnp.all(p)
+                cov = data_loader_output._get_covariance(
+                    cv_0=cv0_white,
+                    cv_1=cv_tau_white,
+                    w=w,
+                    calc_pi=False,
+                    symmetric=symmetric,
+                )
 
-        if not in_bounds:
-            print(f" {jnp.sum(p)}/ {p.shape[0]} eigvals too large {eigval[p]=}.")
+                if symmetric:
+                    k, u = jnp.linalg.eigh(cov.C01)
+                else:
+                    k, u = jnp.linalg.eig(cov.C01)
 
-        if add_1:
-            idx = jnp.argsort(jnp.abs(eigval - 1))[0]
-            assert jnp.abs(eigval[idx] - 1) < 1e-8, f"{eigval[idx]=}, but should be 1"
-        else:
-            idx = jnp.argmax(jnp.real(eigval))
-            print(f"largest eigval = {eigval[idx]}")
-            assert jnp.allclose(jnp.imag(eigval[idx]), 0)
+                # reverse order
+                k = k[::-1]
+                u = u[:, ::-1]
 
-        print(f"idx = {idx}, {eigval[idx]=}, {u[:, idx]=}")
+                # renaming stuff
+                pi_0, pi_1 = pi, pi
+                q_0, q_1 = q, q
+                l_0, l_1 = l, l
+                U = u
+                s = k
+                Vh = jnp.linalg.inv(u)
 
-        w_k = jnp.einsum("ni,n,i->n", cv0_white.cv, w, u[:, idx])
+            elif method == "tcca":
+                (
+                    cv0_white,
+                    transform_maf_0,
+                    pi_0,
+                    q_0,
+                    l_0,
+                    mask_0,
+                ) = data_loader_output._whiten(
+                    cv_0=cv_0,
+                    w=w,
+                    eps=eps,
+                    max_features=max_features,
+                    add_1=add_1,
+                )
 
-        if not (w_k > 0).all():
-            print(
-                f"  { jnp.sum( w_k<= 0 ) }/{w_k.shape[0]} negative weights,  mean {  jnp.mean( w_k[w_k<= 0]) }, min { jnp.min( w_k[w_k<= 0] ) }. Setting to zero and reestimating",
+                (
+                    cv_tau_white,
+                    transform_maf_1,
+                    pi_1,
+                    q_1,
+                    l_1,
+                    mask_1,
+                ) = data_loader_output._whiten(
+                    cv_0=cv_tau,
+                    w=w,
+                    eps=eps,
+                    max_features=max_features,
+                    add_1=add_1,
+                )
+
+                cov = data_loader_output._get_covariance(
+                    cv_0=cv0_white,
+                    cv_1=cv_tau_white,
+                    w=w,
+                    symmetric=False,
+                    calc_pi=False,
+                )
+
+                K = cov.C01
+                U, s, Vh = jnp.linalg.svd(K.T)
+
+                print(f"{s[0:10]=}")
+
+                if out_dim is not None:
+                    od = out_dim
+                    if add_1:
+                        od += 1
+
+                    U = U[:, :od]
+                    s = s[:od]
+                    Vh = Vh[:od, :]
+            else:
+                raise ValueError(f"method {method} not known")
+
+            km = data_loader_output._KoopmanModel(
+                pi_0=pi_0,
+                pi_1=pi_1,
+                q_0=q_0,
+                q_1=q_1,
+                l_0=l_0,
+                l_1=l_1,
+                U=U,
+                s=s,
+                Vh=Vh,
+                cv_0=cv_0,
+                cv_tau=cv_tau,
+                w=w,
+                add_1=add_1,
+                max_features=max_features,
+                out_dim=out_dim,
+                method=method,
+                tau=tau,
             )
 
-        w_k /= jnp.sum(w_k)
+            if koopman_weight:
+                km = km.weighted_model()
 
-        return w_k
+            return km
+
+        @property
+        def _q0(self):
+            if self.add_1:
+                out = jnp.zeros((self.q_0.shape[0] + 1, self.q_0.shape[1] + 1))
+                out = out.at[1:, :-1].set(self.q_0)
+                out = out.at[0, -1].set(1)
+
+                return out
+            return self.q_0
+
+        @property
+        def _q1(self):
+            if self.add_1:
+                out = jnp.zeros((self.q_1.shape[0] + 1, self.q_1.shape[1] + 1))
+                out = out.at[1:, :-1].set(self.q_1)
+                out = out.at[0, -1].set(1)
+
+                return out
+            return self.q_1
+
+        @property
+        def _l0(self):
+            if self.add_1:
+                return jnp.hstack([self.l_0, jnp.array([1])])
+            return self.l_0
+
+        @property
+        def _l1(self):
+            if self.add_1:
+                return jnp.hstack([self.l_1, jnp.array([1])])
+            return self.l_1
+
+        def C00(self, pow=1):
+            return self._q0 @ jnp.diag(self.l0_pow(pow)) @ self._q0.T
+
+        def C11(self, pow=1):
+            return self._q1 @ jnp.diag(self.l1_pow(pow)) @ self._q1.T
+
+        def C01(self):
+            return (
+                self._q1
+                @ jnp.diag(self.l1_pow(1 / 2))
+                @ self.U
+                @ jnp.diag(self.s)
+                @ self.Vh
+                @ jnp.diag(self.l0_pow(1 / 2))
+                @ self._q0.T
+            )
+
+        def Tk(self, out_dim=None):
+            # Optimal Data-Driven Estimation of Generalized Markov State Models for Non-Equilibrium Dynamics eq. 30
+
+            if out_dim is None:
+                out_dim = self.U.shape[1]
+
+            return (
+                self.C11(pow=-1 / 2)
+                @ self.Vh.T[:, :out_dim]
+                @ jnp.diag(self.s[:out_dim])
+                @ self.U.T[:out_dim, :]
+                @ self.C00(pow=1 / 2)
+            )
+
+        def whiten_f(self):
+            return CvTrans.from_cv_function(
+                data_loader_output._transform,
+                static_argnames=["add_1"],
+                add_1=False,
+                q=self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)),
+                pi=self.pi_0,
+            )
+
+        def whiten_g(self):
+            return CvTrans.from_cv_function(
+                data_loader_output._transform,
+                static_argnames=["add_1"],
+                add_1=False,
+                q=self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)),
+                pi=self.pi_1,
+            )
+
+        def f(self, out_dim=None):
+            if self.add_1:
+                o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)[:-1]) @ self.U[:-1, 1:]
+            else:
+                o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)) @ self.U
+
+            if out_dim is not None:
+                o = o[:, :out_dim]
+
+            return CvTrans.from_cv_function(
+                data_loader_output._transform,
+                static_argnames=["add_1"],
+                add_1=False,
+                q=o,
+                pi=self.pi_0,
+            )
+
+        def g(self, out_dim):
+            if self.add_1:
+                o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)[:-1]) @ self.Vh[:-1, 1 : out_dim + 1]
+            else:
+                o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)) @ self.Vh[:, :out_dim]
+
+            return CvTrans.from_cv_function(
+                data_loader_output._transform,
+                static_argnames=["add_1"],
+                add_1=False,
+                q=o,
+                pi=self.pi_1,
+            )
+
+        def l0_pow(self, pow=1, add_1=None):
+            if pow < 0:
+                return jnp.where(self._l0 > self.eps, self._l0**pow, 0)
+
+            return self._l0**pow
+
+        def l1_pow(self, pow=1):
+            if pow < 0:
+                return jnp.where(self._l1 > self.eps, self._l1**pow, 0)
+
+            return self._l1**pow
+
+        def koopman_weight(self) -> jax.Array:
+            # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
+
+            # from scipy.sparse.linalg import eigs
+            # from numpy import asarray
+
+            # # # out_dim = 10
+
+            A = self.C00(pow=-1) @ self.C11() @ self.Tk(out_dim=1)
+
+            # # # directly estimate in the whitened f basis where c00 = I. We also need C11 in this basis
+            # l, v = eigs(asarray(self.C11(pow=1 / 2) @ self.Vh.T @ jnp.diag(self.s) @ self.U.T), k=5, which="LR")
+
+            l, v = jnp.linalg.eig(A)
+
+            idx = jnp.argmax(jnp.real(l))
+
+            v = jnp.real(v[:, idx])
+
+            print(f"{l[idx]=}")
+
+            if self.add_1:
+                #     v = v[:-1]
+                w = jnp.einsum("ni,i->n", self.cv_0.cv, v[:-1]) + v[-1]
+
+                print(v[-1])
+            else:
+                #     v = v[:-1]
+                w = jnp.einsum("ni,i->n", self.cv_0.cv, v)
+
+            mask = w > 0
+
+            n1 = jnp.sum(mask)
+            n2 = jnp.sum(jnp.logical_not(mask))
+
+            if n2 > n1:
+                w = -w
+                mask = jnp.logical_not(mask)
+                n2, n1 = n1, n2
+
+            w /= jnp.sum(w[mask])
+
+            if not mask.all():
+                print(
+                    f"{ n2 }/{w.shape[0]} negative weights,  mean {  jnp.mean( w[ jnp.logical_not(mask) ])= }, min { jnp.min( w[ jnp.logical_not(mask) ])= }. Setting to zero",
+                )
+
+                w = w.at[w < 0].set(0)
+            else:
+                print("all weights positive")
+
+            return w
+
+        def weighted_model(self, add_1=False) -> data_loader_output._KoopmanModel:
+            return data_loader_output._KoopmanModel.create(
+                w=self.koopman_weight(),
+                cv_0=self.cv_0,
+                cv_tau=self.cv_tau,
+                add_1=add_1,
+                eps=self.eps,
+                method=self.method,
+                symmetric=False,
+                out_dim=self.out_dim,
+                tau=self.tau,
+            )
+
+        def timescales(self):
+            s = self.s
+            if self.add_1:
+                s = s[1:]
+
+            tau = self.tau
+            if tau is None:
+                tau = 1
+                print("tau not set, assuming 1")
+
+            return -tau / jnp.log(s)
 
     def koopman_model(
         self,
         cv_0: list[CV] = None,
         cv_tau: list[CV] = None,
-        method="tica",
-        koopman_weight=True,
-        symmetric_tica=True,
+        method="tcca",
+        koopman_weight=False,
+        symmetric=True,
         w: list[jax.Array] | None = None,
         eps=1e-10,
         max_features=2000,
         out_dim=None,
         add_1=True,
-    ):
+    ) -> data_loader_output._KoopmanModel:
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
         assert method in ["tica", "tcca"]
 
@@ -2180,147 +2555,24 @@ class data_loader_output:
 
         if w is not None:
             w = jnp.hstack(w)
+        else:
+            w = jnp.ones((cv_0.shape[0],))
 
-        print(f"{cv_0.shape=}, {cv_tau.shape=}")
+        w /= jnp.sum(w)
 
-        if koopman_weight:
-            w = self.koopman_weights(cv_0=cv_0, cv_tau=cv_tau, w=w, eps=eps)
-
-        if method == "tica":
-            (
-                cv0_white,
-                cv_tau_white,
-                transform_maf,
-                pi,
-                q,
-            ) = data_loader_output._whiten(
-                cv_0=cv_0,
-                cv_tau=cv_tau,
-                symmetric=symmetric_tica,
-                w=w,
-                add_1=add_1,
-                eps=eps,
-                max_features=max_features,
-            )
-
-            _, C_01, _ = data_loader_output._get_covariance(
-                cv_0=cv0_white,
-                cv_1=cv_tau_white,
-                w=w,
-                calc_pi=False,
-                symmetric=symmetric_tica,
-            )
-
-            if symmetric_tica:
-                k, u = jnp.linalg.eigh(C_01)
-            else:
-                k, u = jnp.linalg.eig(C_01)
-
-            # reverse order
-            k = k[::-1]
-            u = u[:, ::-1]
-
-            if add_1:
-                assert jnp.allclose(k[0], 1, atol=1e-6), f"{k[0]=}, but should be 1"
-                M = q @ (u[:-1,][:, 1:])
-                k = k[1:]
-            else:
-                M = q @ u
-
-            if out_dim is not None:
-                M = M[:, :out_dim]
-
-            f = CvTrans.from_cv_function(
-                data_loader_output._transform,
-                static_argnames=["add_1"],
-                add_1=False,
-                q=M,
-                pi=pi,
-            )
-
-            cv_0_out = f.compute_cv_trans(cv_0)[0]
-            cv_tau_out = f.compute_cv_trans(cv_tau)[0]
-
-            return k, f, pi, M, cv_0_out, cv_tau_out
-
-        if method == "tcca":
-            (
-                cv0_white,
-                transform_maf_0,
-                pi_0,
-                q_0,
-            ) = data_loader_output._whiten(
-                cv_0=cv_0,
-                w=w,
-                add_1=add_1,
-                eps=eps,
-                max_features=max_features,
-            )
-
-            (
-                cv_tau_white,
-                transform_maf_1,
-                pi_1,
-                q_1,
-            ) = data_loader_output._whiten(
-                cv_0=cv_tau,
-                w=w,
-                add_1=add_1,
-                eps=eps,
-                max_features=max_features,
-            )
-
-            C_00, C_01, C_11, _, _ = data_loader_output._get_covariance(
-                cv_0=cv0_white,
-                cv_1=cv_tau_white,
-                w=w,
-                symmetric=False,
-                calc_pi=False,
-            )
-
-            K = C_01
-
-            U, s, Vh = jnp.linalg.svd(K)
-
-            if add_1:
-                U = U[:-1, :][:, 1:]
-                Vh = Vh[:, :-1][1:, :]
-                s = s[1:]
-
-            msk = s >= 1
-            if jnp.any(msk):
-                print(f"{jnp.sum(msk)}/{msk.shape[0]} singular values larger than 1. Removing them.")
-
-                U = U[:, ~msk]
-                Vh = Vh[~msk, :]
-                s = s[~msk]
-
-            q_0 = q_0 @ U
-            q_1 = q_1 @ jnp.transpose(Vh)
-            if out_dim is not None:
-                q_0 = q_0[:, :out_dim]
-                q_1 = q_1[:, :out_dim]
-
-            f = CvTrans.from_cv_function(
-                data_loader_output._transform,
-                static_argnames=["add_1"],
-                add_1=False,
-                q=q_0,
-                pi=pi_0,
-            )
-
-            g = CvTrans.from_cv_function(
-                data_loader_output._transform,
-                static_argnames=["add_1"],
-                add_1=False,
-                q=q_1,
-                pi=pi_1,
-            )
-
-            cv_0_out = f.compute_cv_trans(cv_0)[0]
-            cv_tau_out = f.compute_cv_trans(cv_tau)[0]
-
-            return s, f, g, pi_0, q_0, pi_1, q_1, cv_0_out, cv_tau_out
+        return data_loader_output._KoopmanModel.create(
+            w=w,
+            cv_0=cv_0,
+            cv_tau=cv_tau,
+            add_1=add_1,
+            eps=eps,
+            method=method,
+            symmetric=symmetric,
+            out_dim=out_dim,
+            koopman_weight=koopman_weight,
+            max_features=max_features,
+            tau=self.tau,
+        )
 
     def filter_nans(self, x: list[CV] | None = None, x_t: list[CV] | None = None) -> tuple[data_loader_output, CV, CV]:
         if x is None:
@@ -2538,7 +2790,7 @@ class data_loader_output:
         cv: list[CV],
         samples_per_bin=10,
         min_samples_per_bin: int | None = 3,
-        n_max=60,
+        n_max=30,
         n_grid=None,
         max_bias=None,
     ) -> RbfBias:
@@ -2546,6 +2798,10 @@ class data_loader_output:
 
         cv = CV.stack(*cv)
         p = jnp.hstack(weights)
+
+        mask = p > 0
+        cv = cv[mask]
+        p = p[mask]
 
         if n_grid is None:
             n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=cv.shape[0], n_dims=cv.shape[1])
@@ -2592,7 +2848,7 @@ class data_loader_output:
             mask = num_grid <= min_samples_per_bin
             p_grid = p_grid.at[mask].set(0)
 
-        mask = p_grid != 0
+        mask = p_grid >= 1e-16
 
         p_grid = p_grid[mask]
 

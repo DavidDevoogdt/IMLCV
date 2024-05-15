@@ -442,7 +442,7 @@ class TrajectoryInfo(PyTreeNode):
     def volume(self):
         if self.cell is not None:
             vol_unsigned = jnp.linalg.det(self._cell)
-            if vol_unsigned < 0:
+            if (vol_unsigned < 0).any():
                 print("cell volume was negative")
 
             return jnp.abs(vol_unsigned)
