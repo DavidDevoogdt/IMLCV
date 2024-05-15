@@ -437,7 +437,7 @@ def config(
     default_on_threads=False,
     default_threads=4,
     training_on_threads=False,
-    trainig_cores=12,
+    training_cores=12,
 ):
     def get_kwargs(cpu_cluster=None, gpu_cluster=None):
         if env == "hortense":
@@ -517,7 +517,7 @@ def config(
 
     else:
         default_labels = []
-        trainig_labels = []
+        training_labels = []
         reference_labels = []
 
         execs = []
@@ -559,12 +559,12 @@ def config(
 
             training = ThreadPoolExecutor(
                 label=label,
-                max_threads=trainig_cores,
+                max_threads=training_cores,
                 working_dir=str(Path(path_internal) / label),
             )
 
             execs.append(training)
-            trainig_labels.append(label)
+            training_labels.append(label)
 
         else:
             if gpu_cluster is not None:
@@ -581,13 +581,13 @@ def config(
                         max_blocks=4,
                         parallelism=1,
                         parsl_tasks_per_block=1,
-                        threads_per_core=trainig_cores,
+                        threads_per_core=training_cores,
                         parsl_cores=False,
                         walltime="04:00:00",
                         **kw,
                     )
                     execs.append(gpu_part)
-                    trainig_labels.append(label)
+                    training_labels.append(label)
             else:
                 for cpu in cpu_cluster:
                     kw = get_kwargs(cpu_cluster=cpu)
@@ -601,13 +601,13 @@ def config(
                         max_blocks=4,
                         parallelism=1,
                         parsl_tasks_per_block=1,
-                        threads_per_core=trainig_cores,
+                        threads_per_core=training_cores,
                         parsl_cores=False,
                         walltime="04:00:00",
                         **kw,
                     )
                     execs.append(cpu_part)
-                    trainig_labels.append(label)
+                    training_labels.append(label)
 
         if cpu_cluster is not None:
             for cpu in cpu_cluster:
@@ -654,4 +654,4 @@ def config(
                     execs.append(default)
                     default_labels.append(label)
 
-    return execs, [default_labels, trainig_labels, reference_labels]
+    return execs, [default_labels, training_labels, reference_labels]

@@ -54,6 +54,8 @@ def config(
     default_on_threads=False,
     training_cores=32,
     training_on_threads=False,
+    work_queue_local=True,
+    max_threads_local=10,
 ):
     if parsl.DataFlowKernelLoader._dfk is not None:
         print("parsl already configured, using previous setup")
@@ -66,11 +68,14 @@ def config(
         path_internal = ROOT_DIR / ".runinfo"
 
     if env == "local":
-        execs, [default_labels, trainig_labels, reference_labels] = get_config_local(
-            path_internal, ref_threads=local_ref_threads
+        execs, [default_labels, training_labels, reference_labels] = get_config_local(
+            path_internal,
+            ref_threads=local_ref_threads,
+            max_threads=max_threads_local,
+            work_queue=work_queue_local,
         )
     elif env == "hortense" or env == "stevin":
-        execs, [default_labels, trainig_labels, reference_labels] = config_ugent(
+        execs, [default_labels, training_labels, reference_labels] = config_ugent(
             env=env,
             path_internal=path_internal,
             singlepoint_nodes=singlepoint_nodes,
@@ -84,7 +89,7 @@ def config(
             executor=executor,
             default_on_threads=default_on_threads,
             default_threads=local_ref_threads,
-            trainig_cores=training_cores,
+            training_cores=training_cores,
             training_on_threads=training_on_threads,
         )
 
@@ -97,7 +102,7 @@ def config(
 
     DEFAULT_LABELS.extend(default_labels)
     REFERENCE_LABELS.extend(reference_labels)
-    TRAINING_LABELS.extend(trainig_labels)
+    TRAINING_LABELS.extend(training_labels)
 
     parsl.load(config=config)
 

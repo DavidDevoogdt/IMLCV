@@ -541,6 +541,9 @@ class SystemParams(PyTreeNode):
         chunk_size=None,
         verbose=False,
     ) -> NeighbourList | None:
+        if info.r_cut is None:
+            return None
+
         b, _, _, nl = self._get_neighbour_list(
             info=info,
             chunk_size=chunk_size,

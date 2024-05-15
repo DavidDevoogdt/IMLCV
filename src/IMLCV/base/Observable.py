@@ -205,6 +205,7 @@ class ThermoLIB:
         only_finished=True,
         bounds_percentile=1,
         vmax=100 * kjmol,
+        thermolib=False,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -222,30 +223,6 @@ class ThermoLIB:
             "get_bias_list": True,
             "only_finished": only_finished,
         }
-
-        if plot:
-            trajs_plot = self.rounds.data_loader(
-                num=1,
-                ignore_invalid=False,
-                cv_round=self.cv_round,
-                split_data=True,
-                new_r_cut=None,
-                min_traj_length=min_traj_length,
-                only_finished=only_finished,
-            ).cv
-
-            bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
-                bias=self.common_bias,
-                outputs=[File(f"{directory}/combined.png")],  # png because heavy file
-                name="combined.png",
-                execution_folder=directory,
-                stdout="combined.stdout",
-                stderr="combined.stderr",
-                map=False,
-                traj=trajs_plot,
-                margin=margin,
-                vmax=vmax,
-            )
 
         # return ThermoLIB._fes_nd_thermolib(
         #     dlo_kwargs=dlo_kwargs,
@@ -297,7 +274,7 @@ class ThermoLIB:
         rbf_kernel="linear",
         rbf_degree=None,
         smoothing_threshold=5 * kjmol,
-        samples_per_bin=2,
+        samples_per_bin=200,
         min_samples_per_bin=2,
         chunk_size=None,
         resample_bias=True,
@@ -313,114 +290,175 @@ class ThermoLIB:
         vmax=100 * kjmol,
         pmap=True,
         resample_num=30,
+        thermolib=False,
         **plot_kwargs,
     ):
-        if fes is None:
-            fes, grid, bounds = self.fes_nd_thermolib(
-                plot=plot,
-                start_r=start_r,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
-                num_rnds=num_rnds,
-                chunk_size=chunk_size,
-                update_bounding_box=update_bounding_box,
-                n_max=n_max,
+        directory = self.rounds.path(c=self.cv_round, r=self.rnd)
+
+        if plot:
+            trajs_plot = self.rounds.data_loader(
+                num=1,
+                ignore_invalid=False,
+                cv_round=self.cv_round,
+                start=self.rnd,
+                stop=self.rnd,
+                split_data=True,
+                new_r_cut=None,
                 min_traj_length=min_traj_length,
-                margin=margin,
                 only_finished=only_finished,
+                weight=False,
+            ).cv
+
+            bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                bias=self.common_bias,
+                outputs=[File(f"{directory}/combined.png")],  # png because heavy file
+                name="combined.png",
+                execution_folder=directory,
+                stdout="combined.stdout",
+                stderr="combined.stderr",
+                map=False,
+                traj=trajs_plot,
+                margin=margin,
                 vmax=vmax,
-                pmap=pmap,
             )
 
-        # fes is in 'xy'- indexing convention, convert to ij
-        fs = np.transpose(fes.fs)
-
-        # remove previous fs
-        cv_grid = CV.stack(*list(zip(*grid))[1])
-
-        if collective_variable is None:
-            collective_variable = self.collective_variable
-
-        # # invert to use as bias, center zero
-        mask = ~np.isnan(fs)
-        fs[:] = -(fs[:] - fs[mask].min())
-
-        fs_max = fs[mask].max()  # = 0 kjmol
-        fs_min = fs[mask].min()  # = -max_bias kjmol
-
-        if max_bias is not None:
-            fs_min = -max_bias
-
-        print(f"min fs: {-fs_min/kjmol} kjmol")
-
-        # if max_bias is None:
-        #     max_bias = fs_max - fs_min
-
-        if use_prev_fs:
-            prev_fs = jnp.reshape(self.common_bias.compute_from_cv(cv_grid)[0], fs.shape)
-            fs -= np.array(prev_fs)
-
-        if choice == "rbf":
-            fslist = []
-            # smoothing_list = []
-            cv: list[CV] = []
-
-            for idx, cvi in grid:
-                if not np.isnan(fs[idx]):
-                    fslist.append(fs[idx])
-
-                    cv += [cvi]
-
-                    # smoothing_list.append(sigma[idx])
-            cv = CV.stack(*cv)
-
-            fslist = jnp.array(fslist)
-            bounds = jnp.array(bounds)
-
-            def get_b(fact):
-                eps = fs.shape[0] / (bounds[:, 1] - bounds[:, 0]) * fact
-
-                # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
-
-                fesBias = RbfBias.create(
-                    cvs=collective_variable,
-                    vals=fslist,
-                    cv=cv,
-                    # kernel="linear",
-                    kernel=rbf_kernel,
-                    epsilon=eps,
-                    # smoothing=sigmalist,
-                    degree=rbf_degree,
+        if thermolib:
+            if fes is None:
+                fes, grid, bounds = self.fes_nd_thermolib(
+                    plot=plot,
+                    start_r=start_r,
+                    samples_per_bin=samples_per_bin,
+                    min_samples_per_bin=min_samples_per_bin,
+                    num_rnds=num_rnds,
+                    chunk_size=chunk_size,
+                    update_bounding_box=update_bounding_box,
+                    n_max=n_max,
+                    min_traj_length=min_traj_length,
+                    margin=margin,
+                    only_finished=only_finished,
+                    vmax=vmax,
+                    pmap=pmap,
                 )
-                return fesBias
 
-            fesBias = get_b(1.0)
+            # fes is in 'xy'- indexing convention, convert to ij
+            fs = np.transpose(fes.fs)
 
-        elif choice == "gridbias":
-            raise ValueError("choose choice='rbf' for the moment")
+            # remove previous fs
+            cv_grid = CV.stack(*list(zip(*grid))[1])
 
-            fs[~mask] = 0.0
-            fesBias = GridBias(cvs=collective_variable, vals=fs, bounds=bounds)
-        else:
-            raise ValueError
+            if collective_variable is None:
+                collective_variable = self.collective_variable
 
-        if use_prev_fs:
-            fes_bias_tot = CompositeBias.create(biases=[self.common_bias, fesBias])
-        else:
-            fes_bias_tot = fesBias
+            # # invert to use as bias, center zero
+            mask = ~np.isnan(fs)
+            fs[:] = -(fs[:] - fs[mask].min())
 
-        if resample_bias:
-            fes_bias_tot = fes_bias_tot.resample(
-                cv_grid=cv_grid,
-                n=n_max,
+            fs_max = fs[mask].max()  # = 0 kjmol
+            fs_min = fs[mask].min()  # = -max_bias kjmol
+
+            if max_bias is not None:
+                fs_min = -max_bias
+
+            print(f"min fs: {-fs_min/kjmol} kjmol")
+
+            # if max_bias is None:
+            #     max_bias = fs_max - fs_min
+
+            if use_prev_fs:
+                prev_fs = jnp.reshape(self.common_bias.compute_from_cv(cv_grid)[0], fs.shape)
+                fs -= np.array(prev_fs)
+
+            if choice == "rbf":
+                fslist = []
+                # smoothing_list = []
+                cv: list[CV] = []
+
+                for idx, cvi in grid:
+                    if not np.isnan(fs[idx]):
+                        fslist.append(fs[idx])
+
+                        cv += [cvi]
+
+                        # smoothing_list.append(sigma[idx])
+                cv = CV.stack(*cv)
+
+                fslist = jnp.array(fslist)
+                bounds = jnp.array(bounds)
+
+                def get_b(fact):
+                    eps = fs.shape[0] / (bounds[:, 1] - bounds[:, 0]) * fact
+
+                    # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
+
+                    fesBias = RbfBias.create(
+                        cvs=collective_variable,
+                        vals=fslist,
+                        cv=cv,
+                        # kernel="linear",
+                        kernel=rbf_kernel,
+                        epsilon=eps,
+                        # smoothing=sigmalist,
+                        degree=rbf_degree,
+                    )
+                    return fesBias
+
+                fesBias = get_b(1.0)
+
+            elif choice == "gridbias":
+                raise ValueError("choose choice='rbf' for the moment")
+
+                fs[~mask] = 0.0
+                fesBias = GridBias(cvs=collective_variable, vals=fs, bounds=bounds)
+            else:
+                raise ValueError
+
+            if use_prev_fs:
+                fes_bias_tot = CompositeBias.create(biases=[self.common_bias, fesBias])
+            else:
+                fes_bias_tot = fesBias
+
+            if resample_bias:
+                fes_bias_tot = fes_bias_tot.resample(
+                    cv_grid=cv_grid,
+                    n=n_max,
+                )
+
+            # clip value of bias to min and max of computed FES
+            fes_bias_tot = BiasModify.create(
+                bias=fes_bias_tot,
+                fun=_clip,
+                kwargs={"a_min": fs_min, "a_max": fs_max},
             )
 
-        # clip value of bias to min and max of computed FES
-        fes_bias_tot = BiasModify.create(
-            bias=fes_bias_tot,
-            fun=_clip,
-            kwargs={"a_min": fs_min, "a_max": fs_max},
-        )
+        else:
+            use_prev_fs = False
+
+            dlo = self.rounds.data_loader(
+                num=num_rnds,
+                cv_round=self.cv_round,
+                start=start_r,
+                split_data=False,
+                new_r_cut=None,
+                only_finished=only_finished,
+                time_series=True,
+                lag_n=10,
+            )
+
+            weights = dlo.weights(
+                chunk_size=chunk_size,
+                n_max=n_max,
+                samples_per_bin=samples_per_bin,
+                koopman=True,
+            )
+
+            fes_bias_tot = dlo._get_fes_bias_from_weights(
+                T=dlo.sti.T,
+                weights=weights,
+                collective_variable=dlo.collective_variable,
+                cv=dlo.cv,
+                max_bias=max_bias,
+                n_max=n_max,
+            )
 
         if plot:
             fold = str(self.rounds.path(c=self.cv_round))

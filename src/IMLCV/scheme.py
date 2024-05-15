@@ -60,10 +60,10 @@ class Scheme:
 
         return Scheme(rounds=rnds, md=mde)
 
-    def FESBias(self, cv_round: int | None = None, chunk_size=None, **plotkwargs):
+    def FESBias(self, rnd: int | None = None, cv_round: int | None = None, chunk_size=None, **plotkwargs):
         """replace the current md bias with the computed FES from current
         round."""
-        obs = ThermoLIB.create(self.rounds, cv_round=cv_round)
+        obs = ThermoLIB.create(self.rounds, rnd=rnd, cv_round=cv_round)
         fesBias = obs.fes_bias(chunk_size=chunk_size, **plotkwargs)
         self.md = self.md.new_bias(fesBias)
 
@@ -81,6 +81,7 @@ class Scheme:
         min_traj_length=None,
         recalc_cv=False,
         only_finished=True,
+        chunk_size=None,
     ):
         m = self.md.bias.collective_variable.metric
         _, cv_grid, _ = m.grid(n)
@@ -124,6 +125,7 @@ class Scheme:
             recalc_cv=recalc_cv,
             only_finished=only_finished,
             sp0=sp0,
+            chunk_size=chunk_size,
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):
@@ -135,7 +137,7 @@ class Scheme:
         self,
         rnds=10,
         convergence_kl=0.1,
-        init=500,
+        init=0,
         steps=5e4,
         K=None,
         update_metric=False,
@@ -159,6 +161,7 @@ class Scheme:
         plot_umbrella=None,
         max_bias=None,
         n_max_fes=30,
+        use_thermolib=False,
         # resample_num=20,
     ):
         if plot_umbrella is None:
@@ -215,6 +218,7 @@ class Scheme:
                 min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
                 recalc_cv=recalc_cv,
                 only_finished=i > 1 and only_finished,
+                chunk_size=chunk_size,
             )
 
             if update_metric:
@@ -237,6 +241,7 @@ class Scheme:
                     max_bias=max_bias,
                     use_prev_fs=i > 1,
                     n_max=n_max_fes,
+                    use_thermolib=use_thermolib,
                     **plot_kwargs,
                 )
 

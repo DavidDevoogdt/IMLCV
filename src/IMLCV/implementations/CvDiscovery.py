@@ -627,7 +627,9 @@ class TransformerMAF(Transformer):
         print("getting weights")
 
         if correct_bias:
-            w = dlo.weights(correct_U=False, use_ground_bias=use_ground_bias, n_max=60, T_scale=T_scale)
+            w = dlo.weights(
+                koopman=True,
+            )
 
         print("getting koopman")
 

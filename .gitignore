@@ -66,6 +66,7 @@ notebooks/alanine_dipeptide_LDA/*
 notebooks/alanine_dipeptide_LDA_*/*
 
 notebooks/alanine_dipeptide_sd_*/*
+notebooks/test*
 
 .pip_cache/*
 
