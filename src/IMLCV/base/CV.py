@@ -1050,7 +1050,7 @@ class NeighbourListInfo(PyTreeNode):
     def nl_split_z(self, p):
         bool_masks = [jnp.array(self.z_array) == zu for zu in self.z_unique]
 
-        arg_split = [jnp.argsort(~bm, kind="stable")[0:nzu] for bm, nzu in zip(bool_masks, self.num_z_unique)]
+        arg_split = [jnp.argsort(~bm, stable=True)[0:nzu] for bm, nzu in zip(bool_masks, self.num_z_unique)]
         p = [jax.tree_map(lambda pi: pi[a], tree=p) for a in arg_split]
 
         return jnp.array(bool_masks), arg_split, p
@@ -1296,18 +1296,13 @@ class NeighbourList(PyTreeNode):
         chunk_size_neigbourgs=None,
         chunk_size_atoms=None,
         chunk_size_batch=None,
+        new=True,
     ):
         """
         Args:
         ______
-        func_single=lambda r_ij, atom_index_j: (1,),
-        func_double=lambda r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k: (
-            r_ij,
-            atom_index_j,
-            r_ik,
-            atom_index_k,
-        ),
-
+        func_single(r_ij, atom_index_j) = ..
+        func_double( p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k) = ...
         """
         if sp.batched:
             return chunk_map(
@@ -1342,7 +1337,16 @@ class NeighbourList(PyTreeNode):
             chunk_size_atoms=chunk_size_atoms,
         )
 
-        out_ijk = chunk_map(
+        # @vmap
+        # def f2(pos_i, ind_i, data_single_i):
+        #     _f = func_double
+
+        #     _f = vmap(_f, in_axes=(0, 0, 0, None, None, None))
+        #     _f = vmap(_f, in_axes=(None, None, None, 0, 0, 0))
+
+        #     return _f(pos_i, ind_i, data_single_i, pos_i, ind_i, data_single_i)
+
+        _f2 = chunk_map(
             lambda x, y, z: vmap(
                 lambda x1, y1, z1, x2, y2, z2: chunk_map(
                     vmap(
@@ -1355,7 +1359,12 @@ class NeighbourList(PyTreeNode):
                 )(x1, y1, z1),
             )(x, y, z, x, y, z),
             chunk_size=chunk_size_atoms,
-        )(pos, ind, data_single)
+        )
+
+        # if new:
+        out_ijk = _f2(pos, ind, data_single)
+        # else:
+        #     out_ijk = _f2(pos, ind, data_single)
 
         bools = vmap(
             lambda b: vmap(

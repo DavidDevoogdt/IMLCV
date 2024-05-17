@@ -1,22 +1,19 @@
 # this is a helper function to perform md simulations. Executed by parsl on HPC infrastructure, but
-import argparse
+
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 
-import jax
-
-
 import cloudpickle
 import jsonpickle
-from IMLCV import unpickler
+
 from parsl import bash_app
 from parsl import File
 from parsl import python_app
 from parsl.dataflow.futures import AppFuture
-from IMLCV.configs.config_general import DEFAULT_LABELS
+
 from parsl import AUTO_LOGNAME
 
 
@@ -24,15 +21,18 @@ from parsl import AUTO_LOGNAME
 def bash_app_python(
     function=None,
     executors=None,
-    precommand="",  # command to run before the python command
-    uses_mpi=False,
+    uses_mpi=False,  # used in jax.distributed.initialize()
     pickle_extension="json",
     pass_files=False,
     auto_log=False,
     profile=False,
 ):
+    from IMLCV.configs.config_general import PARSL_DICT, Executors
+
     if executors is None:
-        executors = DEFAULT_LABELS
+        executors = Executors.default
+
+    labels, precommand = PARSL_DICT[executors.value]
 
     def decorator(func):
         def wrapper(
@@ -44,6 +44,8 @@ def bash_app_python(
             outputs=[],
             **kwargs,
         ):
+            from IMLCV import unpickler
+
             # merge in and outputsdirector
             inp = [*inputs, *kwargs.pop("inputs", [])]
             outp = [*outputs, *kwargs.pop("outputs", [])]
@@ -79,31 +81,19 @@ def bash_app_python(
             with open(lockfile, "w+"):
                 pass
 
-            file_in = rename_num(
-                execution_folder / f"{func.__name__}.inp.{pickle_extension}",
-                i,
-            )
+            file_in = rename_num(execution_folder / f"{func.__name__}.inp.{pickle_extension}", i)
             with open(file_in, "w+"):
                 pass
 
-            file_out = rename_num(
-                execution_folder / f"{func.__name__}.outp.{pickle_extension}",
-                i,
-            )
+            file_out = rename_num(execution_folder / f"{func.__name__}.outp.{pickle_extension}", i)
 
             if not auto_log:
                 stdout = str(
-                    rename_num(
-                        execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)),
-                        i,
-                    )
+                    rename_num(execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)), i)
                 )
 
                 stderr = str(
-                    rename_num(
-                        execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)),
-                        i,
-                    )
+                    rename_num(execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)), i)
                 )
             else:
                 stdout = AUTO_LOGNAME
@@ -143,7 +133,7 @@ def bash_app_python(
 
             fun.__name__ = func.__name__
 
-            future: AppFuture = bash_app(function=fun, executors=executors)(
+            future: AppFuture = bash_app(function=fun, executors=labels)(
                 inputs=[*inp, File(str(file_in)), File(str(execution_folder))],
                 outputs=[*outp, File(str(file_out))],
                 stdout=stdout,
@@ -167,7 +157,7 @@ def bash_app_python(
 
             load.__name__ = f"{func.__name__}_load"
 
-            return python_app(load, executors=DEFAULT_LABELS)(
+            return python_app(load, executors=PARSL_DICT["default"][0])(
                 inputs=future.outputs,
                 outputs=outp,
             )
@@ -180,6 +170,8 @@ def bash_app_python(
 
 
 if __name__ == "__main__":
+    import argparse
+
     parser = argparse.ArgumentParser(
         description="Execute python function in a bash app",
     )
@@ -213,14 +205,11 @@ if __name__ == "__main__":
     cwd = os.getcwd()
     os.chdir(args.folder)
 
-    try:
-        jax.distributed.initialize()
-    except Exception as e:
-        print(e)
+    # import jax
 
     rank = 0
-    args.uses_mpi = False
 
+    # only run program once
     if args.uses_mpi:
         from mpi4py import MPI
 
@@ -230,16 +219,32 @@ if __name__ == "__main__":
 
         assert num_ranks > 1, "MPI is not installed"
 
+        print(f"print hello from {rank=}/{num_ranks}")
+
+    import os
+
+    os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={len(os.sched_getaffinity(0))}"
+    import jax
+
     if rank == 0:
         print("#" * 20)
+        import platform
+
+        my_system = platform.uname()
         print(f"got input {sys.argv}")
         print(f"task started at {datetime.now():%d/%m/%Y %H:%M:%S }")
         print(f"working in folder {os.getcwd()}")
-        if args.uses_mpi:
-            print(f"using mpi with {num_ranks} ranks")
-        print(f"working with {jax.local_device_count()=} {jax.device_count()=}")
+        print(f"System: {my_system.system}")
+        print(f"Node Name: {my_system.node}")
+        print(f"Release: {my_system.release}")
+        print(f"Version: {my_system.version}")
+        print(f"Machine: {my_system.machine}")
+        print(f"Processor: {my_system.processor}")
+        print(f"working with {jax.local_device_count()=}, {os.sched_getaffinity(0)=}")
 
         file_in = Path(args.file_in)
+
+        from IMLCV import unpickler
 
         if file_in.suffix == ".json":
             with open(file_in) as f1:

@@ -5,6 +5,11 @@ import scipy.special
 from jax import custom_jvp
 from jax import pure_callback
 from jax.custom_batching import custom_vmap
+from IMLCV.tools.bessel_jn import bessel_jn
+from IMLCV.tools.spherical_bessel import csphjy
+from functools import partial
+
+# from jax.scipy.special import bessel_jn
 
 # see https://github.com/google/jax/issues/11002
 # see https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html
@@ -118,7 +123,10 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
     return cv
 
 
-jv = generate_bessel(scipy.special.jv, type=0)
+jv = bessel_jn
+
+
+# jv = generate_bessel(scipy.special.jv, type=0)
 yv = generate_bessel(scipy.special.yv, type=0)
 hankel1 = generate_bessel(scipy.special.hankel1, type=0)
 hankel2 = generate_bessel(scipy.special.hankel2, type=0)
@@ -126,7 +134,37 @@ hankel2 = generate_bessel(scipy.special.hankel2, type=0)
 kv = generate_bessel(scipy.special.kv, sign=-1, type=1)
 iv = generate_bessel(scipy.special.iv, sign=+1, type=1)
 
-spherical_jn = generate_bessel(scipy.special.spherical_jn, type=2)
+
+@partial(custom_jvp, nondiff_argnums=(0,))
+@partial(jax.jit, static_argnums=0)
+def spherical_jn(v, x):
+    out = csphjy(v, x)
+
+    return jnp.real(out)
+
+
+@spherical_jn.defjvp
+def cv_jvp(v, primals, tangents):
+    (x,) = primals
+    (dx,) = tangents
+
+    o = spherical_jn(v + 1, x)
+
+    primal_out = o[:-1]
+
+    v_vec = jnp.arange(1, v + 1)
+
+    tangents_out = jnp.array([-o[1]])
+
+    if v != 0:
+        tangents_out = jnp.concatenate(
+            [tangents_out, (v_vec * o[v_vec - 1] - (v_vec + 1) * o[v_vec + 1]) / (2 * v_vec + 1)]
+        )
+
+    return primal_out, tangents_out * dx
+
+
+# spherical_jn = csphjy  # generate_bessel(scipy.special.spherical_jn, type=2)
 spherical_yn = generate_bessel(scipy.special.spherical_yn, type=2)
 
 ive = generate_bessel(scipy.special.ive, sign=+1, type=1, exp_scaled=True)

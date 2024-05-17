@@ -62,4 +62,4 @@ export XLA_FLAGS='--xla_force_host_platform_device_count={threads}'
             _get_exec("reference", num=math.floor(max_threads / ref_threads), threads=ref_threads),
         ]
     # default on reference
-    return executors, [["reference"], ["training"], ["reference"]]
+    return executors, [["reference"], ["training"], ["reference"]], ["", "", ""]

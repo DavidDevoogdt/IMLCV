@@ -200,29 +200,35 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     assert l_max <= n_max, "l_max should be smaller or equal to n_max"
 
+    spherical_jn_2 = jax.vmap(jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1), in_axes=(None, 1), out_axes=2)
+
     def spherical_jn_zeros(n, m):
+        x0 = jnp.array((scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2)
+
         return vmap(
+            # lambda x: jaxopt.FixedPointIteration(
+            #     lambda x: spherical_jn(n, x)[n] - x,
+            #     maxiter=1000,
+            #     tol=1e-15,
+            # )
             lambda x: jaxopt.GradientDescent(
-                lambda x: spherical_jn(n, x) ** 2,
+                lambda x: spherical_jn(n, x)[n] ** 2,
                 maxiter=1000,
-                tol=1e-15,
+                tol=1e-20,
             )
             .run(x)
             .params,
-        )(
-            jnp.array(
-                (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2,
-            ),
-        )
+        )(x0)
 
     def show_spherical_jn_zeros(n, m, ngrid=100):
         """Graphical test for the above function"""
 
         zeros = spherical_jn_zeros(n, m)
+
         zeros_guess = (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
 
         x = jnp.linspace(0, jnp.max(zeros), num=1000)
-        y = spherical_jn(n, x)
+        y = jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1)(n, x)[n, :]
 
         plt.plot(x, y)
 
@@ -231,7 +237,25 @@ def p_inl_sb(l_max, n_max, r_cut):
         [plt.axvline(x0, color="b") for x0 in zeros_guess]
         plt.axhline(0, color="k")
 
-    u_ln = jnp.array([spherical_jn_zeros(n, l_max + 2) for n in range(n_max + 2)])
+        # plt.savefig("bessel_zero.png")
+
+    # show_spherical_jn_zeros(0, 5)
+
+    l_vec = jnp.arange(0, l_max + 1)
+    n_vec = jnp.arange(0, n_max + 1)
+
+    # n+1th zero of spherical bessel function of the first kind
+    u_ln = jnp.array([spherical_jn_zeros(int(n), l_max + 2) for n in range(n_max + 2)])
+
+    # print(f"{spherical_jn_2(l_max + 1, u_ln)}")
+
+    # # perform check
+    # @partial(vmap, in_axes=(0, None))
+    # @partial(vmap, in_axes=(None, 0))
+    # def _check(n, l):
+    #     return spherical_jn(l_max + 1, u_ln[l, n])[l]
+
+    # print(f"{_check(n_vec, l_vec)=}")
 
     def e(x):
         l, n = x
@@ -247,16 +271,14 @@ def p_inl_sb(l_max, n_max, r_cut):
         arr=jnp.array(jnp.meshgrid(jnp.arange(l_max + 2), jnp.arange(n_max + 2))),
     )
 
+    s_lln = spherical_jn_2(l_max + 1, u_ln)
+
     @partial(vmap, in_axes=(0, None, None))
     @partial(vmap, in_axes=(None, 0, None))
-    def f_nl(n, l, r):
-        def f(r):
-            return (
-                u_ln[l, n + 1] / spherical_jn(l + 1, u_ln[l, n]) * spherical_jn(l, r * u_ln[l, n] / r_cut)
-                - u_ln[l, n] / spherical_jn(l + 1, u_ln[l, n + 1]) * spherical_jn(l, r * u_ln[l, n + 1] / r_cut)
-            ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1] ** 2) / r_cut**3) ** (0.5)
-
-        return f(r)
+    def f_nl(n, l, sj):
+        return (
+            u_ln[l, n + 1] / s_lln[l + 1, l, n] * sj[l, l, n] - u_ln[l, n] / s_lln[l + 1, l, n + 1] * sj[l, l, n + 1]
+        ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1] ** 2) / r_cut**3) ** (0.5)
 
     l_list = list(range(l_max + 1))
     l_vec = jnp.array(l_list)
@@ -268,7 +290,8 @@ def p_inl_sb(l_max, n_max, r_cut):
         return jnp.array([legendre_l(l, p_ij, p_ik) for l in l_list])
 
     def g_nl(r: Array):
-        fnl = f_nl(n_vec, l_vec, r)
+        sj = spherical_jn_2(l_max, r * u_ln / r_cut)
+        fnl = f_nl(n_vec, l_vec, sj)
 
         def body(args, n):
             def inner(args):

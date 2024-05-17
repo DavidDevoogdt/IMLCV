@@ -21,10 +21,10 @@ from parsl import File
 from thermolib.thermodynamics.bias import BiasPotential2D
 from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
 from thermolib.thermodynamics.histogram import HistogramND
-from IMLCV.configs.config_general import DEFAULT_LABELS, TRAINING_LABELS
 from jax.tree_util import Partial
 from dataclasses import dataclass
 from IMLCV.base.rounds import data_loader_output
+from IMLCV.configs.config_general import Executors
 
 
 @dataclass(kw_only=True)
@@ -240,7 +240,7 @@ class ThermoLIB:
 
         return bash_app_python(
             ThermoLIB._fes_nd_thermolib,
-            executors=TRAINING_LABELS,
+            executors=Executors.training,
         )(
             dlo_kwargs=dlo_kwargs,
             dlo=dlo,
@@ -307,7 +307,7 @@ class ThermoLIB:
                 only_finished=only_finished,
             ).cv
 
-            bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+            bash_app_python(function=Bias.static_plot)(
                 bias=self.common_bias,
                 outputs=[File(f"{directory}/combined.png")],  # png because heavy file
                 name="combined.png",
@@ -447,9 +447,7 @@ class ThermoLIB:
             # get weights based on koopman theory. the CVs are binned with indicators
             weights = dlo.weights(
                 koopman=True,
-                correct_U=True,
-                correct_FES=False,
-                indicator_CVs=True,
+                indicator_CV=True,
                 n_max=n_max,
                 add_1=True,
             )
@@ -469,7 +467,7 @@ class ThermoLIB:
 
             if use_prev_fs:
                 pf.append(
-                    bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                    bash_app_python(function=Bias.static_plot)(
                         bias=fesBias,
                         outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.png")],
                         execution_folder=fold,
@@ -485,7 +483,7 @@ class ThermoLIB:
                 )
 
                 pf.append(
-                    bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                    bash_app_python(function=Bias.static_plot)(
                         bias=fesBias,
                         outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.png")],
                         name=f"diff_FES_bias_{self.rnd}_{choice}.png",
@@ -499,7 +497,7 @@ class ThermoLIB:
                 )
 
             pf.append(
-                bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                bash_app_python(function=Bias.static_plot)(
                     bias=fes_bias_tot,
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.png")],
                     execution_folder=fold,
@@ -515,7 +513,7 @@ class ThermoLIB:
             )
 
             pf.append(
-                bash_app_python(function=Bias.static_plot, executors=DEFAULT_LABELS)(
+                bash_app_python(function=Bias.static_plot)(
                     bias=fes_bias_tot,
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.png")],
                     execution_folder=fold,

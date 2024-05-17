@@ -32,7 +32,7 @@ from jax.random import PRNGKey
 from jax.random import split
 from molmod.constants import boltzmann
 from parsl.data_provider.files import File
-from IMLCV.configs.config_general import DEFAULT_LABELS, REFERENCE_LABELS, TRAINING_LABELS
+
 from typing import Callable
 from jax import vmap
 from functools import partial
@@ -43,6 +43,7 @@ from IMLCV.base.bias import NoneBias
 from IMLCV.base.CVDiscovery import Transformer
 from molmod.units import kjmol
 from flax.struct import PyTreeNode
+from IMLCV.configs.config_general import Executors
 
 
 @dataclass
@@ -744,6 +745,24 @@ class Rounds(ABC):
         if get_bias_list:
             out_biases = []
 
+        # pop_n = []
+
+        # for n, (s, w) in enumerate(zip(sp, weights)):
+        #     assert s.shape[0] == w.shape[0], f"sp and w shape are different: {s.shape=} {w.shape=} {n=}"
+
+        #     if s.shape[0] < lag_n:
+        #         print(f"not enough data points for lag_n {s.shape[0]} < {lag_n}")
+        #         pop_n.append(n)
+
+        # for n in jnp.sort(pop_n, descending=True):
+        #     sp.pop(n)
+        #     cv.pop(n)
+        #     ti.pop(n)
+        #     weights.pop(n)
+
+        #     if get_bias_list:
+        #         bias_list.pop(n)
+
         total = sum([max(a.shape[0] - lag_n, 0) for a in sp])
 
         if out == -1:
@@ -795,7 +814,15 @@ class Rounds(ABC):
                 if lag_n == 0:
                     wi = jnp.hstack(weights)
                 else:
-                    wi = jnp.hstack([wi[:-lag_n] for wi in weights])
+                    w = []
+                    for n, wi in enumerate(weights):
+                        if wi.shape[0] <= lag_n:
+                            print(f"not enough data points for lag_n {wi.shape[0]} <= {lag_n}")
+                            continue
+
+                        w.append(wi[:-lag_n])
+
+                    wi = jnp.hstack(w)
 
                 probs = wi / jnp.sum(wi)
 
@@ -1273,7 +1300,7 @@ class Rounds(ABC):
             future = bash_app_python(
                 Rounds.run_md,
                 pass_files=True,
-                executors=REFERENCE_LABELS,
+                executors=Executors.reference,
                 profile=profile,
             )(
                 sp=spi,  # type: ignore
@@ -1286,7 +1313,7 @@ class Rounds(ABC):
             if plot:
                 plot_file = path_name / "plot.png"
 
-                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=DEFAULT_LABELS)(
+                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True)(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
@@ -1372,7 +1399,7 @@ class Rounds(ABC):
 
             traj_name = path_name / "trajectory_info.h5"
 
-            future = bash_app_python(Rounds.run_md, pass_files=True, executors=REFERENCE_LABELS)(
+            future = bash_app_python(Rounds.run_md, pass_files=True, executors=Executors.reference)(
                 sp=None,  # type: ignore
                 inputs=[File(common_md_name), File(str(b_name))],
                 outputs=[File(str(b_name_new)), File(str(traj_name))],
@@ -1383,7 +1410,7 @@ class Rounds(ABC):
             if plot:
                 plot_file = path_name / "plot.png"
 
-                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True, executors=DEFAULT_LABELS)(
+                plot_fut = bash_app_python(Rounds.plot_md_run, pass_files=True)(
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
@@ -1556,7 +1583,7 @@ class Rounds(ABC):
         )
 
         if use_executor:
-            return bash_app_python(Rounds._update_CV, executors=TRAINING_LABELS)(
+            return bash_app_python(Rounds._update_CV, executors=Executors.training)(
                 execution_folder=self.path(c=cv_round_to), **kw
             ).result()
 
@@ -1962,10 +1989,15 @@ class data_loader_output:
         energies = []
 
         for ti_i in self.ti:
-            energies.append(ti_i.e_bias)
+            e = ti_i.e_bias
+
+            if e is None:
+                print("WARNING: no bias enerrgy found")
+                e = jnp.zeros((ti_i.sp.shape[0],))
+
+            energies.append(e)
 
         energies = jnp.hstack(energies)
-        energies -= jnp.min(energies)
 
         w_u = jnp.exp(-beta * energies)
 
@@ -2032,7 +2064,10 @@ class data_loader_output:
             b_ik = jnp.zeros((len(self.bias), jnp.sum(mask)))
 
             for i, bi in enumerate(self.bias):
-                o = _b_ik(cv_mid, sub_mg, bi)[mask]
+                if bi is None:
+                    o = jnp.ones((jnp.sum(mask),))
+                else:
+                    o = _b_ik(cv_mid, sub_mg, bi)[mask]
                 b_ik = b_ik.at[i, :].set(o)
 
             f_i = jnp.ones((len(self.bias),))
@@ -2839,7 +2874,7 @@ class data_loader_output:
         if macro_chunk is None:
             stack_dims = [nli.shape[0] for nli in nl]
 
-            z = f(SystemParams.stack(*y), NeighbourList.stack(*nl))
+            z = f(op(*y), NeighbourList.stack(*nl))
 
             z = z.replace(_stack_dims=stack_dims).unstack()
 

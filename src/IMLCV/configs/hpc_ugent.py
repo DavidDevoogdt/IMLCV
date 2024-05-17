@@ -283,31 +283,25 @@ which python
 
     worker_init = f"{py_env}\n"
 
-    if env == "hortense" and load_cp2k:
-        worker_init += "module load CP2K/2023.1-foss-2022b\n"
-        worker_init += "module unload SciPy-bundle Python\n"
+    if env == "hortense":
+        if load_cp2k:
+            worker_init += "module load CP2K/2023.1-foss-2022b\n"
+            worker_init += "module unload SciPy-bundle Python\n"
+        else:
+            worker_init += "module load OpenMPI\n"
 
-    elif env == "stevin" and load_cp2k:
-        worker_init += "module load CP2K/2023.1-foss-2022b\n"
-        worker_init += "module unload SciPy-bundle Python\n"
+    elif env == "stevin":
+        if load_cp2k:
+            worker_init += "module load CP2K/2023.1-foss-2022b\n"
+            worker_init += "module unload SciPy-bundle Python\n"
+        else:
+            worker_init += "module load OpenMPI\n"
 
     if not parsl_cores:
         if threads_per_core is None:
             threads_per_core = 1
 
         total_cores = parsl_tasks_per_block * threads_per_core
-
-        # if not use_open_mp:
-        #     # worker_init += "unset SLURM_CPUS_PER_TASK\n"
-        #     # worker_init += f"export SLURM_CPUS_PER_TASK={1}\n"
-        #     # worker_init += f"export SLURM_NTASKS_PER_NODE={total_cores}\n"
-        #     # worker_init += f"export SLURM_TASKS_PER_NODE={total_cores}\n"
-        #     worker_init += f"export OMP_NUM_THREADS={ 1   }\n"
-
-        # else:
-        #     worker_init += f"export SLURM_CPUS_PER_TASK={1}\n"
-        #     worker_init += f"export SLURM_NTASKS_PER_NODE={parsl_tasks_per_block}\n"
-        #     worker_init += f"export SLURM_TASKS_PER_NODE={parsl_tasks_per_block}\n"
 
         worker_init += f"export OMP_NUM_THREADS={threads_per_core if use_open_mp else 1   }\n"
 
@@ -320,8 +314,7 @@ which python
 
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
 
-    if load_cp2k:
-        worker_init += f"mpirun -report-bindings -np ${total_cores} echo -n \n"
+    worker_init += f"mpirun -report-bindings -np {total_cores} echo 'a' "
 
     common_kwargs = {
         "channel": channel,
@@ -331,7 +324,7 @@ which python
         "parallelism": parallelism,
         "nodes_per_block": 1,
         "worker_init": worker_init,
-        "launcher": launcher,
+        "launcher": SingleNodeLauncher(),
     }
 
     if provider == "slurm":
@@ -364,6 +357,8 @@ which python
             cmd_timeout=1,
         )
 
+    pre_command = f" srun --export=ALL --cpu-bind=verbose -n 1 -c {threads_per_core}  "
+
     print(f"{executor=}")
 
     if executor == "work_queue":
@@ -386,7 +381,6 @@ which python
 
         executor: ParslExecutor = WorkQueueExecutor(
             label=label,
-            # env={"OMP_NUM_THREADS":f"threads_per_core",},
             working_dir=str(Path(path_internal) / label),
             provider=provider,
             shared_fs=True,
@@ -396,6 +390,7 @@ which python
             max_retries=1,  # do not retry task
             worker_options=" ".join(worker_options),
             coprocess=False,
+            worker_executable="work_queue_worker",
         )
 
     elif executor == "task_vine":
@@ -418,7 +413,7 @@ which python
         )
     else:
         raise ValueError(f"unknown executor {executor=}")
-    return executor
+    return executor, pre_command
 
 
 def config(
@@ -504,21 +499,26 @@ def config(
     if bootstrap:
         assert not isinstance(cpu_cluster, list), "bootstrap does not support multiple clusters"
 
-        execs = [
-            get_slurm_provider(
-                **get_kwargs(cpu_cluster),
-                label="default",
-                init_blocks=1,
-                parsl_cores=True,
-                mem=10,
-                walltime="72:00:00",
-            ),
-        ]
+        executor, pre_command = get_slurm_provider(
+            **get_kwargs(cpu_cluster),
+            label="default",
+            init_blocks=1,
+            parsl_cores=True,
+            mem=10,
+            walltime="72:00:00",
+        )
+
+        execs = [executor]
+        pre_commands = [pre_command]
 
     else:
         default_labels = []
         training_labels = []
         reference_labels = []
+
+        default_pre_commands = []
+        training_pre_commands = []
+        reference_pre_commands = []
 
         execs = []
 
@@ -531,25 +531,9 @@ def config(
                 working_dir=str(Path(path_internal) / label),
             )
 
-            # default = get_slurm_provider(
-            #     label=label,
-            #     init_blocks=1,
-            #     min_blocks=1,
-            #     max_blocks=10,
-            #     parallelism=1,
-            #     cores=1,
-            #     threads_per_core=default_threads,
-            #     parsl_cores=False,
-            #     walltime="02:00:00",
-            #     env=env,
-            #     path_internal=path_internal,
-            #     cpu_cluster=None,
-            #     gpu_cluster=None,
-            #     provider="local",
-            # )
-
             execs.append(default)
             default_labels.append(label)
+            default_pre_commands.append("")
 
         if not isinstance(cpu_cluster, list):
             cpu_cluster = [cpu_cluster]
@@ -565,6 +549,7 @@ def config(
 
             execs.append(training)
             training_labels.append(label)
+            training_pre_commands.append("")
 
         else:
             if gpu_cluster is not None:
@@ -573,7 +558,7 @@ def config(
 
                     label = f"training_{gpu}"
 
-                    gpu_part = get_slurm_provider(
+                    gpu_part, pre_command = get_slurm_provider(
                         gpu=True,
                         label=label,
                         init_blocks=0,
@@ -587,6 +572,7 @@ def config(
                         **kw,
                     )
                     execs.append(gpu_part)
+                    training_pre_commands.append(pre_command)
                     training_labels.append(label)
             else:
                 for cpu in cpu_cluster:
@@ -594,7 +580,7 @@ def config(
 
                     label = f"training_{cpu}"
 
-                    cpu_part = get_slurm_provider(
+                    cpu_part, pre_command = get_slurm_provider(
                         label=label,
                         init_blocks=0,
                         min_blocks=0,
@@ -608,6 +594,7 @@ def config(
                     )
                     execs.append(cpu_part)
                     training_labels.append(label)
+                    training_pre_commands.append(pre_command)
 
         if cpu_cluster is not None:
             for cpu in cpu_cluster:
@@ -615,7 +602,7 @@ def config(
 
                 label = f"reference_{cpu}"
 
-                reference = get_slurm_provider(
+                reference, pre_command = get_slurm_provider(
                     label=label,
                     memory_per_core=memory_per_core,
                     mem=min_memery_per_node,
@@ -633,12 +620,13 @@ def config(
 
                 execs.append(reference)
                 reference_labels.append(label)
+                reference_pre_commands.append(pre_command)
 
                 if not default_on_threads:
                     # general tasks
                     label = f"default_{cpu}"
 
-                    default = get_slurm_provider(
+                    default, pre_command = get_slurm_provider(
                         label=label,
                         init_blocks=1,
                         min_blocks=1,
@@ -653,5 +641,21 @@ def config(
 
                     execs.append(default)
                     default_labels.append(label)
+                    default_pre_commands.append(pre_command)
 
-    return execs, [default_labels, training_labels, reference_labels]
+        pre_commands = [
+            default_pre_commands,
+            training_pre_commands,
+            reference_pre_commands,
+        ]
+
+    pre_commands_filtered = []
+
+    for pc in pre_commands:
+        pre_commands_filtered.append(pc[0])
+
+        if len(pc) > 1:
+            for pci in pc[1:]:
+                assert pci == pc[0], "all pre_commands should be the same per category"
+
+    return execs, [default_labels, training_labels, reference_labels], pre_commands_filtered

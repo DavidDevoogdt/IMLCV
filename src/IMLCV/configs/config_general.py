@@ -6,6 +6,8 @@ import parsl
 from IMLCV.configs.hpc_ugent import config as config_ugent
 from IMLCV.configs.local_threadpool import get_config as get_config_local
 from parsl.config import Config
+from enum import Enum
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -13,9 +15,14 @@ print(f"{ROOT_DIR=}")
 
 py_env = " which python"
 
-DEFAULT_LABELS = []
-REFERENCE_LABELS = []
-TRAINING_LABELS = []
+
+PARSL_DICT = {}
+
+
+class Executors(Enum):
+    default = "default"
+    training = "training"
+    reference = "reference"
 
 
 def get_platform():
@@ -68,14 +75,14 @@ def config(
         path_internal = ROOT_DIR / ".runinfo"
 
     if env == "local":
-        execs, [default_labels, training_labels, reference_labels] = get_config_local(
+        execs, labels, precommands = get_config_local(
             path_internal,
             ref_threads=local_ref_threads,
             max_threads=max_threads_local,
             work_queue=work_queue_local,
         )
     elif env == "hortense" or env == "stevin":
-        execs, [default_labels, training_labels, reference_labels] = config_ugent(
+        execs, labels, precommands = config_ugent(
             env=env,
             path_internal=path_internal,
             singlepoint_nodes=singlepoint_nodes,
@@ -100,9 +107,10 @@ def config(
         initialize_logging=initialize_logging,
     )
 
-    DEFAULT_LABELS.extend(default_labels)
-    REFERENCE_LABELS.extend(reference_labels)
-    TRAINING_LABELS.extend(training_labels)
+    global PARSL_DICT
+
+    for k, l, p in zip(["default", "training", "reference"], labels, precommands):
+        PARSL_DICT[k] = [l, p]
 
     parsl.load(config=config)
 
