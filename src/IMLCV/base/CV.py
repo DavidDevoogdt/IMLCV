@@ -7,7 +7,6 @@ from dataclasses import KW_ONLY
 from functools import partial
 from pathlib import Path
 from typing import Callable
-
 import cloudpickle
 import distrax
 import jax.flatten_util
@@ -23,7 +22,9 @@ from IMLCV import unpickler
 from jax import Array
 from jax import jacfwd
 from jax import jit
-from jax import pmap
+import jax.experimental.mesh_utils as mesh_utils
+import jax.sharding as jshard
+from jax.sharding import PartitionSpec, Mesh
 from jax import vmap
 from jax.tree_util import Partial
 from jax.tree_util import tree_flatten
@@ -35,78 +36,79 @@ import re
 ######################################
 
 
-def padded_pmap(f, n_devices: int | None = None):
+def padded_pmap(f, axis=0, n_devices: int | None = None):
     # helper function to pad pytree, apply pmap and unpad the result
 
-    def get_shape(n_devices, batch_dim):
-        _, b = jnp.divmod(batch_dim, n_devices)
-
-        if b == 0:
-            return 0
-
-        return n_devices - b
-
-    def n_pad(x, n_devices, p):
+    @partial(jit, static_argnames=("p", "axis"))
+    def n_pad(x, axis, p):
         if x is None:
             return x
 
         if p != 0:
-            pad_shape = jnp.zeros((len(x.shape), 2), dtype=jnp.int16)
-            pad_shape = pad_shape.at[0, 1].set(p)
-            pad_shape = jnp.array(pad_shape)
+            pad_shape = [[0, p if i == axis else 0] for i in range(x.ndim)]
+
             x_padded = jnp.pad(x, pad_shape)
         else:
             x_padded = x
 
-        return jnp.reshape(x_padded, (n_devices, -1, *x.shape[1:]))
+        return x_padded  # jnp.reshape(x_padded, (n_devices, -1, *x.shape[1:]))
 
-    def n_unpad(y, p):
-        y = jnp.reshape(y, (-1, *y.shape[2:]))
-        if p != 0:
-            y = y[:-p]
-        return y
-
+    @partial(jit, static_argnames=("axis", "n_devices"))
     def apply_pmap_fn(
         *args: PyTreeNode,
+        axis: int = 0,
         n_devices: int | None = None,
+        # **kwargs: PyTreeNode,
     ):
+        # get sharding
+
         if n_devices is None:
             n_devices = jax.device_count("cpu")
 
         if n_devices == 1:
-            # print(f"only 1 device found, skipping parallel mapping")
-            # still vmap it
             return f(*args)
 
-        p = None
+        devices = mesh_utils.create_device_mesh((n_devices,))
 
-        # pad the input args
         in_tree, tree_def = tree_flatten(args)
 
+        shape = in_tree[0].shape[axis]
+
+        rem = shape % n_devices
+
+        if rem != 0:
+            p = n_devices - rem
+        else:
+            p = 0
+
+        mesh = Mesh(devices, axis_names=("a",))
+        shardings = []
+
         for i in range(len(in_tree)):
-            if p is None:
-                p = get_shape(n_devices, in_tree[i].shape[0])
-            else:
-                assert p == get_shape(n_devices, in_tree[i].shape[0]), "inconsisitent batch dims"
+            assert shape == shape, "inconsisitent batch dims"
 
-            in_tree[i] = n_pad(in_tree[i], n_devices, p)
+            in_tree[i] = n_pad(in_tree[i], axis, p)
 
-        in_tree = tree_unflatten(tree_def, in_tree)
+            ps = [None] * len(in_tree[i].shape)
+            ps[axis] = "a"
 
-        out_tree = pmap(f)(*in_tree)
+            # shard over common axis
 
-        del in_tree  # for memory purposes
+            sharding = jshard.NamedSharding(mesh, PartitionSpec(*ps))
 
-        out_tree, tree_def = tree_flatten(out_tree)
+            shardings.append(sharding)
 
-        for i in range(len(out_tree)):
-            out_tree[i] = n_unpad(out_tree[i], p)
+        arg_shards = tree_unflatten(tree_def, shardings)
 
-        out_tree = tree_unflatten(tree_def, out_tree)
+        args = tree_unflatten(tree_def, in_tree)
 
-        return out_tree
+        out = jax.jit(f, in_shardings=arg_shards)(*args)
 
-    return partial(apply_pmap_fn, n_devices=n_devices)
+        out_reshaped = jax.tree_map(lambda x: x[:shape], out)
+
+        return out_reshaped
+
+    return Partial(apply_pmap_fn, axis=axis, n_devices=n_devices)
 
 
 def chunk_map(f, chunk_size):
@@ -275,6 +277,7 @@ class SystemParams(PyTreeNode):
         max_neighs=None,
         verbose=False,
         chunk_size_inner=2,
+        shmap=True,
     ) -> tuple[bool, NeighbourList | None]:
         if info.r_cut is None:
             return False, None, None, None
@@ -424,26 +427,6 @@ class SystemParams(PyTreeNode):
 
                 return n, r[idx], atoms[idx], None, center_op
 
-            # _, (r, atoms, indices) = vmap(
-            #     vmap(
-            #         vmap(
-            #             lambda i, j, k: _apply_g_inner(
-            #                 sp=sp_center,
-            #                 func=func,
-            #                 r_cut=jnp.inf,
-            #                 ijk=(i, j, k),
-            #                 exclude_self=False,
-            #             ),
-            #             in_axes=(0, None, None),
-            #             out_axes=0,
-            #         ),
-            #         in_axes=(None, 0, None),
-            #         out_axes=1,
-            #     ),
-            #     in_axes=(None, None, 0),
-            #     out_axes=2,
-            # )(bx, by, bz)
-
             @vmap
             def __f(i, j, k):
                 return _apply_g_inner(
@@ -492,7 +475,11 @@ class SystemParams(PyTreeNode):
         def get_f(take_num):
             f = Partial(_f, take_num=take_num)
             if sp.batched:
-                f = padded_pmap(chunk_map(vmap(f), chunk_size=chunk_size))
+                f = chunk_map(vmap(f), chunk_size=chunk_size)
+
+                if shmap:
+                    f = padded_pmap(f)
+
             return f
 
         if verbose:
@@ -1170,14 +1157,15 @@ class NeighbourList(PyTreeNode):
         r_cut=None,
         fill_value=0,
         reduce="full",  # or 'z' or 'none'
-        split_z=False,  #
         exclude_self=False,
         chunk_size_neigbourgs=None,
         chunk_size_atoms=None,
         chunk_size_batch=None,
+        shmap=True,
+        split_z=False,
     ):
         if sp.batched:
-            return chunk_map(
+            f = chunk_map(
                 vmap(
                     lambda nl, sp: NeighbourList.apply_fun_neighbour(
                         self=nl,
@@ -1186,101 +1174,90 @@ class NeighbourList(PyTreeNode):
                         r_cut=r_cut,
                         fill_value=fill_value,
                         reduce=reduce,
-                        split_z=split_z,
                         exclude_self=exclude_self,
                         chunk_size_neigbourgs=chunk_size_neigbourgs,
                         chunk_size_atoms=chunk_size_atoms,
                         chunk_size_batch=None,
+                        shmap=False,
+                        split_z=split_z,
                     ),
                 ),
                 chunk_size=chunk_size_batch,
-            )(self=self, sp=sp)
+            )
+
+            if shmap:
+                f = padded_pmap(f)
+
+            return f(self, sp)
 
         if r_cut is None:
             r_cut = self.info.r_cut
 
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
-        r = jnp.linalg.norm(pos, axis=-1)
 
-        bools = r**2 < r_cut**2
+        @vmap
+        def _apply_fun(pos_i, ind_i, pb_i):
+            j = ind_i
 
-        if exclude_self:
-            bools = jnp.logical_and(bools, r**2 != 0.0)
-
-        bools = jnp.logical_and(bools, self.padding_bools)
-
-        if func is None:
-            return bools, None
-
-        true_val = chunk_map(
-            vmap(
-                chunk_map(
-                    vmap(func),
-                    chunk_size=chunk_size_neigbourgs,
-                ),
-            ),
-            chunk_size=chunk_size_atoms,
-        )(pos, ind)
-
-        false_val = jax.tree_map(
-            lambda a: jnp.zeros_like(a) + fill_value,
-            true_val,
-        )
-
-        def _get(bools):
-            def _red(bools):
-                val = vmap(
-                    lambda b, x, y: jax.tree_map(
-                        lambda t, f: vmap(jnp.where)(b, t, f),
-                        x,
-                        y,
-                    ),
-                )(bools, true_val, false_val)
-
-                if reduce == "full":
-                    return jax.tree_map(lambda x: jnp.sum(x, axis=(1)), (bools, val))
-                elif reduce == "z":
-                    return jax.tree_map(lambda x: jnp.sum(x, axis=(0, 1)), (bools, val))
-                elif reduce == "none":
-                    return bools, val
-                else:
-                    raise ValueError(
-                        f"unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'",
-                    )
-
-            if not reduce == "z":
-                return _red(bools=bools)
-
-            @partial(vmap, in_axes=(0, None))
-            def _f(u, a):
-                b = vmap(
-                    lambda t, f: jnp.where(a == u, t, f),
-                    in_axes=(1, 1),
-                    out_axes=1,
-                )(bools, jnp.full_like(bools, False))
-
-                return _red(bools=b)
-
-            return _f(jnp.array(self.info.z_unique), jnp.array(self.info.z_array))
-
-        if not split_z:
-            return _get(bools)
-
-        assert self.z_array is not None, "provide z_array to neighbourlist"
-
-        @partial(vmap, in_axes=(0, None), out_axes=1)
-        def sel(u1, at):
             @vmap
-            def _b(at):
-                bools_z1 = vmap(lambda x: x == u1)(at)
-                return bools_z1
+            def _f(j):
+                r_ij = jnp.linalg.norm(pos_i[j], axis=-1)
 
-            return _get(jnp.logical_and(_b(at), bools))
+                b = jnp.logical_and(pb_i[j], r_ij < r_cut)
 
-        return sel(jnp.array(self.info.z_unique), jnp.array(self.info.z_array)[ind])
+                if exclude_self:
+                    b = jnp.logical_and(b, r_ij != 0.0)
 
-        # return _apply_fun_neighbour(sp, self)
+                out = func(pos_i[j], ind_i[j])
+
+                out = jax.tree_map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
+
+                return (b, out), jnp.array(self.info.z_array)[j]
+
+            if chunk_size_neigbourgs is not None:
+                _f = chunk_map(_f, chunk_size_neigbourgs)
+
+            if shmap:
+                _f = padded_pmap(_f)
+
+            out_tree_n, zj_n = _f(j)
+
+            if reduce == "full":
+                return jax.tree_map(lambda x: jnp.sum(x, axis=0), out_tree_n)
+
+            if reduce == "z":
+
+                def _red(zj_ref):
+                    b = jnp.logical_and(zj_n == zj_ref)
+                    return jax.tree_map(lambda x: jnp.einsum("n,n...->...", b, x), out_tree_n)
+
+                _red = vmap(_red)
+                return _red(jnp.array(self.info.z_unique))
+
+            if reduce == "none":
+                return out_tree_n
+
+            raise ValueError(
+                "unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
+            )
+
+        if chunk_size_atoms is not None:
+            _apply_fun = chunk_map(_apply_fun, chunk_size_atoms)
+
+        out = _apply_fun(pos, ind, self.padding_bools)
+
+        if split_z:
+            # sum atom indices to  value per z
+            b_split, _, _ = self.info.nl_split_z(out)
+
+            @vmap
+            def _split(b_split):
+                return jax.tree_map(lambda x: jnp.sum(jnp.where(b_split, x, jnp.zeros_like(x) + fill_value)), out)
+
+            out = _split(b_split)
+
+        return out
 
     def apply_fun_neighbour_pair(
         self,
@@ -1296,7 +1273,7 @@ class NeighbourList(PyTreeNode):
         chunk_size_neigbourgs=None,
         chunk_size_atoms=None,
         chunk_size_batch=None,
-        new=True,
+        shmap=True,
     ):
         """
         Args:
@@ -1305,7 +1282,7 @@ class NeighbourList(PyTreeNode):
         func_double( p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k) = ...
         """
         if sp.batched:
-            return chunk_map(
+            f = chunk_map(
                 vmap(
                     lambda nl, sp: NeighbourList.apply_fun_neighbour_pair(
                         self=nl,
@@ -1318,10 +1295,15 @@ class NeighbourList(PyTreeNode):
                         split_z=split_z,
                         exclude_self=exclude_self,
                         unique=unique,
+                        shmap=False,
                     ),
                 ),
                 chunk_size=chunk_size_batch,
-            )(self=self, sp=sp)
+            )
+            if shmap:
+                f = padded_pmap(f)
+
+            return f(self, sp)
 
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
@@ -1335,121 +1317,89 @@ class NeighbourList(PyTreeNode):
             exclude_self=exclude_self,
             chunk_size_neigbourgs=chunk_size_neigbourgs,
             chunk_size_atoms=chunk_size_atoms,
+            shmap=shmap,
         )
 
-        # @vmap
-        # def f2(pos_i, ind_i, data_single_i):
-        #     _f = func_double
+        i_vec = jnp.arange(pos.shape[0])
 
-        #     _f = vmap(_f, in_axes=(0, 0, 0, None, None, None))
-        #     _f = vmap(_f, in_axes=(None, None, None, 0, 0, 0))
+        @vmap
+        def f2(i, pos_i, ind_i, data_single_i, bools_i):
+            ij, ik = jnp.meshgrid(ind_i, ind_i, indexing="ij")
+            ijk_n = jnp.array([ij, ik]).reshape(2, -1).T
 
-        #     return _f(pos_i, ind_i, data_single_i, pos_i, ind_i, data_single_i)
+            @vmap
+            def _f(jk):
+                j, k = jk
 
-        _f2 = chunk_map(
-            lambda x, y, z: vmap(
-                lambda x1, y1, z1, x2, y2, z2: chunk_map(
-                    vmap(
-                        lambda vx1, vy1, vz1: chunk_map(
-                            vmap(lambda vx2, vy2, vz2: func_double(vx2, vy2, vz2, vx1, vy1, vz1)),
-                            chunk_size=chunk_size_neigbourgs,
-                        )(x2, y2, z2),
-                    ),
-                    chunk_size=chunk_size_neigbourgs,
-                )(x1, y1, z1),
-            )(x, y, z, x, y, z),
-            chunk_size=chunk_size_atoms,
-        )
-
-        # if new:
-        out_ijk = _f2(pos, ind, data_single)
-        # else:
-        #     out_ijk = _f2(pos, ind, data_single)
-
-        bools = vmap(
-            lambda b: vmap(
-                vmap(jnp.logical_and, in_axes=(0, None)),
-                in_axes=(None, 0),
-            )(b, b),
-        )(bools)
-
-        if unique:
-            bools = vmap(lambda b: b.at[jnp.diag_indices_from(b)].set(False))(bools)
-
-        # check if indices are not -1
-
-        out_ijk_f = jax.tree_map(
-            lambda o: jnp.full_like(o, fill_value),
-            out_ijk,
-        )
-
-        def get(bools):
-            def _red(bools):
-                val = jax.tree_map(
-                    lambda t, f: vmap(vmap(vmap(jnp.where)))(bools, t, f),
-                    out_ijk,
-                    out_ijk_f,
+                b = jnp.logical_and(
+                    bools_i[j],
+                    bools_i[k],
                 )
 
-                if reduce == "full":
-                    return jax.tree_map(lambda x: jnp.sum(x, axis=(1, 2)), (bools, val))
-                elif reduce == "z":
-                    return jax.tree_map(
-                        lambda x: jnp.sum(x, axis=(0, 1, 2)),
-                        (bools, val),
-                    )
-                elif reduce == "none":
-                    return bools, val
-                else:
-                    raise ValueError(
-                        f"unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'",
-                    )
+                if unique:
+                    b = jnp.logical_and(b, j != k)
 
-            if not reduce == "z":
-                return _red(bools=bools)
+                if exclude_self:
+                    b = jnp.logical_and(b, i != k)
+                    b = jnp.logical_and(b, i != j)
 
-            @partial(vmap, in_axes=(0, None))
-            def _f(u, a):
-                b = vmap(
-                    vmap(
-                        lambda t, f: jnp.where(a == u, t, f),
-                        in_axes=(1, 1),
-                        out_axes=1,
-                    ),
-                    in_axes=(2, 2),
-                    out_axes=2,
-                )(bools, jnp.full_like(bools, False))
+                out = func_double(pos_i[j], ind_i[j], data_single_i[j], pos_i[k], ind_i[k], data_single_i[k])
 
-                return _red(bools=b)
+                out = jax.tree_map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
 
-            return _f(jnp.array(self.info.z_unique), jnp.array(self.info.z_array))
+                return (b, out), jnp.array(self.info.z_array)[j], jnp.array(self.info.z_array)[k]
 
-        if not split_z:
-            return get(bools)
+            if chunk_size_neigbourgs is not None:
+                _f = chunk_map(_f, chunk_size_neigbourgs)
 
-        assert self.info.z_array is not None, "provide z_array to neighbourlist"
+            if shmap:
+                _f = padded_pmap(_f)
 
-        @partial(vmap, in_axes=(None, 0, None), out_axes=2)
-        @partial(vmap, in_axes=(0, None, None), out_axes=1)
-        def sel(u1, u2, at):
-            @partial(vmap, in_axes=(0))
-            def _b(at):
-                bools_z1_z2 = vmap(
-                    vmap(
-                        lambda x, y: jnp.logical_and(x == u1, y == u2),
-                        in_axes=(0, None),
-                    ),
-                    in_axes=(None, 0),
-                )(at, at)
-                return bools_z1_z2
+            out_tree_n, zj_n, zk_n = _f(ijk_n)
 
-            return get(jnp.logical_and(_b(at), bools))
+            # replace vals with fill_value if bools is False
 
-        return sel(
-            jnp.array(self.info.z_unique),
-            jnp.array(self.info.z_unique),
-            jnp.array(self.info.z_array)[self.atom_indices],
-        )
+            if reduce == "full":
+                out = jax.tree_map(lambda x: jnp.sum(x, axis=0), out_tree_n)
+
+            elif reduce == "z":
+
+                def _red(zj_ref, zk_ref):
+                    b = jnp.logical_and(zj_n == zj_ref, zk_n == zk_ref)
+                    return jax.tree_map(lambda x: jnp.einsum("n,n...->...", b, x), out_tree_n)
+
+                _red = vmap(_red, in_axes=(0, None))
+                _red = vmap(_red, in_axes=(None, 0))
+
+                out = _red(jnp.array(self.info.z_unique), jnp.array(self.info.z_unique))
+
+            elif reduce == "none":
+                out = out_tree_n
+            else:
+                raise ValueError(
+                    "unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
+                )
+
+            return out
+
+        if chunk_size_atoms is not None:
+            f2 = chunk_map(f2, chunk_size_atoms)
+
+        out = f2(i_vec, pos, ind, data_single, bools)
+
+        if split_z:
+            # sum atom indices to  value per z
+            b_split, _, _ = self.info.nl_split_z(out)
+
+            @vmap
+            def _split(b_split):
+                return jax.tree_map(lambda x: jnp.einsum("i,i...->...", b_split, x), out)
+
+            out = _split(b_split)
+
+        print(out)
+
+        return out
 
     @property
     def batched(self):
@@ -2213,6 +2163,7 @@ class _CvFunBase:
         reverse=False,
         log_det=False,
         jacobian=False,
+        shmap=True,
     ) -> tuple[CV, Array | None]:
         if self.cv_input is not None:
             y, cond = self.cv_input.split(x)
@@ -2220,13 +2171,13 @@ class _CvFunBase:
             y, cond = x, None
 
         if jacobian:
-            out, jac, log_det = self._jac(y, nl, reverse=reverse, conditioners=cond)
+            out, jac, log_det = self._jac(y, nl, reverse=reverse, conditioners=cond, shmap=shmap)
 
         elif log_det:
-            out, log_det = self._log_Jf(y, nl, reverse=reverse, conditioners=cond)
+            out, log_det = self._log_Jf(y, nl, reverse=reverse, conditioners=cond, shmap=shmap)
             jac = None
         else:
-            out = self._calc(y, nl, reverse=reverse, conditioners=cond)
+            out = self._calc(y, nl, reverse=reverse, conditioners=cond, shmap=shmap)
             jac = None
             log_det = None
 
@@ -2242,6 +2193,7 @@ class _CvFunBase:
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> CV:
         pass
 
@@ -2251,11 +2203,12 @@ class _CvFunBase:
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> tuple[CV, Array | None]:
         """naive automated implementation, overrride this"""
 
         def f(x):
-            return self._calc(x, nl, reverse, conditioners)
+            return self._calc(x, nl, reverse, conditioners, shmap)
 
         a = f(x)
         b = jacfwd(f)(x)
@@ -2269,9 +2222,10 @@ class _CvFunBase:
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> tuple[CV, Array | None]:
         def f(x):
-            return self._calc(x, nl, reverse, conditioners)
+            return self._calc(x, nl, reverse, conditioners, shmap)
 
         a = f(x)
         b = self.jacfun(f)(x).cv
@@ -2311,6 +2265,7 @@ class CvFun(CvFunBase, PyTreeNode):
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> CV:
         if conditioners is None:
             c = None
@@ -2319,10 +2274,10 @@ class CvFun(CvFunBase, PyTreeNode):
 
         if reverse:
             assert self.backward is not None
-            return jax.jit(Partial(self.backward, **self.static_kwargs))(x, nl, c, **self.kwargs)
+            return jax.jit(Partial(self.backward, shmap=shmap, **self.static_kwargs))(x, nl, c, **self.kwargs)
         else:
             assert self.forward is not None
-            return jax.jit(Partial(self.forward, **self.static_kwargs))(x, nl, c, **self.kwargs)
+            return jax.jit(Partial(self.forward, shmap=shmap, **self.static_kwargs))(x, nl, c, **self.kwargs)
 
 
 class CvFunNn(nn.Module, _CvFunBase):
@@ -2343,11 +2298,12 @@ class CvFunNn(nn.Module, _CvFunBase):
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> tuple[CV, CV | None, Array | None]:
         if reverse:
-            return self.backward(x, nl, conditioners, **self.kwargs)
+            return self.backward(x, nl, conditioners, shmap, **self.kwargs)
         else:
-            return self.forward(x, nl, conditioners, **self.kwargs)
+            return self.forward(x, nl, conditioners, shmap, **self.kwargs)
 
     @abstractmethod
     def forward(
@@ -2355,6 +2311,7 @@ class CvFunNn(nn.Module, _CvFunBase):
         x: CV,
         nl: NeighbourList | None,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> CV:
         pass
 
@@ -2364,6 +2321,7 @@ class CvFunNn(nn.Module, _CvFunBase):
         x: CV,
         nl: NeighbourList | None,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> CV:
         pass
 
@@ -2407,6 +2365,7 @@ class CvFunDistrax(nn.Module, _CvFunBase):
         reverse=False,
         log_det=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> tuple[CV, CV, Array | None]:
         if conditioners is not None:
             z = CV.combine(*conditioners, x).cv
@@ -2428,6 +2387,7 @@ class CvFunDistrax(nn.Module, _CvFunBase):
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> tuple[CV, Array | None]:
         """naive implementation, overrride this"""
         assert nl is None, "not implemented"
@@ -2453,6 +2413,7 @@ class _CombinedCvFun(_CvFunBase):
         reverse=False,
         log_det=False,
         jacobian=False,
+        shmap=True,
     ) -> tuple[CV, CV | None, Array | None]:
         if isinstance(x, CV):
             assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
@@ -2475,7 +2436,14 @@ class _CombinedCvFun(_CvFunBase):
             jac = None
 
             for tr in ordered:
-                xi, jac_i, log_det_i = tr.calc(x=xi, nl=nl, reverse=reverse, log_det=log_det, jacobian=jacobian)
+                xi, jac_i, log_det_i = tr.calc(
+                    x=xi,
+                    nl=nl,
+                    reverse=reverse,
+                    log_det=log_det,
+                    jacobian=jacobian,
+                    shmap=shmap,
+                )
 
                 if jacobian:
                     if jac is None:
@@ -2503,6 +2471,7 @@ class _CombinedCvFun(_CvFunBase):
         nl: NeighbourList | None,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> tuple[CV, Array | None]:
         """naive automated implementation, overrride this"""
 
@@ -2519,7 +2488,7 @@ class CombinedCvFunNN(nn.Module, _CombinedCvFun):
     classes: tuple[tuple[CvFunNn]]
 
 
-def _duplicate_trans(x: CV | SystemParams, nl: NeighbourList | None, _, n):
+def _duplicate_trans(x: CV | SystemParams, nl: NeighbourList | None, _, shmap, n):
     if isinstance(x, SystemParams):
         return [x] * n
 
@@ -2605,25 +2574,31 @@ class _CvTrans:
         log_Jf=False,
         chunk_size=None,
         jacobian=False,
+        shmap=True,
     ) -> tuple[CV, CV | None, Array | None]:
         """
         result is always batched
         arg: CV
         """
         if x.batched:
-            return chunk_map(
+            f = chunk_map(
                 vmap(
                     Partial(
-                        _CvTrans.compute_cv_trans,
-                        self=self,
+                        self.compute_cv_trans,
                         reverse=reverse,
                         log_Jf=log_Jf,
                         chunk_size=None,
                         jacobian=jacobian,
-                    ),
+                        shmap=False,
+                    )
                 ),
                 chunk_size=chunk_size,
-            )(x=x, nl=nl)
+            )
+
+            if shmap:
+                f = padded_pmap(f)
+
+            return f(x, nl)
 
         ordered = reversed(self.trans) if reverse else self.trans
 
@@ -2637,7 +2612,14 @@ class _CvTrans:
         for tr in ordered:
             # print(f"{tr=} {x=}")
 
-            x, jac_i, log_det_i = tr.calc(x=x, nl=nl, reverse=reverse, log_det=log_Jf, jacobian=jacobian)
+            x, jac_i, log_det_i = tr.calc(
+                x=x,
+                nl=nl,
+                reverse=reverse,
+                log_det=log_Jf,
+                jacobian=jacobian,
+                shmap=shmap,
+            )
 
             if jacobian:
                 if jac is None:
@@ -2696,7 +2678,7 @@ class CvTrans(_CvTrans, PyTreeNode):
     __: KW_ONLY
     trans: tuple[CvFunBase]
 
-    @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size", "jacobian"))
+    @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size", "jacobian", "shmap"))
     def compute_cv_trans(
         self,
         x: CV | SystemParams,
@@ -2705,6 +2687,7 @@ class CvTrans(_CvTrans, PyTreeNode):
         log_Jf=False,
         jacobian=False,
         chunk_size=None,
+        shmap=True,
     ) -> tuple[CV, CV, Array | None]:
         return _CvTrans.compute_cv_trans(
             self=self,
@@ -2714,6 +2697,7 @@ class CvTrans(_CvTrans, PyTreeNode):
             log_Jf=log_Jf,
             chunk_size=chunk_size,
             jacobian=jacobian,
+            shmap=shmap,
         )
 
 
@@ -2732,6 +2716,7 @@ class CvTransNN(nn.Module, _CvTrans):
         nl: NeighbourList | None,
         reverse=False,
         log_Jf=False,
+        shmap=True,
     ) -> tuple[CV, CV, Array | None]:
         return _CvTrans.compute_cv_trans(
             self=self,
@@ -2739,6 +2724,7 @@ class CvTransNN(nn.Module, _CvTrans):
             nl=nl,
             reverse=reverse,
             log_Jf=log_Jf,
+            shmap=shmap,
         )
 
     @nn.nowrap
@@ -2789,28 +2775,50 @@ class CvFlow(PyTreeNode):
     ) -> CvFlow:
         return CvFlow(func=_CvTrans.from_cv_function(f=f, static_argnames=static_argnames, **kwargs))
 
-    @partial(jax.jit, static_argnames=["chunk_size", "jacobian"])
+    @partial(jax.jit, static_argnames=["chunk_size", "jacobian", "shmap"])
     def compute_cv_flow(
         self,
         x: SystemParams,
         nl: NeighbourList | None = None,
         chunk_size: int | None = None,
         jacobian=False,
+        shmap=True,
     ) -> tuple[CV, CV | None]:
         if x.batched:
-            return chunk_map(
+            f = chunk_map(
                 vmap(
-                    Partial(self.compute_cv_flow, jacobian=jacobian),
+                    Partial(
+                        self.compute_cv_flow,
+                        jacobian=jacobian,
+                        chunk_size=None,
+                        shmap=False,
+                    ),
                     in_axes=0,
                 ),
                 chunk_size=chunk_size,
-            )(x=x, nl=nl)
+            )
 
-        out, out_jac, _ = self.func.compute_cv_trans(x, nl, jacobian=jacobian, chunk_size=chunk_size)
+            if shmap:
+                f = padded_pmap(f)
+
+            return f(x, nl)
+
+        out, out_jac, _ = self.func.compute_cv_trans(
+            x,
+            nl,
+            jacobian=jacobian,
+            chunk_size=chunk_size,
+            shmap=shmap,
+        )
         # print(f"{out_jac}")
 
         if self.trans is not None:
-            out, out_jac_i, _ = self.trans.compute_cv_trans(x=out, nl=nl, jacobian=jacobian)
+            out, out_jac_i, _ = self.trans.compute_cv_trans(
+                x=out,
+                nl=nl,
+                jacobian=jacobian,
+                shmap=shmap,
+            )
 
             if jacobian:
                 out_jac = jac_compose(out_jac, out_jac_i)
@@ -2877,7 +2885,7 @@ class CvFlow(PyTreeNode):
 
             return nn, (b, nl, nn)  # aux output
 
-        _l = jit(partial(loss, norm=norm))
+        _l = jit(Partial(loss, norm=norm))
 
         slvr = solver(
             fun=_l,
@@ -2919,44 +2927,44 @@ class CollectiveVariable(PyTreeNode):
     metric: CvMetric
     jac: Callable = field(pytree_node=False, default=jax.jacrev)  # jacfwd is generally faster, but not always supported
 
-    @partial(jax.jit, static_argnames=["chunk_size", "jacobian"])
+    @partial(jax.jit, static_argnames=["chunk_size", "jacobian", "shmap"])
     def compute_cv(
         self,
         sp: SystemParams,
         nl: NeighbourList | None = None,
         jacobian=False,
         chunk_size: int | None = None,
+        shmap=True,
     ) -> tuple[CV, CV]:
         if sp.batched:
             if nl is not None:
                 assert nl.batched
 
-                return chunk_map(
-                    vmap(
-                        Partial(
-                            self.compute_cv,
-                            jacobian=jacobian,
-                            chunk_size=None,
-                        ),
-                    ),
-                    chunk_size=chunk_size,
-                )(sp=sp, nl=nl)
-
-            return chunk_map(
+            f = chunk_map(
                 vmap(
                     Partial(
                         self.compute_cv,
                         jacobian=jacobian,
                         chunk_size=None,
-                        nl=None,
+                        shmap=False,
                     ),
                 ),
                 chunk_size=chunk_size,
-            )(sp=sp)
+            )
+
+            if shmap:
+                f = padded_pmap(f)
+
+            return f(sp, nl)
 
         # cv, dcv = self.f.compute_cv_flow(sp, nl, jacobian=jacobian)
         def _f(sp):
-            cv, _ = self.f.compute_cv_flow(sp, nl, jacobian=False)
+            cv, _ = self.f.compute_cv_flow(
+                sp,
+                nl,
+                jacobian=False,
+                shmap=shmap,
+            )
             return cv
 
         cv = _f(sp)

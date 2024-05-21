@@ -497,7 +497,8 @@ class Rounds(ABC):
         verbose=False,
         weight=True,
         T_scale=3,
-        macro_chunk=10000,
+        macro_chunk=2000,
+        macro_chunk_nl=5000,
         compute_effective_sample_size=True,
     ) -> data_loader_output:
         # weights = []
@@ -953,8 +954,8 @@ class Rounds(ABC):
             dlo = dlo.calc_neighbours(
                 r_cut=new_r_cut,
                 chunk_size=chunk_size,
-                verbose=verbose,
-                macro_chunk=macro_chunk,
+                verbose=False,
+                macro_chunk=macro_chunk_nl,
             )
 
         if recalc_cv:
@@ -2168,7 +2169,7 @@ class data_loader_output:
         return _unstack_weights(w_u)
 
     @staticmethod
-    def _transform(cv, nl, _, pi, add_1, q):
+    def _transform(cv, nl, _, shmap, pi, add_1, q):
         cv_v = (cv.cv - pi) @ q
 
         if add_1:
@@ -2715,55 +2716,43 @@ class data_loader_output:
             tau=self.tau,
         )
 
-    def filter_nans(self, x: list[CV] | None = None, x_t: list[CV] | None = None) -> tuple[data_loader_output, CV, CV]:
+    def filter_nans(
+        self,
+        x: list[CV] | None = None,
+        x_t: list[CV] | None = None,
+        macro_chunk=10000,
+    ) -> tuple[data_loader_output, CV, CV]:
         if x is None:
             x = self.cv
-
-        x = CV.stack(*x)
 
         if x_t is None:
             x_t = self.cv_t
 
-        if self.time_series:
-            x_t = CV.stack(*x_t)
+        def _check_nan(x: CV, *_):
+            return x.replace(cv=jnp.isnan(x.cv) | jnp.isinf(x.cv))
 
-        nanmask = jnp.logical_and(jax.vmap(jnp.any)(jnp.isnan(x.cv)), jax.vmap(jnp.any)(jnp.isinf(x.cv)))
+        check_nan = CvTrans.from_cv_function(_check_nan)
 
-        if x_t is not None:
-            nanmask = jnp.logical_or(
-                nanmask, jnp.logical_and(jax.vmap(jnp.any)(jnp.isnan(x_t.cv)), jax.vmap(jnp.any)(jnp.isinf(x_t.cv)))
-            )
-
-        mask = None
-
-        if not jnp.any(nanmask):
-            return self, x.unstack(), x_t.unstack() if x_t is not None else None
-
-        print(f"found {jnp.sum(nanmask)}/{len(nanmask)} nans or infs in the cv data, removing")
-        x = x[~nanmask]
-        if x_t is not None:
-            x_t = x_t[~nanmask]
-
-        mask = [m.cv for m in CV(cv=~nanmask, _stack_dims=x.stack_dims).unstack()]
-
-        dlo = data_loader_output(
-            sp=[sp_i[m_i] for sp_i, m_i in zip(self.sp, mask)],
-            nl=[nl_i[m_i] for nl_i, m_i in zip(self.nl, mask)],
-            sp_t=[sp_i[m_i] for sp_i, m_i in zip(self.sp_t, mask)] if self.sp_t is not None else None,
-            nl_t=[nl_i[m_i] for nl_i, m_i in zip(self.nl_t, mask)] if self.nl_t is not None else None,
-            cv=[cv_i[m_i] for cv_i, m_i in zip(self.cv, mask)],
-            cv_t=[cv_i[m_i] for cv_i, m_i in zip(self.cv_t, mask)] if self.cv_t is not None else None,
-            time_series=self.time_series,
-            tau=self.tau,
-            bias=self.bias,
-            ti=[ti_i[m_i] for ti_i, m_i in zip(self.ti, mask)] if self.ti is not None else None,
-            ti_t=[ti_t_i[m_i] for ti_t_i, m_i in zip(self.ti_t, mask)] if self.ti_t is not None else None,
-            collective_variable=self.collective_variable,
-            sti=self.sti,
-            ground_bias=self.ground_bias,
+        nan_x, nan_x_t = self.apply_cv_trans(
+            check_nan,
+            x,
+            x_t,
+            macro_chunk=macro_chunk,
+            pmap=True,
+            verbose=True,
         )
 
-        return dlo, x.unstack(), x_t.unstack() if x_t is not None else None
+        nan = CV.stack(*nan_x).cv
+
+        if nan_x_t is not None:
+            nan = jnp.logical_or(nan, CV.stack(*nan_x_t).cv)
+
+        assert not jnp.any(nan), f"found {jnp.sum(nan)}/{len(nan)} nans or infs in the cv data"
+
+        if jnp.any(nan):
+            raise
+
+        print(f"found {jnp.sum(nan)}/{len(nan)} nans or infs in the cv data, removing")
 
     def apply_cv_trans(
         self,
@@ -2782,10 +2771,10 @@ class data_loader_output:
             x_t = self.cv_t
 
         def f(x, nl):
-            return cv_trans.compute_cv_trans(x, nl, chunk_size=chunk_size)[0]
+            return cv_trans.compute_cv_trans(x, nl, shmap=padded_pmap)[0]
 
-        if pmap:
-            f = padded_pmap(f)
+        # if pmap:
+        #     f = padded_pmap(f)
 
         if self.time_series:
             y = [*x, *x_t]
@@ -2827,12 +2816,10 @@ class data_loader_output:
             x_t = self.sp_t
 
         def f(x, nl):
-            return flow.compute_cv_flow(x, nl, chunk_size=chunk_size)[0]
+            return flow.compute_cv_flow(x, nl, shmap=padded_pmap)[0]
 
-        if pmap:
-            f = padded_pmap(f)
-
-        # f: Callable[[SystemParams, NeighbourList], tuple[CV, Any]]
+        # if pmap:
+        #     f = padded_pmap(f)
 
         if verbose:
             print(f"apply_cv_func: stacking {len(x)} {len(x_t) if x_t is not None else 0} ")
@@ -2866,7 +2853,7 @@ class data_loader_output:
         op: SystemParams.stack | CV.stack,
         y: list[SystemParams | CV],
         nl: list[NeighbourList] | None,
-        macro_chunk=10000,
+        macro_chunk: int | None = 10000,
         verbose=False,
     ):
         # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
@@ -2878,46 +2865,90 @@ class data_loader_output:
 
             z = z.replace(_stack_dims=stack_dims).unstack()
 
-        else:
-            n = 0
+            return z
 
-            z = []
+        n = 0
 
-            y_chunk = []
-            nl_chunk = [] if nl is not None else None
+        z = []
 
-            tot_chunk = 0
-            stack_dims_chunk = []
+        y_chunk = []
+        nl_chunk = [] if nl is not None else None
 
-            while n < len(y):
-                s = y[n].shape[0]
+        tot_chunk = 0
+        stack_dims_chunk = []
 
-                y_chunk.append(y[n])
-                nl_chunk.append(nl[n]) if nl is not None else None
+        last_z = None
 
-                tot_chunk += s
-                stack_dims_chunk.append(s)
+        tot = sum(y_chunk.shape[0] for y_chunk in y)
 
-                if tot_chunk > macro_chunk or n == len(y) - 1:
-                    if verbose:
-                        print(f"apply_cv_func: chunk {n+1}/{len(y)}, {tot_chunk=}")
+        tot_running = 0
 
-                    z_chunk = f(
-                        op(*y_chunk),
-                        NeighbourList.stack(*nl_chunk) if nl is not None else None,
-                    )
+        while n < len(y):
+            s = y[n].shape[0]
 
-                    z_chunk = z_chunk.replace(_stack_dims=stack_dims_chunk).unstack()
+            y_chunk.append(y[n])
+            nl_chunk.append(nl[n]) if nl is not None else None
 
-                    z.extend(z_chunk)
+            tot_chunk += s
+            stack_dims_chunk.append(s)
 
+            if tot_chunk > macro_chunk or n == len(y) - 1:
+                # split last element
+                split_last = tot_chunk > macro_chunk
+
+                if split_last:
+                    y_last = y_chunk[-1]
+
+                    s_last = y_last.shape[0] - (tot_chunk - macro_chunk)
+
+                    y_chunk[-1] = y_last[0:s_last]
+                    last_chunk_y = y_last[s_last:]
+
+                    if nl is not None:
+                        nl_last = nl_chunk[-1] if nl is not None else None
+
+                        nl_chunk[-1] = nl_last[0:s_last]
+                        last_chunk_nl = nl_last[s_last:]
+
+                    tot_chunk -= y_last.shape[0] - s_last
+                    stack_dims_chunk[-1] = s_last
+
+                if verbose:
+                    print(f"apply_cv_func: chunk {n+1}/{len(y)},  {tot_running}-{ tot_running+tot_chunk }/{tot} ")
+
+                z_chunk = f(
+                    op(*y_chunk),
+                    NeighbourList.stack(*nl_chunk) if nl is not None else None,
+                )
+
+                tot_running += tot_chunk
+
+                z_chunk = z_chunk.replace(_stack_dims=stack_dims_chunk).unstack()
+
+                if last_z is not None:
+                    # recombine
+                    z_chunk[0] = CV.stack(z_chunk[0], last_z)
+
+                if split_last:
+                    last_z = z_chunk[-1]
+
+                    z_chunk = z_chunk[:-1]
+
+                    y_chunk = [last_chunk_y]
+                    nl_chunk = [last_chunk_nl] if nl is not None else None
+                    tot_chunk = last_chunk_y.shape[0]
+                    stack_dims_chunk = [tot_chunk]
+
+                else:
+                    last_z = None
                     y_chunk = []
                     nl_chunk = [] if nl is not None else None
+                    tot_chunk = 0
                     stack_dims_chunk = []
 
-                    tot_chunk = 0
+                z.extend(z_chunk)
 
-                n += 1
+            n += 1
 
         print(f"{len(z)=}")
 

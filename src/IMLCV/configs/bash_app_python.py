@@ -27,7 +27,7 @@ def bash_app_python(
     auto_log=False,
     profile=False,
 ):
-    from IMLCV.configs.config_general import PARSL_DICT, Executors
+    from IMLCV.configs.config_general import PARSL_DICT, Executors, REFERENCE_COMMANDS
 
     if executors is None:
         executors = Executors.default
@@ -124,10 +124,12 @@ def bash_app_python(
 
                 if filename.suffix == ".json":
                     with open(filename, "r+") as f:
-                        f.writelines(jsonpickle.encode((func, args, kwargs), indent=1, use_base85=True))
+                        f.writelines(
+                            jsonpickle.encode((func, args, kwargs, REFERENCE_COMMANDS), indent=1, use_base85=True)
+                        )
                 else:
                     with open(filename, "rb+") as f:
-                        cloudpickle.dump((func, args, kwargs), f)
+                        cloudpickle.dump((func, args, kwargs, REFERENCE_COMMANDS), f)
 
                 return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }  {'--uses_mpi' if uses_mpi else ''}   {'--profile' if profile else ''} "
 
@@ -248,21 +250,29 @@ if __name__ == "__main__":
 
         if file_in.suffix == ".json":
             with open(file_in) as f1:
-                func, fargs, fkwargs = jsonpickle.decode(f1.read(), context=unpickler)
+                func, fargs, fkwargs, ref_com = jsonpickle.decode(f1.read(), context=unpickler)
         else:
             with open(file_in, "rb") as f2:
-                func, fargs, fkwargs = cloudpickle.load(f2)
+                func, fargs, fkwargs, ref_com = cloudpickle.load(f2)
+
+        print(f"loaded  {ref_com=}")
 
         print("#" * 20)
     else:
         func = None
         fargs = None
         fkwargs = None
+        ref_com = None
 
     if args.uses_mpi:
         func = comm.bcast(func, root=0)
         fargs = comm.bcast(fargs, root=0)
         fkwargs = comm.bcast(fkwargs, root=0)
+        ref_com = comm.bcast(ref_com, root=0)
+
+    from IMLCV.configs.config_general import REFERENCE_COMMANDS
+
+    REFERENCE_COMMANDS.update(ref_com)
 
     if args.profile:
         import cProfile

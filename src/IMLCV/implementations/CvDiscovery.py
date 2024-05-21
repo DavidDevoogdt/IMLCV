@@ -336,7 +336,7 @@ class TranformerAutoEncoder(Transformer):
 
             # @partial(jit, static_argnums=(0,))
 
-        def forward(x: CV, nl, y: list[CV] | None = None, _=None):
+        def forward(x: CV, nl, y: list[CV] | None = None, _=None, smap=False):
             assert y is None
             encoded: Array = VAE(**vae_args).apply(
                 {"params": state.params},
@@ -354,7 +354,7 @@ class TranformerAutoEncoder(Transformer):
         return cv, cv_t, un_atomize * f_enc, None
 
 
-def _LDA_trans(cv: CV, nl: NeighbourList | None, _, alpha, outdim, solver):
+def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, alpha, outdim, solver):
     if solver == "eigen":
 
         def f(cv, scalings):
@@ -385,7 +385,7 @@ def _LDA_trans(cv: CV, nl: NeighbourList | None, _, alpha, outdim, solver):
     )
 
 
-def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, mean):
+def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, shmap, mean):
     return CV(
         cv=(cv.cv - mean[0]) / (mean[1] - mean[0]),
         _stack_dims=cv._stack_dims,
@@ -395,7 +395,7 @@ def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, mean):
     )
 
 
-def _scale_trans(cv: CV, nl: NeighbourList | None, _, alpha, scale_factor):
+def _scale_trans(cv: CV, nl: NeighbourList | None, _, shmap, alpha, scale_factor):
     return CV(
         (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
         _stack_dims=cv._stack_dims,

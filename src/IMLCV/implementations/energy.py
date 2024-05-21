@@ -14,7 +14,7 @@ from ase.calculators.cp2k import CP2K
 from IMLCV.base.bias import Energy
 from IMLCV.base.bias import EnergyError
 from IMLCV.base.bias import EnergyResult
-from IMLCV.configs.config_general import get_cp2k
+from IMLCV.configs.config_general import REFERENCE_COMMANDS
 from molmod.units import angstrom
 from molmod.units import electronvolt
 from IMLCV.configs.config_general import ROOT_DIR
@@ -260,7 +260,7 @@ class Cp2kEnergy(AseEnergy):
 
         params["directory"] = "."
 
-        params["command"] = get_cp2k()
+        params["command"] = REFERENCE_COMMANDS["cp2k"]
 
         calc = CP2K(**params)
 

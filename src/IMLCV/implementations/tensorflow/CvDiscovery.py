@@ -49,6 +49,7 @@ class hkFunBase(CvFunBase, PyTreeNode):
         nl: NeighbourList,
         reverse=False,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ) -> CV:
         assert conditioners is None
         assert not reverse

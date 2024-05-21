@@ -123,9 +123,9 @@ class Transformer:
             macro_chunk=macro_chunk,
         )
 
-        if check_nan:
-            print("checking pre_fit nans")
-            dlo, x, x_t = dlo.filter_nans(x, x_t)
+        # if check_nan:
+        #     print("checking pre_fit nans")
+        #     dlo, x, x_t = dlo.filter_nans(x, x_t)
 
         if test:
             print("testing pre_fit")
@@ -157,7 +157,7 @@ class Transformer:
 
         if check_nan:
             print("checking fit nans")
-            dlo, y, y_t = dlo.filter_nans(y, y_t)
+            dlo.filter_nans(y, y_t)
 
         y = CV.stack(*y)
         if y_t is not None:

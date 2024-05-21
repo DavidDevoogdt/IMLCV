@@ -10,7 +10,7 @@ import jax.scipy
 import jaxopt
 import matplotlib.pyplot as plt
 import scipy.special
-from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import NeighbourList, padded_pmap
 from IMLCV.base.CV import SystemParams
 from IMLCV.tools.bessel_callback import ive
 from IMLCV.tools.bessel_callback import spherical_jn
@@ -18,6 +18,7 @@ from jax import Array
 from jax import lax
 from jax import vmap
 from scipy.special import legendre as sp_legendre
+from jax.tree_util import Partial
 
 
 # @partial(jit, static_argnums=(1,))
@@ -39,9 +40,21 @@ def p_i(
     chunk_size_neigbourgs=None,
     chunk_size_atoms=None,
     chunk_size_batch=None,
+    shmap=True,
 ):
     if sp.batched:
-        return vmap(p_i, in_axes=(0, 0, None, None))(sp, nl, p, r_cut)
+        f = Partial(
+            p_i,
+            p=p,
+            chunk_size_neigbourgs=chunk_size_neigbourgs,
+            chunk_size_atoms=chunk_size_atoms,
+            chunk_size_batch=chunk_size_batch,
+            shmap=False,
+        )
+
+        if shmap:
+            f = padded_pmap(f)
+        return f(sp, nl)
 
     ps, pd = p
 
@@ -51,12 +64,13 @@ def p_i(
         func_double=pd,
         r_cut=r_cut,
         fill_value=0.0,
-        reduce="full",
+        reduce="z",
         unique=True,
-        split_z=True,
+        split_z=False,
         chunk_size_neigbourgs=chunk_size_neigbourgs,
         chunk_size_atoms=chunk_size_atoms,
         chunk_size_batch=chunk_size_batch,
+        shmap=shmap,
     )
 
     return val0

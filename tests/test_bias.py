@@ -81,7 +81,7 @@ def test_RBF_bias(kernel):
     # bounds = [[0, 3], [0, 3]]
     n = 5
 
-    def a(sp, nl, _):
+    def a(sp, nl, _, shmap):
         return CV(cv=sp.coordinates)
 
     collective_variable = CollectiveVariable(
@@ -94,7 +94,12 @@ def test_RBF_bias(kernel):
 
     _, _, center_cvs = collective_variable.metric.grid(n=n)
 
-    def f(cv: CV, _nl, _cond):
+    def f(
+        cv: CV,
+        _nl,
+        _cond,
+        shmap,
+    ):
         return cv.replace(cv=cv.cv[0] ** 3 + cv.cv[1])
 
     val, _, _ = CvTrans.from_cv_function(f).compute_cv_trans(center_cvs)

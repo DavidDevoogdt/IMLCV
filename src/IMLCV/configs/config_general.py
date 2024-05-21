@@ -17,12 +17,19 @@ py_env = " which python"
 
 
 PARSL_DICT = {}
+REFERENCE_COMMANDS = {
+    "cp2k": "mpirun cp2k_shell.psmp",
+}
 
 
 class Executors(Enum):
     default = "default"
     training = "training"
     reference = "reference"
+
+
+class ReferenceCommands(Enum):
+    cp2k = "cp2k"
 
 
 def get_platform():
@@ -75,14 +82,14 @@ def config(
         path_internal = ROOT_DIR / ".runinfo"
 
     if env == "local":
-        execs, labels, precommands = get_config_local(
+        execs, labels, precommands, ref_comm = get_config_local(
             path_internal,
             ref_threads=local_ref_threads,
             max_threads=max_threads_local,
             work_queue=work_queue_local,
         )
     elif env == "hortense" or env == "stevin":
-        execs, labels, precommands = config_ugent(
+        execs, labels, precommands, ref_comm = config_ugent(
             env=env,
             path_internal=path_internal,
             singlepoint_nodes=singlepoint_nodes,
@@ -112,18 +119,8 @@ def config(
     for k, l, p in zip(["default", "training", "reference"], labels, precommands):
         PARSL_DICT[k] = [l, p]
 
+    global REFERENCE_COMMANDS
+
+    REFERENCE_COMMANDS.update(ref_comm)
+
     parsl.load(config=config)
-
-
-def get_cp2k():
-    env = get_platform()
-    if env == "hortense":
-        return "export OMP_NUM_THREADS=1; mpirun  -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi  cp2k_shell.psmp"
-    if env == "stevin":
-        return "export OMP_NUM_THREADS=1; mpirun -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi cp2k_shell.psmp"
-    raise ValueError(f"unknow {env=} for cp2k ")
-
-
-# -mca pml ucx -mca btl ^uct
-# export OMPI_MCA_btl=^openib
-# mca_base_component_show_load_errors 0

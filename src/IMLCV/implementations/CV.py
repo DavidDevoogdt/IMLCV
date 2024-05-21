@@ -34,11 +34,11 @@ from functools import partial
 ######################################
 
 
-def _identity_trans(x, nl, _):
+def _identity_trans(x, nl, _, shmap):
     return x
 
 
-def _zero_cv(x, nl, _):
+def _zero_cv(x, nl, _, shmap):
     return CV(cv=jnp.array([0.0]))
 
 
@@ -46,7 +46,7 @@ identity_trans = _CvTrans.from_cv_function(_identity_trans)
 zero_trans = _CvTrans.from_cv_function(_zero_cv)
 
 
-def _Volume(sp: SystemParams, *_):
+def _Volume(sp: SystemParams, _nl, _c, shmap):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
     vol = jnp.abs(jnp.linalg.det(sp.cell))
@@ -73,7 +73,7 @@ def distance_descriptor():
     return CvFlow.from_function(_distance)
 
 
-def _dihedral(sp: SystemParams, _nl, _c, numbers):
+def _dihedral(sp: SystemParams, _nl, _c, shmap, numbers):
     coor = sp.coordinates
     p0 = coor[numbers[0]]
     p1 = coor[numbers[1]]
@@ -109,6 +109,7 @@ def _sb_descriptor(
     sp: SystemParams,
     nl: NeighbourList,
     _,
+    shmap,
     r_cut,
     chunk_size_atoms,
     chunk_size_neigbourgs,
@@ -162,6 +163,7 @@ def _sb_descriptor(
         r_cut=r_cut,
         chunk_size_atoms=chunk_size_atoms,
         chunk_size_neigbourgs=chunk_size_neigbourgs,
+        shmap=shmap,
     )
 
     if reduce:
@@ -207,6 +209,7 @@ def _soap_descriptor(
     sp: SystemParams,
     nl: NeighbourList,
     _,
+    shmap,
     r_cut,
     reduce,
     reshape,
@@ -247,6 +250,7 @@ def _soap_descriptor(
         nl=nl,
         p=p,
         r_cut=r_cut,
+        shmap=shmap,
     )
 
     if reduce:
@@ -301,7 +305,7 @@ def NoneCV() -> CollectiveVariable:
 ######################################
 #           CV trans                 #
 ######################################
-def _rotate_2d(cv: CV, _nl: NeighbourList, _, alpha):
+def _rotate_2d(cv: CV, _nl: NeighbourList, _, shmap, alpha):
     return (
         jnp.array(
             [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]],
@@ -314,7 +318,7 @@ def rotate_2d(alpha):
     return CvTrans.from_cv_function(_rotate_2d, alpha=alpha)
 
 
-def _project_distances(cvs: CV, nl, _, a):
+def _project_distances(cvs: CV, nl, _, shmap, a):
     "projects the distances to a reaction coordinate"
     import jax.numpy as jnp
 
@@ -338,7 +342,7 @@ def project_distances(a):
     return CvTrans.from_cv_function(_project_distances, a=a)
 
 
-def _scale_cv_trans(x, nl, _, upper, lower, mini, diff):
+def _scale_cv_trans(x, nl, _, shmap, upper, lower, mini, diff):
     return x.replace(cv=((x.cv - mini) / diff) * (upper - lower) + lower)
 
 
@@ -353,7 +357,7 @@ def scale_cv_trans(array: CV, lower=0, upper=1):
     return CvTrans.from_cv_function(_scale_cv_trans, upper=upper, lower=lower, mini=mini, diff=diff)
 
 
-def _trunc_svd(x: CV, nl: NeighbourList | None, _, m_atomic, v, cvi_shape):
+def _trunc_svd(x: CV, nl: NeighbourList | None, _, shmap, m_atomic, v, cvi_shape):
     if m_atomic:
         out = jnp.einsum("ni,jni->j", x.cv, v)
 
@@ -610,6 +614,7 @@ def _sinkhorn_divergence_trans(
     cv: CV,
     nl: NeighbourList | None,
     _,
+    shmap,
     nli,
     pi,
     sort,
@@ -949,6 +954,7 @@ def _sinkhorn_divergence_trans_2(
     cv: CV,
     nl: NeighbourList | None,
     _,
+    shmap,
     nli: NeighbourList,
     pi: CV,
     alpha_rematch,
@@ -1097,6 +1103,7 @@ def _divergence_from_aligned_cv(
     cv: CV,
     nl: NeighbourList | None,
     _,
+    shmap,
 ):
     splitted = jnp.array([a.cv for a in cv.split()])
     div = jnp.einsum("k...->k", splitted) / splitted.shape[0]
@@ -1111,6 +1118,7 @@ def _divergence_weighed_aligned_cv(
     cv: CV,
     nl: NeighbourList | None,
     _,
+    shmap,
     scaling,
 ):
     divergence, _, _ = divergence_from_aligned_cv.compute_cv_trans(cv, nl)
@@ -1134,6 +1142,7 @@ def _weighted_sinkhorn_divergence_2(
     cv: CV,
     nl: NeighbourList | None,
     _,
+    shmap,
     scaling,
     mean=None,
     append_weights=True,
@@ -1181,7 +1190,12 @@ def weighted_sinkhorn_divergence_2(
     )
 
 
-def _un_atomize(x: CV, nl, _):
+def _un_atomize(
+    x: CV,
+    nl,
+    _,
+    shmap,
+):
     if not x.atomic:
         return x
 
@@ -1194,7 +1208,7 @@ def _un_atomize(x: CV, nl, _):
 un_atomize = CvTrans.from_cv_function(_un_atomize)
 
 
-def _stack_reduce(cv: CV, nl: NeighbourList | None, _, op):
+def _stack_reduce(cv: CV, nl: NeighbourList | None, _, shmap, op):
     cvs = cv.split(cv.stack_dims)
 
     return CV(
@@ -1210,7 +1224,7 @@ def stack_reduce(op=jnp.mean):
     return CvTrans.from_cv_function(_stack_reduce, op=op)
 
 
-def _affine_trans(x: CV, nl, _, C):
+def _affine_trans(x: CV, nl, _, shmap, C):
     assert x.dim == 2
 
     u = (C[0] * x.cv[0] + C[1] * x.cv[1] + C[2]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
@@ -1268,7 +1282,7 @@ def affine_2d(old: Array, new: Array):
     return CvTrans.from_cv_function(_affine_trans, C=C)
 
 
-def _remove_mean(cv: CV, nl: NeighbourList | None, _, mean):
+def _remove_mean(cv: CV, nl: NeighbourList | None, _, shmap, mean):
     return cv - mean
 
 
@@ -1281,7 +1295,7 @@ def get_remove_mean_trans(c: CV, range=Ellipsis):
     return trans.compute_cv_trans(c)[0], trans
 
 
-def _normalize(cv: CV, nl: NeighbourList | None, _, std):
+def _normalize(cv: CV, nl: NeighbourList | None, _, shmap, std):
     return cv * (1 / std)
 
 
@@ -1294,7 +1308,7 @@ def get_normalize_trans(c: CV, range=Ellipsis):
     return trans.compute_cv_trans(c)[0], trans
 
 
-def _cv_slice(cv: CV, nl: NeighbourList, _, indices):
+def _cv_slice(cv: CV, nl: NeighbourList, _, shmap, indices):
     return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
 
 
@@ -1387,6 +1401,7 @@ class RealNVP(CvFunNn):
         x: CV,
         nl: NeighbourList | None,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ):
         y = CV.combine(*conditioners).cv
         return CV(cv=x.cv * self.s(y) + self.t(y))
@@ -1396,6 +1411,7 @@ class RealNVP(CvFunNn):
         z: CV,
         nl: NeighbourList | None,
         conditioners: list[CV] | None = None,
+        shmap=True,
     ):
         y = CV.combine(*conditioners).cv
         return CV(cv=(z.cv - self.t(y)) / self.s(y))

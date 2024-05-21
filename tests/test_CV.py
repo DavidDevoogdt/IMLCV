@@ -286,7 +286,7 @@ def test_neigh():
         r_cut=r_cut,
         func=func,
         reduce="z",
-        split_z=True,
+        split_z=False,
     )
 
     # method 7: with neighbourlist, sort_z_self
@@ -296,7 +296,7 @@ def test_neigh():
         r_cut=r_cut,
         func=func,
         reduce="none",
-        split_z=True,
+        split_z=False,
     )
 
     _, _, s6_z = nl.nl_split_z(s6)
@@ -381,7 +381,7 @@ def test_neigh_pair():
         func_double=func_double,
         exclude_self=True,
         unique=True,
-        split_z=True,
+        split_z=False,
     )
 
     # reduce to non split version
@@ -397,7 +397,7 @@ def test_neigh_pair():
         reduce="none",
         exclude_self=True,
         unique=True,
-        split_z=True,
+        split_z=False,
     )
 
     # test if j and k indices are correctly fragmented
@@ -415,7 +415,7 @@ def test_neigh_pair():
         reduce="z",
         exclude_self=True,
         unique=True,
-        split_z=True,
+        split_z=False,
     )
 
 
@@ -511,3 +511,8 @@ def test_sp_apply():
 
     assert jnp.linalg.norm(sp_can.cell - sp_can_2.cell) < 1e-10
     assert jnp.linalg.norm(sp_can.coordinates - sp_can_2.coordinates) < 1e-10
+
+
+if __name__ == "__main__":
+    test_neigh()
+    test_neigh_pair()

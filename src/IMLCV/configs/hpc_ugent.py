@@ -357,7 +357,11 @@ which python
             cmd_timeout=1,
         )
 
-    pre_command = f" srun --export=ALL --cpu-bind=verbose -n 1 -c {threads_per_core}  "
+    pre_command = ""
+
+    ref_comm = {
+        "cp2k": "export OMP_NUM_THREADS=1; mpirun -report-bindings  -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi cp2k_shell.psmp ",
+    }
 
     print(f"{executor=}")
 
@@ -413,7 +417,7 @@ which python
         )
     else:
         raise ValueError(f"unknown executor {executor=}")
-    return executor, pre_command
+    return executor, pre_command, ref_comm
 
 
 def config(
@@ -499,7 +503,7 @@ def config(
     if bootstrap:
         assert not isinstance(cpu_cluster, list), "bootstrap does not support multiple clusters"
 
-        executor, pre_command = get_slurm_provider(
+        executor, pre_command, _ = get_slurm_provider(
             **get_kwargs(cpu_cluster),
             label="default",
             init_blocks=1,
@@ -519,6 +523,8 @@ def config(
         default_pre_commands = []
         training_pre_commands = []
         reference_pre_commands = []
+
+        reference_command = None
 
         execs = []
 
@@ -558,7 +564,7 @@ def config(
 
                     label = f"training_{gpu}"
 
-                    gpu_part, pre_command = get_slurm_provider(
+                    gpu_part, pre_command, _ = get_slurm_provider(
                         gpu=True,
                         label=label,
                         init_blocks=0,
@@ -580,7 +586,7 @@ def config(
 
                     label = f"training_{cpu}"
 
-                    cpu_part, pre_command = get_slurm_provider(
+                    cpu_part, pre_command, _ = get_slurm_provider(
                         label=label,
                         init_blocks=0,
                         min_blocks=0,
@@ -602,7 +608,7 @@ def config(
 
                 label = f"reference_{cpu}"
 
-                reference, pre_command = get_slurm_provider(
+                reference, pre_command, ref_com = get_slurm_provider(
                     label=label,
                     memory_per_core=memory_per_core,
                     mem=min_memery_per_node,
@@ -622,11 +628,14 @@ def config(
                 reference_labels.append(label)
                 reference_pre_commands.append(pre_command)
 
+                if reference_command is None:
+                    reference_command = ref_com
+
                 if not default_on_threads:
                     # general tasks
                     label = f"default_{cpu}"
 
-                    default, pre_command = get_slurm_provider(
+                    default, pre_command, _ = get_slurm_provider(
                         label=label,
                         init_blocks=1,
                         min_blocks=1,
@@ -658,4 +667,4 @@ def config(
             for pci in pc[1:]:
                 assert pci == pc[0], "all pre_commands should be the same per category"
 
-    return execs, [default_labels, training_labels, reference_labels], pre_commands_filtered
+    return execs, [default_labels, training_labels, reference_labels], pre_commands_filtered, reference_command
