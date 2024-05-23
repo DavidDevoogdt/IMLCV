@@ -111,6 +111,7 @@ class TranformerUMAP(Transformer):
         # metric=None,
         chunk_size=None,
         verbose=True,
+        macro_chunk=1000,
         **kwargs,
     ):
         x = CV.stack(*x)

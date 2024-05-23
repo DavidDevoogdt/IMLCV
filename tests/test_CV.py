@@ -262,7 +262,7 @@ def test_neigh():
     # test 3: with neighbourlist, split z
 
     s3 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func=func, split_z=True)
-    s3_u = jax.tree_map(lambda x: jnp.sum(x, axis=1), s3)  # resum over z axis
+    s3_u = jax.tree.map(lambda x: jnp.sum(x, axis=1), s3)  # resum over z axis
     _comp(s1, s3_u)
 
     # method 6: with neighbourlist, no reduction
@@ -272,9 +272,8 @@ def test_neigh():
         r_cut=r_cut,
         func=func,
         reduce="none",
-        split_z=False,
     )
-    s4_u = jax.tree_map(lambda x: jnp.sum(x, axis=1), s4)  # resum over z axis
+    s4_u = jax.tree.map(lambda x: jnp.sum(x, axis=1), s4)  # resum over z axis
     _comp(s1, s4_u)
 
     # split to ge tz components
@@ -286,7 +285,6 @@ def test_neigh():
         r_cut=r_cut,
         func=func,
         reduce="z",
-        split_z=False,
     )
 
     # method 7: with neighbourlist, sort_z_self
@@ -296,12 +294,11 @@ def test_neigh():
         r_cut=r_cut,
         func=func,
         reduce="none",
-        split_z=False,
     )
 
     _, _, s6_z = nl.nl_split_z(s6)
     a, bc = tuple(
-        zip(*jax.tree_map(lambda x: jnp.sum(x, axis=(0, -1)), s6_z)),
+        zip(*jax.tree.map(lambda x: jnp.sum(x, axis=(0, -1)), s6_z)),
     )  # sum over z and over neighbours
     b, c = tuple(zip(*bc))
 
@@ -385,7 +382,7 @@ def test_neigh_pair():
     )
 
     # reduce to non split version
-    s2_u = jax.tree_map(lambda x: jnp.sum(jnp.sum(x, axis=2), axis=1), s2)
+    s2_u = jax.tree.map(lambda x: jnp.sum(jnp.sum(x, axis=2), axis=1), s2)
     _comp(s1, s2_u)
 
     # same but without reduction
@@ -397,7 +394,6 @@ def test_neigh_pair():
         reduce="none",
         exclude_self=True,
         unique=True,
-        split_z=False,
     )
 
     # test if j and k indices are correctly fragmented
@@ -415,7 +411,6 @@ def test_neigh_pair():
         reduce="z",
         exclude_self=True,
         unique=True,
-        split_z=False,
     )
 
 

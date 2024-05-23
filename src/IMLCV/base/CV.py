@@ -22,7 +22,6 @@ from IMLCV import unpickler
 from jax import Array
 from jax import jacfwd
 from jax import jit
-import jax.experimental.mesh_utils as mesh_utils
 import jax.sharding as jshard
 from jax.sharding import PartitionSpec, Mesh
 from jax import vmap
@@ -68,7 +67,7 @@ def padded_pmap(f, axis=0, n_devices: int | None = None):
         if n_devices == 1:
             return f(*args)
 
-        devices = mesh_utils.create_device_mesh((n_devices,))
+        devices = jax.devices()
 
         in_tree, tree_def = tree_flatten(args)
 
@@ -99,12 +98,10 @@ def padded_pmap(f, axis=0, n_devices: int | None = None):
             shardings.append(sharding)
 
         arg_shards = tree_unflatten(tree_def, shardings)
-
         args = tree_unflatten(tree_def, in_tree)
-
         out = jax.jit(f, in_shardings=arg_shards)(*args)
 
-        out_reshaped = jax.tree_map(lambda x: x[:shape], out)
+        out_reshaped = jax.tree.map(lambda x: x[:shape], out)
 
         return out_reshaped
 
@@ -186,14 +183,142 @@ def chunk_map(f, chunk_size):
     return _f
 
 
+def macro_chunk_map(
+    f: Callable[[SystemParams | CV, NeighbourList], CV | NeighbourList],
+    op: SystemParams.stack | CV.stack,
+    y: list[SystemParams | CV],
+    nl: list[NeighbourList] | None,
+    macro_chunk: int | None = 10000,
+    verbose=False,
+):
+    # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
+
+    if macro_chunk is None:
+        stack_dims = [nli.shape[0] for nli in nl]
+
+        z = f(op(*y), NeighbourList.stack(*nl))
+
+        z = z.replace(_stack_dims=stack_dims).unstack()
+
+        return z
+
+    n_prev = 0
+    n = 0
+
+    z = []
+
+    y_chunk = []
+    nl_chunk = [] if nl is not None else None
+
+    tot_chunk = 0
+    stack_dims_chunk = []
+
+    last_z = None
+
+    tot = sum(y_chunk.shape[0] for y_chunk in y)
+
+    tot_running = 0
+
+    while tot_running < tot:
+        if (tot_chunk < macro_chunk) and (tot_running + tot_chunk != tot):
+            # the last element from previous cycle might be bigger tan the chunk size
+            s = y[n].shape[0]
+
+            y_chunk.append(y[n])
+            nl_chunk.append(nl[n]) if nl is not None else None
+
+            tot_chunk += s
+            stack_dims_chunk.append(s)
+
+        if tot_chunk >= macro_chunk or (tot_running + tot_chunk == tot):
+            # split last element
+            split_last = tot_chunk > macro_chunk
+
+            if split_last:
+                y_last = y_chunk[-1]
+                yls = y_last.shape[0]
+
+                s_last = yls - (tot_chunk - macro_chunk)
+
+                last_chunk_y = y_last[s_last:yls]
+                y_chunk[-1] = y_last[0:s_last]
+
+                if nl is not None:
+                    nl_last = nl_chunk[-1] if nl is not None else None
+
+                    # order matters
+                    last_chunk_nl = nl_last[s_last:yls]
+                    nl_chunk[-1] = nl_last[0:s_last]
+
+                tot_chunk -= y_last.shape[0] - s_last
+                stack_dims_chunk[-1] = s_last
+
+            y_stack = op(*y_chunk)
+            nl_stack = NeighbourList.stack(*nl_chunk) if nl is not None else None
+
+            if verbose:
+                print(
+                    f"apply_cv_func: chunk {n_prev+1}-{n+1}/{len(y)},  {tot_running}-{ tot_running+tot_chunk }/{tot}  {y_stack.shape=}   "
+                )
+
+            z_chunk = f(
+                y_stack,
+                nl_stack.replace(_stack_dims=None) if nl_stack is not None else None,
+            )
+
+            tot_running += tot_chunk
+
+            z_chunk = z_chunk.replace(_stack_dims=stack_dims_chunk).unstack()
+
+            if last_z is not None:
+                z_chunk[0] = last_z.stack(last_z, z_chunk[0])
+                # now fix the stack dims
+                z_chunk[0] = z_chunk[0].replace(_stack_dims=None)
+
+            if split_last:
+                last_z = z_chunk[-1]
+                z_chunk = z_chunk[:-1]
+
+                y_chunk = [last_chunk_y]
+                nl_chunk = [last_chunk_nl] if nl is not None else None
+
+                tot_chunk = last_chunk_y.shape[0]
+                stack_dims_chunk = [tot_chunk]
+
+                n_prev = n
+
+            else:
+                last_z = None
+                y_chunk = []
+                nl_chunk = [] if nl is not None else None
+                tot_chunk = 0
+                stack_dims_chunk = []
+                last_chunk_y = None
+                last_chunk_nl = None
+
+                n_prev = n + 1
+
+            z.extend(z_chunk)
+
+        if tot_chunk < macro_chunk and (tot_running + tot_chunk != tot):
+            n += 1
+
+    print(f"{len(z)=}")
+
+    return z
+
+
 class SystemParams(PyTreeNode):
     coordinates: Array
     cell: Array | None = field(default=None)
 
     def __getitem__(self, slices) -> SystemParams:
+        if not self.batched:
+            self = self.batch()
+
         return SystemParams(
-            coordinates=self.coordinates[slices],
-            cell=(self.cell[slices] if self.cell is not None else None),
+            coordinates=self.coordinates[slices, :, :].copy(),
+            cell=(self.cell[slices, :, :].copy() if self.cell is not None else None),
         )
 
     def __iter__(self):
@@ -390,13 +515,13 @@ class SystemParams(PyTreeNode):
                 )
 
             true_val = vmap(func, in_axes=(0, 0, None, None, None))(pos, index_j, i, j, k)
-            false_val = jax.tree_map(
+            false_val = jax.tree.map(
                 jnp.zeros_like,
                 true_val,
             )
 
             val = vmap(
-                lambda b, x, y: jax.tree_map(lambda t, f: jnp.where(b, t, f), x, y),
+                lambda b, x, y: jax.tree.map(lambda t, f: jnp.where(b, t, f), x, y),
             )(bools, true_val, false_val)
 
             return bools, val
@@ -1038,7 +1163,7 @@ class NeighbourListInfo(PyTreeNode):
         bool_masks = [jnp.array(self.z_array) == zu for zu in self.z_unique]
 
         arg_split = [jnp.argsort(~bm, stable=True)[0:nzu] for bm, nzu in zip(bool_masks, self.num_z_unique)]
-        p = [jax.tree_map(lambda pi: pi[a], tree=p) for a in arg_split]
+        p = [jax.tree.map(lambda pi: pi[a], tree=p) for a in arg_split]
 
         return jnp.array(bool_masks), arg_split, p
 
@@ -1062,6 +1187,8 @@ class NeighbourList(PyTreeNode):
     nxyz: tuple[int] | None = field(pytree_node=False, default=None)
     _padding_bools: Array | None = field(default=None)
 
+    _stack_dims: tuple[int] | None = field(pytree_node=False, default=None)
+
     @staticmethod
     def create(
         r_cut,
@@ -1074,6 +1201,7 @@ class NeighbourList(PyTreeNode):
         op_coor=None,
         op_center=None,
         sp_orig=None,
+        stack_dims=None,
     ):
         info = NeighbourListInfo.create(r_cut=r_cut, z_array=z_array, r_skin=r_skin)
 
@@ -1086,6 +1214,7 @@ class NeighbourList(PyTreeNode):
             op_coor=op_coor,
             op_center=op_center,
             sp_orig=sp_orig,
+            _stack_dims=stack_dims,
         )
 
     @property
@@ -1196,9 +1325,11 @@ class NeighbourList(PyTreeNode):
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
 
+        i_vec = jnp.arange(pos.shape[0])
+
         @vmap
-        def _apply_fun(pos_i, ind_i, pb_i):
-            j = ind_i
+        def _apply_fun(i, pos_i, ind_i, pb_i):
+            j = jnp.arange(pos_i.shape[0])
 
             @vmap
             def _f(j):
@@ -1207,13 +1338,16 @@ class NeighbourList(PyTreeNode):
                 b = jnp.logical_and(pb_i[j], r_ij < r_cut)
 
                 if exclude_self:
-                    b = jnp.logical_and(b, r_ij != 0.0)
+                    b = jnp.logical_and(b, r_ij > 1e-16)
 
-                out = func(pos_i[j], ind_i[j])
+                if func is not None:
+                    out = func(pos_i[j], ind_i[j])
 
-                out = jax.tree_map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
+                    out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
+                else:
+                    out = None
 
-                return (b, out), jnp.array(self.info.z_array)[j]
+                return (b, out), jnp.array(self.info.z_array)[ind_i[j]]
 
             if chunk_size_neigbourgs is not None:
                 _f = chunk_map(_f, chunk_size_neigbourgs)
@@ -1224,15 +1358,16 @@ class NeighbourList(PyTreeNode):
             out_tree_n, zj_n = _f(j)
 
             if reduce == "full":
-                return jax.tree_map(lambda x: jnp.sum(x, axis=0), out_tree_n)
+                return jax.tree.map(lambda x: jnp.sum(x, axis=0), out_tree_n)
 
             if reduce == "z":
 
+                @vmap
                 def _red(zj_ref):
-                    b = jnp.logical_and(zj_n == zj_ref)
-                    return jax.tree_map(lambda x: jnp.einsum("n,n...->...", b, x), out_tree_n)
+                    a = jnp.array(zj_n == zj_ref, dtype=jnp.int64)
 
-                _red = vmap(_red)
+                    return jax.tree.map(lambda x: jnp.einsum("n,n...->...", a, x), out_tree_n)
+
                 return _red(jnp.array(self.info.z_unique))
 
             if reduce == "none":
@@ -1245,7 +1380,7 @@ class NeighbourList(PyTreeNode):
         if chunk_size_atoms is not None:
             _apply_fun = chunk_map(_apply_fun, chunk_size_atoms)
 
-        out = _apply_fun(pos, ind, self.padding_bools)
+        out = _apply_fun(i_vec, pos, ind, self.padding_bools)
 
         if split_z:
             # sum atom indices to  value per z
@@ -1253,7 +1388,7 @@ class NeighbourList(PyTreeNode):
 
             @vmap
             def _split(b_split):
-                return jax.tree_map(lambda x: jnp.sum(jnp.where(b_split, x, jnp.zeros_like(x) + fill_value)), out)
+                return jax.tree.map(lambda x: jnp.sum(jnp.where(b_split, x, jnp.zeros_like(x) + fill_value)), out)
 
             out = _split(b_split)
 
@@ -1324,7 +1459,10 @@ class NeighbourList(PyTreeNode):
 
         @vmap
         def f2(i, pos_i, ind_i, data_single_i, bools_i):
-            ij, ik = jnp.meshgrid(ind_i, ind_i, indexing="ij")
+            j = jnp.arange(pos_i.shape[0])
+            k = jnp.arange(pos_i.shape[0])
+
+            ij, ik = jnp.meshgrid(j, k, indexing="ij")
             ijk_n = jnp.array([ij, ik]).reshape(2, -1).T
 
             @vmap
@@ -1339,15 +1477,18 @@ class NeighbourList(PyTreeNode):
                 if unique:
                     b = jnp.logical_and(b, j != k)
 
-                if exclude_self:
-                    b = jnp.logical_and(b, i != k)
-                    b = jnp.logical_and(b, i != j)
+                out = func_double(
+                    pos_i[j],
+                    ind_i[j],
+                    data_single_i[j] if data_single_i is not None else None,
+                    pos_i[k],
+                    ind_i[k],
+                    data_single_i[k] if data_single_i is not None else None,
+                )
 
-                out = func_double(pos_i[j], ind_i[j], data_single_i[j], pos_i[k], ind_i[k], data_single_i[k])
+                out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
 
-                out = jax.tree_map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
-
-                return (b, out), jnp.array(self.info.z_array)[j], jnp.array(self.info.z_array)[k]
+                return (b, out), jnp.array(self.info.z_array)[ind_i[j]], jnp.array(self.info.z_array)[ind_i[k]]
 
             if chunk_size_neigbourgs is not None:
                 _f = chunk_map(_f, chunk_size_neigbourgs)
@@ -1360,13 +1501,13 @@ class NeighbourList(PyTreeNode):
             # replace vals with fill_value if bools is False
 
             if reduce == "full":
-                out = jax.tree_map(lambda x: jnp.sum(x, axis=0), out_tree_n)
+                out = jax.tree.map(lambda x: jnp.sum(x, axis=0), out_tree_n)
 
             elif reduce == "z":
 
                 def _red(zj_ref, zk_ref):
                     b = jnp.logical_and(zj_n == zj_ref, zk_n == zk_ref)
-                    return jax.tree_map(lambda x: jnp.einsum("n,n...->...", b, x), out_tree_n)
+                    return jax.tree.map(lambda x: jnp.einsum("n,n...->...", b, x), out_tree_n)
 
                 _red = vmap(_red, in_axes=(0, None))
                 _red = vmap(_red, in_axes=(None, 0))
@@ -1374,7 +1515,7 @@ class NeighbourList(PyTreeNode):
                 out = _red(jnp.array(self.info.z_unique), jnp.array(self.info.z_unique))
 
             elif reduce == "none":
-                out = out_tree_n
+                out = jax.tree.map(lambda x: x.reshape((*ij.shape, *x.shape[1:])), out_tree_n)
             else:
                 raise ValueError(
                     "unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
@@ -1393,11 +1534,9 @@ class NeighbourList(PyTreeNode):
 
             @vmap
             def _split(b_split):
-                return jax.tree_map(lambda x: jnp.einsum("i,i...->...", b_split, x), out)
+                return jax.tree.map(lambda x: jnp.einsum("i,i...->...", b_split, x), out)
 
             out = _split(b_split)
-
-        print(out)
 
         return out
 
@@ -1420,16 +1559,19 @@ class NeighbourList(PyTreeNode):
         return self.shape[-1]
 
     def __getitem__(self, slices):
+        assert self.batched
+
         return NeighbourList(
-            atom_indices=self.atom_indices[slices, :] if self.atom_indices is not None else None,
-            ijk_indices=self.ijk_indices[slices, :] if self.ijk_indices is not None else None,
-            op_cell=self.op_cell[slices, :, :] if self.op_cell is not None else None,
-            op_coor=self.op_coor[slices, :, :] if self.op_coor is not None else None,
-            op_center=self.op_center[slices, :] if self.op_center is not None else None,
+            atom_indices=self.atom_indices[slices, :, :].copy() if self.atom_indices is not None else None,
+            ijk_indices=self.ijk_indices[slices, :, :].copy() if self.ijk_indices is not None else None,
+            op_cell=self.op_cell[slices, :, :].copy() if self.op_cell is not None else None,
+            op_coor=self.op_coor[slices, :, :].copy() if self.op_coor is not None else None,
+            op_center=self.op_center[slices, :].copy() if self.op_center is not None else None,
             info=self.info,
             sp_orig=self.sp_orig[slices],
             nxyz=self.nxyz,
-            _padding_bools=self._padding_bools[slices, :] if self._padding_bools is not None else None,
+            _padding_bools=self._padding_bools[slices, :].copy() if self._padding_bools is not None else None,
+            _stack_dims=None,
         )
 
     @jax.jit
@@ -1473,8 +1615,9 @@ class NeighbourList(PyTreeNode):
             op_center=jnp.expand_dims(self.op_center, axis=0) if self.op_center is not None else None,
             _padding_bools=jnp.expand_dims(self._padding_bools, axis=0) if self._padding_bools is not None else None,
             info=self.info,
-            sp_orig=self.sp_orig,
+            sp_orig=self.sp_orig.batch() if self.sp_orig is not None else None,
             nxyz=self.nxyz,
+            _stack_dims=None,
         )
 
     def __add__(self, other):
@@ -1511,6 +1654,8 @@ class NeighbourList(PyTreeNode):
             else:
                 assert jnp.all(a == b)
 
+        _stack_dims = []
+
         # consistency checks
         for nl_i in nls:
             assert nl_i.info.r_cut + nl_i.info.r_skin >= r_cut
@@ -1525,6 +1670,8 @@ class NeighbourList(PyTreeNode):
             assert op_coor_none == (nl_i.op_coor is None)
             assert op_center_none == (nl_i.op_center is None)
             assert atom_indices_none == (nl_i.atom_indices is None)
+
+            _stack_dims.append(nl_i.shape[0])
 
             if not nxyz_none:
                 nxyz = [max(a, b) for a, b in zip(nxyz, nl_i.nxyz)]
@@ -1594,7 +1741,36 @@ class NeighbourList(PyTreeNode):
             op_coor=jnp.vstack(op_coor) if not op_coor_none else None,
             op_center=jnp.vstack(op_center) if not op_center_none else None,
             _padding_bools=jnp.vstack(padding_bools) if not atom_indices_none else None,
+            _stack_dims=_stack_dims,
         )
+
+    def unstack(self) -> list[NeighbourList]:
+        if self._stack_dims is None:
+            return [self]
+
+        out = []
+
+        t = 0
+
+        for i in self._stack_dims:
+            out.append(
+                NeighbourList(
+                    atom_indices=self.atom_indices[t : t + i, :, :].copy() if self.atom_indices is not None else None,
+                    ijk_indices=self.ijk_indices[t : t + i, :, :].copy() if self.ijk_indices is not None else None,
+                    op_cell=self.op_cell[t : t + i, :, :].copy() if self.op_cell is not None else None,
+                    op_coor=self.op_coor[t : t + i, :, :].copy() if self.op_coor is not None else None,
+                    op_center=self.op_center[t : t + i, :].copy() if self.op_center is not None else None,
+                    info=self.info,
+                    sp_orig=self.sp_orig[t : t + i] if self.sp_orig is not None else None,
+                    nxyz=self.nxyz,
+                    _padding_bools=self._padding_bools[t : t + i, :].copy()
+                    if self._padding_bools is not None
+                    else None,
+                    _stack_dims=None,
+                )
+            )
+
+        return out
 
     def __getstate__(self):
         return self.__dict__
@@ -1716,7 +1892,7 @@ class CV(PyTreeNode):
     def __getitem__(self, idx):
         assert self.batched
         return CV(
-            cv=self.cv[idx, :],
+            cv=self.cv[idx, :].copy(),
             mapped=self.mapped,
             atomic=self.atomic,
             _stack_dims=None,

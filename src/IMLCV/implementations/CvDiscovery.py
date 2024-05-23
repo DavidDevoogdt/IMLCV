@@ -193,6 +193,7 @@ class TranformerAutoEncoder(Transformer):
         batch_size=32,
         chunk_size=None,
         verbose=True,
+        macro_chunk=1000,
         **kwargs,
     ):
         # import wandb
@@ -447,6 +448,7 @@ class TransoformerLDA(Transformer):
         min_step_size: float = 1e-3,
         max_iterations=25,
         verbose=True,
+        macro_chunk=1000,
         **kwargs,
     ):
         # nl_list = dlo.nl
@@ -584,69 +586,58 @@ class TransformerMAF(Transformer):
         pre_selction_epsilon=1e-10,
         max_features=2000,
         max_functions=2500,
-        koopman_weighting=False,
-        kinetic_distance=False,
         method="tcca",
-        use_ground_bias=False,
-        T_scale=3,
-        verbose=True,
+        macro_chunk=1000,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         assert dlo.time_series
         assert x_t is not None
-
-        print("stacking")
-
-        cv_0 = CV.stack(*x)
-        cv_tau = CV.stack(*x_t)
-
-        trans = un_atomize
-
-        print("unatomizing")
-
-        cv_0, _, _ = un_atomize.compute_cv_trans(cv_0)
-        cv_tau, _, _ = un_atomize.compute_cv_trans(cv_tau)
-
-        cv_0, transform = get_non_constant_trans(cv_0, epsilon=pre_selction_epsilon, max_functions=max_functions)
-        cv_tau, _, _ = transform.compute_cv_trans(cv_tau)
-
-        print("getting feature cov")
-
-        # cv_0, cv_tau, transform = get_feature_cov(
-        #     cv_0,
-        #     cv_tau,
-        #     max_functions=max_functions,
-        #     epsilon=pre_selction_epsilon,
-        #     abs_val=False,
-        # )
-
-        trans *= transform
 
         w = None
 
         print("getting weights")
 
         if correct_bias:
-            w = dlo.weights(
-                koopman=True,
-            )
+            w = dlo.weights()  # retrieve the precalculated weights
+
+        print("unatomizing")
+
+        trans = un_atomize
+        x, x_t = dlo.apply_cv_trans(un_atomize, x=x, x_t=x_t, macro_chunk=macro_chunk)
+
+        print("getting features with highest covariance")
+
+        transform = get_non_constant_trans(
+            x,
+            x_t,
+            w,
+            epsilon=pre_selction_epsilon,
+            max_functions=max_functions,
+        )
+
+        x, x_t = dlo.apply_cv_trans(transform, x=x, x_t=x_t, macro_chunk=macro_chunk)
+        trans *= transform
 
         print("getting koopman")
 
         km = dlo.koopman_model(
-            cv_0=cv_0.unstack(),
-            cv_tau=cv_tau.unstack(),
+            cv_0=x,
+            cv_tau=x_t,
             eps=1e-10,
             method=method,
             max_features=max_features,
             w=w,
-            koopman_weight=koopman_weighting,
+            koopman_weight=True,  # this is not a good idea because the features will most likely not be able to predict a good ground state
         )
 
         ts = km.timescales() / nanosecond
 
         print(f"timescales {  ts[: min(self.outdim+5,len(ts))  ]   } ns")
 
-        trans *= km.f(out_dim=self.outdim)
+        trans_km = km.f(out_dim=self.outdim)
 
-        return trans.compute_cv_trans(x=cv_0)[0].unstack(), trans.compute_cv_trans(x=cv_tau)[0].unstack(), trans, km.w
+        trans *= trans_km
+
+        x, x_t = dlo.apply_cv_trans(trans_km, x=x, x_t=x_t, macro_chunk=macro_chunk)
+
+        return x, x_t, trans, None

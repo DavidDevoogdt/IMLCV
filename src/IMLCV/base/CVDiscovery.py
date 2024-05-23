@@ -106,12 +106,10 @@ class Transformer:
         cv_titles=None,
         vmax=100 * kjmol,
         n_grid_new=30,
-        macro_chunk=10000,
+        macro_chunk=1000,
     ) -> tuple[CV, CollectiveVariable, Bias]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
-
-        print(f"stack dims = {[ a.shape[0] for a in dlo.sp]}")
 
         print("starting pre_fit")
 
@@ -125,7 +123,7 @@ class Transformer:
 
         # if check_nan:
         #     print("checking pre_fit nans")
-        #     dlo, x, x_t = dlo.filter_nans(x, x_t)
+        #     dlo.filter_nans(x, x_t)
 
         if test:
             print("testing pre_fit")
@@ -152,20 +150,24 @@ class Transformer:
             x_t,
             dlo,
             chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
             **self.fit_kwargs,
         )
 
-        if check_nan:
-            print("checking fit nans")
-            dlo.filter_nans(y, y_t)
+        # if check_nan:
+        #     print("checking fit nans")
+        #     dlo.filter_nans(y, y_t)
+
+        # cv should be small enough to fit in memory
 
         y = CV.stack(*y)
+
         if y_t is not None:
             y_t = CV.stack(*y_t)
 
-            assert y_t.stack_dims == y.stack_dims, "y and y_t must have the same stack_dims"
-
-        print(f"{y.stack_dims=}")
+            assert (
+                y_t.stack_dims == y.stack_dims
+            ), f" y and y_t must have the same stack_dims, but found {y.stack_dims=} and {y_t.stack_dims=} respectively"
 
         if test:
             y_2, _, _ = g.compute_cv_trans(CV.stack(*x), NeighbourList.stack(*dlo.nl), chunk_size=chunk_size)
@@ -277,6 +279,7 @@ class Transformer:
         dlo: data_loader_output,
         chunk_size=None,
         verbose=True,
+        macro_chunk=1000,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
         raise NotImplementedError
@@ -1084,6 +1087,7 @@ class CombineTransformer(Transformer):
         dlo: data_loader_output,
         chunk_size=None,
         verbose=True,
+        macro_chunk=1000,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:
         trans = None
@@ -1091,7 +1095,16 @@ class CombineTransformer(Transformer):
         for i, t in enumerate(self.transformers):
             print(f"fitting transformer {i+1}/{len(self.transformers)}")
 
-            x, x_t, trans_t, _ = t._fit(x, x_t, dlo, chunk_size=chunk_size, **t.fit_kwargs, **fit_kwargs)
+            x, x_t, trans_t, _ = t._fit(
+                x,
+                x_t,
+                dlo,
+                chunk_size=chunk_size,
+                verbose=verbose,
+                macro_chunk=macro_chunk,
+                **t.fit_kwargs,
+                **fit_kwargs,
+            )
 
             if trans is None:
                 trans = trans_t
@@ -1109,6 +1122,7 @@ class IdentityTransformer(Transformer):
         dlo: data_loader_output,
         chunk_size=None,
         verbose=True,
+        macro_chunk=1000,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
         return x, x_t, identity_trans, None

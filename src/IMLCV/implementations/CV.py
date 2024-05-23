@@ -20,6 +20,7 @@ from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CV import SystemParams
+
 from jax import Array
 from jax import vmap
 from ott.geometry.pointcloud import PointCloud
@@ -1312,72 +1313,83 @@ def _cv_slice(cv: CV, nl: NeighbourList, _, shmap, indices):
     return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
 
 
-def get_non_constant_trans(c: CV, epsilon=1e-14, max_functions=None):
-    assert c.batched
+def get_non_constant_trans(
+    c: list[CV], c_t: list[CV] | None = None, w: list[Array] | None = None, epsilon=1e-14, max_functions=None
+):
+    from IMLCV.base.rounds import data_loader_output
 
-    norm = jnp.linalg.norm(c.cv - jnp.mean(c.cv, axis=0), axis=0)
+    cov = data_loader_output._get_covariance(
+        cv_0=c,
+        cv_1=c_t,
+        w=w,
+        symmetric=True,
+        calc_pi=True,
+        only_diag=True,
+    )
 
-    mask = norm > epsilon
+    print(f"auto variances {cov}")
+
+    cov = jnp.sqrt(cov.C00)
+
+    idx = jnp.argsort(cov, descending=True)
+    cov_sorted = cov[idx]
+
+    pos = int(jnp.argwhere(cov_sorted > epsilon)[-1][0])
 
     if max_functions is not None:
-        if jnp.sum(mask) > max_functions:
-            idx = jnp.argsort(norm)[-(max_functions + 1)]
-            mask = norm > norm[idx]
-            print(f"Settings eps={norm[idx]}")
+        if pos > max_functions:
+            pos = max_functions
+    if pos == 0:
+        raise ValueError("No features found")
 
-    args = jnp.argwhere(mask).reshape((-1,))
-    trans = CvTrans.from_cv_function(_cv_slice, indices=args)
+    idx = idx[:pos]
 
-    return trans.compute_cv_trans(c)[0], trans
+    print(f"selected auto variances {cov[idx]}")
+
+    trans = CvTrans.from_cv_function(_cv_slice, indices=idx)
+
+    return trans
 
 
 def get_feature_cov(
-    c_0: CV, c_tau: CV, epsilon=1e-14, max_functions=None, abs_val=True, chunk_size=1000
+    c_0: list[CV],
+    c_tau: list[CV],
+    w: list[jnp.array] | None = None,
+    epsilon=1e-14,
+    max_functions=None,
 ) -> tuple[CV, CV, CvTrans]:
-    mu_x = jnp.mean(c_0.cv, axis=0)
-    mu_y = jnp.mean(c_tau.cv, axis=0)
+    from IMLCV.base.rounds import data_loader_output
 
-    @jax.vmap
-    def get_cov(x, y, mu_x, mu_y):
-        x, y = x.T, y.T
-
-        x = x - mu_x
-        y = y - mu_y
-
-        sigma_x = jnp.mean(x**2)
-        sigma_y = jnp.mean(y**2)
-
-        sigma_x_inv = jnp.where(sigma_x == 0.0, 0.0, 1 / sigma_x)
-        sigma_y_inv = jnp.where(sigma_y == 0.0, 0.0, 1 / sigma_y)
-
-        sigma_xy = jnp.mean(x * y)
-
-        return sigma_xy * jnp.sqrt(sigma_x_inv * sigma_y_inv)
-
-    cov = chunk_map(get_cov, chunk_size=chunk_size)(
-        c_0.cv.T,
-        c_tau.cv.T,
-        mu_x,
-        mu_y,
+    cov = data_loader_output._get_covariance(
+        c_0,
+        c_tau,
+        w=w,
+        symmetric=True,
+        calc_pi=True,
+        only_diag=True,
     )
 
-    print(f"{cov=}")
+    cov_n = jnp.sqrt(cov.C00 * cov.C11)
+    cov = jnp.where(cov_n > epsilon, cov.C01 / cov_n, 0)
 
-    if abs_val:
-        cov = jnp.abs(cov)
+    idx = jnp.argsort(cov, descending=True)
+    cov_sorted = cov[idx]
 
-    mask = cov > epsilon
+    pos = int(jnp.argwhere(cov_sorted > epsilon)[-1][0])
 
     if max_functions is not None:
-        if jnp.sum(mask) > max_functions:
-            idx = jnp.argsort(cov)[-(max_functions + 1)]
-            mask = cov > cov[idx]
-            print(f"Settings eps={cov[idx]}")
+        if pos > max_functions:
+            pos = max_functions
+    if pos == 0:
+        raise ValueError("No features found")
 
-    args = jnp.argwhere(mask).reshape((-1,))
-    trans = CvTrans.from_cv_function(_cv_slice, indices=args)
+    idx = idx[:pos]
 
-    return trans.compute_cv_trans(c_0)[0], trans.compute_cv_trans(c_tau)[0], trans
+    print(f"selected auto covariances {cov[idx]}")
+
+    trans = CvTrans.from_cv_function(_cv_slice, indices=idx)
+
+    return trans
 
 
 ######################################
