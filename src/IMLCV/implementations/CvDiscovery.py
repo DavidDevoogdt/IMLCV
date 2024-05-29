@@ -11,7 +11,7 @@ from IMLCV.base.CV import CvFun
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.implementations.CV import get_non_constant_trans
+from IMLCV.implementations.CV import get_feature_cov
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -586,6 +586,7 @@ class TransformerMAF(Transformer):
         pre_selction_epsilon=1e-10,
         max_features=2000,
         max_functions=2500,
+        koopman_weighting=False,
         method="tcca",
         macro_chunk=1000,
         **fit_kwargs,
@@ -607,7 +608,7 @@ class TransformerMAF(Transformer):
 
         print("getting features with highest covariance")
 
-        transform = get_non_constant_trans(
+        transform = get_feature_cov(
             x,
             x_t,
             w,
@@ -627,7 +628,7 @@ class TransformerMAF(Transformer):
             method=method,
             max_features=max_features,
             w=w,
-            koopman_weight=True,  # this is not a good idea because the features will most likely not be able to predict a good ground state
+            koopman_weight=koopman_weighting,  # this is not a good idea because the features will most likely not be able to predict a good ground state
         )
 
         ts = km.timescales() / nanosecond
@@ -640,4 +641,4 @@ class TransformerMAF(Transformer):
 
         x, x_t = dlo.apply_cv_trans(trans_km, x=x, x_t=x_t, macro_chunk=macro_chunk)
 
-        return x, x_t, trans, None
+        return x, x_t, trans, w

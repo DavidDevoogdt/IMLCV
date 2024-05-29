@@ -19,7 +19,7 @@ import yaff
 from flax.struct import field
 from flax.struct import PyTreeNode
 from IMLCV import unpickler
-from IMLCV.base.CV import chunk_map
+from IMLCV.base.CV import padded_vmap
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import NeighbourList
@@ -141,6 +141,7 @@ class Energy:
         vir=False,
         sp: SystemParams | None = None,
         nl: NeighbourList | None = None,
+        shmap=True,
     ) -> EnergyResult:
         if sp is not None:
             self.sp = sp
@@ -236,6 +237,7 @@ class Bias(PyTreeNode, ABC):
         gpos=False,
         vir=False,
         chunk_size: int | None = None,
+        shmap=True,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -243,71 +245,60 @@ class Bias(PyTreeNode, ABC):
         if sp.batched:
             if nl is not None:
                 assert nl.batched
-                return chunk_map(
-                    vmap(
-                        Partial(
-                            self.compute_from_system_params,
-                            gpos=gpos,
-                            vir=vir,
-                        ),
-                    ),
-                    chunk_size=chunk_size,
-                )(sp, nl)
-            else:
-                return chunk_map(
-                    vmap(
-                        Partial(
-                            self.compute_from_system_params,
-                            gpos=gpos,
-                            vir=vir,
-                            nl=None,
-                        ),
-                    ),
-                    chunk_size=chunk_size,
-                )(sp)
+            padded_vmap(
+                Partial(
+                    self.compute_from_system_params,
+                    gpos=gpos,
+                    vir=vir,
+                    shmap=False,
+                ),
+                chunk_size=chunk_size,
+                shmap=shmap,
+            )(sp, nl)
 
         [cvs, jac] = self.collective_variable.compute_cv(
             sp=sp,
             nl=nl,
             jacobian=gpos or vir,
+            shmap=shmap,
         )
-        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir))
+        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir), shmap=shmap)
 
         # def _resum(sp, jac, de):
         e_gpos = None
         if gpos:
-            es = "nj,njkl->nkl"
-            if not sp.batched:
-                es = es.replace("n", "")
-            e_gpos = jnp.einsum(es, de.cv, jac.cv.coordinates)
+            e_gpos = jnp.einsum("j,jkl->kl", de.cv, jac.cv.coordinates)
 
         e_vir = None
         if vir and sp.cell is not None:
             # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
-            es = "nji,nk,nkjl->nli"
-            if not sp.batched:
-                es = es.replace("n", "")
-            e_vir = jnp.einsum(es, sp.cell, de.cv, jac.cv.cell)
+            e_vir = jnp.einsum("ji,k,kjl->li", sp.cell, de.cv, jac.cv.cell)
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 
-    @partial(jax.jit, static_argnames=["diff", "chunk_size"])
-    def compute_from_cv(self, cvs: CV, diff=False, chunk_size=None) -> tuple[CV, CV | None]:
+    @partial(jax.jit, static_argnames=["diff", "chunk_size", "shmap"])
+    def compute_from_cv(
+        self,
+        cvs: CV,
+        diff=False,
+        chunk_size=None,
+        shmap=True,
+    ) -> tuple[CV, CV | None]:
         """compute the energy and derivative.
 
         If map==False, the cvs are assumed to be already mapped
         """
 
         if cvs.batched:
-            return chunk_map(
-                vmap(
-                    Partial(
-                        self.compute_from_cv,
-                        chunk_size=chunk_size,
-                        diff=diff,
-                    ),
+            return padded_vmap(
+                Partial(
+                    self.compute_from_cv,
+                    chunk_size=chunk_size,
+                    diff=diff,
+                    shmap=False,
                 ),
                 chunk_size=chunk_size,
+                shard=shmap,
             )(cvs)
 
         if diff:

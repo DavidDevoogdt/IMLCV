@@ -18,7 +18,7 @@ from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import dihedral
 from IMLCV.implementations.CV import NoneCV
 from IMLCV.implementations.CV import Volume
-from IMLCV.implementations.energy import Cp2kEnergy
+from IMLCV.implementations.energy import Cp2kEnergy, MACEASE
 from IMLCV.implementations.energy import YaffEnergy
 from IMLCV.implementations.MdEngine import YaffEngine
 from molmod import units
@@ -294,6 +294,54 @@ def CsPbI3(cv=None, unit_cells=[2]):
     else:
         raise ValueError(f"unknown value {cv} for cv choose 'cell_vec'")
 
+    bias = NoneBias.create(collective_variable=cv)
+
+    yaffmd = YaffEngine.create(
+        energy=energy,
+        bias=bias,
+        static_trajectory_info=tic,
+    )
+
+    return yaffmd
+
+
+def CsPbI3_MACE(unit_cells=[2]):
+    assert isinstance(unit_cells, list)
+
+    if len(unit_cells) == 3:
+        [x, y, z] = unit_cells
+    elif len(unit_cells) == 1:
+        [n] = unit_cells
+        x = n
+        y = n
+        z = n
+    else:
+        raise ValueError(
+            f"provided unit cell {unit_cells}, please provide 1 or 3 arguments ",
+        )
+
+    refs, z_array, atoms = CsPbI3_refs(x, y, z)
+
+    energy = MACEASE(
+        atoms=atoms[0],
+    )
+
+    r_cut = 6 * angstrom
+
+    tic = StaticMdInfo(
+        write_step=50,
+        T=300 * units.kelvin,
+        P=1.0 * units.bar,
+        timestep=2.0 * units.femtosecond,
+        timecon_thermo=100.0 * units.femtosecond,
+        timecon_baro=500.0 * units.femtosecond,
+        atomic_numbers=z_array,
+        equilibration=0 * units.femtosecond,
+        screen_log=50,
+        r_cut=r_cut,
+    )
+
+    cv = NoneCV()
     bias = NoneBias.create(collective_variable=cv)
 
     yaffmd = YaffEngine.create(

@@ -310,3 +310,25 @@ class Cp2kEnergy(AseEnergy):
             input_kwargs=input_kwargs,
             **kwargs,
         )
+
+
+class MACEASE(AseEnergy):
+    def _calculator(self):
+        from mace.calculators import mace_mp
+
+        return mace_mp(model="medium", dispersion=False, default_dtype="float64", device="cpu")
+
+    def __getstate__(self):
+        dict = {
+            "atoms": self.atoms,
+        }
+
+        return dict
+
+    def __setstate__(self, state):
+        print(f"{state=}")
+
+        self.atoms = state["atoms"]
+
+        self.calculator = self._calculator()
+        self.atoms.calc = self.calculator

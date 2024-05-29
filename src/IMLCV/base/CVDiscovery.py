@@ -58,6 +58,8 @@ class Transformer:
 
         x, x_t = dlo.apply_cv_flow(
             f,
+            dlo.sp,
+            dlo.sp_t,
             chunk_size=chunk_size,
             pmap=p_map,
             macro_chunk=macro_chunk,
@@ -160,15 +162,6 @@ class Transformer:
 
         # cv should be small enough to fit in memory
 
-        y = CV.stack(*y)
-
-        if y_t is not None:
-            y_t = CV.stack(*y_t)
-
-            assert (
-                y_t.stack_dims == y.stack_dims
-            ), f" y and y_t must have the same stack_dims, but found {y.stack_dims=} and {y_t.stack_dims=} respectively"
-
         if test:
             y_2, _, _ = g.compute_cv_trans(CV.stack(*x), NeighbourList.stack(*dlo.nl), chunk_size=chunk_size)
             assert jnp.allclose(y_2.cv, y.cv)
@@ -181,9 +174,9 @@ class Transformer:
                 )
 
         if w is not None:
-            dlo_weights = jnp.hstack(w)
+            dlo_weights = w
         else:
-            dlo_weights = jnp.hstack(dlo.weights())
+            dlo_weights = dlo.weights()
 
         # remove outliers from the data
         _, mask = CvMetric.bounds_from_cv(
@@ -191,6 +184,17 @@ class Transformer:
             percentile=percentile,
             weights=dlo_weights,
         )
+
+        y = CV.stack(*y)
+        mask = jnp.hstack(mask)
+
+        if y_t is not None:
+            y_t = CV.stack(*y_t)
+
+            assert (
+                y_t.stack_dims == y.stack_dims
+            ), f" y and y_t must have the same stack_dims, but found {y.stack_dims=} and {y_t.stack_dims=} respectively"
+
         y_masked = y[mask]
 
         print("starting post_fit")
@@ -226,7 +230,7 @@ class Transformer:
 
             bias: Bias = data_loader_output._get_fes_bias_from_weights(
                 dlo.sti.T,
-                weights=dlo_weights,
+                weights=jnp.hstack(dlo_weights),
                 collective_variable=new_collective_variable,
                 cv=z.unstack(),
                 samples_per_bin=samples_per_bin,

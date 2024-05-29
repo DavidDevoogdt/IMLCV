@@ -8,17 +8,16 @@ import numba
 import numpy as np
 from equinox import Partial
 from flax.linen.linear import Dense
-from IMLCV.base.CV import _CvTrans
-from IMLCV.base.CV import chunk_map
+from IMLCV.base.CV import _CvTrans, CvFlow
+from IMLCV.base.CV import padded_vmap
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import CvFunDistrax
 from IMLCV.base.CV import CvFunInput
 from IMLCV.base.CV import CvFunNn
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
-from IMLCV.base.CV import NeighbourList
+from IMLCV.base.CV import NeighbourList, NeighbourListInfo
 from IMLCV.base.CV import SystemParams
 
 from jax import Array
@@ -45,6 +44,7 @@ def _zero_cv(x, nl, _, shmap):
 
 identity_trans = _CvTrans.from_cv_function(_identity_trans)
 zero_trans = _CvTrans.from_cv_function(_zero_cv)
+zero_flow = CvFlow.from_function(_zero_cv)
 
 
 def _Volume(sp: SystemParams, _nl, _c, shmap):
@@ -298,7 +298,7 @@ def soap_descriptor(
 
 def NoneCV() -> CollectiveVariable:
     return CollectiveVariable(
-        f=zero_trans,
+        f=zero_flow,
         metric=CvMetric.create(periodicities=[None]),
     )
 
@@ -535,24 +535,13 @@ def sinkhorn_divergence(
     get_P12 = get_P
 
     if nl1.batched:
-        get_P1 = chunk_map(
-            vmap(get_P1, in_axes=(0, 0, None, None)),
-            chunk_size=chunk_size,
-        )
-        get_P12 = chunk_map(
-            vmap(get_P12, in_axes=(0, 0, None, None)),
-            chunk_size=chunk_size,
-        )
+        # raise
+        get_P1 = padded_vmap(get_P1, in_axes=(0, 0, None, None), chunk_size=chunk_size)
+        get_P12 = padded_vmap(get_P12, in_axes=(0, 0, None, None), chunk_size=chunk_size)
 
     if nl2.batched:
-        get_P2 = chunk_map(
-            vmap(get_P2, in_axes=(0, 0, None, None)),
-            chunk_size=chunk_size,
-        )
-        get_P12 = chunk_map(
-            vmap(get_P12, in_axes=(None, None, 0, 0)),
-            chunk_size=chunk_size,
-        )
+        get_P2 = padded_vmap(get_P2, in_axes=(0, 0, None, None), chunk_size=chunk_size)
+        get_P12 = padded_vmap(get_P12, in_axes=(None, None, 0, 0), chunk_size=chunk_size)
 
     P11 = get_P1(x1, nl1, None, None)
     P22 = get_P2(x2, nl2, None, None)
@@ -708,8 +697,8 @@ def get_sinkhorn_divergence(
 def sinkhorn_divergence_2(
     x1: CV,
     x2: CV,
-    nl1: NeighbourList,
-    nl2: NeighbourList,
+    nl1: NeighbourListInfo,
+    nl2: NeighbourListInfo,
     alpha=1e-2,
     normalize=True,
     sum_divergence=False,
@@ -748,8 +737,17 @@ def sinkhorn_divergence_2(
         x1 = p_norm(x1)
         x2 = p_norm(x2)
 
-    src_mask, _, p1 = nl1.nl_split_z(x1)
-    tgt_mask, _, p2 = nl2.nl_split_z(x2)
+    f1 = nl1.nl_split_z
+    if x1.batched:
+        f1 = vmap(f1)
+
+    src_mask, _, p1 = f1(x1)
+
+    f2 = nl2.nl_split_z
+    if x2.batched:
+        f2 = vmap(f2)
+
+    tgt_mask, _, p2 = f2(x2)
 
     # src_mask = jnp.array(src_mask)
     # tgt_mask = jnp.array(tgt_mask)
@@ -956,7 +954,7 @@ def _sinkhorn_divergence_trans_2(
     nl: NeighbourList | None,
     _,
     shmap,
-    nli: NeighbourList,
+    nli: NeighbourList | NeighbourListInfo,
     pi: CV,
     alpha_rematch,
     output,
@@ -971,12 +969,16 @@ def _sinkhorn_divergence_trans_2(
 ):
     assert nl is not None, "Neigbourlist required for rematch"
 
-    def f(pii, cv, nlii, nl):
+    if isinstance(nli, NeighbourList):
+        print("converting nli to info")
+        nli = nli.info
+
+    def f(pii, cv):
         return sinkhorn_divergence_2(
             x1=cv,
             x2=pii,
-            nl1=nl,
-            nl2=nlii,
+            nl1=nl.info,
+            nl2=nli,
             alpha=alpha_rematch,
             normalize=normalize,
             sum_divergence=sum_divergence,
@@ -990,9 +992,9 @@ def _sinkhorn_divergence_trans_2(
 
     def get_div(pi, cv):
         if pi.batched:
-            cv_arr = vmap(f, in_axes=(0, None, 0, None))(pi, cv, nli, nl)
+            cv_arr = vmap(f, in_axes=(0, None))(pi, cv)
         else:
-            cv_arr = f(pi, cv, nli, nl)
+            cv_arr = f(pi, cv)
 
         if pi.batched:
             _combine_dims = [cv_arr.shape[1]] * cv_arr.shape[0]
@@ -1052,7 +1054,7 @@ def _sinkhorn_divergence_trans_2(
 
 
 def get_sinkhorn_divergence_2(
-    nli: NeighbourList | None,
+    nli: NeighbourListInfo,
     pi: CV,
     alpha_rematch=0.1,
     output="divergence",
@@ -1069,6 +1071,10 @@ def get_sinkhorn_divergence_2(
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
     assert pi.atomic, "pi must be atomic"
+
+    if isinstance(nli, NeighbourList):
+        print("converting nli to info")
+        nli = nli.info
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
@@ -1327,8 +1333,6 @@ def get_non_constant_trans(
         only_diag=True,
     )
 
-    print(f"auto variances {cov}")
-
     cov = jnp.sqrt(cov.C00)
 
     idx = jnp.argsort(cov, descending=True)
@@ -1360,6 +1364,8 @@ def get_feature_cov(
 ) -> tuple[CV, CV, CvTrans]:
     from IMLCV.base.rounds import data_loader_output
 
+    print("computing feature covariances")
+
     cov = data_loader_output._get_covariance(
         c_0,
         c_tau,
@@ -1368,6 +1374,8 @@ def get_feature_cov(
         calc_pi=True,
         only_diag=True,
     )
+
+    print("computing feature covariances done")
 
     cov_n = jnp.sqrt(cov.C00 * cov.C11)
     cov = jnp.where(cov_n > epsilon, cov.C01 / cov_n, 0)

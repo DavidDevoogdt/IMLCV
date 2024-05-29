@@ -10,7 +10,7 @@ import jax.scipy
 import jaxopt
 import matplotlib.pyplot as plt
 import scipy.special
-from IMLCV.base.CV import NeighbourList, padded_pmap
+from IMLCV.base.CV import NeighbourList, padded_shard_map
 from IMLCV.base.CV import SystemParams
 from IMLCV.tools.bessel_callback import ive
 from IMLCV.tools.bessel_callback import spherical_jn
@@ -53,7 +53,7 @@ def p_i(
         )
 
         if shmap:
-            f = padded_pmap(f)
+            f = padded_shard_map(f)
         return f(sp, nl)
 
     ps, pd = p

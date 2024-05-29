@@ -316,7 +316,7 @@ def test_neigh():
         sp.coordinates + 0.1 * jax.random.normal(key1, sp.coordinates.shape),
         sp.cell + 0.1 * jax.random.normal(key2, sp.cell.shape),
     )
-    bool, nl4 = nl.update(sp4)
+    bool, nl4 = nl.update_nl(sp4)
 
 
 def test_neigh_pair():

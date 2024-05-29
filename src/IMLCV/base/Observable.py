@@ -91,11 +91,11 @@ class ThermoLIB:
         trajs = dlo.cv
         biases = dlo.bias
 
-        c = CV.stack(*trajs)
+        # c = CV.stack(*trajs)
         # c = dlo.collective_variable.metric.periodic_wrap(c)
 
         if update_bounding_box:
-            bounds, _ = CvMetric.bounds_from_cv(c, bounds_percentile)
+            bounds, _ = CvMetric.bounds_from_cv(trajs, bounds_percentile)
 
             # # do not update periodic bounds
             bounding_box = jnp.where(
@@ -111,8 +111,10 @@ class ThermoLIB:
         else:
             bounding_box = dlo.collective_variable.metric.bounding_box
 
+        bd = [i.shape[0] for i in trajs]
+
         if n is None:
-            n = CvMetric.get_n(samples_per_bin, c.batch_dim, c.dim)
+            n = CvMetric.get_n(samples_per_bin, bd, trajs[0].shape[1])
 
             print(f"n: {n}")
 
@@ -127,7 +129,7 @@ class ThermoLIB:
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
-        from IMLCV.base.CV import padded_pmap
+        from IMLCV.base.CV import padded_shard_map
 
         class _ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:
@@ -144,7 +146,7 @@ class ThermoLIB:
                 f = Partial(self.bias.compute_from_cv, diff=False, chunk_size=chunk_size)
 
                 if pmap:
-                    f = padded_pmap(f)
+                    f = padded_shard_map(f)
 
                 out, _ = f(cvs)
 
@@ -449,7 +451,6 @@ class ThermoLIB:
                 koopman=True,
                 indicator_CV=True,
                 n_max=n_max,
-                add_1=True,
             )
 
             fes_bias_tot = dlo._get_fes_bias_from_weights(

@@ -609,30 +609,26 @@ class MDEngine(ABC):
         if self.static_trajectory_info.r_cut is None:
             return None
 
-        def _nl():
-            info = NeighbourListInfo.create(
-                r_cut=self.static_trajectory_info.r_cut,
-                z_array=self.static_trajectory_info.atomic_numbers,
-                r_skin=1.0 * angstrom,
-            )
+        info = NeighbourListInfo.create(
+            r_cut=self.static_trajectory_info.r_cut,
+            z_array=self.static_trajectory_info.atomic_numbers,
+            r_skin=1.0 * angstrom,
+        )
 
-            return self.sp.get_neighbour_list(info)
-
-        # only first time
         if self._nl is None:
-            self._nl = _nl()
-            return self._nl
-
-        if not self._nl.needs_update(self.sp):
-            return self._nl
-
-        print("updating nl")
-
-        b, nl = self._nl.update(self.sp)  # jitted update
+            nl = self.sp.get_neighbour_list(info)  # jitted update
+            b = True
+        else:
+            nl = self._nl
+            b = not self._nl.needs_update(self.sp)
 
         if not b:
-            print("updating nl - slow")
-            nl = _nl()
+            print("nl - update")
+            b, nl = nl.update_nl(self.sp)
+
+        if not b:
+            print("nl - slow update")
+            nl = self.sp.get_neighbour_list(info)
 
         self._nl = nl
         return nl
@@ -714,12 +710,14 @@ class MDEngine(ABC):
         except Exception as err:
             if self.step == 1:
                 raise err
-            print(f"The calculator finished early with error {err=},{type(err)=}, marking as invalid")
+            print("The calculator finished early with error , marking as invalid")
             if self.trajectory_file is not None:
                 inv = Path(self.trajectory_file).parent / "invalid"
                 if not inv.exists():
                     with open(inv, "w+"):
                         pass
+
+            raise err
 
         # self.trajectory_info =  self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
