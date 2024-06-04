@@ -2,6 +2,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+import ase.atoms
 import ase.calculators.calculator
 import ase.cell
 import ase.geometry
@@ -320,15 +321,16 @@ class MACEASE(AseEnergy):
 
     def __getstate__(self):
         dict = {
-            "atoms": self.atoms,
+            "atoms": self.atoms.todict(),
         }
 
         return dict
 
     def __setstate__(self, state):
-        print(f"{state=}")
-
-        self.atoms = state["atoms"]
+        if isinstance(state["atoms"], ase.Atoms):
+            self.atoms = state["atoms"]
+        else:
+            self.atoms = ase.Atoms.fromdict(state["atoms"])
 
         self.calculator = self._calculator()
         self.atoms.calc = self.calculator

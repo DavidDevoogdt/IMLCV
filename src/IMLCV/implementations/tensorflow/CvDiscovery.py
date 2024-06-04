@@ -14,6 +14,7 @@ from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.implementations.CV import un_atomize
 import numpy
 from IMLCV.base.rounds import data_loader_output
+from jax import Array
 
 
 def umap_function(x: CV, nl: NeighbourList, c, enc):
@@ -101,6 +102,7 @@ class TranformerUMAP(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
+        w: list[Array],
         dlo: data_loader_output,
         decoder=False,
         nunits=256,
@@ -194,4 +196,4 @@ class TranformerUMAP(Transformer):
         cv_0 = f.compute_cv_trans(x, chunk_size=chunk_size)[0].unstack()
         cv_tau = f.compute_cv_trans(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
 
-        return cv_0, cv_tau, un_atomize * f, None
+        return cv_0, cv_tau, un_atomize * f, w

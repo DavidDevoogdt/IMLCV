@@ -6,8 +6,9 @@ from jax import custom_jvp
 from jax import pure_callback
 from jax.custom_batching import custom_vmap
 from IMLCV.tools.bessel_jn import bessel_jn
-from IMLCV.tools.spherical_bessel import csphjy
 from functools import partial
+import jax
+
 
 # from jax.scipy.special import bessel_jn
 
@@ -135,33 +136,94 @@ kv = generate_bessel(scipy.special.kv, sign=-1, type=1)
 iv = generate_bessel(scipy.special.iv, sign=+1, type=1)
 
 
+# @partial(custom_jvp, nondiff_argnums=(0,))
+# @partial(jax.jit, static_argnums=0)
+# def spherical_jn(v, x):
+#     out = csphjy(v, x)
+
+#     return jnp.real(out)
+
+
+# @spherical_jn.defjvp
+# def cv_jvp(v, primals, tangents):
+#     (x,) = primals
+#     (dx,) = tangents
+
+#     o = spherical_jn(v + 1, x)
+
+#     primal_out = o[:-1]
+
+#     v_vec = jnp.arange(1, v + 1)
+
+#     tangents_out = jnp.array([-o[1]])
+
+#     if v != 0:
+#         tangents_out = jnp.concatenate(
+#             [tangents_out, (v_vec * o[v_vec - 1] - (v_vec + 1) * o[v_vec + 1]) / (2 * v_vec + 1)]
+#         )
+
+#     return primal_out, tangents_out * dx
+
+
+# https://github.com/tpudlik/sbf/blob/master/algos/d_recur_miller.py
+
+ORDER = 100  # Following Jablonski (1994)
+
+
+@partial(jax.jit, static_argnums=0)
+def recurrence_pattern(n, z):
+    jlp1 = 0
+    jl = 10 ** (-200)
+
+    # https://dlmf.nist.gov/10.51
+    def iter(n, jl, jlp1):
+        jlm1 = (2 * n + 1) / z * jl - jlp1
+
+        return n - 1, jlm1, jl
+
+    l = n + ORDER
+
+    for _ in range(ORDER):
+        l, jl, jlp1 = iter(l, jl, jlp1)
+
+    # scan over other values
+
+    def body(carry, xs):
+        carry = iter(*carry)
+        return carry, carry[1]
+
+    _, out = jax.lax.scan(body, init=(l, jl, jlp1), xs=None, length=n)
+
+    out = out[::-1]
+
+    f0 = jnp.sinc(z / jnp.pi)
+
+    return out / out[0] * f0
+
+
 @partial(custom_jvp, nondiff_argnums=(0,))
 @partial(jax.jit, static_argnums=0)
-def spherical_jn(v, x):
-    out = csphjy(v, x)
-
-    return jnp.real(out)
+def spherical_jn(n, z):
+    return recurrence_pattern(n + 1, z)
 
 
 @spherical_jn.defjvp
-def cv_jvp(v, primals, tangents):
+def spherical_jn_jvp(n, primals, tangents):
     (x,) = primals
-    (dx,) = tangents
+    (x_dot,) = tangents
 
-    o = spherical_jn(v + 1, x)
+    ni = n
 
-    primal_out = o[:-1]
+    if ni == 0:
+        ni = 1
 
-    v_vec = jnp.arange(1, v + 1)
+    y = spherical_jn(ni, x)
 
-    tangents_out = jnp.array([-o[1]])
+    dy = jnp.zeros(ni + 1)
+    dy = dy.at[0].set(-y[1])
+    dy = dy.at[1:].set(y[:-1] - (jnp.arange(1, len(y)) + 1.0) * y[1:] / x)
 
-    if v != 0:
-        tangents_out = jnp.concatenate(
-            [tangents_out, (v_vec * o[v_vec - 1] - (v_vec + 1) * o[v_vec + 1]) / (2 * v_vec + 1)]
-        )
-
-    return primal_out, tangents_out * dx
+    return y[: n + 1], dy[: n + 1] * x_dot
 
 
 # spherical_jn = csphjy  # generate_bessel(scipy.special.spherical_jn, type=2)

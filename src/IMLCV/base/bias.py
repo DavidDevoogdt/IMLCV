@@ -334,11 +334,11 @@ class Bias(PyTreeNode, ABC):
         plot_bias=True,
         colors: Array | None = None,
         offset=False,
-        dpi=600,
+        dpi=300,
     ):
         """plot bias."""
         if bins is None:
-            bins, _, _ = self.collective_variable.metric.grid(
+            bins, _, _, _ = self.collective_variable.metric.grid(
                 n=n,
                 endpoints=True,
                 margin=margin,
@@ -689,7 +689,7 @@ class Bias(PyTreeNode, ABC):
         margin = 1e-10
 
         colvar = self.collective_variable
-        bins, grid, _ = colvar.metric.grid(n=50, margin=0.1)
+        bins, grid, _, _ = colvar.metric.grid(n=50, margin=0.1)
 
         beta = 1 / (boltzmann * T)
 
@@ -714,7 +714,7 @@ class Bias(PyTreeNode, ABC):
         return bounds
 
     def kl_divergence(self, other: Bias, T: float, symmetric=True, sign=1.0, n=50):
-        _, cvs, _ = self.collective_variable.metric.grid(n=n, margin=0.1)
+        _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=0.1)
 
         p_self = jnp.exp(sign * self.compute_from_cv(cvs)[0] / (T * boltzmann))
         p_self /= jnp.sum(p_self)

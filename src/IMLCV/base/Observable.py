@@ -95,7 +95,7 @@ class ThermoLIB:
         # c = dlo.collective_variable.metric.periodic_wrap(c)
 
         if update_bounding_box:
-            bounds, _ = CvMetric.bounds_from_cv(trajs, bounds_percentile)
+            bounds, _, _ = CvMetric.bounds_from_cv(trajs, bounds_percentile)
 
             # # do not update periodic bounds
             bounding_box = jnp.where(
@@ -279,6 +279,7 @@ class ThermoLIB:
         samples_per_bin=200,
         min_samples_per_bin=2,
         chunk_size=None,
+        macro_chunk=10000,
         resample_bias=True,
         update_bounding_box=True,  # make boudning box bigger for FES calculation
         n_max=60,
@@ -294,6 +295,7 @@ class ThermoLIB:
         resample_num=30,
         thermolib=True,
         lag_n=10,
+        out=int(5e4),
         **plot_kwargs,
     ):
         if plot:
@@ -307,6 +309,8 @@ class ThermoLIB:
                 new_r_cut=None,
                 min_traj_length=min_traj_length,
                 only_finished=only_finished,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
             ).cv
 
             bash_app_python(function=Bias.static_plot)(
@@ -435,8 +439,8 @@ class ThermoLIB:
             print("estimating bias from koopman Theory!")
 
             dlo = self.rounds.data_loader(
-                num=10,
-                out=-1,
+                num=num_rnds,
+                out=out,
                 lag_n=lag_n,
                 cv_round=self.cv_round,
                 start=start_r,
@@ -444,6 +448,8 @@ class ThermoLIB:
                 min_traj_length=min_traj_length,
                 only_finished=only_finished,
                 time_series=True,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
             )
 
             # get weights based on koopman theory. the CVs are binned with indicators
@@ -451,7 +457,11 @@ class ThermoLIB:
                 koopman=True,
                 indicator_CV=True,
                 n_max=n_max,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
             )
+
+            print("gettingg FES Bias")
 
             fes_bias_tot = dlo._get_fes_bias_from_weights(
                 weights=weights,
@@ -459,6 +469,8 @@ class ThermoLIB:
                 n_grid=n_max,
                 T=dlo.sti.T,
                 collective_variable=dlo.collective_variable,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
             )
 
         if plot:

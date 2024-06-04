@@ -708,6 +708,9 @@ def sinkhorn_divergence_2(
     r_cond_svd=1e-10,
     method=None,
     op=None,
+    scale=None,
+    push_div=False,
+    nan_zero=True,
 ) -> Array:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -733,9 +736,14 @@ def sinkhorn_divergence_2(
             atomic=x.atomic,
         )
 
-    if normalize:
-        x1 = p_norm(x1)
-        x2 = p_norm(x2)
+    if scale is None:
+        if normalize:
+            x1 = p_norm(x1)
+            x2 = p_norm(x2)
+
+    else:
+        x1 = x1.replace(cv=x1.cv * scale)
+        x2 = x2.replace(cv=x2.cv * scale)
 
     f1 = nl1.nl_split_z
     if x1.batched:
@@ -936,6 +944,21 @@ def sinkhorn_divergence_2(
 
         return div
 
+    if push_div:
+        get_divergence = jax.jacrev(get_divergence, argnums=(1))
+
+        divergences = []
+
+        for p1_i, p2_i in zip(p1, p2):
+            div_z = get_divergence(p1_i.cv, p2_i.cv)
+
+            cv_z = p1_i.replace(cv=jnp.reshape(div_z, (-1,)), atomic=False)
+
+            divergences.append(cv_z)
+        comb = CV.combine(*divergences)
+
+        return comb.replace(_stack_dims=x1._stack_dims)
+
     # this is not vmappable because it has different lengths. The src_mask and tgt_mask in ott jax geometry do not produce the desired results
     divergences = jnp.array([get_divergence(p1_i.cv, p2_i.cv) for p1_i, p2_i in zip(p1, p2)])
 
@@ -966,6 +989,8 @@ def _sinkhorn_divergence_trans_2(
     r_cond_svd=1e-10,
     method=None,
     op=None,
+    scale=None,
+    push_div=False,
 ):
     assert nl is not None, "Neigbourlist required for rematch"
 
@@ -988,6 +1013,8 @@ def _sinkhorn_divergence_trans_2(
             r_cond_svd=r_cond_svd,
             method=method,
             op=op,
+            scale=scale,
+            push_div=push_div,
         )
 
     def get_div(pi, cv):
@@ -1011,6 +1038,14 @@ def _sinkhorn_divergence_trans_2(
             _combine_dims=_combine_dims,
             atomic=False,
         )
+
+    if push_div:
+        if pi.batched:
+            f = vmap(f, in_axes=(0, None))
+
+            raise NotImplementedError("TODO: unstack and combine along batched axis")
+
+        return f(pi, cv)
 
     if output == "ddiv":
         div = jax.jacrev(get_div, argnums=ddiv_arg)(pi, cv).cv
@@ -1058,7 +1093,7 @@ def get_sinkhorn_divergence_2(
     pi: CV,
     alpha_rematch=0.1,
     output="divergence",
-    normalize=True,
+    normalize=False,
     sum_divergence=False,
     ddiv_arg=0,
     ridge=0,
@@ -1067,6 +1102,8 @@ def get_sinkhorn_divergence_2(
     r_cond_svd=1e-10,
     method=None,
     op=None,
+    scale=None,
+    push_div=False,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -1075,6 +1112,10 @@ def get_sinkhorn_divergence_2(
     if isinstance(nli, NeighbourList):
         print("converting nli to info")
         nli = nli.info
+
+    if push_div:
+        assert output == "jacrev"
+        output = "divergence"
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
@@ -1090,6 +1131,7 @@ def get_sinkhorn_divergence_2(
             "r_cond_svd",
             "method",
             "op",
+            "push_div",
         ],
         nli=nli,
         pi=pi,
@@ -1103,6 +1145,8 @@ def get_sinkhorn_divergence_2(
         r_cond_svd=r_cond_svd,
         method=method,
         op=op,
+        scale=scale,
+        push_div=push_div,
     )
 
 

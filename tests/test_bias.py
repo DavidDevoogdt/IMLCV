@@ -92,7 +92,7 @@ def test_RBF_bias(kernel):
         ),
     )
 
-    _, _, center_cvs = collective_variable.metric.grid(n=n)
+    _, _, center_cvs, _ = collective_variable.metric.grid(n=n)
 
     def f(
         cv: CV,
@@ -258,7 +258,7 @@ def test_reparametrize():
     n = 20
     margin = 0.1
 
-    _, cv_grid, _ = bias.collective_variable.metric.grid(n=n, margin=margin)
+    _, cv_grid, _, _ = bias.collective_variable.metric.grid(n=n, margin=margin)
 
     new_bias = bias.resample(cv_grid=cv_grid)
 

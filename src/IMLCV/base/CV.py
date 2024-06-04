@@ -348,11 +348,12 @@ def macro_chunk_map(
     nl: list[NeighbourList] | None,
     macro_chunk: int | None = 10000,
     verbose=False,
+    yield_chunk=False,
 ):
     # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
 
     if macro_chunk is None:
-        stack_dims = [nli.shape[0] for nli in nl]
+        stack_dims = [yi.shape[0] for yi in y]
 
         z = f(op(*y), NeighbourList.stack(*nl))
 
@@ -363,19 +364,18 @@ def macro_chunk_map(
     n_prev = 0
     n = 0
 
-    z = []
-
     y_chunk = []
     nl_chunk = [] if nl is not None else None
 
     tot_chunk = 0
     stack_dims_chunk = []
 
-    last_z = None
-
     tot = sum(y_chunk.shape[0] for y_chunk in y)
 
     tot_running = 0
+
+    z = []
+    last_z = None
 
     while tot_running < tot:
         if (tot_chunk < macro_chunk) and (tot_running + tot_chunk != tot):
@@ -426,50 +426,74 @@ def macro_chunk_map(
 
             tot_running += tot_chunk
 
-            if isinstance(z_chunk, CV):
-                z_chunk = z_chunk.replace(_stack_dims=stack_dims_chunk).unstack()
-            elif isinstance(z_chunk, NeighbourList):
-                upd = z_chunk.update.replace(stack_dims=stack_dims_chunk)
-                z_chunk = z_chunk.replace(update=upd)
-                z_chunk = z_chunk.unstack()
+            if not yield_chunk:
+                if isinstance(z_chunk, CV):
+                    z_chunk = z_chunk.replace(_stack_dims=stack_dims_chunk).unstack()
+                elif isinstance(z_chunk, NeighbourList):
+                    upd = z_chunk.update.replace(stack_dims=stack_dims_chunk)
+                    z_chunk = z_chunk.replace(update=upd)
+                    z_chunk = z_chunk.unstack()
 
-            if last_z is not None:
-                z_chunk[0] = last_z.stack(last_z, z_chunk[0])
-                # now fix the stack dims
-                if isinstance(z_chunk[0], CV):
-                    z_chunk[0] = z_chunk[0].replace(_stack_dims=None)
+                if last_z is not None:
+                    z_chunk[0] = last_z.stack(last_z, z_chunk[0])
+                    # now fix the stack dims
+                    if isinstance(z_chunk[0], CV):
+                        z_chunk[0] = z_chunk[0].replace(_stack_dims=None)
+                    else:
+                        z_chunk[0] = z_chunk[0].replace(update=z_chunk[0].update.replace(stack_dims=None))
+
+                if split_last:
+                    last_z = z_chunk[-1]
+                    z_chunk = z_chunk[:-1]
+
+                    y_chunk = [last_chunk_y]
+                    nl_chunk = [last_chunk_nl] if nl is not None else None
+
+                    tot_chunk = last_chunk_y.shape[0]
+                    stack_dims_chunk = [tot_chunk]
+
+                    n_prev = n
+
                 else:
-                    z_chunk[0] = z_chunk[0].replace(update=z_chunk[0].update.replace(stack_dims=None))
+                    last_z = None
+                    y_chunk = []
+                    nl_chunk = [] if nl is not None else None
+                    tot_chunk = 0
+                    stack_dims_chunk = []
+                    last_chunk_y = None
+                    last_chunk_nl = None
 
-            if split_last:
-                last_z = z_chunk[-1]
-                z_chunk = z_chunk[:-1]
+                    n_prev = n + 1
 
-                y_chunk = [last_chunk_y]
-                nl_chunk = [last_chunk_nl] if nl is not None else None
-
-                tot_chunk = last_chunk_y.shape[0]
-                stack_dims_chunk = [tot_chunk]
-
-                n_prev = n
+                z.extend(z_chunk)
 
             else:
-                last_z = None
-                y_chunk = []
-                nl_chunk = [] if nl is not None else None
-                tot_chunk = 0
-                stack_dims_chunk = []
-                last_chunk_y = None
-                last_chunk_nl = None
+                z.append(z_chunk)
 
-                n_prev = n + 1
+                if split_last:
+                    y_chunk = [last_chunk_y]
+                    nl_chunk = [last_chunk_nl] if nl is not None else None
 
-            z.extend(z_chunk)
+                    tot_chunk = last_chunk_y.shape[0]
+                    stack_dims_chunk = [tot_chunk]
+
+                    n_prev = n
+
+                else:
+                    y_chunk = []
+                    nl_chunk = [] if nl is not None else None
+                    tot_chunk = 0
+                    stack_dims_chunk = []
+                    last_chunk_y = None
+                    last_chunk_nl = None
+
+                    n_prev = n + 1
 
         if tot_chunk < macro_chunk and (tot_running + tot_chunk != tot):
             n += 1
 
-    return z
+    if not yield_chunk:
+        return z
 
 
 class SystemParams(PyTreeNode):
@@ -850,13 +874,17 @@ class SystemParams(PyTreeNode):
         if info.r_cut is None:
             return None
 
-        _, _, _, nl = self._get_neighbour_list(
+        _, nn, _, nl = self._get_neighbour_list(
             info=info,
             chunk_size=chunk_size,
             verbose=verbose,
             shmap=shmap,
             only_update=only_update,
         )
+
+        if nn <= 1:
+            raise ValueError("No neighbours found")
+
         return nl
 
     @jax.jit
@@ -1444,6 +1472,12 @@ class NeighbourList(PyTreeNode):
             sp_orig=sp_orig,
         )
 
+    def nneighs(self, sp=None):
+        if sp is None:
+            sp = self.sp_orig
+
+        return vmap(lambda x: jnp.sum(jnp.sum(x**2, axis=1) < self.info.r_cut**2))(self.neighbour_pos(sp))
+
     @property
     def needs_calculation(self):
         return self.atom_indices is None
@@ -1465,7 +1499,7 @@ class NeighbourList(PyTreeNode):
         return app_can(sp, (self.op_cell, self.op_coor, None))
 
     @jax.jit
-    def neighbour_pos(self, sp_orig):
+    def neighbour_pos(self, sp_orig: SystemParams):
         @partial(vmap, in_axes=(0, 0, None, None))
         def neighbour_translate(ijk, a, sp_centered_on_atom, cell):
             # a: index of atom
@@ -1826,7 +1860,7 @@ class NeighbourList(PyTreeNode):
             jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
         )
 
-        return max_displacement > self.info.r_skin
+        return max_displacement > self.info.r_skin / 2
 
     @partial(jax.jit, static_argnames=("chunk_size", "shmap", "verbose"))
     def update_nl(self, sp: SystemParams, chunk_size=None, shmap=True, verbose=False) -> tuple[bool, NeighbourList]:
@@ -2511,7 +2545,7 @@ class CvMetric(PyTreeNode):
         mid = [a[:-1] + (a[1:] - a[:-1]) / 2 for a in grid]
         cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing=indexing)])
 
-        return grid, cv, cv_mid
+        return grid, cv, cv_mid, bounds
 
     @property
     def ndim(self):
@@ -2519,12 +2553,12 @@ class CvMetric(PyTreeNode):
 
     @staticmethod
     def bounds_from_cv(
-        cv: list[CV],
+        cv_0: list[CV],
         percentile=0.1,
         weights: list[Array] | None = None,
         margin=None,
         chunk_size=None,
-        n=40,
+        n=20,
         macro_chunk=10000,
         verbose=False,
     ):
@@ -2535,14 +2569,16 @@ class CvMetric(PyTreeNode):
 
         # first find absolute bounds
 
-        mini = jnp.min(cv[0].cv, axis=0)
-        maxi = jnp.max(cv[0].cv, axis=0)
+        mini = jnp.min(cv_0[0].cv, axis=0)
+        maxi = jnp.max(cv_0[0].cv, axis=0)
 
-        for cvi in cv:
+        for cvi in cv_0:
             mini = jnp.minimum(mini, jnp.min(cvi.cv, axis=0))
             maxi = jnp.maximum(maxi, jnp.max(cvi.cv, axis=0))
 
         bounding_box = jnp.vstack((mini, maxi)).T
+
+        constants = False
 
         for i in range(bounding_box.shape[0]):
             if jnp.abs(bounding_box[i, 0] - bounding_box[i, 1]) <= 1e-12:
@@ -2550,6 +2586,8 @@ class CvMetric(PyTreeNode):
 
                 bounding_box = bounding_box.at[i, 0].set(bounding_box[i, 0] - 0.5)
                 bounding_box = bounding_box.at[i, 1].set(bounding_box[i, 1] + 0.5)
+
+                constants = True
 
         # do bin count over range
 
@@ -2568,7 +2606,7 @@ class CvMetric(PyTreeNode):
             return closest_trans.compute_cv_trans(x, chunk_size=chunk_size)[0]
 
         grid_nums, _ = data_loader_output._apply(
-            cv,
+            cv_0,
             None,
             None,
             None,
@@ -2583,8 +2621,8 @@ class CvMetric(PyTreeNode):
         hist /= jnp.sum(hist)
 
         # integrate ranges and find cutoff
-        bounds = jnp.zeros((cv[0].shape[1], 2))
-        for i in range(cv[0].shape[1]):
+        bounds = jnp.zeros((cv_0[0].shape[1], 2))
+        for i in range(cv_0[0].shape[1]):
             cummul = jnp.cumulative_sum(vmap(jnp.sum, in_axes=i)(hist))
 
             n_min = jnp.min(jnp.argwhere(cummul > percentile / 100))
@@ -2612,7 +2650,7 @@ class CvMetric(PyTreeNode):
             return get_mask.compute_cv_trans(x, chunk_size=chunk_size)[0]
 
         mask, _ = data_loader_output._apply(
-            x=cv,
+            x=cv_0,
             x_t=None,
             nl=None,
             nl_t=None,
@@ -2621,7 +2659,7 @@ class CvMetric(PyTreeNode):
             verbose=verbose,
         )
 
-        return bounds, [mask.cv.reshape(-1) for mask in mask]
+        return bounds, [mask.cv.reshape(-1) for mask in mask], constants
 
     def __getstate__(self):
         return self.__dict__

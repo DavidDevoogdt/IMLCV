@@ -630,6 +630,11 @@ class MDEngine(ABC):
             print("nl - slow update")
             nl = self.sp.get_neighbour_list(info)
 
+        nneigh = nl.nneighs()
+
+        if jnp.min(nneigh) <= 1:
+            raise ValueError(f"neighbour list is empty for at leat one  atom {nneigh=}")
+
         self._nl = nl
         return nl
 

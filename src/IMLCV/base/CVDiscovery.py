@@ -13,8 +13,6 @@ from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvFlow
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.CV import CvTrans
-from IMLCV.base.CV import NeighbourList
-from IMLCV.base.CV import SystemParams
 from IMLCV.implementations.CV import identity_trans
 from IMLCV.implementations.CV import scale_cv_trans
 from matplotlib import gridspec
@@ -23,7 +21,7 @@ from IMLCV.base.bias import NoneBias, Bias
 from molmod.units import kjmol
 from typing import Self
 from typing import TYPE_CHECKING
-from IMLCV.implementations.CV import _cv_slice
+from IMLCV.implementations.CV import _cv_slice, _scale_cv_trans
 
 if TYPE_CHECKING:
     from IMLCV.base.rounds import data_loader_output
@@ -36,6 +34,7 @@ class Transformer:
         descriptor: CvFlow,
         pre_scale=True,
         post_scale=True,
+        T_scale=3,
         **fit_kwargs,
     ) -> None:
         self.outdim = outdim
@@ -43,6 +42,7 @@ class Transformer:
         self.descriptor = descriptor
         self.pre_scale = pre_scale
         self.post_scale = post_scale
+        self.T_scale = T_scale
 
         self.fit_kwargs = fit_kwargs
 
@@ -67,6 +67,7 @@ class Transformer:
         )
 
         if self.pre_scale:
+            # todo: change
             g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
             x, x_t = dlo.apply_cv_trans(
                 g,
@@ -113,6 +114,11 @@ class Transformer:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
 
+        print("getting weights")
+        w = dlo.weights(
+            T_scale=self.T_scale,
+        )
+
         print("starting pre_fit")
 
         x, x_t, f = self.pre_fit(
@@ -123,104 +129,62 @@ class Transformer:
             macro_chunk=macro_chunk,
         )
 
-        # if check_nan:
-        #     print("checking pre_fit nans")
-        #     dlo.filter_nans(x, x_t)
-
-        if test:
-            print("testing pre_fit")
-            x_2, _ = f.compute_cv_flow(
-                SystemParams.stack(*dlo.sp),
-                NeighbourList.stack(*dlo.nl),
-                chunk_size=chunk_size,
-            )
-
-            assert jnp.allclose(x_2.cv, CV.stack(*x).cv)
-
-            if x_t is not None:
-                x_t_2, _ = f.compute_cv_flow(
-                    SystemParams.stack(*dlo.sp_t),
-                    NeighbourList.stack(*dlo.nl_t),
-                    chunk_size=chunk_size,
-                )
-
-                assert jnp.allclose(x_t_2.cv, CV.stack(*x_t).cv)
-
         print("starting fit")
-        y, y_t, g, w = self._fit(
+        x, x_t, g, w = self._fit(
             x,
             x_t,
+            w,
             dlo,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
+            T_scale=self.T_scale,
             **self.fit_kwargs,
         )
 
-        # if check_nan:
-        #     print("checking fit nans")
-        #     dlo.filter_nans(y, y_t)
-
-        # cv should be small enough to fit in memory
-
-        if test:
-            y_2, _, _ = g.compute_cv_trans(CV.stack(*x), NeighbourList.stack(*dlo.nl), chunk_size=chunk_size)
-            assert jnp.allclose(y_2.cv, y.cv)
-
-            if y_t is not None:
-                y_t_2, _, _ = g.compute_cv_trans(
-                    CV.stack(*x_t),
-                    NeighbourList.stack(*dlo.nl_t),
-                    chunk_size=chunk_size,
-                )
-
-        if w is not None:
-            dlo_weights = w
-        else:
-            dlo_weights = dlo.weights()
+        print("getting bounds")
 
         # remove outliers from the data
-        _, mask = CvMetric.bounds_from_cv(
-            y,
+        bounds, mask, constants = CvMetric.bounds_from_cv(
+            x,
             percentile=percentile,
-            weights=dlo_weights,
+            weights=w,
+            macro_chunk=macro_chunk,
+            chunk_size=chunk_size,
         )
 
-        y = CV.stack(*y)
-        mask = jnp.hstack(mask)
+        assert not constants, "found constant collective variables"
 
-        if y_t is not None:
-            y_t = CV.stack(*y_t)
+        if self.post_scale:
+            print("post scaling")
+            trans = CvTrans.from_cv_function(
+                _scale_cv_trans,
+                upper=1,
+                lower=0,
+                mini=bounds[:, 0],
+                diff=bounds[:, 1] - bounds[:, 0],
+            )
 
-            assert (
-                y_t.stack_dims == y.stack_dims
-            ), f" y and y_t must have the same stack_dims, but found {y.stack_dims=} and {y_t.stack_dims=} respectively"
+            bounds = jnp.zeros_like(bounds)
+            bounds = bounds.at[:, 1].set(1)
 
-        y_masked = y[mask]
+            x, x_t = dlo.apply_cv_trans(
+                trans,
+                x,
+                x_t,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                pmap=p_map,
+                verbose=verbose,
+            )
 
-        print("starting post_fit")
-        z_masked, h = self.post_fit(y_masked)
-        z, _, _ = h.compute_cv_trans(y)
-
-        z: CV
-
-        mini = jnp.min(z_masked.cv, axis=0)
-        maxi = jnp.max(z_masked.cv, axis=0)
-
-        diff = maxi - mini
-
-        mini_margin = mini - diff * (percentile / 200 + margin)
-        maxi_margin = maxi + diff * (percentile / 200 + margin)
-
-        new_bounding_box = jnp.vstack(
-            [mini_margin, maxi_margin],
-        ).T
+            g *= trans
 
         new_collective_variable = CollectiveVariable(
-            f=f * g * h,
+            f=f * g,
             jac=jac,
             metric=CvMetric.create(
                 periodicities=None,
-                bounding_box=new_bounding_box,
+                bounding_box=bounds,
             ),
         )
 
@@ -230,13 +194,15 @@ class Transformer:
 
             bias: Bias = data_loader_output._get_fes_bias_from_weights(
                 dlo.sti.T,
-                weights=jnp.hstack(dlo_weights),
+                weights=w,
                 collective_variable=new_collective_variable,
-                cv=z.unstack(),
+                cv=x,
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
-                n_max=40,
+                n_max=25,
                 max_bias=max_fes_bias,
+                macro_chunk=macro_chunk,
+                chunk_size=chunk_size,
             )
 
             if plot:
@@ -250,21 +216,12 @@ class Transformer:
         else:
             bias = NoneBias.create(new_collective_variable)
 
-        if test:
-            cv_full, _ = new_collective_variable.compute_cv(
-                SystemParams.stack(*dlo.sp),
-                NeighbourList.stack(*dlo.nl),
-                chunk_size=chunk_size,
-            )
-
-            assert jnp.allclose(cv_full.cv, z.cv)
-
         if plot:
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery.png"),
                 collective_variables=[dlo.collective_variable, new_collective_variable],
-                cv_data=[CV.stack(*dlo.cv), z],
-                weight=[dlo_weights],
+                cv_data=[dlo.cv, x],
+                weight=w,
                 margin=0.1,
                 T=dlo.sti.T,
                 plot_FES=True,
@@ -274,12 +231,13 @@ class Transformer:
                 min_samples_per_bin=min_samples_per_bin,
             )
 
-        return z, new_collective_variable, bias
+        return x, new_collective_variable, bias
 
     def _fit(
         self,
         x: list[CV],
         x_t: list[CV] | None,
+        w: list[jax.Array],
         dlo: data_loader_output,
         chunk_size=None,
         verbose=True,
@@ -288,18 +246,18 @@ class Transformer:
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
         raise NotImplementedError
 
-    def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:
-        # y = CV.stack(*y)
-        if not self.post_scale:
-            return y, identity_trans
-        h = scale_cv_trans(y)
-        return h.compute_cv_trans(y)[0], h
+    # def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:
+    #     # y = CV.stack(*y)
+    #     if not self.post_scale:
+    #         return y, identity_trans
+    #     h = scale_cv_trans(y)
+    #     return h.compute_cv_trans(y)[0], h
 
     @staticmethod
     def plot_app(
         collective_variables: list[CollectiveVariable],
-        cv_data: list[CV] | list[list[CV]],
-        weight: list[jax.Array] | list[list[jax.Array]] | None = None,
+        cv_data: list[list[CV]] | list[list[list[CV]]],
+        weight: list[list[jax.Array]] | list[list[list[jax.Array]]] | None = None,
         duplicate_cv_data=True,
         fes_biases: list[Bias] | None = None,
         name: str | Path | None = None,
@@ -329,8 +287,8 @@ class Transformer:
             if weight is not None:
                 weight = [weight] * ncv
 
-        if weight is not None:
-            weight = [jnp.hstack(w) for w in weight]
+        # if weight is not None:
+        #     weight = [jnp.hstack(w) for w in weight]
 
         if plot_FES:
             assert weight is not None, "weight must be specified if plot_FES=True"
@@ -366,6 +324,10 @@ class Transformer:
                     margin_fes_ij = []
 
                     for k in range(cvi.n):
+                        cv_data_i_k = CV.stack(*cvdata_i)
+                        cv_data_i_k = cv_data_i_k.replace(cv=cv_data_i_k.cv[:, k].reshape((-1, 1)))
+                        cv_data_i_k = cv_data_i_k.unstack()
+
                         margin_fes_ij.append(
                             data_loader_output._get_fes_bias_from_weights(
                                 T=T,
@@ -381,7 +343,7 @@ class Transformer:
                                         bounding_box=cvi.metric.bounding_box[k : k + 1, :],
                                     ),
                                 ),
-                                cv=cvdata_i.replace(cv=cvdata_i.cv[:, k].reshape((-1, 1))),
+                                cv=cv_data_i_k,
                                 weights=wj,
                                 samples_per_bin=samples_per_bin,
                                 min_samples_per_bin=min_samples_per_bin,
@@ -409,7 +371,7 @@ class Transformer:
                 ["cv_1 [a.u.]", "cv_2 [a.u.]", "cv_3 [a.u.]"],
             ]
 
-        inoutdims = [cv_data[n][n].shape[1] for n in range(ncv)]
+        inoutdims = [cv_data[n][n][0].shape[1] for n in range(ncv)]
 
         print(f"{inoutdims=}")
 
@@ -419,7 +381,7 @@ class Transformer:
         fig = plt.figure(figsize=(6, 6))
         rgb_data = [
             Transformer._get_color_data(
-                cv_data[n][n],
+                CV.stack(*cv_data[n][n]),
                 inoutdims[n],
                 color_trajectories,
                 metric=metrics[n],
@@ -436,10 +398,10 @@ class Transformer:
         ):
             dim = inoutdims[in_out]
 
-            data_proc = cv_data[data_in][in_out].cv
+            data_proc = CV.stack(*cv_data[data_in][in_out]).cv
             if dim == 1:
                 x = []
-                for i, ai in enumerate(cv_data[data_in][in_out].unstack()):
+                for i, ai in enumerate(cv_data[data_in][in_out]):
                     x.append(ai.cv * 0 + i)
 
                 data_proc = jnp.hstack([data_proc, jnp.vstack(x)])
@@ -463,7 +425,7 @@ class Transformer:
                 colors=rgb_data[data_in],
                 labels=labels[0:dim],
                 metric=metrics[in_out],
-                weight=weight[data_in] if weight is not None else None,
+                weight=weight is not None,
                 margin=margin,
                 plot_FES=plot_FES,
                 FES=fesses[data_in][in_out] if plot_FES else None,
@@ -681,7 +643,7 @@ class Transformer:
         labels,
         metric: CvMetric,
         margin=None,
-        weight=None,
+        weight=False,
         plot_FES=True,
         FES: Bias | None = None,
         margin_fes: list[Bias] | None = None,
@@ -717,7 +679,7 @@ class Transformer:
         if plot_FES:
             assert FES is not None, "FES must be specified if plot_FES=True"
 
-            bins, cv_grid, _ = metric.grid(
+            bins, cv_grid, _, _ = metric.grid(
                 n=80,
                 endpoints=True,
                 margin=margin,
@@ -777,7 +739,7 @@ class Transformer:
         bins_x_center = (x_bins[1:] + x_bins[:-1]) / 2
         bins_y_center = (y_bins[1:] + y_bins[:-1]) / 2
 
-        if weight is None:
+        if not weight:
             # raw number of points
             H, _ = jnp.histogramdd(data, bins=n_bins, range=[x_lim, y_lim])
 
@@ -1088,6 +1050,7 @@ class CombineTransformer(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
+        w: list[jax.Array],
         dlo: data_loader_output,
         chunk_size=None,
         verbose=True,
@@ -1115,7 +1078,7 @@ class CombineTransformer(Transformer):
             else:
                 trans *= trans_t
 
-        return x, x_t, trans
+        return x, x_t, trans, w
 
 
 class IdentityTransformer(Transformer):
@@ -1123,10 +1086,11 @@ class IdentityTransformer(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
+        w: list[jax.Array],
         dlo: data_loader_output,
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
-        return x, x_t, identity_trans, None
+        return x, x_t, identity_trans, w

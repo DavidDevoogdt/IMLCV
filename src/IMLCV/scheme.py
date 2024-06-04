@@ -84,7 +84,7 @@ class Scheme:
         chunk_size=None,
     ):
         m = self.md.bias.collective_variable.metric
-        _, cv_grid, _ = m.grid(n)
+        _, cv_grid, _, _ = m.grid(n)
 
         if k is None:
             # 0.1*N *Kb*T
@@ -162,6 +162,7 @@ class Scheme:
         max_bias=None,
         n_max_fes=30,
         thermolib=False,
+        macro_chunk=10000,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -241,6 +242,7 @@ class Scheme:
                     use_prev_fs=i > 1,
                     n_max=n_max_fes,
                     thermolib=thermolib,
+                    macro_chunk=macro_chunk,
                     **plot_kwargs,
                 )
 

@@ -635,7 +635,7 @@ class Rounds(ABC):
 
             if weight_c and out != -1:
                 if verbose:
-                    print(f"getting weights for cv_round {cvi}")
+                    print(f"getting weights for cv_round {cvi} {len(sp_c)} trajectories")
 
                 dlo = data_loader_output(
                     sp=sp_c,
@@ -650,7 +650,7 @@ class Rounds(ABC):
                 )
 
                 # select points according to free energy divided by histogram count
-                wc = dlo.weights(
+                w_c = dlo.weights(
                     chunk_size=chunk_size,
                     wham=True,
                     koopman=False,
@@ -659,16 +659,16 @@ class Rounds(ABC):
                     verbose=verbose,
                 )
 
-                n = sum([len(wi) for wi in wc])
-                wc = [wc[i] * n for i in range(len(wc))]
+                n = sum([len(wi) for wi in w_c])
+                w_c = [w_c[i] * n for i in range(len(w_c))]
 
             else:
-                wc = [jnp.ones((spi.shape[0])) for spi in sp_c]
+                w_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
 
             sp.extend(sp_c)
             cv.extend(cv_c)
             ti.extend(ti_c)
-            weights.extend(wc)
+            weights.extend(w_c)
             if get_bias_list:
                 bias_list.extend(bias_c)
 
@@ -1266,8 +1266,8 @@ class Rounds(ABC):
                 only_finished=only_finished,
                 weight=True,
                 T_scale=5,
-                time_series=True,
-                lag_n=10,
+                time_series=False,
+                # lag_n=10,
                 chunk_size=chunk_size,
             )
 
@@ -1719,12 +1719,11 @@ class Rounds(ABC):
 
         x, _ = dlo.apply_cv_trans(cv_trans=cv_trans, x=dlo.cv, chunk_size=chunk_size, verbose=verbose)
 
-        x = CV.stack(*x)
-
+        #
         if plot:
             Transformer.plot_app(
                 collective_variables=[md.bias.collective_variable, collective_variable],
-                cv_data=[CV.stack(*dlo.cv), x],
+                cv_data=[dlo.cv, x],
                 duplicate_cv_data=True,
                 T=dlo.sti.T,
                 plot_FES=True,
@@ -1772,7 +1771,7 @@ class Rounds(ABC):
             first = True
 
             if save_multiple_cvs:
-                for dlo_i, cv_new_i in zip(iter(dlo), CV.unstack(cvs_new)):
+                for dlo_i, cv_new_i in zip(iter(dlo), cvs_new):
                     if not first:
                         md.bias = NoneBias.create(new_collective_variable)
                         rounds.add_cv_from_cv(new_collective_variable)
@@ -1791,7 +1790,7 @@ class Rounds(ABC):
             else:
                 rounds._copy_from_previous_round(
                     dlo=dlo,
-                    new_cvs=CV.unstack(cvs_new),
+                    new_cvs=cvs_new,
                     cv_round=cv_round_from,
                 )
                 rounds.add_round_from_md(md)
@@ -1949,7 +1948,7 @@ class data_loader_output:
         chunk_size=None,
         chunk_size_mid=1,
     ):
-        bins, _, cv_mid = metric.grid(n=n_grid, bounds=grid_bounds)
+        bins, _, cv_mid, _ = metric.grid(n=n_grid, bounds=grid_bounds)
 
         @partial(CvTrans.from_cv_function, mid=cv_mid)
         def closest_trans(cv: CV, _nl, _, shmap, mid: CV):
@@ -2014,7 +2013,7 @@ class data_loader_output:
             n = n_max
 
         print("getting bounds")
-        grid_bounds, _ = CvMetric.bounds_from_cv(
+        grid_bounds, _, constants = CvMetric.bounds_from_cv(
             cv_0,
             margin=0.1,
             chunk_size=chunk_size,
@@ -2037,42 +2036,54 @@ class data_loader_output:
         else:
             # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
 
-            beta = 1 / (self.sti.T * boltzmann * T_scale)
+            beta = 1 / (self.sti.T * boltzmann)
 
             if ground_bias is None:
                 ground_bias = self.ground_bias
 
             # get raw rescaling
-            energies = []
+            w_u = []
 
             for ti_i in self.ti:
                 e = ti_i.e_bias
 
                 if e is None:
-                    print("WARNING: no bias enerrgy found")
+                    if verbose:
+                        print("WARNING: no bias enerrgy found")
                     e = jnp.zeros((ti_i.sp.shape[0],))
 
-                energies.append(e)
+                # energies.append(e)
 
-            energies = jnp.hstack(energies)
+                e -= jnp.max(e)
+                e = jnp.exp(-beta * e)
 
-            w_u = jnp.exp(-beta * energies)
+                e /= jnp.mean(e)
+
+                w_u.append(e)
+
+            w_u = jnp.hstack(w_u)
+
+            nan_mask = jnp.isnan(w_u)
+            if jnp.any(nan_mask):
+                print(f"WARNING: {jnp.sum(nan_mask)}/{w_u.shape[0]} nan values in weights, replacing with zeros")
+                w_u = jnp.where(nan_mask, 0, w_u)
+
+            w_u /= jnp.sum(w_u)
 
             if wham:
                 assert self.bias is not None
 
-                print("step 1 wham")
+                if verbose:
+                    print("step 1 wham")
                 grid_nums, _ = self.apply_cv_trans(
                     closest,
                     cv_0,
                     chunk_size=chunk_size,
                     macro_chunk=macro_chunk,
                 )
-                hist = get_histo(grid_nums)
+                hist = get_histo(grid_nums, data_loader_output._unstack_weights(sd, w_u))
 
-                mask = hist > 0
-
-                print(f"{jnp.sum(mask)}/{len(mask)} bins used for wham ")
+                mask = hist > 1e-16
 
                 dx = []
 
@@ -2094,10 +2105,10 @@ class data_loader_output:
                 shape = mg[0].shape
 
                 grid_cv = CV.stack(*[sub_mg + x.cv for x in cv_mid])
+                if verbose:
+                    print(f"{grid_cv.shape=}")
 
-                print(f"{grid_cv.shape=}")
-
-                print("step 2: getting biases")
+                    print("step 2: getting biases")
 
                 @vmap
                 def _b_ik(sg_b):
@@ -2138,6 +2149,9 @@ class data_loader_output:
                 else:
                     a_k = jnp.ones((b_ik.shape[1],))
 
+                if verbose:
+                    print(f"{jnp.isnan(a_k).sum()=}")
+
                 a_k /= jnp.sum(a_k)
 
                 from jaxopt import FixedPointIteration
@@ -2163,14 +2177,16 @@ class data_loader_output:
 
                 a_k, state = out.params, out.state
 
-                print(f"{state=}")
+                if verbose:
+                    print(f"{state=}")
 
                 f_inv = jnp.einsum("k,ik->i", a_k, b_ik)
 
                 w_u = jnp.hstack([wi * fi for wi, fi in zip(data_loader_output._unstack_weights(sd, w_u), f_inv)])
 
             else:
-                print("WARNING: not using wham")
+                if verbose:
+                    print("WARNING: not using wham")
 
                 grid_nums, _ = self.apply_cv_trans(closest, cv_0, chunk_size=chunk_size, macro_chunk=macro_chunk)
                 hist = get_histo(grid_nums, w_u)
@@ -2185,10 +2201,15 @@ class data_loader_output:
                 w_u = w_u * p_grid[grid_nums]
                 w_u /= jnp.sum(w_u)
 
+        if constants and koopman:
+            print("not performing koopman weighing because of constants in cv")
+            koopman = False
+
         if koopman and self.time_series:
             # prepare histo
 
-            print("koopman weights")
+            if verbose:
+                print("koopman weights")
 
             if indicator_CV:
                 grid_nums, grid_nums_t = self.apply_cv_trans(
@@ -2198,30 +2219,34 @@ class data_loader_output:
                 hist = get_histo(grid_nums)
                 hist_t = get_histo(grid_nums_t)
 
-                print(f"{hist.shape=}  {jnp.sum(hist)=}")
-
                 mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
-                print(f"{mask=}")
 
                 @partial(CvTrans.from_cv_function, mask=mask)
                 def get_indicator(cv: CV, nl, _, shmap, mask):
-                    out = jnp.zeros((cv.cv.shape[0],))
-                    out = out.at[nums].set(1)
+                    out = jnp.zeros((hist.shape[0],))
+                    out = out.at[cv.cv].set(1)
                     out = jnp.take(out, mask)
-
-                    print(f"{out.shape=}")
 
                     return cv.replace(cv=out)
 
+                if verbose:
+                    print("Calculating indicator CVs")
+
                 cv_km, cv_km_t = self.apply_cv_trans(
-                    get_indicator, grid_nums, grid_nums_t, chunk_size=chunk_size, macro_chunk=macro_chunk
+                    get_indicator,
+                    grid_nums,
+                    grid_nums_t,
+                    chunk_size=chunk_size,
+                    macro_chunk=macro_chunk,
+                    verbose=verbose,
                 )
 
             else:
                 cv_km = cv_0
                 cv_km_t = cv_t
 
-            print(f"constructing koopman model {cv_km[0].shape=}")
+            if verbose:
+                print("constructing koopman model")
 
             # construct koopman model
             km = self.koopman_model(
@@ -2231,12 +2256,18 @@ class data_loader_output:
                 add_1=True,
                 method="tcca",
                 symmetric=False,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                out_dim=10,
+                verbose=verbose,
             )
-
+            if verbose:
+                print("koopman_weight")
             w_u = jnp.hstack(km.koopman_weight())
 
         else:
-            print("not using koopman weights")
+            if verbose:
+                print("not using koopman weights")
 
         if T_scale != 1:
             w_u = w_u ** (1 / T_scale)
@@ -2264,9 +2295,19 @@ class data_loader_output:
         eps=1e-10,
         max_features=2000,
         macro_chunk=10000,
+        chunk_size=None,
         canoncial_signs=True,
+        verbose=False,
+        transform_cv=True,
     ):
-        cov = data_loader_output._get_covariance(cv_0, cv_tau, w, calc_pi=True, symmetric=symmetric)
+        print("whitening: getting covariance")
+        cov = data_loader_output._get_covariance(
+            cv_0,
+            cv_tau,
+            w,
+            calc_pi=True,
+            symmetric=symmetric,
+        )
         C0 = cov.C00
 
         # TODO: tends to hang here due to parsl forking. see https://github.com/google/jax/issues/1805#issuecomment-561244991 and https://github.com/Parsl/parsl/issues/2343
@@ -2275,13 +2316,14 @@ class data_loader_output:
         l, q = jnp.linalg.eigh(C0)
 
         mask = l >= eps
-        print(f"{jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
+        if verbose:
+            print(f"whitening: {jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
 
         l = jnp.where(mask, l, 0)
 
         if canoncial_signs:
             signs = jax.vmap(lambda q: jnp.sign(q[jnp.argmax(jnp.abs(q))]), in_axes=1)(q)
-            q = q @ jnp.diag(signs)
+            q = jnp.einsum("ij,j->ij", q, signs)
 
         l_inv_sqrt = jnp.where(l > eps, 1 / jnp.sqrt(l), 0)
 
@@ -2289,18 +2331,22 @@ class data_loader_output:
             data_loader_output._transform,
             static_argnames=["add_1"],
             add_1=add_1,
-            q=q @ jnp.diag(l_inv_sqrt),
+            q=jnp.einsum("ij,j->ij", q, l_inv_sqrt),
             pi=cov.pi_0,
         )
+        if verbose:
+            print("applying transformation")
 
-        cv_0, cv_tau = data_loader_output._apply(
-            x=cv_0,
-            x_t=cv_tau,
-            nl=None,
-            nl_t=None,
-            f=lambda x, nl: transform_maf.compute_cv_trans(x, nl)[0],
-            macro_chunk=macro_chunk,
-        )
+        if transform_cv:
+            cv_0, cv_tau = data_loader_output._apply(
+                x=cv_0,
+                x_t=cv_tau,
+                nl=None,
+                nl_t=None,
+                f=lambda x, nl: transform_maf.compute_cv_trans(x, nl, chunk_size=chunk_size)[0],
+                macro_chunk=macro_chunk,
+                verbose=True,
+            )
 
         return cv_0, cv_tau, transform_maf, cov.pi_0, q, l, mask
 
@@ -2431,6 +2477,9 @@ class data_loader_output:
             koopman_weight=False,
             max_features=None,
             tau=None,
+            macro_chunk=10000,
+            chunk_size=None,
+            verbose=False,
         ):
             if max_features is None:
                 max_features = cv_0[0].shape[1]
@@ -2444,6 +2493,7 @@ class data_loader_output:
                     add_1=add_1,
                     eps=eps,
                     max_features=max_features,
+                    verbose=verbose,
                 )
 
                 # p = jnp.abs(eigval) > 1 + 1e-10
@@ -2473,37 +2523,30 @@ class data_loader_output:
                 Vh = jnp.linalg.inv(u)
 
             elif method == "tcca":
-                (
-                    cv0_white,
-                    _,
-                    transform_maf_0,
-                    pi_0,
-                    q_0,
-                    l_0,
-                    mask_0,
-                ) = data_loader_output._whiten(
+                (cv0_white, _, transform_maf_0, pi_0, q_0, l_0, mask_0) = data_loader_output._whiten(
                     cv_0=cv_0,
                     w=w,
                     eps=eps,
                     max_features=max_features,
                     add_1=add_1,
+                    macro_chunk=macro_chunk,
+                    chunk_size=chunk_size,
+                    verbose=verbose,
                 )
 
-                (
-                    cv_tau_white,
-                    _,
-                    transform_maf_1,
-                    pi_1,
-                    q_1,
-                    l_1,
-                    mask_1,
-                ) = data_loader_output._whiten(
+                (cv_tau_white, _, transform_maf_1, pi_1, q_1, l_1, mask_1) = data_loader_output._whiten(
                     cv_0=cv_tau,
                     w=w,
                     eps=eps,
                     max_features=max_features,
                     add_1=add_1,
+                    chunk_size=chunk_size,
+                    macro_chunk=macro_chunk,
+                    verbose=verbose,
                 )
+
+                if verbose:
+                    print("koopman':gettig covariance")
 
                 cov = data_loader_output._get_covariance(
                     cv_0=cv0_white,
@@ -2512,20 +2555,27 @@ class data_loader_output:
                     symmetric=False,
                     calc_pi=False,
                 )
+                if verbose:
+                    print("koopman': SVD")
 
                 K = cov.C01
+
+                # if out_dim is None:
                 U, s, Vh = jnp.linalg.svd(K.T)
 
-                print(f"{s[0:10]=}")
+                # else:
+                #     od = out_dim
+                #     if add_1:
+                #         od += 1
 
-                if out_dim is not None:
-                    od = out_dim
-                    if add_1:
-                        od += 1
+                #     U, s, Vh = jnp.linalg.svd(
+                #         K.T,
+                #         subset_by_index=(0, od),
+                #         full_matrices=False,
+                #     )
+                if verbose:
+                    print(f"{s[0:10]=}")
 
-                    U = U[:, :od]
-                    s = s[:od]
-                    Vh = Vh[:od, :]
             else:
                 raise ValueError(f"method {method} not known")
 
@@ -2550,7 +2600,11 @@ class data_loader_output:
             )
 
             if koopman_weight:
-                km = km.weighted_model()
+                km = km.weighted_model(
+                    chunk_size=chunk_size,
+                    macro_chunk=macro_chunk,
+                    verbose=verbose,
+                )
 
             return km
 
@@ -2678,15 +2732,38 @@ class data_loader_output:
 
             return self._l1**pow
 
-        def koopman_weight(self) -> list[jax.Array]:
+        def koopman_weight(self, verbose=False) -> list[jax.Array]:
             # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
 
-            A = self.C00(pow=-1) @ self.C11() @ self.Tk(out_dim=1)
+            A = self.C00(pow=-1) @ self.C11() @ self.Tk()
+
+            if verbose:
+                print("getting eig A")
+
+            # solve for invariant distribution v under koopman operator
+            #  K v = v
+
             l, v = jnp.linalg.eig(A)
 
-            idx = jnp.argmax(jnp.real(l))
+            idx = jnp.argmin(jnp.abs(l - 1))
 
-            v = jnp.real(v[:, idx])
+            l0 = l[idx]
+
+            if not jnp.isclose(l0, 1, atol=1e-10):
+                print(f"no eigenvalue with value 1: {l0}")
+
+            idx2 = jnp.argwhere(jnp.abs(l - l0) < 1e-10)
+
+            if len(idx2) > 1:
+                # it doens't make sense to only take 1, as the order of eigenvlues is arbitrary
+                print(
+                    f"multiple eigenvalues close to {l0=} found: {l[idx2]}. This means that there are {len(idx2) } stationary disjoint distrubitions distributions in the system.  Taking average of eigenvalues"
+                )
+                v = jnp.real(v[:, idx2].mean(axis=1))
+            else:
+                v = jnp.real(v[:, idx])
+
+            print("got A ")
 
             w = []
 
@@ -2726,9 +2803,17 @@ class data_loader_output:
 
             return data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w)
 
-        def weighted_model(self, add_1=False) -> data_loader_output._KoopmanModel:
+        def weighted_model(
+            self,
+            add_1=False,
+            chunk_size=None,
+            macro_chunk=10000,
+            verbose=False,
+        ) -> data_loader_output._KoopmanModel:
             return data_loader_output._KoopmanModel.create(
-                w=self.koopman_weight(),
+                w=self.koopman_weight(
+                    verbose=verbose,
+                ),
                 cv_0=self.cv_0,
                 cv_tau=self.cv_tau,
                 add_1=add_1,
@@ -2737,6 +2822,8 @@ class data_loader_output:
                 symmetric=False,
                 out_dim=self.out_dim,
                 tau=self.tau,
+                macro_chunk=macro_chunk,
+                chunk_size=chunk_size,
             )
 
         def timescales(self):
@@ -2763,6 +2850,9 @@ class data_loader_output:
         max_features=2000,
         out_dim=None,
         add_1=True,
+        chunk_size=None,
+        macro_chunk=10000,
+        verbose=False,
     ) -> data_loader_output._KoopmanModel:
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
         assert method in ["tica", "tcca"]
@@ -2789,6 +2879,9 @@ class data_loader_output:
             koopman_weight=koopman_weight,
             max_features=max_features,
             tau=self.tau,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
         )
 
     def filter_nans(
@@ -2837,12 +2930,6 @@ class data_loader_output:
         pmap=True,
         verbose=False,
     ) -> tuple[list[CV], list[CV] | None]:
-        # if x is None:
-        #     x = self.cv
-
-        # if x_t is None:
-        #     x_t = self.cv_t
-
         def f(x, nl):
             return cv_trans.compute_cv_trans(
                 x,
@@ -2871,12 +2958,6 @@ class data_loader_output:
         pmap=True,
         verbose=False,
     ) -> tuple[list[CV], list[CV] | None]:
-        # if x is None:
-        #     x = self.sp
-
-        # if x_t is None:
-        #     x_t = self.sp_t
-
         def f(x, nl):
             return flow.compute_cv_flow(
                 x,
@@ -2927,13 +3008,13 @@ class data_loader_output:
         else:
             z_t = None
 
-        assert jnp.all(
-            jnp.array([zi.shape[0] == xi.shape[0] for zi, xi in zip(z, x)])
-        ), f"{[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
-        if x_t is not None:
-            assert jnp.all(jnp.array([zi.shape[0] == xi.shape[0] for zi, xi in zip(z_t, x_t)]))
+        for i in range(len(z)):
+            assert (
+                z[i].shape[0] == x[i].shape[0]
+            ), f" shapes do not match {[zi.shape[0] for  zi in z ]} != {[xi.shape[0] for xi in x]}"
 
-            assert jnp.all(jnp.array([zi.shape[0] == zit.shape[0] for zi, zit in zip(z, z_t)]))
+            if x_t is not None:
+                assert z[i].shape[0] == z_t[i].shape[0]
 
         return z, z_t
 
@@ -2949,32 +3030,30 @@ class data_loader_output:
         n_grid=None,
         max_bias=None,
         chunk_size=None,
+        macro_chunk=10000,
     ) -> RbfBias:
         beta = 1 / (T * boltzmann)
 
-        cv = CV.stack(*cv)
-        p = jnp.hstack(weights)
+        # cv = CV.stack(*cv)
+        # p = jnp.hstack(weights)
 
-        mask = p > 0
-        cv = cv[mask]
-        p = p[mask]
+        # mask = p > 0
+        # cv = cv[mask]
+        # p = p[mask]
+
+        samples = sum([cvi.shape[0] for cvi in cv])
 
         if n_grid is None:
-            n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=cv.shape[0], n_dims=cv.shape[1])
+            n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=samples, n_dims=cv[0].shape[1])
 
         if n_grid > n_max:
             # print(f"reducing n_grid from {n_grid} to {n_max}")
             n_grid = n_max
 
         if n_grid <= 1:
-            return RbfBias.create(
-                cvs=collective_variable,
-                cv=cv,
-                kernel="thin_plate_spline",
-                vals=jnp.zeros((cv.shape[0],)),
-            )
+            raise
 
-        grid_bounds, _ = CvMetric.bounds_from_cv(cv, margin=0.1)
+        grid_bounds, _, _ = CvMetric.bounds_from_cv(cv, margin=0.1)
 
         # # do not update periodic bounds
         grid_bounds = jnp.where(
@@ -2988,23 +3067,20 @@ class data_loader_output:
             grid_bounds=grid_bounds,
             metric=collective_variable.metric,
         )
-        grid_nums = closest.compute_cv_trans(cv, chunk_size=chunk_size)[0].cv
 
-        @partial(vmap, in_axes=(None, 0, None))
-        def fes_weight(data_num, num, p):
-            b = data_num == num
-            p = jnp.where(b, p, 0)
-            return jnp.sum(b), jnp.sum(p)
+        def f(x, nl):
+            return closest.compute_cv_trans(x, chunk_size=chunk_size)[0]
 
-        num_grid, p_grid = fes_weight(
-            grid_nums,
-            nums,
-            p,
+        grid_nums, _ = data_loader_output._apply(
+            cv,
+            None,
+            nl=None,
+            nl_t=None,
+            f=f,
+            macro_chunk=macro_chunk,
         )
 
-        if min_samples_per_bin is not None:
-            mask = num_grid <= min_samples_per_bin
-            p_grid = p_grid.at[mask].set(0)
+        p_grid = get_histo(grid_nums, weights)
 
         mask = p_grid >= 1e-16
 
@@ -3016,7 +3092,9 @@ class data_loader_output:
         bias = RbfBias.create(
             cvs=collective_variable,
             cv=cv_mid[mask],
-            kernel="thin_plate_spline",
+            kernel="thin_plate_spline"
+            if jnp.sum(mask) > 1
+            else "linear",  # number of points needs to be at leat the degree
             vals=-fes_grid,
         )
 
@@ -3046,7 +3124,7 @@ class data_loader_output:
         new_cv = CV.stack(*new_cv)
 
         # get bins for new CV
-        grid_bounds_new, _ = CvMetric.bounds_from_cv(new_cv, margin=0.1)
+        grid_bounds_new, _, _ = CvMetric.bounds_from_cv(new_cv, margin=0.1)
         cv_mid_new, nums_new, _, closest_new, get_histo_new = data_loader_output._histogram(
             n_grid=n_grid_new,
             grid_bounds=grid_bounds_new,
@@ -3055,7 +3133,7 @@ class data_loader_output:
         grid_nums_new = closest_new.compute_cv_trans(new_cv, chunk_size=chunk_size)[0].cv
 
         # get bins for old CV
-        grid_bounds_old, _ = CvMetric.bounds_from_cv(old_cv, margin=0.1)
+        grid_bounds_old, _, _ = CvMetric.bounds_from_cv(old_cv, margin=0.1)
         cv_mid_old, nums_old, _, closest_old, get_histo_old = data_loader_output._histogram(
             n_grid=n_grid_old,
             grid_bounds=grid_bounds_old,
@@ -3136,7 +3214,7 @@ class data_loader_output:
         if T is None:
             T = self.sti.T
 
-        _, cv_grid, _ = self.collective_variable.metric.grid(n=n_grid)
+        _, cv_grid, _, _ = self.collective_variable.metric.grid(n=n_grid)
         new_cv_grid, _, log_det = trans.compute_cv_trans(cv_grid, log_Jf=True)
 
         FES_bias_vals, _ = self.ground_bias.compute_from_cv(cv_grid)
@@ -3147,7 +3225,7 @@ class data_loader_output:
         weight = jnp.exp(new_FES_bias_vals / (T * boltzmann))
         weight /= jnp.sum(weight)
 
-        bounds, _ = self.collective_variable.metric.bounds_from_cv(
+        bounds, _, _ = self.collective_variable.metric.bounds_from_cv(
             new_cv_grid,
             weights=weight,
             percentile=1e-5,

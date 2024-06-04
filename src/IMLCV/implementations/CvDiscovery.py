@@ -11,7 +11,6 @@ from IMLCV.base.CV import CvFun
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.CV import NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.implementations.CV import get_feature_cov
 from IMLCV.implementations.CV import trunc_svd
 from IMLCV.implementations.CV import un_atomize
 from jax import Array
@@ -185,6 +184,7 @@ class TranformerAutoEncoder(Transformer):
         self,
         cv: list[CV],
         cv_t: list[CV] | None,
+        w: list[jax.Array],
         dlo: data_loader_output,
         nunits=250,
         nlayers=3,
@@ -352,7 +352,7 @@ class TranformerAutoEncoder(Transformer):
         if cv_t is not None:
             cv_t = f_enc.compute_cv_trans(cv_t)[0].unstack()
 
-        return cv, cv_t, un_atomize * f_enc, None
+        return cv, cv_t, un_atomize * f_enc, w
 
 
 def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, alpha, outdim, solver):
@@ -437,6 +437,7 @@ class TransoformerLDA(Transformer):
         self,
         cv_list: list[CV],
         cv_t: list[CV] | None,
+        w: list[jax.Array],
         dlo: data_loader_output,
         kernel=False,
         optimizer=None,
@@ -546,7 +547,7 @@ class TransoformerLDA(Transformer):
 
             full_trans = un_atomize * _f * _g
 
-        return cv.unstack(), cv_t.unstack(), full_trans, None
+        return cv.unstack(), cv_t.unstack(), full_trans, w
 
 
 def _transform(cv: CV, nl: NeighbourList | None, _, mask):
@@ -581,6 +582,7 @@ class TransformerMAF(Transformer):
         self,
         x: list[CV],
         x_t: list[CV] | None,
+        w: list[jax.Array],
         dlo: data_loader_output,
         correct_bias=False,
         pre_selction_epsilon=1e-10,
@@ -589,35 +591,42 @@ class TransformerMAF(Transformer):
         koopman_weighting=False,
         method="tcca",
         macro_chunk=1000,
+        chunk_size=None,
+        T_scale=3,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         assert dlo.time_series
         assert x_t is not None
 
-        w = None
-
-        print("getting weights")
-
-        if correct_bias:
-            w = dlo.weights()  # retrieve the precalculated weights
-
         print("unatomizing")
 
         trans = un_atomize
-        x, x_t = dlo.apply_cv_trans(un_atomize, x=x, x_t=x_t, macro_chunk=macro_chunk)
+        x, x_t = dlo.apply_cv_trans(
+            un_atomize,
+            x=x,
+            x_t=x_t,
+            macro_chunk=macro_chunk,
+            chunk_size=chunk_size,
+        )
 
         print("getting features with highest covariance")
 
-        transform = get_feature_cov(
-            x,
-            x_t,
-            w,
-            epsilon=pre_selction_epsilon,
-            max_functions=max_functions,
-        )
+        # transform = get_feature_cov(
+        #     x,
+        #     x_t,
+        #     w,
+        #     epsilon=pre_selction_epsilon,
+        #     max_functions=max_functions,
+        # )
 
-        x, x_t = dlo.apply_cv_trans(transform, x=x, x_t=x_t, macro_chunk=macro_chunk)
-        trans *= transform
+        # x, x_t = dlo.apply_cv_trans(
+        #     transform,
+        #     x=x,
+        #     x_t=x_t,
+        #     macro_chunk=macro_chunk,
+        #     chunk_size=chunk_size,
+        # )
+        # trans *= transform
 
         print("getting koopman")
 
@@ -628,7 +637,11 @@ class TransformerMAF(Transformer):
             method=method,
             max_features=max_features,
             w=w,
-            koopman_weight=koopman_weighting,  # this is not a good idea because the features will most likely not be able to predict a good ground state
+            koopman_weight=False,  # this is not a good idea because the features will most likely not be able to predict a good ground state. Moreover, it doesn,t work well with T_scale
+            add_1=False,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            verbose=True,
         )
 
         ts = km.timescales() / nanosecond
@@ -637,8 +650,18 @@ class TransformerMAF(Transformer):
 
         trans_km = km.f(out_dim=self.outdim)
 
+        del km
+
         trans *= trans_km
 
-        x, x_t = dlo.apply_cv_trans(trans_km, x=x, x_t=x_t, macro_chunk=macro_chunk)
+        print("applying transformation")
+
+        x, x_t = dlo.apply_cv_trans(
+            trans_km,
+            x=x,
+            x_t=x_t,
+            macro_chunk=macro_chunk,
+            chunk_size=chunk_size,
+        )
 
         return x, x_t, trans, w
