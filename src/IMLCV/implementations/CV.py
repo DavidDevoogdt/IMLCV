@@ -729,12 +729,7 @@ def sinkhorn_divergence_2(
         p_sq_safe = jnp.where(p_sq <= eps, 1, p_sq)
         p_norm_inv = jnp.where(p_sq == 0, 0.0, 1 / jnp.sqrt(p_sq_safe))
 
-        return CV(
-            cv=jnp.einsum("i...,i->i...", p, p_norm_inv),
-            _stack_dims=x._stack_dims,
-            _combine_dims=x._combine_dims,
-            atomic=x.atomic,
-        )
+        return x.replace(cv=jnp.einsum("i...,i->i...", p, p_norm_inv))
 
     if scale is None:
         if normalize:
@@ -745,20 +740,8 @@ def sinkhorn_divergence_2(
         x1 = x1.replace(cv=x1.cv * scale)
         x2 = x2.replace(cv=x2.cv * scale)
 
-    f1 = nl1.nl_split_z
-    if x1.batched:
-        f1 = vmap(f1)
-
-    src_mask, _, p1 = f1(x1)
-
-    f2 = nl2.nl_split_z
-    if x2.batched:
-        f2 = vmap(f2)
-
-    tgt_mask, _, p2 = f2(x2)
-
-    # src_mask = jnp.array(src_mask)
-    # tgt_mask = jnp.array(tgt_mask)
+    src_mask, _, p1 = nl1.nl_split_z(x1)
+    tgt_mask, _, p2 = nl2.nl_split_z(x2)
 
     def solve_lineax_svd(
         lin,

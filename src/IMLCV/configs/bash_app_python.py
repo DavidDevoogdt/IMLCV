@@ -242,7 +242,7 @@ if __name__ == "__main__":
         print(f"Version: {my_system.version}")
         print(f"Machine: {my_system.machine}")
         print(f"Processor: {my_system.processor}")
-        print(f"working with {jax.local_device_count()=}, {os.sched_getaffinity(0)=}")
+        print(f"working with {jax.local_device_count()=},   {jax.device_count()=}  {os.sched_getaffinity(0)=}")
 
         file_in = Path(args.file_in)
 

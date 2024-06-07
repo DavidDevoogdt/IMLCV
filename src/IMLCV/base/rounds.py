@@ -1612,7 +1612,7 @@ class Rounds(ABC):
 
         if use_executor:
             return bash_app_python(Rounds._update_CV, executors=Executors.training)(
-                execution_folder=self.path(c=cv_round_to), **kw
+                execution_folder=self.path(c=cv_round_from), **kw
             ).result()
 
         return Rounds._update_CV(**kw)
@@ -2345,7 +2345,7 @@ class data_loader_output:
                 nl_t=None,
                 f=lambda x, nl: transform_maf.compute_cv_trans(x, nl, chunk_size=chunk_size)[0],
                 macro_chunk=macro_chunk,
-                verbose=True,
+                verbose=False,
             )
 
         return cv_0, cv_tau, transform_maf, cov.pi_0, q, l, mask
@@ -2735,15 +2735,30 @@ class data_loader_output:
         def koopman_weight(self, verbose=False) -> list[jax.Array]:
             # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
 
-            A = self.C00(pow=-1) @ self.C11() @ self.Tk()
+            n = jnp.sum(jnp.abs(self.s - 1) < 1e-10)
+
+            if n == 0:
+                print(
+                    f"Largest eigenvalue in koopman model is {self.s[0]} instead of 1. Connsider adding constant function"
+                )
+                n = 1
+
+            if n > 1:
+                print(
+                    f"{n=} eigenvalues with eigenvalue 1 found. This means that there are {n} stationary disjoint distrubitions distributions in the system.  Taking average of eigenvalues"
+                )
 
             if verbose:
                 print("getting eig A")
-
-            # solve for invariant distribution v under koopman operator
-            #  K v = v
-
+            # TODO : simplify, no calc needed?
+            A = self.C00(pow=-1) @ self.C11() @ self.Tk(out_dim=n)
             l, v = jnp.linalg.eig(A)
+
+            del A
+
+            # truncate to only real values
+            l = l[:n]
+            v = v[:, :n]
 
             idx = jnp.argmin(jnp.abs(l - 1))
 
@@ -2767,16 +2782,12 @@ class data_loader_output:
 
             w = []
 
-            if self.add_1:
-                for cv0_i in self.cv_0:
-                    w.extend(jnp.einsum("ni,i->n", cv0_i.cv, v[:-1]) + v[-1])
+            def _get_w(cv0_i: CV):
+                if self.add_1:
+                    return jnp.einsum("ni,i->n", cv0_i.cv, v[:-1]) + v[-1]
+                return jnp.einsum("ni,i->n", cv0_i.cv, v)
 
-                print(v[-1])
-            else:
-                for cv0_i in self.cv_0:
-                    w.extend(jnp.einsum("ni,i->n", cv0_i.cv, v))
-
-            w = jnp.hstack(w)
+            w = jnp.hstack([_get_w(cv0_i) for cv0_i in self.cv_0])
 
             mask = w > 0
 
@@ -3031,6 +3042,7 @@ class data_loader_output:
         max_bias=None,
         chunk_size=None,
         macro_chunk=10000,
+        max_bias_margin=0.2,
     ) -> RbfBias:
         beta = 1 / (T * boltzmann)
 
@@ -3099,7 +3111,7 @@ class data_loader_output:
         )
 
         if max_bias is None:
-            max_bias = jnp.max(fes_grid)
+            max_bias = jnp.max(fes_grid) * (1 + max_bias_margin)
 
         return BiasModify.create(
             bias=bias,

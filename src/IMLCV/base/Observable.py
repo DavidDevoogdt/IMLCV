@@ -6,14 +6,12 @@ import jax.numpy as jnp
 import numpy as np
 from IMLCV.base.bias import Bias
 from IMLCV.base.bias import BiasModify
-from IMLCV.base.bias import CompositeBias
 from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.CV import CV
 from IMLCV.base.CV import CvMetric
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.bias import _clip
-from IMLCV.implementations.bias import GridBias
 from IMLCV.implementations.bias import RbfBias
 from molmod.units import kjmol
 from molmod.units import picosecond
@@ -80,7 +78,7 @@ class ThermoLIB:
         temp=None,
         chunk_size=None,
         pmap=True,
-        rounds=None,
+        rounds: Rounds = None,
     ):
         if dlo is None:
             dlo = rounds.data_loader(**dlo_kwargs)
@@ -189,7 +187,6 @@ class ThermoLIB:
 
     def fes_nd_thermolib(
         self,
-        plot=True,
         num_rnds=4,
         start_r=1,
         update_bounding_box=True,
@@ -199,15 +196,15 @@ class ThermoLIB:
         n_max=60,
         n=None,
         min_traj_length=None,
-        margin=None,
         dlo=None,
         directory=None,
         temp=None,
         pmap=True,
         only_finished=True,
         bounds_percentile=1,
-        vmax=100 * kjmol,
-        thermolib=False,
+        max_bias=None,
+        rbf_kernel="linear",
+        rbf_degree=None,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -226,21 +223,7 @@ class ThermoLIB:
             "only_finished": only_finished,
         }
 
-        # return ThermoLIB._fes_nd_thermolib(
-        #     dlo_kwargs=dlo_kwargs,
-        #     dlo=dlo,
-        #     update_bounding_box=update_bounding_box,
-        #     bounds_percentile=bounds_percentile,
-        #     samples_per_bin=samples_per_bin,
-        #     n=n,
-        #     n_max=n_max,
-        #     temp=temp,
-        #     chunk_size=chunk_size,
-        #     pmap=pmap,
-        #     rounds=self.rounds,
-        # )
-
-        return bash_app_python(
+        fes, grid, bounds = bash_app_python(
             ThermoLIB._fes_nd_thermolib,
             executors=Executors.training,
         )(
@@ -259,15 +242,153 @@ class ThermoLIB:
             rounds=self.rounds,
         ).result()
 
-    def new_metric(self, plot=False, r=None):
-        assert isinstance(self.rounds, Rounds)
+        # fes is in 'xy'- indexing convention, convert to ij
+        fs = np.transpose(fes.fs)
 
-        raise NotImplementedError
+        # # invert to use as bias, center zero
+        mask = ~np.isnan(fs)
+        fs[:] = -(fs[:] - fs[mask].min())
+
+        fs_max = fs[mask].max()  # = 0 kjmol
+        fs_min = fs[mask].min()  # = -max_bias kjmol
+
+        if max_bias is not None:
+            fs_min = -max_bias
+
+        print(f"min fs: {-fs_min/kjmol} kjmol")
+
+        fslist = []
+        # smoothing_list = []
+        cv: list[CV] = []
+
+        for idx, cvi in grid:
+            if not np.isnan(fs[idx]):
+                fslist.append(fs[idx])
+
+                cv += [cvi]
+
+                # smoothing_list.append(sigma[idx])
+        cv = CV.stack(*cv)
+
+        fslist = jnp.array(fslist)
+        bounds = jnp.array(bounds)
+
+        eps = fs.shape[0] / (bounds[:, 1] - bounds[:, 0])
+
+        fes_bias_tot = RbfBias.create(
+            cvs=self.collective_variable,
+            vals=fslist,
+            cv=cv,
+            kernel=rbf_kernel,
+            epsilon=eps,
+            degree=rbf_degree,
+        )
+
+        # clip value of bias to min and max of computed FES
+        fes_bias_tot = BiasModify.create(
+            bias=fes_bias_tot,
+            fun=_clip,
+            kwargs={"a_min": fs_min, "a_max": fs_max},
+        )
+
+        return fes_bias_tot
+
+    @staticmethod
+    def _fes_nd_weights(
+        rounds: Rounds,
+        num_rnds=4,
+        out=int(3e4),
+        lag_n=10,
+        start_r=1,
+        min_traj_length=None,
+        only_finished=True,
+        chunk_size=None,
+        macro_chunk=10000,
+        T_scale=10,
+        n_max=30,
+        cv_round=None,
+    ):
+        dlo = rounds.data_loader(
+            num=num_rnds,
+            out=out,
+            lag_n=lag_n,
+            cv_round=cv_round,
+            start=start_r,
+            new_r_cut=None,
+            min_traj_length=min_traj_length,
+            only_finished=only_finished,
+            time_series=True,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            T_scale=T_scale,
+        )
+
+        # get weights based on koopman theory. the CVs are binned with indicators
+        weights = dlo.weights(
+            koopman=True,
+            indicator_CV=True,
+            n_max=n_max,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+        )
+
+        print("gettingg FES Bias")
+
+        fes_bias_tot = dlo._get_fes_bias_from_weights(
+            weights=weights,
+            cv=dlo.cv,
+            n_grid=n_max,
+            T=dlo.sti.T,
+            collective_variable=dlo.collective_variable,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+        )
+
+        return fes_bias_tot
+
+    def fes_nd_weights(
+        self,
+        num_rnds=4,
+        out=int(3e4),
+        lag_n=10,
+        start_r=1,
+        min_traj_length=None,
+        only_finished=True,
+        chunk_size=None,
+        macro_chunk=10000,
+        T_scale=10,
+        n_max=30,
+        cv_round=None,
+        directory=None,
+    ):
+        if cv_round is None:
+            cv_round = self.cv_round
+
+        if directory is None:
+            directory = self.rounds.path(c=self.cv_round, r=self.rnd)
+
+        return bash_app_python(
+            ThermoLIB._fes_nd_weights,
+            executors=Executors.training,
+        )(
+            rounds=self.rounds,
+            num_rnds=num_rnds,
+            out=out,
+            lag_n=lag_n,
+            start_r=start_r,
+            min_traj_length=min_traj_length,
+            only_finished=only_finished,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            T_scale=T_scale,
+            n_max=n_max,
+            cv_round=cv_round,
+            execution_folder=directory,
+        ).result()
 
     def fes_bias(
         self,
         plot=True,
-        # max_bias: float | None = None,
         fes=None,
         max_bias=None,
         choice="rbf",
@@ -275,28 +396,21 @@ class ThermoLIB:
         start_r=1,
         rbf_kernel="linear",
         rbf_degree=None,
-        smoothing_threshold=5 * kjmol,
         samples_per_bin=200,
         min_samples_per_bin=2,
         chunk_size=None,
         macro_chunk=10000,
-        resample_bias=True,
         update_bounding_box=True,  # make boudning box bigger for FES calculation
         n_max=60,
         min_traj_length=None,
         margin=0.1,
-        grid=None,
-        bounds=None,
-        use_prev_fs=False,
-        collective_variable=None,
         only_finished=True,
-        vmax=100 * kjmol,
         pmap=True,
-        resample_num=30,
         thermolib=True,
         lag_n=10,
-        out=int(5e4),
-        **plot_kwargs,
+        out=int(3e4),
+        T_scale=10,
+        vmax=None,
     ):
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
@@ -327,187 +441,43 @@ class ThermoLIB:
             )
 
         if thermolib:
-            if fes is None:
-                fes, grid, bounds = self.fes_nd_thermolib(
-                    plot=plot,
-                    start_r=start_r,
-                    samples_per_bin=samples_per_bin,
-                    min_samples_per_bin=min_samples_per_bin,
-                    num_rnds=num_rnds,
-                    chunk_size=chunk_size,
-                    update_bounding_box=update_bounding_box,
-                    n_max=n_max,
-                    min_traj_length=min_traj_length,
-                    margin=margin,
-                    only_finished=only_finished,
-                    vmax=vmax,
-                    pmap=pmap,
-                )
-
-            # fes is in 'xy'- indexing convention, convert to ij
-            fs = np.transpose(fes.fs)
-
-            # remove previous fs
-            cv_grid = CV.stack(*list(zip(*grid))[1])
-
-            if collective_variable is None:
-                collective_variable = self.collective_variable
-
-            # # invert to use as bias, center zero
-            mask = ~np.isnan(fs)
-            fs[:] = -(fs[:] - fs[mask].min())
-
-            fs_max = fs[mask].max()  # = 0 kjmol
-            fs_min = fs[mask].min()  # = -max_bias kjmol
-
-            if max_bias is not None:
-                fs_min = -max_bias
-
-            print(f"min fs: {-fs_min/kjmol} kjmol")
-
-            # if max_bias is None:
-            #     max_bias = fs_max - fs_min
-
-            if use_prev_fs:
-                prev_fs = jnp.reshape(self.common_bias.compute_from_cv(cv_grid)[0], fs.shape)
-                fs -= np.array(prev_fs)
-
-            if choice == "rbf":
-                fslist = []
-                # smoothing_list = []
-                cv: list[CV] = []
-
-                for idx, cvi in grid:
-                    if not np.isnan(fs[idx]):
-                        fslist.append(fs[idx])
-
-                        cv += [cvi]
-
-                        # smoothing_list.append(sigma[idx])
-                cv = CV.stack(*cv)
-
-                fslist = jnp.array(fslist)
-                bounds = jnp.array(bounds)
-
-                def get_b(fact):
-                    eps = fs.shape[0] / (bounds[:, 1] - bounds[:, 0]) * fact
-
-                    # 'cubic', 'thin_plate_spline', 'multiquadric', 'quintic', 'inverse_multiquadric', 'gaussian', 'inverse_quadratic', 'linear'
-
-                    fesBias = RbfBias.create(
-                        cvs=collective_variable,
-                        vals=fslist,
-                        cv=cv,
-                        # kernel="linear",
-                        kernel=rbf_kernel,
-                        epsilon=eps,
-                        # smoothing=sigmalist,
-                        degree=rbf_degree,
-                    )
-                    return fesBias
-
-                fesBias = get_b(1.0)
-
-            elif choice == "gridbias":
-                raise ValueError("choose choice='rbf' for the moment")
-
-                fs[~mask] = 0.0
-                fesBias = GridBias(cvs=collective_variable, vals=fs, bounds=bounds)
-            else:
-                raise ValueError
-
-            if use_prev_fs:
-                fes_bias_tot = CompositeBias.create(biases=[self.common_bias, fesBias])
-            else:
-                fes_bias_tot = fesBias
-
-            if resample_bias:
-                fes_bias_tot = fes_bias_tot.resample(
-                    cv_grid=cv_grid,
-                    n=n_max,
-                )
-
-            # clip value of bias to min and max of computed FES
-            fes_bias_tot = BiasModify.create(
-                bias=fes_bias_tot,
-                fun=_clip,
-                kwargs={"a_min": fs_min, "a_max": fs_max},
+            fes_bias_tot = self.fes_nd_thermolib(
+                start_r=start_r,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                num_rnds=num_rnds,
+                chunk_size=chunk_size,
+                update_bounding_box=update_bounding_box,
+                n_max=n_max,
+                min_traj_length=min_traj_length,
+                margin=margin,
+                only_finished=only_finished,
+                pmap=pmap,
+                max_bias=max_bias,
+                rbf_kernel=rbf_kernel,
+                rbf_degree=rbf_degree,
             )
-        else:
-            use_prev_fs = False
 
+        else:
             print("estimating bias from koopman Theory!")
 
-            dlo = self.rounds.data_loader(
-                num=num_rnds,
+            fes_bias_tot = self.fes_nd_weights(
+                num_rnds=num_rnds,
                 out=out,
                 lag_n=lag_n,
-                cv_round=self.cv_round,
-                start=start_r,
-                new_r_cut=None,
+                start_r=start_r,
                 min_traj_length=min_traj_length,
                 only_finished=only_finished,
-                time_series=True,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-            )
-
-            # get weights based on koopman theory. the CVs are binned with indicators
-            weights = dlo.weights(
-                koopman=True,
-                indicator_CV=True,
+                T_scale=T_scale,
                 n_max=n_max,
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
-            )
-
-            print("gettingg FES Bias")
-
-            fes_bias_tot = dlo._get_fes_bias_from_weights(
-                weights=weights,
-                cv=dlo.cv,
-                n_grid=n_max,
-                T=dlo.sti.T,
-                collective_variable=dlo.collective_variable,
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
             )
 
         if plot:
             fold = str(self.rounds.path(c=self.cv_round))
 
             pf = []
-
-            if use_prev_fs:
-                pf.append(
-                    bash_app_python(function=Bias.static_plot)(
-                        bias=fesBias,
-                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_inverted_{choice}.png")],
-                        execution_folder=fold,
-                        name=f"diff_FES_bias_{self.rnd}_inverted_{choice}.png",
-                        inverted=True,
-                        label="Free Energy [kJ/mol]",
-                        stdout=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stdout",
-                        stderr=f"diff_FES_bias_{self.rnd}_inverted_{choice}.stderr",
-                        margin=margin,
-                        vmax=vmax,
-                        **plot_kwargs,
-                    ),
-                )
-
-                pf.append(
-                    bash_app_python(function=Bias.static_plot)(
-                        bias=fesBias,
-                        outputs=[File(f"{fold}/diff_FES_bias_{self.rnd}_{choice}.png")],
-                        name=f"diff_FES_bias_{self.rnd}_{choice}.png",
-                        execution_folder=fold,
-                        stdout=f"diff_FES_bias_{self.rnd}_{choice}.stdout",
-                        stderr=f"diff_FES_bias_{self.rnd}_{choice}.stderr",
-                        margin=margin,
-                        vmax=vmax,
-                        **plot_kwargs,
-                    ),
-                )
 
             pf.append(
                 bash_app_python(function=Bias.static_plot)(
@@ -521,7 +491,6 @@ class ThermoLIB:
                     stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
                     margin=margin,
                     vmax=vmax,
-                    **plot_kwargs,
                 ),
             )
 
@@ -535,7 +504,6 @@ class ThermoLIB:
                     stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
                     margin=margin,
                     vmax=vmax,
-                    **plot_kwargs,
                 ),
             )
 

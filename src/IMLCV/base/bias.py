@@ -323,7 +323,7 @@ class Bias(PyTreeNode, ABC):
         n=100,
         traj: list[CV] | None = None,
         vmin=0,
-        vmax=100 * kjmol,
+        vmax=None,
         map=False,
         inverted=False,
         margin=None,
@@ -346,6 +346,9 @@ class Bias(PyTreeNode, ABC):
         mg = np.meshgrid(*bins, indexing="xy")
         cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*bins)])
         bias, _ = self.compute_from_cv(cv_grid)
+
+        if vmax is None:
+            vmax = 100 * kjmol
 
         if offset:
             bias -= bias[~np.isnan(bias)].min()

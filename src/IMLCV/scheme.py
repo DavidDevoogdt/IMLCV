@@ -147,7 +147,6 @@ class Scheme:
         init_max_grad=None,
         max_grad=None,
         plot=True,
-        plot_kwargs={},
         choice="rbf",
         fes_bias_rnds=4,
         scale_n: int | None = None,
@@ -239,11 +238,10 @@ class Scheme:
                     margin=plot_margin,
                     only_finished=only_finished,
                     max_bias=max_bias,
-                    use_prev_fs=i > 1,
                     n_max=n_max_fes,
                     thermolib=thermolib,
                     macro_chunk=macro_chunk,
-                    **plot_kwargs,
+                    vmax=max_bias,
                 )
 
             self.rounds.add_round_from_md(self.md, cv=cv_round)
@@ -271,8 +269,8 @@ class Scheme:
         test=False,
         max_bias=None,
         transform_bias=True,
-        samples_per_bin=100,
-        min_samples_per_bin=20,
+        samples_per_bin=50,
+        min_samples_per_bin=5,
         percentile=1e-1,
         use_executor=True,
         n_max=30,

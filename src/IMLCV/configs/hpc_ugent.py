@@ -357,7 +357,8 @@ which python
             cmd_timeout=1,
         )
 
-    pre_command = ""
+    # let slurm use the cores as threads
+    pre_command = f"srun  -N 1 -n 1 -c {threads_per_core} --cpu-bind=threads --export=ALL"
 
     ref_comm = {
         "cp2k": "export OMP_NUM_THREADS=1; mpirun -report-bindings  -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi cp2k_shell.psmp ",
