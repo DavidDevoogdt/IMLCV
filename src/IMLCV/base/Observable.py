@@ -307,6 +307,8 @@ class ThermoLIB:
         T_scale=10,
         n_max=30,
         cv_round=None,
+        koopman=True,
+        plot_selected_points=True,
     ):
         dlo = rounds.data_loader(
             num=num_rnds,
@@ -321,15 +323,17 @@ class ThermoLIB:
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             T_scale=T_scale,
+            verbose=True,
         )
 
         # get weights based on koopman theory. the CVs are binned with indicators
         weights = dlo.weights(
-            koopman=True,
+            koopman=koopman,
             indicator_CV=True,
             n_max=n_max,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
+            verbose=True,
         )
 
         print("gettingg FES Bias")
@@ -343,6 +347,12 @@ class ThermoLIB:
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
         )
+
+        if plot_selected_points:
+            fes_bias_tot.plot(
+                name="FES_bias_points.png",
+                traj=dlo.cv,
+            )
 
         return fes_bias_tot
 
@@ -360,6 +370,7 @@ class ThermoLIB:
         n_max=30,
         cv_round=None,
         directory=None,
+        koopman=True,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -384,6 +395,7 @@ class ThermoLIB:
             n_max=n_max,
             cv_round=cv_round,
             execution_folder=directory,
+            koopman=koopman,
         ).result()
 
     def fes_bias(
@@ -411,6 +423,7 @@ class ThermoLIB:
         out=int(3e4),
         T_scale=10,
         vmax=None,
+        koopman=True,
     ):
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
@@ -472,6 +485,7 @@ class ThermoLIB:
                 macro_chunk=macro_chunk,
                 T_scale=T_scale,
                 n_max=n_max,
+                koopman=koopman,
             )
 
         if plot:

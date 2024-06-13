@@ -592,7 +592,7 @@ class TransformerMAF(Transformer):
         method="tcca",
         macro_chunk=1000,
         chunk_size=None,
-        T_scale=3,
+        T_scale=10,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         assert dlo.time_series
@@ -609,7 +609,7 @@ class TransformerMAF(Transformer):
             chunk_size=chunk_size,
         )
 
-        print("getting features with highest covariance")
+        # print("getting features with highest covariance")
 
         # transform = get_feature_cov(
         #     x,

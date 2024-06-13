@@ -346,10 +346,14 @@ which python
             "cmd_timeout": 60,
         }
 
+        sheduler_options = "#SBATCH --signal B:USR2"  # send signal to worker if job is cancelled/ time is up/ OOM
+
         if gpu:
-            vsc_kwargs[
-                "scheduler_options"
-            ] = f"#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu={parsl_tasks_per_block}\n#SBATCH --export=None"  # request gpu
+            sheduler_options += (
+                "\n#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu={parsl_tasks_per_block}\n#SBATCH --export=None"
+            )
+
+        vsc_kwargs["scheduler_options"] = sheduler_options
         provider = SlurmProviderVSC(**common_kwargs, **vsc_kwargs)
     elif provider == "local":
         provider = LocalProvider(

@@ -565,7 +565,7 @@ class Bias(PyTreeNode, ABC):
                     # print(col)
 
                     # trajs are ij indexed
-                    ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=2, color=col)
+                    # ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=2, color=col,)
 
                     x_list.append(tr.cv[:, 0])
                     y_list.append(tr.cv[:, 1])
@@ -574,6 +574,22 @@ class Bias(PyTreeNode, ABC):
                     in_ylim = jnp.logical_and(tr.cv[:, 1] > y_lim[0], tr.cv[:, 1] < y_lim[1])
 
                     n_points += jnp.sum(jnp.logical_and(in_xlim, in_ylim))
+
+                s = (500 / n_points) ** (0.5)
+
+                from matplotlib.markers import MarkerStyle
+
+                for x, y, c in zip(x_list, y_list, c_list):
+                    ax.scatter(
+                        x,
+                        y,
+                        s=s,
+                        color=c,
+                        marker=MarkerStyle(
+                            marker="o",
+                            fillstyle="full",
+                        ),
+                    )
 
                 if n_points != 0:
                     n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))

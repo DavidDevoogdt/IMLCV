@@ -496,12 +496,16 @@ class Rounds(ABC):
         check_dtau=True,
         verbose=False,
         weight=True,
-        T_scale=3,
+        T_scale=10,
         macro_chunk=2000,
         macro_chunk_nl=5000,
         only_update_nl=False,
+        divide_by_histogram=False,
     ) -> data_loader_output:
         # weights = []
+
+        # if T_scale != 1:
+        #     raise NotImplementedError("T_scale not implemented")
 
         if cv_round is None:
             cv_round = self.cv
@@ -515,6 +519,7 @@ class Rounds(ABC):
         cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
         weights: list[Array] = []
+        weights_bincount: list[Array] = []
 
         if not time_series:
             lag_n = 0
@@ -650,14 +655,20 @@ class Rounds(ABC):
                 )
 
                 # select points according to free energy divided by histogram count
-                w_c = dlo.weights(
+                w_out = dlo.weights(
                     chunk_size=chunk_size,
                     wham=True,
                     koopman=False,
-                    n_max=20,
+                    n_max=30,
                     wham_sub_grid=3,  # quick settings
                     verbose=verbose,
+                    output_bincount=divide_by_histogram,
                 )
+
+                if divide_by_histogram:
+                    w_c, w_c_bincount = w_out
+                else:
+                    w_c = w_out
 
                 n = sum([len(wi) for wi in w_c])
                 w_c = [w_c[i] * n for i in range(len(w_c))]
@@ -665,10 +676,17 @@ class Rounds(ABC):
             else:
                 w_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
 
+                if divide_by_histogram:
+                    w_c_bincount = [jnp.ones((spi.shape[0])) for spi in sp_c]
+
             sp.extend(sp_c)
             cv.extend(cv_c)
             ti.extend(ti_c)
             weights.extend(w_c)
+
+            if divide_by_histogram:
+                weights_bincount.extend(w_c_bincount)
+
             if get_bias_list:
                 bias_list.extend(bias_c)
 
@@ -700,6 +718,8 @@ class Rounds(ABC):
             cv_new: list[CV] = []
             ti_new: list[TrajectoryInfo] = []
             weights_new: list[Array] = []
+            weights_bincount_new: list[Array] = []
+
             if get_bias_list:
                 new_bias_list = []
 
@@ -719,10 +739,16 @@ class Rounds(ABC):
 
                 weights_new.append(weights[n])
 
+                if divide_by_histogram:
+                    weights_bincount_new.append(weights_bincount[n])
+
             sp = sp_new
             ti = ti_new
             cv = cv_new
             weights = weights_new
+            if divide_by_histogram:
+                weights_bincount = weights_bincount_new
+
             if get_bias_list:
                 bias_list = new_bias_list
 
@@ -752,24 +778,6 @@ class Rounds(ABC):
                 wi.shape[0] == spi.shape[0]
             ), f"weights and sp shape are different: {wi.shape=} {StopAsyncIteration.shape=}"
 
-        # pop_n = []
-
-        # for n, (s, w) in enumerate(zip(sp, weights)):
-        #     assert s.shape[0] == w.shape[0], f"sp and w shape are different: {s.shape=} {w.shape=} {n=}"
-
-        #     if s.shape[0] < lag_n:
-        #         print(f"not enough data points for lag_n {s.shape[0]} < {lag_n}")
-        #         pop_n.append(n)
-
-        # for n in jnp.sort(pop_n, descending=True):
-        #     sp.pop(n)
-        #     cv.pop(n)
-        #     ti.pop(n)
-        #     weights.pop(n)
-
-        #     if get_bias_list:
-        #         bias_list.pop(n)
-
         total = sum([max(a.shape[0] - lag_n, 0) for a in sp])
 
         if out == -1:
@@ -786,16 +794,35 @@ class Rounds(ABC):
             frac = out / total
 
             for n, wi in enumerate(weights):
+                ow = None
+
                 if wi is None:
                     probs = None
                 else:
                     if lag_n != 0:
-                        wi = wi[:-lag_n]
+                        wio = wi[:-lag_n]
+                    else:
+                        wio = wi
+
+                    # if divide_by_histogram:
+                    #     wi_bc = weights_bincount[n]
+                    #     if lag_n != 0:
+                    #         wi_bc = wi_bc[:-lag_n]
+
+                    #     ow = wi_bc
+
+                    #     wi /= wi_bc
 
                     if T_scale != 1:
-                        wi = wi ** (1 / T_scale)
+                        wi_orig = wio
 
-                    probs = wi / jnp.sum(wi)
+                        wio = wio ** (1 / T_scale)
+                        ow = wi_orig / wio
+
+                    else:
+                        ow = jnp.ones_like(wi)
+
+                    probs = wio / jnp.sum(wio)
 
                 ni = int(frac * (sp[n].shape[0] - lag_n))
 
@@ -811,10 +838,13 @@ class Rounds(ABC):
                     len=sp[n].shape[0] - lag_n,
                 )
 
+                if ow is None:
+                    ow = jnp.ones_like(weights[n][indices])
+
                 out_sp.append(sp[n][indices])
                 out_cv.append(cv[n][indices])
                 out_ti.append(ti[n][indices])
-                out_weights.append(weights[n][indices])
+                out_weights.append(ow)
 
                 if time_series:
                     out_sp_t.append(sp[n][indices + lag_n])
@@ -822,6 +852,8 @@ class Rounds(ABC):
                     out_ti_t.append(ti[n][indices + lag_n])
 
         else:
+            o_w: list[jax.Array] = None
+
             if weights[0] is None:
                 probs = None
             else:
@@ -829,17 +861,35 @@ class Rounds(ABC):
                     wi = jnp.hstack(weights)
                 else:
                     w = []
+
                     for n, wi in enumerate(weights):
                         if wi.shape[0] <= lag_n:
                             print(f"not enough data points for lag_n {wi.shape[0]} <= {lag_n}")
                             continue
 
-                        w.append(wi[:-lag_n])
+                        wio = wi[:-lag_n]
+
+                        if T_scale != 1:
+                            wi_orig = wio
+
+                            wio = wio ** (1 / T_scale)
+                            ow = wi_orig / wio
+
+                        else:
+                            ow = jnp.ones_like(wi)
+
+                        # if divide_by_histogram:
+                        #     wbi = weights_bincount[n][:-lag_n]
+                        #     wio /= wbi
+
+                        w.append(wio)
+
+                        if o_w is None:
+                            o_w = [ow]
+                        else:
+                            o_w.append(ow)
 
                     wi = jnp.hstack(w)
-
-                if T_scale != 1:
-                    wi = wi ** (1 / T_scale)
 
                 probs = wi / jnp.sum(wi)
 
@@ -877,7 +927,11 @@ class Rounds(ABC):
 
                 cv_trimmed.append(cv_n[index])
                 ti_trimmed.append(ti_n[index])
-                weights_trimmed.append(weights[n][index])
+
+                if o_w is None:
+                    weights_trimmed.append(jnp.ones_like(weights[n][index]))
+                else:
+                    weights_trimmed.append(o_w[n][index])
 
                 if time_series:
                     sp_trimmed_t.append(sp_n[index + lag_n])
@@ -903,6 +957,8 @@ class Rounds(ABC):
                 bias_list = out_biases
 
             # bias = None
+
+        print(f"len(out_sp) = {len(out_sp)} ")
 
         out_nl = None
 
@@ -1233,6 +1289,7 @@ class Rounds(ABC):
         only_finished=True,
         profile=False,
         chunk_size=None,
+        T_scale=10,
     ):
         if cv_round is None:
             cv_round = self.cv
@@ -1254,7 +1311,7 @@ class Rounds(ABC):
 
         if not sp0_provided:
             dlo_data = self.data_loader(
-                num=4,
+                num=5,
                 out=10000,
                 split_data=False,
                 new_r_cut=None,
@@ -1265,7 +1322,7 @@ class Rounds(ABC):
                 recalc_cv=recalc_cv,
                 only_finished=only_finished,
                 weight=True,
-                T_scale=5,
+                T_scale=T_scale,
                 time_series=False,
                 # lag_n=10,
                 chunk_size=chunk_size,
@@ -1981,7 +2038,7 @@ class data_loader_output:
         ground_bias=None,
         use_ground_bias=True,
         sign=1,
-        T_scale=1,
+        T_scale=10,
         chunk_size=None,
         wham=True,
         koopman=True,
@@ -1993,6 +2050,7 @@ class data_loader_output:
         force_recalc=False,
         macro_chunk=10000,
         verbose=False,
+        output_bincount=False,
     ) -> list[jax.Array]:
         if cv_0 is None:
             cv_0 = self.cv
@@ -2012,6 +2070,9 @@ class data_loader_output:
         if n > n_max:
             n = n_max
 
+        if verbose:
+            print(f"using {n=}")
+
         print("getting bounds")
         grid_bounds, _, constants = CvMetric.bounds_from_cv(
             cv_0,
@@ -2027,6 +2088,8 @@ class data_loader_output:
             grid_bounds=grid_bounds,
             chunk_size=chunk_size,
         )
+
+        grid_nums = None
 
         if self._weights is not None and not force_recalc:
             print("using precomputed weights")
@@ -2055,7 +2118,7 @@ class data_loader_output:
                 # energies.append(e)
 
                 e -= jnp.max(e)
-                e = jnp.exp(-beta * e)
+                e = jnp.exp(beta * e)
 
                 e /= jnp.mean(e)
 
@@ -2075,12 +2138,14 @@ class data_loader_output:
 
                 if verbose:
                     print("step 1 wham")
-                grid_nums, _ = self.apply_cv_trans(
-                    closest,
-                    cv_0,
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
-                )
+
+                if grid_nums is None:
+                    grid_nums, _ = self.apply_cv_trans(
+                        closest,
+                        cv_0,
+                        chunk_size=chunk_size,
+                        macro_chunk=macro_chunk,
+                    )
                 hist = get_histo(grid_nums, data_loader_output._unstack_weights(sd, w_u))
 
                 mask = hist > 1e-16
@@ -2188,7 +2253,8 @@ class data_loader_output:
                 if verbose:
                     print("WARNING: not using wham")
 
-                grid_nums, _ = self.apply_cv_trans(closest, cv_0, chunk_size=chunk_size, macro_chunk=macro_chunk)
+                if grid_nums is None:
+                    grid_nums, _ = self.apply_cv_trans(closest, cv_0, chunk_size=chunk_size, macro_chunk=macro_chunk)
                 hist = get_histo(grid_nums, w_u)
 
                 if use_ground_bias:
@@ -2274,7 +2340,20 @@ class data_loader_output:
 
         w_u /= jnp.sum(w_u)
 
-        return data_loader_output._unstack_weights(sd, w_u)
+        w_u = data_loader_output._unstack_weights(sd, w_u)
+
+        if output_bincount:
+            if grid_nums is None:
+                grid_nums, _ = self.apply_cv_trans(closest, cv_0, chunk_size=chunk_size, macro_chunk=macro_chunk)
+
+            hist = get_histo(grid_nums, w_u)
+
+            bin_counts = [hist[i.cv].reshape((-1,)) for i in grid_nums]
+
+        if output_bincount:
+            return w_u, bin_counts
+
+        return w_u
 
     @staticmethod
     def _transform(cv, nl, _, shmap, pi, add_1, q):
@@ -3046,13 +3125,6 @@ class data_loader_output:
     ) -> RbfBias:
         beta = 1 / (T * boltzmann)
 
-        # cv = CV.stack(*cv)
-        # p = jnp.hstack(weights)
-
-        # mask = p > 0
-        # cv = cv[mask]
-        # p = p[mask]
-
         samples = sum([cvi.shape[0] for cvi in cv])
 
         if n_grid is None:
@@ -3094,7 +3166,7 @@ class data_loader_output:
 
         p_grid = get_histo(grid_nums, weights)
 
-        mask = p_grid >= 1e-16
+        mask = p_grid != 0
 
         p_grid = p_grid[mask]
 

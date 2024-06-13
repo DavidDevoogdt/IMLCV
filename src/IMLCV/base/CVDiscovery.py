@@ -34,7 +34,7 @@ class Transformer:
         descriptor: CvFlow,
         pre_scale=True,
         post_scale=True,
-        T_scale=3,
+        T_scale=10,
         **fit_kwargs,
     ) -> None:
         self.outdim = outdim
@@ -96,10 +96,7 @@ class Transformer:
         plot_folder: str | Path | None = None,
         p_map=True,
         percentile=5.0,
-        margin=0.01,
         jac=jax.jacrev,
-        test=False,
-        check_nan=True,
         transform_FES=True,
         max_fes_bias=100 * kjmol,
         n_max=30,
@@ -108,16 +105,29 @@ class Transformer:
         verbose=True,
         cv_titles=None,
         vmax=100 * kjmol,
-        n_grid_new=30,
         macro_chunk=1000,
+        **kwargs,
     ) -> tuple[CV, CollectiveVariable, Bias]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
 
         print("getting weights")
-        w = dlo.weights(
-            T_scale=self.T_scale,
-        )
+        w = dlo.weights()
+
+        if plot:
+            Transformer.plot_app(
+                name=str(plot_folder / "cvdiscovery_pre.png"),
+                collective_variables=[dlo.collective_variable],
+                cv_data=[dlo.cv],
+                weight=w,
+                margin=0.1,
+                T=dlo.sti.T,
+                plot_FES=True,
+                cv_titles=cv_titles,
+                vmax=vmax,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+            )
 
         print("starting pre_fit")
 
@@ -199,7 +209,7 @@ class Transformer:
                 cv=x,
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
-                n_max=25,
+                n_max=n_max,
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,

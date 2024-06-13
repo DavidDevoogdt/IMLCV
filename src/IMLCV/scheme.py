@@ -82,6 +82,7 @@ class Scheme:
         recalc_cv=False,
         only_finished=True,
         chunk_size=None,
+        T_scale=10,
     ):
         m = self.md.bias.collective_variable.metric
         _, cv_grid, _, _ = m.grid(n)
@@ -126,6 +127,7 @@ class Scheme:
             only_finished=only_finished,
             sp0=sp0,
             chunk_size=chunk_size,
+            T_scale=T_scale,
         )
 
     def new_metric(self, plot=False, r=None, cv_round: int | None = None):
@@ -162,6 +164,7 @@ class Scheme:
         n_max_fes=30,
         thermolib=False,
         macro_chunk=10000,
+        T_scale=10,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -218,6 +221,7 @@ class Scheme:
                 recalc_cv=recalc_cv,
                 only_finished=i > 1 and only_finished,
                 chunk_size=chunk_size,
+                T_scale=T_scale,
             )
 
             if update_metric:
@@ -242,6 +246,7 @@ class Scheme:
                     thermolib=thermolib,
                     macro_chunk=macro_chunk,
                     vmax=max_bias,
+                    T_scale=T_scale,
                 )
 
             self.rounds.add_round_from_md(self.md, cv=cv_round)
