@@ -1349,9 +1349,9 @@ def _cv_slice(cv: CV, nl: NeighbourList, _, shmap, indices):
 def get_non_constant_trans(
     c: list[CV], c_t: list[CV] | None = None, w: list[Array] | None = None, epsilon=1e-14, max_functions=None
 ):
-    from IMLCV.base.rounds import data_loader_output
+    from IMLCV.base.rounds import Covariances
 
-    cov = data_loader_output._get_covariance(
+    cov = Covariances.create(
         cv_0=c,
         cv_1=c_t,
         w=w,
@@ -1389,11 +1389,11 @@ def get_feature_cov(
     epsilon=1e-14,
     max_functions=None,
 ) -> tuple[CV, CV, CvTrans]:
-    from IMLCV.base.rounds import data_loader_output
+    from IMLCV.base.rounds import Covariances
 
     print("computing feature covariances")
 
-    cov = data_loader_output._get_covariance(
+    cov = Covariances.create(
         c_0,
         c_tau,
         w=w,
@@ -1405,10 +1405,10 @@ def get_feature_cov(
     print("computing feature covariances done")
 
     cov_n = jnp.sqrt(cov.C00 * cov.C11)
-    cov = jnp.where(cov_n > epsilon, cov.C01 / cov_n, 0)
+    cov_01 = jnp.where(cov_n > epsilon, cov.C01 / cov_n, 0)
 
-    idx = jnp.argsort(cov, descending=True)
-    cov_sorted = cov[idx]
+    idx = jnp.argsort(cov_01, descending=True)
+    cov_sorted = cov_01[idx]
 
     pos = int(jnp.argwhere(cov_sorted > epsilon)[-1][0])
 
@@ -1420,7 +1420,7 @@ def get_feature_cov(
 
     idx = idx[:pos]
 
-    print(f"selected auto covariances {cov[idx]}")
+    print(f"selected auto covariances {cov_01[idx]}")
 
     trans = CvTrans.from_cv_function(_cv_slice, indices=idx)
 

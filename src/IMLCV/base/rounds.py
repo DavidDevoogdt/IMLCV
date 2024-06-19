@@ -10,6 +10,9 @@ from pathlib import Path
 
 import ase
 import jax
+import jax.experimental
+import jax.experimental.sparse
+import jax.experimental.sparse.bcoo
 import jax.numpy as jnp
 import numpy as np
 from equinox import Partial
@@ -44,6 +47,8 @@ from IMLCV.base.CVDiscovery import Transformer
 from molmod.units import kjmol
 from flax.struct import PyTreeNode
 from IMLCV.configs.config_general import Executors
+
+from IMLCV.implementations.CV import identity_trans
 
 
 @dataclass
@@ -311,82 +316,39 @@ class Rounds(ABC):
 
         return len(self._r_vals(c))
 
-    def add_cv(self, c=None):
+    def add_cv(self, collective_variable: CollectiveVariable, c=None):
         if c is None:
             c = self.cv + 1
-
-        dir = self.path(c=c)
-        if not dir.exists():
-            dir.mkdir(parents=True)
-
-    def add_cv_from_cv(self, cv: CollectiveVariable, c=None):
-        if c is None:
-            c = self.cv + 1
-
-        # attr = {}
 
         directory = self.path(c=c)
         if not os.path.isdir(directory):
             os.mkdir(directory)
 
-        cv.save(self.path(c=c) / "cv.json")
+        collective_variable.save(self.path(c=c) / "cv.json")
 
-        self.add_cv(c=c)
-
-    def add_round(self, stic: StaticMdInfo | None = None, c=None, r=None):
+    def add_round(self, bias: Bias, stic: StaticMdInfo | None = None, mde=None, c=None, r=None):
         if c is None:
             c = self.cv
 
         if r is None:
             r = self.get_round(c=c) + 1
 
+        if stic is None:
+            stic = self.static_trajectory_information(c=c)
+
+        if mde is None:
+            mde = self.get_engine(c=c)
+
+        mde.static_trajectory_info = stic
+        mde.bias = bias
+
         dir = self.path(c=c, r=r)
         if not dir.exists():
             dir.mkdir(parents=True)
 
-        if not (p := self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
-            assert stic is not None
-            stic.save(p)
-
-    def add_round_from_md(self, md: MDEngine, cv: int | None = None, r: int | None = None):
-        if cv is None:
-            c = self.cv
-        else:
-            c = cv
-
-        if r is None:
-            r = self._r_vals(c=c)[-1] + 1
-
-        assert c != -1, "run add_cv first"
-
-        directory = self.path(c=c, r=r)
-        if not os.path.isdir(directory):
-            os.mkdir(directory)
-
-        name_md = directory / "engine.json"
-        name_bias = directory / "bias.json"
-        md.save(name_md)
-        md.bias.save(name_bias)
-
-        self.add_round(stic=md.static_trajectory_info, r=r, c=c)
-
-    def add_md(
-        self,
-        i,
-        d: TrajectoryInfo | None = None,
-        bias: str | None = None,
-        r=None,
-        c=None,
-    ):
-        if c is None:
-            c = self.cv
-
-        if r is None:
-            r = self.get_round(c=c)
-
-        if not (p := self.path(c=c, r=r, i=i) / "trajectory_info.h5").exists():
-            assert d is not None
-            d.save(filename=p)
+        stic.save(self.path(c=c, r=r) / "static_trajectory_info.h5")
+        bias.save(self.path(c=c, r=r) / "bias.json")
+        mde.save(self.path(c=c, r=r) / "engine.json")
 
     ######################################
     #             retrieval              #
@@ -500,7 +462,8 @@ class Rounds(ABC):
         macro_chunk=2000,
         macro_chunk_nl=5000,
         only_update_nl=False,
-        divide_by_histogram=False,
+        divide_by_histogram=True,
+        n_max=30,
     ) -> data_loader_output:
         # weights = []
 
@@ -659,7 +622,7 @@ class Rounds(ABC):
                     chunk_size=chunk_size,
                     wham=True,
                     koopman=False,
-                    n_max=30,
+                    n_max=n_max,
                     wham_sub_grid=3,  # quick settings
                     verbose=verbose,
                     output_bincount=divide_by_histogram,
@@ -773,10 +736,10 @@ class Rounds(ABC):
         if get_bias_list:
             out_biases = []
 
-        for wi, spi in zip(weights, sp):
+        for select_weight, spi in zip(weights, sp):
             assert (
-                wi.shape[0] == spi.shape[0]
-            ), f"weights and sp shape are different: {wi.shape=} {StopAsyncIteration.shape=}"
+                select_weight.shape[0] == spi.shape[0]
+            ), f"weights and sp shape are different: {select_weight.shape=} {StopAsyncIteration.shape=}"
 
         total = sum([max(a.shape[0] - lag_n, 0) for a in sp])
 
@@ -793,36 +756,38 @@ class Rounds(ABC):
         if split_data:
             frac = out / total
 
-            for n, wi in enumerate(weights):
-                ow = None
+            for n, select_weight in enumerate(weights):
+                reweight = None
 
-                if wi is None:
+                if select_weight is None:
                     probs = None
                 else:
                     if lag_n != 0:
-                        wio = wi[:-lag_n]
+                        select_weight = select_weight[:-lag_n]
                     else:
-                        wio = wi
+                        select_weight = select_weight
 
-                    # if divide_by_histogram:
-                    #     wi_bc = weights_bincount[n]
-                    #     if lag_n != 0:
-                    #         wi_bc = wi_bc[:-lag_n]
+                    reweight = jnp.ones_like(select_weight)
 
-                    #     ow = wi_bc
+                    if divide_by_histogram:
+                        wi_bc = weights_bincount[n]
+                        if lag_n != 0:
+                            wi_bc = wi_bc[:-lag_n]
 
-                    #     wi /= wi_bc
+                        new_select_weight = select_weight / wi_bc
+                        new_reweight = reweight * (select_weight / new_select_weight)
+
+                        reweight = new_reweight
+                        select_weight = new_select_weight
 
                     if T_scale != 1:
-                        wi_orig = wio
+                        new_select_weight = select_weight ** (1 / T_scale)
+                        new_reweight = reweight * (select_weight / new_select_weight)
 
-                        wio = wio ** (1 / T_scale)
-                        ow = wi_orig / wio
+                        reweight = new_reweight
+                        select_weight = new_select_weight
 
-                    else:
-                        ow = jnp.ones_like(wi)
-
-                    probs = wio / jnp.sum(wio)
+                    probs = select_weight / jnp.sum(select_weight)
 
                 ni = int(frac * (sp[n].shape[0] - lag_n))
 
@@ -838,13 +803,13 @@ class Rounds(ABC):
                     len=sp[n].shape[0] - lag_n,
                 )
 
-                if ow is None:
-                    ow = jnp.ones_like(weights[n][indices])
+                if reweight is None:
+                    reweight = jnp.ones_like(weights[n][indices])
 
                 out_sp.append(sp[n][indices])
                 out_cv.append(cv[n][indices])
                 out_ti.append(ti[n][indices])
-                out_weights.append(ow)
+                out_weights.append(reweight)
 
                 if time_series:
                     out_sp_t.append(sp[n][indices + lag_n])
@@ -852,46 +817,51 @@ class Rounds(ABC):
                     out_ti_t.append(ti[n][indices + lag_n])
 
         else:
-            o_w: list[jax.Array] = None
+            reweight: list[jax.Array] = None
 
             if weights[0] is None:
                 probs = None
             else:
                 if lag_n == 0:
-                    wi = jnp.hstack(weights)
+                    select_weight = jnp.hstack(weights)
                 else:
                     w = []
 
-                    for n, wi in enumerate(weights):
-                        if wi.shape[0] <= lag_n:
-                            print(f"not enough data points for lag_n {wi.shape[0]} <= {lag_n}")
+                    if divide_by_histogram:
+                        w_bc = []
+
+                    for n, select_weight in enumerate(weights):
+                        if select_weight.shape[0] <= lag_n:
+                            print(f"not enough data points for lag_n {select_weight.shape[0]} <= {lag_n}")
                             continue
 
-                        wio = wi[:-lag_n]
+                        wio = select_weight[:-lag_n]
 
-                        if T_scale != 1:
-                            wi_orig = wio
-
-                            wio = wio ** (1 / T_scale)
-                            ow = wi_orig / wio
-
-                        else:
-                            ow = jnp.ones_like(wi)
-
-                        # if divide_by_histogram:
-                        #     wbi = weights_bincount[n][:-lag_n]
-                        #     wio /= wbi
+                        if divide_by_histogram:
+                            w_bc.append(weights_bincount[n][:-lag_n])
 
                         w.append(wio)
 
-                        if o_w is None:
-                            o_w = [ow]
-                        else:
-                            o_w.append(ow)
+                    select_weight = jnp.hstack(w)
+                    reweight = jnp.ones_like(select_weight)
 
-                    wi = jnp.hstack(w)
+                    if divide_by_histogram:
+                        wi_bc = jnp.hstack(w_bc)
 
-                probs = wi / jnp.sum(wi)
+                        new_select_weight = select_weight / wi_bc
+                        new_reweight = reweight * (select_weight / new_select_weight)
+
+                        reweight = new_reweight
+                        select_weight = new_select_weight
+
+                    if T_scale != 1:
+                        new_select_weight = select_weight ** (1 / T_scale)
+                        new_reweight = reweight * (select_weight / new_select_weight)
+
+                        reweight = new_reweight
+                        select_weight = new_select_weight
+
+                probs = select_weight / jnp.sum(select_weight)
 
                 print(f"probs = {probs.shape}  {out=} {total=} ")
 
@@ -917,7 +887,8 @@ class Rounds(ABC):
             for n, (sp_n, cv_n, ti_n) in enumerate(zip(sp, cv, ti)):
                 n_i = sp_n.shape[0] - lag_n
 
-                index = indices[jnp.logical_and(count <= indices, indices < count + n_i)] - count
+                indices_full = indices[jnp.logical_and(count <= indices, indices < count + n_i)]
+                index = indices_full - count
 
                 if len(index) == 0:
                     count += n_i
@@ -928,10 +899,10 @@ class Rounds(ABC):
                 cv_trimmed.append(cv_n[index])
                 ti_trimmed.append(ti_n[index])
 
-                if o_w is None:
+                if reweight is None:
                     weights_trimmed.append(jnp.ones_like(weights[n][index]))
                 else:
-                    weights_trimmed.append(o_w[n][index])
+                    weights_trimmed.append(reweight[indices_full])
 
                 if time_series:
                     sp_trimmed_t.append(sp_n[index + lag_n])
@@ -1125,6 +1096,16 @@ class Rounds(ABC):
             folder=self.folder,
         )
 
+    def static_trajectory_information(self, c=None, r=None) -> StaticMdInfo:
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+        folder = self.path(c=c, r=r)
+        return StaticMdInfo.load(folder / "static_trajectory_info.h5")
+
     def _round_information(
         self,
         c: int | None = None,
@@ -1294,84 +1275,42 @@ class Rounds(ABC):
         if cv_round is None:
             cv_round = self.cv
 
-        round = self.get_round(c=cv_round)
+        r = self.get_round(c=cv_round)
 
-        if isinstance(KEY, int):
-            KEY = jax.random.PRNGKey(KEY)
+        common_bias_name = self.full_path(self._name_bias(c=cv_round, r=r))
+        common_md_name = self.full_path(self._name_md(c=cv_round, r=r))
 
-        common_bias_name = self.full_path(self._name_bias(c=cv_round, r=round))
-        common_md_name = self.full_path(self._name_md(c=cv_round, r=round))
+        md_engine = MDEngine.load(common_md_name)
+
+        pn = self.path(c=cv_round, r=r)
+
+        out = bash_app_python(
+            Rounds._get_init,
+            executors=Executors.training,
+        )(
+            rounds=self,
+            KEY=KEY,
+            ignore_invalid=ignore_invalid,
+            only_finished=only_finished,
+            min_traj_length=min_traj_length,
+            recalc_cv=recalc_cv,
+            T_scale=T_scale,
+            chunk_size=chunk_size,
+            md_trajs=md_trajs,
+            cv_round=cv_round,
+            biases=biases,
+            sp0=sp0,
+            common_bias_name=common_bias_name,
+            r=r,
+            execution_folder=pn,
+        ).result()
+
         from parsl.dataflow.dflow import AppFuture
 
         tasks: list[tuple[int, AppFuture]] | None = None
         plot_tasks = []
-        md_engine = MDEngine.load(common_md_name)
 
-        sp0_provided = sp0 is not None
-
-        if not sp0_provided:
-            dlo_data = self.data_loader(
-                num=5,
-                out=10000,
-                split_data=False,
-                new_r_cut=None,
-                ignore_invalid=ignore_invalid,
-                md_trajs=md_trajs,
-                cv_round=cv_round,
-                min_traj_length=min_traj_length,
-                recalc_cv=recalc_cv,
-                only_finished=only_finished,
-                weight=True,
-                T_scale=T_scale,
-                time_series=False,
-                # lag_n=10,
-                chunk_size=chunk_size,
-            )
-
-            # get the weights of the points
-
-            sp_stack = SystemParams.stack(*dlo_data.sp)
-            cv_stack = CV.stack(*dlo_data.cv)
-            weights = jnp.hstack(dlo_data.weights())  # retrieve weights
-        else:
-            assert (
-                sp0.shape[0] == len(biases)
-            ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
-
-        for i, bias in enumerate(biases):
-            path_name = self.path(c=cv_round, r=round, i=i)
-            if not os.path.exists(path_name):
-                os.mkdir(path_name)
-
-            b = CompositeBias.create([Bias.load(common_bias_name), bias])
-
-            b_name = path_name / "bias.json"
-            b_name_new = path_name / "bias_new.json"
-            b.save(b_name)
-
-            traj_name = path_name / "trajectory_info.h5"
-
-            if not sp0_provided:
-                # reweigh data points according to new bias
-                probs = weights * jnp.exp(
-                    -bias.compute_from_cv(cvs=cv_stack, chunk_size=chunk_size)[0] / (dlo_data.sti.T * boltzmann)
-                )
-                probs = probs / jnp.sum(probs)
-
-                KEY, k = jax.random.split(KEY, 2)
-                index = jax.random.choice(
-                    a=probs.shape[0],
-                    key=k,
-                    p=probs,
-                )
-
-                spi = sp_stack[index]
-
-            else:
-                spi = sp0[i]
-                # cvi = "unknown"
-                spi = spi.unbatch()
-
+        for i, (spi, bi, traj_name, b_name, b_name_new, path_name) in enumerate(zip(*out)):
             future = bash_app_python(
                 Rounds.run_md,
                 pass_files=True,
@@ -1408,30 +1347,21 @@ class Rounds(ABC):
         # wait for tasks to finish
         for i, future in tasks:
             try:
-                d = future.result()
+                future.result()
 
             except Exception as _:
-                print(f"got exception  while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
+                print(f"got exception  while collecting md {i}, round {r}, cv {cv_round}, continuing anyway")
 
                 # raise e
                 continue
-
-            self.add_md(
-                d=d,
-                bias=self.rel_path(Path(future.outputs[0].filename)),
-                i=i,
-                c=cv_round,
-            )
 
         # wait for plots to finish
         if plot and wait_for_plots:
             for i, future in enumerate(plot_tasks):
                 try:
-                    d = future.result()
+                    future.result()
                 except Exception as _:
-                    print(
-                        f"got exception  while trying to collect plot of {i},round {round}, cv {cv_round}, continuing "
-                    )
+                    print(f"got exception  while trying to collect plot of {i},round {r}, cv {cv_round}, continuing ")
 
     def continue_run(
         self,
@@ -1506,12 +1436,7 @@ class Rounds(ABC):
         for i, future in tasks:
             try:
                 d = future.result()
-                self.add_md(
-                    d=d,
-                    bias=self.rel_path(Path(future.outputs[0].filename)),
-                    i=i,
-                    c=cv_round,
-                )
+
             except Exception as e:
                 print(f"got exception {e} while collecting md {i}, round {round}, cv {cv_round}, continuing anyway")
 
@@ -1519,9 +1444,108 @@ class Rounds(ABC):
         if plot and wait_for_plots:
             for i, future in enumerate(plot_tasks):
                 try:
-                    d = future.result()
+                    future.result()
                 except Exception as e:
                     print(f"got exception {e} while trying to collect plot of {i}, continuing ")
+
+    @staticmethod
+    def _get_init(
+        rounds: Rounds,
+        KEY,
+        ignore_invalid=False,
+        only_finished=True,
+        min_traj_length=None,
+        recalc_cv=False,
+        T_scale=10,
+        chunk_size=None,
+        md_trajs=None,
+        cv_round=None,
+        biases=None,
+        sp0=None,
+        common_bias_name=None,
+        r=None,
+    ):
+        sps = []
+        bs = []
+        traj_names = []
+        b_names = []
+        b_names_new = []
+        path_names = []
+
+        sp0_provided = sp0 is not None
+
+        if not sp0_provided:
+            dlo_data = rounds.data_loader(
+                num=5,
+                out=10000,
+                split_data=False,
+                new_r_cut=None,
+                ignore_invalid=ignore_invalid,
+                md_trajs=md_trajs,
+                cv_round=cv_round,
+                min_traj_length=min_traj_length,
+                recalc_cv=recalc_cv,
+                only_finished=only_finished,
+                weight=True,
+                T_scale=T_scale,
+                time_series=False,
+                chunk_size=chunk_size,
+            )
+
+            # get the weights of the points
+
+            sp_stack = SystemParams.stack(*dlo_data.sp)
+            cv_stack = CV.stack(*dlo_data.cv)
+            weights = jnp.hstack(dlo_data.weights())  # retrieve weights
+        else:
+            assert (
+                sp0.shape[0] == len(biases)
+            ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
+
+        if isinstance(KEY, int):
+            KEY = jax.random.PRNGKey(KEY)
+
+        for i, bias in enumerate(biases):
+            path_name = rounds.path(c=cv_round, r=r, i=i)
+            if not os.path.exists(path_name):
+                os.mkdir(path_name)
+
+            b = CompositeBias.create([Bias.load(common_bias_name), bias])
+
+            b_name = path_name / "bias.json"
+            b_name_new = path_name / "bias_new.json"
+            b.save(b_name)
+
+            traj_name = path_name / "trajectory_info.h5"
+
+            if not sp0_provided:
+                # reweigh data points according to new bias
+                probs = weights * jnp.exp(
+                    -bias.compute_from_cv(cvs=cv_stack, chunk_size=chunk_size)[0] / (dlo_data.sti.T * boltzmann)
+                )
+                probs = probs / jnp.sum(probs)
+
+                KEY, k = jax.random.split(KEY, 2)
+                index = jax.random.choice(
+                    a=probs.shape[0],
+                    key=k,
+                    p=probs,
+                )
+
+                spi = sp_stack[index]
+
+            else:
+                spi = sp0[i]
+                spi = spi.unbatch()
+
+            sps.append(spi)
+            bs.append(b)
+            traj_names.append(traj_name)
+            b_names.append(b_name)
+            b_names_new.append(b_name_new)
+            path_names.append(path_name)
+
+        return sps, bs, traj_names, b_names, b_names_new, path_names
 
     @staticmethod
     def run_md(
@@ -1546,8 +1570,6 @@ class Rounds(ABC):
 
         md.run(steps)
         bias.save(outputs[0].filepath)
-        d = md.get_trajectory()
-        return d
 
     @staticmethod
     def plot_md_run(
@@ -1588,7 +1610,6 @@ class Rounds(ABC):
 
     def update_CV(
         self,
-        md: MDEngine,
         transformer: Transformer,
         dlo_kwargs=None,
         dlo: data_loader_output | None = None,
@@ -1642,7 +1663,6 @@ class Rounds(ABC):
 
         kw = dict(
             rounds=self,
-            md=md,
             transformer=transformer,
             dlo_kwargs=dlo_kwargs,
             dlo=dlo,
@@ -1668,16 +1688,17 @@ class Rounds(ABC):
         )
 
         if use_executor:
-            return bash_app_python(Rounds._update_CV, executors=Executors.training)(
+            bash_app_python(Rounds._update_CV, executors=Executors.training)(
                 execution_folder=self.path(c=cv_round_from), **kw
             ).result()
 
-        return Rounds._update_CV(**kw)
+            return
+
+        Rounds._update_CV(**kw)
 
     @staticmethod
     def _update_CV(
         rounds: Rounds,
-        md: MDEngine,
         transformer: Transformer,
         dlo_kwargs={},
         dlo: data_loader_output | None = None,
@@ -1729,8 +1750,7 @@ class Rounds(ABC):
         )
 
         # update state
-        return rounds.__update_CV(
-            md=md,
+        rounds.__update_CV(
             new_collective_variable=new_collective_variable,
             new_bias=new_bias,
             cv_round_from=cv_round_from,
@@ -1743,7 +1763,6 @@ class Rounds(ABC):
 
     def transform_CV(
         self,
-        md: MDEngine,
         cv_trans: CvTrans,
         dlo_kwargs=None,
         dlo: data_loader_output | None = None,
@@ -1779,7 +1798,7 @@ class Rounds(ABC):
         #
         if plot:
             Transformer.plot_app(
-                collective_variables=[md.bias.collective_variable, collective_variable],
+                collective_variables=[dlo.collective_variable, collective_variable],
                 cv_data=[dlo.cv, x],
                 duplicate_cv_data=True,
                 T=dlo.sti.T,
@@ -1791,8 +1810,7 @@ class Rounds(ABC):
                 vmax=vmax,
             )
 
-        md = self.__update_CV(
-            md=md,
+        self.__update_CV(
             new_collective_variable=collective_variable,
             new_bias=bias,
             cv_round_from=cv_round_from,
@@ -1801,11 +1819,8 @@ class Rounds(ABC):
             new_r_cut=new_r_cut,
         )
 
-        return md
-
     def __update_CV(
         rounds: Rounds,
-        md: MDEngine,
         new_collective_variable: CollectiveVariable,
         new_bias: Bias,
         cv_round_from: int,
@@ -1818,11 +1833,16 @@ class Rounds(ABC):
         if new_r_cut is None:
             new_r_cut = dlo.sti.r_cut
 
-        rounds.add_cv_from_cv(new_collective_variable, c=cv_round_from + 1)
-        md.bias = new_bias
-        md.static_trajectory_info.r_cut = new_r_cut
+        rounds.add_cv(new_collective_variable, c=cv_round_from + 1)
 
-        rounds.add_round_from_md(md)
+        stic = rounds.static_trajectory_information(c=cv_round_from)
+        stic.r_cut = new_r_cut
+
+        rounds.add_round(
+            bias=new_bias,
+            stic=stic,
+            mde=rounds.get_engine(c=cv_round_from),
+        )
 
         if save_samples:
             first = True
@@ -1830,17 +1850,15 @@ class Rounds(ABC):
             if save_multiple_cvs:
                 for dlo_i, cv_new_i in zip(iter(dlo), cvs_new):
                     if not first:
-                        md.bias = NoneBias.create(new_collective_variable)
-                        rounds.add_cv_from_cv(new_collective_variable)
-                        md.static_trajectory_info.r_cut = new_r_cut
-                        rounds.add_round_from_md(md)
+                        rounds.add_cv(new_collective_variable)
+                        rounds.add_round(bias=NoneBias.create(new_collective_variable), stic=stic)
 
                     rounds._copy_from_previous_round(
                         dlo=dlo_i,
                         new_cvs=[cv_new_i],
                         cv_round=cv_round_from,
                     )
-                    rounds.add_round_from_md(md)
+                    rounds.add_round(bias=new_bias, stic=stic)
 
                     first = False
 
@@ -1850,8 +1868,8 @@ class Rounds(ABC):
                     new_cvs=cvs_new,
                     cv_round=cv_round_from,
                 )
-                rounds.add_round_from_md(md)
-        return md
+
+                rounds.add_round(bias=new_bias, stic=stic)
 
     def _copy_from_previous_round(
         self,
@@ -1889,12 +1907,7 @@ class Rounds(ABC):
                 size=traj_info._size,
             )
 
-            self.add_md(
-                i=i,
-                d=new_traj_info,
-                bias=None,
-            )
-
+            new_traj_info.save(round_path / "trajectory_info.h5")
             self.finish_data(c=self.cv, r=0, i=i)
 
             if invalidate:
@@ -2045,12 +2058,14 @@ class data_loader_output:
         indicator_CV=True,
         wham_sub_grid=3,
         wham_eps=1e-6,
+        koopman_eps=1e-10,
         cv_0: list[CV] | None = None,
         cv_t: list[CV] | None = None,
         force_recalc=False,
         macro_chunk=10000,
         verbose=False,
         output_bincount=False,
+        max_features_koopman=100,
     ) -> list[jax.Array]:
         if cv_0 is None:
             cv_0 = self.cv
@@ -2277,6 +2292,8 @@ class data_loader_output:
             if verbose:
                 print("koopman weights")
 
+            tr = None
+
             if indicator_CV:
                 grid_nums, grid_nums_t = self.apply_cv_trans(
                     closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk
@@ -2295,17 +2312,22 @@ class data_loader_output:
 
                     return cv.replace(cv=out)
 
-                if verbose:
-                    print("Calculating indicator CVs")
+                # if verbose:
+                #     print("Calculating indicator CVs")
 
-                cv_km, cv_km_t = self.apply_cv_trans(
-                    get_indicator,
-                    grid_nums,
-                    grid_nums_t,
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
-                    verbose=verbose,
-                )
+                # cv_km, cv_km_t = self.apply_cv_trans(
+                #     get_indicator,
+                #     grid_nums,
+                #     grid_nums_t,
+                #     chunk_size=chunk_size,
+                #     macro_chunk=macro_chunk,
+                #     verbose=verbose,
+                # )
+
+                cv_km = grid_nums
+                cv_km_t = grid_nums_t
+
+                tr = get_indicator
 
             else:
                 cv_km = cv_0
@@ -2326,6 +2348,9 @@ class data_loader_output:
                 macro_chunk=macro_chunk,
                 out_dim=10,
                 verbose=verbose,
+                eps=koopman_eps,
+                trans=tr,
+                max_features=max_features_koopman,
             )
             if verbose:
                 print("koopman_weight")
@@ -2378,33 +2403,30 @@ class data_loader_output:
         canoncial_signs=True,
         verbose=False,
         transform_cv=True,
+        sparse=False,
+        trans=None,
     ):
         print("whitening: getting covariance")
-        cov = data_loader_output._get_covariance(
+        cov = Covariances.create(
             cv_0,
             cv_tau,
             w,
             calc_pi=True,
             symmetric=symmetric,
+            trans=trans,
         )
-        C0 = cov.C00
 
-        # TODO: tends to hang here due to parsl forking. see https://github.com/google/jax/issues/1805#issuecomment-561244991 and https://github.com/Parsl/parsl/issues/2343
-        # l, q = jnp.linalg.eigh(C0)
-
-        l, q = jnp.linalg.eigh(C0)
-
-        mask = l >= eps
-        if verbose:
-            print(f"whitening: {jnp.sum(mask)}/{mask.shape[0]} eigenvalues larger than {eps=}")
-
-        l = jnp.where(mask, l, 0)
+        l, q, _ = cov.diagonalize(
+            "C00",
+            epsilon=eps,
+            out_dim=max_features,
+        )
 
         if canoncial_signs:
             signs = jax.vmap(lambda q: jnp.sign(q[jnp.argmax(jnp.abs(q))]), in_axes=1)(q)
             q = jnp.einsum("ij,j->ij", q, signs)
 
-        l_inv_sqrt = jnp.where(l > eps, 1 / jnp.sqrt(l), 0)
+        l_inv_sqrt = 1 / jnp.sqrt(l)
 
         transform_maf = CvTrans.from_cv_function(
             data_loader_output._transform,
@@ -2413,520 +2435,27 @@ class data_loader_output:
             q=jnp.einsum("ij,j->ij", q, l_inv_sqrt),
             pi=cov.pi_0,
         )
+
         if verbose:
             print("applying transformation")
 
         if transform_cv:
+            if trans is None:
+                t = transform_maf
+            else:
+                t = trans * transform_maf
+
             cv_0, cv_tau = data_loader_output._apply(
                 x=cv_0,
                 x_t=cv_tau,
                 nl=None,
                 nl_t=None,
-                f=lambda x, nl: transform_maf.compute_cv_trans(x, nl, chunk_size=chunk_size)[0],
+                f=lambda x, nl: t.compute_cv_trans(x, nl, chunk_size=chunk_size)[0],
                 macro_chunk=macro_chunk,
                 verbose=False,
             )
 
-        return cv_0, cv_tau, transform_maf, cov.pi_0, q, l, mask
-
-    @staticmethod
-    def _get_covariance(
-        cv_0: list[CV],
-        cv_1: list[CV] = None,
-        w: list[Array] | None = None,
-        calc_pi=False,
-        symmetric=True,
-        only_diag=False,
-    ) -> data_loader_output._Covariances:
-        n = sum([cvi.shape[0] for cvi in cv_0])
-        m = cv_0[0].shape[1]
-
-        time_series = cv_1 is not None
-
-        if cv_1 is None:
-            cv_1 = [None] * len(cv_0)
-
-        if w is None:
-            w = [jnp.ones((cvi.shape[0],)) / n for cvi in cv_0]
-
-        pi_0 = jnp.zeros((cv_0[0].shape[1],))
-        if time_series:
-            pi_1 = jnp.zeros((cv_0[0].shape[1],))
-        else:
-            pi_1 = None
-
-        for cv_i, cv_i_t, wi in zip(cv_0, cv_1, w):
-            assert cv_i.shape[1] == m
-
-            if symmetric:
-                assert time_series
-
-                if calc_pi:
-                    pi_0 += jnp.einsum("ni,n->i", 0.5 * (cv_i.cv + cv_i_t.cv), wi)
-
-            else:
-                if calc_pi:
-                    pi_0 += jnp.einsum("ni,n->i", cv_i.cv, wi)
-
-                    if time_series:
-                        pi_1 += jnp.einsum("ni,n->i", cv_i_t.cv, wi)
-
-        if symmetric:
-            pi_1 = pi_0
-
-        if only_diag:
-            str_0 = "ni,n,ni->i"
-            shape = (m,)
-        else:
-            str_0 = "ni,n,nj->ij"
-            shape = (m, m)
-
-        C00 = jnp.zeros(shape)
-        if time_series:
-            C01 = jnp.zeros(shape)
-            C11 = jnp.zeros(shape)
-        else:
-            C01 = None
-            C11 = None
-
-        for cv_i, cv_i_t, wi in zip(cv_0, cv_1, w):
-            assert cv_i.shape[1] == m
-
-            x = cv_i.cv - pi_0
-            if time_series:
-                y = cv_i_t.cv - pi_1
-
-            if symmetric:
-                C00 += 0.5 * (jnp.einsum(str_0, x, wi, x) + jnp.einsum(str_0, y, wi, y))
-                if time_series:
-                    C01 += 0.5 * (jnp.einsum(str_0, x, wi, y) + jnp.einsum(str_0, y, wi, x))
-            else:
-                C00 += jnp.einsum(str_0, x, wi, x)
-                if time_series:
-                    C01 += jnp.einsum(str_0, x, wi, y)
-                    C11 += jnp.einsum(str_0, y, wi, y)
-
-        if symmetric:
-            C11 = C00
-
-        return data_loader_output._Covariances(C00=C00, C01=C01, C11=C11, pi_0=pi_0, pi_1=pi_1)
-
-    class _Covariances(PyTreeNode):
-        C00: jax.Array
-        C01: jax.Array
-        C11: jax.Array
-        pi_0: jax.Array
-        pi_1: jax.Array
-
-    class _KoopmanModel(PyTreeNode):
-        pi_0: jax.Array
-        pi_1: jax.Array
-        q_0: jax.Array
-        q_1: jax.Array
-        l_0: jax.Array
-        l_1: jax.Array
-
-        U: jax.Array
-        s: jax.Array
-        Vh: jax.Array
-
-        cv_0: list[CV]
-        cv_tau: list[CV]
-
-        w: list[jax.Array] | None = None
-        eps: float = 1e-10
-
-        add_1: bool = False
-        max_features: int = 2000
-        out_dim: int | None = None
-        method: str = "tcca"
-
-        tau: float | None = None
-
-        @staticmethod
-        def create(
-            w: list[jax.Array] | None,
-            cv_0: list[CV],
-            cv_tau: list[CV],
-            add_1=False,
-            eps=1e-10,
-            method="tcca",
-            symmetric=False,
-            out_dim=None,
-            koopman_weight=False,
-            max_features=None,
-            tau=None,
-            macro_chunk=10000,
-            chunk_size=None,
-            verbose=False,
-        ):
-            if max_features is None:
-                max_features = cv_0[0].shape[1]
-
-            if method == "tica":
-                (cv0_white, cv_tau_white, transform_maf, pi, q, l, mask) = data_loader_output._whiten(
-                    cv_0=cv_0,
-                    cv_tau=cv_tau,
-                    symmetric=symmetric,
-                    w=w,
-                    add_1=add_1,
-                    eps=eps,
-                    max_features=max_features,
-                    verbose=verbose,
-                )
-
-                # p = jnp.abs(eigval) > 1 + 1e-10
-                # in_bounds = jnp.sum(p) == 0
-                cov = data_loader_output._get_covariance(
-                    cv_0=cv0_white,
-                    cv_1=cv_tau_white,
-                    w=w,
-                    calc_pi=False,
-                    symmetric=symmetric,
-                )
-
-                if symmetric:
-                    k, u = jnp.linalg.eigh(cov.C01)
-                else:
-                    k, u = jnp.linalg.eig(cov.C01)
-
-                # reverse order
-                k = k[::-1]
-                u = u[:, ::-1]
-
-                pi_0, pi_1 = pi, pi
-                q_0, q_1 = q, q
-                l_0, l_1 = l, l
-                U = u
-                s = k
-                Vh = jnp.linalg.inv(u)
-
-            elif method == "tcca":
-                (cv0_white, _, transform_maf_0, pi_0, q_0, l_0, mask_0) = data_loader_output._whiten(
-                    cv_0=cv_0,
-                    w=w,
-                    eps=eps,
-                    max_features=max_features,
-                    add_1=add_1,
-                    macro_chunk=macro_chunk,
-                    chunk_size=chunk_size,
-                    verbose=verbose,
-                )
-
-                (cv_tau_white, _, transform_maf_1, pi_1, q_1, l_1, mask_1) = data_loader_output._whiten(
-                    cv_0=cv_tau,
-                    w=w,
-                    eps=eps,
-                    max_features=max_features,
-                    add_1=add_1,
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
-                    verbose=verbose,
-                )
-
-                if verbose:
-                    print("koopman':gettig covariance")
-
-                cov = data_loader_output._get_covariance(
-                    cv_0=cv0_white,
-                    cv_1=cv_tau_white,
-                    w=w,
-                    symmetric=False,
-                    calc_pi=False,
-                )
-                if verbose:
-                    print("koopman': SVD")
-
-                K = cov.C01
-
-                # if out_dim is None:
-                U, s, Vh = jnp.linalg.svd(K.T)
-
-                # else:
-                #     od = out_dim
-                #     if add_1:
-                #         od += 1
-
-                #     U, s, Vh = jnp.linalg.svd(
-                #         K.T,
-                #         subset_by_index=(0, od),
-                #         full_matrices=False,
-                #     )
-                if verbose:
-                    print(f"{s[0:10]=}")
-
-            else:
-                raise ValueError(f"method {method} not known")
-
-            km = data_loader_output._KoopmanModel(
-                pi_0=pi_0,
-                pi_1=pi_1,
-                q_0=q_0,
-                q_1=q_1,
-                l_0=l_0,
-                l_1=l_1,
-                U=U,
-                s=s,
-                Vh=Vh,
-                cv_0=cv_0,
-                cv_tau=cv_tau,
-                w=w,
-                add_1=add_1,
-                max_features=max_features,
-                out_dim=out_dim,
-                method=method,
-                tau=tau,
-            )
-
-            if koopman_weight:
-                km = km.weighted_model(
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
-                    verbose=verbose,
-                )
-
-            return km
-
-        @property
-        def _q0(self):
-            if self.add_1:
-                out = jnp.zeros((self.q_0.shape[0] + 1, self.q_0.shape[1] + 1))
-                out = out.at[1:, :-1].set(self.q_0)
-                out = out.at[0, -1].set(1)
-
-                return out
-            return self.q_0
-
-        @property
-        def _q1(self):
-            if self.add_1:
-                out = jnp.zeros((self.q_1.shape[0] + 1, self.q_1.shape[1] + 1))
-                out = out.at[1:, :-1].set(self.q_1)
-                out = out.at[0, -1].set(1)
-
-                return out
-            return self.q_1
-
-        @property
-        def _l0(self):
-            if self.add_1:
-                return jnp.hstack([self.l_0, jnp.array([1])])
-            return self.l_0
-
-        @property
-        def _l1(self):
-            if self.add_1:
-                return jnp.hstack([self.l_1, jnp.array([1])])
-            return self.l_1
-
-        def C00(self, pow=1):
-            return self._q0 @ jnp.diag(self.l0_pow(pow)) @ self._q0.T
-
-        def C11(self, pow=1):
-            return self._q1 @ jnp.diag(self.l1_pow(pow)) @ self._q1.T
-
-        def C01(self):
-            return (
-                self._q1
-                @ jnp.diag(self.l1_pow(1 / 2))
-                @ self.U
-                @ jnp.diag(self.s)
-                @ self.Vh
-                @ jnp.diag(self.l0_pow(1 / 2))
-                @ self._q0.T
-            )
-
-        def Tk(self, out_dim=None):
-            # Optimal Data-Driven Estimation of Generalized Markov State Models for Non-Equilibrium Dynamics eq. 30
-
-            if out_dim is None:
-                out_dim = self.U.shape[1]
-
-            return (
-                self.C11(pow=-1 / 2)
-                @ self.Vh.T[:, :out_dim]
-                @ jnp.diag(self.s[:out_dim])
-                @ self.U.T[:out_dim, :]
-                @ self.C00(pow=1 / 2)
-            )
-
-        def whiten_f(self):
-            return CvTrans.from_cv_function(
-                data_loader_output._transform,
-                static_argnames=["add_1"],
-                add_1=False,
-                q=self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)),
-                pi=self.pi_0,
-            )
-
-        def whiten_g(self):
-            return CvTrans.from_cv_function(
-                data_loader_output._transform,
-                static_argnames=["add_1"],
-                add_1=False,
-                q=self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)),
-                pi=self.pi_1,
-            )
-
-        def f(self, out_dim=None):
-            if self.add_1:
-                o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)[:-1]) @ self.U[:-1, 1:]
-            else:
-                o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)) @ self.U
-
-            if out_dim is not None:
-                o = o[:, :out_dim]
-
-            return CvTrans.from_cv_function(
-                data_loader_output._transform,
-                static_argnames=["add_1"],
-                add_1=False,
-                q=o,
-                pi=self.pi_0,
-            )
-
-        def g(self, out_dim):
-            if self.add_1:
-                o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)[:-1]) @ self.Vh[:-1, 1 : out_dim + 1]
-            else:
-                o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)) @ self.Vh[:, :out_dim]
-
-            return CvTrans.from_cv_function(
-                data_loader_output._transform,
-                static_argnames=["add_1"],
-                add_1=False,
-                q=o,
-                pi=self.pi_1,
-            )
-
-        def l0_pow(self, pow=1, add_1=None):
-            if pow < 0:
-                return jnp.where(self._l0 > self.eps, self._l0**pow, 0)
-
-            return self._l0**pow
-
-        def l1_pow(self, pow=1):
-            if pow < 0:
-                return jnp.where(self._l1 > self.eps, self._l1**pow, 0)
-
-            return self._l1**pow
-
-        def koopman_weight(self, verbose=False) -> list[jax.Array]:
-            # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
-
-            n = jnp.sum(jnp.abs(self.s - 1) < 1e-10)
-
-            if n == 0:
-                print(
-                    f"Largest eigenvalue in koopman model is {self.s[0]} instead of 1. Connsider adding constant function"
-                )
-                n = 1
-
-            if n > 1:
-                print(
-                    f"{n=} eigenvalues with eigenvalue 1 found. This means that there are {n} stationary disjoint distrubitions distributions in the system.  Taking average of eigenvalues"
-                )
-
-            if verbose:
-                print("getting eig A")
-            # TODO : simplify, no calc needed?
-            A = self.C00(pow=-1) @ self.C11() @ self.Tk(out_dim=n)
-            l, v = jnp.linalg.eig(A)
-
-            del A
-
-            # truncate to only real values
-            l = l[:n]
-            v = v[:, :n]
-
-            idx = jnp.argmin(jnp.abs(l - 1))
-
-            l0 = l[idx]
-
-            if not jnp.isclose(l0, 1, atol=1e-10):
-                print(f"no eigenvalue with value 1: {l0}")
-
-            idx2 = jnp.argwhere(jnp.abs(l - l0) < 1e-10)
-
-            if len(idx2) > 1:
-                # it doens't make sense to only take 1, as the order of eigenvlues is arbitrary
-                print(
-                    f"multiple eigenvalues close to {l0=} found: {l[idx2]}. This means that there are {len(idx2) } stationary disjoint distrubitions distributions in the system.  Taking average of eigenvalues"
-                )
-                v = jnp.real(v[:, idx2].mean(axis=1))
-            else:
-                v = jnp.real(v[:, idx])
-
-            print("got A ")
-
-            w = []
-
-            def _get_w(cv0_i: CV):
-                if self.add_1:
-                    return jnp.einsum("ni,i->n", cv0_i.cv, v[:-1]) + v[-1]
-                return jnp.einsum("ni,i->n", cv0_i.cv, v)
-
-            w = jnp.hstack([_get_w(cv0_i) for cv0_i in self.cv_0])
-
-            mask = w > 0
-
-            n1 = jnp.sum(mask)
-            n2 = jnp.sum(jnp.logical_not(mask))
-
-            if n2 > n1:
-                w = -w
-                mask = jnp.logical_not(mask)
-                n2, n1 = n1, n2
-
-            s = jnp.sum(w[mask])
-
-            w /= s
-
-            if not mask.all():
-                print(
-                    f"{ n2 }/{w.shape[0]} negative weights,  mean {  jnp.mean( w[ jnp.logical_not(mask) ])= }, min { jnp.min( w[ jnp.logical_not(mask) ])= }. Setting to zero",
-                )
-
-                w = w.at[w < 0].set(0)
-            else:
-                print("all weights positive")
-
-            return data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w)
-
-        def weighted_model(
-            self,
-            add_1=False,
-            chunk_size=None,
-            macro_chunk=10000,
-            verbose=False,
-        ) -> data_loader_output._KoopmanModel:
-            return data_loader_output._KoopmanModel.create(
-                w=self.koopman_weight(
-                    verbose=verbose,
-                ),
-                cv_0=self.cv_0,
-                cv_tau=self.cv_tau,
-                add_1=add_1,
-                eps=self.eps,
-                method=self.method,
-                symmetric=False,
-                out_dim=self.out_dim,
-                tau=self.tau,
-                macro_chunk=macro_chunk,
-                chunk_size=chunk_size,
-            )
-
-        def timescales(self):
-            s = self.s
-            if self.add_1:
-                s = s[1:]
-
-            tau = self.tau
-            if tau is None:
-                tau = 1
-                print("tau not set, assuming 1")
-
-            return -tau / jnp.log(s)
+        return cv_0, cv_tau, transform_maf, cov.pi_0, q, l
 
     def koopman_model(
         self,
@@ -2943,7 +2472,8 @@ class data_loader_output:
         chunk_size=None,
         macro_chunk=10000,
         verbose=False,
-    ) -> data_loader_output._KoopmanModel:
+        trans=None,
+    ) -> KoopmanModel:
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
         assert method in ["tica", "tcca"]
 
@@ -2957,7 +2487,7 @@ class data_loader_output:
             t = sum([cvi.shape[0] for cvi in cv_0])
             w = [jnp.ones((cvi.shape[0],)) / t for cvi in cv_0]
 
-        return data_loader_output._KoopmanModel.create(
+        return KoopmanModel.create(
             w=w,
             cv_0=cv_0,
             cv_tau=cv_tau,
@@ -2972,6 +2502,7 @@ class data_loader_output:
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=verbose,
+            trans=trans,
         )
 
     def filter_nans(
@@ -3396,3 +2927,601 @@ class data_loader_output:
 
         self.nl = nl
         self.nl_t = nl_t
+
+
+class KoopmanModel(PyTreeNode):
+    pi_0: jax.Array
+    pi_1: jax.Array
+    q_0: jax.Array
+    q_1: jax.Array
+    l_0: jax.Array
+    l_1: jax.Array
+
+    U: jax.Array
+    s: jax.Array
+    Vh: jax.Array
+
+    cv_0: list[CV]
+    cv_tau: list[CV]
+
+    w: list[jax.Array] | None = None
+    eps: float = 1e-10
+
+    add_1: bool = False
+    max_features: int = 2000
+    out_dim: int | None = None
+    method: str = "tcca"
+
+    tau: float | None = None
+
+    trans: CvTrans | None = None
+
+    @staticmethod
+    def create(
+        w: list[jax.Array] | None,
+        cv_0: list[CV],
+        cv_tau: list[CV],
+        add_1=False,
+        eps=1e-10,
+        method="tcca",
+        symmetric=False,
+        out_dim=None,
+        koopman_weight=False,
+        max_features=None,
+        tau=None,
+        macro_chunk=10000,
+        chunk_size=None,
+        verbose=False,
+        trans: CvTrans | None = None,
+    ):
+        if max_features is None:
+            max_features = cv_0[0].shape[1]
+
+        if method == "tica":
+            (cv0_white, cv_tau_white, transform_maf, pi, q, l) = data_loader_output._whiten(
+                cv_0=cv_0,
+                cv_tau=cv_tau,
+                symmetric=symmetric,
+                w=w,
+                add_1=add_1,
+                eps=eps,
+                max_features=max_features,
+                verbose=verbose,
+                trans=trans,
+            )
+
+            # p = jnp.abs(eigval) > 1 + 1e-10
+            # in_bounds = jnp.sum(p) == 0
+            cov = Covariances.create(
+                cv_0=cv0_white,
+                cv_1=cv_tau_white,
+                w=w,
+                calc_pi=False,
+                symmetric=symmetric,
+            )
+
+            k, u = cov.diagonalize(
+                "C01",
+                epsilon=eps,
+                out_dim=out_dim,
+            )
+
+            pi_0, pi_1 = pi, pi
+            q_0, q_1 = q, q
+            l_0, l_1 = l, l
+            U = u
+            s = k
+            Vh = jnp.linalg.inv(u)
+
+        elif method == "tcca":
+            (cv0_white, _, transform_maf_0, pi_0, q_0, l_0) = data_loader_output._whiten(
+                cv_0=cv_0,
+                w=w,
+                eps=eps,
+                max_features=max_features,
+                add_1=add_1,
+                macro_chunk=macro_chunk,
+                chunk_size=chunk_size,
+                verbose=verbose,
+                trans=trans,
+            )
+
+            (cv_tau_white, _, transform_maf_1, pi_1, q_1, l_1) = data_loader_output._whiten(
+                cv_0=cv_tau,
+                w=w,
+                eps=eps,
+                max_features=max_features,
+                add_1=add_1,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+                trans=trans,
+            )
+
+            if verbose:
+                print("koopman':gettig covariance")
+
+            cov = Covariances.create(
+                cv_0=cv0_white,
+                cv_1=cv_tau_white,
+                w=w,
+                symmetric=False,
+                calc_pi=False,
+            )
+
+            if verbose:
+                print("koopman': SVD")
+
+            # if out_dim is None:
+            U, s, Vh = jnp.linalg.svd(cov.C01)
+
+            if verbose:
+                print(f"{s[0:10]=}")
+
+        else:
+            raise ValueError(f"method {method} not known")
+
+        km = KoopmanModel(
+            pi_0=pi_0,
+            pi_1=pi_1,
+            q_0=q_0,
+            q_1=q_1,
+            l_0=l_0,
+            l_1=l_1,
+            U=U,
+            s=s,
+            Vh=Vh,
+            cv_0=cv_0,
+            cv_tau=cv_tau,
+            w=w,
+            add_1=add_1,
+            max_features=max_features,
+            out_dim=out_dim,
+            method=method,
+            tau=tau,
+            trans=trans,
+        )
+
+        if koopman_weight:
+            km = km.weighted_model(
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+            )
+
+        return km
+
+    @property
+    def _q0(self):
+        if self.add_1:
+            out = jnp.zeros((self.q_0.shape[0] + 1, self.q_0.shape[1] + 1))
+            out = out.at[1:, :-1].set(self.q_0)
+            out = out.at[0, -1].set(1)
+
+            return out
+        return self.q_0
+
+    @property
+    def _q1(self):
+        if self.add_1:
+            out = jnp.zeros((self.q_1.shape[0] + 1, self.q_1.shape[1] + 1))
+            out = out.at[1:, :-1].set(self.q_1)
+            out = out.at[0, -1].set(1)
+
+            return out
+        return self.q_1
+
+    @property
+    def _l0(self):
+        if self.add_1:
+            return jnp.hstack([self.l_0, jnp.array([1])])
+        return self.l_0
+
+    @property
+    def _l1(self):
+        if self.add_1:
+            return jnp.hstack([self.l_1, jnp.array([1])])
+        return self.l_1
+
+    def C00(self, pow=1):
+        return self._q0 @ jnp.diag(self.l0_pow(pow)) @ self._q0.T
+
+    def C11(self, pow=1):
+        return self._q1 @ jnp.diag(self.l1_pow(pow)) @ self._q1.T
+
+    def Tk(self, out_dim=None):
+        # Optimal Data-Driven Estimation of Generalized Markov State Models for Non-Equilibrium Dynamics eq. 30
+
+        if out_dim is None:
+            out_dim = self.U.shape[1]
+
+        return (
+            self._q1
+            @ jnp.diag(self.l1_pow(-1 / 2))
+            @ self.Vh.T[:, :out_dim]
+            @ jnp.diag(self.s[:out_dim])
+            @ self.U.T[:out_dim, :]
+            @ jnp.diag(self.l0_pow(1 / 2))
+            @ self._q0.T
+        )
+
+    def whiten_f(self):
+        return CvTrans.from_cv_function(
+            data_loader_output._transform,
+            static_argnames=["add_1"],
+            add_1=False,
+            q=self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)),
+            pi=self.pi_0,
+        )
+
+    def whiten_g(self):
+        return CvTrans.from_cv_function(
+            data_loader_output._transform,
+            static_argnames=["add_1"],
+            add_1=False,
+            q=self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)),
+            pi=self.pi_1,
+        )
+
+    def f(self, out_dim=None):
+        if self.add_1:
+            o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)[:-1]) @ self.U[:-1, 1:]
+        else:
+            o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)) @ self.U
+
+        if out_dim is not None:
+            o = o[:, :out_dim]
+
+        tr = CvTrans.from_cv_function(
+            data_loader_output._transform,
+            static_argnames=["add_1"],
+            add_1=False,
+            q=o,
+            pi=self.pi_0,
+        )
+
+        if self.trans is not None:
+            tr = self.trans * tr
+
+        return tr
+
+    def g(self, out_dim):
+        if self.add_1:
+            o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)[:-1]) @ self.Vh[:-1, 1 : out_dim + 1]
+        else:
+            o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)) @ self.Vh[:, :out_dim]
+
+        tr = CvTrans.from_cv_function(
+            data_loader_output._transform,
+            static_argnames=["add_1"],
+            add_1=False,
+            q=o,
+            pi=self.pi_1,
+        )
+
+        if self.trans is not None:
+            tr = self.trans * tr
+
+        return tr
+
+    def l0_pow(self, pow=1, add_1=None):
+        if pow < 0:
+            return jnp.where(self._l0 > self.eps, self._l0**pow, 0)
+
+        return self._l0**pow
+
+    def l1_pow(self, pow=1):
+        if pow < 0:
+            return jnp.where(self._l1 > self.eps, self._l1**pow, 0)
+
+        return self._l1**pow
+
+    def koopman_weight(self, verbose=False) -> list[jax.Array]:
+        # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
+
+        n = jnp.sum(jnp.abs(self.s - 1) < 1e-10)
+
+        if n == 0:
+            print(
+                f"Largest eigenvalue in koopman model is {self.s[0]} instead of 1. Connsider adding constant function"
+            )
+            n = 1
+
+        if n > 1:
+            print(
+                f"{n=} eigenvalues with eigenvalue 1 found. This means that there are {n} stationary disjoint distrubitions distributions in the system.  Taking average of eigenvalues"
+            )
+
+        if verbose:
+            print("getting eig A")
+        # TODO : simplify, no calc needed?
+        A = self.C00(pow=-1) @ self.C11() @ self.Tk(out_dim=n)
+        l, v = jnp.linalg.eig(A)
+
+        del A
+
+        # truncate to only real values
+        l = l[:n]
+        v = v[:, :n]
+
+        idx = jnp.argmin(jnp.abs(l - 1))
+
+        l0 = l[idx]
+
+        if not jnp.isclose(l0, 1, atol=1e-10):
+            print(f"no eigenvalue with value 1: {l0}")
+
+        idx2 = jnp.argwhere(jnp.abs(l - l0) < 1e-10)
+
+        if len(idx2) > 1:
+            # it doens't make sense to only take 1, as the order of eigenvlues is arbitrary
+            print(
+                f"multiple eigenvalues close to {l0=} found: {l[idx2]}. This means that there are {len(idx2) } stationary disjoint distrubitions distributions in the system.  Taking average of eigenvalues"
+            )
+            v = jnp.real(v[:, idx2].mean(axis=1))
+        else:
+            v = jnp.real(v[:, idx])
+
+        print("got A ")
+
+        w = []
+
+        def _get_w(cv0_i: CV):
+            if self.add_1:
+                return jnp.einsum("ni,i->n", cv0_i.cv, v[:-1]) + v[-1]
+            return jnp.einsum("ni,i->n", cv0_i.cv, v)
+
+        w = jnp.hstack([_get_w(cv0_i) for cv0_i in self.cv_0])
+
+        mask = w > 0
+
+        n1 = jnp.sum(mask)
+        n2 = jnp.sum(jnp.logical_not(mask))
+
+        if n2 > n1:
+            w = -w
+            mask = jnp.logical_not(mask)
+            n2, n1 = n1, n2
+
+        s = jnp.sum(w[mask])
+
+        w /= s
+
+        if not mask.all():
+            print(
+                f"{ n2 }/{w.shape[0]} negative weights,  mean {  jnp.mean( w[ jnp.logical_not(mask) ])= }, min { jnp.min( w[ jnp.logical_not(mask) ])= }. Setting to zero",
+            )
+
+            w = w.at[w < 0].set(0)
+        else:
+            print("all weights positive")
+
+        return data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w)
+
+    def weighted_model(
+        self,
+        add_1=False,
+        chunk_size=None,
+        macro_chunk=10000,
+        verbose=False,
+    ) -> KoopmanModel:
+        return KoopmanModel.create(
+            w=self.koopman_weight(
+                verbose=verbose,
+            ),
+            cv_0=self.cv_0,
+            cv_tau=self.cv_tau,
+            add_1=add_1,
+            eps=self.eps,
+            method=self.method,
+            symmetric=False,
+            out_dim=self.out_dim,
+            tau=self.tau,
+            macro_chunk=macro_chunk,
+            chunk_size=chunk_size,
+            trans=self.trans,
+        )
+
+    def timescales(self):
+        s = self.s
+        if self.add_1:
+            s = s[1:]
+
+        tau = self.tau
+        if tau is None:
+            tau = 1
+            print("tau not set, assuming 1")
+
+        return -tau / jnp.log(s)
+
+
+class Covariances(PyTreeNode):
+    C00: jax.Array
+    C01: jax.Array
+    C11: jax.Array
+    pi_0: jax.Array
+    pi_1: jax.Array
+
+    sparse: bool = False
+    only_diag: bool = False
+    trans: CvTrans | None = None
+
+    def create(
+        cv_0: list[CV],
+        cv_1: list[CV] | None = None,
+        w: list[Array] | None = None,
+        calc_pi=False,
+        symmetric=True,
+        macro_chunk=10000,
+        chunk_size=None,
+        only_diag=False,
+        sparse=False,
+        trans: CvTrans | None = None,
+    ) -> Covariances:
+        # TODO trans
+        n = sum([cvi.shape[0] for cvi in cv_0])
+
+        if trans is not None:
+            cv0_shape = jax.eval_shape(lambda x: trans.compute_cv_trans(x)[0].cv, cv_0[0]).shape
+        else:
+            cv0_shape = cv_0[0].shape
+
+        if cv_1 is not None:
+            if trans is not None:
+                cv1_shape = jax.eval_shape(lambda x: trans.compute_cv_trans(x)[0].cv, cv_1[0]).shape
+            else:
+                cv1_shape = cv_1[0].shape
+
+        time_series = cv_1 is not None
+
+        if w is None:
+            w = [jnp.ones((cvi.shape[0],)) / n for cvi in cv_0]
+
+        pi_0 = jnp.zeros((cv0_shape[1],))
+        if time_series:
+            pi_1 = jnp.zeros((cv1_shape[1],))
+        else:
+            pi_1 = None
+
+        def cov_pi(carry, z_chunk, w):
+            if time_series:
+                cv0, cv1 = z_chunk.split()
+                x0 = cv0.cv
+                x1 = cv1.cv
+            else:
+                x0 = z_chunk.cv
+
+            if only_diag:
+                str = "ni,ni,n->i"
+            else:
+                str = "ni,nj,n->ij"
+
+            C00 = jnp.einsum(str, x0, x0, w)
+            pi0 = jnp.einsum("ni,n->i", x0, w)
+
+            if time_series:
+                C01 = jnp.einsum(str, x0, x1, w)
+                C11 = jnp.einsum(str, x1, x1, w)
+
+                pi1 = jnp.einsum("ni,n->i", x1, w)
+
+            if time_series:
+                if carry is not None:
+                    C00 += carry[0]
+                    C01 += carry[1]
+                    C11 += carry[2]
+                    pi0 += carry[3]
+                    pi1 += carry[4]
+
+                return (C00, C01, C11, pi0, pi1)
+
+            if carry is not None:
+                C00 += carry[0]
+                pi0 += carry[1]
+
+            return (C00, pi0)
+
+        if cv_1 is not None:
+            # trick: combine cv_0 and cv_1. Apply trans to both and then split again
+
+            cv = [CV.combine(x, y) for x, y in zip(cv_0, cv_1)]
+
+            if trans is not None:
+                tr = trans + trans
+
+        else:
+            cv = cv_0
+
+            if trans is not None:
+                tr = trans
+
+        if trans is not None:
+
+            def f(x, _):
+                return tr.compute_cv_trans(x)[0]
+
+        else:
+
+            def f(x, _):
+                return x
+
+        out = macro_chunk_map(
+            f=f,
+            op=CV.stack,
+            y=cv,
+            nl=None,
+            macro_chunk=macro_chunk,
+            verbose=True,
+            chunk_func=cov_pi,
+            chunk_func_init_args=None,
+            w=w,
+        )
+
+        if time_series:
+            C00, C01, C11, pi_0, pi_1 = out
+
+        else:
+            C00, pi_0 = out
+            C01 = None
+            C11 = None
+            pi_1 = None
+
+        C00 -= jnp.outer(pi_0, pi_0)
+        if time_series:
+            C11 -= jnp.outer(pi_1, pi_1)
+            C01 -= jnp.outer(pi_0, pi_1)
+
+        return Covariances(
+            C00=C00,
+            C01=C01,
+            C11=C11,
+            pi_0=pi_0,
+            pi_1=pi_1,
+            sparse=sparse,
+            only_diag=only_diag,
+            trans=trans,
+        )
+
+    def diagonalize(self, choice, epsilon=1e-10, out_dim=None):
+        if choice == "C00":
+            C = self.C00
+            sym = True
+        elif choice == "C11":
+            C = self.C11
+            sym = True
+        elif choice == "C01":
+            C = self.C01
+            sym = False
+        elif choice == "C10":
+            C = self.C01.T
+            sym = False
+        else:
+            raise ValueError(f"choice {choice} not known")
+
+        if self.sparse:
+            raise NotImplementedError("sparse not implemented")
+
+        if sym:
+            k, u = jnp.linalg.eigh(C)
+        else:
+            k, u = jnp.linalg.eig(C)
+
+            idx = jnp.argsort(jnp.abs(k))
+            k = k[idx]
+            u = u[:, idx]
+
+        argmask = jnp.argwhere(jnp.abs(k) > epsilon).reshape(-1)
+
+        if len(argmask) == 0:
+            raise ValueError("no eigenvalues larger than epsilon")
+
+        if out_dim is not None:
+            if out_dim > len(argmask):
+                out_dim = len(argmask)
+
+            argmask = argmask[-(out_dim + 1) :]
+
+        k = k[argmask]
+        u = u[:, argmask]
+
+        return k, u, argmask

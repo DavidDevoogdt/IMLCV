@@ -348,7 +348,9 @@ def macro_chunk_map(
     nl: list[NeighbourList] | None,
     macro_chunk: int | None = 10000,
     verbose=False,
-    yield_chunk=False,
+    chunk_func=None,
+    chunk_func_init_args=None,
+    w: list[Array] | None = None,
 ):
     # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
 
@@ -366,6 +368,7 @@ def macro_chunk_map(
 
     y_chunk = []
     nl_chunk = [] if nl is not None else None
+    w_chunk = [] if w is not None else None
 
     tot_chunk = 0
     stack_dims_chunk = []
@@ -384,6 +387,7 @@ def macro_chunk_map(
 
             y_chunk.append(y[n])
             nl_chunk.append(nl[n]) if nl is not None else None
+            w_chunk.append(w[n]) if w is not None else None
 
             tot_chunk += s
             stack_dims_chunk.append(s)
@@ -408,11 +412,18 @@ def macro_chunk_map(
                     last_chunk_nl = nl_last[s_last:yls]
                     nl_chunk[-1] = nl_last[0:s_last]
 
+                if w is not None:
+                    w_last = w_chunk[-1]
+
+                    last_chunk_w = w_last[s_last:yls]
+                    w_chunk[-1] = w_last[0:s_last]
+
                 tot_chunk -= y_last.shape[0] - s_last
                 stack_dims_chunk[-1] = s_last
 
             y_stack = op(*y_chunk)
             nl_stack = NeighbourList.stack(*nl_chunk) if nl is not None else None
+            w_stack = jnp.hstack(w_chunk) if w is not None else None
 
             if verbose:
                 print(
@@ -426,7 +437,7 @@ def macro_chunk_map(
 
             tot_running += tot_chunk
 
-            if not yield_chunk:
+            if chunk_func is None:
                 if isinstance(z_chunk, CV):
                     z_chunk = z_chunk.replace(_stack_dims=stack_dims_chunk).unstack()
                 elif isinstance(z_chunk, NeighbourList):
@@ -465,14 +476,17 @@ def macro_chunk_map(
 
                     n_prev = n + 1
 
+                w_chunk = [] if w is not None else None
+
                 z.extend(z_chunk)
 
             else:
-                z.append(z_chunk)
+                chunk_func_init_args = chunk_func(chunk_func_init_args, z_chunk, w_stack)
 
                 if split_last:
                     y_chunk = [last_chunk_y]
                     nl_chunk = [last_chunk_nl] if nl is not None else None
+                    w_chunk = [last_chunk_w] if w is not None else None
 
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
@@ -482,18 +496,24 @@ def macro_chunk_map(
                 else:
                     y_chunk = []
                     nl_chunk = [] if nl is not None else None
+                    w_chunk = [] if w is not None else None
+
                     tot_chunk = 0
                     stack_dims_chunk = []
+
                     last_chunk_y = None
                     last_chunk_nl = None
+                    last_chunk_w = None
 
                     n_prev = n + 1
 
         if tot_chunk < macro_chunk and (tot_running + tot_chunk != tot):
             n += 1
 
-    if not yield_chunk:
+    if chunk_func is None:
         return z
+
+    return chunk_func_init_args
 
 
 class SystemParams(PyTreeNode):

@@ -64,8 +64,8 @@ def get_LDA_CV_round(tmpdir, lda_steps=1000) -> Rounds:
         refs = alanine_dipeptide_refs()
 
         rnds = Rounds.create(folder=folder)
-        rnds.add_cv_from_cv(cv=NoneCV())
-        rnds.add_round_from_md(mde)
+        rnds.add_cv(collective_variable=NoneCV())
+        rnds.add_round(bias=NoneBias.create(collective_variable=NoneCV()), sti=mde.static_trajectory_info, r=0)
 
         biases = []
         for _ in refs:

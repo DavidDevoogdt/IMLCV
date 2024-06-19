@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from molmod.units import kjmol
 from IMLCV.base.CV import CvTrans
+from IMLCV.base.bias import Bias
 
 
 @dataclass
@@ -26,15 +27,8 @@ class Scheme:
         CVs: list of CV instances.
     """
 
-    md: MDEngine
+    # md: MDEngine
     rounds: Rounds
-
-    @staticmethod
-    def from_rounds(rounds: Rounds, md=None) -> Scheme:
-        if md is None:
-            md = rounds.get_engine()
-
-        return Scheme(md=md, rounds=rounds)
 
     @staticmethod
     def from_refs(
@@ -43,12 +37,14 @@ class Scheme:
         refs: list[SystemParams] | None = None,
         steps=2e3,
     ) -> Scheme:
-        cv = mde.bias.collective_variable
+        bias = mde.bias
+
+        cv = bias.collective_variable
 
         rnds = Rounds.create(folder=folder)
-        rnds.add_cv_from_cv(cv=cv)
+        rnds.add_cv(collective_variable=cv)
 
-        rnds.add_round_from_md(mde, r=0)
+        rnds.add_round(bias=bias, stic=mde.static_trajectory_info, mde=mde, r=0)
 
         biases = []
         for _ in refs:
@@ -56,16 +52,33 @@ class Scheme:
 
         rnds.run_par(biases=biases, steps=steps, sp0=refs, plot=False)
 
-        rnds.add_round_from_md(mde)
+        rnds.add_round(bias=bias)
 
         return Scheme(rounds=rnds, md=mde)
 
-    def FESBias(self, rnd: int | None = None, cv_round: int | None = None, chunk_size=None, **plotkwargs):
+    def FESBias(
+        self,
+        rnd: int | None = None,
+        cv_round: int | None = None,
+        chunk_size=None,
+        **plotkwargs,
+    ) -> Bias:
         """replace the current md bias with the computed FES from current
         round."""
-        obs = ThermoLIB.create(self.rounds, rnd=rnd, cv_round=cv_round)
-        fesBias = obs.fes_bias(chunk_size=chunk_size, **plotkwargs)
-        self.md = self.md.new_bias(fesBias)
+
+        return ThermoLIB.create(self.rounds, rnd=rnd, cv_round=cv_round).fes_bias(chunk_size=chunk_size, **plotkwargs)
+
+    @property
+    def md(self):
+        return self.rounds.get_engine()
+
+    @property
+    def bias(self):
+        return self.rounds.get_bias()
+
+    @property
+    def sti(self):
+        return self.rounds.static_trajectory_information()
 
     def grid_umbrella(
         self,
@@ -84,17 +97,12 @@ class Scheme:
         chunk_size=None,
         T_scale=10,
     ):
-        m = self.md.bias.collective_variable.metric
+        m = self.bias.collective_variable.metric
         _, cv_grid, _, _ = m.grid(n)
 
         if k is None:
             # 0.1*N *Kb*T
-            k = (
-                eps
-                * self.md.static_trajectory_info.T
-                * boltzmann
-                * self.md.static_trajectory_info.atomic_numbers.shape[0]
-            )
+            k = eps * self.sti.T * boltzmann * self.sti.atomic_numbers.shape[0]
 
         k /= ((m.bounding_box[:, 1] - m.bounding_box[:, 0]) / 2) ** 2
         if scale_n is None:
@@ -103,7 +111,7 @@ class Scheme:
 
         biases = [
             HarmonicBias.create(
-                self.md.bias.collective_variable,
+                self.rounds.get_collective_variable(),
                 cv,
                 k,
                 k_max=max_grad,
@@ -130,11 +138,6 @@ class Scheme:
             T_scale=T_scale,
         )
 
-    def new_metric(self, plot=False, r=None, cv_round: int | None = None):
-        o = ThermoLIB.create(rounds=self.rounds, cv_round=cv_round)
-
-        self.md.bias.collective_variable.metric = o.new_metric(plot=plot, r=r)
-
     def inner_loop(
         self,
         rnds=10,
@@ -147,7 +150,6 @@ class Scheme:
         samples_per_bin=20,
         min_samples_per_bin=2,
         init_max_grad=None,
-        max_grad=None,
         plot=True,
         choice="rbf",
         fes_bias_rnds=4,
@@ -165,6 +167,7 @@ class Scheme:
         thermolib=False,
         macro_chunk=10000,
         T_scale=10,
+        koopman=False,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -186,10 +189,7 @@ class Scheme:
                 cv_round=cv_round,
                 eps=eps_umbrella,
             )
-            self.rounds.invalidate_data(c=cv_round)
-            self.rounds.add_round_from_md(self.md, cv=cv_round)
-        else:
-            self.md.static_trajectory_info.max_grad = max_grad
+            # self.rounds.invalidate_data(c=cv_round)
 
         i_0 = self.rounds.get_round(c=cv_round)
 
@@ -211,7 +211,6 @@ class Scheme:
                 steps=steps,
                 n=n,
                 k=K,
-                max_grad=max_grad,
                 plot=plot_umbrella,
                 scale_n=scale_n,
                 cv_round=cv_round,
@@ -224,34 +223,35 @@ class Scheme:
                 T_scale=T_scale,
             )
 
-            if update_metric:
-                self.new_metric(plot=plot)
-                update_metric = False
-            else:
-                prev_bias = self.md.bias
+            prev_bias = self.rounds.get_bias(c=cv_round, r=i)
 
-                self.FESBias(
-                    plot=plot,
-                    samples_per_bin=samples_per_bin,
-                    min_samples_per_bin=min_samples_per_bin,
-                    choice=choice,
-                    num_rnds=fes_bias_rnds,
-                    cv_round=cv_round,
-                    chunk_size=chunk_size,
-                    min_traj_length=steps if enforce_min_traj_length else None,
-                    margin=plot_margin,
-                    only_finished=only_finished,
-                    max_bias=max_bias,
-                    n_max=n_max_fes,
-                    thermolib=thermolib,
-                    macro_chunk=macro_chunk,
-                    vmax=max_bias,
-                    T_scale=T_scale,
-                )
+            new_bias = self.FESBias(
+                plot=plot,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                choice=choice,
+                num_rnds=fes_bias_rnds,
+                cv_round=cv_round,
+                chunk_size=chunk_size,
+                min_traj_length=steps if enforce_min_traj_length else None,
+                margin=plot_margin,
+                only_finished=only_finished,
+                max_bias=max_bias,
+                n_max=n_max_fes,
+                thermolib=thermolib,
+                macro_chunk=macro_chunk,
+                vmax=max_bias,
+                T_scale=T_scale,
+                koopman=koopman,
+            )
 
-            self.rounds.add_round_from_md(self.md, cv=cv_round)
+            self.rounds.add_round(bias=new_bias, c=cv_round)
 
-            kl_div = self.md.bias.kl_divergence(prev_bias, T=self.rounds.T, symmetric=True)
+            kl_div = self.md.bias.kl_divergence(
+                prev_bias,
+                T=self.rounds.T,
+                symmetric=True,
+            )
 
             print(f"{kl_div=}")
 
@@ -284,8 +284,7 @@ class Scheme:
         macro_chunk_nl=5000,
         verbose=False,
     ):
-        md = self.rounds.update_CV(
-            md=self.md,
+        self.rounds.update_CV(
             transformer=transformer,
             dlo_kwargs=dlo_kwargs,
             dlo=dlo,
@@ -310,8 +309,6 @@ class Scheme:
             verbose=verbose,
         )
 
-        self.md = md
-
     def transform_CV(
         self,
         cv_trans: CvTrans,
@@ -321,8 +318,7 @@ class Scheme:
         new_r_cut=None,
         plot=True,
     ):
-        md = self.rounds.transform_CV(
-            md=self.md,
+        self.rounds.transform_CV(
             cv_trans=cv_trans,
             chunk_size=chunk_size,
             dlo=dlo,
@@ -331,5 +327,3 @@ class Scheme:
             new_r_cut=new_r_cut,
             plot=plot,
         )
-
-        self.md = md

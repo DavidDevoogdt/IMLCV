@@ -309,6 +309,7 @@ class ThermoLIB:
         cv_round=None,
         koopman=True,
         plot_selected_points=True,
+        divide_by_histogram=True,
     ):
         dlo = rounds.data_loader(
             num=num_rnds,
@@ -324,6 +325,8 @@ class ThermoLIB:
             macro_chunk=macro_chunk,
             T_scale=T_scale,
             verbose=True,
+            divide_by_histogram=divide_by_histogram,
+            n_max=n_max,
         )
 
         # get weights based on koopman theory. the CVs are binned with indicators
@@ -371,6 +374,7 @@ class ThermoLIB:
         cv_round=None,
         directory=None,
         koopman=True,
+        divide_by_histogram=True,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -396,6 +400,7 @@ class ThermoLIB:
             cv_round=cv_round,
             execution_folder=directory,
             koopman=koopman,
+            divide_by_histogram=divide_by_histogram,
         ).result()
 
     def fes_bias(
@@ -424,6 +429,7 @@ class ThermoLIB:
         T_scale=10,
         vmax=None,
         koopman=True,
+        divide_by_histogram=True,
     ):
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
@@ -486,6 +492,7 @@ class ThermoLIB:
                 T_scale=T_scale,
                 n_max=n_max,
                 koopman=koopman,
+                divide_by_histogram=divide_by_histogram,
             )
 
         if plot:
