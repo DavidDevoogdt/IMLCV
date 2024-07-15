@@ -93,7 +93,10 @@ class ThermoLIB:
         # c = dlo.collective_variable.metric.periodic_wrap(c)
 
         if update_bounding_box:
-            bounds, _, _ = CvMetric.bounds_from_cv(trajs, bounds_percentile)
+            bounds, _, _ = CvMetric.bounds_from_cv(
+                trajs,
+                bounds_percentile,
+            )
 
             # # do not update periodic bounds
             bounding_box = jnp.where(
@@ -310,7 +313,16 @@ class ThermoLIB:
         koopman=True,
         plot_selected_points=True,
         divide_by_histogram=True,
+        verbose=True,
+        max_bias=None,
+        kooopman_wham=None,
     ):
+        if cv_round is None:
+            cv_round = rounds.cv
+
+        if kooopman_wham is None:
+            kooopman_wham = cv_round == 1
+
         dlo = rounds.data_loader(
             num=num_rnds,
             out=out,
@@ -324,9 +336,10 @@ class ThermoLIB:
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             T_scale=T_scale,
-            verbose=True,
+            verbose=verbose,
             divide_by_histogram=divide_by_histogram,
             n_max=n_max,
+            wham=kooopman_wham,
         )
 
         # get weights based on koopman theory. the CVs are binned with indicators
@@ -336,7 +349,7 @@ class ThermoLIB:
             n_max=n_max,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            verbose=True,
+            verbose=verbose,
         )
 
         print("gettingg FES Bias")
@@ -349,12 +362,16 @@ class ThermoLIB:
             collective_variable=dlo.collective_variable,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
+            # max_bias=max_bias,
         )
 
         if plot_selected_points:
             fes_bias_tot.plot(
                 name="FES_bias_points.png",
                 traj=dlo.cv,
+                margin=0.1,
+                vmax=max_bias,
+                inverted=True,
             )
 
         return fes_bias_tot
@@ -362,7 +379,7 @@ class ThermoLIB:
     def fes_nd_weights(
         self,
         num_rnds=4,
-        out=int(3e4),
+        out=int(1e5),
         lag_n=10,
         start_r=1,
         min_traj_length=None,
@@ -375,6 +392,9 @@ class ThermoLIB:
         directory=None,
         koopman=True,
         divide_by_histogram=True,
+        verbose=True,
+        max_bias=None,
+        kooopman_wham=None,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -401,6 +421,9 @@ class ThermoLIB:
             execution_folder=directory,
             koopman=koopman,
             divide_by_histogram=divide_by_histogram,
+            verbose=verbose,
+            max_bias=max_bias,
+            kooopman_wham=kooopman_wham,
         ).result()
 
     def fes_bias(
@@ -409,7 +432,7 @@ class ThermoLIB:
         fes=None,
         max_bias=None,
         choice="rbf",
-        num_rnds=4,
+        num_rnds=8,
         start_r=1,
         rbf_kernel="linear",
         rbf_degree=None,
@@ -424,12 +447,14 @@ class ThermoLIB:
         only_finished=True,
         pmap=True,
         thermolib=True,
-        lag_n=10,
-        out=int(3e4),
+        lag_n=30,
+        out=int(1e5),
         T_scale=10,
         vmax=None,
         koopman=True,
         divide_by_histogram=True,
+        verbose=True,
+        koopman_wham=None,
     ):
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
@@ -493,6 +518,9 @@ class ThermoLIB:
                 n_max=n_max,
                 koopman=koopman,
                 divide_by_histogram=divide_by_histogram,
+                verbose=verbose,
+                max_bias=max_bias,
+                kooopman_wham=koopman_wham,
             )
 
         if plot:

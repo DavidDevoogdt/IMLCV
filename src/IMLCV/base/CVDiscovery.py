@@ -112,7 +112,10 @@ class Transformer:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
 
         print("getting weights")
-        w = dlo.weights()
+        w = dlo.weights(
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+        )
 
         if plot:
             Transformer.plot_app(
@@ -157,7 +160,7 @@ class Transformer:
         bounds, mask, constants = CvMetric.bounds_from_cv(
             x,
             percentile=percentile,
-            weights=w,
+            # weights=w,
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
         )

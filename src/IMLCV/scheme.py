@@ -66,7 +66,14 @@ class Scheme:
         """replace the current md bias with the computed FES from current
         round."""
 
-        return ThermoLIB.create(self.rounds, rnd=rnd, cv_round=cv_round).fes_bias(chunk_size=chunk_size, **plotkwargs)
+        return ThermoLIB.create(
+            self.rounds,
+            rnd=rnd,
+            cv_round=cv_round,
+        ).fes_bias(
+            chunk_size=chunk_size,
+            **plotkwargs,
+        )
 
     @property
     def md(self):
@@ -167,7 +174,10 @@ class Scheme:
         thermolib=False,
         macro_chunk=10000,
         T_scale=10,
-        koopman=False,
+        koopman=True,
+        lag_n=30,
+        koopman_wham=None,
+        out=-1,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -243,6 +253,8 @@ class Scheme:
                 vmax=max_bias,
                 T_scale=T_scale,
                 koopman=koopman,
+                lag_n=lag_n,
+                koopman_wham=koopman_wham,
             )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)

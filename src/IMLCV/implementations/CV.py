@@ -1388,6 +1388,7 @@ def get_feature_cov(
     w: list[jnp.array] | None = None,
     epsilon=1e-14,
     max_functions=None,
+    T_scale=1,
 ) -> tuple[CV, CV, CvTrans]:
     from IMLCV.base.rounds import Covariances
 
@@ -1400,6 +1401,7 @@ def get_feature_cov(
         symmetric=True,
         calc_pi=True,
         only_diag=True,
+        T_scale=T_scale,
     )
 
     print("computing feature covariances done")

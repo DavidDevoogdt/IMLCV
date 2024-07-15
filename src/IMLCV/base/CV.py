@@ -2645,8 +2645,18 @@ class CvMetric(PyTreeNode):
         for i in range(cv_0[0].shape[1]):
             cummul = jnp.cumulative_sum(vmap(jnp.sum, in_axes=i)(hist))
 
-            n_min = jnp.min(jnp.argwhere(cummul > percentile / 100))
-            n_max = jnp.max(jnp.argwhere(cummul < 1 - percentile / 100))
+            v0 = jnp.argwhere(cummul > percentile / 100)
+            if len(v0) == 0:
+                n_min = 0
+            else:
+                n_min = jnp.min(v0)
+
+            v0 = jnp.argwhere(cummul < 1 - percentile / 100)
+
+            if len(v0) == 0:
+                n_max = n - 2
+            else:
+                n_max = jnp.max(v0)
 
             bounds = bounds.at[i, 0].set(bins[i][n_min])  # lower end
             bounds = bounds.at[i, 1].set(bins[i][n_max + 2])  # higher end

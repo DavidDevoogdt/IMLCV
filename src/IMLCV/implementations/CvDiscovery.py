@@ -22,76 +22,6 @@ from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from IMLCV.base.rounds import data_loader_output
 
-# https://arxiv.org/pdf/1602.08776.pdf appendix b
-
-
-def shrink(S: Array, n: int, shrinkage="OAS"):
-    if shrinkage == "None":
-        return S
-    # Todo https://papers.nips.cc/paper_files/paper/2014/file/fa83a11a198d5a7f0bf77a1987bcd006-Paper.pdf
-    # todo: paper Covariance shrinkage for autocorrelated data
-    assert shrinkage in ["RBLW", "OAS", "BC"]
-
-    p = S.shape[0]
-    F = jnp.trace(S) / p * jnp.eye(p)
-
-    tr_s2 = jnp.trace(S**2)
-    tr2_s = jnp.trace(S) ** 2
-
-    if shrinkage == "RBLW":
-        rho = ((n - 2) / n * tr_s2 + tr2_s) / ((n + 2) * (tr_s2 - tr2_s / p))
-    elif shrinkage == "OAS":
-        # use oracle https://arxiv.org/pdf/0907.4698.pdf, eq 23
-        rho = ((1 - 2 / p) * tr_s2 + tr2_s) / ((n + 1 - 2 / p) * (tr_s2 - tr2_s / p))
-
-    elif shrinkage == "BC":
-        # https://proceedings.neurips.cc/paper_files/paper/2014/file/fa83a11a198d5a7f0bf77a1987bcd006-Paper.pdf
-        pass
-        # shrinkage based on  X
-        # n = X.shape[0]
-        # p = X.shape[1]
-        # b = 20
-
-        # u = X - pi_x
-        # v = Y - pi_y
-
-        # S_0 = jnp.einsum("ti,tj->ij", u, u) / (n - 1)
-        # S_1 = jnp.einsum("ti,tj->ij", u, v) / (n - 1)
-
-        # T_0 = jnp.trace(S_0) / p * jnp.eye(p)
-        # T_1 = jnp.trace(S_1) / p * jnp.eye(p)
-
-        # def gamma(s, u, v, S):
-        #     return (
-        #         jnp.einsum(
-        #             "ti,tj,ti,tj,t->ij", u[: n - s, :], w[: n - s], v[: n - s, :], u[s:, :], w[s:], v[s:, :], w
-        #         )
-        #         - jnp.sum(w[: n - s]) / jnp.sum(w) * S**2
-        #     )
-
-        # var_BC = gamma(0)
-        # for i in range(1, b + 1):
-        #     var_BC += 2 * gamma(i)
-        # var_BC /= n - 1 - 2 * b + b * (b + 1) / n
-
-        # lambda_BC = jnp.einsum("ij,ij", var_BC, var_BC) / jnp.einsum("ij,ij", S_0 - T_0, S_0 - T_0)
-
-        # lambda_BC = jnp.clip(lambda_BC, 0, 1)
-
-        # print(f"lambda_BC = {lambda_BC}")
-
-        #
-
-    if rho > 1:
-        rho = 1
-
-    print(f"{rho=}")
-
-    def f(C):
-        return rho * F + (1 - rho) * C
-
-    return f
-
 
 class Encoder(nn.Module):
     latents: int
@@ -609,25 +539,6 @@ class TransformerMAF(Transformer):
             chunk_size=chunk_size,
         )
 
-        # print("getting features with highest covariance")
-
-        # transform = get_feature_cov(
-        #     x,
-        #     x_t,
-        #     w,
-        #     epsilon=pre_selction_epsilon,
-        #     max_functions=max_functions,
-        # )
-
-        # x, x_t = dlo.apply_cv_trans(
-        #     transform,
-        #     x=x,
-        #     x_t=x_t,
-        #     macro_chunk=macro_chunk,
-        #     chunk_size=chunk_size,
-        # )
-        # trans *= transform
-
         print("getting koopman")
 
         km = dlo.koopman_model(
@@ -638,10 +549,11 @@ class TransformerMAF(Transformer):
             max_features=max_features,
             w=w,
             koopman_weight=False,  # this is not a good idea because the features will most likely not be able to predict a good ground state. Moreover, it doesn,t work well with T_scale
-            add_1=False,
+            add_1=True,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=True,
+            T_scale=T_scale,
         )
 
         ts = km.timescales() / nanosecond
