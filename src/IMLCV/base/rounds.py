@@ -872,7 +872,7 @@ class Rounds(ABC):
                     continue
 
                 out_indices.append(index)
-                out_reweights.append(reweight[indices_full])
+                out_reweights.append(reweight)
 
                 n_list.append(n)
 
@@ -891,6 +891,7 @@ class Rounds(ABC):
             out_sp_t = []
             out_cv_t = []
             out_ti_t = []
+            out_weights_t = []
 
         if get_bias_list:
             out_biases = []
@@ -901,7 +902,7 @@ class Rounds(ABC):
             out_sp.append(sp[n][indices_n])
             out_cv.append(cv[n][indices_n])
             out_ti.append(ti[n][indices_n])
-            out_weights.append(reweights_n)
+            out_weights.append(reweights_n[indices_n])
 
             if time_series:
                 out_sp_t.append(sp[n][indices_n + lag_n])
@@ -2067,6 +2068,7 @@ class data_loader_output:
         self,
         samples_per_bin=50,
         n_max=50,
+        n_max_koopman=100,
         ground_bias=None,
         use_ground_bias=True,
         sign=1,
@@ -2083,7 +2085,7 @@ class data_loader_output:
         macro_chunk=1000,
         verbose=False,
         output_bincount=False,
-        max_features_koopman=300,
+        max_features_koopman=800,
         margin=0.1,
         add_1=None,
         bias_cutoff=1e10,
@@ -2206,7 +2208,7 @@ class data_loader_output:
                         f"WARNING: {n_tot} trajectories have bias energy below {1/bias_cutoff=}, {sum(nm_tot)=}/{sum(sd)} samples removed (total {sum(nm_tot)/sum(sd)*100:.2f}%)"
                     )
                     print(f"{jnp.array(nm_tot)=}")
-                    print(f"{jnp.array(offset_i)/kjmol=}")
+                    # print(f"{jnp.array(offset_i)/kjmol=}")
 
             w_stacked = jnp.hstack(w_unstacked)
             w_stacked = check_w(w_stacked)
@@ -2327,8 +2329,8 @@ class data_loader_output:
 
                     N_i = jnp.array([jnp.sum(wi > 0) for wi in w_unstacked])
 
-                    from jaxopt import FixedPointIteration, ProjectedGradient
-                    from jaxopt.projection import projection_simplex
+                    # from jaxopt import ProjectedGradient
+                    # from jaxopt.projection import projection_simplex
 
                     # def T(a_k, x):
                     #     b_ik, N_i, hist_k = x
@@ -2396,6 +2398,8 @@ class data_loader_output:
 
                         return log_a_k_new
 
+                    from jaxopt import FixedPointIteration
+
                     fpi = FixedPointIteration(
                         fixed_point_fun=T,
                         maxiter=50000,
@@ -2420,7 +2424,7 @@ class data_loader_output:
                         + log_b_ik_max
                     )
 
-                    print(f"{log_f=}")
+                    # print(f"{log_f=}")
 
                     f = jnp.exp(log_f)
 
@@ -2514,6 +2518,15 @@ class data_loader_output:
             tr = None
 
             if indicator_CV:
+                cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+                    metric=self.collective_variable.metric,
+                    n_grid=n_max_koopman,
+                    grid_bounds=grid_bounds,
+                    chunk_size=chunk_size,
+                )
+
+                # n_max_koopman
+
                 grid_nums, grid_nums_t = self.apply_cv_trans(
                     closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk
                 )
@@ -2524,6 +2537,8 @@ class data_loader_output:
                 hist_t = get_histo(grid_nums_t, w_pos)
 
                 mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
+
+                print(f"{jnp.sum(mask)=}")
 
                 @partial(CvTrans.from_cv_function, mask=mask)
                 def get_indicator(cv: CV, nl, _, shmap, mask):
@@ -2560,6 +2575,8 @@ class data_loader_output:
                 eps=koopman_eps,
                 trans=tr,
                 max_features=max_features_koopman,
+                only_diag=False,
+                calc_pi=True,
             )
 
             if verbose:
@@ -2572,6 +2589,8 @@ class data_loader_output:
                 macro_chunk=macro_chunk,
                 verbose=verbose,
             )
+
+            # return w_unstacked, w_unstacked_corr
 
             w_stacked = jnp.hstack(w_unstacked)
             w_stacked = check_w(w_stacked)
@@ -2602,13 +2621,35 @@ class data_loader_output:
         return w_unstacked
 
     @staticmethod
-    def _transform(cv, nl, _, shmap, pi, add_1, q):
-        cv_v = (cv.cv - pi) @ q
+    def _transform(
+        cv,
+        nl,
+        _,
+        shmap,
+        argmask: jnp.Array | None = None,
+        pi: jnp.Array | None = None,
+        add_1: bool = False,
+        q: jnp.Array | None = None,
+        l: jnp.Array | None = None,
+    ):
+        x = cv.cv
+
+        if argmask is not None:
+            x = x[argmask]
+
+        if pi is not None:
+            x = x - pi
+
+        if q is not None:
+            x = x @ q
+
+        if l is not None:
+            x = x * l
 
         if add_1:
-            cv_v = jnp.hstack([cv_v, jnp.array([1])])
+            x = jnp.hstack([x, jnp.array([1])])
 
-        return cv.replace(cv=cv_v)
+        return cv.replace(cv=x)
 
     @staticmethod
     def _whiten(
@@ -2627,13 +2668,16 @@ class data_loader_output:
         sparse=False,
         trans=None,
         T_scale=1,
+        calc_pi=True,
+        only_diag=False,
     ):
         print("whitening: getting covariance")
         cov: Covariances = Covariances.create(
             cv_0,
             cv_tau,
             w,
-            calc_pi=True,
+            calc_pi=calc_pi,
+            only_diag=only_diag,
             symmetric=symmetric,
             trans=trans,
             macro_chunk=macro_chunk,
@@ -2641,28 +2685,42 @@ class data_loader_output:
             T_scale=T_scale,
         )
 
+        print(f"{cov=}")
+
         l, q, argmask = cov.diagonalize(
             "C00",
             epsilon=eps,
             out_dim=max_features,
+            verbose=verbose,
         )
 
-        if canoncial_signs:
+        print(f"{l=}")
+
+        if canoncial_signs and not only_diag:
             signs = jax.vmap(lambda q: jnp.sign(q[jnp.argmax(jnp.abs(q))]), in_axes=1)(q)
             q = jnp.einsum("ij,j->ij", q, signs)
 
         l_inv_sqrt = 1 / jnp.sqrt(l)
 
+        pi = cov.pi_0
+        if argmask is not None:
+            pi = pi[argmask]
+
         transform_maf = CvTrans.from_cv_function(
             data_loader_output._transform,
             static_argnames=["add_1"],
             add_1=add_1,
-            q=jnp.einsum("ij,j->ij", q, l_inv_sqrt),
-            pi=cov.pi_0,
+            q=q,
+            l=l_inv_sqrt,
+            pi=pi,
+            argmask=argmask,
         )
 
         if verbose:
-            print(f"applying transformation. {q.shape=}")
+            if only_diag:
+                print(f"applying transformation. {l.shape=}")
+            else:
+                print(f"applying transformation. {q.shape=}")
 
         if transform_cv:
             if trans is None:
@@ -2680,12 +2738,12 @@ class data_loader_output:
                 verbose=False,
             )
 
-        return cv_0, cv_tau, transform_maf, cov.pi_0, q, l
+        return cv_0, cv_tau, transform_maf, cov.pi_0, q, l, argmask
 
     def koopman_model(
         self,
-        cv_0: list[CV] = None,
-        cv_tau: list[CV] = None,
+        cv_0: list[CV] | None = None,
+        cv_tau: list[CV] | None = None,
         method="tcca",
         koopman_weight=False,
         symmetric=True,
@@ -2699,6 +2757,8 @@ class data_loader_output:
         verbose=False,
         trans=None,
         T_scale=1,
+        only_diag=False,
+        calc_pi=True,
     ) -> KoopmanModel:
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
         assert method in ["tica", "tcca"]
@@ -2732,6 +2792,8 @@ class data_loader_output:
             verbose=verbose,
             trans=trans,
             T_scale=T_scale,
+            only_diag=only_diag,
+            calc_pi=calc_pi,
         )
 
     def filter_nans(
@@ -3169,12 +3231,16 @@ class data_loader_output:
 
 
 class KoopmanModel(PyTreeNode):
-    pi_0: jax.Array
-    pi_1: jax.Array
-    q_0: jax.Array
-    q_1: jax.Array
+    shape: int
+
+    pi_0: jax.Array | None
+    pi_1: jax.Array | None
+    q_0: jax.Array | None
+    q_1: jax.Array | None
     l_0: jax.Array
     l_1: jax.Array
+    argmask_0: jax.Array | None
+    argmask_1: jax.Array | None
 
     U: jax.Array
     s: jax.Array
@@ -3188,6 +3254,8 @@ class KoopmanModel(PyTreeNode):
 
     w: list[jax.Array] | None = None
     eps: float = 1e-10
+
+    only_diag: bool = False
 
     add_1: bool = False
     max_features: int = 2000
@@ -3217,12 +3285,21 @@ class KoopmanModel(PyTreeNode):
         verbose=False,
         trans: CvTrans | None = None,
         T_scale=1,
+        only_diag=False,
+        calc_pi=True,
     ):
         if max_features is None:
             max_features = cv_0[0].shape[1]
 
+        if trans is not None:
+            shape = jax.eval_shape(lambda x: trans.compute_cv_trans(x)[0], cv_0[0]).shape[1]
+
+            print(f"{shape=}")
+        else:
+            shape = cv_0[0].shape[1]
+
         if method == "tica":
-            (cv0_white, cv_tau_white, f_trans, pi, q, l) = data_loader_output._whiten(
+            (cv0_white, cv_tau_white, f_trans, pi, q, l, argmask) = data_loader_output._whiten(
                 cv_0=cv_0,
                 cv_tau=cv_tau,
                 symmetric=symmetric,
@@ -3244,6 +3321,8 @@ class KoopmanModel(PyTreeNode):
                 calc_pi=False,
                 symmetric=symmetric,
                 T_scale=T_scale,
+                calc_C00=False,
+                calc_C11=False,
             )
 
             k, u = cov.diagonalize(
@@ -3258,10 +3337,18 @@ class KoopmanModel(PyTreeNode):
             U = u
             s = k
             Vh = jnp.linalg.inv(u)
+            argmask_0 = argmask
+            argmask_1 = argmask
 
         elif method == "tcca":
-            (cv0_white, _, f_trans, pi_0, q_0, l_0) = data_loader_output._whiten(
+            # TODO
+            # according to Optimal Data-Driven Estimation of Generalized Markov State Models
+            # it is not neccecary to remove mean
+            # this means that indicator CV covariances are diagonal, reducing memory consumption
+
+            (cv0_white, _, f_trans, pi_0, q_0, l_0, argmask_0) = data_loader_output._whiten(
                 cv_0=cv_0,
+                cv_tau=cv_tau,
                 w=w,
                 eps=eps,
                 max_features=max_features,
@@ -3271,9 +3358,25 @@ class KoopmanModel(PyTreeNode):
                 verbose=verbose,
                 trans=trans,
                 T_scale=T_scale,
+                calc_pi=calc_pi,
+                only_diag=only_diag,
             )
 
-            (cv_tau_white, _, g_trans, pi_1, q_1, l_1) = data_loader_output._whiten(
+            g_trans, pi_1, q_1, l_1, argmask_1 = f_trans, pi_0, q_0, l_0, argmask_0
+
+            # cv_tau_white, _ = f_trans.compute_cv_trans(cv_tau, chunk_size=chunk_size)
+
+            # cv_tau_white, _ = data_loader_output._apply(
+            #     x=cv_tau,
+            #     x_t=None,
+            #     nl=None,
+            #     nl_t=None,
+            #     f=lambda x, nl: f_trans.compute_cv_trans(x, nl, chunk_size=chunk_size)[0],
+            #     macro_chunk=macro_chunk,
+            #     verbose=verbose,
+            # )
+
+            (cv_tau_white, _, g_trans, pi_1, q_1, l_1, argmask_1) = data_loader_output._whiten(
                 cv_0=cv_tau,
                 w=w,
                 eps=eps,
@@ -3284,6 +3387,8 @@ class KoopmanModel(PyTreeNode):
                 verbose=verbose,
                 trans=trans,
                 T_scale=T_scale,
+                calc_pi=calc_pi,
+                only_diag=only_diag,
             )
 
             if verbose:
@@ -3298,6 +3403,8 @@ class KoopmanModel(PyTreeNode):
                 T_scale=T_scale,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
+                calc_C00=False,
+                calc_C11=False,
             )
 
             if verbose:
@@ -3306,8 +3413,16 @@ class KoopmanModel(PyTreeNode):
             # if out_dim is None:
             U, s, Vh = jnp.linalg.svd(cov.C01)
 
+            mask = s > 0
+            if jnp.sum(jnp.logical_not(mask)) > 0:
+                print(f"found {jnp.sum(jnp.logical_not(mask))}  singular values smaller than {eps=}, removing")
+
+                U = U[:, mask]
+                s = s[mask]
+                Vh = Vh[mask, :]
+
             if verbose:
-                print(f"{s=}")
+                print(f"{s[s>0.9]=}")
 
         else:
             raise ValueError(f"method {method} not known")
@@ -3336,6 +3451,10 @@ class KoopmanModel(PyTreeNode):
             T_scale=T_scale,
             f_trans=f_trans,
             g_trans=g_trans,
+            argmask_0=argmask_0,
+            argmask_1=argmask_1,
+            only_diag=only_diag,
+            shape=shape,
         )
 
         if koopman_weight:
@@ -3349,23 +3468,33 @@ class KoopmanModel(PyTreeNode):
 
     @property
     def _q0(self):
+        if self.only_diag:
+            __q0 = jnp.eye(self.shape)[:, self.argmask_0]
+        else:
+            __q0 = self.q_0
+
         if self.add_1:
-            out = jnp.zeros((self.q_0.shape[0] + 1, self.q_0.shape[1] + 1))
-            out = out.at[1:, :-1].set(self.q_0)
+            out = jnp.zeros((__q0.shape[0] + 1, __q0.shape[1] + 1))
+            out = out.at[1:, :-1].set(__q0)
             out = out.at[0, -1].set(1)
 
             return out
-        return self.q_0
+        return __q0
 
     @property
     def _q1(self):
+        if self.only_diag:
+            __q1 = jnp.eye(self.shape)[:, self.argmask_1]
+        else:
+            __q1 = self.q_1
+
         if self.add_1:
-            out = jnp.zeros((self.q_1.shape[0] + 1, self.q_1.shape[1] + 1))
+            out = jnp.zeros((__q1.shape[0] + 1, __q1.shape[1] + 1))
             out = out.at[1:, :-1].set(self.q_1)
             out = out.at[0, -1].set(1)
 
             return out
-        return self.q_1
+        return __q1
 
     @property
     def _l0(self):
@@ -3391,7 +3520,7 @@ class KoopmanModel(PyTreeNode):
         if out_dim is None:
             out_dim = self.U.shape[1]
 
-        return (
+        Tk = (
             self._q1
             @ jnp.diag(self.l1_pow(-1 / 2))
             @ self.Vh.T[:, :out_dim]
@@ -3401,13 +3530,17 @@ class KoopmanModel(PyTreeNode):
             @ self._q0.T
         )
 
+        return Tk
+
     def whiten_f(self):
         return CvTrans.from_cv_function(
             data_loader_output._transform,
             static_argnames=["add_1"],
             add_1=False,
-            q=self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)),
+            q=self.q_0,
+            l=self.l0_pow(-1 / 2),
             pi=self.pi_0,
+            argmask=self.argmask_0,
         )
 
     def whiten_g(self):
@@ -3415,18 +3548,23 @@ class KoopmanModel(PyTreeNode):
             data_loader_output._transform,
             static_argnames=["add_1"],
             add_1=False,
-            q=self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)),
+            q=self.q_1,
+            l=jnp.diag(self.l1_pow(-1 / 2)),
             pi=self.pi_1,
+            argmask=self.argmask_1,
         )
 
     def f(self, out_dim=None):
         pi = self.pi_0
 
         if self.add_1:
-            o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)[:-1]) @ self.U[:-1, 1:]
+            o = jnp.diag(self.l0_pow(-1 / 2)[:-1]) @ self.U[:-1, 1:]
 
         else:
-            o = self.q_0 @ jnp.diag(self.l0_pow(-1 / 2)) @ self.U
+            o = jnp.diag(self.l0_pow(-1 / 2)) @ self.U
+
+        if self.q_0 is not None:
+            o = self.q_0 @ o
 
         if out_dim is not None:
             o = o[:, :out_dim]
@@ -3437,6 +3575,7 @@ class KoopmanModel(PyTreeNode):
             add_1=False,
             q=o,
             pi=pi,
+            argmask=self.argmask_0,
         )
 
         if self.trans is not None:
@@ -3448,10 +3587,13 @@ class KoopmanModel(PyTreeNode):
         pi = self.pi_1
 
         if self.add_1:
-            o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)[:-1]) @ self.Vh[:-1, 1 : out_dim + 1]
+            o = jnp.diag(self.l1_pow(-1 / 2)[:-1]) @ self.Vh[:-1, 1 : out_dim + 1]
 
         else:
-            o = self.q_1 @ jnp.diag(self.l1_pow(-1 / 2)) @ self.Vh[:, :out_dim]
+            o = jnp.diag(self.l1_pow(-1 / 2)) @ self.Vh[:, :out_dim]
+
+        if self.q_1 is not None:
+            o = self.q_1 @ o
 
         tr = CvTrans.from_cv_function(
             data_loader_output._transform,
@@ -3459,6 +3601,7 @@ class KoopmanModel(PyTreeNode):
             add_1=False,
             q=o,
             pi=pi,
+            argmask=self.argmask_1,
         )
 
         if self.trans is not None:
@@ -3487,60 +3630,70 @@ class KoopmanModel(PyTreeNode):
         chunk_size=None,
         macro_chunk=10000,
         retarget=True,
+        epsilon=1e-3,
     ) -> list[jax.Array]:
-        n = jnp.sum(jnp.abs(self.s - 1) < 1e-3)
+        n = jnp.sum(jnp.abs(self.s - 1) < epsilon)  # important to avoid numerical issues
 
         if n == 0:
-            print(
-                f"Largest eigenvalue in koopman model is {self.s[0]} instead of 1. Connsider adding constant function"
-            )
-            n = 1
+            print(f"Warning: No eigenvalues of koopman model within {epsilon=} of 1. aborting")
+            return self.w, None
 
-        out_dim = n  # self.s.shape[0]
+        out_dim = self.s.shape[0]
 
         # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
         # create T_k in the trans basis
         # T_k = C00^{-1} C11 T_k
+        # T_k w_corr =  1 * w_corr
+        # this leads to the generalized eigenvlaue problem
+        # C11 T_k w_corr = 1 * C00 w_corr
 
-        # get largest eigenvalue in X0 bais (trans basis)
+        from scipy.sparse.linalg import eigs
+
+        import numpy as np
 
         A = (
-            self._q0
-            @ jnp.diag(self.l0_pow(-1))
-            @ self._q0.T
-            @ self._q1
+            self._q1
             @ jnp.diag(self.l1_pow(1 / 2))
             @ self.Vh.T[:, :out_dim]
             @ jnp.diag(self.s[:out_dim])
             @ self.U.T[:out_dim, :]
-            @ jnp.diag(self.l0_pow(1 / 2))  # go to trans basis from f basis
-            @ self._q0.T  #
+            @ jnp.diag(self.l0_pow(1 / 2))
+            @ self._q0.T
+        )
+        M = self._q0 @ jnp.diag(self.l0_pow(1)) @ self._q0.T
+        Minv = self._q0 @ jnp.diag(self.l0_pow(-1)) @ self._q0.T
+
+        l, v = eigs(
+            A=np.array(A),
+            M=np.array(M),
+            Minv=np.array(Minv),
+            k=int(n),
+            which="LM",
         )
 
-        l, v = jnp.linalg.eig(A)
+        l = jnp.array(l)
+        v = jnp.array(v)
+
+        # remove complex eigenvalues, as they cannot be the ground state
+        real = jnp.isreal(l)
+        l = l[real]
+        v = v[:, real]
 
         idx = jnp.argsort(jnp.abs(l - 1), descending=False).reshape((-1,))
-        real = jnp.isreal(l[idx])
-        idx = idx[real]
 
-        l = l[idx]
-        v = v[:, idx]
+        l = jnp.real(l[idx])
+        v = jnp.real(v[:, idx])
 
-        idx = jnp.argwhere(jnp.abs(l - l[0]) < 1e-1).reshape((-1,))
+        out_dim = l.shape[0]
 
-        print(f"got eig A, {l[idx]=}   ")
-
-        out_dim = idx.shape[0]
+        print(f"got eig A, {l=} Taking {l[0]}  ")
 
         assert out_dim > 0, "no real eigenvalues found"
-
-        v = jnp.real(v[:, idx])
-        l = jnp.real(l[idx])
 
         @partial(CvTrans.from_cv_function, v=v)
         def _get_w(cv: CV, _nl, _, shmap, v: Array):
             if self.add_1:
-                o = jnp.einsum("i,ij->j", cv.cv, v[:-1]) + v[-1]
+                o = jnp.einsum("i,ij->j", cv.cv, v[:-1]) + v[-1, :]
             else:
                 o = jnp.einsum("i,ij->j", cv.cv, v)
 
@@ -3561,39 +3714,58 @@ class KoopmanModel(PyTreeNode):
             verbose=verbose,
         )
 
-        print("got weights")
         w_corr = CV.stack(*w_corr_cv).cv.reshape((-1, out_dim))
-        w_corr /= jnp.mean(w_corr, axis=0)
 
-        w = jnp.einsum("ij,i->ij", w_corr, jnp.hstack(self.w))
-        w /= jnp.sum(jnp.abs(w), axis=0)
+        # # best done in log space to avoid numerical issues
 
-        # figure out linear combination that sums to biggest eigenvalue
+        log_w_corr = jnp.log(jnp.abs(w_corr))
+        sign_w_corr = jnp.sign(w_corr)
+
+        log_w = jnp.log(jnp.hstack(self.w))
+
+        print(f"{jnp.sum(jnp.hstack(self.w)==0)=} zeros in w")
+
+        @partial(vmap, in_axes=(1, None, 1), out_axes=1)
+        def w_normed(log_w_corr, log_w, sign):
+            log_w = jnp.zeros_like(log_w_corr)
+
+            m = jnp.max(log_w_corr + log_w)
+
+            log_w_tot = log_w + log_w_corr - (jnp.log(jnp.sum(jnp.exp(log_w_corr + log_w - m))) + m)
+
+            return jnp.exp(log_w_tot) * sign
+
+        w_out = w_normed(log_w_corr, log_w, sign_w_corr)
+        w_out /= jnp.sign(jnp.sum(w_out, axis=0))
+
+        # frac = jnp.sum(w_out, axis=0)
+
+        # idx = jnp.abs(1 - frac) < 1e-3  # only modes with 99.9% of the prob
+
+        # if jnp.sum(idx) == 0:
+        #     print("Warning: no modes with 99.9% of the prob found, aborting")
+        #     return self.w, None
+
+        # w_out = w_out[:, idx]
+        # l = l[idx]
+
+        # if jnp.sum(idx) > 1:
+        #     print(f"{jnp.sum(idx)} modes with 99.9% of the prob found. finding minimal norm linear combination")
 
         import jaxopt
 
         def get_w(params, w, l):
-            params /= jnp.sum(jnp.abs(params))
-
-            wj = jnp.einsum("ij,j->i", w, params)
+            wj = jnp.einsum("ij,j,j->i", w, params, l)
 
             wj = jax.lax.cond(jnp.sum(wj) > 0, lambda _wj: _wj, lambda _wj: -_wj, wj)
 
-            n1 = jnp.sum(jnp.where(wj > 0, wj, 0))
-            n2 = jnp.sum(jnp.where(wj < 0, -wj, 0))
+            prob_mass = jnp.sum(wj)
 
             wj = jnp.where(wj < 0, 0, wj)
 
-            # s_pos, s_neg, wj = jax.lax.cond(
-            #     n2 > n1, lambda _n1, _n2, _wj: (_n2, _n1, -_wj), lambda _n1, _n2, _wj: (n1, n2, _wj), n1, n2, wj
-            # )
+            return wj, -prob_mass
 
-            # wj /= s_pos
-            # wj = jnp.where(wj < 0, 0, wj)
-
-            return wj, n2 - n1
-
-        # make linear combination that results in positive weights
+        # # make linear combination that results in positive weights
         def obj(params, w, l):
             return get_w(params, w, l)[1]
 
@@ -3604,29 +3776,33 @@ class KoopmanModel(PyTreeNode):
             tol=1e-10,
         )
 
-        # solver = jaxopt.GradientDescent(
-        #     fun=obj,
-        #     maxiter=10000,
-        #     tol=1e-10,
-        # )
-
-        shape = (w.shape[1],)
-
         res = solver.run(
-            init_params=jnp.ones(shape),
+            init_params=jnp.ones((w_corr.shape[1],)),
             hyperparams_proj=1,
-            w=w,
+            w=w_out,
             l=l,
         )
 
-        w, f = get_w(res.params, w, l)
+        print(f"{jnp.sum(w_out,axis=0)=} {res=} ")
 
-        print(f"{res=} {f=}")
+        alpha = res.params
 
-        w_out = data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w)
-        w_corr_out = data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_corr)
+        # alpha = jnp.where(jnp.sum(w_out, axis=0) < 1e-3, 1, 0)  # select modes with more than 99% of the prob
+        # alpha /= jnp.sum(alpha)
 
-        return w_out, w_corr_out
+        # alpha = l
+        # alpha /= jnp.sum(alpha)
+
+        w_out, _ = get_w(alpha, w_out, jnp.ones_like(l))
+
+        print(f"{jnp.sum(w_out)=:.2%} of the total prob is captured. weighted eigenvalue: {jnp.sum(alpha*l)} ")
+
+        w_out *= jnp.hstack(self.w)
+        w_out /= jnp.sum(w_out)
+
+        w_out = data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_out)
+
+        return w_out, _
 
     def weighted_model(
         self,
@@ -3674,13 +3850,12 @@ class KoopmanModel(PyTreeNode):
 
 
 class Covariances(PyTreeNode):
-    C00: jax.Array
+    C00: jax.Array | None
     C01: jax.Array | None
     C11: jax.Array | None
     pi_0: jax.Array | None
     pi_1: jax.Array | None
 
-    sparse: bool = False
     only_diag: bool = False
     trans: CvTrans | None = None
     T_scale: float = 1
@@ -3694,10 +3869,12 @@ class Covariances(PyTreeNode):
         macro_chunk=10000,
         chunk_size=None,
         only_diag=False,
-        sparse=False,
         trans: CvTrans | None = None,
         T_scale=1,
         symmetric=False,
+        calc_C00=True,
+        calc_C01=True,
+        calc_C11=True,
     ) -> Covariances:
         # TODO trans
         n = sum([cvi.shape[0] for cvi in cv_0])
@@ -3732,6 +3909,7 @@ class Covariances(PyTreeNode):
         def cov_pi(carry, z_chunk, w):
             if time_series:
                 cv0, cv1 = z_chunk.split()
+
                 x0 = cv0.cv
                 x1 = cv1.cv
             else:
@@ -3742,7 +3920,10 @@ class Covariances(PyTreeNode):
             else:
                 str = "ni,nj,n->ij"
 
-            C00 = jnp.einsum(str, x0, x0, w)
+            if calc_C00:
+                C00 = jnp.einsum(str, x0, x0, w)
+            else:
+                C00 = None
 
             if calc_pi:
                 pi0 = jnp.einsum("ni,n->i", x0, w)
@@ -3750,8 +3931,15 @@ class Covariances(PyTreeNode):
                 pi0 = None
 
             if time_series:
-                C01 = jnp.einsum(str, x0, x1, w)
-                C11 = jnp.einsum(str, x1, x1, w)
+                if calc_C01:
+                    C01 = jnp.einsum(str, x0, x1, w)
+                else:
+                    C01 = None
+
+                if calc_C11:
+                    C11 = jnp.einsum(str, x1, x1, w)
+                else:
+                    C11 = None
 
                 if calc_pi:
                     pi1 = jnp.einsum("ni,n->i", x1, w)
@@ -3760,9 +3948,12 @@ class Covariances(PyTreeNode):
 
             if time_series:
                 if carry is not None:
-                    C00 += carry[0]
-                    C01 += carry[1]
-                    C11 += carry[2]
+                    if calc_C00:
+                        C00 += carry[0]
+                    if calc_C01:
+                        C01 += carry[1]
+                    if calc_C11:
+                        C11 += carry[2]
 
                     if calc_pi:
                         pi0 += carry[3]
@@ -3782,19 +3973,21 @@ class Covariances(PyTreeNode):
 
             cv = [CV.combine(x, y) for x, y in zip(cv_0, cv_1)]
 
-            if trans is not None:
-                tr = trans + trans
-
         else:
             cv = cv_0
-
-            if trans is not None:
-                tr = trans
 
         if trans is not None:
 
             def f(x, _):
-                return tr.compute_cv_trans(x, chunk_size=chunk_size)[0]
+                if cv_1 is not None:
+                    cv0, cv1 = x.split()
+
+                    x = trans.compute_cv_trans(cv0, chunk_size=chunk_size)[0]
+                    y = trans.compute_cv_trans(cv1, chunk_size=chunk_size)[0]
+
+                    return CV.combine(x, y)
+
+                return trans.compute_cv_trans(x, chunk_size=chunk_size)[0]
 
         else:
 
@@ -3834,16 +4027,23 @@ class Covariances(PyTreeNode):
 
         if calc_pi:
             if only_diag:
-                C00 -= pi_0**2
+                if calc_C00:
+                    C00 -= pi_0**2
+
                 if time_series:
-                    C11 -= pi_1**2
-                    C01 -= pi_0 * pi_1
+                    if calc_C11:
+                        C11 -= pi_1**2
+                    if calc_C01:
+                        C01 -= pi_0 * pi_1
 
             else:
-                C00 -= jnp.outer(pi_0, pi_0)
+                if calc_C00:
+                    C00 -= jnp.outer(pi_0, pi_0)
                 if time_series:
-                    C11 -= jnp.outer(pi_1, pi_1)
-                    C01 -= jnp.outer(pi_0, pi_1)
+                    if calc_C11:
+                        C11 -= jnp.outer(pi_1, pi_1)
+                    if calc_C01:
+                        C01 -= jnp.outer(pi_0, pi_1)
 
         cov = Covariances(
             C00=C00,
@@ -3851,7 +4051,6 @@ class Covariances(PyTreeNode):
             C11=C11,
             pi_0=pi_0,
             pi_1=pi_1,
-            sparse=sparse,
             only_diag=only_diag,
             trans=trans,
             T_scale=T_scale,
@@ -3862,7 +4061,14 @@ class Covariances(PyTreeNode):
 
         return cov
 
-    def diagonalize(self, choice, epsilon=1e-10, out_dim=None):
+    def diagonalize(
+        self,
+        choice,
+        epsilon=1e-10,
+        out_dim=None,
+        verbose=False,
+        use_scipy=True,
+    ):
         if choice == "C00":
             C = self.C00
             sym = True
@@ -3878,19 +4084,40 @@ class Covariances(PyTreeNode):
         else:
             raise ValueError(f"choice {choice} not known")
 
-        if self.sparse:
-            raise NotImplementedError("sparse not implemented")
+        if self.only_diag:
+            print("using sparse")
+
+            argmask = jnp.argwhere(jnp.abs(C) > epsilon).reshape(-1)
+
+            k = C[argmask]
+            u = None
+
+            return k, u, argmask
 
         if sym:
-            k, u = jnp.linalg.eigh(C)
+            if use_scipy:
+                from scipy.linalg import eigh
+                from numpy import inf
+
+                k, u = eigh(C, subset_by_value=(epsilon, inf))
+                k, u = jnp.array(k), jnp.array(u)
+
+            else:
+                k, u = jnp.linalg.eigh(C)
         else:
-            k, u = jnp.linalg.eig(C)
+            if use_scipy:
+                from scipy.sparse.linalg import eigs
+
+                k, u = eigs(C, k=out_dim, which="LM")
+                k, u = jnp.array(k), jnp.array(u)
+            else:
+                k, u = jnp.linalg.eig(C)
 
             idx = jnp.argsort(jnp.abs(k))
             k = k[idx]
             u = u[:, idx]
 
-        argmask = jnp.argwhere(jnp.abs(k) > epsilon).reshape(-1)
+        argmask = jnp.argwhere(jnp.real(k) > epsilon).reshape(-1)
 
         if len(argmask) == 0:
             raise ValueError("no eigenvalues larger than epsilon")
@@ -3903,7 +4130,7 @@ class Covariances(PyTreeNode):
 
         k = k[argmask]
         u = u[:, argmask]
-        return k, u, argmask
+        return k, u, None
 
     # def shrink(S: Array, n: int, shrinkage="OAS"):
     #     # https://arxiv.org/pdf/1602.08776.pdf appendix b
@@ -4017,7 +4244,6 @@ class Covariances(PyTreeNode):
             C11=C11,
             pi_0=pi_0,
             pi_1=pi_1,
-            sparse=self.sparse,
             only_diag=self.only_diag,
             symmetric=True,
         )

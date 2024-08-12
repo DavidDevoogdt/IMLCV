@@ -219,11 +219,12 @@ class ThermoLIB:
             "num": num_rnds,
             "cv_round": self.cv_round,
             "start": start_r,
-            "split_data": True,
+            "split_data": False,
             "new_r_cut": None,
             "min_traj_length": min_traj_length,
             "get_bias_list": True,
             "only_finished": only_finished,
+            "weight": True,
         }
 
         fes, grid, bounds = bash_app_python(
@@ -347,6 +348,7 @@ class ThermoLIB:
             koopman=koopman,
             indicator_CV=True,
             n_max=n_max,
+            # n_max_koopman=20,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=verbose,
@@ -372,6 +374,7 @@ class ThermoLIB:
                 margin=0.1,
                 vmax=max_bias,
                 inverted=True,
+                n=200,
             )
 
         return fes_bias_tot
@@ -446,7 +449,7 @@ class ThermoLIB:
         margin=0.1,
         only_finished=True,
         pmap=True,
-        thermolib=True,
+        thermolib=False,
         lag_n=30,
         out=int(1e5),
         T_scale=10,
@@ -482,6 +485,7 @@ class ThermoLIB:
                 traj=trajs_plot,
                 margin=margin,
                 vmax=vmax,
+                n=200,
             )
 
         if thermolib:
@@ -540,6 +544,7 @@ class ThermoLIB:
                     stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
                     margin=margin,
                     vmax=vmax,
+                    n=200,
                 ),
             )
 
@@ -553,6 +558,7 @@ class ThermoLIB:
                     stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
                     margin=margin,
                     vmax=vmax,
+                    n=200,
                 ),
             )
 
