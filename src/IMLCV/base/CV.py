@@ -6,32 +6,27 @@ from abc import abstractmethod
 from dataclasses import KW_ONLY
 from functools import partial
 from pathlib import Path
-from typing import Callable
-import cloudpickle
-import distrax
+from typing import TYPE_CHECKING, Callable
+
 import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
 import jax.scipy.optimize
+import jax.sharding as jshard
 import jaxopt.objective
 import jsonpickle
 from flax import linen as nn
-from flax.struct import field
-from flax.struct import PyTreeNode
-from IMLCV import unpickler
-from jax import Array
-from jax import jacfwd
-from jax import jit
-import jax.sharding as jshard
-from jax.sharding import PartitionSpec, Mesh
+from flax.struct import PyTreeNode, field
+from jax import Array, jacfwd, jit, vmap
 from jax.experimental import mesh_utils
-
-from jax import vmap
-from jax.tree_util import Partial
-from jax.tree_util import tree_flatten
-from jax.tree_util import tree_unflatten
-import re
 from jax.experimental.shard_map import shard_map
+from jax.sharding import Mesh, PartitionSpec
+from jax.tree_util import Partial, tree_flatten, tree_unflatten
+
+from IMLCV import unpickler
+
+if TYPE_CHECKING:
+    import distrax
 
 ######################################
 #        Data types                  #
@@ -3427,6 +3422,8 @@ class CvFlow(PyTreeNode):
             with open(filename, "w") as f:
                 f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
+            import cloudpickle
+
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
@@ -3438,6 +3435,8 @@ class CvFlow(PyTreeNode):
             with open(filename) as f:
                 self = jsonpickle.decode(f.read(), context=unpickler)
         else:
+            import cloudpickle
+
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
 
@@ -3559,6 +3558,8 @@ class CollectiveVariable(PyTreeNode):
             with open(filename, "w") as f:
                 f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
+            import cloudpickle
+
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
@@ -3572,6 +3573,8 @@ class CollectiveVariable(PyTreeNode):
             with open(filename) as f:
                 self = jsonpickle.decode(f.read(), context=unpickler)
         else:
+            import cloudpickle
+
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
 
@@ -3592,6 +3595,8 @@ class CollectiveVariable(PyTreeNode):
 
         self_val, self_tree = tree_flatten(self)
         other_val, other_tree = tree_flatten(other)
+
+        import re
 
         # remove location of functions with regex
         if re.sub("at 0x[0-9a-f]*>", "", str(self_tree)) != re.sub("at 0x[0-9a-f]*>", "", str(other_tree)):

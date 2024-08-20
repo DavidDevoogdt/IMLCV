@@ -10,15 +10,12 @@ import jax.scipy
 import jaxopt
 import matplotlib.pyplot as plt
 import scipy.special
-from IMLCV.base.CV import NeighbourList, padded_shard_map
-from IMLCV.base.CV import SystemParams
-from IMLCV.tools.bessel_callback import ive
-from IMLCV.tools.bessel_callback import spherical_jn
-from jax import Array
-from jax import lax
-from jax import vmap
-from scipy.special import legendre as sp_legendre
+from jax import Array, lax, vmap
 from jax.tree_util import Partial
+from scipy.special import legendre as sp_legendre
+
+from IMLCV.base.CV import NeighbourList, SystemParams, padded_shard_map
+from IMLCV.tools.bessel_callback import ive, spherical_jn
 
 
 # @partial(jit, static_argnums=(1,))

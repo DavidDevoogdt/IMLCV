@@ -1,13 +1,13 @@
 import platform
 import re
+from enum import Enum
 from pathlib import Path
 
 import parsl
+from parsl.config import Config
+
 from IMLCV.configs.hpc_ugent import config as config_ugent
 from IMLCV.configs.local_threadpool import get_config as get_config_local
-from parsl.config import Config
-from enum import Enum
-
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 

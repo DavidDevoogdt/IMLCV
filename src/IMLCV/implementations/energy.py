@@ -12,13 +12,10 @@ import jax.numpy as jnp
 import numpy as np
 import yaff
 from ase.calculators.cp2k import CP2K
-from IMLCV.base.bias import Energy
-from IMLCV.base.bias import EnergyError
-from IMLCV.base.bias import EnergyResult
-from IMLCV.configs.config_general import REFERENCE_COMMANDS
-from molmod.units import angstrom
-from molmod.units import electronvolt
-from IMLCV.configs.config_general import ROOT_DIR
+from molmod.units import angstrom, electronvolt
+
+from IMLCV.base.bias import Energy, EnergyError, EnergyResult
+from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
 
 yaff.log.set_level(yaff.log.silent)
 

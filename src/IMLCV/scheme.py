@@ -1,21 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
 
 import jax
-from IMLCV.base.CV import SystemParams
+from molmod.constants import boltzmann
+from molmod.units import kjmol
+
+from IMLCV.base.bias import Bias, NoneBias
+from IMLCV.base.CV import CvTrans, SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
-from IMLCV.base.rounds import Rounds
+from IMLCV.base.rounds import Rounds, data_loader_output
 from IMLCV.implementations.bias import HarmonicBias
-from molmod.constants import boltzmann
-from IMLCV.base.rounds import data_loader_output
-from IMLCV.base.bias import NoneBias
-from dataclasses import dataclass
-from pathlib import Path
-from molmod.units import kjmol
-from IMLCV.base.CV import CvTrans
-from IMLCV.base.bias import Bias
 
 
 @dataclass

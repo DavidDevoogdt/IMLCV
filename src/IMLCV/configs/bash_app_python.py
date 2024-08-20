@@ -5,16 +5,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
 import cloudpickle
 import jsonpickle
-
-from parsl import bash_app
-from parsl import File
-from parsl import python_app
+from parsl import AUTO_LOGNAME, File, bash_app, python_app
 from parsl.dataflow.futures import AppFuture
-
-from parsl import AUTO_LOGNAME
 
 
 # @typeguard.typechecked
@@ -27,7 +21,7 @@ def bash_app_python(
     auto_log=False,
     profile=False,
 ):
-    from IMLCV.configs.config_general import PARSL_DICT, Executors, REFERENCE_COMMANDS
+    from IMLCV.configs.config_general import PARSL_DICT, REFERENCE_COMMANDS, Executors
 
     if executors is None:
         executors = Executors.default

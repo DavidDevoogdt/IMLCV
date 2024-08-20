@@ -1,8 +1,9 @@
-from parsl.executors import ThreadPoolExecutor, WorkQueueExecutor
-from parsl.providers import LocalProvider
-from parsl.launchers import SimpleLauncher
-from pathlib import Path
 import math
+from pathlib import Path
+
+from parsl.executors import ThreadPoolExecutor, WorkQueueExecutor
+from parsl.launchers import SimpleLauncher
+from parsl.providers import LocalProvider
 
 
 def get_config(path_internal, ref_threads=2, max_threads=10, work_queue=True):

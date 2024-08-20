@@ -1,27 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator, Self
 
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-from hsluv import hsluv_to_rgb
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvFlow
-from IMLCV.base.CV import CvMetric
-from IMLCV.base.CV import CvTrans
-from IMLCV.implementations.CV import identity_trans
-from IMLCV.implementations.CV import scale_cv_trans
 from matplotlib import gridspec
 from matplotlib.figure import Figure
-from IMLCV.base.bias import NoneBias, Bias
 from molmod.units import kjmol
-from typing import Self
-from typing import TYPE_CHECKING
-from IMLCV.implementations.CV import _cv_slice, _scale_cv_trans
+
+from IMLCV.base.bias import Bias, NoneBias
+from IMLCV.base.CV import CV, CollectiveVariable, CvFlow, CvMetric, CvTrans
+from IMLCV.implementations.CV import _cv_slice, _scale_cv_trans, identity_trans, scale_cv_trans
 
 if TYPE_CHECKING:
     from IMLCV.base.rounds import data_loader_output
@@ -1028,6 +1020,8 @@ class Transformer:
             lab = lab.at[:, 2].set(data_col[:, 2] * 60 + 20)
 
         rgb = []
+
+        from hsluv import hsluv_to_rgb
 
         for s in lab:
             rgb.append(hsluv_to_rgb(s))

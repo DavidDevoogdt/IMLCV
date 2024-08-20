@@ -13,7 +13,6 @@ import jax
 import pytest
 from IMLCV.configs.config_general import config
 
-
 if os.getenv("_PYTEST_RAISE", "0") != "0":
 
     @pytest.hookimpl(tryfirst=True)

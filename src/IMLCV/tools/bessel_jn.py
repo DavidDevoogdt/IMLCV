@@ -1,16 +1,14 @@
 # taken from https://colab.research.google.com/drive/1JBM1ZXFCR6DtKxeS5p9sS1MgdcYNXigj?usp=sharing#scrollTo=78aef876-0377-4d8f-b069-9da94d9111a6,
 # see https://github.com/google/jax/pull/17038
 
+import functools
+
 import jax
 import numpy as np
 from jax import lax
+from jax import numpy as jnp
 from jax._src import dtypes
 from jax._src.numpy.util import promote_dtypes_inexact
-
-
-import functools
-
-from jax import numpy as jnp
 
 # polynomial coefficients for J0
 PP0 = np.array(

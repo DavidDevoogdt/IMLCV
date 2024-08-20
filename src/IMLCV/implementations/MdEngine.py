@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -12,14 +11,11 @@ import yaff.log
 import yaff.pes.bias
 import yaff.pes.ext
 import yaff.sampling.iterative
-from IMLCV.base.bias import Bias
-from IMLCV.base.bias import Energy
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.MdEngine import StaticMdInfo
-from IMLCV.base.MdEngine import time
-from IMLCV.base.MdEngine import TrajectoryInfo
 from yaff.sampling.verlet import VerletIntegrator
+
+from IMLCV.base.bias import Bias, Energy
+from IMLCV.base.CV import SystemParams
+from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 
 
 @dataclass

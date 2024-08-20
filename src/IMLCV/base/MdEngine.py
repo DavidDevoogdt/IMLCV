@@ -5,10 +5,8 @@ Currently, the MD is done with YAFF
 from __future__ import annotations
 
 import tempfile
-from abc import ABC
-from abc import abstractmethod
-from dataclasses import dataclass
-from dataclasses import fields
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, fields
 from pathlib import Path
 from time import time
 
@@ -16,24 +14,16 @@ import cloudpickle
 import h5py
 import jax.numpy as jnp
 import jsonpickle
-from IMLCV import unpickler
-from IMLCV.base.bias import Bias
-from IMLCV.base.bias import Energy
-from IMLCV.base.bias import EnergyResult
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import NeighbourList, NeighbourListInfo
-from IMLCV.base.CV import SystemParams
-from jax import Array
+from flax.struct import PyTreeNode, field
+from jax import Array, jit
+from jax.lax import dynamic_update_slice_in_dim
 from molmod.periodic import periodic
-from molmod.units import angstrom
-from molmod.units import bar
-from molmod.units import kjmol
+from molmod.units import angstrom, bar, kjmol
 from typing_extensions import Self
 
-from flax.struct import PyTreeNode, field
-from jax import jit
-
-from jax.lax import dynamic_update_slice_in_dim
+from IMLCV import unpickler
+from IMLCV.base.bias import Bias, Energy, EnergyResult
+from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, SystemParams
 
 ######################################
 #             Trajectory             #

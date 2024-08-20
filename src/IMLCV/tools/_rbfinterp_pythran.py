@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvMetric
+
+from IMLCV.base.CV import CV, CvMetric
 
 
 def linear(r):

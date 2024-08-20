@@ -1,18 +1,15 @@
 # taken from https://github.com/shashankdholakia/harmonix/blob/main/src/harmonix/utils.py
 
-import jax.numpy as jnp
-import jax
-from jax import jit
 from functools import partial
 
-from jax.scipy.special import gamma
-
-
-from jax._src.lax import lax
-from jax._src.typing import Array, ArrayLike
-from jax._src.numpy.util import check_arraylike, promote_dtypes_inexact, _where
+import jax
+import jax.numpy as jnp
+from jax import jit
 from jax._src.custom_derivatives import custom_jvp
-
+from jax._src.lax import lax
+from jax._src.numpy.util import _where, check_arraylike, promote_dtypes_inexact
+from jax._src.typing import Array, ArrayLike
+from jax.scipy.special import gamma
 
 # config.update("jax_enable_x64", True)
 

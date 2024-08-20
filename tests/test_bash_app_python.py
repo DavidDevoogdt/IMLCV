@@ -1,9 +1,8 @@
 import jax.numpy as jnp
-from IMLCV.base.CV import CvFlow
-from IMLCV.base.CV import SystemParams
+import pytest
+from IMLCV.base.CV import CvFlow, SystemParams
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.CV import dihedral
-import pytest
 
 
 def f_test_parallel(i):
@@ -59,8 +58,9 @@ def test_py_env(tmp_path, config_test):
 
 
 def _f_MPI(i):
-    from mpi4py import MPI
     from time import sleep
+
+    from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()

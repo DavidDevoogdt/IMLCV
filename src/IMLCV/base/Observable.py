@@ -1,26 +1,20 @@
 from __future__ import annotations
 
 import itertools
+from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpy as np
-from IMLCV.base.bias import Bias
-from IMLCV.base.bias import BiasModify
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvMetric
-from IMLCV.base.rounds import Rounds
-from IMLCV.configs.bash_app_python import bash_app_python
-from IMLCV.implementations.bias import _clip
-from IMLCV.implementations.bias import RbfBias
-from molmod.units import kjmol
-from molmod.units import picosecond
+from jax.tree_util import Partial
+from molmod.units import kjmol, picosecond
 from parsl import File
 
-from jax.tree_util import Partial
-from dataclasses import dataclass
-from IMLCV.base.rounds import data_loader_output
+from IMLCV.base.bias import Bias, BiasModify
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
+from IMLCV.base.rounds import Rounds, data_loader_output
+from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
+from IMLCV.implementations.bias import RbfBias, _clip
 
 
 @dataclass(kw_only=True)
@@ -128,10 +122,11 @@ class Observable:
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
-        from IMLCV.base.CV import padded_shard_map
         from thermolib.thermodynamics.bias import BiasPotential2D
         from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
         from thermolib.thermodynamics.histogram import HistogramND
+
+        from IMLCV.base.CV import padded_shard_map
 
         class _ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:

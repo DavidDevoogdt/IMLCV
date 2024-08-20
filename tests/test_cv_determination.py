@@ -6,16 +6,12 @@ import pytest
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import ROOT_DIR
-from IMLCV.examples.example_systems import alanine_dipeptide_refs
-from IMLCV.examples.example_systems import alanine_dipeptide_yaff
-from IMLCV.implementations.CV import NoneCV, SystemParams, NeighbourList, CV, NeighbourListInfo
-from IMLCV.implementations.CV import sb_descriptor
-from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder
-from IMLCV.implementations.CvDiscovery import TransoformerLDA
+from IMLCV.examples.example_systems import alanine_dipeptide_refs, alanine_dipeptide_yaff
+from IMLCV.implementations.CV import CV, NeighbourList, NeighbourListInfo, NoneCV, SystemParams, sb_descriptor
+from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder, TransoformerLDA
 from IMLCV.implementations.tensorflow.CvDiscovery import TranformerUMAP
 from IMLCV.scheme import Scheme
-from molmod.units import angstrom
-from molmod.units import kjmol
+from molmod.units import angstrom, kjmol
 
 
 def get_rounds_ala(tmpdir) -> Rounds:

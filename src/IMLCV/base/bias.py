@@ -1,41 +1,24 @@
 from __future__ import annotations
-from abc import ABC
-from abc import abstractmethod
+
+from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import fields
-from dataclasses import KW_ONLY
+from dataclasses import KW_ONLY, fields
 from functools import partial
 from pathlib import Path
-from typing import Callable
-from typing import TYPE_CHECKING
-import cloudpickle
+from typing import TYPE_CHECKING, Callable
+
 import jax
 import jax.numpy as jnp
 import jsonpickle
-import matplotlib.gridspec as gridspec
-import matplotlib.pyplot as plt
-import numpy as np
-import yaff
-from flax.struct import field
-from flax.struct import PyTreeNode
-from IMLCV import unpickler
-from IMLCV.base.CV import padded_vmap
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import NeighbourList
-from IMLCV.base.CV import SystemParams
-from jax import Array
-from jax import value_and_grad
-from jax import vmap
+from flax.struct import PyTreeNode, field
+from jax import Array, value_and_grad, vmap
 from jax.tree_util import Partial
-from molmod.units import angstrom
-from molmod.units import electronvolt
-from molmod.units import kjmol
 from molmod.constants import boltzmann
+from molmod.units import angstrom, electronvolt, kjmol
 from typing_extensions import Self
 
-
-yaff.log.set_level(yaff.log.silent)
+from IMLCV import unpickler
+from IMLCV.base.CV import CV, CollectiveVariable, NeighbourList, SystemParams, padded_vmap
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine
@@ -159,6 +142,8 @@ class Energy:
             with open(filename, "w") as f:
                 f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
+            import cloudpickle
+
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
@@ -170,6 +155,8 @@ class Energy:
             with open(filename) as f:
                 self = jsonpickle.decode(f.read(), context=unpickler)
         else:
+            import cloudpickle
+
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
 
@@ -336,6 +323,10 @@ class Bias(PyTreeNode, ABC):
         offset=False,
         dpi=300,
     ):
+        import matplotlib.gridspec as gridspec
+        import matplotlib.pyplot as plt
+        import numpy as np
+
         """plot bias."""
         if bins is None:
             bins, _, _, _ = self.collective_variable.metric.grid(
@@ -665,6 +656,8 @@ class Bias(PyTreeNode, ABC):
             with open(filename, "w") as f:
                 f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
         else:
+            import cloudpickle
+
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
@@ -675,6 +668,8 @@ class Bias(PyTreeNode, ABC):
             with open(filename) as f:
                 self = jsonpickle.decode(f.read(), context=unpickler)
         else:
+            import cloudpickle
+
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
 

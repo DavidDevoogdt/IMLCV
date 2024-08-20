@@ -2,14 +2,8 @@ import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
 import jax.scipy.optimize
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvFunInput
-from IMLCV.base.CV import CvTrans
-from IMLCV.base.CV import NeighbourList, NeighbourListInfo
-from IMLCV.base.CV import NormalizingFlow
-from IMLCV.base.CV import SystemParams
-from IMLCV.implementations.CV import DistraxRealNVP
-from IMLCV.implementations.CV import RealNVP
+from IMLCV.base.CV import CV, CvFunInput, CvTrans, NeighbourList, NeighbourListInfo, NormalizingFlow, SystemParams
+from IMLCV.implementations.CV import DistraxRealNVP, RealNVP
 from jax import vmap
 
 ######################################

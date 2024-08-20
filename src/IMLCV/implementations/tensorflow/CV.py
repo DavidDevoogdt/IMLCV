@@ -2,15 +2,12 @@ import tempfile
 
 import numpy as np
 import tensorflow as tfl
-from flax.struct import field
-from flax.struct import PyTreeNode
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvFunBase
-from IMLCV.base.CV import NeighbourList
+import tf_keras as keras
+from flax.struct import PyTreeNode, field
 from jax.custom_batching import custom_vmap
 from jax.experimental.jax2tf import call_tf
 
-import tf_keras as keras
+from IMLCV.base.CV import CV, CvFunBase, NeighbourList
 
 
 class PeriodicLayer(keras.layers.Layer):

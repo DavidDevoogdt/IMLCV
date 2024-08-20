@@ -6,10 +6,7 @@ import os
 # import time
 from pathlib import Path
 
-# import parsl.providers.slurm.slurm
-from parsl.providers import SlurmProvider
-from parsl import HighThroughputExecutor
-from parsl import WorkQueueExecutor
+from parsl import HighThroughputExecutor, WorkQueueExecutor
 from parsl.channels import LocalChannel
 from parsl.executors.base import ParslExecutor
 
@@ -19,8 +16,10 @@ from parsl.executors.base import ParslExecutor
 # from parsl.utils import wtime_to_minutes
 from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig
 from parsl.executors.threads import ThreadPoolExecutor
-from parsl.providers import LocalProvider
 from parsl.launchers import SingleNodeLauncher
+
+# import parsl.providers.slurm.slurm
+from parsl.providers import LocalProvider, SlurmProvider
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 

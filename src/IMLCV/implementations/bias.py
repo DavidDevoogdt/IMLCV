@@ -5,14 +5,13 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import numpy as np
 from flax.struct import field
-from IMLCV.base.bias import Bias
-from IMLCV.base.bias import CompositeBias
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV
-from IMLCV.base.MdEngine import MDEngine
-from IMLCV.tools._rbf_interp import RBFInterpolator
 from jax import Array
 from typing_extensions import Self
+
+from IMLCV.base.bias import Bias, CompositeBias
+from IMLCV.base.CV import CV, CollectiveVariable
+from IMLCV.base.MdEngine import MDEngine
+from IMLCV.tools._rbf_interp import RBFInterpolator
 
 ######################################
 # helper functions that are pickable #

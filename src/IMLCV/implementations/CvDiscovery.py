@@ -3,24 +3,17 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import optax
-
 from flax import linen as nn
 from flax.training import train_state
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvFun
-from IMLCV.base.CV import CvTrans
-from IMLCV.base.CV import NeighbourList
-from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.implementations.CV import trunc_svd
-from IMLCV.implementations.CV import un_atomize
-from jax import Array
-from jax import jit
-from jax import random
-from jax import vmap
+from jax import Array, jit, random, vmap
 from molmod.units import nanosecond
 from sklearn.covariance import LedoitWolf
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+
+from IMLCV.base.CV import CV, CvFun, CvTrans, NeighbourList
+from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import data_loader_output
+from IMLCV.implementations.CV import trunc_svd, un_atomize
 
 
 class Encoder(nn.Module):

@@ -2,19 +2,16 @@ from dataclasses import KW_ONLY
 
 import haiku as hk
 import jax.numpy as jnp
+import numpy
 import umap
 from equinox import Partial
-from flax.struct import field
-from flax.struct import PyTreeNode
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvFunBase
-from IMLCV.base.CV import CvTrans
-from IMLCV.base.CV import NeighbourList
-from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.implementations.CV import un_atomize
-import numpy
-from IMLCV.base.rounds import data_loader_output
+from flax.struct import PyTreeNode, field
 from jax import Array
+
+from IMLCV.base.CV import CV, CvFunBase, CvTrans, NeighbourList
+from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.base.rounds import data_loader_output
+from IMLCV.implementations.CV import un_atomize
 
 
 def umap_function(x: CV, nl: NeighbourList, c, enc):

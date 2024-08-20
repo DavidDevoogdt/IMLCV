@@ -10,22 +10,11 @@ import jax.scipy
 import numpy as onp
 import pytest
 import scipy.special
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import SystemParams, NeighbourListInfo
-from IMLCV.implementations.CV import get_sinkhorn_divergence_2
-from IMLCV.implementations.CV import sb_descriptor
-from IMLCV.implementations.CV import soap_descriptor
-from IMLCV.tools.bessel_callback import iv
-from IMLCV.tools.bessel_callback import ive
-from IMLCV.tools.bessel_callback import jv
-from IMLCV.tools.bessel_callback import kv
-from IMLCV.tools.bessel_callback import kve
-from IMLCV.tools.bessel_callback import spherical_jn
-from IMLCV.tools.bessel_callback import spherical_yn
-from IMLCV.tools.bessel_callback import yv
+from IMLCV.base.CV import CollectiveVariable, NeighbourListInfo, SystemParams
+from IMLCV.implementations.CV import get_sinkhorn_divergence_2, sb_descriptor, soap_descriptor
+from IMLCV.tools.bessel_callback import iv, ive, jv, kv, kve, spherical_jn, spherical_yn, yv
 from IMLCV.tools.soap_kernel import p_inl_sb
-from jax import grad
-from jax import vmap
+from jax import grad, vmap
 
 
 def get_sps(

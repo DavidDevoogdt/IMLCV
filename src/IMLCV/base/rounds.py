@@ -6,47 +6,42 @@ import time
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from typing import Callable
 
-import ase
 import jax
 import jax.experimental
 import jax.experimental.sparse
 import jax.experimental.sparse.bcoo
 import jax.numpy as jnp
 import numpy as np
-from equinox import Partial
-from IMLCV.base.bias import Bias
-from IMLCV.base.bias import CompositeBias
-from IMLCV.implementations.bias import RbfBias
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV, CvMetric
-from IMLCV.base.CV import CvTrans, CvFlow
-from IMLCV.base.CV import NeighbourList, NeighbourListInfo
-from IMLCV.base.CV import padded_shard_map
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.MdEngine import StaticMdInfo
-from IMLCV.base.MdEngine import TrajectoryInfo
-from IMLCV.configs.bash_app_python import bash_app_python
-from jax import Array
-from jax.random import choice
-from jax.random import PRNGKey
-from jax.random import split
+from flax.struct import PyTreeNode
+from jax import Array, vmap
+from jax.random import PRNGKey, choice, split
 from molmod.constants import boltzmann
+from molmod.units import kjmol
 from parsl.data_provider.files import File
 
-from typing import Callable
-from jax import vmap
-from functools import partial
-from IMLCV.implementations.bias import _clip
-from IMLCV.base.bias import BiasModify
-from IMLCV.base.CV import padded_vmap, macro_chunk_map
-from IMLCV.base.bias import NoneBias
+from IMLCV.base.bias import Bias, BiasModify, CompositeBias, NoneBias
+from IMLCV.base.CV import (
+    CV,
+    CollectiveVariable,
+    CvFlow,
+    CvMetric,
+    CvTrans,
+    NeighbourList,
+    NeighbourListInfo,
+    SystemParams,
+    macro_chunk_map,
+    padded_shard_map,
+    padded_vmap,
+)
 from IMLCV.base.CVDiscovery import Transformer
-from molmod.units import kjmol
-from flax.struct import PyTreeNode
+from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo
+from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
+from IMLCV.implementations.bias import RbfBias, _clip
 
 
 @dataclass
@@ -1014,6 +1009,7 @@ class Rounds(ABC):
         only_finished=False,
         ignore_invalid=False,
     ):
+        import ase
         from molmod import angstrom
 
         for round, trajejctory in self.iter(
@@ -2917,7 +2913,7 @@ class data_loader_output:
 
         # takes a lot of memory somehow
 
-        prob = Partial(prob, grid_nums_new=grid_nums_new, nums_old=nums_old, p_grid_old=p_grid_old)
+        prob = partial(prob, grid_nums_new=grid_nums_new, nums_old=nums_old, p_grid_old=p_grid_old)
         prob = padded_vmap(prob, chunk_size=chunk_size)
 
         if pmap:
@@ -3232,9 +3228,8 @@ class KoopmanModel(PyTreeNode):
 
             K = cov.C01
 
-            from scipy.sparse.linalg import svds, ArpackNoConvergence
-
             import numpy as np
+            from scipy.sparse.linalg import ArpackNoConvergence, svds
 
             if out_dim is None:
                 out_dim = min(K.shape)
@@ -3443,9 +3438,8 @@ class KoopmanModel(PyTreeNode):
 
         # w_corr_i = sum_j (trans)(x_i)_j * mu_corr_j
 
-        from scipy.sparse.linalg import eigs
-
         import numpy as np
+        from scipy.sparse.linalg import eigs
 
         A = self.C11(power=1 / 2) @ self.K(out_dim=out_dim).T @ self.C00(power=1 / 2)
 
@@ -3846,8 +3840,8 @@ class Covariances(PyTreeNode):
 
         if sym:
             if use_scipy:
-                from scipy.linalg import eigh
                 from numpy import inf
+                from scipy.linalg import eigh
 
                 k, u = eigh(C, subset_by_value=(epsilon, inf))
                 k, u = jnp.array(k), jnp.array(u)

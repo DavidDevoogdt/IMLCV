@@ -5,27 +5,18 @@ import ase.units
 import jax.numpy as jnp
 import numpy as np
 import yaff
-from IMLCV.base.bias import Bias
-from IMLCV.base.bias import NoneBias
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvMetric
-from IMLCV.base.CV import NeighbourList
-from IMLCV.base.CV import SystemParams
+from molmod import units
+from molmod.units import angstrom, kelvin, kjmol
+from yaff.test.common import get_alaninedipeptide_amber99ff
+
+from IMLCV.base.bias import Bias, NoneBias
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
-from IMLCV.implementations.CV import dihedral
-from IMLCV.implementations.CV import NoneCV
-from IMLCV.implementations.CV import Volume
-from IMLCV.implementations.energy import Cp2kEnergy, MACEASE
-from IMLCV.implementations.energy import YaffEnergy
+from IMLCV.implementations.CV import NoneCV, Volume, dihedral
+from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
 from IMLCV.implementations.MdEngine import YaffEngine
-from molmod import units
-from molmod.units import angstrom
-from molmod.units import kelvin
-from molmod.units import kjmol
-from yaff.test.common import get_alaninedipeptide_amber99ff
 
 yaff.log.set_level(yaff.log.silent)
 

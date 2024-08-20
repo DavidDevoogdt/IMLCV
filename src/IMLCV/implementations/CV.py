@@ -1,4 +1,5 @@
 import dataclasses
+from functools import partial
 
 import distrax
 import jax
@@ -8,26 +9,27 @@ import numba
 import numpy as np
 from equinox import Partial
 from flax.linen.linear import Dense
-from IMLCV.base.CV import _CvTrans, CvFlow
-from IMLCV.base.CV import padded_vmap
-from IMLCV.base.CV import CollectiveVariable
-from IMLCV.base.CV import CV
-from IMLCV.base.CV import CvFunDistrax
-from IMLCV.base.CV import CvFunInput
-from IMLCV.base.CV import CvFunNn
-from IMLCV.base.CV import CvMetric
-from IMLCV.base.CV import CvTrans
-from IMLCV.base.CV import NeighbourList, NeighbourListInfo
-from IMLCV.base.CV import SystemParams
-
-from jax import Array
-from jax import vmap
-from ott.geometry.pointcloud import PointCloud
+from jax import Array, vmap
 from ott.geometry.geometry import Geometry
+from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
-from ott.solvers.linear import implicit_differentiation
-from ott.solvers.linear import sinkhorn, solve
-from functools import partial
+from ott.solvers.linear import implicit_differentiation, sinkhorn, solve
+
+from IMLCV.base.CV import (
+    CV,
+    CollectiveVariable,
+    CvFlow,
+    CvFunDistrax,
+    CvFunInput,
+    CvFunNn,
+    CvMetric,
+    CvTrans,
+    NeighbourList,
+    NeighbourListInfo,
+    SystemParams,
+    _CvTrans,
+    padded_vmap,
+)
 
 ######################################
 #       CV transformations           #

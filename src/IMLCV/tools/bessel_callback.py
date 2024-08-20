@@ -1,14 +1,14 @@
+from functools import partial
+
+import jax
 import jax.lax
 import jax.numpy as jnp
 import numpy as onp
 import scipy.special
-from jax import custom_jvp
-from jax import pure_callback
+from jax import custom_jvp, pure_callback
 from jax.custom_batching import custom_vmap
-from IMLCV.tools.bessel_jn import bessel_jn
-from functools import partial
-import jax
 
+from IMLCV.tools.bessel_jn import bessel_jn
 
 # from jax.scipy.special import bessel_jn
 

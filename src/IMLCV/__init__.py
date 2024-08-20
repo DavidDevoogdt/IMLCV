@@ -21,19 +21,17 @@ import logging
 import os
 import sys
 from logging import warning
+
 import jax
-
-
-from jax import random
 import jax._src.tree_util
-import jsonpickle
-from jsonpickle.handlers import BaseHandler
-from jsonpickle import tags
-from jsonpickle.ext.numpy import register_handlers, register
-import numpy as np
 import jax.numpy as jnp
+import jsonpickle
+import numpy as np
 from flax.struct import PyTreeNode
-
+from jax import random
+from jsonpickle import tags
+from jsonpickle.ext.numpy import register, register_handlers
+from jsonpickle.handlers import BaseHandler
 
 logging.getLogger("parsl").setLevel(logging.WARNING)
 
