@@ -2,11 +2,12 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from molmod.units import kjmol
+
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import CsPbI3
 from IMLCV.scheme import Scheme
-from molmod.units import kjmol
 
 
 @pytest.mark.skip(reason="run on HPC")

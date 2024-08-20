@@ -1,30 +1,22 @@
 import os
-from collections.abc import Callable
 from pathlib import Path
 
-import ase.atoms
-import ase.calculators.calculator
-import ase.cell
-import ase.geometry
-import ase.stress
-import ase.units
 import jax.numpy as jnp
 import numpy as np
-import yaff
-from ase.calculators.cp2k import CP2K
 from molmod.units import angstrom, electronvolt
 
 from IMLCV.base.bias import Energy, EnergyError, EnergyResult
 from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
 
-yaff.log.set_level(yaff.log.silent)
-
 
 class YaffEnergy(Energy):
     def __init__(
         self,
-        f: Callable[[], yaff.ForceField],
+        f,  #: Callable[[], yaff.ForceField],
     ) -> None:
+        import yaff
+        import yaff.ForceField
+
         super().__init__()
         self.f = f
         self.ff: yaff.ForceField = f()
@@ -84,8 +76,8 @@ class AseEnergy(Energy):
 
     def __init__(
         self,
-        atoms: ase.Atoms,
-        calculator: ase.calculators.calculator.Calculator | None = None,
+        atoms,  # , : ase.Atoms,
+        calculator=None,  #: ase.calculators.calculator.Calculator | None = None,
     ):
         self.atoms = atoms
 
@@ -104,6 +96,9 @@ class AseEnergy(Energy):
     def cell(self, cell):
         if cell is None:
             return
+
+        import ase
+
         self.atoms.set_cell(ase.geometry.Cell(np.array(cell[:]) / angstrom))
 
     @property
@@ -143,7 +138,7 @@ class AseEnergy(Energy):
 
         return EnergyResult(energy, gpos_out, vtens_out)
 
-    def _calculator(self) -> ase.calculators.calculator.Calculator:
+    def _calculator(self):  # -> ase.calculators.calculator.Calculator:
         raise NotImplementedError
 
     def _handle_exception(self):
@@ -166,6 +161,8 @@ class AseEnergy(Energy):
         clss = state["cc"]
         calc_params = state["calc_args"]
         atom_params = state["atoms"]
+
+        import ase
 
         self.atoms = ase.Atoms.fromdict(**atom_params)
         print(f"setting {atom_params=}")
@@ -196,7 +193,7 @@ class Cp2kEnergy(AseEnergy):
 
     def __init__(
         self,
-        atoms: ase.Atoms,
+        atoms,  # ase.Atoms,
         input_file,
         input_kwargs: dict,
         cp2k_path: Path | None = None,
@@ -260,6 +257,8 @@ class Cp2kEnergy(AseEnergy):
 
         params["command"] = REFERENCE_COMMANDS["cp2k"]
 
+        from ase.calculators.cp2k import CP2K
+
         calc = CP2K(**params)
 
         return calc
@@ -288,6 +287,7 @@ class Cp2kEnergy(AseEnergy):
 
     def __setstate__(self, state):
         # print(f"unpickling {self.__class__}")
+        import ase
 
         atoms_dict, cp2k_inp, input_kwargs, kwargs = state
 
@@ -324,6 +324,8 @@ class MACEASE(AseEnergy):
         return dict
 
     def __setstate__(self, state):
+        import ase
+
         if isinstance(state["atoms"], ase.Atoms):
             self.atoms = state["atoms"]
         else:

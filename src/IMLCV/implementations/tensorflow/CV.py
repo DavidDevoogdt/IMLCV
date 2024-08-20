@@ -1,36 +1,19 @@
 import tempfile
+from typing import TYPE_CHECKING
 
 import numpy as np
-import tensorflow as tfl
-import tf_keras as keras
 from flax.struct import PyTreeNode, field
 from jax.custom_batching import custom_vmap
 from jax.experimental.jax2tf import call_tf
 
 from IMLCV.base.CV import CV, CvFunBase, NeighbourList
 
+if TYPE_CHECKING:
+    import tensorflow as tfl
 
-class PeriodicLayer(keras.layers.Layer):
-    def __init__(self, bbox, periodicity, **kwargs):
-        super().__init__(**kwargs)
 
-        self.bbox = tfl.Variable(np.array(bbox))
-        self.periodicity = np.array(periodicity)
-
-    def call(self, inputs):
-        # maps to periodic box
-        bbox = self.bbox
-
-        inputs_mod = tfl.math.mod(inputs - bbox[:, 0], bbox[:, 1] - bbox[:, 0]) + bbox[:, 0]
-        return tfl.where(self.periodicity, inputs_mod, inputs)
-
-    def metric(self, r):
-        # maps difference
-        a = self.bbox[:, 1] - self.bbox[:, 0]
-
-        r = tfl.math.mod(r, a)
-        r = tfl.where(r > a / 2, r - a, r)
-        return tfl.norm(r, axis=1)
+class tfl_module(PyTreeNode):
+    mod: tfl.Module = field(pytree_node=False, default=None)
 
     def get_config(self):
         config = super().get_config().copy()
@@ -42,12 +25,9 @@ class PeriodicLayer(keras.layers.Layer):
         )
         return config
 
-
-class tfl_module(PyTreeNode):
-    mod: tfl.Module = field(pytree_node=False, default=None)
-
     def __getstate__(self):
         # https://stackoverflow.com/questions/48295661/how-to-pickle-keras-model
+        import tensorflow as tfl
 
         with tempfile.NamedTemporaryFile(suffix=".keras", delete=True) as fd:
             tfl.keras.models.save_model(self.mod, fd.name, overwrite=True)
@@ -58,6 +38,31 @@ class tfl_module(PyTreeNode):
         with tempfile.NamedTemporaryFile(suffix=".keras", delete=True) as fd:
             fd.write(state["mod_str"])
             fd.flush()
+
+            import tensorflow as tfl
+            import tf_keras as keras
+
+            class PeriodicLayer(keras.layers.Layer):
+                def __init__(self, bbox, periodicity, **kwargs):
+                    super().__init__(**kwargs)
+
+                    self.bbox = tfl.Variable(np.array(bbox))
+                    self.periodicity = np.array(periodicity)
+
+                def call(self, inputs):
+                    # maps to periodic box
+                    bbox = self.bbox
+
+                    inputs_mod = tfl.math.mod(inputs - bbox[:, 0], bbox[:, 1] - bbox[:, 0]) + bbox[:, 0]
+                    return tfl.where(self.periodicity, inputs_mod, inputs)
+
+                def metric(self, r):
+                    # maps difference
+                    a = self.bbox[:, 1] - self.bbox[:, 0]
+
+                    r = tfl.math.mod(r, a)
+                    r = tfl.where(r > a / 2, r - a, r)
+                    return tfl.norm(r, axis=1)
 
             custom_objects = {"PeriodicLayer": PeriodicLayer}
             with keras.utils.custom_object_scope(custom_objects):

@@ -1,16 +1,18 @@
 """
-    Dummy conftest.py for IMLCV.
+Dummy conftest.py for IMLCV.
 
-    If you don't know what this is for, just leave it empty.
-    Read more about conftest.py under:
-    - https://docs.pytest.org/en/stable/fixture.html
-    - https://docs.pytest.org/en/stable/writing_plugins.html
+If you don't know what this is for, just leave it empty.
+Read more about conftest.py under:
+- https://docs.pytest.org/en/stable/fixture.html
+- https://docs.pytest.org/en/stable/writing_plugins.html
 """
+
 # import pytest
 import os
 
 import jax
 import pytest
+
 from IMLCV.configs.config_general import config
 
 if os.getenv("_PYTEST_RAISE", "0") != "0":

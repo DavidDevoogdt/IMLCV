@@ -5,7 +5,6 @@ import distrax
 import jax
 import jax.numpy as jnp
 import lineax as lx
-import numba
 import numpy as np
 from equinox import Partial
 from flax.linen.linear import Dense
@@ -1506,6 +1505,8 @@ class MetricUMAP(CvMetric):
 
         # bb = np.array(self.bounding_box)
         per = np.array(self.periodicities)
+
+        import numba
 
         # @numba.njit
         # def map(y):

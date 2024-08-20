@@ -5,7 +5,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import cloudpickle
 import jsonpickle
 from parsl import AUTO_LOGNAME, File, bash_app, python_app
 from parsl.dataflow.futures import AppFuture
@@ -122,6 +121,8 @@ def bash_app_python(
                             jsonpickle.encode((func, args, kwargs, REFERENCE_COMMANDS), indent=1, use_base85=True)
                         )
                 else:
+                    import cloudpickle
+
                     with open(filename, "rb+") as f:
                         cloudpickle.dump((func, args, kwargs, REFERENCE_COMMANDS), f)
 
@@ -144,6 +145,8 @@ def bash_app_python(
                     with open(filename) as f:
                         result = jsonpickle.decode(f.read(), context=unpickler)
                 else:
+                    import cloudpickle
+
                     with open(filename, "rb") as f:
                         result = cloudpickle.load(f)
                 import os
@@ -222,6 +225,9 @@ if __name__ == "__main__":
     os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={len(os.sched_getaffinity(0))}"
     import jax
 
+    jax.config.update("jax_platform_name", "cpu")
+    jax.config.update("jax_enable_x64", True)
+
     if rank == 0:
         print("#" * 20)
         import platform
@@ -246,6 +252,8 @@ if __name__ == "__main__":
             with open(file_in) as f1:
                 func, fargs, fkwargs, ref_com = jsonpickle.decode(f1.read(), context=unpickler)
         else:
+            import cloudpickle
+
             with open(file_in, "rb") as f2:
                 func, fargs, fkwargs, ref_com = cloudpickle.load(f2)
 
@@ -291,6 +299,8 @@ if __name__ == "__main__":
             with open(file_out, "w+") as f3:
                 f3.writelines(jsonpickle.encode(a, use_base85=True))
         else:
+            import cloudpickle
+
             with open(file_out, "wb+") as f4:
                 cloudpickle.dump(a, f4)
 

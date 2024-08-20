@@ -1,4 +1,5 @@
 """Module for RBF interpolation."""
+
 import warnings
 from itertools import combinations_with_replacement
 

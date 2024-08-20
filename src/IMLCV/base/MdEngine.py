@@ -2,6 +2,7 @@
 
 Currently, the MD is done with YAFF
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -757,7 +758,7 @@ class MDEngine(ABC):
             if ti._P is not None:
                 str += f"|{'P[bar]': ^10s}"
             str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
-            ss = "|\u2207\u2093U\u1D47|[Kj/\u212B]"
+            ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
             str += f"|{ ss  : ^13s}"
             str += f"|{' CV': ^10s}"
             print(str, sep="")

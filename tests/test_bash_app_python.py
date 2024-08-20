@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 import pytest
+
 from IMLCV.base.CV import CvFlow, SystemParams
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.CV import dihedral

@@ -1,10 +1,11 @@
 import functools
 
-import tensorflow as tf
 from jax.experimental.jax2tf import call_tf
 
 
 def loop_batcher(prim, args, dims, **params):
+    import tensorflow as tf
+
     # do partial application of args on given position"
     def apply(batch_args, f, static_args, static_pos):
         arguments = []

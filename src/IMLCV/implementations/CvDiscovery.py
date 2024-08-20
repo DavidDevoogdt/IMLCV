@@ -2,13 +2,10 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import optax
 from flax import linen as nn
 from flax.training import train_state
 from jax import Array, jit, random, vmap
 from molmod.units import nanosecond
-from sklearn.covariance import LedoitWolf
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 
 from IMLCV.base.CV import CV, CvFun, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
@@ -169,6 +166,8 @@ class TranformerAutoEncoder(Transformer):
         #     return -jnp.sum(
         #         labels * logits + (1.0 - labels) * jnp.log(-jnp.expm1(logits))
         #     )
+
+        import optax
 
         @jax.jit
         def train_step(state: optax.TraceState, batch, z_rng):
@@ -385,6 +384,8 @@ class TransoformerLDA(Transformer):
         cv, _, _ = un_atomize.compute_cv_trans(cv)
 
         if method == "sklearn":
+            from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+
             labels = []
             for i, cvi in enumerate(cv_list):
                 labels.append(jnp.full(cvi.shape[0], i))
@@ -436,6 +437,8 @@ class TransoformerLDA(Transformer):
 
             obersevations_within = CV.stack(*[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)])
             observations_between = CV.stack(*[cv_i - mu for cv_i in normed_cv_u])
+
+            from sklearn.covariance import LedoitWolf
 
             cov_w = LedoitWolf(assume_centered=True).fit(obersevations_within.cv).covariance_
             cov_b = LedoitWolf(assume_centered=True).fit(observations_between.cv).covariance_

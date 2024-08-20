@@ -8,7 +8,6 @@ import jax.numpy.linalg
 import jax.random
 import jax.scipy
 import jaxopt
-import matplotlib.pyplot as plt
 import scipy.special
 from jax import Array, lax, vmap
 from jax.tree_util import Partial
@@ -240,6 +239,8 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         x = jnp.linspace(0, jnp.max(zeros), num=1000)
         y = jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1)(n, x)[n, :]
+
+        import matplotlib.pyplot as plt
 
         plt.plot(x, y)
 

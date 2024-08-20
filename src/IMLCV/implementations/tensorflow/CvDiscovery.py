@@ -3,7 +3,6 @@ from dataclasses import KW_ONLY
 import haiku as hk
 import jax.numpy as jnp
 import numpy
-import umap
 from equinox import Partial
 from flax.struct import PyTreeNode, field
 from jax import Array
@@ -128,6 +127,8 @@ class TranformerUMAP(Transformer):
         kwargs["n_components"] = self.outdim
         kwargs["n_neighbors"] = n_neighbors
         kwargs["densmap"] = densmap
+
+        import umap
 
         if parametric:
             # import tensorflow as tf

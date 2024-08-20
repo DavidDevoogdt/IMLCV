@@ -3,6 +3,9 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from molmod import units
+from molmod.units import kelvin
+
 from IMLCV.base.bias import Bias, BiasF, CompositeBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvFlow, CvMetric, CvTrans, NeighbourListInfo, SystemParams
 from IMLCV.base.rounds import Rounds
@@ -10,8 +13,6 @@ from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import BiasMTD, HarmonicBias, RbfBias
 from IMLCV.implementations.CV import Volume, dihedral
 from IMLCV.implementations.energy import YaffEnergy
-from molmod import units
-from molmod.units import kelvin
 
 ######################################
 #              test                  #
@@ -101,9 +102,10 @@ def test_RBF_bias(kernel):
 
 
 def test_combine_bias():
+    from yaff.test.common import get_alaninedipeptide_amber99ff
+
     from IMLCV.base.MdEngine import StaticMdInfo
     from IMLCV.implementations.MdEngine import YaffEngine
-    from yaff.test.common import get_alaninedipeptide_amber99ff
 
     T = 300 * kelvin
 

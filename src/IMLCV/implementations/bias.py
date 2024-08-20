@@ -2,7 +2,6 @@ from collections.abc import Iterable
 
 import jax
 import jax.numpy as jnp
-import jax.scipy as jsp
 import numpy as np
 from flax.struct import field
 from jax import Array
@@ -338,5 +337,6 @@ class GridBias(Bias):
         # scale to array size and offset extra row
         coords = coords * (self.n - 1) + 1
 
-        # type: ignore
+        import jax.scipy as jsp
+
         return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)

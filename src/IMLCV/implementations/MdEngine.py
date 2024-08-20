@@ -2,37 +2,38 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import jax.numpy as jnp
 import numpy as np
-import yaff.analysis.biased_sampling
-import yaff.external
-import yaff.log
-import yaff.pes.bias
-import yaff.pes.ext
-import yaff.sampling.iterative
-from yaff.sampling.verlet import VerletIntegrator
 
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 
+if TYPE_CHECKING:
+    import yaff
+    import yaff.analysis.biased_sampling
+    import yaff.external
+    import yaff.log
+    import yaff.pes.bias
+    import yaff.pes.ext
+    import yaff.sampling.iterative
+    from yaff.sampling.verlet import VerletIntegrator
+
 
 @dataclass
-class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
+class YaffEngine(MDEngine):
     """MD engine with YAFF as backend.
 
     Args:
         ff (yaff.pes.ForceField)
     """
 
-    start = 0
-
     _verlet_initialized: bool = False
     _verlet: yaff.sampling.VerletIntegrator | None = None
-    _yaff_ener: YaffFF | None = None
-    name = "YaffEngineIMLCV"
-    additional_parts: list[yaff.ForcePart] = field(default_factory=list)
+    _yaff_ener: Any | None = None
+    additional_parts: list[Any] = field(default_factory=list)
 
     @classmethod
     def create(  # type: ignore[override]
@@ -83,22 +84,85 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
             **kwargs,
         )
 
-    def __call__(self, iterative: VerletIntegrator):
-        if not self._verlet_initialized:
-            return
-
-        kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
-
-        if hasattr(iterative, "press"):
-            kwargs["P"] = iterative.press
-
-        self.save_step(**kwargs)
-
-    def expects_call(self, counter):
-        return True
-
     def _setup_verlet(self):
-        hooks = [self]
+        hooks = []
+
+        import yaff
+
+        yaff.log.set_level(0)
+
+        # myhook calls save_step
+        class myHook(yaff.sampling.iterative.Hook):
+            def __init__(self, md_engine: YaffEngine):
+                self.md_engine = md_engine
+
+                super().__init__()
+
+            def __call__(self, iterative: VerletIntegrator):
+                kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
+
+                if hasattr(iterative, "press"):
+                    kwargs["P"] = iterative.press
+
+                self.md_engine.save_step(**kwargs)
+
+            def expects_call(self, counter):
+                return True
+
+        class YaffFF(yaff.pes.ForceField):
+            def __init__(
+                self,
+                md_engine: YaffEngine,
+                name="IMLCV_YAFF_forcepart",
+                additional_parts=[],
+            ):
+                self.md_engine = md_engine
+
+                super().__init__(system=self.system, parts=additional_parts)
+
+            @property
+            def system(self):
+                return self.md_engine.yaff_system
+
+            @system.setter
+            def system(self, sys):
+                assert sys == self.system
+
+            @property
+            def sp(self):
+                return self.md_engine.energy.sp
+
+            def update_rvecs(self, rvecs):
+                self.clear()
+                self.system.cell.rvecs = rvecs
+
+            def update_pos(self, pos):
+                self.clear()
+                self.system.pos = pos
+
+            def _internal_compute(self, gpos, vtens):
+                energy = self.md_engine.get_energy(
+                    gpos is not None,
+                    vtens is not None,
+                )
+
+                cv, bias = self.md_engine.get_bias(
+                    gpos is not None,
+                    vtens is not None,
+                )
+
+                res = energy + bias
+
+                self.md_engine.last_ener = energy
+                self.md_engine.last_bias = bias
+                self.md_engine.last_cv = cv
+
+                if res.gpos is not None:
+                    gpos[:] += np.array(res.gpos, dtype=np.float64)
+                if res.vtens is not None:
+                    vtens[:] += np.array(res.vtens, dtype=np.float64)
+
+                return res.energy
 
         self._yaff_ener = YaffFF(
             md_engine=self,
@@ -123,10 +187,12 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
                 ),
             )
 
-        # plumed hook
-        for i in self.additional_parts:
-            if isinstance(i, yaff.sampling.iterative.Hook):
-                hooks.append(i)
+        # # plumed hook
+        # for i in self.additional_parts:
+        #     if isinstance(i, yaff.sampling.iterative.Hook):
+        #         hooks.append(i)
+
+        hooks.append(myHook(self))
 
         self._verlet = yaff.sampling.VerletIntegrator(
             self._yaff_ener,
@@ -160,62 +226,6 @@ class YaffEngine(MDEngine, yaff.sampling.iterative.Hook):
     @property
     def yaff_system(self) -> YaffSys:
         return YaffSys(self.energy, self.static_trajectory_info)
-
-
-class YaffFF(yaff.pes.ForceField):
-    def __init__(
-        self,
-        md_engine: YaffEngine,
-        name="IMLCV_YAFF_forcepart",
-        additional_parts=[],
-    ):
-        self.md_engine = md_engine
-
-        super().__init__(system=self.system, parts=additional_parts)
-
-    @property
-    def system(self):
-        return self.md_engine.yaff_system
-
-    @system.setter
-    def system(self, sys):
-        assert sys == self.system
-
-    @property
-    def sp(self):
-        return self.md_engine.energy.sp
-
-    def update_rvecs(self, rvecs):
-        self.clear()
-        self.system.cell.rvecs = rvecs
-
-    def update_pos(self, pos):
-        self.clear()
-        self.system.pos = pos
-
-    def _internal_compute(self, gpos, vtens):
-        energy = self.md_engine.get_energy(
-            gpos is not None,
-            vtens is not None,
-        )
-
-        cv, bias = self.md_engine.get_bias(
-            gpos is not None,
-            vtens is not None,
-        )
-
-        res = energy + bias
-
-        self.md_engine.last_ener = energy
-        self.md_engine.last_bias = bias
-        self.md_engine.last_cv = cv
-
-        if res.gpos is not None:
-            gpos[:] += np.array(res.gpos, dtype=np.float64)
-        if res.vtens is not None:
-            vtens[:] += np.array(res.vtens, dtype=np.float64)
-
-        return res.energy
 
 
 @dataclass

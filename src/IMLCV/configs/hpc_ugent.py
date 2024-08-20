@@ -1,24 +1,13 @@
 import logging
-
-# import math
 import os
-
-# import time
 from pathlib import Path
 
 from parsl import HighThroughputExecutor, WorkQueueExecutor
 from parsl.channels import LocalChannel
 from parsl.executors.base import ParslExecutor
-
-# from parsl.jobs.states import JobState
-# from parsl.providers.base import JobStatus
-# from parsl.providers.slurm.template import template_string
-# from parsl.utils import wtime_to_minutes
 from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig
 from parsl.executors.threads import ThreadPoolExecutor
 from parsl.launchers import SingleNodeLauncher
-
-# import parsl.providers.slurm.slurm
 from parsl.providers import LocalProvider, SlurmProvider
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent

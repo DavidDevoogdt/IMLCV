@@ -4,10 +4,8 @@ import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
-import yaff
 from molmod import units
 from molmod.units import angstrom, kelvin, kjmol
-from yaff.test.common import get_alaninedipeptide_amber99ff
 
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams
@@ -17,8 +15,6 @@ from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import NoneCV, Volume, dihedral
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
 from IMLCV.implementations.MdEngine import YaffEngine
-
-yaff.log.set_level(yaff.log.silent)
 
 DATA_ROOT = ROOT_DIR / "data"
 
@@ -65,6 +61,8 @@ def alanine_dipeptide_yaff(
         bias_cv0 = bias(cv0)
 
     print(bias_cv0)
+
+    from yaff.test.common import get_alaninedipeptide_amber99ff
 
     mde = YaffEngine.create(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
@@ -142,6 +140,8 @@ def alanine_dipeptide_refs():
 def mil53_yaff():
     T = 300 * units.kelvin
     P = 1 * units.atm
+
+    import yaff
 
     def f():
         rd = ROOT_DIR / "data" / "MIL53"
