@@ -544,11 +544,11 @@ class TransformerMAF(Transformer):
         km = dlo.koopman_model(
             cv_0=x,
             cv_tau=x_t,
-            eps=1e-10,
+            # eps=1e-10,
             method=method,
             max_features=max_features,
             w=w,
-            koopman_weight=False,  # this is not a good idea because the features will most likely not be able to predict a good ground state. Moreover, it doesn,t work well with T_scale
+            koopman_weight=True,
             add_1=True,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
@@ -558,7 +558,7 @@ class TransformerMAF(Transformer):
 
         ts = km.timescales() / nanosecond
 
-        print(f"timescales {  ts[: min(self.outdim+5,len(ts))  ]   } ns")
+        print(f"timescales {  ts[1: min(self.outdim+5,len(ts-1))  ]   } ns")
 
         trans_km = km.f(out_dim=self.outdim)
 

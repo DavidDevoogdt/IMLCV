@@ -61,8 +61,8 @@ def get_slurm_provider(
         if env == "hortense":
             print("setting python env for hortense")
             py_env = """
-export MAMBA_EXE=$VSC_HOME/IMLCV_scratch/bin/micromamba
-export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV_scratch/micromamba
+export MAMBA_EXE=$VSC_HOME/2024_026/IMLCV/bin/micromamba
+export MAMBA_ROOT_PREFIX=$VSC_HOME/2024_026/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py312
 which python

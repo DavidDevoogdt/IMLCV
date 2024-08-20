@@ -16,9 +16,7 @@ from IMLCV.implementations.bias import RbfBias
 from molmod.units import kjmol
 from molmod.units import picosecond
 from parsl import File
-from thermolib.thermodynamics.bias import BiasPotential2D
-from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
-from thermolib.thermodynamics.histogram import HistogramND
+
 from jax.tree_util import Partial
 from dataclasses import dataclass
 from IMLCV.base.rounds import data_loader_output
@@ -26,7 +24,7 @@ from IMLCV.configs.config_general import Executors
 
 
 @dataclass(kw_only=True)
-class ThermoLIB:
+class Observable:
     """class to convert data and CVs to different thermodynamic/ kinetic
     observables."""
 
@@ -44,7 +42,7 @@ class ThermoLIB:
         rnd=None,
         cv_round: int | None = None,
         collective_variable: CollectiveVariable | None = None,
-    ) -> ThermoLIB:
+    ) -> Observable:
         if cv_round is None:
             cv_round = rounds.cv
 
@@ -57,7 +55,7 @@ class ThermoLIB:
             b = rounds.get_bias(c=cv_round, r=rnd)
             collective_variable = b.collective_variable
 
-        return ThermoLIB(
+        return Observable(
             cv_round=cv_round,
             rnd=rnd,
             rounds=rounds,
@@ -131,6 +129,9 @@ class ThermoLIB:
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
         from IMLCV.base.CV import padded_shard_map
+        from thermolib.thermodynamics.bias import BiasPotential2D
+        from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
+        from thermolib.thermodynamics.histogram import HistogramND
 
         class _ThermoBiasND(BiasPotential2D):
             def __init__(self, bias: Bias, chunk_size=None, num=None) -> None:
@@ -228,7 +229,7 @@ class ThermoLIB:
         }
 
         fes, grid, bounds = bash_app_python(
-            ThermoLIB._fes_nd_thermolib,
+            Observable._fes_nd_thermolib,
             executors=Executors.training,
         )(
             dlo_kwargs=dlo_kwargs,
@@ -341,6 +342,7 @@ class ThermoLIB:
             divide_by_histogram=divide_by_histogram,
             n_max=n_max,
             wham=kooopman_wham,
+            uniform=True,
         )
 
         # get weights based on koopman theory. the CVs are binned with indicators
@@ -348,7 +350,6 @@ class ThermoLIB:
             koopman=koopman,
             indicator_CV=True,
             n_max=n_max,
-            # n_max_koopman=20,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=verbose,
@@ -406,7 +407,7 @@ class ThermoLIB:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
         return bash_app_python(
-            ThermoLIB._fes_nd_weights,
+            Observable._fes_nd_weights,
             executors=Executors.training,
         )(
             rounds=self.rounds,

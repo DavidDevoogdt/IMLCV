@@ -79,7 +79,7 @@ def _n_unpad(x, axis, shape, pmap=False, move_pmap_axis=True):
     return jnp.apply_along_axis(lambda x: x[:shape], axis, x)
 
 
-def _shard(x_padded, axis, axis_name, mesh, unflatten=False):
+def _shard(x_padded, axis, axis_name, mesh, put=True, unflatten=False):
     x_padded, tree_def = tree_flatten(x_padded)
 
     shardings = []
@@ -90,7 +90,9 @@ def _shard(x_padded, axis, axis_name, mesh, unflatten=False):
         ps[axis] = axis_name
         spec = PartitionSpec(*ps)
         sharding = jshard.NamedSharding(mesh, spec)
-        x_padded[i] = jax.device_put(x_padded[i], sharding)
+
+        if put:
+            x_padded[i] = jax.device_put(x_padded[i], sharding)
 
         shardings.append(sharding)
 
@@ -127,13 +129,12 @@ def padded_shard_map(
     f,
     axis=0,
     out_axes: int = 0,
-    axis_name: str | None = None,
+    axis_name: str | None = "i",
     n_devices: int | None = None,
     pmap=False,
 ):
     # helper function to pad pytree, apply pmap and unpad the result
 
-    # @partial(jit, static_argnames=("axis", "n_devices", "out_axes", "axis_name", "pmap"))
     def apply_pmap_fn(
         *args: PyTreeNode,
         axis: int = 0,
@@ -147,6 +148,7 @@ def padded_shard_map(
             n_devices = jax.device_count("cpu")
 
         if n_devices == 1:
+            print(f"no schmap, only 1 devices {jax.devices()=}")
             return f(*args)
 
         in_tree, _ = tree_flatten(args)
@@ -160,9 +162,6 @@ def padded_shard_map(
             p = 0
 
         devices = mesh_utils.create_device_mesh((n_devices,), jax.devices())
-        # devices = mesh_utils.create_device_mesh((n_devices,), jax.devices()[:n_devices])
-
-        # print(f"{jax.tree.map( jnp.shape, args  )=} {shape=}  ")
 
         in_tree_padded = jax.tree.map(
             Partial(
@@ -176,23 +175,17 @@ def padded_shard_map(
             args,
         )
 
-        # print(f"pmap {jax.tree.map( jnp.shape, in_tree_padded)=} {(n_devices)=}   {shape/n_devices}")
-
         if pmap:
 
             def _f(x):
-                # print(f"inside pmap {  jax.tree.map( jnp.shape,x  )=}")
-
                 return f(*x)
 
             out = jax.pmap(
                 _f,
                 devices=devices,
-                in_axes=axis,
-                out_axes=out_axes,
+                in_axes=0,
+                out_axes=0,
             )(in_tree_padded)
-
-            # print(f"out {jax.tree.map( jnp.shape, out)=}")
 
         else:
             # TODO convert to shard_map
@@ -204,21 +197,28 @@ def padded_shard_map(
                 axis,
                 axis_name,
                 mesh,
+                put=not explicit_shmap,
                 unflatten=True,
             )
 
+            # explicit: sharding is done by the user
+            # otherwise the compiler figures it out
             if explicit_shmap:
                 out = shard_map(
                     lambda x: f(*x),
                     mesh=mesh,
                     in_specs=PartitionSpec(axis_name),
                     out_specs=PartitionSpec(axis_name),
-                    check_rep=True,
+                    check_rep=False,  # sometimes throws unnecessary errors
                 )(in_tree_padded)
 
             else:
                 in_tree_padded, sharding, specs, tree_def = _shard(
-                    in_tree_padded, axis, axis_name, mesh, unflatten=not explicit_shmap
+                    in_tree_padded,
+                    axis,
+                    axis_name,
+                    mesh,
+                    unflatten=not explicit_shmap,
                 )
 
                 out = jax.jit(
@@ -607,7 +607,7 @@ class SystemParams(PyTreeNode):
         update: NeighbourListUpdate | None = None,
         chunk_size=None,
         verbose=False,
-        chunk_size_inner=None,
+        chunk_size_inner=10,
         shmap=True,
         only_update=False,
     ) -> tuple[bool, NeighbourListUpdate, NeighbourList | None]:
@@ -887,6 +887,7 @@ class SystemParams(PyTreeNode):
         self,
         info: NeighbourListInfo,
         chunk_size=None,
+        chunk_size_inner=10,
         verbose=False,
         shmap=True,
         only_update=False,
@@ -897,6 +898,7 @@ class SystemParams(PyTreeNode):
         _, nn, _, nl = self._get_neighbour_list(
             info=info,
             chunk_size=chunk_size,
+            chunk_size_inner=chunk_size_inner,
             verbose=verbose,
             shmap=shmap,
             only_update=only_update,
@@ -1603,7 +1605,7 @@ class NeighbourList(PyTreeNode):
             return f(self, sp)
         # calculate nl on the fly
         if self.needs_calculation:
-            _, self = self.update_nl(sp, shmap=shmap, chunk_size=chunk_size_batch, verbose=True)
+            _, self = self.update_nl(sp, shmap=shmap, chunk_size_inner=chunk_size_batch, verbose=True)
 
         if r_cut is None:
             r_cut = self.info.r_cut
@@ -1727,7 +1729,7 @@ class NeighbourList(PyTreeNode):
             _, self = self.update_nl(
                 sp,
                 shmap=shmap,
-                chunk_size=chunk_size_batch,
+                chunk_size_inner=chunk_size_batch,
             )
 
         pos = self.neighbour_pos(sp)
@@ -1882,12 +1884,20 @@ class NeighbourList(PyTreeNode):
 
         return max_displacement > self.info.r_skin / 2
 
-    @partial(jax.jit, static_argnames=("chunk_size", "shmap", "verbose"))
-    def update_nl(self, sp: SystemParams, chunk_size=None, shmap=True, verbose=False) -> tuple[bool, NeighbourList]:
+    @partial(jax.jit, static_argnames=("chunk_size", "shmap", "verbose", "chunk_size_inner"))
+    def update_nl(
+        self,
+        sp: SystemParams,
+        chunk_size=None,
+        chunk_size_inner=10,
+        shmap=True,
+        verbose=False,
+    ) -> tuple[bool, NeighbourList]:
         a, _, _, b = sp._get_neighbour_list(
             info=self.info,
             update=self.update,
             chunk_size=chunk_size,
+            chunk_size_inner=chunk_size_inner,
             shmap=shmap,
             verbose=verbose,
         )

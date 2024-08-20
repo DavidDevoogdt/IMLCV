@@ -115,6 +115,10 @@ class Transformer:
         w = dlo.weights(
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
+            koopman=True,
+            verbose=verbose,
+            samples_per_bin=samples_per_bin,
+            n_max=n_max,
         )
 
         if plot:

@@ -48,8 +48,6 @@ from molmod.units import kjmol
 from flax.struct import PyTreeNode
 from IMLCV.configs.config_general import Executors
 
-import itertools
-
 
 @dataclass
 class TrajectoryInformation:
@@ -623,7 +621,7 @@ class Rounds(ABC):
                     chunk_size=chunk_size,
                     koopman=False,
                     n_max=n_max,
-                    wham_sub_grid=3,  # quick settings
+                    # wham_sub_grid=3,  # quick settings
                     verbose=verbose,
                     output_bincount=divide_by_histogram,
                     wham=wham,
@@ -728,9 +726,9 @@ class Rounds(ABC):
 
         def choose(
             key,
-            weight: Array,
+            weight: Array | None,
             out: int,
-            len: int,
+            len: int | None,
             histogram_prob: Array | None = None,
             T_scale=1,
         ):
@@ -2067,29 +2065,30 @@ class data_loader_output:
     def weights(
         self,
         samples_per_bin=50,
-        n_max=50,
-        n_max_koopman=100,
+        n_max=30,
+        n_max_koopman=50,
         ground_bias=None,
-        use_ground_bias=True,
-        sign=1,
+        # use_ground_bias=True,
+        # sign=1,
         chunk_size=None,
         wham=True,
-        koopman=True,
+        koopman=False,
         indicator_CV=True,
-        wham_sub_grid=5,
+        # wham_sub_grid=5,
         wham_eps=1e-10,
-        koopman_eps=1e-10,
+        koopman_eps=1e-12,
         cv_0: list[CV] | None = None,
         cv_t: list[CV] | None = None,
         force_recalc=False,
         macro_chunk=1000,
         verbose=False,
         output_bincount=False,
-        max_features_koopman=800,
+        max_features_koopman=10000,
         margin=0.1,
-        add_1=None,
+        add_1=True,
         bias_cutoff=1e10,
-        cluster_fraction=0.1,
+        # cluster_fraction=0.1,
+        only_diag=False,
     ) -> list[jax.Array]:
         if cv_0 is None:
             cv_0 = self.cv
@@ -2228,66 +2227,11 @@ class data_loader_output:
                         macro_chunk=macro_chunk,
                     )
 
-                N_tot = jnp.sum(w_stacked > 0)
-
                 def get_wham(w_unstacked, grid_nums):
                     hist = get_histo(grid_nums, [wi > 0 for wi in w_unstacked])
                     hist_mask = get_histo(grid_nums, w_unstacked) > 0
 
-                    # print(f"{jnp.sum(hist)=}")
-
-                    # # creating grid
-                    # dx = []
-                    # sg = []
-                    # for b in bins:
-                    #     d = b[1] - b[0]
-                    #     ls = jnp.linspace(-d / 2, d / 2, num=wham_sub_grid)
-                    #     dx.append(ls[1:] - ls[:-1])
-                    #     sg.append(ls)
-
-                    # mg = jnp.meshgrid(*sg, indexing="ij")
-                    # dx = jnp.array(dx)
-                    # sub_mg = CV(cv=jnp.reshape(jnp.array(mg), (-1, mg[0].size)).T)
-                    # shape = mg[0].shape
-
-                    # grid_cv = CV.stack(*[sub_mg + x.cv for x in cv_mid])
-                    # if verbose:
-                    #     print(f"{grid_cv.shape=}")
-                    #     print("step 2: getting biases")
-
-                    # # weighing the biases on the grid
-                    # @partial(vmap, in_axes=(0, None))
-                    # def _b_ik(sg_b, offset):
-                    #     sg_b = sg_b.reshape(shape)
-
-                    #     sg_b = jnp.exp(-beta * (sg_b - offset))
-
-                    #     # sg_b = jnp.exp(-beta * sg_b)
-
-                    #     for _ in range(len(shape)):
-                    #         sg_b = jnp.trapezoid(sg_b, axis=0) / sg_b.shape[0]
-
-                    #     return sg_b
-
-                    # print(f"{jnp.sum(hist_i_mask)=}")
-
-                    # if bi is None:
-                    #     raise
-
-                    # o = bi.compute_from_cv(
-                    #     cvs=grid_cv,
-                    # )[0]
-
-                    # b_k = jnp.reshape(o, (cv_mid.shape[0], -1))
-                    # b_k = _b_ik(b_k, offset_i[i])[hist_mask]
-
-                    # # b_k = jnp.where(
-                    # #     hist_i_mask, b_k, 0
-                    # # )  # infite bias if there are no samples for trajectory i in bin k
-
                     b_ik = jnp.zeros((len(w_unstacked), jnp.sum(hist_mask)))
-
-                    # print(f"{jnp.sum(hist_mask)=}")
 
                     for i in range(len(w_unstacked)):
                         # mask part of potential that is not sampled
@@ -2303,67 +2247,9 @@ class data_loader_output:
 
                     log_b_ik = jnp.where(b_ik > 0, jnp.log(b_ik), -jnp.inf)
 
-                    # print(f"{ hist.reshape((n_hist-1,n_hist-1))=}")
-
-                    #     if verbose:
-                    #         print(".", end="")
-
-                    #         if (i + 1) % 10 == 0:
-                    #             print("")
-                    # if verbose:
-                    #     print("")
-
-                    # peerfomring self consistent cycle
-
-                    # print(f"{f_i=}")
-
-                    # take intial guess from ground bias
-                    # if ground_bias is not None:
-                    #     a_k = jnp.exp(
-                    #         -beta * self.ground_bias.compute_from_cv(cvs=cv_mid[hist_mask], chunk_size=chunk_size)[0]
-                    #     )
-                    #     a_k /= jnp.sum(a_k)
-                    # else:
                     log_a_k = jnp.zeros((b_ik.shape[1],))
-                    # log_a_k /= jnp.sum(log_a_k)
 
                     N_i = jnp.array([jnp.sum(wi > 0) for wi in w_unstacked])
-
-                    # from jaxopt import ProjectedGradient
-                    # from jaxopt.projection import projection_simplex
-
-                    # def T(a_k, x):
-                    #     b_ik, N_i, hist_k = x
-
-                    #     a_k = jnp.where(a_k < 1e-14, 1e-14, a_k)
-
-                    #     f = jnp.einsum("k,ik->i", a_k, b_ik)
-
-                    #     f_safe = jnp.where(f > 0, f, 1)
-                    #     f_inv = jnp.where(f > 0, 1 / f_safe, 0)
-
-                    #     denom = jnp.einsum("i,i,ik->k", f_inv, N_i, b_ik)
-                    #     denom_safe = jnp.where(denom > 0, denom, 1)
-
-                    #     denom_inv = jnp.where(denom > 0, 1 / denom_safe, 0)
-                    #     a_k_new = hist_k * denom_inv
-
-                    #     a_k_new /= jnp.sum(a_k_new)
-
-                    #     return jnp.sum((a_k_new - a_k) ** 2) / jnp.sum(a_k**2)
-
-                    # fpi = ProjectedGradient(
-                    #     fun=T,
-                    #     projection=projection_simplex,  # probability distribution
-                    #     maxiter=10000,
-                    #     tol=1e-6,
-                    # )
-
-                    # out = fpi.run(
-                    #     a_k,
-                    #     hyperparams_proj=1.0,
-                    #     x=(b_ik, N_i, hist[hist_mask]),
-                    # )
 
                     def T(log_a_k, x):
                         log_b_ik, N_i, hist_k = x
@@ -2424,8 +2310,6 @@ class data_loader_output:
                         + log_b_ik_max
                     )
 
-                    # print(f"{log_f=}")
-
                     f = jnp.exp(log_f)
 
                     mask = f < 0
@@ -2442,61 +2326,14 @@ class data_loader_output:
                     w_stacked *= n  # muliply proportional to the number of samples that were used
                     return probs, mask, n
 
-                i = 0
-
                 w_unstacked = unstack_w(w_stacked)
 
-                # w_unstacked = get_wham(
-                #     unstack_w(w_stacked),
-                #     grid_nums,
-                # )
+                w_unstacked, _, _ = get_wham(
+                    w_unstacked,
+                    grid_nums,
+                )
 
                 w_stacked = jnp.hstack(w_unstacked)
-
-                w_unstacked_i = [None] * len(w_unstacked)
-
-                i_mask = jnp.full((len(sd),), True)
-
-                # perform wham and collect trajectories with very low probability
-                # perform wham again on those
-                while jnp.sum(i_mask) != 0:
-                    w_u_ind = []
-                    g_u_ind = []
-
-                    for ind in jnp.argwhere(i_mask).reshape(-1):
-                        w_u_ind.append(w_unstacked[int(ind)])
-                        g_u_ind.append(grid_nums[int(ind)])
-
-                    w_s_i, j_mask, nn = get_wham(
-                        w_u_ind,
-                        g_u_ind,
-                    )
-
-                    got_cluster = nn > N_tot * cluster_fraction
-
-                    if got_cluster:
-                        a = 1.0
-                        i += 1
-
-                        print(f"found cluster with {nn=} {nn/N_tot:.2%}")
-                    else:
-                        a = 0.0
-                        print(f"didn't find cluster {int(nn)=} {nn/N_tot:.2%}")
-
-                    ind_i_mask = jnp.argwhere(i_mask).reshape(-1)
-                    for ind_n in jnp.argwhere(jnp.logical_not(j_mask)).reshape(-1):
-                        w_unstacked_i[int(ind_i_mask[ind_n])] = w_s_i[ind_n] * a
-
-                    i_mask = i_mask.at[i_mask].set(j_mask)
-
-                w_stacked = jnp.hstack(w_unstacked_i)
-
-                if i > 1:
-                    print(
-                        f"found {i} disconnected parts while performing wham, which span more than {cluster_fraction:.2%} !"
-                    )
-
-                # take average off all disconected parts
 
                 w_stacked = check_w(w_stacked)
                 w_stacked = norm_w(w_stacked)
@@ -2520,12 +2357,10 @@ class data_loader_output:
             if indicator_CV:
                 cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
                     metric=self.collective_variable.metric,
-                    n_grid=n_max_koopman,
+                    n_grid=n_max,
                     grid_bounds=grid_bounds,
                     chunk_size=chunk_size,
                 )
-
-                # n_max_koopman
 
                 grid_nums, grid_nums_t = self.apply_cv_trans(
                     closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk
@@ -2570,13 +2405,13 @@ class data_loader_output:
                 symmetric=False,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-                out_dim=None,
+                out_dim=50,
                 verbose=verbose,
                 eps=koopman_eps,
                 trans=tr,
                 max_features=max_features_koopman,
-                only_diag=False,
-                calc_pi=True,
+                only_diag=only_diag,
+                calc_pi=False,
             )
 
             if verbose:
@@ -2657,7 +2492,6 @@ class data_loader_output:
         cv_tau: list[CV] | None = None,
         symmetric=False,
         w=None,
-        add_1=False,
         eps=1e-10,
         max_features=2000,
         macro_chunk=10000,
@@ -2679,13 +2513,14 @@ class data_loader_output:
             calc_pi=calc_pi,
             only_diag=only_diag,
             symmetric=symmetric,
-            trans=trans,
+            trans_f=trans,
+            trans_g=trans,
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
             T_scale=T_scale,
         )
 
-        print(f"{cov=}")
+        # print(f"{cov=}")
 
         l, q, argmask = cov.diagonalize(
             "C00",
@@ -2694,7 +2529,7 @@ class data_loader_output:
             verbose=verbose,
         )
 
-        print(f"{l=}")
+        # print(f"{l=}")
 
         if canoncial_signs and not only_diag:
             signs = jax.vmap(lambda q: jnp.sign(q[jnp.argmax(jnp.abs(q))]), in_axes=1)(q)
@@ -2708,8 +2543,6 @@ class data_loader_output:
 
         transform_maf = CvTrans.from_cv_function(
             data_loader_output._transform,
-            static_argnames=["add_1"],
-            add_1=add_1,
             q=q,
             l=l_inv_sqrt,
             pi=pi,
@@ -2718,9 +2551,9 @@ class data_loader_output:
 
         if verbose:
             if only_diag:
-                print(f"applying transformation. {l.shape=}")
+                print(f"whitened shape: {l.shape=}")
             else:
-                print(f"applying transformation. {q.shape=}")
+                print(f"whitened shape: {q.shape=}")
 
         if transform_cv:
             if trans is None:
@@ -2738,7 +2571,7 @@ class data_loader_output:
                 verbose=False,
             )
 
-        return cv_0, cv_tau, transform_maf, cov.pi_0, q, l, argmask
+        return cv_0, cv_tau, transform_maf, l
 
     def koopman_model(
         self,
@@ -2750,7 +2583,7 @@ class data_loader_output:
         w: list[jax.Array] | None = None,
         eps=1e-10,
         max_features=2000,
-        out_dim=None,
+        out_dim=50,
         add_1=True,
         chunk_size=None,
         macro_chunk=10000,
@@ -2758,7 +2591,7 @@ class data_loader_output:
         trans=None,
         T_scale=1,
         only_diag=False,
-        calc_pi=True,
+        calc_pi=False,
     ) -> KoopmanModel:
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
         assert method in ["tica", "tcca"]
@@ -3186,7 +3019,15 @@ class data_loader_output:
         self.cv = x
         self.cv_t = x_t
 
-    def calc_neighbours(self, r_cut, chunk_size=None, macro_chunk=10000, verbose=False, only_update=False):
+    def calc_neighbours(
+        self,
+        r_cut,
+        chunk_size=None,
+        macro_chunk=10000,
+        verbose=False,
+        only_update=False,
+        chunk_size_inner=10,
+    ):
         if self.time_series:
             y = [*self.sp, *self.sp_t]
         else:
@@ -3204,6 +3045,7 @@ class data_loader_output:
             b, _, _, nl = sp._get_neighbour_list(
                 info=nl_info,
                 chunk_size=chunk_size,
+                chunk_size_inner=chunk_size_inner,
                 shmap=False,
                 only_update=only_update,
             )
@@ -3231,20 +3073,12 @@ class data_loader_output:
 
 
 class KoopmanModel(PyTreeNode):
-    shape: int
-
-    pi_0: jax.Array | None
-    pi_1: jax.Array | None
-    q_0: jax.Array | None
-    q_1: jax.Array | None
-    l_0: jax.Array
-    l_1: jax.Array
-    argmask_0: jax.Array | None
-    argmask_1: jax.Array | None
-
     U: jax.Array
     s: jax.Array
     Vh: jax.Array
+
+    l0: jax.Array
+    l1: jax.Array
 
     cv_0: list[CV]
     cv_tau: list[CV]
@@ -3276,7 +3110,7 @@ class KoopmanModel(PyTreeNode):
         eps=1e-15,
         method="tcca",
         symmetric=False,
-        out_dim=None,
+        out_dim=50,
         koopman_weight=False,
         max_features=None,
         tau=None,
@@ -3286,31 +3120,32 @@ class KoopmanModel(PyTreeNode):
         trans: CvTrans | None = None,
         T_scale=1,
         only_diag=False,
-        calc_pi=True,
+        calc_pi=False,
     ):
         if max_features is None:
             max_features = cv_0[0].shape[1]
 
-        if trans is not None:
-            shape = jax.eval_shape(lambda x: trans.compute_cv_trans(x)[0], cv_0[0]).shape[1]
-
-            print(f"{shape=}")
-        else:
-            shape = cv_0[0].shape[1]
+        if add_1:
+            if trans is not None:
+                trans = trans * CvTrans.from_cv_function(KoopmanModel._add_1)
+            else:
+                trans = CvTrans.from_cv_function(KoopmanModel._add_1)
 
         if method == "tica":
-            (cv0_white, cv_tau_white, f_trans, pi, q, l, argmask) = data_loader_output._whiten(
+            (cv0_white, cv_tau_white, f_trans, l) = data_loader_output._whiten(
                 cv_0=cv_0,
                 cv_tau=cv_tau,
                 symmetric=symmetric,
                 w=w,
-                add_1=add_1,
                 eps=eps,
                 max_features=max_features,
                 verbose=verbose,
                 trans=trans,
                 T_scale=T_scale,
             )
+
+            l0 = l
+            l1 = l
 
             g_trans = None
 
@@ -3328,17 +3163,11 @@ class KoopmanModel(PyTreeNode):
             k, u = cov.diagonalize(
                 "C01",
                 epsilon=eps,
-                out_dim=out_dim,
             )
 
-            pi_0, pi_1 = pi, pi
-            q_0, q_1 = q, q
-            l_0, l_1 = l, l
             U = u
             s = k
             Vh = jnp.linalg.inv(u)
-            argmask_0 = argmask
-            argmask_1 = argmask
 
         elif method == "tcca":
             # TODO
@@ -3346,13 +3175,11 @@ class KoopmanModel(PyTreeNode):
             # it is not neccecary to remove mean
             # this means that indicator CV covariances are diagonal, reducing memory consumption
 
-            (cv0_white, _, f_trans, pi_0, q_0, l_0, argmask_0) = data_loader_output._whiten(
+            (_, _, f_trans, l0) = data_loader_output._whiten(
                 cv_0=cv_0,
-                cv_tau=cv_tau,
                 w=w,
                 eps=eps,
                 max_features=max_features,
-                add_1=add_1,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 verbose=verbose,
@@ -3360,28 +3187,14 @@ class KoopmanModel(PyTreeNode):
                 T_scale=T_scale,
                 calc_pi=calc_pi,
                 only_diag=only_diag,
+                transform_cv=False,
             )
 
-            g_trans, pi_1, q_1, l_1, argmask_1 = f_trans, pi_0, q_0, l_0, argmask_0
-
-            # cv_tau_white, _ = f_trans.compute_cv_trans(cv_tau, chunk_size=chunk_size)
-
-            # cv_tau_white, _ = data_loader_output._apply(
-            #     x=cv_tau,
-            #     x_t=None,
-            #     nl=None,
-            #     nl_t=None,
-            #     f=lambda x, nl: f_trans.compute_cv_trans(x, nl, chunk_size=chunk_size)[0],
-            #     macro_chunk=macro_chunk,
-            #     verbose=verbose,
-            # )
-
-            (cv_tau_white, _, g_trans, pi_1, q_1, l_1, argmask_1) = data_loader_output._whiten(
+            (_, _, g_trans, l1) = data_loader_output._whiten(
                 cv_0=cv_tau,
                 w=w,
                 eps=eps,
                 max_features=max_features,
-                add_1=add_1,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 verbose=verbose,
@@ -3389,14 +3202,16 @@ class KoopmanModel(PyTreeNode):
                 T_scale=T_scale,
                 calc_pi=calc_pi,
                 only_diag=only_diag,
+                transform_cv=False,
             )
 
             if verbose:
                 print("koopman':gettig covariance")
 
-            cov = Covariances.create(
-                cv_0=cv0_white,
-                cv_1=cv_tau_white,
+            # this doens't need to be mean free.
+            cov: Covariances = Covariances.create(
+                cv_0=cv_0,
+                cv_1=cv_tau,
                 w=w,
                 symmetric=False,
                 calc_pi=False,
@@ -3405,15 +3220,55 @@ class KoopmanModel(PyTreeNode):
                 macro_chunk=macro_chunk,
                 calc_C00=False,
                 calc_C11=False,
+                trans_f=trans * f_trans if trans is not None else f_trans,
+                trans_g=trans * g_trans if trans is not None else g_trans,
             )
 
             if verbose:
                 print("koopman': SVD")
 
-            # if out_dim is None:
-            U, s, Vh = jnp.linalg.svd(cov.C01)
+            # TK = C00^{-1/2} C01' C11^{-1/2}
+            # C01' in transformed basis
 
-            mask = s > 0
+            K = cov.C01
+
+            from scipy.sparse.linalg import svds, ArpackNoConvergence
+
+            import numpy as np
+
+            if out_dim is None:
+                out_dim = min(K.shape)
+            else:
+                out_dim = min(out_dim, min(K.shape))
+
+            print(f"{out_dim=}")
+
+            try:
+                U, s, Vh = svds(np.array(K), which="LM", k=int(out_dim))
+            except ArpackNoConvergence as e:
+                print(f"ArpackNoConvergence: {e}, trying again with full matrix")
+                U, s, Vh = jax.numpy.linalg.svd(K)
+
+            U = jnp.array(U)
+            s = jnp.array(s)
+            Vh = jnp.array(Vh)
+
+            idx = jnp.argsort(s)[::-1]
+
+            if len(idx) > out_dim:
+                idx = idx[:out_dim]
+
+            U = U[:, idx]
+            s = s[idx]
+            Vh = Vh[idx, :]
+
+            q0 = f_trans.trans[0].kwargs["q"]
+            q1 = g_trans.trans[0].kwargs["q"]
+
+            U = q0 @ U
+            Vh = Vh @ q1.T
+
+            mask = s > eps
             if jnp.sum(jnp.logical_not(mask)) > 0:
                 print(f"found {jnp.sum(jnp.logical_not(mask))}  singular values smaller than {eps=}, removing")
 
@@ -3430,12 +3285,6 @@ class KoopmanModel(PyTreeNode):
         print(f"{add_1=}")
 
         km = KoopmanModel(
-            pi_0=pi_0,
-            pi_1=pi_1,
-            q_0=q_0,
-            q_1=q_1,
-            l_0=l_0,
-            l_1=l_1,
             U=U,
             s=s,
             Vh=Vh,
@@ -3451,10 +3300,9 @@ class KoopmanModel(PyTreeNode):
             T_scale=T_scale,
             f_trans=f_trans,
             g_trans=g_trans,
-            argmask_0=argmask_0,
-            argmask_1=argmask_1,
             only_diag=only_diag,
-            shape=shape,
+            l0=l0,
+            l1=l1,
         )
 
         if koopman_weight:
@@ -3466,108 +3314,53 @@ class KoopmanModel(PyTreeNode):
 
         return km
 
-    @property
-    def _q0(self):
-        if self.only_diag:
-            __q0 = jnp.eye(self.shape)[:, self.argmask_0]
-        else:
-            __q0 = self.q_0
-
-        if self.add_1:
-            out = jnp.zeros((__q0.shape[0] + 1, __q0.shape[1] + 1))
-            out = out.at[1:, :-1].set(__q0)
-            out = out.at[0, -1].set(1)
-
-            return out
-        return __q0
+    @staticmethod
+    def _add_1(
+        cv,
+        nl,
+        _,
+        shmap,
+    ):
+        return cv.replace(cv=jnp.hstack([cv.cv, jnp.array([1])]))
 
     @property
-    def _q1(self):
-        if self.only_diag:
-            __q1 = jnp.eye(self.shape)[:, self.argmask_1]
-        else:
-            __q1 = self.q_1
-
-        if self.add_1:
-            out = jnp.zeros((__q1.shape[0] + 1, __q1.shape[1] + 1))
-            out = out.at[1:, :-1].set(self.q_1)
-            out = out.at[0, -1].set(1)
-
-            return out
-        return __q1
+    def f_kwargs(self):
+        return self.f_trans.trans[0].kwargs
 
     @property
-    def _l0(self):
-        if self.add_1:
-            return jnp.hstack([self.l_0, jnp.array([1])])
-        return self.l_0
+    def g_kwargs(self):
+        return self.g_trans.trans[0].kwargs
 
-    @property
-    def _l1(self):
-        if self.add_1:
-            return jnp.hstack([self.l_1, jnp.array([1])])
-        return self.l_1
+    def C00(self, power=1):
+        return self.f_kwargs["q"] @ jnp.diag(self.l0_power(power)) @ self.f_kwargs["q"].T
 
-    def C00(self, pow=1):
-        return self._q0 @ jnp.diag(self.l0_pow(pow)) @ self._q0.T
+    def C11(self, power=1):
+        return self.g_kwargs["q"] @ jnp.diag(self.l1_power(power)) @ self.g_kwargs["q"].T
 
-    def C11(self, pow=1):
-        return self._q1 @ jnp.diag(self.l1_pow(pow)) @ self._q1.T
+    def K(self, out_dim=None):
+        if out_dim is None:
+            out_dim = self.U.shape[1]
+
+        return self.U[:, :out_dim] @ jnp.diag(self.s[:out_dim]) @ self.Vh[:out_dim, :]
 
     def Tk(self, out_dim=None):
         # Optimal Data-Driven Estimation of Generalized Markov State Models for Non-Equilibrium Dynamics eq. 30
 
-        if out_dim is None:
-            out_dim = self.U.shape[1]
-
-        Tk = (
-            self._q1
-            @ jnp.diag(self.l1_pow(-1 / 2))
-            @ self.Vh.T[:, :out_dim]
-            @ jnp.diag(self.s[:out_dim])
-            @ self.U.T[:out_dim, :]
-            @ jnp.diag(self.l0_pow(1 / 2))
-            @ self._q0.T
-        )
+        Tk = self.C11(power=-1 / 2) @ self.K(out_dim).T @ self.C00(power=1 / 2)
 
         return Tk
 
-    def whiten_f(self):
-        return CvTrans.from_cv_function(
-            data_loader_output._transform,
-            static_argnames=["add_1"],
-            add_1=False,
-            q=self.q_0,
-            l=self.l0_pow(-1 / 2),
-            pi=self.pi_0,
-            argmask=self.argmask_0,
-        )
-
-    def whiten_g(self):
-        return CvTrans.from_cv_function(
-            data_loader_output._transform,
-            static_argnames=["add_1"],
-            add_1=False,
-            q=self.q_1,
-            l=jnp.diag(self.l1_pow(-1 / 2)),
-            pi=self.pi_1,
-            argmask=self.argmask_1,
-        )
-
     def f(self, out_dim=None):
-        pi = self.pi_0
+        # this performs y =  (trans*f_trans)(x) @ U[:,:out_dim], but stores smaller matrices
 
+        pi = self.f_kwargs["pi"]
+        o = self.C00(power=-1 / 2) @ self.U
+
+        # find eigenvalues largest non constant eigenvalues
         if self.add_1:
-            o = jnp.diag(self.l0_pow(-1 / 2)[:-1]) @ self.U[:-1, 1:]
+            o = o[:, 1:]
 
-        else:
-            o = jnp.diag(self.l0_pow(-1 / 2)) @ self.U
-
-        if self.q_0 is not None:
-            o = self.q_0 @ o
-
-        if out_dim is not None:
-            o = o[:, :out_dim]
+        o = o[:, :out_dim]
 
         tr = CvTrans.from_cv_function(
             data_loader_output._transform,
@@ -3575,7 +3368,7 @@ class KoopmanModel(PyTreeNode):
             add_1=False,
             q=o,
             pi=pi,
-            argmask=self.argmask_0,
+            argmask=self.f_kwargs["argmask"],
         )
 
         if self.trans is not None:
@@ -3584,16 +3377,16 @@ class KoopmanModel(PyTreeNode):
         return tr
 
     def g(self, out_dim=None):
-        pi = self.pi_1
+        # this performs y =  (trans*g_trans)(x) @ Vh[:out_dim,:], but stores smaller matrices
 
+        pi = self.g_kwargs["pi"]
+        o = self.C11(power=-1 / 2) @ self.Vh.T
+
+        # find eigenvalues largest non constant eigenvalues
         if self.add_1:
-            o = jnp.diag(self.l1_pow(-1 / 2)[:-1]) @ self.Vh[:-1, 1 : out_dim + 1]
+            o = o[1:, :]
 
-        else:
-            o = jnp.diag(self.l1_pow(-1 / 2)) @ self.Vh[:, :out_dim]
-
-        if self.q_1 is not None:
-            o = self.q_1 @ o
+        o = o[:out_dim, :]
 
         tr = CvTrans.from_cv_function(
             data_loader_output._transform,
@@ -3601,7 +3394,7 @@ class KoopmanModel(PyTreeNode):
             add_1=False,
             q=o,
             pi=pi,
-            argmask=self.argmask_1,
+            argmask=self.g_kwargs["argmask"],
         )
 
         if self.trans is not None:
@@ -3609,20 +3402,20 @@ class KoopmanModel(PyTreeNode):
 
         return tr
 
-    def l0_pow(self, pow=1, add_1=None, eps=None):
+    def l0_power(self, power=1, add_1=None, eps=None):
         if eps is None:
             eps = self.eps
 
-        if pow < 0:
-            return jnp.where(self._l0 > eps, self._l0**pow, 0)
+        if power < 0:
+            return jnp.where(self.l0 > eps, self.l0**power, 0)
 
-        return self._l0**pow
+        return self.l0**power
 
-    def l1_pow(self, pow=1):
-        if pow < 0:
-            return jnp.where(self._l1 > self.eps, self._l1**pow, 0)
+    def l1_power(self, power=1):
+        if power < 0:
+            return jnp.where(self.l1 > self.eps, self.l1**power, 0)
 
-        return self._l1**pow
+        return self.l1**power
 
     def koopman_weight(
         self,
@@ -3630,43 +3423,39 @@ class KoopmanModel(PyTreeNode):
         chunk_size=None,
         macro_chunk=10000,
         retarget=True,
-        epsilon=1e-3,
-    ) -> list[jax.Array]:
-        n = jnp.sum(jnp.abs(self.s - 1) < epsilon)  # important to avoid numerical issues
+        epsilon=1e-4,
+        max_entropy=True,
+    ) -> tuple[list[jax.Array], list[jax.Array] | None]:
+        n = jnp.sum(jnp.abs(self.s - 1) < 1e-6)  # important to avoid numerical issues
 
-        if n == 0:
-            print(f"Warning: No eigenvalues of koopman model within {epsilon=} of 1. aborting")
-            return self.w, None
+        # print(f"{n=}")
 
-        out_dim = self.s.shape[0]
+        # n = 1
+
+        out_dim = n
 
         # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
         # create T_k in the trans basis
-        # T_k = C00^{-1} C11 T_k
-        # T_k w_corr =  1 * w_corr
-        # this leads to the generalized eigenvlaue problem
-        # C11 T_k w_corr = 1 * C00 w_corr
+        # T_n = C00^{-1} C11 T_k
+        # T_K = C11^{-1/2} U S Vh C00^{1/2}
+        # T_n mu_corr =  (lambda=1) * mu_corr
+        # C11^{1/2} K^T C00^{1/2} mu_corr = C00  mu_corr
+
+        # w_corr_i = sum_j (trans)(x_i)_j * mu_corr_j
 
         from scipy.sparse.linalg import eigs
 
         import numpy as np
 
-        A = (
-            self._q1
-            @ jnp.diag(self.l1_pow(1 / 2))
-            @ self.Vh.T[:, :out_dim]
-            @ jnp.diag(self.s[:out_dim])
-            @ self.U.T[:out_dim, :]
-            @ jnp.diag(self.l0_pow(1 / 2))
-            @ self._q0.T
-        )
-        M = self._q0 @ jnp.diag(self.l0_pow(1)) @ self._q0.T
-        Minv = self._q0 @ jnp.diag(self.l0_pow(-1)) @ self._q0.T
+        A = self.C11(power=1 / 2) @ self.K(out_dim=out_dim).T @ self.C00(power=1 / 2)
+
+        M = self.C00(power=1)  # this is diagonal
+        M_inv = self.C00(power=-1)  # this is diagonal
 
         l, v = eigs(
             A=np.array(A),
             M=np.array(M),
-            Minv=np.array(Minv),
+            Minv=np.array(M_inv),
             k=int(n),
             which="LM",
         )
@@ -3674,8 +3463,10 @@ class KoopmanModel(PyTreeNode):
         l = jnp.array(l)
         v = jnp.array(v)
 
+        # print(f"got eig A, {l=} {v=}")
+
         # remove complex eigenvalues, as they cannot be the ground state
-        real = jnp.isreal(l)
+        real = jnp.abs(jnp.imag(l)) < 1e-10
         l = l[real]
         v = v[:, real]
 
@@ -3684,25 +3475,28 @@ class KoopmanModel(PyTreeNode):
         l = jnp.real(l[idx])
         v = jnp.real(v[:, idx])
 
-        out_dim = l.shape[0]
+        out_dim = jnp.sum(jnp.abs(l - 1) < epsilon)
 
-        print(f"got eig A, {l=} Taking {l[0]}  ")
+        assert out_dim > 0, "no eigenvalues found, consider using add_1"
 
-        assert out_dim > 0, "no real eigenvalues found"
+        l = l[:out_dim]
+        v = v[:, :out_dim]
 
-        @partial(CvTrans.from_cv_function, v=v)
-        def _get_w(cv: CV, _nl, _, shmap, v: Array):
-            if self.add_1:
-                o = jnp.einsum("i,ij->j", cv.cv, v[:-1]) + v[-1, :]
-            else:
-                o = jnp.einsum("i,ij->j", cv.cv, v)
+        print(f"{l=}")
 
-            return cv.replace(cv=jnp.reshape(o, (-1,)))
+        @partial(CvTrans.from_cv_function, v=v, argmask=self.f_kwargs["argmask"])
+        def _get_w(cv: CV, _nl, _, shmap, v: Array, argmask: Array | None):
+            x = cv.cv
+
+            if argmask is not None:
+                x = x[argmask]
+
+            return cv.replace(cv=jnp.einsum("i,ij->j", x, v))
+
+        tr = _get_w
 
         if self.trans is not None:
-            tr = self.trans * _get_w
-        else:
-            tr = _get_w
+            tr = self.trans * tr
 
         w_corr_cv, _ = data_loader_output._apply(
             x=self.cv_0,
@@ -3714,95 +3508,80 @@ class KoopmanModel(PyTreeNode):
             verbose=verbose,
         )
 
-        w_corr = CV.stack(*w_corr_cv).cv.reshape((-1, out_dim))
+        w_corr = CV.stack(*w_corr_cv).cv
 
-        # # best done in log space to avoid numerical issues
+        # @partial(vmap, in_axes=(1,), out_axes=0)
+        def norm(w):
+            w = w
 
-        log_w_corr = jnp.log(jnp.abs(w_corr))
-        sign_w_corr = jnp.sign(w_corr)
+            s = jnp.sum(w)
 
-        log_w = jnp.log(jnp.hstack(self.w))
+            w = jnp.where(s < 0, -w, w)
 
-        print(f"{jnp.sum(jnp.hstack(self.w)==0)=} zeros in w")
+            w_pos = jnp.where(w > 0, w, 0)
+            w_neg = jnp.where(w < 0, -w, 0)
 
-        @partial(vmap, in_axes=(1, None, 1), out_axes=1)
-        def w_normed(log_w_corr, log_w, sign):
-            log_w = jnp.zeros_like(log_w_corr)
+            n = jnp.sum(w_pos)
 
-            m = jnp.max(log_w_corr + log_w)
+            w_pos /= n
+            w_neg /= n
 
-            log_w_tot = log_w + log_w_corr - (jnp.log(jnp.sum(jnp.exp(log_w_corr + log_w - m))) + m)
+            frac_neg = jnp.sum(w_neg)
 
-            return jnp.exp(log_w_tot) * sign
+            n_neg = jnp.sum(jnp.where(w < 0, 1, 0))
 
-        w_out = w_normed(log_w_corr, log_w, sign_w_corr)
-        w_out /= jnp.sign(jnp.sum(w_out, axis=0))
+            return w_pos, frac_neg, n_neg
 
-        # frac = jnp.sum(w_out, axis=0)
+        l0_idx = jnp.argmin(jnp.abs(l - 1)).reshape((-1,))
+        l0 = l[l0_idx]
+        idx = jnp.argwhere(jnp.abs(l - l0) < epsilon).reshape((-1,))
 
-        # idx = jnp.abs(1 - frac) < 1e-3  # only modes with 99.9% of the prob
+        w_corr = w_corr[:, idx]
+        l = l[idx]
 
-        # if jnp.sum(idx) == 0:
-        #     print("Warning: no modes with 99.9% of the prob found, aborting")
-        #     return self.w, None
+        if len(l) >= 0:
+            print("mutliple valid distributions found, minimazing negative fraction")
 
-        # w_out = w_out[:, idx]
-        # l = l[idx]
+            from jaxopt import ProjectedGradient
+            from jaxopt.projection import projection_l1_sphere
 
-        # if jnp.sum(idx) > 1:
-        #     print(f"{jnp.sum(idx)} modes with 99.9% of the prob found. finding minimal norm linear combination")
+            def fun(alpha, w_corr):
+                w = jnp.einsum("i,ji->j", alpha, w_corr)
 
-        import jaxopt
+                w_pos, frac_neg, n_neg = norm(w)
 
-        def get_w(params, w, l):
-            wj = jnp.einsum("ij,j,j->i", w, params, l)
+                return frac_neg
 
-            wj = jax.lax.cond(jnp.sum(wj) > 0, lambda _wj: _wj, lambda _wj: -_wj, wj)
+            pg = ProjectedGradient(
+                fun=fun,
+                projection=projection_l1_sphere,
+            )
 
-            prob_mass = jnp.sum(wj)
+            print(f"{l.shape=} {w_corr.shape=}")
 
-            wj = jnp.where(wj < 0, 0, wj)
+            pg_sol = pg.run(
+                jnp.ones((len(l),)) / len(l),
+                # hyperparams_proj=1.0,
+                w_corr=w_corr,
+            )
 
-            return wj, -prob_mass
+            print(f"{pg_sol=}")
 
-        # # make linear combination that results in positive weights
-        def obj(params, w, l):
-            return get_w(params, w, l)[1]
+            w_corr = jnp.einsum("i,ji->j", pg_sol.params, w_corr)
+        else:
+            w_corr = w_corr[:, 0]
 
-        solver = jaxopt.ProjectedGradient(
-            fun=obj,
-            projection=jaxopt.projection.projection_l1_sphere,
-            maxiter=10000,
-            tol=1e-10,
-        )
+        w_corr, frac_neg, n_neg = norm(w_corr)
 
-        res = solver.run(
-            init_params=jnp.ones((w_corr.shape[1],)),
-            hyperparams_proj=1,
-            w=w_out,
-            l=l,
-        )
+        print(f"{l=} {frac_neg=} {n_neg=}")
 
-        print(f"{jnp.sum(w_out,axis=0)=} {res=} ")
-
-        alpha = res.params
-
-        # alpha = jnp.where(jnp.sum(w_out, axis=0) < 1e-3, 1, 0)  # select modes with more than 99% of the prob
-        # alpha /= jnp.sum(alpha)
-
-        # alpha = l
-        # alpha /= jnp.sum(alpha)
-
-        w_out, _ = get_w(alpha, w_out, jnp.ones_like(l))
-
-        print(f"{jnp.sum(w_out)=:.2%} of the total prob is captured. weighted eigenvalue: {jnp.sum(alpha*l)} ")
-
-        w_out *= jnp.hstack(self.w)
+        w_out = w_corr * jnp.hstack(self.w)
         w_out /= jnp.sum(w_out)
 
         w_out = data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_out)
+        w_corr = data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_corr)
 
-        return w_out, _
+        return w_out, w_corr
 
     def weighted_model(
         self,
@@ -3857,7 +3636,8 @@ class Covariances(PyTreeNode):
     pi_1: jax.Array | None
 
     only_diag: bool = False
-    trans: CvTrans | None = None
+    trans_f: CvTrans | None = None
+    trans_g: CvTrans | None = None
     T_scale: float = 1
     symmetric: bool = False
 
@@ -3866,27 +3646,27 @@ class Covariances(PyTreeNode):
         cv_1: list[CV] | None = None,
         w: list[Array] | None = None,
         calc_pi=False,
-        macro_chunk=10000,
+        macro_chunk=1000,
         chunk_size=None,
         only_diag=False,
-        trans: CvTrans | None = None,
+        trans_f: CvTrans | None = None,
+        trans_g: CvTrans | None = None,
         T_scale=1,
         symmetric=False,
         calc_C00=True,
         calc_C01=True,
         calc_C11=True,
     ) -> Covariances:
-        # TODO trans
         n = sum([cvi.shape[0] for cvi in cv_0])
 
-        if trans is not None:
-            cv0_shape = jax.eval_shape(lambda x: trans.compute_cv_trans(x)[0].cv, cv_0[0]).shape
+        if trans_f is not None:
+            cv0_shape = jax.eval_shape(lambda x: trans_f.compute_cv_trans(x)[0].cv, cv_0[0]).shape
         else:
             cv0_shape = cv_0[0].shape
 
         if cv_1 is not None:
-            if trans is not None:
-                cv1_shape = jax.eval_shape(lambda x: trans.compute_cv_trans(x)[0].cv, cv_1[0]).shape
+            if trans_g is not None:
+                cv1_shape = jax.eval_shape(lambda x: trans_g.compute_cv_trans(x)[0].cv, cv_1[0]).shape
             else:
                 cv1_shape = cv_1[0].shape
 
@@ -3906,6 +3686,7 @@ class Covariances(PyTreeNode):
         else:
             pi_1 = None
 
+        @jax.jit
         def cov_pi(carry, z_chunk, w):
             if time_series:
                 cv0, cv1 = z_chunk.split()
@@ -3915,58 +3696,43 @@ class Covariances(PyTreeNode):
             else:
                 x0 = z_chunk.cv
 
-            if only_diag:
-                str = "ni,ni,n->i"
-            else:
-                str = "ni,nj,n->ij"
+            (C00, C01, C11, pi0, pi1) = carry
+
+            def c(x, y, w, c_pre):
+                if only_diag:
+                    einstr = "ni,ni,n->i"
+                else:
+                    einstr = "ni,nj,n->ij"
+
+                out = jnp.einsum(einstr, x, y, w)
+                if c_pre is not None:
+                    out += c_pre
+
+                return out
+
+            def p(x, w, p_pre):
+                out = jnp.einsum("ni,n->i", x, w)
+                if p_pre is not None:
+                    out += p_pre
+                return out
 
             if calc_C00:
-                C00 = jnp.einsum(str, x0, x0, w)
-            else:
-                C00 = None
+                C00 = c(x0, x0, w, C00)
 
             if calc_pi:
-                pi0 = jnp.einsum("ni,n->i", x0, w)
-            else:
-                pi0 = None
+                pi0 = p(x0, w, pi0)
 
             if time_series:
                 if calc_C01:
-                    C01 = jnp.einsum(str, x0, x1, w)
-                else:
-                    C01 = None
+                    C01 = c(x0, x1, w, C01)
 
                 if calc_C11:
-                    C11 = jnp.einsum(str, x1, x1, w)
-                else:
-                    C11 = None
+                    C11 = c(x1, x1, w, C11)
 
                 if calc_pi:
-                    pi1 = jnp.einsum("ni,n->i", x1, w)
-                else:
-                    pi1 = None
+                    pi1 = p(x1, w, pi1)
 
-            if time_series:
-                if carry is not None:
-                    if calc_C00:
-                        C00 += carry[0]
-                    if calc_C01:
-                        C01 += carry[1]
-                    if calc_C11:
-                        C11 += carry[2]
-
-                    if calc_pi:
-                        pi0 += carry[3]
-                        pi1 += carry[4]
-
-                return (C00, C01, C11, pi0, pi1)
-
-            if carry is not None:
-                C00 += carry[0]
-                if calc_pi:
-                    pi0 += carry[1]
-
-            return (C00, pi0)
+            return (C00, C01, C11, pi0, pi1)
 
         if cv_1 is not None:
             # trick: combine cv_0 and cv_1. Apply trans to both and then split again
@@ -3976,18 +3742,18 @@ class Covariances(PyTreeNode):
         else:
             cv = cv_0
 
-        if trans is not None:
+        if trans_f is not None or trans_g is not None:
 
-            def f(x, _):
+            def f(x: CV, _):
                 if cv_1 is not None:
                     cv0, cv1 = x.split()
 
-                    x = trans.compute_cv_trans(cv0, chunk_size=chunk_size)[0]
-                    y = trans.compute_cv_trans(cv1, chunk_size=chunk_size)[0]
+                    x = trans_f.compute_cv_trans(cv0, chunk_size=chunk_size)[0] if trans_f is not None else cv0
+                    y = trans_g.compute_cv_trans(cv1, chunk_size=chunk_size)[0] if trans_g is not None else cv1
 
                     return CV.combine(x, y)
 
-                return trans.compute_cv_trans(x, chunk_size=chunk_size)[0]
+                return trans_f.compute_cv_trans(x, chunk_size=chunk_size)[0] if trans_f is not None else x
 
         else:
 
@@ -4002,28 +3768,11 @@ class Covariances(PyTreeNode):
             macro_chunk=macro_chunk,
             verbose=True,
             chunk_func=cov_pi,
-            chunk_func_init_args=None,
+            chunk_func_init_args=(None, None, None, None, None),
             w=w,
         )
 
-        if time_series:
-            C00 = out[0]
-            C01 = out[1]
-            C11 = out[2]
-
-            if calc_pi:
-                pi_0 = out[3]
-                pi_1 = out[4]
-
-        else:
-            C00 = out[0]
-
-            if calc_pi:
-                pi_0 = out[1]
-
-            C01 = None
-            C11 = None
-            pi_1 = None
+        C00, C01, C11, pi_0, pi_1 = out
 
         if calc_pi:
             if only_diag:
@@ -4052,7 +3801,8 @@ class Covariances(PyTreeNode):
             pi_0=pi_0,
             pi_1=pi_1,
             only_diag=only_diag,
-            trans=trans,
+            trans_f=trans_f,
+            trans_g=trans_g,
             T_scale=T_scale,
         )
 
@@ -4246,4 +3996,6 @@ class Covariances(PyTreeNode):
             pi_1=pi_1,
             only_diag=self.only_diag,
             symmetric=True,
+            trans_f=self.trans_f,
+            trans_g=self.trans_g,
         )

@@ -5,7 +5,7 @@ import jax
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.Observable import ThermoLIB
+from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import Rounds
 from IMLCV.implementations.bias import HarmonicBias
 from molmod.constants import boltzmann
@@ -54,7 +54,7 @@ class Scheme:
 
         rnds.add_round(bias=bias)
 
-        return Scheme(rounds=rnds, md=mde)
+        return Scheme(rounds=rnds)
 
     def FESBias(
         self,
@@ -66,7 +66,7 @@ class Scheme:
         """replace the current md bias with the computed FES from current
         round."""
 
-        return ThermoLIB.create(
+        return Observable.create(
             self.rounds,
             rnd=rnd,
             cv_round=cv_round,
