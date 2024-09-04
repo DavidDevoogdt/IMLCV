@@ -8,14 +8,17 @@ from __future__ import annotations
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
+from functools import partial
 from pathlib import Path
 from time import time
 
 import cloudpickle
 import h5py
+import jax
 import jax.numpy as jnp
 import jsonpickle
-from flax.struct import PyTreeNode, field
+from flax.struct import dataclass as flax_dataclass
+from flax.struct import field
 from jax import Array, jit
 from jax.lax import dynamic_update_slice_in_dim
 from molmod.periodic import periodic
@@ -136,7 +139,8 @@ class StaticMdInfo:
             return StaticMdInfo._load(hf=hf)
 
 
-class TrajectoryInfo(PyTreeNode):
+@partial(flax_dataclass, frozen=False, eq=False)
+class TrajectoryInfo:
     _positions: Array
     _cell: Array | None = None
     _charges: Array | None = None
@@ -232,7 +236,7 @@ class TrajectoryInfo(PyTreeNode):
     def __getitem__(self, slices):
         "gets slice from indices. the output is truncated to the to include only items wihtin _size"
 
-        slz = (jnp.ones(self._capacity, dtype=jnp.int32).cumsum() - 1)[slices]
+        slz = (jnp.ones(self._capacity, dtype=jnp.int64).cumsum() - 1)[slices]
         slz = slz[slz <= self._size]
 
         # dynamic_slice_in_dim
@@ -540,8 +544,8 @@ class MDEngine(ABC):
 
     step: int = 1
 
-    last_bias: EnergyResult = EnergyResult(0)
-    last_ener: EnergyResult = EnergyResult(0)
+    last_bias: EnergyResult = EnergyResult(energy=jnp.array(0))
+    last_ener: EnergyResult = EnergyResult(energy=jnp.array(0))
     last_cv: CV | None = None
     _nl: NeighbourList | None = None
 
@@ -600,13 +604,13 @@ class MDEngine(ABC):
         if self.static_trajectory_info.r_cut is None:
             return None
 
-        info = NeighbourListInfo.create(
-            r_cut=self.static_trajectory_info.r_cut,
-            z_array=self.static_trajectory_info.atomic_numbers,
-            r_skin=1.0 * angstrom,
-        )
-
         if self._nl is None:
+            info = NeighbourListInfo.create(
+                r_cut=self.static_trajectory_info.r_cut,
+                z_array=self.static_trajectory_info.atomic_numbers,
+                r_skin=1.0 * angstrom,
+            )
+
             nl = self.sp.get_neighbour_list(info)  # jitted update
             b = True
         else:
@@ -619,7 +623,7 @@ class MDEngine(ABC):
 
         if not b:
             print("nl - slow update")
-            nl = self.sp.get_neighbour_list(info)
+            nl = self.sp.get_neighbour_list(nl.info)
 
         nneigh = nl.nneighs()
 
@@ -796,24 +800,41 @@ class MDEngine(ABC):
         self.step += 1
 
     def get_energy(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
-        return self.energy.compute_from_system_params(
-            gpos=gpos,
-            vir=vtens,
-            sp=self.sp,
-            nl=self.nl,
-        )
+        def f(sp, nl):
+            return self.energy.compute_from_system_params(
+                gpos=gpos,
+                vir=vtens,
+                sp=sp,
+                nl=nl,
+            )
+
+        return f(self.sp, self.nl)
 
     def get_bias(
         self,
         gpos: bool = False,
         vtens: bool = False,
+        shmap: bool = False,
+        use_jac=False,
+        push_jac=False,
     ) -> tuple[CV, EnergyResult]:
-        cv, ener = self.bias.compute_from_system_params(
-            sp=self.sp,
-            nl=self.nl,
-            gpos=gpos,
-            vir=vtens,
-        )
+        # @jit
+        def f(sp, nl):
+            out = self.bias.compute_from_system_params(
+                sp=sp,
+                nl=nl,
+                gpos=gpos,
+                vir=vtens,
+                shmap=shmap,  # TODO: https://github.com/google/jax/issues/19691
+                use_jac=use_jac,
+                push_jac=push_jac,
+            )
+
+            out = jax.block_until_ready(out)
+
+            return out
+
+        cv, ener = f(self.sp, self.nl)
 
         return cv, ener
 

@@ -22,7 +22,7 @@ def legendre(x, n):
     c = jnp.array(sp_legendre(n).c, dtype=x.dtype)
 
     y = jnp.zeros_like(x)
-    y, _ = lax.scan(lambda y, p: (y * x + p, None), y, c, length=n + 1)
+    y, _ = lax.scan(lambda y, p: (y * x + p, None), y, c, length=n + 1, unroll=False)
 
     return y
 

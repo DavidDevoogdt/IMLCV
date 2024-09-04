@@ -476,31 +476,6 @@ class TransoformerLDA(Transformer):
         return cv.unstack(), cv_t.unstack(), full_trans, w
 
 
-def _transform(cv: CV, nl: NeighbourList | None, _, mask):
-    return cv.replace(cv=cv.cv[mask])
-
-
-def _cv_slice(cv: CV, nl: NeighbourList, _, indices):
-    return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
-
-
-def _tranform_maf(cv, nl, _, pi, add_1, q):
-    cv_v = (cv.cv - pi) @ q
-
-    if add_1:
-        cv_v = jnp.hstack([cv_v, jnp.array([1])])
-
-    return CV(cv=cv_v, _stack_dims=cv._stack_dims)
-
-
-def _tica_selection(cv: CV, nl: NeighbourList | None, _, pi_eq, alpha):
-    return CV(cv=(cv.cv - pi_eq) @ alpha, _stack_dims=cv._stack_dims)
-
-
-def _tica_selection_2(cv: CV, nl: NeighbourList | None, _, u):
-    return cv @ u
-
-
 class TransformerMAF(Transformer):
     # Maximum Autocorrelation Factors
 

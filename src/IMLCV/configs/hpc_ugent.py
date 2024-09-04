@@ -49,16 +49,16 @@ def get_slurm_provider(
         if env == "hortense":
             print("setting python env for hortense")
             py_env = """
-export MAMBA_EXE=$VSC_HOME/2024_026/IMLCV/bin/micromamba
-export MAMBA_ROOT_PREFIX=$VSC_HOME/2024_026/IMLCV/micromamba
+export MAMBA_EXE=/dodrio/scratch/projects/2024_026/IMLCV/bin/micromamba
+export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/2024_026/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py312
 which python
             """
         elif env == "stevin":
             py_env = """
-export MAMBA_EXE=$VSC_HOME/IMLCV/bin/micromamba
-export MAMBA_ROOT_PREFIX=$VSC_HOME/IMLCV/micromamba
+export MAMBA_EXE=/dodrio/scratch/projects/IMLCV/bin/micromamba
+export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py312
 which python
@@ -91,7 +91,7 @@ which python
 
         total_cores = parsl_tasks_per_block * threads_per_core
 
-        worker_init += f"export OMP_NUM_THREADS={threads_per_core if use_open_mp else 1   }\n"
+        worker_init += f"export OMP_NUM_THREADS={threads_per_core}\n"
 
         # give all cores to xla
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
@@ -102,7 +102,7 @@ which python
 
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
 
-    worker_init += f"mpirun -report-bindings -np {total_cores} echo 'a' "
+    worker_init += f"mpirun -report-bindings -np {total_cores} echo 'a' " if load_cp2k else ""
 
     common_kwargs = {
         "channel": channel,
@@ -134,7 +134,7 @@ which python
             "cmd_timeout": 60,
         }
 
-        sheduler_options = "#SBATCH --signal B:USR2"  # send signal to worker if job is cancelled/ time is up/ OOM
+        sheduler_options = ""
 
         if gpu:
             sheduler_options += (

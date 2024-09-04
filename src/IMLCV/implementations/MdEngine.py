@@ -99,6 +99,8 @@ class YaffEngine(MDEngine):
                 super().__init__()
 
             def __call__(self, iterative: VerletIntegrator):
+                # print("iterative.time", iterative.time)
+
                 kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
 
                 if hasattr(iterative, "press"):

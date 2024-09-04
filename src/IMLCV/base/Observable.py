@@ -69,7 +69,7 @@ class Observable:
         n_max=30,
         temp=None,
         chunk_size=None,
-        pmap=True,
+        shmap=True,
         rounds: Rounds = None,
     ):
         if dlo is None:
@@ -142,7 +142,7 @@ class Observable:
                 cvs = CV.combine(*[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv])
                 f = Partial(self.bias.compute_from_cv, diff=False, chunk_size=chunk_size)
 
-                if pmap:
+                if shmap:
                     f = padded_shard_map(f)
 
                 out, _ = f(cvs)
@@ -198,7 +198,7 @@ class Observable:
         dlo=None,
         directory=None,
         temp=None,
-        pmap=True,
+        shmap=True,
         only_finished=True,
         bounds_percentile=1,
         max_bias=None,
@@ -238,7 +238,7 @@ class Observable:
             temp=temp,
             execution_folder=directory,
             chunk_size=chunk_size,
-            pmap=pmap,
+            shmap=shmap,
             rounds=self.rounds,
         ).result()
 
@@ -432,7 +432,7 @@ class Observable:
         max_bias=None,
         choice="rbf",
         num_rnds=8,
-        start_r=1,
+        start_r=0,
         rbf_kernel="linear",
         rbf_degree=None,
         samples_per_bin=200,
@@ -444,7 +444,7 @@ class Observable:
         min_traj_length=None,
         margin=0.1,
         only_finished=True,
-        pmap=True,
+        shmap=True,
         thermolib=False,
         lag_n=30,
         out=int(1e5),
@@ -496,7 +496,7 @@ class Observable:
                 min_traj_length=min_traj_length,
                 margin=margin,
                 only_finished=only_finished,
-                pmap=pmap,
+                shmap=shmap,
                 max_bias=max_bias,
                 rbf_kernel=rbf_kernel,
                 rbf_degree=rbf_degree,

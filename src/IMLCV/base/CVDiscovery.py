@@ -42,7 +42,7 @@ class Transformer:
         self,
         dlo: data_loader_output,
         chunk_size=None,
-        p_map=True,
+        shmap=True,
         verbose=False,
         macro_chunk=10000,
     ) -> tuple[list[CV], list[CV] | None, CvFlow]:
@@ -53,7 +53,7 @@ class Transformer:
             dlo.sp,
             dlo.sp_t,
             chunk_size=chunk_size,
-            pmap=p_map,
+            shmap=shmap,
             macro_chunk=macro_chunk,
             verbose=verbose,
         )
@@ -66,7 +66,7 @@ class Transformer:
                 x,
                 x_t,
                 chunk_size=chunk_size,
-                pmap=p_map,
+                shmap=shmap,
                 verbose=verbose,
                 macro_chunk=macro_chunk,
             )
@@ -86,7 +86,7 @@ class Transformer:
         chunk_size=None,
         plot=True,
         plot_folder: str | Path | None = None,
-        p_map=True,
+        shmap=True,
         percentile=5.0,
         jac=jax.jacrev,
         transform_FES=True,
@@ -104,10 +104,11 @@ class Transformer:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
 
         print("getting weights")
+        # koopman does not really make sense because it reinforces the current CV
         w = dlo.weights(
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            koopman=True,
+            koopman=False,
             verbose=verbose,
             samples_per_bin=samples_per_bin,
             n_max=n_max,
@@ -133,7 +134,7 @@ class Transformer:
         x, x_t, f = self.pre_fit(
             dlo,
             chunk_size=chunk_size,
-            p_map=p_map,
+            shmap=shmap,
             verbose=verbose,
             macro_chunk=macro_chunk,
         )
@@ -182,7 +183,7 @@ class Transformer:
                 x_t,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-                pmap=p_map,
+                shmap=shmap,
                 verbose=verbose,
             )
 

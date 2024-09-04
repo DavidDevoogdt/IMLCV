@@ -228,6 +228,8 @@ if __name__ == "__main__":
     jax.config.update("jax_platform_name", "cpu")
     jax.config.update("jax_enable_x64", True)
 
+    import IMLCV  # noqa: F401
+
     if rank == 0:
         print("#" * 20)
         import platform

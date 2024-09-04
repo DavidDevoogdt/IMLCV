@@ -1,9 +1,10 @@
 from collections.abc import Iterable
+from functools import partial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from flax.struct import field
+from flax.struct import dataclass, field
 from jax import Array
 from typing_extensions import Self
 
@@ -24,6 +25,7 @@ def _clip(x, a_min, a_max):
 ######################################
 
 
+@partial(dataclass, frozen=False, eq=False)
 class MinBias(CompositeBias):
     @classmethod
     def create(clz, biases: Iterable[Bias]) -> Self:
@@ -31,6 +33,7 @@ class MinBias(CompositeBias):
         return b
 
 
+@partial(dataclass, frozen=False, eq=False)
 class HarmonicBias(Bias):
     """Harmonic bias potential centered arround q0 with force constant k."""
 
@@ -119,6 +122,7 @@ class HarmonicBias(Bias):
         )
 
 
+@partial(dataclass, frozen=False, eq=False)
 class BiasMTD(Bias):
     r"""A sum of Gaussian hills, for instance used in metadynamics:
     Adapted from Yaff.
@@ -224,6 +228,7 @@ class BiasMTD(Bias):
         return energy
 
 
+@partial(dataclass, frozen=False, eq=False)
 class RbfBias(Bias):
     """Bias interpolated from lookup table on uniform grid.
 
@@ -276,6 +281,7 @@ class RbfBias(Bias):
         return out[0]
 
 
+@partial(dataclass, frozen=False, eq=False)
 class GridBias(Bias):
     """Bias interpolated from lookup table on uniform grid.
 

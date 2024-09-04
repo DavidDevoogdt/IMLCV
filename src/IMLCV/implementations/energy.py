@@ -86,11 +86,12 @@ class AseEnergy(Energy):
 
     @property
     def cell(self):
-        cell = self.atoms.get_cell()
-        if cell.rank == 0:
+        cell = jnp.asarray(self.atoms.cell) * angstrom
+
+        if cell.ndim == 0:
             return None
 
-        return jnp.array(self.atoms.get_cell()[:] * angstrom)
+        return cell
 
     @cell.setter
     def cell(self, cell):
@@ -99,15 +100,17 @@ class AseEnergy(Energy):
 
         import ase
 
-        self.atoms.set_cell(ase.geometry.Cell(np.array(cell[:]) / angstrom))
+        self.atoms.set_cell(ase.geometry.Cell(np.array(cell) / angstrom))
 
     @property
     def coordinates(self):
-        return jnp.array(self.atoms.get_positions() * angstrom)
+        # return jnp.asarray(self.atoms.get_positions() * angstrom)
+
+        return jnp.asarray(self.atoms.arrays["positions"]) * angstrom
 
     @coordinates.setter
     def coordinates(self, coordinates):
-        self.atoms.set_positions(np.array(coordinates[:]) / angstrom)
+        self.atoms.set_positions(np.array(coordinates / angstrom))
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         """use unit conventions of ASE"""

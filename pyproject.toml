@@ -20,4 +20,4 @@ target-version = ['py310']
 line-length = 120
 lint.ignore = ["E741"]
 
-extend-select = ["I"]
+lint.extend-select = ["I"]

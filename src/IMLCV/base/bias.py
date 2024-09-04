@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Callable
 import jax
 import jax.numpy as jnp
 import jsonpickle
-from flax.struct import PyTreeNode, field
+from flax.struct import dataclass, field
 from jax import Array, value_and_grad, vmap
 from jax.tree_util import Partial
 from molmod.constants import boltzmann
@@ -18,7 +18,7 @@ from molmod.units import angstrom, electronvolt, kjmol
 from typing_extensions import Self
 
 from IMLCV import unpickler
-from IMLCV.base.CV import CV, CollectiveVariable, NeighbourList, SystemParams, padded_vmap
+from IMLCV.base.CV import CV, CollectiveVariable, NeighbourList, SystemParams, padded_shard_map, padded_vmap
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine
@@ -29,16 +29,11 @@ if TYPE_CHECKING:
 ######################################
 
 
-class EnergyResult(PyTreeNode):
-    energy: float
+@partial(dataclass, frozen=False, eq=False)
+class EnergyResult:
+    energy: Array
     gpos: Array | None = field(default=None)
     vtens: Array | None = field(default=None)
-
-    def __post_init__(self):
-        if isinstance(self.gpos, Array):
-            self.__dict__["gpos"] = jnp.array(self.gpos)
-        if isinstance(self.vtens, Array):
-            self.__dict__["vtens"] = jnp.array(self.vtens)
 
     def __add__(self, other) -> EnergyResult:
         assert isinstance(other, EnergyResult)
@@ -176,7 +171,8 @@ class BiasError(Exception):
     pass
 
 
-class Bias(PyTreeNode, ABC):
+@partial(dataclass, frozen=False, eq=False)
+class Bias(ABC):
     """base class for biased MD runs."""
 
     __: KW_ONLY
@@ -216,7 +212,7 @@ class Bias(PyTreeNode, ABC):
             return True, self.replace(start=self.start + self.step - 1)
         return False, self.replace(start=self.start - 1)
 
-    @partial(jax.jit, static_argnames=["gpos", "vir", "chunk_size"])
+    @partial(jax.jit, static_argnames=["gpos", "vir", "chunk_size", "shmap", "use_jac", "push_jac"])
     def compute_from_system_params(
         self,
         sp: SystemParams,
@@ -225,6 +221,8 @@ class Bias(PyTreeNode, ABC):
         vir=False,
         chunk_size: int | None = None,
         shmap=True,
+        use_jac=False,
+        push_jac=False,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -232,7 +230,8 @@ class Bias(PyTreeNode, ABC):
         if sp.batched:
             if nl is not None:
                 assert nl.batched
-            padded_vmap(
+
+            f = padded_vmap(
                 Partial(
                     self.compute_from_system_params,
                     gpos=gpos,
@@ -240,26 +239,67 @@ class Bias(PyTreeNode, ABC):
                     shmap=False,
                 ),
                 chunk_size=chunk_size,
-                shmap=shmap,
-            )(sp, nl)
+            )
 
-        [cvs, jac] = self.collective_variable.compute_cv(
-            sp=sp,
-            nl=nl,
-            jacobian=gpos or vir,
-            shmap=shmap,
-        )
-        [ener, de] = self.compute_from_cv(cvs, diff=(gpos or vir), shmap=shmap)
+            if shmap:
+                f = padded_shard_map(f)
 
-        # def _resum(sp, jac, de):
+            return f(sp, nl)
+
         e_gpos = None
-        if gpos:
-            e_gpos = jnp.einsum("j,jkl->kl", de.cv, jac.cv.coordinates)
-
         e_vir = None
-        if vir and sp.cell is not None:
-            # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
-            e_vir = jnp.einsum("ji,k,kjl->li", sp.cell, de.cv, jac.cv.cell)
+
+        if not use_jac:
+
+            @jax.jit
+            def _compute(sp):
+                cvs, _ = self.collective_variable.compute_cv(
+                    sp=sp,
+                    nl=nl,
+                    jacobian=False,
+                    shmap=shmap,
+                )
+                ener = self._compute(cvs)
+
+                return ener, cvs
+
+            if gpos or vir:
+                (ener, cvs), de = value_and_grad(_compute, has_aux=True)(sp)
+
+                if gpos:
+                    e_gpos = de.coordinates
+                if vir and sp.cell is not None:
+                    e_vir = sp.cell.T @ de.cell
+
+            else:
+                ener, cvs = _compute(sp)
+
+        else:
+            # print(f"{e=} {cvs=} {de=}")
+
+            [cvs, jac] = self.collective_variable.compute_cv(
+                sp=sp,
+                nl=nl,
+                jacobian=gpos or vir,
+                shmap=shmap,
+                push_jac=push_jac,
+            )
+
+            # print(f"{cvs=} {jac=}")
+
+            [ener, de] = self.compute_from_cv(
+                cvs,
+                diff=(gpos or vir),
+                shmap=shmap,
+            )
+
+            if gpos:
+                e_gpos = jnp.einsum("j,jkl->kl", de.cv, jac.coordinates)
+
+            e_vir = None
+            if vir and sp.cell is not None:
+                # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
+                e_vir = jnp.einsum("ji,k,kjl->li", sp.cell, de.cv, jac.cell)
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 
@@ -277,7 +317,7 @@ class Bias(PyTreeNode, ABC):
         """
 
         if cvs.batched:
-            return padded_vmap(
+            f = padded_vmap(
                 Partial(
                     self.compute_from_cv,
                     chunk_size=chunk_size,
@@ -285,8 +325,12 @@ class Bias(PyTreeNode, ABC):
                     shmap=False,
                 ),
                 chunk_size=chunk_size,
-                shard=shmap,
-            )(cvs)
+            )
+
+            if shmap:
+                f = padded_shard_map(f)
+
+            return f(cvs)
 
         if diff:
             return value_and_grad(self._compute)(cvs)
@@ -749,31 +793,10 @@ class Bias(PyTreeNode, ABC):
         return kl
 
     # def __eq__(self, other):
-    #     if not isinstance(other, Bias):
-    #         return False
-
-    #     self_val, self_tree = tree_flatten(self)
-    #     other_val, other_tree = tree_flatten(other)
-
-    #     if not self_tree == other_tree:
-    #         return False
-
-    #     for a, b in zip(self_val, other_val):
-    #         a = jnp.array(a)
-    #         b = jnp.array(b)
-
-    #         if not a.shape == b.shape:
-    #             return False
-
-    #         if not a.dtype == b.dtype:
-    #             return False
-
-    #         if not jnp.allclose(a, b):
-    #             return False
-
-    #     return True
+    #     return pytreenode_equal(self, other)
 
 
+@partial(dataclass, frozen=False, eq=False)
 class CompositeBias(Bias):
     """Class that combines several biases in one single bias."""
 
@@ -792,10 +815,10 @@ class CompositeBias(Bias):
 
             if collective_variable is None:
                 collective_variable = b.collective_variable
-            else:
-                assert (
-                    collective_variable == b.collective_variable
-                ), f"encountered 2 different collective variables {collective_variable=}  {b.collective_variable=} "
+            # else:
+            #     assert (
+            #         collective_variable == b.collective_variable
+            #     ), f"encountered 2 different collective variables {collective_variable=}  {b.collective_variable=} "
 
             biases_new.append(b)
 
@@ -832,6 +855,7 @@ def _constant(cvs: CV, val: float = 0.0):
     return jnp.array(val)
 
 
+@partial(dataclass, frozen=False, eq=False)
 class BiasModify(Bias):
     """Bias according to CV."""
 
@@ -873,6 +897,7 @@ class BiasModify(Bias):
         super().__setstate__(statedict)
 
 
+@partial(dataclass, frozen=False, eq=False)
 class BiasF(Bias):
     """Bias according to CV."""
 
@@ -902,6 +927,7 @@ class BiasF(Bias):
         return self.g(cvs, **self.kwargs, **self.static_kwargs)
 
 
+@partial(dataclass, frozen=False, eq=False)
 class NoneBias(BiasF):
     @classmethod
     def create(clz, collective_variable: CollectiveVariable) -> Self:  # type: ignore[override]

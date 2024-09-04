@@ -1,8 +1,9 @@
 import tempfile
+from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
-from flax.struct import PyTreeNode, field
+from flax.struct import dataclass, field
 from jax.custom_batching import custom_vmap
 from jax.experimental.jax2tf import call_tf
 
@@ -12,7 +13,8 @@ if TYPE_CHECKING:
     import tensorflow as tfl
 
 
-class tfl_module(PyTreeNode):
+@partial(dataclass, frozen=False, eq=False)
+class tfl_module:
     mod: tfl.Module = field(pytree_node=False, default=None)
 
     def get_config(self):

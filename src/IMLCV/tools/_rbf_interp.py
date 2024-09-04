@@ -1,11 +1,12 @@
 """Module for RBF interpolation."""
 
 import warnings
+from functools import partial
 from itertools import combinations_with_replacement
 
 import jax
 import jax.numpy as jnp
-from flax.struct import PyTreeNode, field
+from flax.struct import dataclass, field
 from numpy.linalg import LinAlgError
 from scipy.linalg.lapack import dgesv
 from scipy.special import comb
@@ -138,7 +139,8 @@ def _build_and_solve_system(
     return coeffs
 
 
-class RBFInterpolator(PyTreeNode):
+@partial(dataclass, frozen=False, eq=False)
+class RBFInterpolator:
     """Radial basis function (RBF) interpolation in N dimensions. adapted from scipy"""
 
     _coeffs: jax.Array
@@ -354,3 +356,6 @@ class RBFInterpolator(PyTreeNode):
             state["y"] = state["y"].replace(_stack_dims=None)
 
         self.__init__(**state)
+
+    # def __eq__(self, other):
+    #     return pytreenode_equal(self, other)

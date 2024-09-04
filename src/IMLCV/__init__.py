@@ -21,6 +21,8 @@ finally:
 import logging
 import os
 import sys
+from dataclasses import KW_ONLY
+from functools import partial
 from logging import warning
 
 import jax
@@ -28,11 +30,14 @@ import jax._src.tree_util
 import jax.numpy as jnp
 import jsonpickle
 import numpy as np
-from flax.struct import PyTreeNode
+from flax.struct import PyTreeNode, dataclass, field
+
+# from flax.struct import PyTreeNode as MyPyTreeNode
 from jax import random
 from jsonpickle import tags
 from jsonpickle.ext.numpy import register, register_handlers
 from jsonpickle.handlers import BaseHandler
+from typing_extensions import dataclass_transform
 
 logging.getLogger("parsl").setLevel(logging.WARNING)
 
@@ -62,6 +67,42 @@ moved_functions = {
 }
 
 
+def pytreenode_equal(self, other):
+    if not isinstance(other, self.__class__):
+        return False
+
+    print(f"{self=}, {other=}")
+
+    self_val, self_tree = jax.tree_flatten(self)
+    other_val, other_tree = jax.tree_flatten(other)
+
+    if not self_tree == other_tree:
+        return False
+
+    for a, b in zip(self_val, other_val):
+        a = jnp.array(a)
+        b = jnp.array(b)
+
+        if not a.shape == b.shape:
+            return False
+
+        if not a.dtype == b.dtype:
+            return False
+
+        if not jnp.allclose(a, b):
+            return False
+
+    return True
+
+
+# @partial(dataclass, frozen=False, field_specifiers=(field,), eq=False)
+
+
+# class MyPyTreeNode:
+#     def __eq__(self, other):
+#         return pytreenode_equal(self, other)
+
+
 class JaxHandler(BaseHandler):
     "flattens the jax array to numpy array, which is already handled by jsonpickle"
 
@@ -82,8 +123,7 @@ class Unpickler(jsonpickle.Unpickler):
     def _restore_object_instance_variables(self, obj, instance):
         update_state = hasattr(instance, "__setstate__") and tags.STATE not in obj
 
-        re_init = update_state or isinstance(instance, PyTreeNode)
-
+        re_init = update_state
         out = super()._restore_object_instance_variables(obj, instance)
 
         if update_state:

@@ -3,6 +3,8 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import pytest
+from molmod.units import angstrom, kjmol
+
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.rounds import Rounds
 from IMLCV.configs.config_general import ROOT_DIR
@@ -11,7 +13,6 @@ from IMLCV.implementations.CV import CV, NeighbourList, NeighbourListInfo, NoneC
 from IMLCV.implementations.CvDiscovery import TranformerAutoEncoder, TransoformerLDA
 from IMLCV.implementations.tensorflow.CvDiscovery import TranformerUMAP
 from IMLCV.scheme import Scheme
-from molmod.units import angstrom, kjmol
 
 
 def get_rounds_ala(tmpdir) -> Rounds:

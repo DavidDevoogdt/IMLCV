@@ -1,11 +1,12 @@
 from dataclasses import KW_ONLY
+from functools import partial
 
 import haiku as hk
 import jax.numpy as jnp
 import numpy
-from equinox import Partial
-from flax.struct import PyTreeNode, field
+from flax.struct import dataclass, field
 from jax import Array
+from jax.tree_util import Partial
 
 from IMLCV.base.CV import CV, CvFunBase, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
@@ -32,7 +33,8 @@ def umap_encoder(x, nlayers, nunits, outdim):
     return hk.Linear(outdim)(x)
 
 
-class hkFunBase(CvFunBase, PyTreeNode):
+@partial(dataclass, frozen=False, eq=False)
+class hkFunBase(CvFunBase):
     _: KW_ONLY
     fwd_params: dict
     fwd_kwargs: dict = field(pytree_node=False)
@@ -69,6 +71,9 @@ class hkFunBase(CvFunBase, PyTreeNode):
             out = out.reshape((-1,))
 
         return x.replace(cv=out)
+
+    # def __eq__(self, other):
+    #     return pytreenode_equal(self, other)
 
 
 class TranformerUMAP(Transformer):

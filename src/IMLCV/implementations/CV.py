@@ -6,13 +6,12 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from equinox import Partial
 from flax.linen.linear import Dense
 from jax import Array, vmap
-from ott.geometry.geometry import Geometry
+from jax.tree_util import Partial
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
-from ott.solvers.linear import implicit_differentiation, sinkhorn, solve
+from ott.solvers.linear import implicit_differentiation, sinkhorn
 
 from IMLCV.base.CV import (
     CV,
@@ -26,7 +25,6 @@ from IMLCV.base.CV import (
     NeighbourList,
     NeighbourListInfo,
     SystemParams,
-    _CvTrans,
     padded_vmap,
 )
 
@@ -43,8 +41,8 @@ def _zero_cv(x, nl, _, shmap):
     return CV(cv=jnp.array([0.0]))
 
 
-identity_trans = _CvTrans.from_cv_function(_identity_trans)
-zero_trans = _CvTrans.from_cv_function(_zero_cv)
+identity_trans = CvTrans.from_cv_function(_identity_trans)
+zero_trans = CvTrans.from_cv_function(_zero_cv)
 zero_flow = CvFlow.from_function(_zero_cv)
 
 
@@ -704,7 +702,7 @@ def sinkhorn_divergence_2(
     normalize=True,
     sum_divergence=False,
     ridge=0,
-    sinkhorn_iterations=None,
+    sinkhorn_iterations=100,
     use_dankskin=False,
     r_cond_svd=1e-10,
     method=None,
@@ -712,6 +710,7 @@ def sinkhorn_divergence_2(
     scale=None,
     push_div=False,
     nan_zero=True,
+    lse=True,
 ) -> Array:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -744,187 +743,87 @@ def sinkhorn_divergence_2(
     src_mask, _, p1 = nl1.nl_split_z(x1)
     tgt_mask, _, p2 = nl2.nl_split_z(x2)
 
-    def solve_lineax_svd(
-        lin,
-        b: Array,
-        lin_t=None,
-        symmetric: bool = False,
-        ridge_identity: float = 0.0,
-        ridge_kernel: float = 0.0,
-        r_cond_svd: float = 1e-10,
-        method="jvp",
-    ) -> Array:
-        def lin_reg(x, symmetric, lin, lin_t, ridge_kernel, ridge_identity):
-            op = lin if symmetric else lambda x: lin_t(lin(x))
+    def sinkhorn(p1, p2, epsilon, precision=1e-10):
+        @partial(vmap, in_axes=(None, 0), out_axes=1)
+        @partial(vmap, in_axes=(0, None), out_axes=0)
+        def cost(p1, p2):
+            return jnp.sum((p1 - p2) ** 2)
 
-            if ridge_kernel == 0 and ridge_identity == 0:
-                return op(x)
+        c = cost(p1, p2)
 
-            return op(x) + ridge_kernel * jnp.sum(x) + ridge_identity * x
+        a = jnp.ones((c.shape[0],)) / c.shape[0]
+        b = jnp.ones((c.shape[1],)) / c.shape[1]
 
-        fun = Partial(
-            lin_reg,
-            symmetric=symmetric,
-            lin=lin,
-            lin_t=lin_t,
-            ridge_kernel=ridge_kernel,
-            ridge_identity=ridge_identity,
-        )
+        from jaxopt import FixedPointIteration
+        from jaxopt.linear_solve import solve_normal_cg
 
-        fun, aux_args = jax.closure_convert(fun, b)
+        if lse:  # log space
+            eps_log_a = jnp.log(a) * epsilon
+            eps_log_b = jnp.log(b) * epsilon
 
-        def _solve(fun, r_cond_svd, aux_args, b):
-            input_structure = jax.eval_shape(lambda: b)
+            # initialization
+            g = jnp.zeros((c.shape[1],))
 
-            solver = lx.SVD(rcond=r_cond_svd)
+            def _f0(c, h):
+                return jnp.sum(jnp.exp((-c + h) / epsilon))
 
-            def _f(x):
-                return fun(x, *aux_args)
+            def T(g, c, eps_log_a, eps_log_b):
+                f = eps_log_a - epsilon * jnp.log(vmap(_f0, in_axes=(0, None))(c, g))
+                g = eps_log_b - epsilon * jnp.log(vmap(_f0, in_axes=(1, None))(c, f))
 
-            fn_operator = lx.FunctionLinearOperator(
-                _f,
-                input_structure,
-                tags=[lx.positive_semidefinite_tag, lx.symmetric_tag],
+                return g
+
+            fpi = FixedPointIteration(
+                fixed_point_fun=T,
+                maxiter=1000,
+                tol=precision,
+                implicit_diff_solve=partial(solve_normal_cg, tol=1e-10, ridge=1e-6),
             )
 
-            return lx.linear_solve(fn_operator, b, solver).value
+            out = fpi.run(g, c, eps_log_a, eps_log_b)
 
-        # methods to differentiate through the solver
-        # They're not needed as the the derivatives are taken as jacrev(solve) jacfwd(jacrev(solve)) below, but are needed for 3rd order derivatives
-        if method == "jvp":
-            _solve = jax.custom_jvp(_solve, nondiff_argnums=(0, 1))
+            g = out.params
 
-            @_solve.defjvp
-            def _solve_jvp(fun, r_cond_svd, primals, tangents):
-                (aux_args, b) = primals
-                (aux_args_dot, b_dot) = tangents
+            f = eps_log_a - epsilon * jnp.log(vmap(_f0, in_axes=(0, None))(c, g))
 
-                y = _solve(fun, r_cond_svd, aux_args, b)
+            c_red = vmap(jnp.add, in_axes=(1, None), out_axes=1)(-c, f)
+            c_red = vmap(jnp.add, in_axes=(0, None))(c_red, g)
 
-                solver = lx.SVD(rcond=r_cond_svd)
-
-                def _f(x, _):
-                    return fun(x, *aux_args)
-
-                jac_operator = lx.JacobianLinearOperator(_f, y)
-
-                dy = lx.linear_solve(jac_operator, b_dot, solver).value
-
-                return y, dy
-
-        elif method == "vjp":
-            _solve = jax.custom_vjp(_solve, nondiff_argnums=(0, 1))
-
-            def _solve_fwd(fun, r_cond_svd, aux_args, b):
-                y = _solve(fun, r_cond_svd, aux_args, b)
-                return y, (aux_args, y)
-
-            def _solve_rev(fun, r_cond_svd, args, b_dot):
-                aux_args, y = args
-                solver = lx.SVD(rcond=r_cond_svd)
-
-                def _f(x, _):
-                    return fun(x, *aux_args)
-
-                jac_operator = lx.JacobianLinearOperator(_f, y)
-                y_dot = lx.linear_solve(jac_operator, b_dot, solver).value
-
-                return (y_dot, None)
-
-            _solve.defvjp(_solve_fwd, _solve_rev)
-
-        return _solve(fun, r_cond_svd, aux_args, b)
-
-    sinkhorn_kwargs = {
-        "threshold": 1e-4,
-        "implicit_diff": implicit_differentiation.ImplicitDiff(
-            solver=solve_lineax_svd,  # solve_jax_cg, solve_lineax_svd,
-            solver_kwargs={
-                "ridge_identity": ridge,
-                "ridge_kernel": ridge,
-                "r_cond_svd": r_cond_svd,
-                "method": method,
-            },
-        ),
-        "use_danskin": use_dankskin,
-    }
-
-    if sinkhorn_iterations is not None:
-        sinkhorn_kwargs["min_iterations"] = sinkhorn_iterations
-        sinkhorn_kwargs["max_iterations"] = sinkhorn_iterations
-
-    def get_divergence(p1, p2):
-        cost_xy = PointCloud(
-            x=jnp.reshape(p1, (p1.shape[0], -1)),
-            y=jnp.reshape(p2, (p2.shape[0], -1)),
-            epsilon=alpha,
-        ).cost_matrix
-
-        cost_xx = PointCloud(
-            x=jnp.reshape(p1, (p1.shape[0], -1)),
-            y=jnp.reshape(p1, (p1.shape[0], -1)),
-            epsilon=alpha,
-        ).cost_matrix
-
-        cost_yy = PointCloud(
-            x=jnp.reshape(p2, (p2.shape[0], -1)),
-            y=jnp.reshape(p2, (p2.shape[0], -1)),
-            epsilon=alpha,
-        ).cost_matrix
-
-        num_a, num_b = p1.shape[0], p2.shape[0]
-
-        a = jnp.ones(num_a) / num_a
-        b = jnp.ones(num_b) / num_b
-
-        # raw sinkhorn optimal transport cost
-        def _f(cost, a, b):
-            geom = Geometry(cost, epsilon=alpha)
-            return solve(geom, a, b, **sinkhorn_kwargs).reg_ot_cost
-
-        @partial(jax.custom_jvp, nondiff_argnums=(0,))
-        def f(_f, cost, a, b):
-            return _f(cost, a, b)
-
-        @partial(jax.custom_jvp, nondiff_argnums=(0,))
-        def df(_f, cost, a, b):
-            return jax.jacrev(_f, argnums=0)(cost, a, b)
-
-        def ddf(_f, cost, a, b):
-            # jacfwd(jacrev(_f)) needed to avoid predefined  number of sinkhorn iterations
-            return jax.hessian(_f)(cost, a, b)
-
-        @f.defjvp
-        def f_jvp(_f, primals, tangents):
-            (cost, a, b) = primals
-            (cost_dot, _, _) = tangents
-
-            y = f(_f, cost, a, b)
-            dy = df(_f, cost, a, b)
-
-            return y, jnp.einsum("ij,ij->", dy, cost_dot)
-
-        @df.defjvp
-        def df_jvp(f, primals, tangents):
-            (cost, a, b) = primals
-            (cost_dot, _, _) = tangents
-
-            dy = df(_f, cost, a, b)
-            ddy = ddf(_f, cost, a, b)
-
-            return dy, jnp.einsum("ijkl,kl->ij", ddy, cost_dot)
-
-        if op == "jacrev":
-            fun = partial(df, _f)
+            P = jnp.exp(c_red / epsilon)
 
         else:
-            fun = partial(f, _f)
+            K = jnp.exp(-c / epsilon)
 
-        out_xy = fun(cost_xy, a, b)
-        out_xx = fun(cost_xx, a, a)
-        out_yy = fun(cost_yy, b, b)
+            # initialization
+            v = jnp.ones((c.shape[1],))
 
-        div = out_xy - 0.5 * (out_xx + out_yy) + 0.5 * alpha * (jnp.sum(a) - jnp.sum(b)) ** 2
+            def T(v, K, a, b):
+                u = a / jnp.einsum("ij,j->i", K, v)
+                v = b / jnp.einsum("ij,i->j", K, u)
+
+                return v
+
+            fpi = FixedPointIteration(fixed_point_fun=T, maxiter=1000, tol=precision)
+
+            out = fpi.run(v, K, a, b)
+
+            v = out.params
+            u = a / jnp.einsum("ij,j->i", K, v)
+
+            P = jnp.einsum("i,j,ij->ij", u, v, K)
+        c0 = jnp.einsum("ij,ij->", P, c)
+
+        return P, c0
+
+    def get_divergence(p1, p2):
+        p1 = jnp.reshape(p1, (p1.shape[0], -1))
+        p2 = jnp.reshape(p2, (p2.shape[0], -1))
+
+        _, out_xy = sinkhorn(p1, p2, epsilon=alpha)
+        _, out_xx = sinkhorn(p1, p1, epsilon=alpha)
+        _, out_yy = sinkhorn(p2, p2, epsilon=alpha)
+
+        div = out_xy - 0.5 * (out_xx + out_yy)
 
         return div
 
@@ -969,7 +868,7 @@ def _sinkhorn_divergence_trans_2(
     sum_divergence,
     ddiv_arg=0,
     ridge=0,
-    sinkhorn_iterations=None,
+    sinkhorn_iterations=100,
     r_cond_svd=1e-10,
     method=None,
     op=None,
@@ -1069,7 +968,10 @@ def _sinkhorn_divergence_trans_2(
     else:
         div = get_div(pi, cv)
 
-    return div.replace(cv=jnp.reshape(div.cv, (-1)), atomic=False)
+    return div.replace(
+        cv=jnp.reshape(div.cv, (-1)),
+        atomic=False,
+    )
 
 
 def get_sinkhorn_divergence_2(
@@ -1081,7 +983,7 @@ def get_sinkhorn_divergence_2(
     sum_divergence=False,
     ddiv_arg=0,
     ridge=0,
-    sinkhorn_iterations=None,
+    sinkhorn_iterations=100,
     merge=False,
     r_cond_svd=1e-10,
     method=None,
@@ -1386,7 +1288,9 @@ def get_non_constant_trans(
 def get_feature_cov(
     c_0: list[CV],
     c_tau: list[CV],
+    nl: list[NeighbourList] | None = None,
     w: list[jnp.array] | None = None,
+    trans: CvTrans | None = None,
     epsilon=1e-14,
     max_functions=None,
     T_scale=1,
@@ -1398,17 +1302,26 @@ def get_feature_cov(
     cov = Covariances.create(
         c_0,
         c_tau,
+        nl=nl,
         w=w,
-        symmetric=True,
-        calc_pi=True,
+        symmetric=False,
+        calc_pi=False,
         only_diag=True,
         T_scale=T_scale,
+        trans_f=trans,
+        trans_g=trans,
     )
+
+    print(f"{cov=}")
 
     print("computing feature covariances done")
 
     cov_n = jnp.sqrt(cov.C00 * cov.C11)
     cov_01 = jnp.where(cov_n > epsilon, cov.C01 / cov_n, 0)
+
+    print(f"{cov_01}")
+
+    print(f"selected auto covariances {cov_01}")
 
     idx = jnp.argsort(cov_01, descending=True)
     cov_sorted = cov_01[idx]
@@ -1436,8 +1349,6 @@ def get_feature_cov(
 
 
 class RealNVP(CvFunNn):
-    """use in combination with swaplink"""
-
     _: dataclasses.KW_ONLY
     features: int
     cv_input: CvFunInput
