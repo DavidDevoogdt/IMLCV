@@ -625,10 +625,10 @@ class MDEngine(ABC):
             print("nl - slow update")
             nl = self.sp.get_neighbour_list(nl.info)
 
-        nneigh = nl.nneighs()
+        # nneigh = nl.nneighs()
 
-        if jnp.min(nneigh) <= 1:
-            raise ValueError(f"neighbour list is empty for at leat one  atom {nneigh=}")
+        # if jnp.min(nneigh) <= 1:
+        #     raise ValueError(f"neighbour list is empty for at leat one  atom {nneigh=}")
 
         self._nl = nl
         return nl
@@ -815,7 +815,7 @@ class MDEngine(ABC):
         gpos: bool = False,
         vtens: bool = False,
         shmap: bool = False,
-        use_jac=False,
+        use_jac=True,
         push_jac=False,
     ) -> tuple[CV, EnergyResult]:
         # @jit

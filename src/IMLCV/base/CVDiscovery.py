@@ -48,7 +48,7 @@ class Transformer:
     ) -> tuple[list[CV], list[CV] | None, CvFlow]:
         f = self.descriptor
 
-        x, x_t = dlo.apply_cv_flow(
+        x, x_t = dlo.apply_cv(
             f,
             dlo.sp,
             dlo.sp_t,
@@ -61,7 +61,7 @@ class Transformer:
         if self.pre_scale:
             # todo: change
             g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
-            x, x_t = dlo.apply_cv_trans(
+            x, x_t = dlo.apply_cv(
                 g,
                 x,
                 x_t,
@@ -177,7 +177,7 @@ class Transformer:
             bounds = jnp.zeros_like(bounds)
             bounds = bounds.at[:, 1].set(1)
 
-            x, x_t = dlo.apply_cv_trans(
+            x, x_t = dlo.apply_cv(
                 trans,
                 x,
                 x_t,

@@ -31,6 +31,7 @@ from IMLCV.base.CV import (
     CvTrans,
     NeighbourList,
     NeighbourListInfo,
+    NeighbourListUpdate,
     SystemParams,
     macro_chunk_map,
     padded_shard_map,
@@ -886,7 +887,6 @@ class Rounds(ABC):
             out_sp_t = []
             out_cv_t = []
             out_ti_t = []
-            out_weights_t = []
 
         if get_bias_list:
             out_biases = []
@@ -1810,7 +1810,7 @@ class Rounds(ABC):
         bias = dlo.transform_FES(trans=cv_trans, max_bias=vmax)
         collective_variable = bias.collective_variable
 
-        x, _ = dlo.apply_cv_trans(cv_trans=cv_trans, x=dlo.cv, chunk_size=chunk_size, verbose=verbose)
+        x, _ = dlo.apply_cv(cv_trans=cv_trans, x=dlo.cv, chunk_size=chunk_size, verbose=verbose)
 
         #
         if plot:
@@ -1934,13 +1934,13 @@ class Rounds(ABC):
 @dataclass(repr=False)
 class data_loader_output:
     sp: list[SystemParams]
-    nl: list[NeighbourList] | None
+    nl: list[NeighbourList] | NeighbourList | None
     cv: list[CV]
     sti: StaticMdInfo
     ti: list[TrajectoryInfo]
     collective_variable: CollectiveVariable
     sp_t: list[SystemParams] | None = None
-    nl_t: list[NeighbourList] | None = None
+    nl_t: list[NeighbourList] | NeighbourList | None = None
     cv_t: list[CV] | None = None
     ti_t: list[TrajectoryInfo] | None = None
     time_series: bool = False
@@ -2227,7 +2227,7 @@ class data_loader_output:
                     print("step 1 wham")
 
                 if grid_nums is None:
-                    grid_nums, _ = self.apply_cv_trans(
+                    grid_nums, _ = self.apply_cv(
                         closest,
                         cv_0,
                         chunk_size=chunk_size,
@@ -2365,7 +2365,7 @@ class data_loader_output:
                     chunk_size=chunk_size,
                 )
 
-                grid_nums, grid_nums_t = self.apply_cv_trans(
+                grid_nums, grid_nums_t = self.apply_cv(
                     closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk
                 )
 
@@ -2443,7 +2443,7 @@ class data_loader_output:
 
         if output_bincount:
             if grid_nums is None:
-                grid_nums, _ = self.apply_cv_trans(
+                grid_nums, _ = self.apply_cv(
                     closest,
                     cv_0,
                     chunk_size=chunk_size,
@@ -2493,7 +2493,7 @@ class data_loader_output:
     def _whiten(
         cv_0: list[CV],
         cv_tau: list[CV] | None = None,
-        nl: list[NeighbourList] | None = None,
+        nl: list[NeighbourList] | NeighbourList | None = None,
         symmetric=False,
         w=None,
         eps=1e-10,
@@ -2583,6 +2583,7 @@ class data_loader_output:
         cv_0: list[CV] | None = None,
         cv_tau: list[CV] | None = None,
         nl: NeighbourList | None = None,
+        nl_t: NeighbourList | None = None,
         method="tcca",
         koopman_weight=False,
         symmetric=True,
@@ -2653,7 +2654,7 @@ class data_loader_output:
 
         check_nan = CvTrans.from_cv_function(_check_nan)
 
-        nan_x, nan_x_t = self.apply_cv_trans(
+        nan_x, nan_x_t = self.apply_cv(
             check_nan,
             x,
             x_t,
@@ -2672,48 +2673,27 @@ class data_loader_output:
         if jnp.any(nan):
             raise
 
-    def apply_cv_trans(
+    def apply_cv(
         self,
-        cv_trans: CvTrans,
-        x: list[CV] | None = None,
-        x_t: list[CV] | None = None,
+        f: CvTrans | CvFlow,
+        x: list[CV] | list[SystemParams] | None = None,
+        x_t: list[CV] | list[SystemParams] | None = None,
         chunk_size=None,
         macro_chunk=10000,
         shmap=True,
         verbose=False,
     ) -> tuple[list[CV], list[CV] | None]:
         # @jax.jit
-        def f(x, nl):
-            return cv_trans.compute_cv_trans(
-                x,
-                nl,
-                chunk_size=chunk_size,
-                shmap=shmap,
-            )[0]
 
-        return self._apply(
-            x,
-            x_t,
-            self.nl,
-            self.nl_t,
-            f,
-            macro_chunk=macro_chunk,
-            verbose=verbose,
-        )
+        if isinstance(f, CvTrans):
+            _f = f.compute_cv_trans
+        elif isinstance(f, CvFlow):
+            _f = f.compute_cv_flow
+        else:
+            raise ValueError(f"{f=} must be CvTrans or CvFlow")
 
-    def apply_cv_flow(
-        self,
-        flow: CvFlow,
-        x: list[SystemParams] | None = None,
-        x_t: list[SystemParams] | None = None,
-        chunk_size=None,
-        macro_chunk=10000,
-        shmap=True,
-        verbose=False,
-    ) -> tuple[list[CV], list[CV] | None]:
-        # @jax.jit
         def f(x, nl):
-            return flow.compute_cv_flow(
+            return _f(
                 x,
                 nl,
                 chunk_size=chunk_size,
@@ -2732,33 +2712,27 @@ class data_loader_output:
 
     @staticmethod
     def _apply(
-        x: CV,
-        x_t: CV | None,
-        nl: NeighbourList | None,
-        nl_t: NeighbourList | None,
+        x: CV | SystemParams,
+        nl: NeighbourList | NeighbourListUpdate | None,
         f: Callable,
+        x_t: CV | SystemParams | None = None,
+        nl_t: NeighbourList | NeighbourListUpdate | None = None,
         macro_chunk=10000,
         verbose=False,
     ):
-        if x_t is not None:
-            y = [*x, *x_t]
-            nl = [*nl, *nl_t] if nl is not None else None
-
-        else:
-            y = [*x]
-            nl = [*nl] if nl is not None else None
-
-        z = macro_chunk_map(
-            f,
-            x[0].__class__.stack,
-            y,
-            nl,
+        out = macro_chunk_map(
+            f=f,
+            op=x[0].__class__.stack,
+            y=x,
+            y_t=x_t,
+            nl=nl,
+            nl_t=nl_t,
             macro_chunk=macro_chunk,
             verbose=verbose,
         )
 
         if x_t is not None:
-            z, z_t = z[0 : len(x)], z[len(x) :]
+            z, z_t = out
         else:
             z_t = None
 
@@ -3017,7 +2991,7 @@ class data_loader_output:
         )
 
     def recalc(self, chunk_size=None, macro_chunk=10000, shmap=True, verbose=False):
-        x, x_t = self.apply_cv_flow(
+        x, x_t = self.apply_cv(
             self.collective_variable.f,
             chunk_size=chunk_size,
             shmap=shmap,
@@ -3049,6 +3023,73 @@ class data_loader_output:
             r_skin=1 * angstrom,
             z_array=self.sti.atomic_numbers,
         )
+
+        @partial(jax.jit, static_argnames=["update"])
+        def _f(sp, update):
+            return sp._get_neighbour_list(
+                info=nl_info,
+                chunk_size=chunk_size,
+                chunk_size_inner=chunk_size_inner,
+                shmap=False,
+                only_update=only_update,
+                update=update,
+            )
+
+        if only_update:
+
+            def f(nl_update: NeighbourListUpdate | None, sp, _):
+                # print(f"updating neighbour list {nl_update=}")
+
+                if nl_update is None:
+                    b, nn, n_xyz, _ = sp._get_neighbour_list(
+                        info=nl_info,
+                        chunk_size=chunk_size,
+                        chunk_size_inner=chunk_size_inner,
+                        shmap=False,
+                        only_update=only_update,
+                    )
+
+                    return NeighbourListUpdate.create(
+                        nxyz=n_xyz,
+                        num_neighs=nn,
+                        stack_dims=None,
+                    )
+
+                b, new_nn, new_xyz, _ = _f(sp, nl_update)
+
+                if not jnp.all(b):
+                    n_xyz, nn = nl_update.nxyz, nl_update.num_neighs
+
+                    nl_update = NeighbourListUpdate.create(
+                        nxyz=tuple([max(a, int(b)) for a, b in zip(n_xyz, new_xyz)]),
+                        num_neighs=max(nn, int(new_nn)),
+                        stack_dims=None,
+                    )
+
+                    print(f"updating neighbour list {nl_update=}")
+
+                return nl_update
+
+            nl_update = macro_chunk_map(
+                f=lambda x, y: x,
+                op=SystemParams.stack,
+                y=y,
+                nl=None,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+                jit_f=False,
+                chunk_func=f,
+            )
+
+            self.nl = NeighbourList(
+                info=nl_info,
+                update=nl_update,
+                sp_orig=None,
+            )
+
+            self.nl_t = self.nl if self.time_series else None
+
+            return
 
         def f(sp: SystemParams, nl=None):
             b, _, _, nl = sp._get_neighbour_list(
@@ -3093,7 +3134,8 @@ class KoopmanModel:
 
     cv_0: list[CV]
     cv_tau: list[CV]
-    nl: list[NeighbourList] | None
+    nl: list[NeighbourList] | NeighbourList | None
+    nl_t: list[NeighbourList] | NeighbourList | None
 
     f_trans: CvTrans
     g_trans: CvTrans | None = None
@@ -3111,14 +3153,15 @@ class KoopmanModel:
     tau: float | None = None
     T_scale: float = 1.0
 
-    trans: CvTrans | None = None
+    trans: CvTrans | CvFlow | None = None
 
     @staticmethod
     def create(
         w: list[jax.Array] | None,
         cv_0: list[CV],
         cv_tau: list[CV],
-        nl: list[NeighbourList] | None,
+        nl: list[NeighbourList] | NeighbourList | None = None,
+        nl_t: list[NeighbourList] | NeighbourList | None = None,
         add_1=False,
         eps=1e-15,
         method="tcca",
@@ -3185,86 +3228,76 @@ class KoopmanModel:
             Vh = jnp.linalg.inv(u)
 
         elif method == "tcca":
-            # TODO
-            # according to Optimal Data-Driven Estimation of Generalized Markov State Models
-            # it is not neccecary to remove mean
-            # this means that indicator CV covariances are diagonal, reducing memory consumption
-
-            (_, _, f_trans, l0) = data_loader_output._whiten(
-                cv_0=cv_0,
-                nl=nl,
-                w=w,
-                eps=eps,
-                max_features=max_features,
-                macro_chunk=macro_chunk,
-                chunk_size=chunk_size,
-                verbose=verbose,
-                trans=trans,
-                T_scale=T_scale,
-                calc_pi=calc_pi,
-                only_diag=only_diag,
-                transform_cv=False,
-            )
-
-            (_, _, g_trans, l1) = data_loader_output._whiten(
-                cv_0=cv_tau,
-                nl=nl,
-                w=w,
-                eps=eps,
-                max_features=max_features,
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
-                verbose=verbose,
-                trans=trans,
-                T_scale=T_scale,
-                calc_pi=calc_pi,
-                only_diag=only_diag,
-                transform_cv=False,
-            )
-
+            #  see Optimal Data-Driven Estimation of Generalized Markov State Models
             if verbose:
-                print("koopman':gettig covariance")
+                print("getting covariances")
 
-            # this doens't need to be mean free.
-            cov: Covariances = Covariances.create(
+            cov = Covariances.create(
                 cv_0=cv_0,
                 cv_1=cv_tau,
                 nl=nl,
+                nl_t=nl_t,
                 w=w,
-                symmetric=False,
-                calc_pi=False,
+                calc_pi=calc_pi,
+                only_diag=only_diag,
+                symmetric=symmetric,
                 T_scale=T_scale,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-                calc_C00=False,
-                calc_C11=False,
-                trans_f=trans * f_trans if trans is not None else f_trans,
-                trans_g=trans * g_trans if trans is not None else g_trans,
+                trans_f=trans,
+                trans_g=trans,
+            )
+
+            l0, q0, argmask_0 = cov.diagonalize("C00", epsilon=eps, out_dim=max_features, verbose=verbose)
+            l1, q1, argmask_1 = cov.diagonalize("C11", epsilon=eps, out_dim=max_features, verbose=verbose)
+
+            l0_inv_sqrt = 1 / jnp.sqrt(l0)
+            l1_inv_sqrt = 1 / jnp.sqrt(l1)
+
+            Kt = jnp.diag(l0_inv_sqrt) @ q0.T @ cov.C01 @ q1 @ jnp.diag(l1_inv_sqrt)
+
+            pi0 = cov.pi_0
+            if argmask_0 is not None:
+                pi0 = pi0[argmask_0]
+
+            f_trans = CvTrans.from_cv_function(
+                data_loader_output._transform,
+                q=q0,
+                l=l0_inv_sqrt,
+                pi=pi0,
+                argmask=argmask_0,
+            )
+
+            pi1 = cov.pi_1
+            if argmask_1 is not None:
+                pi1 = pi1[argmask_1]
+
+            g_trans = CvTrans.from_cv_function(
+                data_loader_output._transform,
+                q=q1,
+                l=l1_inv_sqrt,
+                pi=pi1,
+                argmask=argmask_1,
             )
 
             if verbose:
                 print("koopman': SVD")
 
-            # TK = C00^{-1/2} C01' C11^{-1/2}
-            # C01' in transformed basis
-
-            K = cov.C01
-
             import numpy as np
             from scipy.sparse.linalg import ArpackNoConvergence, svds
 
             if out_dim is None:
-                out_dim = min(K.shape)
+                out_dim = min(Kt.shape)
             else:
-                out_dim = min(out_dim, min(K.shape) - 1)
+                out_dim = min(out_dim, min(Kt.shape) - 1)
 
             print(f"{out_dim=}")
 
             try:
-                U, s, Vh = svds(np.array(K), which="LM", k=int(out_dim))
+                U, s, Vh = svds(np.array(Kt), which="LM", k=int(out_dim))
             except ArpackNoConvergence as e:
                 print(f"ArpackNoConvergence: {e}, trying again with full matrix")
-                U, s, Vh = jax.numpy.linalg.svd(K)
+                U, s, Vh = jax.numpy.linalg.svd(Kt)
 
             U = jnp.array(U)
             s = jnp.array(s)
@@ -3278,9 +3311,6 @@ class KoopmanModel:
             U = U[:, idx]
             s = s[idx]
             Vh = Vh[idx, :]
-
-            q0 = f_trans.trans[0].kwargs["q"]
-            q1 = g_trans.trans[0].kwargs["q"]
 
             U = q0 @ U
             Vh = Vh @ q1.T
@@ -3375,7 +3405,7 @@ class KoopmanModel:
         o = self.C00(power=-1 / 2) @ self.U
 
         # find eigenvalues largest non constant eigenvalues
-        idx = jnp.abs(self.s - 1) < 1e-8
+        idx = jnp.abs(self.s - 1) < 1e-6
 
         if jnp.sum(idx) != 0:
             print(f"found {jnp.sum(idx)} constant eigenvalues, removing {self.s[idx]=}")
@@ -3447,7 +3477,7 @@ class KoopmanModel:
         epsilon=1e-4,
         max_entropy=True,
     ) -> tuple[list[jax.Array], list[jax.Array] | None]:
-        n = jnp.sum(jnp.abs(self.s - 1) < 1e-6)  # important to avoid numerical issues
+        n = jnp.sum(jnp.abs(self.s - 1) < 1e-4)  # important to avoid numerical issues
 
         # print(f"{n=}")
 
@@ -3523,7 +3553,7 @@ class KoopmanModel:
             x_t=None,
             nl=self.nl,
             nl_t=None,
-            f=lambda x, _: tr.compute_cv_trans(x, _, chunk_size=chunk_size)[0],
+            f=lambda x, _: tr.compute_cv(x, _, chunk_size=chunk_size)[0],
             macro_chunk=macro_chunk,
             verbose=verbose,
         )
@@ -3662,43 +3692,29 @@ class Covariances:
     pi_1: jax.Array | None
 
     only_diag: bool = False
-    trans_f: CvTrans | None = None
-    trans_g: CvTrans | None = None
+    trans_f: CvTrans | CvFlow | None = None
+    trans_g: CvTrans | CvFlow | None = None
     T_scale: float = 1
     symmetric: bool = False
 
     def create(
-        cv_0: list[CV],
-        cv_1: list[CV] | None = None,
-        nl: list[NeighbourList] | None = None,
+        cv_0: list[CV] | list[SystemParams],
+        cv_1: list[CV] | list[SystemParams] | None = None,
+        nl: list[NeighbourList] | NeighbourList | None = None,
+        nl_t: list[NeighbourList] | NeighbourList | None = None,
         w: list[Array] | None = None,
         calc_pi=False,
         macro_chunk=1000,
         chunk_size=None,
         only_diag=False,
-        trans_f: CvTrans | None = None,
-        trans_g: CvTrans | None = None,
+        trans_f: CvTrans | CvFlow | None = None,
+        trans_g: CvTrans | CvFlow | None = None,
         T_scale=1,
         symmetric=False,
         calc_C00=True,
         calc_C01=True,
         calc_C11=True,
     ) -> Covariances:
-        # if trans_f is not None:
-        #     cv0_shape = jax.eval_shape(
-        #         lambda x, y: trans_f.compute_cv_trans(x, y)[0].cv, cv_0[0], nl[0] if nl is not None else None
-        #     ).shape
-        # else:
-        #     cv0_shape = cv_0[0].shape
-
-        # if cv_1 is not None:
-        #     if trans_g is not None:
-        #         cv1_shape = jax.eval_shape(
-        #             lambda x, y: trans_g.compute_cv_trans(x, y)[0].cv, cv_1[0], nl[0] if nl is not None else None
-        #         ).shape
-        #     else:
-        #         cv1_shape = cv_1[0].shape
-
         time_series = cv_1 is not None
 
         if w is None:
@@ -3709,12 +3725,6 @@ class Covariances:
             w = [wi ** (1 / T_scale) for wi in w]
             s = jnp.sum(jnp.hstack(w))
             w = [wi / s for wi in w]
-
-        # pi_0 = jnp.zeros((cv0_shape[1],))
-        # if time_series:
-        #     pi_1 = jnp.zeros((cv1_shape[1],))
-        # else:
-        #     pi_1 = None
 
         @jax.jit
         def cov_pi(carry, z_chunk: CV, w):
@@ -3764,37 +3774,32 @@ class Covariances:
 
             return (C00, C01, C11, pi0, pi1)
 
-        if cv_1 is not None:
-            cv = [CV.combine(x, y) for x, y in zip(cv_0, cv_1)]
+        if trans_f is not None:
 
+            def f_func(x, nl):
+                return trans_f.compute_cv(x, nl, chunk_size=chunk_size)[0]
         else:
-            cv = cv_0
 
-        def f(x: CV, nl):
-            if cv_1 is not None:
-                cv0, cv1 = x.split()
-            else:
-                cv0 = x
-                cv1 = None
+            def f_func(x, nl):
+                return x
 
-            if trans_f is not None:
-                cv0 = trans_f.compute_cv_trans(cv0, nl, chunk_size=chunk_size)[0]
+        if trans_g is not None:
 
-            if trans_g is not None and cv1 is not None:
-                cv1 = trans_g.compute_cv_trans(cv1, nl, chunk_size=chunk_size)[0]
+            def g_func(x, nl):
+                return trans_g.compute_cv(x, nl, chunk_size=chunk_size)[0]
+        else:
 
-            # print(f"{cv0=} {cv1=}")
-
-            if cv_1 is not None:
-                return CV.combine(cv0, cv1)
-
-            return cv0
+            def g_func(x, nl):
+                return x
 
         out = macro_chunk_map(
-            f=f,
-            op=CV.stack,
-            y=cv,
+            f=f_func,
+            ft=g_func,
+            op=cv_0[0].stack,
+            y=cv_0,
+            y_t=cv_1,
             nl=nl,
+            nl_t=nl,
             macro_chunk=macro_chunk,
             verbose=True,
             chunk_func=cov_pi,

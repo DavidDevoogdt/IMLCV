@@ -321,7 +321,7 @@ def test_neigh_pair():
 
     rng, sp, nl = _get_sp_rand(rng, 40, r_cut=r_cut)
 
-    z_array = nl.z_array
+    z_array = nl.info.z_array
 
     # neighbourghlist
     def func_double(r_ij, atom_index_j, data_j, r_ik, atom_index_k, data_k):

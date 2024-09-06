@@ -75,7 +75,7 @@ def get_sps(
 
 
 @pytest.mark.parametrize(
-    "cell,matching, pp",
+    "cell, pp",
     [(True, "sb"), (False, "soap")],
 )
 def test_SOAP_SB_sinkhorn(cell, pp):

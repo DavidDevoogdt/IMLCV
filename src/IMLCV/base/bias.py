@@ -269,7 +269,7 @@ class Bias(ABC):
                 if gpos:
                     e_gpos = de.coordinates
                 if vir and sp.cell is not None:
-                    e_vir = sp.cell.T @ de.cell
+                    e_vir = (sp.cell.T @ de.cell).T
 
             else:
                 ener, cvs = _compute(sp)
@@ -284,8 +284,6 @@ class Bias(ABC):
                 shmap=shmap,
                 push_jac=push_jac,
             )
-
-            # print(f"{cvs=} {jac=}")
 
             [ener, de] = self.compute_from_cv(
                 cvs,

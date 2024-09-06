@@ -499,28 +499,31 @@ class TransformerMAF(Transformer):
         assert dlo.time_series
         assert x_t is not None
 
-        print("unatomizing")
+        if x[0].atomic:
+            print("unatomizing")
 
-        trans = un_atomize
-        x, x_t = dlo.apply_cv_trans(
-            un_atomize,
-            x=x,
-            x_t=x_t,
-            macro_chunk=macro_chunk,
-            chunk_size=chunk_size,
-        )
+            trans = un_atomize
+            x, x_t = dlo.apply_cv(
+                un_atomize,
+                x=x,
+                x_t=x_t,
+                macro_chunk=macro_chunk,
+                chunk_size=chunk_size,
+            )
+        else:
+            trans = None
 
         print("getting koopman")
 
         km = dlo.koopman_model(
             cv_0=x,
             cv_tau=x_t,
-            # eps=1e-10,
             method=method,
             max_features=max_features,
             w=w,
-            koopman_weight=True,
-            add_1=True,
+            calc_pi=True,
+            koopman_weight=False,
+            add_1=False,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=True,
@@ -535,11 +538,14 @@ class TransformerMAF(Transformer):
 
         del km
 
-        trans *= trans_km
+        if trans is None:
+            trans = trans_km
+        else:
+            trans *= trans_km
 
         print("applying transformation")
 
-        x, x_t = dlo.apply_cv_trans(
+        x, x_t = dlo.apply_cv(
             trans_km,
             x=x,
             x_t=x_t,

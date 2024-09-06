@@ -331,7 +331,10 @@ def macro_chunk_map(
     f: Callable[[SystemParams | CV, NeighbourList], CV | NeighbourList],
     op: SystemParams.stack | CV.stack,
     y: list[SystemParams | CV],
-    nl: list[NeighbourList] | None,
+    nl: list[NeighbourList] | NeighbourList | None,
+    ft: Callable[[SystemParams | CV, NeighbourList], CV | NeighbourList] | None = None,
+    y_t: list[SystemParams | CV] | None = None,
+    nl_t: list[NeighbourList] | NeighbourList | None = None,
     macro_chunk: int | None = 10000,
     verbose=False,
     chunk_func=None,
@@ -341,35 +344,51 @@ def macro_chunk_map(
 ):
     # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
 
+    compute_t = y_t is not None
+
+    if jit_f:
+        f_cache = 0
+        f = jit(f)
+
+        if ft is not None:
+            ft = jit(ft)
+
     if macro_chunk is None:
         stack_dims = tuple([yi.shape[0] for yi in y])
 
-        z = f(op(*y), NeighbourList.stack(*nl))
-
+        z = f(op(*y), NeighbourList.stack(*nl) if isinstance(nl, list) else nl)
         z = z.replace(_stack_dims=stack_dims).unstack()
 
-        return z
+        if not compute_t:
+            return z
+
+        zt = ft(op(*y_t), NeighbourList.stack(*nl_t) if isinstance(nl_t, list) else nl_t)
+        zt = zt.replace(_stack_dims=stack_dims).unstack()
+
+        return z, zt
 
     n_prev = 0
     n = 0
 
     y_chunk = []
-    nl_chunk = [] if nl is not None else None
+
+    nl_chunk = [] if isinstance(nl, list) else None
     w_chunk = [] if w is not None else None
 
     tot_chunk = 0
     stack_dims_chunk = []
 
     tot = sum(y_chunk.shape[0] for y_chunk in y)
-
     tot_running = 0
 
     z = []
     last_z = None
 
-    if jit_f:
-        f_cache = 0
-        f = jit(f)
+    if compute_t:
+        yt_chunk = [] if compute_t else None
+        nlt_chunk = [] if isinstance(nl_t, list) else None
+        zt = [] if compute_t else None
+        last_zt = None
 
     while tot_running < tot:
         if (tot_chunk < macro_chunk) and (tot_running + tot_chunk != tot):
@@ -377,8 +396,12 @@ def macro_chunk_map(
             s = y[n].shape[0]
 
             y_chunk.append(y[n])
-            nl_chunk.append(nl[n]) if nl is not None else None
+            nl_chunk.append(nl[n]) if isinstance(nl, list) else None
             w_chunk.append(w[n]) if w is not None else None
+
+            if compute_t:
+                yt_chunk.append(y_t[n]) if compute_t else None
+                nlt_chunk.append(nl_t[n]) if isinstance(nl_t, list) else None
 
             tot_chunk += s
             stack_dims_chunk.append(s)
@@ -396,12 +419,20 @@ def macro_chunk_map(
                 last_chunk_y = y_last[s_last:yls]
                 y_chunk[-1] = y_last[0:s_last]
 
-                if nl is not None:
-                    nl_last = nl_chunk[-1] if nl is not None else None
+                if compute_t:
+                    yt_last = yt_chunk[-1]
+                    last_chunk_yt = yt_last[s_last:yls]
+                    yt_chunk[-1] = yt_last[0:s_last]
 
-                    # order matters
+                if isinstance(nl, list):
+                    nl_last = nl_chunk[-1] if nl is not None else None
                     last_chunk_nl = nl_last[s_last:yls]
                     nl_chunk[-1] = nl_last[0:s_last]
+
+                    if compute_t:
+                        nlt_last = nlt_chunk[-1] if nl_t is not None else None
+                        last_chunk_nlt = nlt_last[s_last:yls]
+                        nlt_chunk[-1] = nlt_last[0:s_last]
 
                 if w is not None:
                     w_last = w_chunk[-1]
@@ -413,12 +444,14 @@ def macro_chunk_map(
                 stack_dims_chunk[-1] = s_last
 
             y_stack = op(*y_chunk)
-            nl_stack = NeighbourList.stack(*nl_chunk) if nl is not None else None
+            yt_stack = op(*yt_chunk) if compute_t else None
+            nl_stack = NeighbourList.stack(*nl_chunk) if isinstance(nl, list) else nl
+            nlt_stack = NeighbourList.stack(*nlt_chunk) if isinstance(nl_t, list) else nl_t
             w_stack = jnp.hstack(w_chunk) if w is not None else None
 
             if verbose:
                 print(
-                    f"apply_cv_func: chunk {n_prev+1}-{n+1}/{len(y)},  {tot_running}-{ tot_running+tot_chunk }/{tot}  {y_stack.shape=}   "
+                    f"apply_cv_func: chunk {n_prev+1}-{n+1}/{len(y)},  {tot_running}-{ tot_running+tot_chunk }/{tot}  {y_stack.shape=}  {yt_stack.shape if compute_t else ''} "
                 )
 
             # remove the stack dims from the CVs and NLs
@@ -426,7 +459,7 @@ def macro_chunk_map(
             if isinstance(y_stack, CV):
                 y_stack.stack_dims = None
 
-            if nl_stack is not None:
+            if isinstance(nl, list):
                 nl_stack.update.stack_dims = None
 
             z_chunk = f(
@@ -434,21 +467,27 @@ def macro_chunk_map(
                 nl_stack,
             )
 
+            if compute_t:
+                if isinstance(yt_stack, CV):
+                    yt_stack.stack_dims = None
+
+                if isinstance(nlt_stack, list):
+                    nlt_stack.update.stack_dims = None
+
+                zt_chunk = ft(
+                    yt_stack,
+                    nlt_stack,
+                )
+
             # keep track of recompilation cache. Frequent recompilation indicates a problem
             if jit_f:
                 if (cs := f._cache_size()) != f_cache:
                     if cs == 1 and verbose:
-                        if nl_stack is not None:
-                            print(f"recompiled jit function for  {nl_stack.update=}")
-                        else:
-                            print("compiled jit function")
+                        print("compiled jit function")
 
                     elif cs > 1 and verbose:
                         if tot_chunk == macro_chunk:
-                            if nl_stack is not None:
-                                print(f"recompiled jit function for  {nl_stack.update=}")
-                            else:
-                                print("WARNING: recompiled jit function wihtout new neighbourlist")
+                            print("WARNING: recompiled jit function wihtout new neighbourlist")
                         else:
                             print("recompiled for last chunk")
                     f_cache = cs
@@ -459,21 +498,37 @@ def macro_chunk_map(
                 z_chunk.stack_dims = tuple(stack_dims_chunk)
                 z_chunk = z_chunk.unstack()
 
+                if compute_t:
+                    zt_chunk.stack_dims = tuple(stack_dims_chunk)
+                    zt_chunk = zt_chunk.unstack()
+
                 if last_z is not None:
                     z_chunk[0] = last_z.stack(last_z, z_chunk[0])
-                    # now fix the stack dims
                     if isinstance(z_chunk[0], CV):
                         z_chunk[0].stack_dims = None
 
                     elif isinstance(z_chunk[0], NeighbourList):
                         z_chunk[0].update.stack_dims = None
 
+                    if compute_t:
+                        zt_chunk[0] = last_zt.stack(last_zt, zt_chunk[0]) if compute_t else None
+                        if isinstance(zt_chunk[0], CV):
+                            zt_chunk[0].stack_dims = None
+
+                        elif isinstance(zt_chunk[0], NeighbourList):
+                            zt_chunk[0].update.stack_dims = None
+
                 if split_last:
                     last_z = z_chunk[-1]
                     z_chunk = z_chunk[:-1]
-
                     y_chunk = [last_chunk_y]
-                    nl_chunk = [last_chunk_nl] if nl is not None else None
+                    nl_chunk = [last_chunk_nl] if isinstance(nl, list) else None
+
+                    if compute_t:
+                        last_zt = zt_chunk[-1]
+                        zt_chunk = zt_chunk[:-1]
+                        yt_chunk = [last_chunk_yt]
+                        nlt_chunk = [last_chunk_nlt] if isinstance(nl_t, list) else None
 
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
@@ -483,11 +538,18 @@ def macro_chunk_map(
                 else:
                     last_z = None
                     y_chunk = []
-                    nl_chunk = [] if nl is not None else None
+                    nl_chunk = [] if isinstance(nl, list) else None
                     tot_chunk = 0
                     stack_dims_chunk = []
                     last_chunk_y = None
                     last_chunk_nl = None
+
+                    if compute_t:
+                        last_zt = None
+                        yt_chunk = []
+                        nlt_chunk = [] if isinstance(nl_t, list) else None
+                        last_chunk_yt = None
+                        last_chunk_nlt = None
 
                     n_prev = n + 1
 
@@ -496,12 +558,21 @@ def macro_chunk_map(
                 z.extend(z_chunk)
 
             else:
-                chunk_func_init_args = chunk_func(chunk_func_init_args, z_chunk, w_stack)
+                if compute_t:
+                    zz = CV.combine(z_chunk, zt_chunk)
+                else:
+                    zz = z_chunk
+
+                chunk_func_init_args = chunk_func(chunk_func_init_args, zz, w_stack)
 
                 if split_last:
                     y_chunk = [last_chunk_y]
-                    nl_chunk = [last_chunk_nl] if nl is not None else None
+                    nl_chunk = [last_chunk_nl] if isinstance(nl, list) else None
                     w_chunk = [last_chunk_w] if w is not None else None
+
+                    if compute_t:
+                        yt_chunk = [last_chunk_yt]
+                        nlt_chunk = [last_chunk_nlt] if isinstance(nl_t, list) else None
 
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
@@ -510,15 +581,21 @@ def macro_chunk_map(
 
                 else:
                     y_chunk = []
-                    nl_chunk = [] if nl is not None else None
+                    nl_chunk = [] if isinstance(nl, list) else None
                     w_chunk = [] if w is not None else None
-
-                    tot_chunk = 0
-                    stack_dims_chunk = []
 
                     last_chunk_y = None
                     last_chunk_nl = None
                     last_chunk_w = None
+
+                    tot_chunk = 0
+                    stack_dims_chunk = []
+
+                    if compute_t:
+                        yt_chunk = []
+                        nlt_chunk = [] if isinstance(nl_t, list) else None
+                        last_chunk_yt = None
+                        last_chunk_nlt = None
 
                     n_prev = n + 1
 
@@ -526,6 +603,9 @@ def macro_chunk_map(
             n += 1
 
     if chunk_func is None:
+        if compute_t:
+            return z, zt
+
         return z
 
     return chunk_func_init_args
@@ -848,20 +928,16 @@ class SystemParams:
             num_neighs = int(nn)
 
         if only_update:
-            new_update = NeighbourListUpdate.create(
-                num_neighs=num_neighs,
-                nxyz=new_nxyz,
-            )
+            # new_update = NeighbourListUpdate.create(
+            #     num_neighs=num_neighs,
+            #     nxyz=new_nxyz,
+            # )
 
             return (
                 b,
                 num_neighs,
                 new_nxyz,
-                NeighbourList(
-                    update=new_update,
-                    info=info,
-                    sp_orig=self,
-                ),
+                None,
             )
 
         if verbose:
@@ -3304,6 +3380,16 @@ class _CvTrans:
             return CvTransNN(trans=(proto,))
         return CvTrans(trans=(proto,))
 
+    def compute(
+        self,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
+        chunk_size=None,
+        jacobian=False,
+        shmap=True,
+    ) -> tuple[CV, CV | None, Array | None]:
+        return self.compute_cv_trans(x, nl, jacobian=jacobian, chunk_size=chunk_size, shmap=shmap)
+
     @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size", "jacobian", "shmap"))
     def compute_cv_trans(
         self,
@@ -3369,6 +3455,12 @@ class _CvTrans:
                 log_det += log_det_i
 
         return x, jac, log_det
+
+    def compute_cv(self, x: CV | SystemParams, nl: NeighbourList | None = None, jacobian=False, chunk_size=None) -> CV:
+        return self.compute_cv_trans(
+            x,
+            nl,
+        )[0]
 
     def __mul__(self, other):
         assert isinstance(
@@ -3515,6 +3607,16 @@ class CvFlow:
         **kwargs,
     ) -> CvFlow:
         return CvFlow(func=_CvTrans.from_cv_function(f=f, static_argnames=static_argnames, **kwargs))
+
+    def compute_cv(
+        self,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
+        chunk_size=None,
+        jacobian=False,
+        shmap=True,
+    ) -> tuple[CV, CV | None, Array | None]:
+        return self.compute_cv_flow(x, nl, jacobian=jacobian, chunk_size=chunk_size, shmap=shmap)
 
     @partial(jax.jit, static_argnames=["chunk_size", "jacobian", "shmap"])
     def compute_cv_flow(

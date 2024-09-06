@@ -26,24 +26,24 @@ class YaffEnergy(Energy):
         out = self.ff.system.cell.rvecs[:]  # empty cell represented as array with shape (0,3)
         if out.size == 0:
             return None
-        return jnp.asarray(out)
+        return jnp.array(out)
 
     @cell.setter
     def cell(self, cell):
         if cell is None:
             return
 
-        cell = np.asarray(cell, dtype=np.double)
+        cell = np.array(cell, dtype=np.double)
 
         self.ff.update_rvecs(cell)
 
     @property
     def coordinates(self):
-        return jnp.asarray(self.ff.system.pos[:])
+        return jnp.array(self.ff.system.pos[:])
 
     @coordinates.setter
     def coordinates(self, coordinates):
-        self.ff.update_pos(np.asarray(coordinates))
+        self.ff.update_pos(np.array(coordinates))
 
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
@@ -86,7 +86,7 @@ class AseEnergy(Energy):
 
     @property
     def cell(self):
-        cell = jnp.asarray(self.atoms.cell) * angstrom
+        cell = jnp.array(self.atoms.cell) * angstrom
 
         if cell.ndim == 0:
             return None
@@ -106,7 +106,7 @@ class AseEnergy(Energy):
     def coordinates(self):
         # return jnp.asarray(self.atoms.get_positions() * angstrom)
 
-        return jnp.asarray(self.atoms.arrays["positions"]) * angstrom
+        return jnp.array(self.atoms.arrays["positions"]) * angstrom
 
     @coordinates.setter
     def coordinates(self, coordinates):

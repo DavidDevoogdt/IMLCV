@@ -14,10 +14,21 @@ line-length = 120
 target-version = ['py310']
 
 [tool.ruff]
-# Exclude a variety of commonly ignored directories.
+
+extend-include = ["*.ipynb"]
 
 # Same as Black.
 line-length = 120
 lint.ignore = ["E741"]
-
 lint.extend-select = ["I"]
+
+
+[tool.pyright]
+include = ["."]
+exclude = [
+    ".vscode/**",
+    ".vscdoe-server/**",
+    ".ruff_cache/**",
+    ".pip_cache/**",
+    "micromamba/**",
+]

@@ -21,8 +21,6 @@ finally:
 import logging
 import os
 import sys
-from dataclasses import KW_ONLY
-from functools import partial
 from logging import warning
 
 import jax
@@ -30,19 +28,16 @@ import jax._src.tree_util
 import jax.numpy as jnp
 import jsonpickle
 import numpy as np
-from flax.struct import PyTreeNode, dataclass, field
 
 # from flax.struct import PyTreeNode as MyPyTreeNode
 from jax import random
 from jsonpickle import tags
 from jsonpickle.ext.numpy import register, register_handlers
 from jsonpickle.handlers import BaseHandler
-from typing_extensions import dataclass_transform
 
 logging.getLogger("parsl").setLevel(logging.WARNING)
 
 KEY = random.PRNGKey(0)
-LOGLEVEL = logging.CRITICAL
 
 
 if "mpi4py" in sys.modules:

@@ -1,5 +1,6 @@
 import dataclasses
 from functools import partial
+from typing import Callable
 
 import distrax
 import jax
@@ -8,7 +9,9 @@ import lineax as lx
 import numpy as np
 from flax.linen.linear import Dense
 from jax import Array, vmap
-from jax.tree_util import Partial
+from jax.numpy.linalg import lstsq
+from jaxopt._src.linear_solve import _materialize_array
+from jaxopt.linear_solve import solve_normal_cg
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear import linear_problem
 from ott.solvers.linear import implicit_differentiation, sinkhorn
@@ -711,6 +714,7 @@ def sinkhorn_divergence_2(
     push_div=False,
     nan_zero=True,
     lse=True,
+    in_prod=True,
 ) -> Array:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -720,7 +724,7 @@ def sinkhorn_divergence_2(
     assert not x1.batched
     assert not x2.batched
 
-    eps = 10 * jnp.finfo(x1.cv.dtype).eps
+    eps = 100 * jnp.finfo(x1.cv.dtype).eps
 
     def p_norm(x: CV):
         p = x.cv
@@ -741,9 +745,38 @@ def sinkhorn_divergence_2(
         x2 = x2.replace(cv=x2.cv * scale)
 
     src_mask, _, p1 = nl1.nl_split_z(x1)
-    tgt_mask, _, p2 = nl2.nl_split_z(x2)
+    tgt_mask, tgt_split, p2 = nl2.nl_split_z(x2)
 
-    def sinkhorn(p1, p2, epsilon, precision=1e-10):
+    lse = True
+    r_cond_svd = 1e-6
+
+    def solve_svd(matvec: Callable, b: Array) -> Array:
+        print(f"solve_svd {  b= }")
+
+        if len(b.shape) == 0:
+            return b / _materialize_array(matvec, b.shape)
+
+        A = _materialize_array(matvec, b.shape, b.dtype)
+
+        b_shape = b.shape
+
+        if len(b_shape) > 2:
+            raise ValueError("b must be 1D or 2D")
+
+        if len(b.shape) == 2:
+            A = A.reshape(-1, b.shape[0] * b.shape[1])
+            b = b.ravel()
+
+        x, _, _, s = lstsq(A, b, rcond=r_cond_svd)
+
+        # jax.debug.print("s {}", s)
+
+        if len(b_shape) == 2:
+            x = x.reshape(*b_shape[1])
+
+        return x
+
+    def sinkhorn(p1, p2, epsilon, precision=1e-14):
         @partial(vmap, in_axes=(None, 0), out_axes=1)
         @partial(vmap, in_axes=(0, None), out_axes=0)
         def cost(p1, p2):
@@ -755,7 +788,6 @@ def sinkhorn_divergence_2(
         b = jnp.ones((c.shape[1],)) / c.shape[1]
 
         from jaxopt import FixedPointIteration
-        from jaxopt.linear_solve import solve_normal_cg
 
         if lse:  # log space
             eps_log_a = jnp.log(a) * epsilon
@@ -767,7 +799,7 @@ def sinkhorn_divergence_2(
             def _f0(c, h):
                 return jnp.sum(jnp.exp((-c + h) / epsilon))
 
-            def T(g, c, eps_log_a, eps_log_b):
+            def T(g, c):
                 f = eps_log_a - epsilon * jnp.log(vmap(_f0, in_axes=(0, None))(c, g))
                 g = eps_log_b - epsilon * jnp.log(vmap(_f0, in_axes=(1, None))(c, f))
 
@@ -775,12 +807,12 @@ def sinkhorn_divergence_2(
 
             fpi = FixedPointIteration(
                 fixed_point_fun=T,
-                maxiter=1000,
+                maxiter=2000,
                 tol=precision,
-                implicit_diff_solve=partial(solve_normal_cg, tol=1e-10, ridge=1e-6),
+                implicit_diff_solve=solve_normal_cg,
             )
 
-            out = fpi.run(g, c, eps_log_a, eps_log_b)
+            out = fpi.run(g, c)
 
             g = out.params
 
@@ -803,7 +835,12 @@ def sinkhorn_divergence_2(
 
                 return v
 
-            fpi = FixedPointIteration(fixed_point_fun=T, maxiter=1000, tol=precision)
+            fpi = FixedPointIteration(
+                fixed_point_fun=T,
+                maxiter=1000,
+                tol=precision,
+                implicit_diff_solve=partial(lstsq, rcond=r_cond_svd),
+            )
 
             out = fpi.run(v, K, a, b)
 
@@ -815,35 +852,55 @@ def sinkhorn_divergence_2(
 
         return P, c0
 
-    def get_divergence(p1, p2):
-        p1 = jnp.reshape(p1, (p1.shape[0], -1))
-        p2 = jnp.reshape(p2, (p2.shape[0], -1))
+    if in_prod:
 
-        _, out_xy = sinkhorn(p1, p2, epsilon=alpha)
-        _, out_xx = sinkhorn(p1, p1, epsilon=alpha)
-        _, out_yy = sinkhorn(p2, p2, epsilon=alpha)
+        def get_divergence(p1, p2):
+            p1 = jnp.reshape(p1, (p1.shape[0], -1))
+            p2 = jnp.reshape(p2, (p2.shape[0], -1))
 
-        div = out_xy - 0.5 * (out_xx + out_yy)
+            P12, _ = sinkhorn(p1, p2, epsilon=alpha)
 
-        return div
+            return jnp.einsum("ij,i...->j...", P12, p1)
 
-    if push_div:
-        get_divergence = jax.jacrev(get_divergence, argnums=(1))
+        out = jnp.zeros_like(x2.cv)
 
-        divergences = []
+        for p1_i, p2_i, out_i in zip(p1, p2, tgt_split):
+            print(f"{out_i=}")
+            out = out.at[out_i].set(get_divergence(p1_i.cv, p2_i.cv))
 
-        for p1_i, p2_i in zip(p1, p2):
-            div_z = get_divergence(p1_i.cv, p2_i.cv)
+        return x2.replace(cv=out, _stack_dims=x1._stack_dims)
 
-            cv_z = p1_i.replace(cv=jnp.reshape(div_z, (-1,)), atomic=False)
+    else:
+        # norm per species per atom
+        def get_divergence(p1, p2):
+            p1 = jnp.reshape(p1, (p1.shape[0], -1))
+            p2 = jnp.reshape(p2, (p2.shape[0], -1))
 
-            divergences.append(cv_z)
-        comb = CV.combine(*divergences)
+            _, out_xy = sinkhorn(p1, p2, epsilon=alpha)
+            _, out_xx = sinkhorn(p1, p1, epsilon=alpha)
+            _, out_yy = sinkhorn(p2, p2, epsilon=alpha)
 
-        return comb.replace(_stack_dims=x1._stack_dims)
+            div = out_xy - 0.5 * (out_xx + out_yy)
+
+            return div
+
+        if push_div:
+            get_divergence = jax.jacrev(get_divergence, argnums=(1))
+
+            divergences = []
+
+            for p1_i, p2_i in zip(p1, p2):
+                div_z = get_divergence(p1_i.cv, p2_i.cv)
+
+                cv_z = p1_i.replace(cv=jnp.reshape(div_z, (-1,)), atomic=False)
+
+                divergences.append(cv_z)
+            comb = CV.combine(*divergences)
+
+            return comb.replace(_stack_dims=x1._stack_dims)
 
     # this is not vmappable because it has different lengths. The src_mask and tgt_mask in ott jax geometry do not produce the desired results
-    divergences = jnp.array([get_divergence(p1_i.cv, p2_i.cv) for p1_i, p2_i in zip(p1, p2)])
+    divergences = CV(cv=jnp.array([get_divergence(p1_i.cv, p2_i.cv) for p1_i, p2_i in zip(p1, p2)]))
 
     if sum_divergence:
         raise NotImplementedError
@@ -900,78 +957,74 @@ def _sinkhorn_divergence_trans_2(
             push_div=push_div,
         )
 
-    def get_div(pi, cv):
-        if pi.batched:
-            cv_arr = vmap(f, in_axes=(0, None))(pi, cv)
-        else:
-            cv_arr = f(pi, cv)
+    if pi.batched:
+        f = vmap(f, in_axes=(0, None))
 
-        if pi.batched:
-            _combine_dims = [cv_arr.shape[1]] * cv_arr.shape[0]
-            cv_arr = jnp.hstack(cv_arr)
+    out = f(pi, cv)
 
-        else:
-            _combine_dims = None
+    if pi.batched:
+        print(f"stacking {out=}")
 
-        _stack_dims = cv._stack_dims
+        out.stack_dims = (1,) * out.cv.shape[0]
 
-        return CV(
-            cv=cv_arr,
-            _stack_dims=_stack_dims,
-            _combine_dims=_combine_dims,
-            atomic=False,
-        )
+        out = CV.combine(*out.unstack()).unbatch()
 
-    if push_div:
-        if pi.batched:
-            f = vmap(f, in_axes=(0, None))
+        print(f"stacked {out=}")
 
-            raise NotImplementedError("TODO: unstack and combine along batched axis")
+    out._stack_dims = cv._stack_dims
 
-        return f(pi, cv)
+    return out
 
-    if output == "ddiv":
-        div = jax.jacrev(get_div, argnums=ddiv_arg)(pi, cv).cv
+    # if push_div:
+    #     if pi.batched:
+    #         f = vmap(f, in_axes=(0, None))
 
-    elif output == "both":
-        assert not sum_divergence, "not implemented"
+    #         raise NotImplementedError("TODO: unstack and combine along batched axis")
 
-        # taken from https://github.com/google/jax/pull/762
-        def value_and_jacrev(g, x):
-            y, pullback = jax.vjp(g, x)
-            basis = y.replace(cv=jnp.eye(y.cv.size, dtype=y.cv.dtype))
-            (jac,) = jax.vmap(pullback)(basis)
-            return y, jac
+    #     return f(pi, cv)
 
-        if ddiv_arg == 0:
-            g = Partial(get_div, cv=cv)
-            x = pi
-        else:
-            g = Partial(get_div, pi=pi)
-            x = cv
+    # if output == "ddiv":
+    #     div = jax.jacrev(get_div, argnums=ddiv_arg)(pi, cv).cv
 
-        div, jac = value_and_jacrev(g, x)
+    # elif output == "both":
+    #     assert not sum_divergence, "not implemented"
 
-        # d_size = int(div.shape[0])
-        x_shape = int(x.cv.size / x.shape[0])
-        n_z = x.shape[0]
+    #     # taken from https://github.com/google/jax/pull/762
+    #     def value_and_jacrev(g, x):
+    #         y, pullback = jax.vjp(g, x)
+    #         basis = y.replace(cv=jnp.eye(y.cv.size, dtype=y.cv.dtype))
+    #         (jac,) = jax.vmap(pullback)(basis)
+    #         return y, jac
 
-        jac = jac.replace(
-            cv=jac.cv.reshape(-1),
-            _combine_dims=[[[x_shape] * n_z] * a for a in div._combine_dims] if div._combine_dims is not None else None,
-            atomic=div.atomic,
-            _stack_dims=div._stack_dims,
-        )  # flatten according to ddiv combine dims
+    #     if ddiv_arg == 0:
+    #         g = Partial(get_div, cv=cv)
+    #         x = pi
+    #     else:
+    #         g = Partial(get_div, pi=pi)
+    #         x = cv
 
-        div = CV.combine(div, jac)
+    #     div, jac = value_and_jacrev(g, x)
 
-    else:
-        div = get_div(pi, cv)
+    #     # d_size = int(div.shape[0])
+    #     x_shape = int(x.cv.size / x.shape[0])
+    #     n_z = x.shape[0]
 
-    return div.replace(
-        cv=jnp.reshape(div.cv, (-1)),
-        atomic=False,
-    )
+    #     jac = jac.replace(
+    #         cv=jac.cv.reshape(-1),
+    #         _combine_dims=[[[x_shape] * n_z] * a for a in div._combine_dims] if div._combine_dims is not None else None,
+    #         atomic=div.atomic,
+    #         _stack_dims=div._stack_dims,
+    #     )  # flatten according to ddiv combine dims
+
+    #     div = CV.combine(div, jac)
+
+    # else:
+    #     div = get_div(pi, cv)
+
+    # return div.replace(
+    #     cv=jnp.reshape(div.cv, (-1)),
+    #     atomic=False,
+    # )
 
 
 def get_sinkhorn_divergence_2(
@@ -1288,10 +1341,11 @@ def get_non_constant_trans(
 def get_feature_cov(
     c_0: list[CV],
     c_tau: list[CV],
-    nl: list[NeighbourList] | None = None,
+    nl: list[NeighbourList] | NeighbourList | None = None,
     w: list[jnp.array] | None = None,
     trans: CvTrans | None = None,
-    epsilon=1e-14,
+    epsilon=0.1,
+    smallest_correlation=1e-12,
     max_functions=None,
     T_scale=1,
 ) -> tuple[CV, CV, CvTrans]:
@@ -1305,23 +1359,17 @@ def get_feature_cov(
         nl=nl,
         w=w,
         symmetric=False,
-        calc_pi=False,
+        calc_pi=True,
         only_diag=True,
         T_scale=T_scale,
         trans_f=trans,
         trans_g=trans,
     )
 
-    print(f"{cov=}")
-
     print("computing feature covariances done")
 
     cov_n = jnp.sqrt(cov.C00 * cov.C11)
-    cov_01 = jnp.where(cov_n > epsilon, cov.C01 / cov_n, 0)
-
-    print(f"{cov_01}")
-
-    print(f"selected auto covariances {cov_01}")
+    cov_01 = jnp.where(cov_n > smallest_correlation, cov.C01 / cov_n, 0)  # avoid division by zero
 
     idx = jnp.argsort(cov_01, descending=True)
     cov_sorted = cov_01[idx]
@@ -1336,7 +1384,7 @@ def get_feature_cov(
 
     idx = idx[:pos]
 
-    print(f"selected auto covariances {cov_01[idx]}")
+    print(f"selected auto covariances {cov_01[idx]} {pos=}")
 
     trans = CvTrans.from_cv_function(_cv_slice, indices=idx)
 

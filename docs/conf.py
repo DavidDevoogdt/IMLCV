@@ -122,7 +122,7 @@ copyright = "2023, David Devoogdt"
 # If you don’t need the separation provided between version and release,
 # just set them both to the same value.
 try:
-    from imlcv import __version__ as version
+    from IMLCV import __version__ as version
 except ImportError:
     version = ""
 
