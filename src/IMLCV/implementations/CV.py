@@ -40,13 +40,17 @@ def _identity_trans(x, nl, _, shmap):
     return x
 
 
-def _zero_cv(x, nl, _, shmap):
+def _zero_cv_trans(x: CV, nl, _, shmap):
+    return x.replace(cv=jnp.array([0.0]), combine_dims=None)
+
+
+def _zero_cv_flow(x: SystemParams, nl, _, shmap):
     return CV(cv=jnp.array([0.0]))
 
 
 identity_trans = CvTrans.from_cv_function(_identity_trans)
-zero_trans = CvTrans.from_cv_function(_zero_cv)
-zero_flow = CvFlow.from_function(_zero_cv)
+zero_trans = CvTrans.from_cv_function(_zero_cv_trans)
+zero_flow = CvFlow.from_function(_zero_cv_flow)
 
 
 def _Volume(sp: SystemParams, _nl, _c, shmap):
@@ -69,7 +73,7 @@ def _distance(x: SystemParams, *_):
         jnp.arange(n),
     )
 
-    return CV(cv=out[jnp.triu_indices_from(out, k=1)])
+    return x(cv=out[jnp.triu_indices_from(out, k=1)], _combine_dims=None)
 
 
 def distance_descriptor():
@@ -747,7 +751,6 @@ def sinkhorn_divergence_2(
     src_mask, _, p1 = nl1.nl_split_z(x1)
     tgt_mask, tgt_split, p2 = nl2.nl_split_z(x2)
 
-    lse = True
     r_cond_svd = 1e-6
 
     def solve_svd(matvec: Callable, b: Array) -> Array:
@@ -776,7 +779,22 @@ def sinkhorn_divergence_2(
 
         return x
 
-    def sinkhorn(p1, p2, epsilon, precision=1e-14):
+    def _core_sinkhorn(p1, p2, epsilon, precision=1e-10, lse=True, r_cond_svd=1e-10):
+        def _f0(c, h, epsilon):
+            return jnp.sum(jnp.exp((-c + h) / epsilon))
+
+        def _T_lse(g, c, eps_log_a, eps_log_b, epsilon):
+            f = eps_log_a - epsilon * jnp.log(vmap(_f0, in_axes=(0, None, None))(c, g, epsilon))
+            g = eps_log_b - epsilon * jnp.log(vmap(_f0, in_axes=(1, None, None))(c, f, epsilon))
+
+            return g
+
+        def _T(v, K, a, b):
+            u = a / jnp.einsum("ij,j->i", K, v)
+            v = b / jnp.einsum("ij,i->j", K, u)
+
+            return v
+
         @partial(vmap, in_axes=(None, 0), out_axes=1)
         @partial(vmap, in_axes=(0, None), out_axes=0)
         def cost(p1, p2):
@@ -796,27 +814,18 @@ def sinkhorn_divergence_2(
             # initialization
             g = jnp.zeros((c.shape[1],))
 
-            def _f0(c, h):
-                return jnp.sum(jnp.exp((-c + h) / epsilon))
-
-            def T(g, c):
-                f = eps_log_a - epsilon * jnp.log(vmap(_f0, in_axes=(0, None))(c, g))
-                g = eps_log_b - epsilon * jnp.log(vmap(_f0, in_axes=(1, None))(c, f))
-
-                return g
-
             fpi = FixedPointIteration(
-                fixed_point_fun=T,
+                fixed_point_fun=_T_lse,
                 maxiter=2000,
                 tol=precision,
                 implicit_diff_solve=solve_normal_cg,
             )
 
-            out = fpi.run(g, c)
+            out = fpi.run(g, c, eps_log_a, eps_log_b, epsilon)
 
             g = out.params
 
-            f = eps_log_a - epsilon * jnp.log(vmap(_f0, in_axes=(0, None))(c, g))
+            f = eps_log_a - epsilon * jnp.log(vmap(_f0, in_axes=(0, None, None))(c, g, epsilon))
 
             c_red = vmap(jnp.add, in_axes=(1, None), out_axes=1)(-c, f)
             c_red = vmap(jnp.add, in_axes=(0, None))(c_red, g)
@@ -829,14 +838,8 @@ def sinkhorn_divergence_2(
             # initialization
             v = jnp.ones((c.shape[1],))
 
-            def T(v, K, a, b):
-                u = a / jnp.einsum("ij,j->i", K, v)
-                v = b / jnp.einsum("ij,i->j", K, u)
-
-                return v
-
             fpi = FixedPointIteration(
-                fixed_point_fun=T,
+                fixed_point_fun=_T,
                 maxiter=1000,
                 tol=precision,
                 implicit_diff_solve=partial(lstsq, rcond=r_cond_svd),
@@ -852,6 +855,8 @@ def sinkhorn_divergence_2(
 
         return P, c0
 
+    sinkhorn = partial(_core_sinkhorn, precision=1e-10, lse=lse, r_cond_svd=r_cond_svd)
+
     if in_prod:
 
         def get_divergence(p1, p2):
@@ -865,7 +870,6 @@ def sinkhorn_divergence_2(
         out = jnp.zeros_like(x2.cv)
 
         for p1_i, p2_i, out_i in zip(p1, p2, tgt_split):
-            print(f"{out_i=}")
             out = out.at[out_i].set(get_divergence(p1_i.cv, p2_i.cv))
 
         return x2.replace(cv=out, _stack_dims=x1._stack_dims)
@@ -963,13 +967,8 @@ def _sinkhorn_divergence_trans_2(
     out = f(pi, cv)
 
     if pi.batched:
-        print(f"stacking {out=}")
-
         out.stack_dims = (1,) * out.cv.shape[0]
-
         out = CV.combine(*out.unstack()).unbatch()
-
-        print(f"stacked {out=}")
 
     out._stack_dims = cv._stack_dims
 
@@ -1342,6 +1341,7 @@ def get_feature_cov(
     c_0: list[CV],
     c_tau: list[CV],
     nl: list[NeighbourList] | NeighbourList | None = None,
+    nl_tau: list[NeighbourList] | NeighbourList | None = None,
     w: list[jnp.array] | None = None,
     trans: CvTrans | None = None,
     epsilon=0.1,
@@ -1354,9 +1354,10 @@ def get_feature_cov(
     print("computing feature covariances")
 
     cov = Covariances.create(
-        c_0,
-        c_tau,
+        cv_0=c_0,
+        cv_1=c_tau,
         nl=nl,
+        nl_t=nl_tau,
         w=w,
         symmetric=False,
         calc_pi=True,

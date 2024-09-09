@@ -158,6 +158,8 @@ def padded_shard_map(
 
         devices = mesh_utils.create_device_mesh((n_devices,), jax.devices())
 
+        # print(f" sharding in_tree  { in  }")
+
         in_tree_padded = jax.tree.map(
             Partial(
                 _n_pad,
@@ -331,7 +333,7 @@ def macro_chunk_map(
     f: Callable[[SystemParams | CV, NeighbourList], CV | NeighbourList],
     op: SystemParams.stack | CV.stack,
     y: list[SystemParams | CV],
-    nl: list[NeighbourList] | NeighbourList | None,
+    nl: list[NeighbourList] | NeighbourList | None = None,
     ft: Callable[[SystemParams | CV, NeighbourList], CV | NeighbourList] | None = None,
     y_t: list[SystemParams | CV] | None = None,
     nl_t: list[NeighbourList] | NeighbourList | None = None,
@@ -345,6 +347,9 @@ def macro_chunk_map(
     # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
 
     compute_t = y_t is not None
+
+    if compute_t and ft is None:
+        ft = f
 
     if jit_f:
         f_cache = 0
@@ -385,9 +390,9 @@ def macro_chunk_map(
     last_z = None
 
     if compute_t:
-        yt_chunk = [] if compute_t else None
+        yt_chunk = []
         nlt_chunk = [] if isinstance(nl_t, list) else None
-        zt = [] if compute_t else None
+        zt = []
         last_zt = None
 
     while tot_running < tot:
@@ -444,9 +449,12 @@ def macro_chunk_map(
                 stack_dims_chunk[-1] = s_last
 
             y_stack = op(*y_chunk)
-            yt_stack = op(*yt_chunk) if compute_t else None
             nl_stack = NeighbourList.stack(*nl_chunk) if isinstance(nl, list) else nl
-            nlt_stack = NeighbourList.stack(*nlt_chunk) if isinstance(nl_t, list) else nl_t
+
+            if compute_t:
+                yt_stack = op(*yt_chunk)
+                nlt_stack = NeighbourList.stack(*nlt_chunk) if isinstance(nl_t, list) else nl_t
+
             w_stack = jnp.hstack(w_chunk) if w is not None else None
 
             if verbose:
@@ -539,8 +547,10 @@ def macro_chunk_map(
                     last_z = None
                     y_chunk = []
                     nl_chunk = [] if isinstance(nl, list) else None
+
                     tot_chunk = 0
                     stack_dims_chunk = []
+
                     last_chunk_y = None
                     last_chunk_nl = None
 
@@ -548,6 +558,7 @@ def macro_chunk_map(
                         last_zt = None
                         yt_chunk = []
                         nlt_chunk = [] if isinstance(nl_t, list) else None
+
                         last_chunk_yt = None
                         last_chunk_nlt = None
 
@@ -556,14 +567,13 @@ def macro_chunk_map(
                 w_chunk = [] if w is not None else None
 
                 z.extend(z_chunk)
+                if compute_t:
+                    zt.extend(zt_chunk)
 
             else:
-                if compute_t:
-                    zz = CV.combine(z_chunk, zt_chunk)
-                else:
-                    zz = z_chunk
-
-                chunk_func_init_args = chunk_func(chunk_func_init_args, zz, w_stack)
+                chunk_func_init_args = chunk_func(
+                    chunk_func_init_args, z_chunk, zt_chunk if compute_t else None, w_stack
+                )
 
                 if split_last:
                     y_chunk = [last_chunk_y]
@@ -2815,16 +2825,13 @@ class CvMetric:
             n_grid=n,
         )
 
-        @jax.jit
+        # @jax.jit
         def f(x: CV, _):
             return closest_trans.compute_cv_trans(x, chunk_size=chunk_size)[0]
 
         grid_nums, _ = data_loader_output._apply(
-            cv_0,
-            None,
-            None,
-            None,
-            f,
+            x=cv_0,
+            f=f,
             macro_chunk=macro_chunk,
             verbose=verbose,
         )
@@ -2875,9 +2882,6 @@ class CvMetric:
 
         mask, _ = data_loader_output._apply(
             x=cv_0,
-            x_t=None,
-            nl=None,
-            nl_t=None,
             f=f,
             macro_chunk=macro_chunk,
             verbose=verbose,
@@ -3388,7 +3392,13 @@ class _CvTrans:
         jacobian=False,
         shmap=True,
     ) -> tuple[CV, CV | None, Array | None]:
-        return self.compute_cv_trans(x, nl, jacobian=jacobian, chunk_size=chunk_size, shmap=shmap)
+        return self.compute_cv_trans(
+            x=x,
+            nl=nl,
+            jacobian=jacobian,
+            chunk_size=chunk_size,
+            shmap=shmap,
+        )
 
     @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size", "jacobian", "shmap"))
     def compute_cv_trans(
@@ -3413,7 +3423,6 @@ class _CvTrans:
                     log_Jf=log_Jf,
                     chunk_size=None,
                     jacobian=jacobian,
-                    shmap=False,
                 ),
                 chunk_size=chunk_size,
             )
@@ -3456,11 +3465,21 @@ class _CvTrans:
 
         return x, jac, log_det
 
-    def compute_cv(self, x: CV | SystemParams, nl: NeighbourList | None = None, jacobian=False, chunk_size=None) -> CV:
+    def compute_cv(
+        self,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
+        jacobian=False,
+        chunk_size=None,
+        shmap=True,
+    ) -> CV:
         return self.compute_cv_trans(
-            x,
-            nl,
-        )[0]
+            x=x,
+            nl=nl,
+            jacobian=jacobian,
+            chunk_size=chunk_size,
+            shmap=shmap,
+        )
 
     def __mul__(self, other):
         assert isinstance(
@@ -3616,7 +3635,13 @@ class CvFlow:
         jacobian=False,
         shmap=True,
     ) -> tuple[CV, CV | None, Array | None]:
-        return self.compute_cv_flow(x, nl, jacobian=jacobian, chunk_size=chunk_size, shmap=shmap)
+        return self.compute_cv_flow(
+            x=x,
+            nl=nl,
+            jacobian=jacobian,
+            chunk_size=chunk_size,
+            shmap=shmap,
+        )
 
     @partial(jax.jit, static_argnames=["chunk_size", "jacobian", "shmap"])
     def compute_cv_flow(

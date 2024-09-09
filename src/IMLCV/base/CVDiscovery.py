@@ -91,7 +91,7 @@ class Transformer:
         jac=jax.jacrev,
         transform_FES=True,
         max_fes_bias=100 * kjmol,
-        n_max=30,
+        n_max=60,
         samples_per_bin=50,
         min_samples_per_bin=5,
         verbose=True,
@@ -315,6 +315,11 @@ class Transformer:
                 margin_fes_i = []
 
                 for i, (cvi, cvdata_i) in enumerate(zip(collective_variables, cvdj)):
+                    if cvi.n != 2:
+                        fes_i.append(None)
+                        margin_fes_i.append(None)
+                        continue
+
                     if fes_biases is not None and i == j:
                         fes_ij = fes_biases[j]
                     else:
@@ -437,7 +442,7 @@ class Transformer:
                 metric=metrics[in_out],
                 weight=weight is not None,
                 margin=margin,
-                plot_FES=plot_FES,
+                plot_FES=plot_FES and fesses[data_in][in_out] is not None,
                 FES=fesses[data_in][in_out] if plot_FES else None,
                 margin_fes=margin_fesses[data_in][in_out] if plot_FES else None,
                 vmax=vmax,

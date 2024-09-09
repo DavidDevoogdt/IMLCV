@@ -252,7 +252,7 @@ class Bias(ABC):
         if not use_jac:
 
             @jax.jit
-            def _compute(sp):
+            def _compute(sp, nl):
                 cvs, _ = self.collective_variable.compute_cv(
                     sp=sp,
                     nl=nl,
@@ -264,7 +264,7 @@ class Bias(ABC):
                 return ener, cvs
 
             if gpos or vir:
-                (ener, cvs), de = value_and_grad(_compute, has_aux=True)(sp)
+                (ener, cvs), de = value_and_grad(_compute, has_aux=True)(sp, nl)
 
                 if gpos:
                     e_gpos = de.coordinates
@@ -272,7 +272,7 @@ class Bias(ABC):
                     e_vir = (sp.cell.T @ de.cell).T
 
             else:
-                ener, cvs = _compute(sp)
+                ener, cvs = _compute(sp, nl)
 
         else:
             # print(f"{e=} {cvs=} {de=}")

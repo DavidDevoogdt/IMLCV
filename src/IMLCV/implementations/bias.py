@@ -252,7 +252,7 @@ class RbfBias(Bias):
         finalized=False,
     ) -> Self:
         assert cv.batched
-        # assert cv.shape[1] == cvs.n
+        assert cv.shape[1] == cvs.n
         assert len(vals.shape) == 1
         assert cv.shape[0] == vals.shape[0]
 

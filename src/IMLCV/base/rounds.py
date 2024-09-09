@@ -2080,8 +2080,8 @@ class data_loader_output:
         koopman=False,
         indicator_CV=True,
         # wham_sub_grid=5,
-        wham_eps=1e-12,
-        koopman_eps=1e-20,
+        wham_eps=1e-10,
+        koopman_eps=1e-15,
         cv_0: list[CV] | None = None,
         cv_t: list[CV] | None = None,
         force_recalc=False,
@@ -2197,7 +2197,7 @@ class data_loader_output:
                 prob = jnp.exp(u)
 
                 if bias_cutoff is not None:
-                    m = jnp.abs(u) * jnp.log10(e) > bias_cutoff
+                    m = u - jnp.min(u) > bias_cutoff * jnp.log(10)
 
                     if (n_o := jnp.sum(m)) > 0:
                         nm_tot.append(n_o)
@@ -2264,11 +2264,9 @@ class data_loader_output:
                         b_ik, N_i = x
 
                         f_i = jnp.einsum("k,ik->i", a_k, b_ik)
-
                         f_i = jnp.where(f_i < min_f_i, min_f_i, f_i)
 
                         a_k_new = jnp.einsum("i,ik->k", N_i / f_i, b_ik)
-
                         a_k_new = a_k_new / jnp.sum(a_k_new)
 
                         return a_k_new, f_i
@@ -2281,8 +2279,8 @@ class data_loader_output:
                     def kl_div(a_k, x):
                         a_k_p, f = T(a_k, x)
 
-                        a_k = jnp.where(a_k >= 1e-50, a_k, 1e-50)
-                        a_k_p = jnp.where(a_k_p >= 1e-50, a_k_p, 1e-50)
+                        a_k = jnp.where(a_k >= min_f_i, a_k, min_f_i)
+                        a_k_p = jnp.where(a_k_p >= min_f_i, a_k_p, min_f_i)
 
                         return jnp.sum(a_k * (jnp.log(a_k) - jnp.log(a_k_p)))
 
@@ -2291,7 +2289,7 @@ class data_loader_output:
                     solver = jaxopt.ProjectedGradient(
                         fun=norm,
                         projection=jaxopt.projection.projection_simplex,  # prob space is simplex
-                        maxiter=10000,
+                        maxiter=1000,
                         tol=wham_eps,
                     )
 
@@ -2697,28 +2695,35 @@ class data_loader_output:
                 x,
                 nl,
                 chunk_size=chunk_size,
-                shmap=shmap,
+                shmap=False,
             )[0]
 
+        if shmap:
+            # TODO 0909 09:41:06.108200 3141823 collective_ops_utils.h:306] This thread has been waiting for 5000ms for and may be stuck: participant AllReduceParticipantData{rank=27, element_count=1, type=PRED, rendezvous_key=RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}} waiting for all participants to arrive at rendezvous RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}
+            f = jax.jit(f)
+            f = padded_shard_map(f, pmap=True)
+
         return self._apply(
-            x,
-            x_t,
-            self.nl,
-            self.nl_t,
-            f,
+            x=x,
+            x_t=x_t,
+            nl=self.nl,
+            nl_t=self.nl_t,
+            f=f,
             macro_chunk=macro_chunk,
             verbose=verbose,
+            jit_f=not shmap,
         )
 
     @staticmethod
     def _apply(
         x: CV | SystemParams,
-        nl: NeighbourList | NeighbourListUpdate | None,
         f: Callable,
         x_t: CV | SystemParams | None = None,
+        nl: NeighbourList | NeighbourListUpdate | None = None,
         nl_t: NeighbourList | NeighbourListUpdate | None = None,
         macro_chunk=10000,
         verbose=False,
+        jit_f=True,
     ):
         out = macro_chunk_map(
             f=f,
@@ -2729,11 +2734,13 @@ class data_loader_output:
             nl_t=nl_t,
             macro_chunk=macro_chunk,
             verbose=verbose,
+            jit_f=jit_f,
         )
 
         if x_t is not None:
             z, z_t = out
         else:
+            z = out
             z_t = None
 
         for i in range(len(z)):
@@ -2803,10 +2810,7 @@ class data_loader_output:
             return closest.compute_cv_trans(x, chunk_size=chunk_size)[0]
 
         grid_nums, _ = data_loader_output._apply(
-            cv,
-            None,
-            nl=None,
-            nl_t=None,
+            x=cv,
             f=f,
             macro_chunk=macro_chunk,
         )
@@ -3037,7 +3041,7 @@ class data_loader_output:
 
         if only_update:
 
-            def f(nl_update: NeighbourListUpdate | None, sp, _):
+            def f(nl_update: NeighbourListUpdate | None, sp, *_):
                 # print(f"updating neighbour list {nl_update=}")
 
                 if nl_update is None:
@@ -3163,7 +3167,7 @@ class KoopmanModel:
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
         add_1=False,
-        eps=1e-15,
+        eps=1e-10,
         method="tcca",
         symmetric=False,
         out_dim=50,
@@ -3178,8 +3182,8 @@ class KoopmanModel:
         only_diag=False,
         calc_pi=False,
     ):
-        if max_features is None:
-            max_features = cv_0[0].shape[1]
+        # if max_features is None:
+        #     max_features = cv_0[0].shape[1]
 
         if add_1:
             if trans is not None:
@@ -3248,8 +3252,57 @@ class KoopmanModel:
                 trans_g=trans,
             )
 
-            l0, q0, argmask_0 = cov.diagonalize("C00", epsilon=eps, out_dim=max_features, verbose=verbose)
-            l1, q1, argmask_1 = cov.diagonalize("C11", epsilon=eps, out_dim=max_features, verbose=verbose)
+            # correct the covariance matrix for the constant added function
+            if add_1:
+                print("WARNUNG: this is untested! correcting cov for constant added function")
+                pi_c_0 = jnp.zeros_like(cov.pi_0)
+                pi_c_0 = pi_c_0.at[-1].set(1)
+
+                pi_c_1 = jnp.zeros_like(cov.pi_1)
+                pi_c_1 = pi_c_1.at[-1].set(1)
+
+                cov.C00 = (
+                    cov.C00 - jnp.outer(pi_c_0, cov.pi_0) - jnp.outer(cov.pi_0, pi_c_0) + jnp.outer(pi_c_0, pi_c_0)
+                )
+                cov.C11 = (
+                    cov.C11 - jnp.outer(pi_c_1, cov.pi_1) - jnp.outer(cov.pi_1, pi_c_1) + jnp.outer(pi_c_1, pi_c_1)
+                )
+                cov.C01 = (
+                    cov.C01 - jnp.outer(pi_c_0, cov.pi_1) - jnp.outer(cov.pi_0, pi_c_1) + jnp.outer(pi_c_0, pi_c_1)
+                )
+
+                cov.pi0 -= pi_c_0
+                cov.pi1 -= pi_c_1
+
+            # print(f"{cov=}")        # w=w,
+
+            if verbose:
+                print("diagonalizing C00")
+
+            l0, q0, argmask_0 = cov.diagonalize(
+                "C00",
+                epsilon=eps,
+                out_dim=max_features,
+                verbose=verbose,
+            )
+
+            if verbose:
+                print(f"{q0.shape=}")
+
+            # if verbose:
+            #     print(f"{l0.shape=} {l0=}")
+
+            if verbose:
+                print("diagonalizing C11")
+
+            l1, q1, argmask_1 = cov.diagonalize(
+                "C11",
+                epsilon=eps,
+                out_dim=max_features,
+                verbose=verbose,
+            )
+            if verbose:
+                print(f"{q1.shape=}")
 
             l0_inv_sqrt = 1 / jnp.sqrt(l0)
             l1_inv_sqrt = 1 / jnp.sqrt(l1)
@@ -3315,16 +3368,38 @@ class KoopmanModel:
             U = q0 @ U
             Vh = Vh @ q1.T
 
-            mask = s > eps
-            if jnp.sum(jnp.logical_not(mask)) > 0:
-                print(f"found {jnp.sum(jnp.logical_not(mask))}  singular values smaller than {eps=}, removing")
+            mask0 = s < eps
 
-                U = U[:, mask]
-                s = s[mask]
-                Vh = Vh[mask, :]
+            if jnp.sum(mask0) > 0:
+                print(f"found {jnp.sum(mask0)} singular values smaller than {eps=}, removing {s[mask0]=}")
+
+                U = U[:, jnp.logical_not(mask0)]
+                s = s[jnp.logical_not(mask0)]
+                Vh = Vh[jnp.logical_not(mask0), :]
+
+            mask_1 = jnp.abs(s - 1) < 1e-10
+
+            if jnp.sum(mask_1) > 0:
+                print(f"found {jnp.sum(mask_1)} constant eigenvalues, removing {s[mask_1]=}")
+
+                U = U[:, jnp.logical_not(mask_1)]
+                s = s[jnp.logical_not(mask_1)]
+                Vh = Vh[jnp.logical_not(mask_1), :]
+
+            mask_2 = s + 1e-10 > 1
+
+            if jnp.sum(mask_2) > 0:
+                print(f"found {jnp.sum(mask_2)} eigenvalues larger than 1, removing {s[mask_2]=}")
+
+                U = U[:, jnp.logical_not(mask_2)]
+                s = s[jnp.logical_not(mask_2)]
+                Vh = Vh[jnp.logical_not(mask_2), :]
+
+            if s.shape[0] < out_dim:
+                print(f"found only {s.shape[0]} singular values")
 
             if verbose:
-                print(f"{s[s>0.9]=}")
+                print(f"{s=}")
 
         else:
             raise ValueError(f"method {method} not known")
@@ -3338,6 +3413,7 @@ class KoopmanModel:
             cv_0=cv_0,
             cv_tau=cv_tau,
             nl=nl,
+            nl_t=nl_t,
             w=w,
             add_1=add_1,
             max_features=max_features,
@@ -3727,14 +3803,20 @@ class Covariances:
             w = [wi / s for wi in w]
 
         @jax.jit
-        def cov_pi(carry, z_chunk: CV, w):
-            if time_series:
-                cv0, cv1 = z_chunk.split()
+        def cov_pi(carry, cv_0: CV, cv1: CV | None, w):
+            # print(f"{cv_0=} {cv1=}")
 
-                x0 = cv0.cv
+            x0 = cv_0.cv
+            if cv1 is not None:
                 x1 = cv1.cv
-            else:
-                x0 = z_chunk.cv
+
+            # if time_series:
+            #     cv0, cv1 = z_chunk.unstack()
+
+            #     x0 = cv0.cv
+            #     x1 = cv1.cv
+            # else:
+            #     x0 = z_chunk.cv
 
             (C00, C01, C11, pi0, pi1) = carry
 
@@ -3777,7 +3859,12 @@ class Covariances:
         if trans_f is not None:
 
             def f_func(x, nl):
-                return trans_f.compute_cv(x, nl, chunk_size=chunk_size)[0]
+                # print(f"f_func {x=}")
+
+                return trans_f.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)[0]
+
+            f_func = jax.jit(f_func)
+            f_func = padded_shard_map(f_func, pmap=True)
         else:
 
             def f_func(x, nl):
@@ -3786,7 +3873,11 @@ class Covariances:
         if trans_g is not None:
 
             def g_func(x, nl):
-                return trans_g.compute_cv(x, nl, chunk_size=chunk_size)[0]
+                # print(f"g_func {x=}")
+                return trans_g.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)[0]
+
+            g_func = jax.jit(g_func)
+            g_func = padded_shard_map(g_func, pmap=True)
         else:
 
             def g_func(x, nl):
@@ -3805,6 +3896,7 @@ class Covariances:
             chunk_func=cov_pi,
             chunk_func_init_args=(None, None, None, None, None),
             w=w,
+            jit_f=False,
         )
 
         C00, C01, C11, pi_0, pi_1 = out

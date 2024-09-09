@@ -815,7 +815,7 @@ class MDEngine(ABC):
         gpos: bool = False,
         vtens: bool = False,
         shmap: bool = False,
-        use_jac=True,
+        use_jac=False,
         push_jac=False,
     ) -> tuple[CV, EnergyResult]:
         # @jit
