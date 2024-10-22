@@ -485,15 +485,10 @@ class TransformerMAF(Transformer):
         x_t: list[CV] | None,
         w: list[jax.Array],
         dlo: data_loader_output,
-        correct_bias=False,
-        pre_selction_epsilon=1e-10,
-        max_features=2000,
-        max_functions=2500,
-        koopman_weighting=False,
-        method="tcca",
+        max_features=500,
+        max_features_pre=500,
         macro_chunk=1000,
         chunk_size=None,
-        T_scale=10,
         trans=None,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
@@ -504,26 +499,38 @@ class TransformerMAF(Transformer):
             cv_tau=x_t,
             nl=dlo.nl,
             nl_t=dlo.nl_t,
-            method=method,
+            method="tcca",
             max_features=max_features,
+            max_features_pre=max_features_pre,
             w=w,
             calc_pi=True,
             koopman_weight=False,
-            add_1=False,
+            add_1=True,
             trans=trans,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=True,
-            T_scale=T_scale,
+            out_dim=50,  # maximal number of koopman modes
+            eps=1e-8,  # if this is too small, the eigenvalues might become unstable
+            eps_pre=1e-8,  # if this is too small, the eigenvalues might become unstable
+            # max_features_pre=500,
+            symmetric=False,
+        )
+
+        # # weight and make reversible
+        km = km.weighted_model(
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            verbose=True,
+            symmetric=True,
+            add_1=False,
         )
 
         ts = km.timescales() / nanosecond
 
-        print(f"timescales {  ts[1: min(self.outdim+5,len(ts-1))  ]   } ns")
+        print(f"timescales {  ts[0: min(self.outdim+5,len(ts-1))  ]   } ns")
 
         trans_km = km.f(out_dim=self.outdim)
-
-        del km
 
         print("applying transformation")
 
@@ -531,6 +538,8 @@ class TransformerMAF(Transformer):
             trans_km,
             x=x,
             x_t=x_t,
+            nl=dlo.nl,
+            nl_t=dlo.nl_t,
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
             verbose=True,

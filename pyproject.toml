@@ -24,11 +24,12 @@ lint.extend-select = ["I"]
 
 
 [tool.pyright]
-include = ["."]
-exclude = [
-    ".vscode/**",
-    ".vscdoe-server/**",
-    ".ruff_cache/**",
-    ".pip_cache/**",
-    "micromamba/**",
-]
+include = ["src"]
+typeCheckingMode = "off"
+#exclude = [
+#    ".vscode/**",
+#    ".vscdoe-server/**",
+#    ".ruff_cache/**",
+#    ".pip_cache/**",
+#    "micromamba/**",
+#]

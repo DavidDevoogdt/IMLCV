@@ -625,10 +625,13 @@ class MDEngine(ABC):
             print("nl - slow update")
             nl = self.sp.get_neighbour_list(nl.info)
 
-        # nneigh = nl.nneighs()
+        nneigh = nl.nneighs()
 
-        # if jnp.min(nneigh) <= 1:
-        #     raise ValueError(f"neighbour list is empty for at leat one  atom {nneigh=}")
+        if jnp.mean(nneigh) <= 2.0:
+            raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh-1}")
+
+        if jnp.max(nneigh) > 100:
+            raise ValueError(f"neighbour list is too large for at leat one  atom {nneigh=}")
 
         self._nl = nl
         return nl
@@ -817,6 +820,7 @@ class MDEngine(ABC):
         shmap: bool = False,
         use_jac=False,
         push_jac=False,
+        rel=False,
     ) -> tuple[CV, EnergyResult]:
         # @jit
         def f(sp, nl):
@@ -828,6 +832,7 @@ class MDEngine(ABC):
                 shmap=shmap,  # TODO: https://github.com/google/jax/issues/19691
                 use_jac=use_jac,
                 push_jac=push_jac,
+                rel=rel,
             )
 
             out = jax.block_until_ready(out)

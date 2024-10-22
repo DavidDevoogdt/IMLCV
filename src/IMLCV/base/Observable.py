@@ -432,7 +432,7 @@ class Observable:
         max_bias=None,
         choice="rbf",
         num_rnds=8,
-        start_r=0,
+        start_r=1,
         rbf_kernel="linear",
         rbf_degree=None,
         samples_per_bin=200,

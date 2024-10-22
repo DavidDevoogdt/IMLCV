@@ -212,7 +212,7 @@ class Bias(ABC):
             return True, self.replace(start=self.start + self.step - 1)
         return False, self.replace(start=self.start - 1)
 
-    @partial(jax.jit, static_argnames=["gpos", "vir", "chunk_size", "shmap", "use_jac", "push_jac"])
+    @partial(jax.jit, static_argnames=["gpos", "vir", "chunk_size", "shmap", "use_jac", "push_jac", "rel"])
     def compute_from_system_params(
         self,
         sp: SystemParams,
@@ -223,6 +223,7 @@ class Bias(ABC):
         shmap=True,
         use_jac=False,
         push_jac=False,
+        rel=False,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -250,9 +251,16 @@ class Bias(ABC):
         e_vir = None
 
         if not use_jac:
+            # for the virial computation, we need to work in relative coordinates
+            # as such, all the positions are scaled when the unit cell is scaled
 
             @jax.jit
-            def _compute(sp, nl):
+            def _compute(sp_rel: SystemParams, nl: NeighbourList):
+                if rel:
+                    sp = sp_rel.to_absolute()
+                else:
+                    sp = sp_rel
+
                 cvs, _ = self.collective_variable.compute_cv(
                     sp=sp,
                     nl=nl,
@@ -264,18 +272,34 @@ class Bias(ABC):
                 return ener, cvs
 
             if gpos or vir:
-                (ener, cvs), de = value_and_grad(_compute, has_aux=True)(sp, nl)
+                if rel:
+                    sp_rel, c_inv = sp.to_relative()
+                else:
+                    sp_rel = sp
+
+                (ener, cvs), de = value_and_grad(_compute, has_aux=True)(sp_rel, nl)
 
                 if gpos:
-                    e_gpos = de.coordinates
+                    if rel:
+                        e_gpos = jnp.einsum("jk, nk->nj ", c_inv, de.coordinates)
+                    else:
+                        e_gpos = de.coordinates
+
                 if vir and sp.cell is not None:
-                    e_vir = (sp.cell.T @ de.cell).T
+                    if rel:
+                        e_vir = jnp.einsum("ji,jl->il", sp.cell, de.cell)
+                    else:
+                        e_vir = jnp.einsum("ji,jl->il", sp.cell, de.cell) + jnp.einsum(
+                            "ni,nl->il", sp.coordinates, de.coordinates
+                        )
+
+                        # jax.debug.print("e_vir_xorr {}", jnp.einsum("ni,nl->il", sp.coordinates, de.coordinates))
 
             else:
                 ener, cvs = _compute(sp, nl)
 
         else:
-            # print(f"{e=} {cvs=} {de=}")
+            raise NotImplementedError("adapt to relative coordinates")
 
             [cvs, jac] = self.collective_variable.compute_cv(
                 sp=sp,
@@ -297,7 +321,7 @@ class Bias(ABC):
             e_vir = None
             if vir and sp.cell is not None:
                 # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
-                e_vir = jnp.einsum("ji,k,kjl->li", sp.cell, de.cv, jac.cell)
+                e_vir = jnp.einsum("ij,k,klj->il", sp.cell, de.cv, jac.cell)
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 

@@ -52,6 +52,8 @@ class Transformer:
             f,
             dlo.sp,
             dlo.sp_t,
+            dlo.nl,
+            dlo.nl_t,
             chunk_size=chunk_size,
             shmap=shmap,
             macro_chunk=macro_chunk,
@@ -65,6 +67,8 @@ class Transformer:
                 g,
                 x,
                 x_t,
+                dlo.nl,
+                dlo.nl_t,
                 chunk_size=chunk_size,
                 shmap=shmap,
                 verbose=verbose,
@@ -104,11 +108,10 @@ class Transformer:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
 
         print("getting weights")
-        # koopman does not really make sense because it reinforces the current CV
         w = dlo.weights(
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            koopman=False,
+            koopman=True,
             verbose=verbose,
             samples_per_bin=samples_per_bin,
             n_max=n_max,
@@ -181,6 +184,8 @@ class Transformer:
                 trans,
                 x,
                 x_t,
+                dlo.nl,
+                dlo.nl_t,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 shmap=shmap,
@@ -255,13 +260,6 @@ class Transformer:
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
         raise NotImplementedError
-
-    # def post_fit(self, y: list[CV]) -> tuple[CV, CvTrans]:
-    #     # y = CV.stack(*y)
-    #     if not self.post_scale:
-    #         return y, identity_trans
-    #     h = scale_cv_trans(y)
-    #     return h.compute_cv_trans(y)[0], h
 
     @staticmethod
     def plot_app(

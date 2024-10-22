@@ -28,12 +28,23 @@ from IMLCV import unpickler
 if TYPE_CHECKING:
     import distrax
 
+    from IMLCV.base.MdEngine import StaticMdInfo
+
 ######################################
 #        Data types                  #
 ######################################
 
 
-@partial(jit, static_argnames=("p", "axis", "chunk_size", "pmap", "move_axis"))
+@partial(
+    jit,
+    static_argnames=(
+        "p",
+        "axis",
+        "chunk_size",
+        "pmap",
+        "move_axis",
+    ),
+)
 def _n_pad(
     x,
     axis,
@@ -417,8 +428,8 @@ def macro_chunk_map(
 
             if split_last:
                 y_last = y_chunk[-1]
-                yls = y_last.shape[0]
 
+                yls = y_last.shape[0]
                 s_last = yls - (tot_chunk - macro_chunk)
 
                 last_chunk_y = y_last[s_last:yls]
@@ -711,7 +722,7 @@ class SystemParams:
         self,
         info: NeighbourListInfo,
         update: NeighbourListUpdate | None = None,
-        chunk_size=None,
+        chunk_size=100,
         verbose=False,
         chunk_size_inner=10,
         shmap=True,
@@ -1350,6 +1361,36 @@ class SystemParams:
 
         return SystemParams(coordinates=new_coordinates, cell=new_cell)
 
+    @jax.jit
+    def to_relative(self) -> SystemParams:
+        if self.cell is None:
+            return self
+
+        if self.batched:
+            return vmap(Partial(SystemParams.to_relative))(self)
+
+        c_inv = jnp.linalg.inv(self.cell)
+
+        out = jnp.einsum("ij,ni->nj", c_inv, self.coordinates)
+
+        return self.replace(coordinates=out), c_inv
+
+    @jax.jit
+    def to_absolute(self) -> SystemParams:
+        if self.cell is None:
+            return self
+
+        if self.batched:
+            return vmap(Partial(SystemParams.to_absolute))(self)
+
+        @partial(vmap, in_axes=(0, None), out_axes=0)
+        def deproj(x, y):
+            return jnp.einsum("i,ij->j", x, y)
+
+        out = deproj(self.coordinates, self.cell)
+
+        return self.replace(coordinates=out)
+
     @partial(jit, static_argnames=["min"])
     def wrap_positions(self, min=False) -> tuple[SystemParams, Array]:
         """wrap pos to lie within unit cell"""
@@ -1477,6 +1518,17 @@ class SystemParams:
             return vmap(SystemParams.volume)(self)
 
         return jnp.abs(jnp.linalg.det(self.cell))
+
+    def to_ase(self, static_trajectory_info: StaticMdInfo):
+        from ase import Atoms
+        from molmod.units import angstrom
+
+        return Atoms(
+            numbers=static_trajectory_info.atomic_numbers,
+            positions=self.coordinates / angstrom,
+            cell=self.cell / angstrom,
+            pbc=self.cell is not None,
+        )
 
 
 @partial(dataclass, frozen=False, eq=False)
@@ -2781,7 +2833,7 @@ class CvMetric:
         weights: list[Array] | None = None,
         margin=None,
         chunk_size=None,
-        n=20,
+        n=40,
         macro_chunk=10000,
         verbose=False,
     ):
