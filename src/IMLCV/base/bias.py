@@ -14,11 +14,19 @@ from flax.struct import dataclass, field
 from jax import Array, value_and_grad, vmap
 from jax.tree_util import Partial
 from molmod.constants import boltzmann
-from molmod.units import angstrom, electronvolt, kjmol
+from molmod.units import angstrom, electronvolt, kelvin
 from typing_extensions import Self
 
 from IMLCV import unpickler
-from IMLCV.base.CV import CV, CollectiveVariable, NeighbourList, SystemParams, padded_shard_map, padded_vmap
+from IMLCV.base.CV import (
+    CV,
+    CollectiveVariable,
+    NeighbourList,
+    SystemParams,
+    padded_shard_map,
+    padded_vmap,
+    shmap_kwargs,
+)
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine
@@ -59,7 +67,7 @@ class EnergyResult:
         if self.gpos is not None:
             str += f"\ndE/dx^i_j [eV/angstrom] \n {self.gpos[:]*angstrom/electronvolt}"
         if self.vtens is not None:
-            str += f"\n  viriaal [eV] \n {self.vtens[:] / electronvolt }"
+            str += f"\n  virial [eV] \n {self.vtens[:] / electronvolt }"
 
         return str
 
@@ -195,7 +203,7 @@ class Bias(ABC):
         Can only change the properties from _get_args
         """
 
-        return self
+        return self._update_bias()[1]
 
     def _update_bias(self) -> tuple[bool, Self]:
         """update the bias.
@@ -212,7 +220,19 @@ class Bias(ABC):
             return True, self.replace(start=self.start + self.step - 1)
         return False, self.replace(start=self.start - 1)
 
-    @partial(jax.jit, static_argnames=["gpos", "vir", "chunk_size", "shmap", "use_jac", "push_jac", "rel"])
+    @partial(
+        jax.jit,
+        static_argnames=[
+            "gpos",
+            "vir",
+            "chunk_size",
+            "shmap",
+            "use_jac",
+            "push_jac",
+            "rel",
+            "shmap_kwargs",
+        ],
+    )
     def compute_from_system_params(
         self,
         sp: SystemParams,
@@ -224,6 +244,7 @@ class Bias(ABC):
         use_jac=False,
         push_jac=False,
         rel=False,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -243,7 +264,7 @@ class Bias(ABC):
             )
 
             if shmap:
-                f = padded_shard_map(f)
+                f = padded_shard_map(f, shmap_kwargs)
 
             return f(sp, nl)
 
@@ -266,6 +287,7 @@ class Bias(ABC):
                     nl=nl,
                     jacobian=False,
                     shmap=shmap,
+                    shmap_kwargs=shmap_kwargs,
                 )
                 ener = self._compute(cvs)
 
@@ -299,7 +321,7 @@ class Bias(ABC):
                 ener, cvs = _compute(sp, nl)
 
         else:
-            raise NotImplementedError("adapt to relative coordinates")
+            # raise NotImplementedError("adapt to relative coordinates")
 
             [cvs, jac] = self.collective_variable.compute_cv(
                 sp=sp,
@@ -321,17 +343,24 @@ class Bias(ABC):
             e_vir = None
             if vir and sp.cell is not None:
                 # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
-                e_vir = jnp.einsum("ij,k,klj->il", sp.cell, de.cv, jac.cell)
+
+                # e_vir = jnp.einsum("ji,jl->il", sp.cell, de.cell) + jnp.einsum(
+                #     "ni,nl->il", sp.coordinates, de.coordinates
+                # )
+                e_vir = jnp.einsum("ij,k,klj->il", sp.cell, de.cv, jac.cell) + jnp.einsum(
+                    "ni,j,jnl->il", sp.coordinates, de.cv, jac.coordinates
+                )
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 
-    @partial(jax.jit, static_argnames=["diff", "chunk_size", "shmap"])
+    @partial(jax.jit, static_argnames=["diff", "chunk_size", "shmap", "shmap_kwargs"])
     def compute_from_cv(
         self,
         cvs: CV,
         diff=False,
         chunk_size=None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV | None]:
         """compute the energy and derivative.
 
@@ -350,7 +379,7 @@ class Bias(ABC):
             )
 
             if shmap:
-                f = padded_shard_map(f)
+                f = padded_shard_map(f, shmap_kwargs)
 
             return f(cvs)
 
@@ -371,331 +400,51 @@ class Bias(ABC):
     def plot(
         self,
         name: str | None = None,
-        x_unit: str | None = None,
-        y_unit: str | None = None,
-        n=100,
+        # weights: list[Array] | None = None,
         traj: list[CV] | None = None,
-        vmin=0,
         vmax=None,
         map=False,
         inverted=False,
         margin=None,
-        x_lim=None,
-        y_lim=None,
-        bins=None,
-        label="bias [kJ/mol]",
-        plot_bias=True,
-        colors: Array | None = None,
-        offset=False,
         dpi=300,
+        T=300 * kelvin,
+        **kwargs,
     ):
-        import matplotlib.gridspec as gridspec
-        import matplotlib.pyplot as plt
-        import numpy as np
+        from IMLCV.base.CVDiscovery import Transformer
 
-        """plot bias."""
-        if bins is None:
-            bins, _, _, _ = self.collective_variable.metric.grid(
-                n=n,
-                endpoints=True,
-                margin=margin,
-            )
-        mg = np.meshgrid(*bins, indexing="xy")
-        cv_grid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*bins)])
-        bias, _ = self.compute_from_cv(cv_grid)
+        # get the bias points. convert to probability such that it can be further used
+        # if traj is None:
+        _, cv, _, _ = self.collective_variable.metric.grid(n=50, margin=0.1)
+        # traj = cv
 
-        if vmax is None:
-            vmax = 100 * kjmol
-
-        if offset:
-            bias -= bias[~np.isnan(bias)].min()
-        else:
-            vrange = vmax - vmin
-
-            vmax = bias[~np.isnan(bias)].max()
-            vmin = vmax - vrange
+        w = self.compute_from_cv(cv)[0]
 
         if inverted:
-            bias = -bias
-            vmin, vmax = -vmax, -vmin
+            w = -w
 
-        bias = bias.reshape([len(mg_i) for mg_i in mg])
+        w -= jnp.min(w)
+        w = jnp.exp(-w / (boltzmann * T))
+        w /= jnp.sum(w)
 
-        plt.rc("text", usetex=False)
-        plt.rc("font", family="DejaVu Sans", size=18)
+        weights = [w]
 
-        # plt.switch_backend("PDF")
-        fig = plt.figure(layout="constrained")
-
-        if self.collective_variable.n == 1:
-            bins = bins[0]
-
-            if x_unit is not None:
-                if x_unit == "rad":
-                    x_unit_label = "rad"
-                    x_fact = 1
-                elif x_unit == "ang":
-                    x_unit_label = "Ang"
-                    x_fact = angstrom
-            else:
-                x_fact = 1
-                x_unit_label = "a.u."
-
-            if x_lim is None:
-                x_lim = [bins.min() / x_fact, bins.max() / x_fact]
-
-            extent = [x_lim[0], x_lim[1]]
-
-            ax = fig.add_subplot()
-            ax.set_xlim(*extent)
-            ax.set_ylim(vmin / kjmol, vmax / kjmol)
-
-            p = ax.plot(bins, bias / (kjmol))
-
-            ax.set_xlabel(f"cv_1 [{x_unit_label}]")
-            ax.set_ylabel(label)
-
-            ax.tick_params(axis="both", which="major")
-            ax.tick_params(axis="both", which="minor")
-
-            if traj is not None:
-                ax2 = ax.twinx()
-                ax2.set_ylabel("count")
-
-                if not isinstance(traj, Iterable):
-                    traj = [traj]
-
-                n = len(traj)
-                print(f"plotting {n=} trajectories")
-
-                x_list = []
-                c_list = []
-
-                n_points = 0
-
-                if colors is None:
-                    from IMLCV.base.CVDiscovery import Transformer
-
-                    colors = [
-                        a.cv[0]
-                        for a in Transformer._get_color_data(
-                            a=CV.stack(*traj),
-                            dim=1,
-                            color_trajectories=True,
-                        ).unstack()
-                    ]
-
-                for col, tr in zip(colors, traj):
-                    col = np.array(col)
-
-                    x_list.append(tr.cv[:, 0])
-                    c_list.append(col)
-
-                    in_xlim = jnp.logical_and(tr.cv[:, 0] > x_lim[0], tr.cv[:, 0] < x_lim[1])
-
-                    n_points += jnp.sum(in_xlim)
-
-                if n_points != 0:
-                    n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
-                else:
-                    n_bins = 10
-
-                ax2.hist(
-                    x_list,
-                    range=x_lim,
-                    bins=n_bins,
-                    color=c_list,
-                    stacked=True,
-                    histtype="step",
-                )
-
-                fig.align_ylabels([ax, ax2])
-
-        elif self.collective_variable.n == 2:
-            if x_unit is not None:
-                if x_unit == "rad":
-                    x_unit_label = "rad"
-                    x_fact = 0
-                elif x_unit == "ang":
-                    x_unit_label = "Ang"
-                    x_fact = angstrom
-            else:
-                x_fact = 1
-                x_unit_label = "a.u."
-
-            if y_unit is not None:
-                if y_unit == "rad":
-                    y_unit_label = "rad"
-                    y_fact = 0
-                elif x_unit == "ang":
-                    y_unit_label = "Ang"
-                    y_fact = angstrom
-            else:
-                y_fact = 1
-                y_unit_label = "a.u."
-
-            if x_lim is None:
-                x_lim = [mg[0].min() / x_fact, mg[0].max() / x_fact]
-            if y_lim is None:
-                y_lim = [mg[1].min() / y_fact, mg[1].max() / y_fact]
-
-            extent = [x_lim[0], x_lim[1], y_lim[0], y_lim[1]]
-
-            if traj is not None:
-                gs = gridspec.GridSpec(
-                    nrows=2,
-                    ncols=3,
-                    width_ratios=[4, 1, 0.2],
-                    height_ratios=[1, 4],
-                    figure=fig,
-                )
-
-                ax = fig.add_subplot(gs[1, 0])
-            else:
-                gs = gridspec.GridSpec(
-                    nrows=1,
-                    ncols=2,
-                    width_ratios=[4, 0.2],
-                    height_ratios=[1],
-                    figure=fig,
-                )
-                ax = fig.add_subplot(gs[0, 0])
-
-            ax.set_xlabel(f"cv_1 [{x_unit_label}]")
-            ax.set_ylabel(f"cv_2 [{y_unit_label}]")
-
-            ax.set_xlim(extent[0], extent[1])
-            ax.set_ylim(extent[2], extent[3])
-
-            if plot_bias:
-                p = ax.imshow(
-                    bias / (kjmol),
-                    cmap=plt.get_cmap("jet"),
-                    origin="lower",
-                    extent=extent,
-                    vmin=vmin / kjmol,
-                    vmax=vmax / kjmol,
-                    aspect="auto",
-                )
-
-            if traj is not None:
-                ax_histx = fig.add_subplot(gs[0, 0], sharex=ax)
-                ax_histy = fig.add_subplot(gs[1, 1], sharey=ax)
-
-                ax_histx.tick_params(axis="x", labelbottom=False, labelleft=False)
-                ax_histy.tick_params(axis="y", labelleft=False, labelbottom=False)
-
-                # ax_histx.set_ylabel(f"n")
-                # ax_histy.set_xlabel(f"n")
-
-            if traj is not None:
-                if not isinstance(traj, Iterable):
-                    traj = [traj]
-
-                n = len(traj)
-                print(f"plotting {n=} trajectories")
-
-                x_list = []
-                y_list = []
-                c_list = []
-
-                n_points = 0
-
-                if colors is None:
-                    from IMLCV.base.CVDiscovery import Transformer
-
-                    colors = [
-                        a.cv[0]
-                        for a in Transformer._get_color_data(
-                            a=CV.stack(*traj),
-                            dim=2,
-                            color_trajectories=True,
-                            min_val=jnp.array([extent[0], extent[2]]),
-                            max_val=jnp.array([extent[1], extent[3]]),
-                        ).unstack()
-                    ]
-
-                for col, tr in zip(colors, traj):
-                    col = np.array(col)
-
-                    # print(tr.cv)
-                    # print(col)
-
-                    # trajs are ij indexed
-                    # ax.scatter(tr.cv[:, 0], tr.cv[:, 1], s=2, color=col,)
-
-                    x_list.append(tr.cv[:, 0])
-                    y_list.append(tr.cv[:, 1])
-                    c_list.append(col)
-                    in_xlim = jnp.logical_and(tr.cv[:, 0] > x_lim[0], tr.cv[:, 0] < x_lim[1])
-                    in_ylim = jnp.logical_and(tr.cv[:, 1] > y_lim[0], tr.cv[:, 1] < y_lim[1])
-
-                    n_points += jnp.sum(jnp.logical_and(in_xlim, in_ylim))
-
-                s = (500 / n_points) ** (0.5)
-
-                from matplotlib.markers import MarkerStyle
-
-                for x, y, c in zip(x_list, y_list, c_list):
-                    ax.scatter(
-                        x,
-                        y,
-                        s=s,
-                        color=c,
-                        marker=MarkerStyle(
-                            marker="o",
-                            fillstyle="full",
-                        ),
-                    )
-
-                if n_points != 0:
-                    n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
-                else:
-                    n_bins = 10
-
-                ax_histx.hist(
-                    x_list,
-                    range=x_lim,
-                    bins=n_bins,
-                    color=c_list,
-                    stacked=True,
-                    histtype="step",
-                )
-                ax_histy.hist(
-                    y_list,
-                    range=y_lim,
-                    bins=n_bins,
-                    color=c_list,
-                    histtype="step",
-                    stacked=True,
-                    orientation="horizontal",
-                )
-
-                ax_histy.tick_params(axis="x", rotation=-90)
-
-                fig.align_ylabels([ax, ax_histx])
-
-            if plot_bias:
-                if traj is not None:
-                    ax_cbar = fig.add_subplot(gs[1, 2])
-                else:
-                    ax_cbar = fig.add_subplot(gs[0, 1])
-
-                cbar = fig.colorbar(p, cax=ax_cbar)
-                cbar.set_label(label)
-
-            # plt.title(label)
-
-        else:
-            raise ValueError
-
-        if name is not None:
-            Path(name).parent.mkdir(parents=True, exist_ok=True)
-
-            plt.savefig(name, dpi=dpi)
-            plt.close(fig=fig)  # write out
-        else:
-            plt.show()
+        Transformer.plot_app(
+            collective_variables=[self.collective_variable],
+            cv_data=[traj] if traj is not None else None,
+            cv_data_weight=[[cv]],
+            name=name,
+            color_trajectories=True,
+            margin=margin,
+            plot_FES=True,
+            weight=weights,
+            vmax=vmax,
+            samples_per_bin=10,
+            min_samples_per_bin=1,
+            dpi=dpi,
+            T=T,
+            indicate_cv_data=False,
+            cv_titles=None,
+        )
 
     def resample(self, cv_grid: CV | None = None, n=None, margin=0.2) -> Bias:
         from IMLCV.implementations.bias import RbfBias
@@ -856,7 +605,7 @@ class CompositeBias(Bias):
             fun=fun,
             start=0,
             step=1,
-            finalized=False,
+            finalized=all([b.finalized for b in biases_new]),
         )
 
     def _compute(self, cvs):
@@ -893,7 +642,7 @@ class BiasModify(Bias):
             fun=fun,
             start=None,
             step=None,
-            finalized=False,
+            finalized=bias.finalized,
             kwargs=kwargs,
             static_kwargs=static_kwargs,
             bias=bias,
@@ -940,7 +689,7 @@ class BiasF(Bias):
             g=g,
             start=None,
             step=None,
-            finalized=False,
+            finalized=True,
             kwargs=kwargs,
             static_kwargs=static_kwargs,
         )

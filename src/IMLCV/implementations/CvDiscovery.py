@@ -277,7 +277,7 @@ class TranformerAutoEncoder(Transformer):
         return cv, cv_t, un_atomize * f_enc, w
 
 
-def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, alpha, outdim, solver):
+def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, outdim, solver):
     if solver == "eigen":
 
         def f(cv, scalings):
@@ -308,7 +308,7 @@ def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, alpha, outdim, solver
     )
 
 
-def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, shmap, mean):
+def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, mean):
     return CV(
         cv=(cv.cv - mean[0]) / (mean[1] - mean[0]),
         _stack_dims=cv._stack_dims,
@@ -318,7 +318,7 @@ def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, shmap, mean):
     )
 
 
-def _scale_trans(cv: CV, nl: NeighbourList | None, _, shmap, alpha, scale_factor):
+def _scale_trans(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, scale_factor):
     return CV(
         (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
         _stack_dims=cv._stack_dims,

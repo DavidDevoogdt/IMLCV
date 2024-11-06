@@ -19,6 +19,8 @@ def bash_app_python(
     pass_files=False,
     auto_log=False,
     profile=False,
+    remove_stdout=True,
+    remove_stderr=True,
 ):
     from IMLCV.configs.config_general import PARSL_DICT, REFERENCE_COMMANDS, Executors
 
@@ -140,6 +142,10 @@ def bash_app_python(
             )
 
             def load(inputs=[], outputs=[]):
+                if not auto_log:
+                    stdout, stderr, lockfile = inputs[-3].filepath, inputs[-2].filepath, inputs[-1].filepath
+                    inputs = inputs[:-3]
+
                 filename = Path(inputs[-1].filepath)
                 if filename.suffix == ".json":
                     with open(filename) as f:
@@ -152,12 +158,26 @@ def bash_app_python(
                 import os
 
                 os.remove(inputs[-1].filepath)
+
+                if remove_stderr and not auto_log:
+                    os.remove(stderr)
+                if remove_stdout and not auto_log:
+                    os.remove(stdout)
+
+                if remove_stdout and remove_stderr and not auto_log:
+                    os.remove(lockfile)
+
                 return result
 
             load.__name__ = f"{func.__name__}_load"
 
+            load_inp = [*future.outputs]
+
+            if not auto_log:
+                load_inp = [*load_inp, File(stdout), File(stderr), File(lockfile)]
+
             return python_app(load, executors=PARSL_DICT["default"][0])(
-                inputs=future.outputs,
+                inputs=load_inp,
                 outputs=outp,
             )
 

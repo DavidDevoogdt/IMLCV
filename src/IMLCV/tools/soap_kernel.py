@@ -13,18 +13,14 @@ from jax import Array, lax, vmap
 from jax.tree_util import Partial
 from scipy.special import legendre as sp_legendre
 
-from IMLCV.base.CV import NeighbourList, SystemParams, padded_shard_map
+from IMLCV.base.CV import NeighbourList, SystemParams, padded_shard_map, shmap_kwargs
 from IMLCV.tools.bessel_callback import ive, spherical_jn
 
 
-# @partial(jit, static_argnums=(1,))
+@partial(jax.jit, static_argnums=(1,))
 def legendre(x, n):
     c = jnp.array(sp_legendre(n).c, dtype=x.dtype)
-
-    y = jnp.zeros_like(x)
-    y, _ = lax.scan(lambda y, p: (y * x + p, None), y, c, length=n + 1, unroll=False)
-
-    return y
+    return jnp.sum(c * x ** (n - jnp.arange(n + 1)))
 
 
 # @partial(jit, static_argnums=(2, 3))
@@ -37,6 +33,7 @@ def p_i(
     chunk_size_atoms=None,
     chunk_size_batch=None,
     shmap=True,
+    shmap_kwargs=shmap_kwargs(),
 ):
     if sp.batched:
         f = Partial(
@@ -49,7 +46,7 @@ def p_i(
         )
 
         if shmap:
-            f = padded_shard_map(f)
+            f = padded_shard_map(f, shmap_kwargs)
         return f(sp, nl)
 
     ps, pd = p
@@ -67,13 +64,14 @@ def p_i(
         chunk_size_atoms=chunk_size_atoms,
         chunk_size_batch=chunk_size_batch,
         shmap=shmap,
+        shmap_kwargs=shmap_kwargs,
     )
 
     return val0
 
 
 # @partial(vmap, in_axes=(0, None, None), out_axes=0)
-# @partial(jit, static_argnums=(0,))
+@partial(jax.jit, static_argnums=(0,))
 def legendre_l(l, pj, pk):
     # https://jax.readthedocs.io/en/latest/faq.html#gradients-contain-nan-where-using-where
 
@@ -298,6 +296,7 @@ def p_inl_sb(l_max, n_max, r_cut):
 
     nm1_vec = jnp.arange(n_max)
 
+    @jax.jit
     def _l(p_ij, p_ik):
         return jnp.array([legendre_l(l, p_ij, p_ik) for l in l_list])
 
@@ -326,12 +325,14 @@ def p_inl_sb(l_max, n_max, r_cut):
                 fnl[0, :],
             ),
             xs=nm1_vec,
+            unroll=True,
         )
 
         return out
 
     def _p_i_sb_2_s(p_ij, atom_index_j):
         r_ij_sq = jnp.dot(p_ij, p_ij)
+
         r_ij_sq_safe = jax.lax.cond(
             r_ij_sq == 0,
             lambda: jnp.ones_like(r_ij_sq),
@@ -340,6 +341,8 @@ def p_inl_sb(l_max, n_max, r_cut):
 
         shape = jax.eval_shape(g_nl, r_ij_sq)
 
+        # a_jnl = jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype)
+        # # print("bb")
         a_jnl = jax.lax.cond(
             r_ij_sq == 0,
             lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
@@ -351,6 +354,15 @@ def p_inl_sb(l_max, n_max, r_cut):
     def _p_i_sb_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
         a_jnl = data_j
         a_knl = data_k
+
+        # return a_jnl
+
+        # shape = jax.eval_shape(_l, p_ij, p_ik)
+        # b_ljk = jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype)
+
+        # print("aab")
+
+        # jax.debug.print("a {}", data_j.shape)
 
         b_ljk = _l(p_ij, p_ik)
 

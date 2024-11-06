@@ -371,6 +371,7 @@ class Observable:
                 vmax=max_bias,
                 inverted=True,
                 n=200,
+                weights=weights,
             )
 
         return fes_bias_tot
@@ -404,6 +405,7 @@ class Observable:
         return bash_app_python(
             Observable._fes_nd_weights,
             executors=Executors.training,
+            remove_stdout=False,
         )(
             rounds=self.rounds,
             num_rnds=num_rnds,
@@ -544,19 +546,19 @@ class Observable:
                 ),
             )
 
-            pf.append(
-                bash_app_python(function=Bias.static_plot)(
-                    bias=fes_bias_tot,
-                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.png")],
-                    execution_folder=fold,
-                    name=f"FES_bias_{self.rnd}_{choice}.png",
-                    stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
-                    stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
-                    margin=margin,
-                    vmax=vmax,
-                    n=200,
-                ),
-            )
+            # pf.append(
+            #     bash_app_python(function=Bias.static_plot)(
+            #         bias=fes_bias_tot,
+            #         outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.png")],
+            #         execution_folder=fold,
+            #         name=f"FES_bias_{self.rnd}_{choice}.png",
+            #         stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
+            #         stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
+            #         margin=margin,
+            #         vmax=vmax,
+            #         n=200,
+            #     ),
+            # )
 
             for f in pf:
                 f.result()

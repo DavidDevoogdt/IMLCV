@@ -33,15 +33,15 @@ from IMLCV.base.CV import (
 ######################################
 
 
-def _identity_trans(x, nl, _, shmap):
+def _identity_trans(x, nl, _, shmap, shmap_kwargs):
     return x
 
 
-def _zero_cv_trans(x: CV, nl, _, shmap):
+def _zero_cv_trans(x: CV, nl, _, shmap, shmap_kwargs):
     return x.replace(cv=jnp.array([0.0]), combine_dims=None)
 
 
-def _zero_cv_flow(x: SystemParams, nl, _, shmap):
+def _zero_cv_flow(x: SystemParams, nl, _, shmap, shmap_kwargs):
     return CV(cv=jnp.array([0.0]))
 
 
@@ -50,7 +50,13 @@ zero_trans = CvTrans.from_cv_function(_zero_cv_trans)
 zero_flow = CvFlow.from_function(_zero_cv_flow)
 
 
-def _Volume(sp: SystemParams, _nl, _c, shmap):
+def _Volume(
+    sp: SystemParams,
+    _nl,
+    _c,
+    shmap,
+    shmap_kwargs,
+):
     assert sp.cell is not None, "can only calculate volume if there is a unit cell"
 
     vol = jnp.abs(jnp.linalg.det(sp.cell))
@@ -77,7 +83,7 @@ def distance_descriptor():
     return CvFlow.from_function(_distance)
 
 
-def _dihedral(sp: SystemParams, _nl, _c, shmap, numbers):
+def _dihedral(sp: SystemParams, _nl, _c, shmap, shmap_kwargs, numbers):
     coor = sp.coordinates
     p0 = coor[numbers[0]]
     p1 = coor[numbers[1]]
@@ -114,6 +120,7 @@ def _sb_descriptor(
     nl: NeighbourList,
     _,
     shmap,
+    shmap_kwargs,
     r_cut,
     chunk_size_atoms,
     chunk_size_neigbourgs,
@@ -168,6 +175,7 @@ def _sb_descriptor(
         chunk_size_atoms=chunk_size_atoms,
         chunk_size_neigbourgs=chunk_size_neigbourgs,
         shmap=shmap,
+        shmap_kwargs=shmap_kwargs,
     )
 
     if reduce:
@@ -214,6 +222,7 @@ def _soap_descriptor(
     nl: NeighbourList,
     _,
     shmap,
+    shmap_kwargs,
     r_cut,
     reduce,
     reshape,
@@ -255,6 +264,7 @@ def _soap_descriptor(
         p=p,
         r_cut=r_cut,
         shmap=shmap,
+        shmap_kwargs=shmap_kwargs,
     )
 
     if reduce:
@@ -309,7 +319,7 @@ def NoneCV() -> CollectiveVariable:
 ######################################
 #           CV trans                 #
 ######################################
-def _rotate_2d(cv: CV, _nl: NeighbourList, _, shmap, alpha):
+def _rotate_2d(cv: CV, _nl: NeighbourList, _, shmap, shmap_kwargs, alpha):
     return (
         jnp.array(
             [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]],
@@ -322,7 +332,7 @@ def rotate_2d(alpha):
     return CvTrans.from_cv_function(_rotate_2d, alpha=alpha)
 
 
-def _project_distances(cvs: CV, nl, _, shmap, a):
+def _project_distances(cvs: CV, nl, _, shmap, shmap_kwargs, a):
     "projects the distances to a reaction coordinate"
     import jax.numpy as jnp
 
@@ -346,7 +356,7 @@ def project_distances(a):
     return CvTrans.from_cv_function(_project_distances, a=a)
 
 
-def _scale_cv_trans(x, nl, _, shmap, upper, lower, mini, diff):
+def _scale_cv_trans(x, nl, _, shmap, shmap_kwargs, upper, lower, mini, diff):
     return x.replace(cv=((x.cv - mini) / diff) * (upper - lower) + lower)
 
 
@@ -361,7 +371,7 @@ def scale_cv_trans(array: CV, lower=0, upper=1):
     return CvTrans.from_cv_function(_scale_cv_trans, upper=upper, lower=lower, mini=mini, diff=diff)
 
 
-def _trunc_svd(x: CV, nl: NeighbourList | None, _, shmap, m_atomic, v, cvi_shape):
+def _trunc_svd(x: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, m_atomic, v, cvi_shape):
     if m_atomic:
         out = jnp.einsum("ni,jni->j", x.cv, v)
 
@@ -608,6 +618,7 @@ def _sinkhorn_divergence_trans(
     nl: NeighbourList | None,
     _,
     shmap,
+    hmap_kwargs,
     nli,
     pi,
     sort,
@@ -932,6 +943,7 @@ def _sinkhorn_divergence_trans_2(
     nl: NeighbourList | None,
     _,
     shmap,
+    shmap_kwargs,
     nli: NeighbourList | NeighbourListInfo,
     pi: CV,
     alpha_rematch,
@@ -1058,6 +1070,7 @@ def _divergence_from_aligned_cv(
     nl: NeighbourList | None,
     _,
     shmap,
+    hmap_kwargs,
 ):
     splitted = jnp.array([a.cv for a in cv.split()])
     div = jnp.einsum("k...->k", splitted) / splitted.shape[0]
@@ -1073,6 +1086,7 @@ def _divergence_weighed_aligned_cv(
     nl: NeighbourList | None,
     _,
     shmap,
+    hmap_kwargs,
     scaling,
 ):
     divergence, _, _ = divergence_from_aligned_cv.compute_cv_trans(cv, nl)
@@ -1097,6 +1111,7 @@ def _weighted_sinkhorn_divergence_2(
     nl: NeighbourList | None,
     _,
     shmap,
+    shmap_kwargs,
     scaling,
     mean=None,
     append_weights=True,
@@ -1149,6 +1164,7 @@ def _un_atomize(
     nl,
     _,
     shmap,
+    shmap_kwargs,
 ):
     if not x.atomic:
         return x
@@ -1162,7 +1178,7 @@ def _un_atomize(
 un_atomize = CvTrans.from_cv_function(_un_atomize)
 
 
-def _stack_reduce(cv: CV, nl: NeighbourList | None, _, shmap, op):
+def _stack_reduce(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, op):
     cvs = cv.split(cv.stack_dims)
 
     return CV(
@@ -1178,7 +1194,7 @@ def stack_reduce(op=jnp.mean):
     return CvTrans.from_cv_function(_stack_reduce, op=op)
 
 
-def _affine_trans(x: CV, nl, _, shmap, C):
+def _affine_trans(x: CV, nl, _, shmap, shmap_kwargs, C):
     assert x.dim == 2
 
     u = (C[0] * x.cv[0] + C[1] * x.cv[1] + C[2]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
@@ -1236,7 +1252,7 @@ def affine_2d(old: Array, new: Array):
     return CvTrans.from_cv_function(_affine_trans, C=C)
 
 
-def _remove_mean(cv: CV, nl: NeighbourList | None, _, shmap, mean):
+def _remove_mean(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, mean):
     return cv - mean
 
 
@@ -1249,7 +1265,7 @@ def get_remove_mean_trans(c: CV, range=Ellipsis):
     return trans.compute_cv_trans(c)[0], trans
 
 
-def _normalize(cv: CV, nl: NeighbourList | None, _, shmap, std):
+def _normalize(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, std):
     return cv * (1 / std)
 
 
@@ -1262,7 +1278,7 @@ def get_normalize_trans(c: CV, range=Ellipsis):
     return trans.compute_cv_trans(c)[0], trans
 
 
-def _cv_slice(cv: CV, nl: NeighbourList, _, shmap, indices):
+def _cv_slice(cv: CV, nl: NeighbourList, _, shmap, shmap_kwargs, indices):
     return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
 
 

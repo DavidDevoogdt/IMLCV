@@ -86,7 +86,7 @@ class AseEnergy(Energy):
 
     @property
     def cell(self):
-        cell = jnp.array(self.atoms.cell) * angstrom
+        cell = jnp.asarray(np.asarray(self.atoms.cell)) * angstrom
 
         if cell.ndim == 0:
             return None

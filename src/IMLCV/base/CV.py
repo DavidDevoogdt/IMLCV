@@ -35,13 +35,25 @@ if TYPE_CHECKING:
 ######################################
 
 
+@partial(dataclass, frozen=True)
+class shmap_kwargs:
+    axis: int = 0
+    out_axes: int = 0
+    axis_name: str | None = "i"
+    n_devices: int | None = None
+    pmap: bool = False
+    explicit_shmap: bool = True
+    verbose: bool = False
+    device_get: bool = True
+
+
 @partial(
     jit,
     static_argnames=(
         "p",
         "axis",
         "chunk_size",
-        "pmap",
+        "reshape",
         "move_axis",
     ),
 )
@@ -50,7 +62,7 @@ def _n_pad(
     axis,
     p,
     chunk_size,
-    pmap=False,
+    reshape=False,
     move_axis=True,
 ):
     if x is None:
@@ -63,7 +75,7 @@ def _n_pad(
     else:
         x_padded = x
 
-    if pmap:
+    if reshape:
         shape = x_padded.shape
 
         x_padded = jnp.reshape(x_padded, (*shape[:axis], chunk_size, -1, *shape[axis + 1 :]))
@@ -74,19 +86,31 @@ def _n_pad(
     return x_padded
 
 
-@partial(jit, static_argnames=("axis", "pmap", "shape", "move_axis"))
-def _n_unpad(x, axis, shape, pmap=False, move_axis=True):
+@partial(
+    jit,
+    static_argnames=(
+        "axis",
+        "reshape",
+        "shape",
+        "move_axis",
+        "trim",
+    ),
+)
+def _n_unpad(x, axis, shape, reshape=False, move_axis=True, trim=True):
     if move_axis:
         x = jnp.moveaxis(x, 0, axis)
 
-    if pmap:
+    if reshape:
         x = jnp.reshape(x, (*x.shape[0:axis], -1, *x.shape[axis + 2 :]))
 
-    return jnp.apply_along_axis(lambda x: x[:shape], axis, x)
+    if trim:
+        x = jnp.apply_along_axis(lambda x: x[:shape], axis, x)
+
+    return x
 
 
-def _shard(x_padded, axis, axis_name, mesh, put=True, unflatten=False):
-    x_padded, tree_def = tree_flatten(x_padded)
+def _shard(x_padded, axis, axis_name, mesh, put=True, unflatten=True):
+    # x_padded, tree_def = tree_flatten(x_padded)
 
     shardings = []
     specs = []
@@ -101,64 +125,82 @@ def _shard(x_padded, axis, axis_name, mesh, put=True, unflatten=False):
             x_padded[i] = jax.device_put(x_padded[i], sharding)
 
         shardings.append(sharding)
-
         specs.append(spec)
 
-    if unflatten:
-        x_padded = tree_unflatten(tree_def, x_padded)
-        shardings = tree_unflatten(tree_def, shardings)
-        specs = tree_unflatten(tree_def, specs)
+    # if unflatten:
+    #     x_padded = tree_unflatten(tree_def, x_padded)
+    #     shardings = tree_unflatten(tree_def, shardings)
+    #     specs = tree_unflatten(tree_def, specs)
 
-    return x_padded, shardings, specs, tree_def
+    return x_padded, shardings, specs  # , tree_def
 
 
-def _shard_out(x_padded, f, axis, axis_name):
-    out_tree = jax.eval_shape(lambda x: f(*x), x_padded)
+def _shard_out(out_tree_def, axis, axis_name, mesh):
+    # out_tree_eval = jax.eval_shape(f, *x_padded)
 
-    out_tree, out_tree_deef = tree_flatten(out_tree)
+    # out_tree, out_tree_def = tree_flatten(out_tree_eval)
 
-    print(out_tree)
+    shardings = []
+
+    # print(out_tree)
 
     specs = []
 
-    for i in range(len(out_tree)):
-        ps = [None] * len(out_tree[i].shape)
+    for out_tree_i in out_tree_def:
+        ps = [None] * len(out_tree_i.shape)
         ps[axis] = axis_name
         spec = PartitionSpec(*ps)
 
+        sharding = jshard.NamedSharding(mesh, spec)
+
+        shardings.append(sharding)
         specs.append(spec)
 
-    return specs
+    # shardings = tree_unflatten(out_tree_def, shardings)
+    # specs = tree_unflatten(out_tree_def, specs)
+
+    return specs, shardings
 
 
 def padded_shard_map(
     f,
-    axis=0,
-    out_axes: int = 0,
-    axis_name: str | None = "i",
-    n_devices: int | None = None,
-    pmap=False,
+    kwargs: shmap_kwargs = shmap_kwargs(),
 ):
-    # helper function to pad pytree, apply pmap and unpad the result
+    # helper function to pad pytree, apply pmap/shmap and unpad the result
+    # strategy: unmap pytree to arrays, pad the arrays, reshape sush that the axis in front equals number of threads, apply pmap/shmap, unpad the arrays, remap to output pytree
 
     def apply_pmap_fn(
         *args,
         axis: int = 0,
-        out_axes: int = 0,
+        # out_axes: int = 0,
         n_devices: int | None = None,
         axis_name: str | None = None,
         pmap: bool = False,
         explicit_shmap=False,
+        verbose=False,
+        device_get=True,
+        move_axis=False,
     ):
+        devices = jax.devices("cpu")
+
         if n_devices is None:
             n_devices = jax.device_count("cpu")
 
         if n_devices == 1:
-            print(f"no schmap, only 1 devices {jax.devices()=}")
+            print(f"no shmap, only 1 devices {jax.devices()=}")
             return f(*args)
 
-        in_tree, _ = tree_flatten(args)
-        shape = int(in_tree[0].shape[axis])
+        in_tree_flat, tree_def = tree_flatten(args)
+        out_tree_eval = jax.eval_shape(f, *args)
+
+        out_tree_flat_eval, out_tree_def = tree_flatten(out_tree_eval)
+
+        shape = int(in_tree_flat[0].shape[axis])
+
+        # if shape <= n_devices:
+        #     print(f"reduce devices to {shape}")
+        #     n_devices = shape
+        #     devices = devices[:n_devices]
 
         rem = shape % n_devices
 
@@ -167,98 +209,144 @@ def padded_shard_map(
         else:
             p = 0
 
-        devices = mesh_utils.create_device_mesh((n_devices,), jax.devices())
+        devices = mesh_utils.create_device_mesh((n_devices,), devices)
 
-        # print(f" sharding in_tree  { in  }")
+        reshape_shmap = False
 
-        in_tree_padded = jax.tree.map(
-            Partial(
+        def f_inner(*args):
+            # print(f"inside f inner {args=}")
+            return f(*args)
+
+        def f_flat(*tree_flat):
+            if pmap:
+                _f = f_inner
+            elif reshape_shmap:
+                if not explicit_shmap:
+                    # tree_flat = [_n_unpad(x, axis=axis, reshape=True, trim=False, shape=None) for x in tree_flat]
+                    _f = vmap(f_inner, in_axes=0 if move_axis else axis)  # vmap over sharded axis
+                else:
+                    # print(f"{tree_flat=}")
+                    tree_flat = [
+                        x[0 if move_axis else axis, :] for x in tree_flat
+                    ]  # sharding keeps axis, pmap removes it
+                    _f = f_inner
+            else:
+                _f = f_inner
+
+            # print(f"{tree_flat=}")
+
+            args = tree_unflatten(tree_def, tree_flat)
+
+            # print(f"{args=}")
+
+            out = _f(*args)
+
+            out = tree_flatten(out)[0]
+
+            if reshape_shmap and not pmap and explicit_shmap:
+                out = [jnp.expand_dims(x, 0) for x in out]  # sharding keeps axis, pmap removes it
+
+            return out
+
+        in_tree_flat_padded = [
+            partial(
                 _n_pad,
                 axis=axis,
                 p=p,
                 chunk_size=n_devices,
-                pmap=pmap,
-                move_axis=True,
-            ),
-            args,
-        )
+                reshape=pmap or reshape_shmap,
+                move_axis=move_axis,
+            )(in_tree_flat_a)
+            for in_tree_flat_a in in_tree_flat
+        ]
 
         if pmap:
-
-            def _f(x):
-                return f(*x)
-
-            out = jax.pmap(
-                _f,
+            out_flat = jax.pmap(
+                f_flat,
                 devices=devices,
-                in_axes=0,
+                in_axes=0 if move_axis else axis,
                 out_axes=0,
-            )(in_tree_padded)
+            )(*in_tree_flat_padded)
 
         else:
-            # TODO convert to shard_map
-            # already sharded
             mesh = Mesh(devices, axis_names=(axis_name,))
 
-            in_tree_padded, sharding, _, tree_def = _shard(
-                in_tree_padded,
-                axis,
-                axis_name,
-                mesh,
-                put=not explicit_shmap,
-                unflatten=True,
+            in_tree_padded_2, sharding, specs = _shard(
+                in_tree_flat_padded,
+                axis=0,  # axis is moved to 0
+                axis_name=axis_name,
+                mesh=mesh,
+                put=False,
+            )
+
+            if verbose:
+                print(f"sharding  {specs=} {in_tree_padded_2=} ")
+
+            specs_out, sharding_out = _shard_out(
+                out_tree_flat_eval,
+                axis=axis,
+                axis_name=axis_name,
+                mesh=mesh,
             )
 
             # explicit: sharding is done by the user
             # otherwise the compiler figures it out
             if explicit_shmap:
-                # print("explicit shmap")
+                if verbose:
+                    print("explicit shmap")
 
-                out = shard_map(
-                    lambda x: f(*x),
+                out_flat = shard_map(
+                    f_flat,
                     mesh=mesh,
-                    in_specs=PartitionSpec(axis_name),
-                    out_specs=PartitionSpec(axis_name),
-                    check_rep=False,  # sometimes throws unnecessary errors
-                )(in_tree_padded)
+                    in_specs=tuple(specs),  # already sharded
+                    out_specs=specs_out,
+                    # check_rep=False,
+                )(*in_tree_padded_2)
 
             else:
-                in_tree_padded, sharding, specs, tree_def = _shard(
-                    in_tree_padded,
-                    axis,
-                    axis_name,
-                    mesh,
-                    unflatten=not explicit_shmap,
-                )
+                print("implicit shmap")
 
-                out = jax.jit(
-                    f,
+                # WARNIMG: might result in random crashes, probably related to https://github.com/jax-ml/jax/issues/19691
+
+                out_flat = jax.jit(
+                    f_flat,
                     in_shardings=sharding,
-                    # out_shardings=out_tree_shards,
-                )(*in_tree_padded)
+                    out_shardings=sharding_out,
+                )(*in_tree_padded_2)
 
-            # out = jax.device_get(out)
-
-        out_reshaped = jax.tree.map(
-            Partial(
-                _n_unpad,
-                shape=shape,
-                pmap=pmap,
+        out_flat = [
+            _n_unpad(
+                x=out_flat_a,
                 axis=axis,
-                move_axis=True,
-            ),
-            out,
-        )
+                shape=shape,
+                reshape=pmap or reshape_shmap,
+                move_axis=move_axis,
+            )
+            for out_flat_a in out_flat
+        ]
 
-        return out_reshaped
+        out = tree_unflatten(out_tree_def, out_flat)
+
+        # print(f"final {out=}")
+
+        if verbose:
+            print(f"done sharding {f=}")
+
+        # single_sharding = jax.sharding.SingleDeviceSharding(devices[0])
+
+        # out = jax.device_put(out, single_sharding)
+
+        return out
 
     return Partial(
         apply_pmap_fn,
-        axis=axis,
-        n_devices=n_devices,
-        out_axes=out_axes,
-        axis_name=axis_name,
-        pmap=pmap,
+        axis=kwargs.axis,
+        n_devices=kwargs.n_devices,
+        axis_name=kwargs.axis_name,
+        pmap=kwargs.pmap,
+        explicit_shmap=kwargs.explicit_shmap,
+        verbose=kwargs.verbose,
+        device_get=kwargs.device_get,
     )
 
 
@@ -304,7 +392,7 @@ def padded_vmap(
                 axis=axis,
                 p=p,
                 chunk_size=chunk_size,
-                pmap=True,
+                reshape=True,
                 move_axis=True,
             ),
             args,
@@ -319,7 +407,7 @@ def padded_vmap(
             Partial(
                 _n_unpad,
                 shape=shape,
-                pmap=True,
+                reshape=True,
                 axis=axis,
                 move_axis=True,
             ),
@@ -583,7 +671,10 @@ def macro_chunk_map(
 
             else:
                 chunk_func_init_args = chunk_func(
-                    chunk_func_init_args, z_chunk, zt_chunk if compute_t else None, w_stack
+                    chunk_func_init_args,
+                    z_chunk,
+                    zt_chunk if compute_t else None,
+                    w_stack,
                 )
 
                 if split_last:
@@ -726,6 +817,7 @@ class SystemParams:
         verbose=False,
         chunk_size_inner=10,
         shmap=True,
+        shmap_kwargs: shmap_kwargs = shmap_kwargs(),
         only_update=False,
     ) -> tuple[bool, NeighbourListUpdate, NeighbourList | None]:
         if info.r_cut is None:
@@ -878,8 +970,8 @@ class SystemParams:
                         exclude_self=False,
                     )
 
-                # if shmap:
-                #     __f = padded_shard_map(__f)
+                if shmap:
+                    __f = padded_shard_map(__f)
 
                 grid_x, grid_y, grid_z = jnp.meshgrid(bx, by, bz, indexing="ij")
 
@@ -913,8 +1005,8 @@ class SystemParams:
             def _res(coor):
                 return res(coor, sp, take_num, shmap)
 
-            if shmap:
-                _res = padded_shard_map(_res)
+            # if shmap:
+            #     _res = padded_shard_map(_res, shmap_kwargs)
 
             if take_num == 0:
                 n = _res(sp.coordinates)
@@ -933,7 +1025,7 @@ class SystemParams:
                 f = padded_vmap(f, chunk_size=chunk_size)
 
                 if shmap:
-                    f = padded_shard_map(f)
+                    f = padded_shard_map(f, shmap_kwargs)
 
             return f
 
@@ -947,6 +1039,8 @@ class SystemParams:
                 nn = jnp.max(nn)  # ingore: type
 
             num_neighs = int(nn)
+
+            # jax.debug.print("num_neighs {}", num_neighs)
 
         if only_update:
             # new_update = NeighbourListUpdate.create(
@@ -1004,6 +1098,7 @@ class SystemParams:
         chunk_size_inner=10,
         verbose=False,
         shmap=True,
+        shmap_kwargs: shmap_kwargs = shmap_kwargs(),
         only_update=False,
     ) -> NeighbourList | None:
         if info.r_cut is None:
@@ -1015,6 +1110,7 @@ class SystemParams:
             chunk_size_inner=chunk_size_inner,
             verbose=verbose,
             shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
             only_update=only_update,
         )
 
@@ -1294,11 +1390,17 @@ class SystemParams:
                 The unimodular matrix transformation (rcell = op @ cell).
             """
 
-            reduced, op = jax.lax.cond(
-                is_minkowski_reduced(cell=cell),
-                lambda: (cell, jnp.eye(3, dtype=int)),
-                lambda: reduction_full(cell),
-            )
+            # reduced, op = jnp.where(
+            #     is_minkowski_reduced(cell=cell),
+            #     (cell, jnp.eye(3, dtype=int)),
+            reduced, op = reduction_full(cell)
+            # )
+
+            # reduced, op = jax.lax.cond(
+            #     is_minkowski_reduced(cell=cell),
+            #     lambda: (cell, jnp.eye(3, dtype=int)),
+            #     lambda: reduction_full(cell),
+            # )
 
             change_handedness = jnp.sign(jnp.linalg.det(cell)) * jnp.sign(jnp.linalg.det(reduced))
             # jax.debug.print("handedness change {}", change_handedness)
@@ -1421,19 +1523,14 @@ class SystemParams:
 
         norms = jnp.linalg.norm(cell, axis=1)
 
-        def _f1():
-            x0 = scaled / norms + 0.5
-            a = jnp.mod(x0, 1)
-            b = (a - 0.5) * norms
-            return a - x0, b
+        # def _f1():
+        x0 = scaled / norms
+        x0 = jnp.where(min, x0 + 0.5, x0)
+        a = jnp.mod(x0, 1)
+        b = jnp.where(min, (a - 0.5) * norms, a * norms)
 
-        def _f2():
-            x0 = scaled / norms
-            a = jnp.mod(x0, 1)
-            b = a * norms
-            return a - x0, b
-
-        op, reduced = jax.lax.cond(min, _f1, _f2)
+        op = a - x0
+        reduced = b
 
         op = jnp.round(op).astype(jnp.int64)
 
@@ -1451,7 +1548,10 @@ class SystemParams:
     @partial(jit, static_argnames=["min", "qr", "chunk_size"])
     def canonicalize(self, min=False, qr=False, chunk_size=None) -> tuple[SystemParams, Array, Array]:
         if self.batched:
-            return padded_vmap(Partial(SystemParams.canonicalize, min=min, qr=qr), chunk_size=chunk_size)(self)
+            return padded_vmap(
+                Partial(SystemParams.canonicalize, min=min, qr=qr),
+                chunk_size=chunk_size,
+            )(self)
 
         mr, op_cell = self.minkowski_reduce()
 
@@ -1768,6 +1868,7 @@ class NeighbourList:
         chunk_size_batch=None,
         shmap=True,
         split_z=False,
+        shmap_kwargs=shmap_kwargs(),
     ):
         if sp.batched:
             f = padded_vmap(
@@ -1789,7 +1890,7 @@ class NeighbourList:
             )
 
             if shmap:
-                f = padded_shard_map(f)
+                f = padded_shard_map(f, shmap_kwargs)
 
             return f(self, sp)
         # calculate nl on the fly
@@ -1849,7 +1950,7 @@ class NeighbourList:
             )
 
         if shmap:
-            _apply_fun = padded_shard_map(_apply_fun)
+            _apply_fun = padded_shard_map(_apply_fun, shmap_kwargs)
 
         out = _apply_fun(i_vec, pos, ind, self.padding_bools)
 
@@ -1859,7 +1960,10 @@ class NeighbourList:
 
             @vmap
             def _split(b_split):
-                return jax.tree.map(lambda x: jnp.sum(jnp.where(b_split, x, jnp.zeros_like(x) + fill_value)), out)
+                return jax.tree.map(
+                    lambda x: jnp.sum(jnp.where(b_split, x, jnp.zeros_like(x) + fill_value)),
+                    out,
+                )
 
             out = _split(b_split)
 
@@ -1880,6 +1984,7 @@ class NeighbourList:
         chunk_size_atoms=None,
         chunk_size_batch=None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ):
         """
         Args:
@@ -1906,7 +2011,7 @@ class NeighbourList:
                 chunk_size=chunk_size_batch,
             )
             if shmap:
-                f = padded_shard_map(f)
+                f = padded_shard_map(f, shmap_kwargs)
 
             return f(self, sp)
 
@@ -1921,72 +2026,99 @@ class NeighbourList:
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
 
-        bools, data_single = self.apply_fun_neighbour(
-            sp=sp,
-            func=func_single,
-            r_cut=r_cut,
-            reduce="none",
-            fill_value=fill_value,
-            exclude_self=exclude_self,
-            chunk_size_neigbourgs=chunk_size_neigbourgs,
-            chunk_size_atoms=chunk_size_atoms,
-            shmap=shmap,
-        )
-
         i_vec = jnp.arange(pos.shape[0])
 
-        @partial(padded_vmap, chunk_size=chunk_size_neigbourgs)
-        def _f(j, k, bools_ij, bools_ik, pos_ij, pos_ik, ind_ij, ind_ik, data_single_ij, data_single_ik):
-            b = jnp.logical_and(
-                bools_ij,
-                bools_ik,
-            )
+        # @partial(padded_vmap, chunk_size=chunk_size_atoms)
+        @vmap
+        def f2(i, pos_i, ind_i, padding_bools_i):
+            # first do single data
+            n = jnp.arange(pos_i.shape[0])
 
-            if unique:
-                b = jnp.logical_and(b, j != k)
+            # @partial(padded_vmap, chunk_size=chunk_size_neigbourgs)
+            @vmap
+            def _f1(j, pos_j, ind_j, padding_bools_j):
+                r_j = jnp.linalg.norm(pos_j, axis=-1)
+                b = jnp.logical_and(padding_bools_j, r_j < r_cut)
 
-            out = func_double(
-                pos_ij,
-                ind_ij,
-                data_single_ij,
-                pos_ik,
-                ind_ik,
-                data_single_ik,
-            )
+                if exclude_self:
+                    b = jnp.logical_and(b, r_j > 1e-16)
 
-            out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
+                if func_single is not None:
+                    out = func_single(
+                        pos_j,
+                        ind_j,
+                    )
+                else:
+                    out = None
 
-            return (b, out), jnp.array(self.info.z_array)[ind_ij], jnp.array(self.info.z_array)[ind_ik]
+                out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
 
-        @partial(padded_vmap, chunk_size=chunk_size_atoms)
-        def f2(i, pos_i, ind_i, data_single_i, bools_i):
-            j = jnp.arange(pos_i.shape[0])
-            k = jnp.arange(pos_i.shape[0])
+                return (b, out)
 
-            ij, ik = jnp.meshgrid(j, k, indexing="ij")
-            ij, ik = jnp.reshape(ij, -1), jnp.reshape(ik, -1)
+            bools_i, data_single_i = _f1(n, pos_i, ind_i, padding_bools_i)
 
-            # ijk_n = jnp.array([ij, ik]).reshape(2, -1).T
+            # two site
 
-            out_tree_n, zj_n, zk_n = _f(
-                ij,
-                ik,
-                bools_i[ij],
-                bools_i[ik],
-                pos_i[ij],
-                pos_i[ik],
-                ind_i[ij],
-                ind_i[ik],
-                data_single_i[ij],
-                data_single_i[ik],
+            nj, nk = jnp.meshgrid(n, n, indexing="ij")
+            nj, nk = jnp.reshape(nj, -1), jnp.reshape(nk, -1)
+
+            # @partial(padded_vmap, chunk_size=chunk_size_neigbourgs)
+            @vmap
+            def _f2(
+                j,
+                k,
+                bools_j,
+                bools_k,
+                pos_j,
+                pos_k,
+                ind_j,
+                ind_k,
+                data_single_j,
+                data_single_k,
+            ):
+                b = jnp.logical_and(
+                    bools_j,
+                    bools_k,
+                )
+
+                if unique:
+                    b = jnp.logical_and(b, j != k)
+
+                out = func_double(
+                    pos_j,
+                    ind_j,
+                    data_single_j,
+                    pos_k,
+                    ind_k,
+                    data_single_k,
+                )
+
+                out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
+
+                return (b, out)
+
+            out_tree_n = _f2(
+                nj,
+                nk,
+                bools_i[nj],
+                bools_i[nk],
+                pos_i[nj],
+                pos_i[nk],
+                ind_i[nj],
+                ind_i[nk],
+                data_single_i[nj],
+                data_single_i[nk],
             )
 
             # replace vals with fill_value if bools is False
-
             if reduce == "full":
                 out = jax.tree.map(lambda x: jnp.sum(x, axis=0), out_tree_n)
 
             elif reduce == "z":
+                zj_n, zk_n = (
+                    jnp.array(self.info.z_array)[ind_i[nj]],
+                    jnp.array(self.info.z_array)[ind_i[nk]],
+                )
 
                 def _red(zj_ref, zk_ref):
                     b = jnp.logical_and(zj_n == zj_ref, zk_n == zk_ref)
@@ -1998,18 +2130,18 @@ class NeighbourList:
                 out = _red(jnp.array(self.info.z_unique), jnp.array(self.info.z_unique))
 
             elif reduce == "none":
-                out = jax.tree.map(lambda x: x.reshape((*ij.shape, *x.shape[1:])), out_tree_n)
+                out = jax.tree.map(lambda x: x.reshape((*nj.shape, *x.shape[1:])), out_tree_n)
             else:
                 raise ValueError(
-                    "unknown value {reduce} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
+                    f"unknown value {reduce=} for reduce argument of neighbourghfunction, try 'none','z' or 'full'"
                 )
 
             return out
 
         if shmap:
-            f2 = padded_shard_map(f2)
+            f2 = padded_shard_map(f2, shmap_kwargs)
 
-        out = f2(i_vec, pos, ind, data_single, bools)
+        out = f2(i_vec, pos, ind, self.padding_bools)
 
         if split_z:
             # sum atom indices to  value per z
@@ -2064,13 +2196,14 @@ class NeighbourList:
 
         return max_displacement > self.info.r_skin / 2
 
-    @partial(jax.jit, static_argnames=("chunk_size", "shmap", "verbose", "chunk_size_inner"))
+    @partial(jax.jit, static_argnames=("chunk_size", "shmap", "verbose", "chunk_size_inner", "shmap_kwargs"))
     def update_nl(
         self,
         sp: SystemParams,
         chunk_size=None,
         chunk_size_inner=10,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
         verbose=False,
     ) -> tuple[bool, NeighbourList]:
         a, __, __, b = sp._get_neighbour_list(
@@ -2079,6 +2212,7 @@ class NeighbourList:
             chunk_size=chunk_size,
             chunk_size_inner=chunk_size_inner,
             shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
             verbose=verbose,
         )
 
@@ -2526,7 +2660,11 @@ class CV:
         for i, s in enumerate(sz):
             assert s != 0
 
-            x = jnp.apply_along_axis(lambda x: x[running : running + s], -1 if not self.atomic else -2, self.cv)
+            x = jnp.apply_along_axis(
+                lambda x: x[running : running + s],
+                -1 if not self.atomic else -2,
+                self.cv,
+            )
 
             out.append(
                 CV(
@@ -2924,7 +3062,7 @@ class CvMetric:
             print(f"{bounds=}")
 
         @partial(CvTrans.from_cv_function, bounds=bounds)
-        def get_mask(x: CV, nl, _, shmap, bounds):
+        def get_mask(x: CV, nl, _, shmap, shmap_kwargs, bounds):
             b = jnp.logical_and(jnp.all(x.cv > bounds[:, 0]), jnp.all(x.cv < bounds[:, 1]))
 
             return x.replace(cv=jnp.reshape(b, (1,)), _combine_dims=None)
@@ -3010,7 +3148,16 @@ class CvFunInput:
 
 
 class _CvFunBase:
-    @partial(jit, static_argnames=("reverse", "log_det", "jacobian", "shmap"))
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
+            "log_det",
+            "jacobian",
+            "shmap",
+            "shmap_kwargs",
+        ),
+    )
     def calc(
         self,
         x: CV,
@@ -3019,6 +3166,7 @@ class _CvFunBase:
         log_det=False,
         jacobian=False,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, Array | None]:
         if self.cv_input is not None:
             y, cond = self.cv_input.split(x)
@@ -3026,13 +3174,34 @@ class _CvFunBase:
             y, cond = x, None
 
         if jacobian:
-            out, jac, log_det = self._jac(y, nl, reverse=reverse, conditioners=cond, shmap=shmap)
+            out, jac, log_det = self._jac(
+                y,
+                nl,
+                reverse=reverse,
+                conditioners=cond,
+                shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
+            )
 
         elif log_det:
-            out, log_det = self._log_Jf(y, nl, reverse=reverse, conditioners=cond, shmap=shmap)
+            out, log_det = self._log_Jf(
+                y,
+                nl,
+                reverse=reverse,
+                conditioners=cond,
+                shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
+            )
             jac = None
         else:
-            out = self._calc(y, nl, reverse=reverse, conditioners=cond, shmap=shmap)
+            out = self._calc(
+                y,
+                nl,
+                reverse=reverse,
+                conditioners=cond,
+                shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
+            )
             jac = None
             log_det = None
 
@@ -3049,6 +3218,7 @@ class _CvFunBase:
         reverse=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> CV:
         pass
 
@@ -3060,6 +3230,7 @@ class _CvFunBase:
         reverse=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, Array | None]:
         """naive automated implementation, overrride this"""
 
@@ -3072,7 +3243,7 @@ class _CvFunBase:
 
         return a, log_det
 
-    @partial(jit, static_argnames=("reverse", "conditioners", "shmap"))
+    @partial(jit, static_argnames=("reverse", "conditioners", "shmap", "shmap_kwargs"))
     def _jac(
         self,
         x: CV,
@@ -3080,11 +3251,16 @@ class _CvFunBase:
         reverse=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, Array | None]:
         def f(x):
-            return self._calc(x, nl, reverse, conditioners, shmap)
+            return self._calc(x, nl, reverse, conditioners, shmap, shmap_kwargs=shmap_kwargs)
 
         a = f(x)
+
+        # print(jax.make_jaxpr(f)(x))
+        # print(jax.make_jaxpr(self.jacfun(f))(x))
+
         b = self.jacfun(f)(x).cv
         # print(b)
 
@@ -3118,7 +3294,15 @@ class CvFun(CvFunBase):
     backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = field(pytree_node=False, default=None)
     conditioners = False
 
-    @partial(jit, static_argnames=("reverse", "conditioners", "shmap"))
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
+            "conditioners",
+            "shmap",
+            "shmap_kwargs",
+        ),
+    )
     def _calc(
         self,
         x: CV,
@@ -3126,6 +3310,7 @@ class CvFun(CvFunBase):
         reverse=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> CV:
         if conditioners is None:
             c = None
@@ -3134,10 +3319,20 @@ class CvFun(CvFunBase):
 
         if reverse:
             assert self.backward is not None
-            return Partial(self.backward, shmap=shmap, **self.static_kwargs)(x, nl, c, **self.kwargs)
+            return Partial(
+                self.backward,
+                shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
+                **self.static_kwargs,
+            )(x, nl, c, **self.kwargs)
         else:
             assert self.forward is not None
-            return Partial(self.forward, shmap=shmap, **self.static_kwargs)(x, nl, c, **self.kwargs)
+            return Partial(
+                self.forward,
+                shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
+                **self.static_kwargs,
+            )(x, nl, c, **self.kwargs)
 
 
 class CvFunNn(nn.Module, _CvFunBase):
@@ -3159,11 +3354,12 @@ class CvFunNn(nn.Module, _CvFunBase):
         reverse=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV | None, Array | None]:
         if reverse:
-            return self.backward(x, nl, conditioners, shmap, **self.kwargs)
+            return self.backward(x, nl, conditioners, shmap, shmap_kwargs, **self.kwargs)
         else:
-            return self.forward(x, nl, conditioners, shmap, **self.kwargs)
+            return self.forward(x, nl, conditioners, shmap, shmap_kwargs, **self.kwargs)
 
     @abstractmethod
     def forward(
@@ -3172,6 +3368,7 @@ class CvFunNn(nn.Module, _CvFunBase):
         nl: NeighbourList | None,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> CV:
         pass
 
@@ -3182,6 +3379,7 @@ class CvFunNn(nn.Module, _CvFunBase):
         nl: NeighbourList | None,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> CV:
         pass
 
@@ -3226,6 +3424,7 @@ class CvFunDistrax(nn.Module, _CvFunBase):
         log_det=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV, Array | None]:
         if conditioners is not None:
             z = CV.combine(*conditioners, x).cv
@@ -3248,6 +3447,7 @@ class CvFunDistrax(nn.Module, _CvFunBase):
         reverse=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, Array | None]:
         """naive implementation, overrride this"""
         assert nl is None, "not implemented"
@@ -3266,7 +3466,16 @@ class _CombinedCvFun(_CvFunBase):
     __: KW_ONLY
     classes: tuple[tuple[_CvFunBase]]
 
-    @partial(jit, static_argnames=("reverse", "log_det", "jacobian", "shmap"))
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
+            "log_det",
+            "jacobian",
+            "shmap",
+            "shmap_kwargs",
+        ),
+    )
     def calc(
         self,
         x: CV | list[SystemParams],
@@ -3275,6 +3484,7 @@ class _CombinedCvFun(_CvFunBase):
         log_det=False,
         jacobian=False,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV | None, Array | None]:
         if isinstance(x, CV):
             assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
@@ -3304,6 +3514,7 @@ class _CombinedCvFun(_CvFunBase):
                     log_det=log_det,
                     jacobian=jacobian,
                     shmap=shmap,
+                    shmap_kwargs=shmap_kwargs,
                 )
 
                 if jacobian:
@@ -3333,6 +3544,7 @@ class _CombinedCvFun(_CvFunBase):
         reverse=False,
         conditioners: list[CV] | None = None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, Array | None]:
         """naive automated implementation, overrride this"""
 
@@ -3356,7 +3568,7 @@ class CombinedCvFunNN(nn.Module, _CombinedCvFun):
     #     return pytreenode_equal(self, other)
 
 
-def _duplicate_trans(x: CV | SystemParams, nl: NeighbourList | None, _, shmap, n):
+def _duplicate_trans(x: CV | SystemParams, nl: NeighbourList | None, _, shmap, shmap_kwargs, n):
     if isinstance(x, SystemParams):
         return [x] * n
 
@@ -3443,6 +3655,7 @@ class _CvTrans:
         chunk_size=None,
         jacobian=False,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV | None, Array | None]:
         return self.compute_cv_trans(
             x=x,
@@ -3450,9 +3663,20 @@ class _CvTrans:
             jacobian=jacobian,
             chunk_size=chunk_size,
             shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
         )
 
-    @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size", "jacobian", "shmap"))
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
+            "log_Jf",
+            "chunk_size",
+            "jacobian",
+            "shmap",
+            "shmap_kwargs",
+        ),
+    )
     def compute_cv_trans(
         self,
         x: CV | SystemParams,
@@ -3462,6 +3686,7 @@ class _CvTrans:
         chunk_size=None,
         jacobian=False,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV | None, Array | None]:
         """
         result is always batched
@@ -3475,12 +3700,13 @@ class _CvTrans:
                     log_Jf=log_Jf,
                     chunk_size=None,
                     jacobian=jacobian,
+                    shmap=False,
                 ),
                 chunk_size=chunk_size,
             )
 
             if shmap:
-                f = padded_shard_map(f)
+                f = padded_shard_map(f, shmap_kwargs)
 
             return f(x, nl)
 
@@ -3503,6 +3729,7 @@ class _CvTrans:
                 log_det=log_Jf,
                 jacobian=jacobian,
                 shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
             )
 
             if jacobian:
@@ -3524,6 +3751,7 @@ class _CvTrans:
         jacobian=False,
         chunk_size=None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> CV:
         return self.compute_cv_trans(
             x=x,
@@ -3531,6 +3759,7 @@ class _CvTrans:
             jacobian=jacobian,
             chunk_size=chunk_size,
             shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
         )
 
     def __mul__(self, other):
@@ -3581,7 +3810,17 @@ class CvTrans(_CvTrans):
     __: KW_ONLY
     trans: tuple[CvFunBase]
 
-    @partial(jit, static_argnames=("reverse", "log_Jf", "chunk_size", "jacobian", "shmap"))
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
+            "log_Jf",
+            "chunk_size",
+            "jacobian",
+            "shmap",
+            "shmap_kwargs",
+        ),
+    )
     def compute_cv_trans(
         self,
         x: CV | SystemParams,
@@ -3591,6 +3830,7 @@ class CvTrans(_CvTrans):
         jacobian=False,
         chunk_size=None,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV, Array | None]:
         return _CvTrans.compute_cv_trans(
             self=self,
@@ -3601,6 +3841,7 @@ class CvTrans(_CvTrans):
             chunk_size=chunk_size,
             jacobian=jacobian,
             shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
         )
 
 
@@ -3695,7 +3936,15 @@ class CvFlow:
             shmap=shmap,
         )
 
-    @partial(jax.jit, static_argnames=["chunk_size", "jacobian", "shmap"])
+    @partial(
+        jax.jit,
+        static_argnames=[
+            "chunk_size",
+            "jacobian",
+            "shmap",
+            "shmap_kwargs",
+        ],
+    )
     def compute_cv_flow(
         self,
         x: SystemParams,
@@ -3703,6 +3952,7 @@ class CvFlow:
         chunk_size: int | None = None,
         jacobian=False,
         shmap=True,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV | None]:
         if x.batched:
             f = padded_vmap(
@@ -3716,7 +3966,7 @@ class CvFlow:
             )
 
             if shmap:
-                f = padded_shard_map(f)
+                f = padded_shard_map(f, shmap_kwargs)
 
             return f(x, nl)
 
@@ -3726,6 +3976,7 @@ class CvFlow:
             jacobian=jacobian,
             chunk_size=chunk_size,
             shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
         )
         if self.trans is not None:
             out, out_jac_i, _ = self.trans.compute_cv_trans(
@@ -3733,6 +3984,7 @@ class CvFlow:
                 nl=nl,
                 jacobian=jacobian,
                 shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
             )
 
             if jacobian:
@@ -3847,7 +4099,16 @@ class CollectiveVariable:
     metric: CvMetric
     jac: Callable = field(pytree_node=False, default=jax.jacrev)  # jacfwd is generally faster, but not always supported
 
-    @partial(jax.jit, static_argnames=["chunk_size", "jacobian", "shmap", "push_jac"])
+    @partial(
+        jax.jit,
+        static_argnames=[
+            "chunk_size",
+            "jacobian",
+            "shmap",
+            "push_jac",
+            "shmap_kwargs",
+        ],
+    )
     def compute_cv(
         self,
         sp: SystemParams,
@@ -3856,6 +4117,7 @@ class CollectiveVariable:
         chunk_size: int | None = None,
         shmap=True,
         push_jac=False,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, CV]:
         if sp.batched:
             if nl is not None:
@@ -3872,15 +4134,15 @@ class CollectiveVariable:
             )
 
             if shmap:
-                f = padded_shard_map(f)
+                f = padded_shard_map(f, shmap_kwargs)
 
             return f(sp, nl)
 
         if push_jac:
-            return self.f.compute_cv_flow(sp, nl, jacobian=jacobian, shmap=shmap)
+            return self.f.compute_cv_flow(sp, nl, jacobian=jacobian, shmap=shmap, shmap_kwargs=shmap_kwargs)
 
         def f(x):
-            return self.f.compute_cv_flow(x, nl, jacobian=False, shmap=shmap)[0]
+            return self.f.compute_cv_flow(x, nl, jacobian=False, shmap=shmap, shmap_kwargs=shmap_kwargs)[0]
 
         y = f(sp)
         if jacobian:

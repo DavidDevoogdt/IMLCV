@@ -166,7 +166,7 @@ class Scheme:
         enforce_min_traj_length=False,
         recalc_cv=False,
         only_finished=True,
-        plot_umbrella=None,
+        plot_umbrella=False,
         max_bias=None,
         n_max_fes=30,
         thermolib=False,
@@ -210,6 +210,8 @@ class Scheme:
             if kl_div < convergence_kl:
                 print(f"already converged {kl_div=}")
                 return
+            else:
+                print(f"not converged {kl_div=}")
 
         print(f"{i_0=}")
 

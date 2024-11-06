@@ -37,6 +37,7 @@ from IMLCV.base.CV import (
     macro_chunk_map,
     padded_shard_map,
     padded_vmap,
+    shmap_kwargs,
 )
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo
@@ -1630,12 +1631,12 @@ class Rounds(ABC):
             )
             cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
 
-        bias.plot(
-            name=outputs[0].filepath,
-            traj=[cvs],
-            offset=True,
-            margin=0.1,
-        )
+        # bias.plot(
+        #     name=outputs[0].filepath,
+        #     traj=[cvs],
+        #     offset=True,
+        #     margin=0.1,
+        # )
 
     ######################################
     #          CV transformations        #
@@ -1721,9 +1722,12 @@ class Rounds(ABC):
         )
 
         if use_executor:
-            bash_app_python(Rounds._update_CV, executors=Executors.training)(
-                execution_folder=self.path(c=cv_round_from), **kw
-            ).result()
+            bash_app_python(
+                Rounds._update_CV,
+                executors=Executors.training,
+                remove_stderr=False,
+                remove_stdout=False,
+            )(execution_folder=self.path(c=cv_round_from), **kw).result()
 
             return
 
@@ -2054,7 +2058,7 @@ class data_loader_output:
         bins, _, cv_mid, _ = metric.grid(n=n_grid, bounds=grid_bounds)
 
         @partial(CvTrans.from_cv_function, mid=cv_mid)
-        def closest_trans(cv: CV, _nl, _, shmap, mid: CV):
+        def closest_trans(cv: CV, _nl, _, shmap, shmap_kwargs, mid: CV):
             m = jnp.argmin(jnp.sum((mid.cv - cv.cv) ** 2, axis=1), keepdims=True)
 
             return cv.replace(cv=m)
@@ -2417,7 +2421,7 @@ class data_loader_output:
                     mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
 
                     @partial(CvTrans.from_cv_function, mask=mask)
-                    def get_indicator(cv: CV, nl, _, shmap, mask):
+                    def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
                         out = jnp.zeros((hist.shape[0],))
                         out = out.at[cv.cv].set(1)
                         out = jnp.take(out, mask)
@@ -2511,6 +2515,7 @@ class data_loader_output:
         nl,
         _,
         shmap,
+        shmap_kwargs,
         argmask: jnp.Array | None = None,
         pi: jnp.Array | None = None,
         add_1: bool = False,
@@ -2671,7 +2676,7 @@ class data_loader_output:
         if shmap:
             # TODO 0909 09:41:06.108200 3141823 collective_ops_utils.h:306] This thread has been waiting for 5000ms for and may be stuck: participant AllReduceParticipantData{rank=27, element_count=1, type=PRED, rendezvous_key=RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}} waiting for all participants to arrive at rendezvous RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}
             f = jax.jit(f)
-            f = padded_shard_map(f, pmap=True)
+            f = padded_shard_map(f, shmap_kwargs(pmap=True))
 
         return data_loader_output._apply(
             x=x,
@@ -2749,7 +2754,7 @@ class data_loader_output:
             # print(f"reducing n_grid from {n_grid} to {n_max}")
             n_grid = n_max
 
-        print(f"getting bounds {n_grid=}")
+        # print(f"getting bounds {n_grid=}")
 
         if n_grid <= 1:
             raise
@@ -2763,11 +2768,14 @@ class data_loader_output:
             percentile=1e-6,
         )
 
-        print(f"{grid_bounds=}")
+        # print(f"{grid_bounds=}")
 
         # # do not update periodic bounds
-        grid_bounds = jnp.where(
-            collective_variable.metric.periodicities,
+        grid_bounds = jax.vmap(
+            lambda x, y: jnp.where(collective_variable.metric.periodicities, x, y),
+            in_axes=(1, 1),
+            out_axes=1,
+        )(
             collective_variable.metric.bounding_box,
             grid_bounds,
         )
@@ -3367,6 +3375,7 @@ class KoopmanModel:
         nl,
         _,
         shmap,
+        shmap_kwargs,
     ):
         return cv.replace(cv=jnp.hstack([cv.cv, jnp.array([1])]))
 
@@ -3537,7 +3546,7 @@ class KoopmanModel:
         )
 
         @partial(CvTrans.from_cv_function, mu_corr=mu_corr)
-        def _get_w(cv: CV, _nl, _, shmap, mu_corr: Array):
+        def _get_w(cv: CV, _nl, _, shmap, shmap_kwargs, mu_corr: Array):
             x = cv.cv
 
             return cv.replace(cv=jnp.einsum("i,ij->j", x, mu_corr), _combine_dims=None)
@@ -3790,7 +3799,7 @@ class Covariances:
                 return trans_f.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)[0]
 
             f_func = jax.jit(f_func)
-            f_func = padded_shard_map(f_func, pmap=True)
+            f_func = padded_shard_map(f_func, shmap_kwargs(pmap=True))
         else:
 
             def f_func(x, nl):
@@ -3803,7 +3812,7 @@ class Covariances:
                 return trans_g.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)[0]
 
             g_func = jax.jit(g_func)
-            g_func = padded_shard_map(g_func, pmap=True)
+            g_func = padded_shard_map(g_func, shmap_kwargs(pmap=True))
         else:
 
             def g_func(x, nl):

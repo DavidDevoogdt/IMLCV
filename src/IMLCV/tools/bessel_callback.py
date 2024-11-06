@@ -173,7 +173,8 @@ ORDER = 100  # Following Jablonski (1994)
 @partial(jax.jit, static_argnums=0)
 def recurrence_pattern(n, z):
     jlp1 = 0
-    jl = 10 ** (-200)
+
+    jl = jnp.where(z.dtype == jnp.float32, 1e-30, 1e-200)
 
     # https://dlmf.nist.gov/10.51
     def iter(n, jl, jlp1):
@@ -183,22 +184,35 @@ def recurrence_pattern(n, z):
 
     l = n + ORDER
 
-    for _ in range(ORDER):
-        l, jl, jlp1 = iter(l, jl, jlp1)
+    l, jl, jlp1 = jax.lax.fori_loop(
+        0,
+        ORDER,
+        lambda i, args: iter(*args),
+        (l, jl, jlp1),
+        unroll=True,
+    )
 
-    # scan over other values
+    # scan over other valuess
 
-    def body(carry, xs):
+    def body(carry, xs: None):
         carry = iter(*carry)
         return carry, carry[1]
 
-    _, out = jax.lax.scan(body, init=(l, jl, jlp1), xs=None, length=n)
+    _, out = jax.lax.scan(
+        body,
+        init=(l, jl, jlp1),
+        xs=None,
+        length=n,
+        unroll=True,
+    )
 
     out = out[::-1]
 
     f0 = jnp.sinc(z / jnp.pi)
 
-    return out / out[0] * f0
+    n_safe = jnp.where(out[0] != 0, out[0], 1)
+
+    return out / n_safe * f0
 
 
 @partial(custom_jvp, nondiff_argnums=(0,))
@@ -226,7 +240,9 @@ def spherical_jn_jvp(n, primals, tangents):
     return y[: n + 1], dy[: n + 1] * x_dot
 
 
-# spherical_jn = csphjy  # generate_bessel(scipy.special.spherical_jn, type=2)
+# spherical_jn = csphjy
+
+# spherical_jn = generate_bessel(scipy.special.spherical_jn, type=2)
 spherical_yn = generate_bessel(scipy.special.spherical_yn, type=2)
 
 ive = generate_bessel(scipy.special.ive, sign=+1, type=1, exp_scaled=True)

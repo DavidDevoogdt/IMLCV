@@ -52,7 +52,7 @@ class HarmonicBias(Bias):
         k_max: Array | float | None = None,
         start=None,
         step=None,
-        finalized=None,
+        finalized=True,
     ) -> Self:
         """generate harmonic potentia;
 
@@ -249,7 +249,7 @@ class RbfBias(Bias):
         epsilon=None,
         smoothing=0.0,
         degree=None,
-        finalized=False,
+        finalized=True,
     ) -> Self:
         assert cv.batched
         assert cv.shape[1] == cvs.n

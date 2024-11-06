@@ -14,7 +14,6 @@ from time import time
 
 import cloudpickle
 import h5py
-import jax
 import jax.numpy as jnp
 import jsonpickle
 from flax.struct import dataclass as flax_dataclass
@@ -27,7 +26,7 @@ from typing_extensions import Self
 
 from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
-from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, SystemParams
+from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, SystemParams, shmap_kwargs
 
 ######################################
 #             Trajectory             #
@@ -633,6 +632,8 @@ class MDEngine(ABC):
         if jnp.max(nneigh) > 100:
             raise ValueError(f"neighbour list is too large for at leat one  atom {nneigh=}")
 
+        # nl = jax.device_put(nl, jax.devices("cpu")[0])
+
         self._nl = nl
         return nl
 
@@ -821,6 +822,7 @@ class MDEngine(ABC):
         use_jac=False,
         push_jac=False,
         rel=False,
+        shmap_kwargs=shmap_kwargs(),
     ) -> tuple[CV, EnergyResult]:
         # @jit
         def f(sp, nl):
@@ -829,13 +831,14 @@ class MDEngine(ABC):
                 nl=nl,
                 gpos=gpos,
                 vir=vtens,
-                shmap=shmap,  # TODO: https://github.com/google/jax/issues/19691
+                shmap=shmap,
                 use_jac=use_jac,
                 push_jac=push_jac,
                 rel=rel,
+                shmap_kwargs=shmap_kwargs,
             )
 
-            out = jax.block_until_ready(out)
+            # out = jax.block_until_ready(out)
 
             return out
 

@@ -72,7 +72,7 @@ def test_RBF_bias(kernel):
     # bounds = [[0, 3], [0, 3]]
     n = 5
 
-    def a(sp, nl, _, shmap):
+    def a(sp, nl, _, shmap, shmap_kwargs):
         return CV(cv=sp.coordinates)
 
     collective_variable = CollectiveVariable(
