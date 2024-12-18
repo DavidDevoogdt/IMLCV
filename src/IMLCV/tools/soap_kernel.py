@@ -202,23 +202,58 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
     return _p_i_soap_2_s, _p_i_soap_2_d
 
 
-def p_inl_sb(l_max, n_max, r_cut):
+def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
     assert l_max <= n_max, "l_max should be smaller or equal to n_max"
 
-    spherical_jn_2 = jax.vmap(jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1), in_axes=(None, 1), out_axes=2)
+    if bessel_fun == "jax":
+        spherical_jn_2 = jax.vmap(jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1), in_axes=(None, 1), out_axes=2)
+    elif bessel_fun == "scipy":
+        from jax import custom_jvp
+
+        from IMLCV.tools.bessel_callback import spherical_jn_b
+
+        # these avoid recalculation of the same values
+        @partial(custom_jvp, nondiff_argnums=(0,))
+        @partial(jax.jit, static_argnums=0)
+        def vec_spherical_jn_2(n, z):
+            @partial(jax.vmap, in_axes=(0, None), out_axes=0)
+            def _spherical_jn_2(n, z):
+                return spherical_jn_b(n, z)
+
+            return _spherical_jn_2(jnp.arange(n + 1), z)
+
+        @vec_spherical_jn_2.defjvp
+        def vec_spherical_jn_2_jvp(n, primals, tangents):
+            (x,) = primals
+            (x_dot,) = tangents
+
+            ni = n
+
+            if ni == 0:
+                ni = 1
+
+            y = vec_spherical_jn_2(ni, x)
+
+            dy = jnp.zeros(ni + 1)
+            dy = dy.at[0].set(-y[1])
+            dy = dy.at[1:].set(y[:-1] - (jnp.arange(1, len(y)) + 1.0) * y[1:] / x)
+
+            return y[: n + 1], dy[: n + 1] * x_dot
+
+        @partial(jax.vmap, in_axes=(None, 1), out_axes=2)
+        @partial(jax.vmap, in_axes=(None, 0), out_axes=1)
+        def spherical_jn_2(n, z):
+            return vec_spherical_jn_2(n, z)
+    else:
+        raise ValueError(f"{bessel_fun=} not supported")
 
     def spherical_jn_zeros(n, m):
         x0 = jnp.array((scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2)
 
         return vmap(
-            # lambda x: jaxopt.FixedPointIteration(
-            #     lambda x: spherical_jn(n, x)[n] - x,
-            #     maxiter=1000,
-            #     tol=1e-15,
-            # )
             lambda x: jaxopt.GradientDescent(
                 lambda x: spherical_jn(n, x)[n] ** 2,
                 maxiter=1000,

@@ -187,7 +187,8 @@ def padded_shard_map(
             n_devices = jax.device_count("cpu")
 
         if n_devices == 1:
-            print(f"no shmap, only 1 devices {jax.devices()=}")
+            if verbose:
+                print(f"no shmap, only 1 devices {jax.devices()=}")
             return f(*args)
 
         in_tree_flat, tree_def = tree_flatten(args)
@@ -441,6 +442,7 @@ def macro_chunk_map(
     chunk_func=None,
     chunk_func_init_args=None,
     w: list[Array] | None = None,
+    w_t: list[Array] | None = None,
     jit_f=True,
 ):
     # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
@@ -493,6 +495,7 @@ def macro_chunk_map(
         nlt_chunk = [] if isinstance(nl_t, list) else None
         zt = []
         last_zt = None
+        wt_chunk = [] if w_t is not None else None
 
     while tot_running < tot:
         if (tot_chunk < macro_chunk) and (tot_running + tot_chunk != tot):
@@ -506,6 +509,7 @@ def macro_chunk_map(
             if compute_t:
                 yt_chunk.append(y_t[n]) if compute_t else None
                 nlt_chunk.append(nl_t[n]) if isinstance(nl_t, list) else None
+                wt_chunk.append(w_t[n]) if w_t is not None else None
 
             tot_chunk += s
             stack_dims_chunk.append(s)
@@ -544,6 +548,12 @@ def macro_chunk_map(
                     last_chunk_w = w_last[s_last:yls]
                     w_chunk[-1] = w_last[0:s_last]
 
+                if compute_t and w_t is not None:
+                    wt_last = wt_chunk[-1]
+
+                    last_chunk_wt = wt_last[s_last:yls]
+                    wt_chunk[-1] = wt_last[0:s_last]
+
                 tot_chunk -= y_last.shape[0] - s_last
                 stack_dims_chunk[-1] = s_last
 
@@ -555,6 +565,9 @@ def macro_chunk_map(
                 nlt_stack = NeighbourList.stack(*nlt_chunk) if isinstance(nl_t, list) else nl_t
 
             w_stack = jnp.hstack(w_chunk) if w is not None else None
+
+            if compute_t and w_t is not None:
+                wt_stack = jnp.hstack(wt_chunk)
 
             if verbose:
                 print(
@@ -668,6 +681,7 @@ def macro_chunk_map(
                 z.extend(z_chunk)
                 if compute_t:
                     zt.extend(zt_chunk)
+                    wt_chunk = [] if w_t is not None else None
 
             else:
                 chunk_func_init_args = chunk_func(
@@ -675,6 +689,7 @@ def macro_chunk_map(
                     z_chunk,
                     zt_chunk if compute_t else None,
                     w_stack,
+                    wt_stack if compute_t else None,
                 )
 
                 if split_last:
@@ -685,6 +700,7 @@ def macro_chunk_map(
                     if compute_t:
                         yt_chunk = [last_chunk_yt]
                         nlt_chunk = [last_chunk_nlt] if isinstance(nl_t, list) else None
+                        wt_chunk = [last_chunk_wt] if w_t is not None else None
 
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
@@ -706,6 +722,8 @@ def macro_chunk_map(
                     if compute_t:
                         yt_chunk = []
                         nlt_chunk = [] if isinstance(nl_t, list) else None
+                        wt_chunk = [] if w_t is not None else None
+
                         last_chunk_yt = None
                         last_chunk_nlt = None
 
@@ -826,7 +844,7 @@ class SystemParams:
         if verbose:
             print("canonicalize")
 
-        sp, (op_cell, op_coor, _) = SystemParams.canonicalize(self, chunk_size=chunk_size)
+        sp, (op_cell, op_coor, op_qr) = SystemParams.canonicalize(self, chunk_size=chunk_size)
 
         b = True
 
@@ -959,8 +977,8 @@ class SystemParams:
                 )
 
             else:
-                # @partial(padded_vmap, chunk_size=chunk_size_inner)
-                @vmap
+
+                @partial(padded_vmap, chunk_size=chunk_size_inner)
                 def __f(i, j, k):
                     return _apply_g_inner(
                         sp=sp_center,
@@ -1515,26 +1533,25 @@ class SystemParams:
         def proj(x):
             return jnp.linalg.inv(trans) @ x
 
-        @partial(vmap)
-        def deproj(x):
-            return trans @ x
+        # @partial(vmap)
+        # def deproj(x):
+        #     return trans @ x
 
         scaled = proj(coordinates)
 
         norms = jnp.linalg.norm(cell, axis=1)
 
-        # def _f1():
         x0 = scaled / norms
         x0 = jnp.where(min, x0 + 0.5, x0)
         a = jnp.mod(x0, 1)
-        b = jnp.where(min, (a - 0.5) * norms, a * norms)
+        # b = jnp.where(min, (a - 0.5) * norms, a * norms)
 
         op = a - x0
-        reduced = b
+        # reduced = b
 
         op = jnp.round(op).astype(jnp.int64)
 
-        return SystemParams(deproj(reduced), cell), op
+        return SystemParams(coordinates + op @ cell, cell), op
 
     @jax.jit
     def apply_wrap(sp: SystemParams, wrap_op: Array) -> SystemParams:
@@ -1596,19 +1613,30 @@ class SystemParams:
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
 
-    def super_cell(self, n: int | list[int]) -> SystemParams:
+    def super_cell(self, n: int | list[int], info: NeighbourListInfo | None = None) -> SystemParams:
         if self.batched:
-            return vmap(Partial(SystemParams.super_cell, n=n))(self)
+            return vmap(Partial(SystemParams.super_cell, n=n, info=info))(self)
 
         if isinstance(n, int):
             n = [n, n, n]
 
         coor = []
 
+        if info is not None:
+            z_list = []
+
         for a, b, c in itertools.product(range(n[0]), range(n[1]), range(n[2])):
             coor.append(self.coordinates + a * self.cell[0, :] + b * self.cell[1, :] + c * self.cell[2, :])
+            z_list.extend(info.z_array)
 
-        return SystemParams(coordinates=jnp.concatenate(coor, axis=0), cell=jnp.array(n) @ self.cell)
+        if info is not None:
+            info = NeighbourListInfo.create(r_cut=info.r_cut, z_array=z_list, r_skin=info.r_skin)
+
+        print(f"{jnp.array(n).shape=} {self.cell.shape} {jnp.array(n) *self.cell=}")
+
+        return SystemParams(
+            coordinates=jnp.concatenate(coor, axis=0), cell=jnp.array(n).reshape((-1,)) * self.cell
+        ), info
 
     def volume(self):
         if self.cell is None:
@@ -2958,7 +2986,7 @@ class CvMetric:
         mid = [a[:-1] + (a[1:] - a[:-1]) / 2 for a in grid]
         cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing=indexing)])
 
-        return grid, cv, cv_mid, bounds
+        return grid, cv, cv_mid, b
 
     @property
     def ndim(self):
@@ -3015,15 +3043,12 @@ class CvMetric:
             n_grid=n,
         )
 
-        # @jax.jit
-        def f(x: CV, _):
-            return closest_trans.compute_cv_trans(x, chunk_size=chunk_size)[0]
-
-        grid_nums, _ = data_loader_output._apply(
+        grid_nums, _ = data_loader_output.apply_cv(
+            f=closest_trans,
             x=cv_0,
-            f=f,
             macro_chunk=macro_chunk,
             verbose=verbose,
+            chunk_size=chunk_size,
         )
 
         hist = get_histo(grid_nums, weights=weights)
@@ -3067,14 +3092,12 @@ class CvMetric:
 
             return x.replace(cv=jnp.reshape(b, (1,)), _combine_dims=None)
 
-        def f(x: CV, _):
-            return get_mask.compute_cv_trans(x, chunk_size=chunk_size)[0]
-
-        mask, _ = data_loader_output._apply(
+        mask, _ = data_loader_output.apply_cv(
             x=cv_0,
-            f=f,
+            f=get_mask,
             macro_chunk=macro_chunk,
             verbose=verbose,
+            chunk_size=chunk_size,
         )
 
         return bounds, [mask.cv.reshape(-1) for mask in mask], constants
@@ -3084,6 +3107,13 @@ class CvMetric:
 
     def __setstate__(self, statedict: dict):
         self.__init__(**statedict)
+
+    def __getitem__(self, idx):
+        idx = jnp.array(idx)
+        return CvMetric(
+            bounding_box=self.bounding_box[idx],
+            periodicities=self.periodicities[idx],
+        )
 
 
 ######################################
@@ -4195,3 +4225,16 @@ class CollectiveVariable:
 
     def __setstate__(self, statedict: dict):
         self.__init__(**statedict)
+
+    def __getitem__(self, tup):
+        from IMLCV.implementations.CV import _cv_slice
+
+        return CollectiveVariable(
+            f=self.f
+            * CvTrans.from_cv_function(
+                _cv_slice,
+                indices=jnp.array(tup).reshape((-1,)),
+            ),
+            jac=self.jac,
+            metric=self.metric[tup],
+        )

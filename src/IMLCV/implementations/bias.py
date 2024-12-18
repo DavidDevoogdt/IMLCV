@@ -73,7 +73,7 @@ class HarmonicBias(Bias):
             else:
                 assert k_max.shape == q0.cv.shape
 
-        assert np.all(k > 0)
+        # assert np.all(k > 0)
         k = jnp.array(k)
 
         if k_max is not None:
@@ -307,7 +307,9 @@ class GridBias(Bias):
             margin=margin,
         )
 
-        vals, _ = bias.compute_from_cv(cv_mid)
+        vals, _ = bias.compute_from_cv(cv)
+
+        vals = vals.reshape((n,) * cvs.n)
 
         return GridBias(
             collective_variable=cvs,
@@ -317,32 +319,10 @@ class GridBias(Bias):
         )
 
     def _compute(self, cvs: CV):
-        # overview of grid points. stars are addded to allow out of bounds extension.
-        #
-        #  ___ ___ ___ ___
-        # |   |   |   |   |
-        # | * | * | * | * |
-        # |___|___|___|___|
-        # |   |   |   |   |
-        # | * | x | x | * |
-        # |___|___|___|___|
-        # |   |   |   |   |
-        # | * | x | x | * |
-        # |___|___|___|___|
-        # |   |   |   |   |
-        # | * | * | * | * |
-        # |___|___|___|___|
-        # gridpoints vals are in the middle
-
         # map between vals 0 and 1
         # if self.bounds is not None:
         coords = (cvs.cv - self.bounds[:, 0]) / (self.bounds[:, 1] - self.bounds[:, 0])
 
-        # map between vals matrix edges
-        coords = (coords * self.n - 0.5) / (self.n - 1)
-        # scale to array size and offset extra row
-        coords = coords * (self.n - 1) + 1
-
         import jax.scipy as jsp
 
-        return jsp.ndimage.map_coordinates(self.vals, coords, mode="nearest", order=1)
+        return jsp.ndimage.map_coordinates(self.vals, coords * (self.n - 1), mode="nearest", order=1)

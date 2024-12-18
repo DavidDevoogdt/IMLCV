@@ -505,32 +505,40 @@ class TransformerMAF(Transformer):
             w=w,
             calc_pi=True,
             koopman_weight=False,
-            add_1=True,
+            add_1=False,
             trans=trans,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=True,
-            out_dim=50,  # maximal number of koopman modes
-            eps=1e-8,  # if this is too small, the eigenvalues might become unstable
-            eps_pre=1e-8,  # if this is too small, the eigenvalues might become unstable
+            out_dim=None,  # maximal number of koopman modes
+            eps=1e-6,  # if this is too small, the eigenvalues might become unstable
+            eps_pre=1e-6,  # if this is too small, the eigenvalues might become unstable
             # max_features_pre=500,
             symmetric=False,
         )
 
-        # # weight and make reversible
-        km = km.weighted_model(
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            verbose=True,
-            symmetric=True,
-            add_1=False,
-        )
+        # # # weight and make reversible
+        # km = km.weighted_model(
+        #     chunk_size=chunk_size,
+        #     macro_chunk=macro_chunk,
+        #     verbose=True,
+        #     symmetric=True,
+        #     add_1=False,
+        # )
 
         ts = km.timescales() / nanosecond
 
         print(f"timescales {  ts[0: min(self.outdim+5,len(ts-1))  ]   } ns")
 
-        trans_km = km.f(out_dim=self.outdim)
+        out_dim = self.outdim
+
+        for i in range(self.outdim - 1):
+            if ts[i + 1] / ts[0] < 1 / 10:
+                (print(f"cv {i+1} is too small compared to cv {0} (fraction= {ts[i+1]/ ts[0]}), cutting off "),)
+                out_dim = i + 1
+                break
+
+        trans_km = km.f(out_dim=out_dim)
 
         print("applying transformation")
 

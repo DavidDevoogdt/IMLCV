@@ -31,7 +31,7 @@ def get_slurm_provider(
     parsl_cores=False,
     mem=None,
     memory_per_core=None,
-    walltime="48:00:00",
+    wall_time="48:00:00",
     init_blocks=1,
     min_blocks=1,
     max_blocks=1,
@@ -52,7 +52,7 @@ def get_slurm_provider(
 export MAMBA_EXE=/dodrio/scratch/projects/2024_026/IMLCV/bin/micromamba
 export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/2024_026/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312
+micromamba activate py312_2
 which python
             """
         elif env == "stevin":
@@ -60,7 +60,7 @@ which python
 export MAMBA_EXE=/dodrio/scratch/projects/IMLCV/bin/micromamba
 export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312
+micromamba activate py312_2
 which python
 """
 
@@ -130,7 +130,7 @@ which python
             "exclusive": False,
             "cores_per_node": total_cores,
             "mem_per_node": mem,
-            "walltime": walltime,
+            "walltime": wall_time,
             "cmd_timeout": 60,
         }
 
@@ -158,23 +158,28 @@ which python
 
     print(f"{executor=}")
 
+    if hasattr(provider, "walltime"):
+        walltime_hhmmss = provider.walltime.split(":")
+        assert len(walltime_hhmmss) == 3
+        wall_time_s = 0.0
+        wall_time_s += 3600 * float(walltime_hhmmss[0])
+        wall_time_s += 60 * float(walltime_hhmmss[1])
+        wall_time_s += float(walltime_hhmmss[2])
+        wall_time_s -= 60 * 4  # add 4 minutes of slack
+
+        print(f"{wall_time_s=}")
+
     if executor == "work_queue":
         worker_options = [
             f"--cores={threads_per_core}",
             f"--gpus={0 if not gpu else 1}",
         ]
-        if hasattr(provider, "walltime"):
-            walltime_hhmmss = provider.walltime.split(":")
-            assert len(walltime_hhmmss) == 3
-            walltime = 0.0
-            walltime += 3600 * float(walltime_hhmmss[0])
-            walltime += 60 * float(walltime_hhmmss[1])
-            walltime += float(walltime_hhmmss[2])
-            walltime -= 60 * 4  # add 4 minutes of slack
 
-            worker_options.append(f"--wall-time={walltime}")
-            worker_options.append(f"--timeout={wq_timeout}")
-            worker_options.append("--parent-death")
+        if wall_time_s is not None:
+            worker_options.append(f"--wall-time={wall_time_s}")
+
+        worker_options.append(f"--timeout={wq_timeout}")
+        worker_options.append("--parent-death")
 
         executor: ParslExecutor = WorkQueueExecutor(
             label=label,
@@ -207,6 +212,7 @@ which python
             working_dir=str(Path(path_internal) / label),
             cores_per_worker=threads_per_core,
             provider=provider,
+            drain_period=int(wall_time_s),
         )
     else:
         raise ValueError(f"unknown executor {executor=}")
@@ -302,7 +308,7 @@ def config(
             init_blocks=1,
             parsl_cores=True,
             mem=10,
-            walltime="72:00:00",
+            wall_time="72:00:00",
         )
 
         execs = [executor]
@@ -367,7 +373,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=training_cores,
                         parsl_cores=False,
-                        walltime="04:00:00",
+                        wall_time="04:00:00",
                         **kw,
                     )
                     execs.append(gpu_part)
@@ -388,7 +394,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=training_cores,
                         parsl_cores=False,
-                        walltime="04:00:00",
+                        wall_time="04:00:00",
                         **kw,
                     )
                     execs.append(cpu_part)
@@ -407,12 +413,12 @@ def config(
                     mem=min_memery_per_node,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=80,
+                    max_blocks=512,
                     parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=singlepoint_nodes,
                     parsl_cores=False,
-                    walltime=walltime,
+                    wall_time=walltime,
                     load_cp2k=True,
                     **kw,
                 )
@@ -431,13 +437,13 @@ def config(
                     default, pre_command, _ = get_slurm_provider(
                         label=label,
                         init_blocks=1,
-                        min_blocks=1,
+                        min_blocks=0,
                         max_blocks=512,
                         parallelism=1,
                         parsl_tasks_per_block=1,
                         threads_per_core=default_threads,
                         parsl_cores=False,
-                        walltime="04:00:00",
+                        wall_time="04:00:00",
                         **kw,
                     )
 

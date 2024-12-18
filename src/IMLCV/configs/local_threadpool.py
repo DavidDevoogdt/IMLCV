@@ -30,14 +30,14 @@ def get_config(path_internal, ref_threads=2, max_threads=10, work_queue=True):
 export MAMBA_EXE=~/projects/IMLCV/bin/micromamba
 export MAMBA_ROOT_PREFIX=~/projects/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312
+micromamba activate py312_2
 which python """
 
         def _get_exec(label, num, threads):
             provider = LocalProvider(
                 worker_init=f"""
 {py_env}
-micromamba activate py312
+micromamba activate py312_2
 export XLA_FLAGS='--xla_force_host_platform_device_count={threads}'
 """,
                 cmd_timeout=1.0,

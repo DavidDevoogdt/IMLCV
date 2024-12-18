@@ -153,7 +153,7 @@ class Scheme:
         update_metric=False,
         n=4,
         samples_per_bin=20,
-        min_samples_per_bin=2,
+        min_samples_per_bin=5,
         init_max_grad=None,
         plot=True,
         choice="rbf",
@@ -224,7 +224,7 @@ class Scheme:
                 plot=plot_umbrella,
                 scale_n=scale_n,
                 cv_round=cv_round,
-                ignore_invalid=i <= 1,
+                ignore_invalid=False,
                 eps=eps_umbrella,
                 min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
                 recalc_cv=recalc_cv,
@@ -255,6 +255,7 @@ class Scheme:
                 koopman=koopman,
                 lag_n=lag_n,
                 koopman_wham=koopman_wham,
+                out=out,
             )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)

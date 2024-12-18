@@ -64,7 +64,7 @@ class Observable:
         update_bounding_box=True,
         bounds_percentile=1,
         samples_per_bin=20,
-        min_samples_per_bin=2,
+        min_samples_per_bin=5,
         n=None,
         n_max=30,
         temp=None,
@@ -190,7 +190,7 @@ class Observable:
         start_r=1,
         update_bounding_box=True,
         samples_per_bin=20,
-        min_samples_per_bin=2,
+        min_samples_per_bin=5,
         chunk_size=None,
         n_max=60,
         n=None,
@@ -309,10 +309,13 @@ class Observable:
         cv_round=None,
         koopman=True,
         plot_selected_points=True,
-        divide_by_histogram=True,
+        # divide_by_histogram=True,
         verbose=True,
         max_bias=None,
         kooopman_wham=None,
+        samples_per_bin=20,
+        min_samples_per_bin=5,
+        resample=True,
     ):
         if cv_round is None:
             cv_round = rounds.cv
@@ -334,25 +337,30 @@ class Observable:
             macro_chunk=macro_chunk,
             T_scale=T_scale,
             verbose=verbose,
-            divide_by_histogram=divide_by_histogram,
+            # divide_by_histogram=divide_by_histogram,
             n_max=n_max,
             wham=kooopman_wham,
             uniform=True,
         )
 
         # get weights based on koopman theory. the CVs are binned with indicators
-        weights = dlo.weights(
-            koopman=koopman,
-            indicator_CV=True,
-            n_max=n_max,
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            verbose=verbose,
-        )
+
+        if koopman:
+            weights = dlo.koopman_weight(
+                koopman=koopman,
+                indicator_CV=True,
+                n_max=n_max,
+                samples_per_bin=samples_per_bin,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+            )
+        else:
+            weights = dlo._weights
 
         print("gettingg FES Bias")
 
-        fes_bias_tot = dlo._get_fes_bias_from_weights(
+        fes_bias_tot = dlo.get_fes_bias_from_weights(
             weights=weights,
             cv=dlo.cv,
             n_grid=n_max,
@@ -360,18 +368,22 @@ class Observable:
             collective_variable=dlo.collective_variable,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            # max_bias=max_bias,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
         )
 
+        if resample:
+            fes_bias_tot = fes_bias_tot.resample()
+
         if plot_selected_points:
+            print("plotting")
             fes_bias_tot.plot(
                 name="FES_bias_points.png",
                 traj=dlo.cv,
                 margin=0.1,
                 vmax=max_bias,
-                inverted=True,
+                inverted=False,
                 n=200,
-                weights=weights,
             )
 
         return fes_bias_tot
@@ -391,10 +403,13 @@ class Observable:
         cv_round=None,
         directory=None,
         koopman=True,
-        divide_by_histogram=True,
+        # divide_by_histogram=True,
         verbose=True,
         max_bias=None,
         kooopman_wham=None,
+        samples_per_bin=20,
+        min_samples_per_bin=5,
+        executors=Executors.training,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -402,11 +417,7 @@ class Observable:
         if directory is None:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
-        return bash_app_python(
-            Observable._fes_nd_weights,
-            executors=Executors.training,
-            remove_stdout=False,
-        )(
+        kwargs = dict(
             rounds=self.rounds,
             num_rnds=num_rnds,
             out=out,
@@ -419,12 +430,25 @@ class Observable:
             T_scale=T_scale,
             n_max=n_max,
             cv_round=cv_round,
-            execution_folder=directory,
             koopman=koopman,
-            divide_by_histogram=divide_by_histogram,
+            # divide_by_histogram=divide_by_histogram,
             verbose=verbose,
             max_bias=max_bias,
             kooopman_wham=kooopman_wham,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
+        )
+
+        if executors is None:
+            return Observable._fes_nd_weights(**kwargs)
+
+        return bash_app_python(
+            Observable._fes_nd_weights,
+            executors=Executors.training,
+            remove_stdout=False,
+        )(
+            **kwargs,
+            execution_folder=directory,
         ).result()
 
     def fes_bias(
@@ -437,8 +461,8 @@ class Observable:
         start_r=1,
         rbf_kernel="linear",
         rbf_degree=None,
-        samples_per_bin=200,
-        min_samples_per_bin=2,
+        samples_per_bin=20,
+        min_samples_per_bin=5,
         chunk_size=None,
         macro_chunk=10000,
         update_bounding_box=True,  # make boudning box bigger for FES calculation
@@ -453,24 +477,13 @@ class Observable:
         T_scale=10,
         vmax=None,
         koopman=True,
-        divide_by_histogram=True,
+        # divide_by_histogram=True,
         verbose=True,
         koopman_wham=None,
+        executors=Executors.training,
     ):
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
-
-            trajs_plot = self.rounds.data_loader(
-                num=1,
-                ignore_invalid=False,
-                cv_round=self.cv_round,
-                split_data=True,
-                new_r_cut=None,
-                min_traj_length=min_traj_length,
-                only_finished=only_finished,
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
-            ).cv
 
             bash_app_python(function=Bias.static_plot)(
                 bias=self.common_bias,
@@ -480,7 +493,19 @@ class Observable:
                 stdout="combined.stdout",
                 stderr="combined.stderr",
                 map=False,
-                traj=trajs_plot,
+                dlo=self.rounds,
+                dlo_kwargs=dict(
+                    num=1,
+                    ignore_invalid=False,
+                    cv_round=self.cv_round,
+                    split_data=True,
+                    new_r_cut=None,
+                    min_traj_length=min_traj_length,
+                    only_finished=only_finished,
+                    chunk_size=chunk_size,
+                    macro_chunk=macro_chunk,
+                    weight=False,
+                ),
                 margin=margin,
                 vmax=vmax,
                 n=200,
@@ -519,10 +544,13 @@ class Observable:
                 T_scale=T_scale,
                 n_max=n_max,
                 koopman=koopman,
-                divide_by_histogram=divide_by_histogram,
+                # divide_by_histogram=divide_by_histogram,
                 verbose=verbose,
                 max_bias=max_bias,
                 kooopman_wham=koopman_wham,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                executors=executors,
             )
 
         if plot:
@@ -536,7 +564,7 @@ class Observable:
                     outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.png")],
                     execution_folder=fold,
                     name=f"FES_bias_{self.rnd}_inverted_{choice}.png",
-                    inverted=True,
+                    inverted=False,
                     label="Free Energy [kJ/mol]",
                     stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
                     stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",

@@ -160,8 +160,8 @@ class TrajectoryInfo:
 
     _t: Array | None = None
 
-    _capacity: int = -1
-    _size: int = -1
+    _capacity: int = field(pytree_node=False, default=-1)
+    _size: int = field(pytree_node=False, default=-1)
 
     # static values
     _items_scal = ["_t", "_e_pot", "_e_bias", "_T", "_P", "_err"]
@@ -255,8 +255,8 @@ class TrajectoryInfo:
             _P=self._P[slz,] if self._P is not None else None,
             _err=self._err[slz,] if self._err is not None else None,
             _t=self._t[slz,] if self._t is not None else None,
-            _capacity=jnp.size(slz),
-            _size=jnp.size(slz),
+            _capacity=int(jnp.size(slz)),
+            _size=int(jnp.size(slz)),
         )
 
     @jit
@@ -306,7 +306,7 @@ class TrajectoryInfo:
 
             index += t._size
 
-        return TrajectoryInfo(**d, _capacity=ti_out._capacity, _size=index)
+        return TrajectoryInfo(**d, _capacity=ti_out._capacity, _size=int(index))
 
     @staticmethod
     def stack(*ti: TrajectoryInfo) -> TrajectoryInfo:
@@ -332,8 +332,8 @@ class TrajectoryInfo:
         delta = nc - self._capacity
 
         dict = {
-            "_capacity": nc,
-            "_size": self._size,
+            "_capacity": int(nc),
+            "_size": int(self._size),
         }
 
         for name in self._items_vec:
@@ -362,8 +362,8 @@ class TrajectoryInfo:
             if prop is not None:
                 dict[name] = prop[: self._size]
 
-        dict["_capacity"] = self._size
-        dict["_size"] = self._size
+        dict["_capacity"] = int(self._size)
+        dict["_size"] = int(self._size)
 
         return TrajectoryInfo(**dict)
 
@@ -472,6 +472,12 @@ class TrajectoryInfo:
             return None
         return self._e_bias[0 : self._size]
 
+    @e_bias.setter
+    def e_bias(self, val):
+        assert val.shape[0] == self._size
+
+        self._e_bias[: self._size] = val
+
     @property
     def e_bias_gpos(self) -> Array | None:
         if self._e_bias_gpos is None:
@@ -513,6 +519,12 @@ class TrajectoryInfo:
         if self._t is None:
             return None
         return self._t[0 : self._size]
+
+    @t.setter
+    def t(self, val):
+        assert val.shape[0] == self._size
+
+        self._t[: self._size] = val
 
     @property
     def shape(self):

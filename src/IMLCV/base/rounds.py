@@ -185,6 +185,96 @@ class Rounds(ABC):
 
         return p
 
+    def zip_cv_round(self, c, r):
+        p = self.path(c=c, r=r)
+
+        if not p.exists():
+            print(f"{p} does not exist")
+            return
+
+        if p.with_suffix(".zip").exists():
+            print(f"{p}.zip already exitst, moving to .old.zip")
+            shutil.move(p.with_suffix(".zip"), p.with_suffix(".old.zip"))
+
+        shutil.make_archive(p, "zip", p)
+        shutil.rmtree(p)
+
+    def unzip_cv_round(self, c, r):
+        p = self.path(c=c, r=r)
+
+        if p.exists():
+            print(f"{p} already exists")
+            return
+
+        if not p.with_suffix(".zip").exists():
+            print(f"{p}.zip does not exist")
+            return
+
+        shutil.unpack_archive(p.with_suffix(".zip"), p)
+        os.remove(p.with_suffix(".zip"))
+
+    def zip_cv(self, cv):
+        print(f"zipping {cv=}")
+        for r in self._r_vals(c=cv):
+            if r == -1:
+                continue
+
+            print(f"zipping {r=}")
+            p = self.path(c=cv, r=r)
+
+            if p.with_suffix(".zip").exists():
+                print(f"{p}.zip already exitst, moving to .old.zip")
+                shutil.move(p.with_suffix(".zip"), p.with_suffix(".old.zip"))
+
+            shutil.make_archive(p, "zip", p)
+            shutil.rmtree(self.path(c=cv, r=r))
+
+    def unzip_cv(self, cv):
+        print(f"unzipping {cv=}")
+
+        for round_r in self.path(c=cv).glob("round_*.zip"):
+            r = round_r.parts[-1][6:-4]
+
+            if r.endswith(".old"):
+                continue
+
+            print(f"unzipping {r=}")
+
+            self.unzip_cv_round(cv, r)
+
+    def zip_cv_rounds(self, begin=1, end=-2):
+        _c_vals = self._c_vals()
+
+        n_cv = len(_c_vals)
+
+        if n_cv == 1:
+            return
+
+        if end is None:
+            end = n_cv
+
+        if end <= 0:
+            end = n_cv + end
+
+        if end <= begin:
+            return
+
+        for cv in _c_vals[begin:end]:
+            print(f"zipping {cv=}")
+            for r in self._r_vals(c=cv):
+                if r == -1:
+                    continue
+
+                print(f"zipping {r=}")
+                p = self.path(c=cv, r=r)
+
+                if p.with_suffix(".zip").exists():
+                    print(f"{p}.zip already exitst, moving to .old.zip")
+                    shutil.move(p.with_suffix(".zip"), p.with_suffix(".old.zip"))
+
+                shutil.make_archive(p, "zip", p)
+                shutil.rmtree(self.path(c=cv, r=r))
+
     @staticmethod
     def load(folder: str | Path, copy=False):
         return Rounds(folder=folder, copy=copy)
@@ -198,8 +288,18 @@ class Rounds(ABC):
         minkowski_reduce=True,
         r_cut=None,
         only_finished=False,
+        ext="xyz",
     ):
-        from ase.io.extxyz import write_extxyz
+        # if format == "xyz":
+        #     from ase.io.extxyz import write_extxyz
+
+        #     def writer(file, atoms):
+        #         write_extxyz(file, atoms)
+        # elif format == "cif":
+        #     from ase.io.cif import write_cif
+
+        #     def writer(file, atoms):
+        #         write_cif(file, atoms)
 
         if c is None:
             c = self.cv
@@ -214,14 +314,23 @@ class Rounds(ABC):
                 only_finished=only_finished,
             ),
         ):
-            with open(
-                self.path(c=c, r=round.round, i=trajejctory.num) / "trajectory.xyz",
-                mode="w",
-            ) as f:
-                if repeat is not None:
-                    atoms = [a.repeat(repeat) for a in atoms]
+            print(f"writing {i} {round.round=} {trajejctory.num=} {ext=}")
+            # with open(
+            #     self.path(c=c, r=round.round, i=trajejctory.num) / "trajectory.xyz",
+            #     mode="w" if format == "xyz" else "wb",
+            # ) as f:
+            if repeat is not None:
+                atoms = [a.repeat(repeat) for a in atoms]
 
-                write_extxyz(f, atoms)
+                print(f"repeating {repeat=} {atoms[0].get_positions().shape=}")
+
+            from ase.io import write
+
+            write(
+                filename=self.path(c=c, r=round.round, i=trajejctory.num) / f"trajectory.{ext}",
+                images=atoms,
+                format=ext,
+            )
 
     ######################################
     #             storage                #
@@ -249,6 +358,9 @@ class Rounds(ABC):
         rounds = []
 
         for round_r in self.path(c=c).glob("round_*"):
+            if round_r.suffix == ".zip":
+                continue
+
             r = round_r.parts[-1][6:]
 
             if not (p := self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
@@ -307,7 +419,7 @@ class Rounds(ABC):
 
     def _num_vals(self, c, r=None):
         if r is not None:
-            return len(self._i_vals(c, r))
+            return len(self._r_vals(c, r))
 
         return len(self._r_vals(c))
 
@@ -371,13 +483,15 @@ class Rounds(ABC):
             stop = self._num_vals(c=c) - 1
 
         if start is None:
-            start = 0
+            start = 1 if self.get_round(c=c) > 1 else 0
 
         if md_trajs is not None:
             assert num == 1
 
         low = max(stop - (num - 1), start)
         high = stop + 1
+
+        print(f"iterating {low=} {high=} {num=}  {start=} {stop=}")
 
         for r0 in range(low, high):
             t_r = time.time()
@@ -444,7 +558,7 @@ class Rounds(ABC):
         get_colvar=True,
         min_traj_length=None,
         recalc_cv=False,
-        get_bias_list=True,
+        get_bias_list=False,
         num_cv_rounds=1,
         only_finished=True,
         uniform=True,
@@ -457,7 +571,6 @@ class Rounds(ABC):
         macro_chunk=2000,
         macro_chunk_nl=5000,
         only_update_nl=False,
-        divide_by_histogram=False,
         n_max=30,
         wham=True,
     ) -> data_loader_output:
@@ -467,8 +580,8 @@ class Rounds(ABC):
         if uniform and T_scale != 1:
             print(f"WARNING: uniform and {T_scale=} are not compatible")
 
-        if uniform and divide_by_histogram:
-            print("WARNING: uniform and divide_by_histogram are not compatible")
+        # if uniform and divide_by_histogram:
+        #     print("WARNING: uniform and divide_by_histogram are not compatible")
 
         sti = self._round_information(c=cv_round).tic
 
@@ -514,15 +627,23 @@ class Rounds(ABC):
         cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
         weights: list[Array] = []
-        weights_bincount: list[Array] = []
+        # weights_bincount: list[Array] = []
+
+        sti_c: StaticMdInfo | None = None
+
+        nl_info: NeighbourListInfo | None = None
+        update_info: NeighbourListUpdate | None = None
+
+        n_tot = 0
 
         for cvi in cvrnds:
-            sti_c: StaticMdInfo | None = None
+            # sti_c: StaticMdInfo | None = None
             sp_c: list[SystemParams] = []
             cv_c: list[CV] = []
             ti_c: list[TrajectoryInfo] = []
 
-            bias_c: list[Bias] | None = []
+            if get_bias_list:
+                bias_c: list[Bias] | None = []
 
             weight_c = weight
 
@@ -571,6 +692,75 @@ class Rounds(ABC):
 
                     raise
 
+                if new_r_cut is not None:
+                    if nl_info is None:
+                        nl_info = NeighbourListInfo.create(
+                            r_cut=new_r_cut,
+                            r_skin=0.0,
+                            z_array=sti_c.atomic_numbers,
+                        )
+
+                        b, nn, new_nxyz, _ = Partial(
+                            SystemParams._get_neighbour_list,
+                            info=nl_info,
+                            chunk_size=chunk_size,
+                            chunk_size_inner=10,
+                            shmap=False,
+                            only_update=True,
+                            update=update_info,
+                        )(
+                            self=sp0,
+                        )
+
+                        update_info = NeighbourListUpdate.create(
+                            num_neighs=nn,
+                            nxyz=new_nxyz,
+                        )
+
+                        print(f"initializing neighbour list with {nn=} {new_nxyz=}")
+
+                    else:
+                        # TODO
+                        b, nn, new_nxyz, _ = jax.jit(
+                            SystemParams._get_neighbour_list,
+                            static_argnames=[
+                                "info",
+                                "chunk_size",
+                                "chunk_size_inner",
+                                "shmap",
+                                "only_update",
+                                "update",
+                                "verbose",
+                                "shmap_kwargs",
+                            ],
+                        )(
+                            self=sp0,
+                            info=nl_info,
+                            chunk_size=chunk_size,
+                            chunk_size_inner=10,
+                            shmap=False,
+                            only_update=True,
+                            update=update_info,
+                        )
+
+                        if jnp.any(jnp.array(new_nxyz) > jnp.array([2, 2, 2])):
+                            print(f"neighbour list is too big {new_nxyz=}")
+                            continue
+
+                        if jnp.any(jnp.array(new_nxyz) > jnp.array(update_info.nxyz)) or nn > update_info.num_neighs:
+                            print(f"updating nl with {nn=} {new_nxyz=}")
+
+                            update_info = update_info.create(
+                                num_neighs=nn,
+                                nxyz=new_nxyz,
+                            )
+
+                print(".", end="")
+                n_tot += 1
+
+                if n_tot % 100 == 0:
+                    print("")
+
                 if cv0 is None:
                     if colvar is None:
                         bias = traj_info.get_bias()
@@ -595,7 +785,8 @@ class Rounds(ABC):
                 sp_c.append(sp0)
                 cv_c.append(cv0)
 
-                bias_c.append(traj_info.get_bias())
+                if get_bias_list:
+                    bias_c.append(traj_info.get_bias())
 
             if len(sp_c) == 0:
                 continue
@@ -611,26 +802,27 @@ class Rounds(ABC):
                     sti=sti_c,
                     nl=None,
                     collective_variable=colvar_c,
-                    bias=bias_c,
+                    bias=bias_c if get_bias_list else None,
                     # time_series=time_series,
                     ground_bias=ground_bias_c,
                 )
 
                 # select points according to free energy divided by histogram count
-                w_out = dlo.weights(
+                w_out, u_offsets = dlo.wham_weight(
                     chunk_size=chunk_size,
-                    koopman=False,
                     n_max=n_max,
-                    # wham_sub_grid=3,  # quick settings
                     verbose=verbose,
-                    output_bincount=divide_by_histogram,
-                    wham=wham,
                 )
 
-                if divide_by_histogram:
-                    w_c, w_c_bincount = w_out
-                else:
-                    w_c = w_out
+                # print(f"u_offsets = {u_offsets}")
+
+                for t, uo in zip(ti_c, u_offsets):
+                    t.e_bias = t.e_bias + uo
+
+                # if divide_by_histogram:
+                #     w_c, w_c_bincount = w_out
+                # else:
+                w_c = w_out
 
                 n = sum([len(wi) for wi in w_c])
                 w_c = [w_c[i] * n for i in range(len(w_c))]
@@ -638,16 +830,17 @@ class Rounds(ABC):
             else:
                 w_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
 
-                if divide_by_histogram:
-                    w_c_bincount = [jnp.ones((spi.shape[0])) for spi in sp_c]
+                # if divide_by_histogram:
+                #     w_c_bincount = [jnp.ones((spi.shape[0])) for spi in sp_c]
 
             sp.extend(sp_c)
             cv.extend(cv_c)
             ti.extend(ti_c)
             weights.extend(w_c)
+            # sti.append(sti_c)
 
-            if divide_by_histogram:
-                weights_bincount.extend(w_c_bincount)
+            # if divide_by_histogram:
+            #     weights_bincount.extend(w_c_bincount)
 
             if get_bias_list:
                 bias_list.extend(bias_c)
@@ -665,7 +858,7 @@ class Rounds(ABC):
             cv_new: list[CV] = []
             ti_new: list[TrajectoryInfo] = []
             weights_new: list[Array] = []
-            weights_bincount_new: list[Array] = []
+            # weights_bincount_new: list[Array] = []
 
             if get_bias_list:
                 new_bias_list = []
@@ -686,15 +879,15 @@ class Rounds(ABC):
 
                 weights_new.append(weights[n])
 
-                if divide_by_histogram:
-                    weights_bincount_new.append(weights_bincount[n])
+                # if divide_by_histogram:
+                #     weights_bincount_new.append(weights_bincount[n])
 
             sp = sp_new
             ti = ti_new
             cv = cv_new
             weights = weights_new
-            if divide_by_histogram:
-                weights_bincount = weights_bincount_new
+            # if divide_by_histogram:
+            #     weights_bincount = weights_bincount_new
 
             if get_bias_list:
                 bias_list = new_bias_list
@@ -706,25 +899,114 @@ class Rounds(ABC):
                 print(f"shapes do not match {j.shape=} {k.shape=}")
 
         for w_i, spi in zip(weights, sp):
-            assert (
-                w_i.shape[0] == spi.shape[0]
-            ), f"weights and sp shape are different: {w_i.shape=} {StopAsyncIteration.shape=}"
+            assert w_i.shape[0] == spi.shape[0], f"weights and sp shape are different: {w_i.shape=} {spi.shape=}"
+
+        scale_times = False
+
+        c_list = []
+        lag_indices = []
+        percentage_list = [] if (weights is not None and scale_times) and (lag_n != 0) else None
 
         if weights is not None:
-            c = 0
+            if lag_n != 0 and verbose:
+                print(f"getting lag indices for {len(ti)} trajectories")
 
-            for w in weights:
+            # TODO use time information from within ti.t
+            @jax.jit
+            def scaled_times(u, beta):
+                # time is scaled
+                # dt = e^(\beta( U ))
+                # lag_n = int_n^idx e^(\beta( U ))
+                # it is assumed that the bias varies linearly between the two points
+                # int_0^dt e^( beta (U_0 + (U_1-U0) t/dt ) = e^beta U0 (  e^beta (U1-U0) - 1 ) / beta (U1-U0)
+                # = e^beta (U0+U1)/2 sinh(beta (U1-U0)/2) / beta (U1-U0)/2
+
+                def sinhc(x):
+                    return jnp.where(x < 1e-10, 1, jnp.sinh(x) / x)
+
+                print(f"{u.shape=}")
+
+                m_u = jnp.exp(beta * (u[:-1] + u[1:]) / 2)  # opprox e^(\beta( U ))
+                d_u = sinhc(beta * (u[:-1] - u[1:]) / 2)  # approx 1 if du is small
+
+                integral = jnp.zeros_like(u)
+                integral = integral.at[1:].set(m_u * d_u)
+                integral = jnp.cumsum(integral)
+
+                return integral
+
+            @jax.jit
+            @partial(jax.vmap, in_axes=(None, 0, None))
+            def get_lag_idx(lag_n, n, integral):
+                integral -= integral[n]
+
+                _, indices = jax.lax.top_k(-jnp.abs(integral - lag_n), 2)
+
+                indices = jnp.sort(indices)
+                values = integral[indices]
+
+                b = (
+                    (indices[1] < u.shape[0] - 1)
+                    * (indices[0] < u.shape[0] - 1)  # if the values are the same, the values might be ordered wrong
+                    * (indices[0] >= n)
+                    * (indices[1] - indices[0] == 1)  # consitency check
+                )
+
+                # make sure that percentage is not if int is zero
+                percentage = jnp.where(
+                    values[1] - values[0] < 1e-20, 0.0, (lag_n - values[0]) / (values[1] - values[0])
+                )
+
+                return indices[0], indices[1], b, percentage
+
+            for n, ti_i in enumerate(ti):
+                beta = 1 / (boltzmann * sti_c.T)
+
                 if lag_n != 0:
-                    if len(w) >= lag_n:
-                        n = jnp.sum(jnp.logical_and(w[:-lag_n] != 0, w[lag_n:] != 0))
-                        c += n
-                else:
-                    c += jnp.sum(w != 0)
+                    if scale_times:
+                        u = ti_i.e_bias
 
-            total = c
+                        orig_times = ti_i.t
+                        ts = scaled_times(u, beta)
+
+                        if n == 1:
+                            print(f"scaled times {ts=} {orig_times=}")
+
+                        ti[n].t = ts * sti_c.timestep  # multiply by dt
+
+                        lag_indices_max, _, bools, p = get_lag_idx(lag_n, jnp.arange(u.shape[0]), ts)
+
+                        c = jnp.sum(jnp.logical_and(u[bools] != 0, u[lag_indices_max[bools]] != 0))
+
+                        if c == 0:
+                            continue
+
+                        percentage_list.append(p)
+                        lag_idx = lag_indices_max[bools]
+
+                    else:
+                        c = ti_i.e_bias.shape[0] - lag_n
+                        lag_idx = jnp.arange(c) + lag_n
+
+                    c_list.append(c)
+                    lag_indices.append(lag_idx)
+
+                else:
+                    c = ti_i.e_bias.shape[0]
+
+                    lag_indices.append(jnp.arange(c))
+                    c_list.append(c)
 
         else:
-            total = sum([max(a.shape[0] - lag_n, 0) for a in sp])
+            for a in sp:
+                c = a.shape[0] - lag_n
+                lag_indices.append(jnp.arange(c))
+                c_list.append(c)
+
+        print(f" {jnp.hstack(c_list)=}")
+        print(f" {jnp.hstack([  jnp.mean( j-jnp.arange(j.shape[0])  )  for j in lag_indices])}")
+
+        total = sum(c_list)
 
         if out == -1:
             out = total
@@ -766,14 +1048,14 @@ class Rounds(ABC):
                     reweight, weight = weight, reweight
 
                 else:
-                    if divide_by_histogram:
-                        assert histogram_prob is not None
+                    # if divide_by_histogram:
+                    #     assert histogram_prob is not None
 
-                        select_weight_new = weight / histogram_prob
-                        new_reweight = reweight * weight / select_weight_new
+                    #     select_weight_new = weight / histogram_prob
+                    #     new_reweight = reweight * weight / select_weight_new
 
-                        weight = select_weight_new
-                        reweight = new_reweight
+                    #     weight = select_weight_new
+                    #     reweight = new_reweight
 
                     if T_scale != 1:
                         select_weight_new = weight ** (1 / T_scale)
@@ -797,13 +1079,13 @@ class Rounds(ABC):
 
             return key_return, indices, reweight
 
-        def remove_lag(w, lag_n, w_bc=None):
-            if lag_n != 0:
-                w = w[:-lag_n]
-                if w_bc is not None:
-                    w_bc = w_bc[:-lag_n]
+        def remove_lag(w, c, w_bc=None):
+            w = w[:c]
 
-            return w, w_bc
+            # if w_bc is not None:
+            #     w_bc = w_bc[:c]
+
+            return w  # , w_bc
 
         out_indices = []
         out_reweights = []
@@ -812,22 +1094,23 @@ class Rounds(ABC):
         if split_data:
             frac = out / total
 
-            for n, w_i in enumerate(weights):
+            for n, w_i, c_i in enumerate(weights, c_list):
                 if w_i is not None:
-                    w_i, w_i_bc = remove_lag(
+                    w_i = remove_lag(
                         w_i,
-                        lag_n,
-                        weights_bincount[n] if divide_by_histogram else None,
+                        c_i,
+                        None,
+                        # weights_bincount[n] if divide_by_histogram else None,
                     )
 
-                ni = int(frac * (sp[n].shape[0] - lag_n))
+                ni = int(frac * c_i)
 
                 key, indices, reweight = choose(
                     key=key,
                     weight=w_i,
                     out=ni,
                     # len=sp[n].shape[0] - lag_n,
-                    histogram_prob=w_i_bc,
+                    # histogram_prob=w_i_bc,
                     T_scale=T_scale,
                 )
 
@@ -838,37 +1121,38 @@ class Rounds(ABC):
         else:
             if weights[0] is None:
                 w = None
-                w_bc = None
+                # w_bc = None
             else:
                 w = []
 
-                if divide_by_histogram:
-                    w_bc = []
-                else:
-                    w_bc = None
+                # if divide_by_histogram:
+                #     w_bc = []
+                # else:
+                #     w_bc = None
 
-                for n, w_i in enumerate(weights):
-                    w_i, w_i_bc = remove_lag(
+                for n, (w_i, c_i) in enumerate(zip(weights, c_list)):
+                    w_i = remove_lag(
                         w_i,
-                        lag_n,
-                        weights_bincount[n] if divide_by_histogram else None,
+                        c_i,
+                        None,
+                        # weights_bincount[n] if divide_by_histogram else None,
                     )
 
                     w.append(w_i)
-                    if divide_by_histogram:
-                        w_bc.append(w_i_bc)
+                    # if divide_by_histogram:
+                    #     w_bc.append(w_i_bc)
 
                 w = jnp.hstack(w)
 
-                if divide_by_histogram and w_bc is not None:
-                    w_bc = jnp.hstack(w_bc)
+                # if divide_by_histogram and w_bc is not None:
+                #     w_bc = jnp.hstack(w_bc)
 
             key, indices, reweight = choose(
                 key=key,
                 weight=w,
                 out=int(out),
                 # len=total,
-                histogram_prob=w_bc,
+                # histogram_prob=w_bc,
                 T_scale=T_scale,
             )
 
@@ -904,11 +1188,15 @@ class Rounds(ABC):
             out_sp_t = []
             out_cv_t = []
             out_ti_t = []
+            out_weights_t = []
 
         if get_bias_list:
             out_biases = []
         else:
             out_biases = None
+
+        if verbose and time_series and percentage_list is not None:
+            print("interpolating data")
 
         for n, indices_n, reweights_n in zip(n_list, out_indices, out_reweights):
             out_sp.append(sp[n][indices_n])
@@ -917,9 +1205,39 @@ class Rounds(ABC):
             out_weights.append(reweights_n[indices_n])
 
             if time_series:
-                out_sp_t.append(sp[n][indices_n + lag_n])
-                out_cv_t.append(cv[n][indices_n + lag_n])
-                out_ti_t.append(ti[n][indices_n + lag_n])
+                idx_t = lag_indices[n][indices_n]
+                idx_t_p = idx_t + 1
+
+                # print(f"{idx_t=} {idx_t_p=}")
+
+                if percentage_list is None:
+                    out_sp_t.append(sp[n][idx_t])
+                    out_cv_t.append(cv[n][idx_t])
+                    out_ti_t.append(ti[n][idx_t])
+                    out_weights_t.append(reweights_n[idx_t])
+                else:
+                    # print(f"interpolating {n=}")
+
+                    percentage = percentage_list[n][indices_n]
+
+                    # print(f"{percentage.shape=} {sp[n][idx_t].shape=} {sp[n][idx_t_p].shape=}")
+
+                    # this performs a lineat interpolation between the two points
+                    def interp(x, y, p):
+                        return jax.vmap(
+                            lambda xi, yi, pi: jax.tree_util.tree_map(
+                                lambda xii, yii: (1 - pi) * xii + pi * yii,
+                                xi,
+                                yi,
+                            ),
+                            in_axes=(0, 0, 0),
+                        )(x, y, p)
+
+                    out_sp_t.append(interp(sp[n][idx_t], sp[n][idx_t_p], percentage))
+                    out_cv_t.append(interp(cv[n][idx_t], cv[n][idx_t_p], percentage))
+
+                    out_ti_t.append(interp(ti[n][idx_t], ti[n][idx_t_p], percentage))
+                    out_weights_t.append(interp(reweights_n[idx_t], reweights_n[idx_t_p], percentage))
 
             if get_bias_list:
                 out_biases.append(bias_list[n])
@@ -930,6 +1248,13 @@ class Rounds(ABC):
 
         out_weights = [ow / s for ow in out_weights]
 
+        if time_series:
+            s = 0
+            for ow in out_weights_t:
+                s += jnp.sum(ow)
+
+            out_weights_t = [ow / s for ow in out_weights_t]
+
         print(f"len(out_sp) = {len(out_sp)} ")
 
         ###################
@@ -937,10 +1262,18 @@ class Rounds(ABC):
         if verbose:
             print("Checking data")
 
-        out_nl = None
+        out_nl = (
+            NeighbourList(
+                info=nl_info,
+                update=update_info,
+                sp_orig=None,
+            )
+            if nl_info is not None
+            else None
+        )
 
         if time_series:
-            out_nl_t = None
+            out_nl_t = out_nl
 
         if time_series:
             tau = None
@@ -991,6 +1324,7 @@ class Rounds(ABC):
                 cv_t=out_cv_t,
                 ti_t=out_ti_t,
                 tau=tau,
+                _weights_t=out_weights_t,
             )
 
         dlo = data_loader_output(
@@ -999,17 +1333,17 @@ class Rounds(ABC):
 
         ###################
 
-        if new_r_cut is not None:
-            if verbose:
-                print("getting Neighbour List")
+        # if new_r_cut is not None:
+        #     if verbose:
+        #         print("getting Neighbour List")
 
-            dlo.calc_neighbours(
-                r_cut=new_r_cut,
-                chunk_size=chunk_size,
-                verbose=verbose,
-                macro_chunk=macro_chunk_nl,
-                only_update=only_update_nl,
-            )
+        #     dlo.calc_neighbours(
+        #         r_cut=new_r_cut,
+        #         chunk_size=chunk_size,
+        #         verbose=verbose,
+        #         macro_chunk=macro_chunk_nl,
+        #         only_update=only_update_nl,
+        #     )
 
         ###################
 
@@ -1409,9 +1743,13 @@ class Rounds(ABC):
                 print(f"skipping {i=}, {b_name_new=}not found")
                 continue
 
-            if b_name_new.exists():
-                print(f"skipping {i=}, new bias found")
+            if (path_name / "invalid").exists():
+                print(f"skipping {i=}, invalid")
                 continue
+
+            # if b_name_new.exists():
+            #     print(f"skipping {i=}, new bias found")
+            #     continue
 
             traj_name = path_name / "trajectory_info.h5"
 
@@ -1479,7 +1817,7 @@ class Rounds(ABC):
         r=None,
         macro_chunk=10000,
         lag_n=20,
-        divide_by_histogram=True,
+        # divide_by_histogram=True,
     ):
         sps = []
         bs = []
@@ -1837,10 +2175,11 @@ class Rounds(ABC):
             Transformer.plot_app(
                 collective_variables=[dlo.collective_variable, collective_variable],
                 cv_data=[dlo.cv, x],
+                biases=[bias],
                 duplicate_cv_data=True,
                 T=dlo.sti.T,
                 plot_FES=True,
-                weight=dlo.weights(),
+                # weight=dlo.weights(),
                 name=self.path(c=cv_round_to) / "transformed_FES.png",
                 cv_titles=[cv_round_from, cv_round_to],
                 data_titles=[cv_round_from, cv_round_to],
@@ -1880,6 +2219,9 @@ class Rounds(ABC):
             stic=stic,
             mde=rounds.get_engine(c=cv_round_from),
         )
+
+        # make sure it doesn't take to much space
+        rounds.zip_cv_rounds()
 
         if save_samples:
             first = True
@@ -1968,6 +2310,7 @@ class data_loader_output:
     bias: list[Bias] | None = None
     ground_bias: Bias | None = None
     _weights: list[Array] | None = None
+    _weights_t: list[Array] | None = None
 
     def __iter__(self):
         for i in range(len(self.sp)):
@@ -2063,13 +2406,75 @@ class data_loader_output:
 
             return cv.replace(cv=m)
 
-        def get_histo(data_nums: list[CV], weights: None | list[Array] = None):
+        def get_histo(
+            data_nums: list[CV],
+            weights: None | list[Array] = None,
+            log_w=False,
+            macro_chunk=10000,
+        ):
             h = jnp.zeros((cv_mid.shape[0],))
 
-            for i in range(len(data_nums)):
-                h = h.at[data_nums[i].cv[:, 0]].add(
-                    jnp.ones_like(data_nums[i].cv[:, 0]) if weights is None else weights[i]
-                )
+            def _get_histo(x, cvi: CV, _, weights, weights_t):
+                alpha_factors, h = x
+
+                if log_w and alpha_factors is None:
+                    alpha_factors = jnp.full_like(h, -jnp.inf)
+
+                cvi = cvi.cv[:, 0]
+
+                if not log_w:
+                    wi = jnp.ones_like(cvi) if weights is None else weights
+                    h = h.at[cvi].add(wi)
+
+                else:
+                    # this log of hist. all calculations are done in log space to avoid numerical issues
+                    w_log = jnp.zeros_like(cvi) if weights is None else weights
+
+                    @partial(jax.vmap, in_axes=(0, None, None, 0))
+                    def get_max(ref_num, data_num, log_w, alpha):
+                        val = jnp.where(data_num == ref_num, log_w, -jnp.inf)
+
+                        max_new = jnp.max(val)
+                        max_tot = jnp.max(jnp.array([alpha, max_new]))
+
+                        return max_tot, max_new > alpha, max_tot - alpha
+
+                    alpha_factors, alpha_factors_changed, d_alpha = get_max(
+                        jnp.arange(cv_mid.shape[0]), cvi, w_log, alpha_factors
+                    )
+
+                    # shift all probs by the change in alpha
+                    h = h.at[alpha_factors_changed].subtract(d_alpha[alpha_factors_changed])
+
+                    m = alpha_factors != -jnp.inf
+
+                    p_new = jnp.zeros_like(h)
+                    p_new = p_new.at[cvi].add(jnp.exp(w_log - alpha_factors[cvi]))
+
+                    h = h.at[m].set(jnp.log(jnp.exp(h[m]) + p_new[m]))
+
+                return (alpha_factors, h)
+
+            def f_func(x, nl):
+                return x
+
+            f_func = jax.jit(f_func)
+            # f_func = padded_shard_map(f_func, shmap_kwargs(pmap=True))
+
+            alpha_factors, h = macro_chunk_map(
+                f=f_func,
+                op=data_nums[0].stack,
+                y=data_nums,
+                macro_chunk=macro_chunk,
+                verbose=False,
+                chunk_func=_get_histo,
+                chunk_func_init_args=(None, h),
+                w=weights,
+                jit_f=True,
+            )
+
+            if log_w:
+                h += alpha_factors
 
             return h
 
@@ -2087,38 +2492,56 @@ class data_loader_output:
             ).unstack()
         ]
 
-    def weights(
+    @staticmethod
+    def norm_w(w_stacked, ret_n=False):
+        n = jnp.sum(w_stacked)
+
+        if ret_n:
+            return w_stacked / n, n
+
+        return w_stacked / n
+
+    @staticmethod
+    def check_w(w_stacked):
+        if jnp.any(jnp.isnan(w_stacked)):
+            print(f"WARNING: w_stacked has {jnp.sum(jnp.isnan(w_stacked))} nan values")
+            w_stacked = jnp.where(jnp.isnan(w_stacked), 0, w_stacked)
+
+        if jnp.any(jnp.isinf(w_stacked)):
+            print(f"WARNING: w_stacked has {jnp.sum(jnp.isinf(w_stacked))} inf values")
+            w_stacked = jnp.where(jnp.isinf(w_stacked), 0, w_stacked)
+
+        if jnp.any(w_stacked < 0):
+            print(f"WARNING: w_stacked has {jnp.sum(w_stacked<0)} neg values")
+            w_stacked = jnp.where(w_stacked < 0, 0, w_stacked)
+
+        if jnp.sum(w_stacked) < 1e-16:
+            print("WARNING: all w_Stacked values are zero")
+            raise
+
+        if len(w_stacked) == 0:
+            print("WARNING: len w_Stacked is zero")
+
+        return w_stacked
+
+    def koopman_weight(
         self,
-        samples_per_bin=50,
-        n_max=30,
+        samples_per_bin=20,
         n_max_koopman=50,
-        ground_bias=None,
-        # use_ground_bias=True,
-        # sign=1,
         chunk_size=None,
-        wham=True,
-        koopman=False,
         indicator_CV=True,
-        # wham_sub_grid=5,
-        wham_eps=1e-10,
         koopman_eps=1e-12,
         koopman_eps_pre=1e-12,
         cv_0: list[CV] | None = None,
         cv_t: list[CV] | None = None,
-        force_recalc=False,
         macro_chunk=1000,
         verbose=False,
-        output_bincount=False,
         max_features_koopman=10000,
         margin=0.1,
-        add_1=True,
-        bias_cutoff=8,  # bigger values can lead to nans
-        min_f_i=1e-30,
-        # cluster_fraction=0.1,
+        add_1=False,
         only_diag=False,
-        return_km=False,
         calc_pi=False,
-    ) -> list[jax.Array]:
+    ):
         if cv_0 is None:
             cv_0 = self.cv
 
@@ -2133,57 +2556,39 @@ class data_loader_output:
         def unstack_w(w_stacked, stack_dims=None):
             if stack_dims is None:
                 stack_dims = sd
-
             return self._unstack_weights(stack_dims, w_stacked)
 
-        def norm_w(w_stacked):
-            return w_stacked / jnp.sum(w_stacked)
+        assert self._weights is not None
+        assert self._weights_t is not None
 
-        def check_w(w_stacked):
-            if jnp.any(jnp.isnan(w_stacked)):
-                print(f"WARNING: w_stacked has {jnp.sum(jnp.isnan(w_stacked))} nan values")
-                w_stacked = jnp.where(jnp.isnan(w_stacked), 0, w_stacked)
+        print("using precomputed weights")
+        w_stacked = jnp.hstack(self._weights)
+        w_stacked = self.check_w(w_stacked)
+        w_stacked = self.norm_w(w_stacked)
 
-            if jnp.any(jnp.isinf(w_stacked)):
-                print(f"WARNING: w_stacked has {jnp.sum(jnp.isinf(w_stacked))} inf values")
-                w_stacked = jnp.where(jnp.isinf(w_stacked), 0, w_stacked)
+        if self.time_series:
+            w_stacked_t = jnp.hstack(self._weights_t)
+            w_stacked_t = self.check_w(w_stacked_t)
+            w_stacked_t = self.norm_w(w_stacked_t)
 
-            if jnp.any(w_stacked < 0):
-                print(f"WARNING: w_stacked has {jnp.sum(w_stacked<0)} neg values")
-                w_stacked = jnp.where(w_stacked < 0, 0, w_stacked)
+        n_hist = CvMetric.get_n(
+            samples_per_bin=samples_per_bin,
+            samples=tot_samples,
+            n_dims=ndim,
+        )
 
-            if jnp.sum(w_stacked) < 1e-16:
-                print("WARNING: all w_Stacked values are zero")
-                raise
+        if n_hist > n_max_koopman:
+            n_hist = n_max_koopman
 
-            if len(w_stacked) == 0:
-                print("WARNING: len w_Stacked is zero")
+        if verbose:
+            print(f"using {n_hist=}")
 
-            return w_stacked
+        if verbose:
+            print("koopman weights")
 
-        if self._weights is not None and not force_recalc:
-            print("using precomputed weights")
-            w_stacked = jnp.hstack(self._weights)
-            w_stacked = check_w(w_stacked)
-            w_stacked = norm_w(w_stacked)
+        skip = False
 
-        else:
-            # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
-
-            # prepare histo
-
-            n_hist = CvMetric.get_n(
-                samples_per_bin=samples_per_bin,
-                samples=tot_samples,
-                n_dims=ndim,
-            )
-
-            if n_hist > n_max:
-                n_hist = n_max
-
-            if verbose:
-                print(f"using {n_hist=}")
-
+        if indicator_CV:
             print("getting bounds")
             grid_bounds, _, constants = CvMetric.bounds_from_cv(
                 cv_0,
@@ -2192,322 +2597,486 @@ class data_loader_output:
                 n=20,
             )
 
-            print("getting histo")
-            cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
-                metric=self.collective_variable.metric,
-                n_grid=n_hist,
-                grid_bounds=grid_bounds,
-                chunk_size=chunk_size,
-            )
-
-            grid_nums = None
-
-            beta = 1 / (self.sti.T * boltzmann)
-
-            if ground_bias is None:
-                ground_bias = self.ground_bias
-
-            # get raw rescaling
-            w_unstacked = []
-
-            nm_tot = []
-            n_tot = 0
-
-            offset_i = []
-
-            for ti_i in self.ti:
-                e = ti_i.e_bias
-
-                if e is None:
-                    if verbose:
-                        print("WARNING: no bias enerrgy found")
-                    e = jnp.ones((ti_i.sp.shape[0],))
-
-                offset = jnp.median(e)
-                offset_i.append(offset)
-
-                u = beta * (e - offset)
-
-                prob = jnp.exp(u)
-
-                # remove everthing that is very improbable
-                if bias_cutoff is not None:
-                    m = jnp.logical_or(u > bias_cutoff * jnp.log(10) / 2, u < -bias_cutoff * jnp.log(10) / 2)
-
-                    if (n_o := jnp.sum(m)) > 0:
-                        nm_tot.append(n_o)
-                        n_tot += 1
-                        prob = jnp.where(m, 0, prob)
-
-                # keep numbers  small
-                # prob /= jnp.sum(prob)
-
-                w_unstacked.append(prob)
-
-            if verbose:
-                if n_tot > 0:
-                    print(
-                        f"WARNING: {n_tot} trajectories have bias energy below {bias_cutoff=}, {sum(nm_tot)=}/{sum(sd)} samples removed (total {sum(nm_tot)/sum(sd)*100:.2f}%)"
-                    )
-                    print(f"{jnp.array(nm_tot)=}")
-
-            w_stacked = jnp.hstack(w_unstacked)
-            w_stacked = check_w(w_stacked)
-            w_stacked = norm_w(w_stacked)
-
-            if wham:
-                assert self.bias is not None
-
-                if verbose:
-                    print("step 1 wham")
-
-                if grid_nums is None:
-                    grid_nums, _ = self.apply_cv(
-                        closest,
-                        cv_0,
-                        chunk_size=chunk_size,
-                        macro_chunk=macro_chunk,
-                    )
-
-                def get_wham(w_unstacked, grid_nums):
-                    hist = get_histo(grid_nums, [wi > 0 for wi in w_unstacked])
-                    hist_mask = hist > 0
-
-                    b_ik = jnp.zeros((len(w_unstacked), jnp.sum(hist_mask)))
-
-                    for i in range(len(w_unstacked)):
-                        # mask part of potential that is not sampled
-
-                        wi_inv = jnp.where(w_unstacked[i] > 0, 1 / w_unstacked[i], 0)
-
-                        hist_i_weights = get_histo([grid_nums[i]], [wi_inv])[hist_mask]
-                        hist_i_num = get_histo([grid_nums[i]], [w_unstacked[i] > 0])[hist_mask]
-
-                        b_k = jnp.where(hist_i_num != 0, hist_i_weights / hist_i_num, 0)
-
-                        b_ik = b_ik.at[i, :].set(b_k)
-
-                    print(f"{jnp.max(b_ik)=}")
-
-                    b_ik /= jnp.mean(b_ik)
-
-                    a_k = jnp.ones((b_ik.shape[1],))
-                    a_k /= jnp.sum(a_k)
-
-                    N_i = jnp.array([jnp.sum(wi > 0) for wi in w_unstacked])
-
-                    @jax.jit
-                    def T(a_k, x):
-                        # log_a_k = jnp.log(a_k)
-
-                        b_ik, N_i = x
-
-                        f_i = jnp.einsum("k,ik->i", a_k, b_ik)
-                        f_i_safe = jnp.where(f_i < min_f_i, min_f_i, f_i)
-                        a_k_new = jnp.einsum("i,ik->k", N_i / f_i_safe, b_ik)
-                        a_k_new = a_k_new / jnp.sum(a_k_new)
-
-                        return a_k_new, f_i
-
-                    def norm(a_k, x):
-                        a_k_p = T(a_k, x)[0]
-
-                        return 0.5 * jnp.sum((a_k - a_k_p) ** 2) / jnp.shape(a_k)[0]
-
-                    def kl_div(a_k, x):
-                        a_k_p, f = T(a_k, x)
-
-                        a_k = jnp.where(a_k >= min_f_i, a_k, min_f_i)
-                        a_k_p = jnp.where(a_k_p >= min_f_i, a_k_p, min_f_i)
-
-                        return jnp.sum(a_k * (jnp.log(a_k) - jnp.log(a_k_p)))
-
-                    import jaxopt
-
-                    solver = jaxopt.ProjectedGradient(
-                        fun=norm,
-                        projection=jaxopt.projection.projection_simplex,  # prob space is simplex
-                        maxiter=20000,
-                        tol=wham_eps,
-                    )
-
-                    out = solver.run(a_k, x=(b_ik, N_i))
-
-                    a_k = out.params
-
-                    # print(f"{a_k=} {out=}")
-
-                    if verbose:
-                        n, k = norm(a_k, (b_ik, N_i)), kl_div(a_k, (b_ik, N_i))
-                        print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
-
-                    _, f = T(a_k, (b_ik, N_i))
-
-                    w_stacked = jnp.hstack([wi * c for wi, c in zip(w_unstacked, f)])
-
-                    print(f"{jnp.isnan(w_stacked).any()}")
-
-                    w_stacked = check_w(w_stacked)
-                    w_stacked = norm_w(w_stacked)
-
-                    probs = unstack_w(w_stacked, stack_dims=[wi.shape[0] for wi in w_unstacked])
-
-                    return probs
-
-                w_unstacked = unstack_w(w_stacked)
-
-                w_unstacked = get_wham(
-                    w_unstacked,
-                    grid_nums,
-                )
-
-                w_stacked = jnp.hstack(w_unstacked)
-
-                w_stacked = check_w(w_stacked)
-                w_stacked = norm_w(w_stacked)
-
+            if constants:
+                print("not performing koopman weighing because of constants in cv")
+                # koopman = False
+                skip = True
             else:
-                if verbose:
-                    print("WARNING: not using wham")
-
-        if koopman and self.time_series:
-            n_hist = CvMetric.get_n(
-                samples_per_bin=samples_per_bin,
-                samples=tot_samples,
-                n_dims=ndim,
-            )
-
-            if n_hist > n_max:
-                n_hist = n_max
-
-            if verbose:
-                print(f"using {n_hist=}")
-
-            if verbose:
-                print("koopman weights")
-
-            skip = False
-
-            if indicator_CV:
-                print("getting bounds")
-                grid_bounds, _, constants = CvMetric.bounds_from_cv(
-                    cv_0,
-                    margin=margin,
+                cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+                    metric=self.collective_variable.metric,
+                    n_grid=n_hist,
+                    grid_bounds=grid_bounds,
                     chunk_size=chunk_size,
-                    n=20,
                 )
 
-                if constants:
-                    print("not performing koopman weighing because of constants in cv")
-                    # koopman = False
-                    skip = True
-                else:
-                    cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
-                        metric=self.collective_variable.metric,
-                        n_grid=n_hist,
-                        grid_bounds=grid_bounds,
-                        chunk_size=chunk_size,
-                    )
-
-                    grid_nums, grid_nums_t = self.apply_cv(
-                        closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk
-                    )
-
-                    w_pos = [(a > 0) * 1.0 for a in unstack_w(w_stacked)]
-
-                    hist = get_histo(grid_nums, w_pos)
-                    hist_t = get_histo(grid_nums_t, w_pos)
-
-                    mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
-
-                    @partial(CvTrans.from_cv_function, mask=mask)
-                    def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
-                        out = jnp.zeros((hist.shape[0],))
-                        out = out.at[cv.cv].set(1)
-                        out = jnp.take(out, mask)
-
-                        return cv.replace(cv=out)
-
-                    cv_km = grid_nums
-                    cv_km_t = grid_nums_t
-
-                    tr = get_indicator
-
-            else:
-                cv_km = cv_0
-                cv_km_t = cv_t
-
-                tr = None
-
-            if not skip:
-                if verbose:
-                    print("constructing koopman model")
-
-                # construct koopman model
-                km = self.koopman_model(
-                    cv_0=cv_km,
-                    cv_tau=cv_km_t,
-                    nl=None,
-                    w=unstack_w(w_stacked),
-                    add_1=True,
-                    method="tcca",
-                    symmetric=False,
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
-                    out_dim=None,
-                    verbose=verbose,
-                    eps=koopman_eps,
-                    eps_pre=koopman_eps_pre,
-                    trans=tr,
-                    max_features=max_features_koopman,
-                    max_features_pre=max_features_koopman,
-                    only_diag=only_diag,
-                    calc_pi=True,
+                grid_nums, grid_nums_t = self.apply_cv(
+                    closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk
                 )
 
-                if verbose:
-                    print("koopman_weight")
+                w_pos = [(a > 0) * 1.0 for a in unstack_w(w_stacked)]
 
-                # return km
+                hist = get_histo(grid_nums, w_pos)
+                hist_t = get_histo(grid_nums_t, w_pos)
 
-                w_unstacked, _ = km.koopman_weight(
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
-                    verbose=verbose,
-                )
+                mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
 
-                # return w_unstacked, w_unstacked_corr
+                @partial(CvTrans.from_cv_function, mask=mask)
+                def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
+                    out = jnp.zeros((hist.shape[0],))
+                    out = out.at[cv.cv].set(1)
+                    out = jnp.take(out, mask)
 
-                w_stacked = jnp.hstack(w_unstacked)
-                w_stacked = check_w(w_stacked)
-                w_stacked = norm_w(w_stacked)
+                    return cv.replace(cv=out)
+
+                cv_km = grid_nums
+                cv_km_t = grid_nums_t
+
+                tr = get_indicator
 
         else:
+            cv_km = cv_0
+            cv_km_t = cv_t
+
+            tr = None
+
+        if not skip:
             if verbose:
-                print("not using koopman weights")
+                print("constructing koopman model")
 
-        w_unstacked = unstack_w(w_stacked)
+            # construct koopman model
+            km = self.koopman_model(
+                cv_0=cv_km,
+                cv_tau=cv_km_t,
+                nl=None,
+                w=unstack_w(w_stacked),
+                w_t=unstack_w(w_stacked_t),
+                add_1=add_1,
+                method="tcca",
+                symmetric=False,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                out_dim=None,
+                verbose=verbose,
+                eps=koopman_eps,
+                eps_pre=koopman_eps_pre,
+                trans=tr,
+                max_features=max_features_koopman,
+                max_features_pre=max_features_koopman,
+                only_diag=only_diag,
+                calc_pi=False,
+            )
 
-        if output_bincount:
-            if grid_nums is None:
-                grid_nums, _ = self.apply_cv(
-                    closest,
-                    cv_0,
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
+            if verbose:
+                print("koopman_weight")
+
+            # return km
+
+            w_unstacked, _ = km.koopman_weight(
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+            )
+
+            # return w_unstacked, w_unstacked_corr
+
+            w_stacked = jnp.hstack(w_unstacked)
+            w_stacked = self.check_w(w_stacked)
+            w_stacked = self.norm_w(w_stacked)
+
+        return self._unstack_weights(sd, w_stacked)
+
+    def wham_weight(
+        self,
+        samples_per_bin=20,
+        n_max=30,
+        chunk_size=None,
+        wham_eps=1e-7,
+        cv_0: list[CV] | None = None,
+        cv_t: list[CV] | None = None,
+        macro_chunk=1000,
+        verbose=False,
+        margin=0.1,
+        bias_cutoff=12,  # bigger values can lead to nans
+        min_f_i=1e-30,
+        log_sum_exp=True,
+    ):
+        if cv_0 is None:
+            cv_0 = self.cv
+
+        sd = [a.shape[0] for a in cv_0]
+        tot_samples = sum(sd)
+
+        ndim = cv_0[0].shape[1]
+
+        if cv_t is None:
+            cv_t = self.cv_t
+
+        def unstack_w(w_stacked, stack_dims=None):
+            if stack_dims is None:
+                stack_dims = sd
+            return self._unstack_weights(stack_dims, w_stacked)
+
+        # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
+
+        # get raw rescaling
+        u_unstacked = []
+        beta = 1 / (self.sti.T * boltzmann)
+
+        nm_tot = []
+        n_tot = 0
+
+        # u_offset_mean = []
+
+        for ti_i in self.ti:
+            e = ti_i.e_bias
+
+            if e is None:
+                if verbose:
+                    print("WARNING: no bias enerrgy found")
+                e = jnp.zeros((ti_i.sp.shape[0],))
+
+            # u0 = beta * jnp.median(e)
+            # u_offset_mean.append(u0)
+
+            u = beta * e  # - u0
+
+            # u = jnp.clip(u, -bias_cutoff * jnp.log(10), bias_cutoff * jnp.log(10))
+
+            u_unstacked.append(u)
+
+        if verbose:
+            if n_tot > 0:
+                print(
+                    f"WARNING: {n_tot} trajectories have bias energy below {bias_cutoff=}, {sum(nm_tot)=}/{sum(sd)} samples removed (total {sum(nm_tot)/sum(sd)*100:.2f}%)"
                 )
+                print(f"{jnp.array(nm_tot)=}")
 
-            hist = get_histo(grid_nums, w_unstacked)
+        # prepare histo
 
-            bin_counts = [hist[i.cv].reshape((-1,)) for i in grid_nums]
+        n_hist = CvMetric.get_n(
+            samples_per_bin=samples_per_bin,
+            samples=tot_samples,
+            n_dims=ndim,
+        )
 
-            return w_unstacked, bin_counts
+        if n_hist > n_max:
+            n_hist = n_max
 
-        if return_km:
-            assert koopman
-            return w_unstacked, km
+        if verbose:
+            print(f"using {n_hist=}")
 
-        return w_unstacked
+        print("getting bounds")
+        grid_bounds, _, constants = CvMetric.bounds_from_cv(
+            cv_0,
+            margin=margin,
+            chunk_size=chunk_size,
+            n=20,
+        )
+
+        print("getting histo")
+        cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+            metric=self.collective_variable.metric,
+            n_grid=n_hist,
+            grid_bounds=grid_bounds,
+            chunk_size=chunk_size,
+        )
+
+        grid_nums = None
+
+        # assert self.bias is not None
+
+        if verbose:
+            print("step 1 wham")
+
+        if grid_nums is None:
+            grid_nums, _ = self.apply_cv(
+                closest,
+                cv_0,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+            )
+
+        hist = get_histo(grid_nums, None, log_w=True)
+
+        # print(f"{jnp.exp(hist)=}")
+        hist_mask = hist > -jnp.inf
+        print(f"{jnp.sum(hist_mask)=}")
+
+        log_b_ik = jnp.full((len(u_unstacked), jnp.sum(hist_mask)), -jnp.inf)
+
+        H_k = jnp.zeros((jnp.sum(hist_mask),))
+
+        for i in range(len(u_unstacked)):
+            # mask part of potential that is not sampled
+
+            # log sum exp(-u_i)
+            log_hist_i_weights = get_histo(
+                [grid_nums[i]],
+                [-u_unstacked[i]],
+                log_w=True,
+            )[hist_mask]
+
+            log_hist_i_num = get_histo(
+                [grid_nums[i]],
+                None,
+                log_w=True,
+            )[hist_mask]
+
+            # mean of e^(-beta U)
+            log_b_k = log_hist_i_weights - jnp.where(log_hist_i_num == -jnp.inf, 0, log_hist_i_num)
+
+            H_k += jnp.exp(log_hist_i_num)
+
+            log_b_ik = log_b_ik.at[i, :].set(log_b_k)
+
+        print(f"{jnp.max(log_b_ik)=}")
+
+        log_H_k = jnp.log(H_k)
+
+        # b_ik /= jnp.max(b_ik)
+
+        a_k = jnp.ones((log_b_ik.shape[1],))
+
+        # N_i = jnp.array([jnp.sum(wi > 10**-14) for wi in w_u])
+        N_i = jnp.array([u.shape[0] for u in u_unstacked])
+
+        # logsumexp = True
+
+        if log_sum_exp:
+            # log_b_ik = jnp.log(b_ik)
+            log_a_k = jnp.log(a_k)
+            log_N_i = jnp.log(N_i)
+
+            print(f"{jnp.min(log_b_ik)=} {jnp.max(log_b_ik)=}")
+
+            def log_sum_exp_safe(*x):
+                # print(f" {[xi.shape for xi in x]=}")
+
+                x = jnp.sum(jnp.stack(x, axis=0), axis=0)
+
+                x_max = jnp.max(x)
+
+                e = jnp.sum(jnp.exp(x - x_max))
+
+                # safegaurd is needed to prevent infities in error for kl divergence
+                # e_safe = jnp.where(e < jnp.log(min_f_i), jnp.log(min_f_i), e)
+
+                return x_max + jnp.log(e)
+
+            # every action is performed in log space. For summation in real space, the largest log value is subtracted from all values. The norm is then calculated in real space
+            @jax.jit
+            def T(log_a_k, log_x):
+                log_b_ik, log_N_i, log_H_k = log_x
+
+                # get log f_i
+                log_f_i = -vmap(log_sum_exp_safe, in_axes=(None, 0))(log_a_k, log_b_ik)
+
+                # get a_k from f_i
+                log_a_k = log_H_k - vmap(log_sum_exp_safe, in_axes=(None, None, 1))(log_N_i, log_f_i, log_b_ik)
+
+                # norm a_k
+                log_a_k_norm = log_sum_exp_safe(log_a_k)
+
+                return log_a_k - log_a_k_norm, log_f_i
+
+            @jax.jit
+            def norm(log_a_k, log_x):
+                log_a_k_p, log_f = T(log_a_k, log_x)
+
+                return 0.5 * jnp.sum((jnp.exp(log_a_k) - jnp.exp(log_a_k_p)) ** 2), log_f
+
+            @jax.jit
+            def kl_div(log_a_k, log_x):
+                log_a_k_p, log_f = T(log_a_k, log_x)
+
+                return jnp.sum(jnp.exp(log_a_k) * (log_a_k - log_a_k_p)), log_f
+
+            import jaxopt
+
+            # solver = jaxopt.GradientDescent(
+            #     fun=norm,
+            #     maxiter=2000,
+            #     tol=wham_eps,
+            #     has_aux=True,
+            # )
+
+            # is much faster than gradient descent
+
+            solver = jaxopt.FixedPointIteration(
+                fixed_point_fun=T,
+                has_aux=True,
+                implicit_diff=True,
+                maxiter=1000,
+            )
+
+            print("solving wham")
+            # with jax.debug_nans():
+            out = solver.run(log_a_k, log_x=(log_b_ik, log_N_i, log_H_k))
+
+            print("solved")
+
+            print(f"wham done! {out.state.error=}")
+
+            log_a_k = out.params
+            log_f = out.state.aux
+
+            if verbose:
+                n, k = norm(log_a_k, (log_b_ik, log_N_i, log_H_k))[0], kl_div(log_a_k, (log_b_ik, log_N_i, log_H_k))[0]
+                print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
+
+        else:
+            b_ik = jnp.exp(log_b_ik)
+
+            @jax.jit
+            def T(a_k, x):
+                b_ik, N_i, H_k = x
+
+                f_inv_i = jnp.einsum("k,ik->i", a_k, b_ik)
+                f_i_inv_safe = jnp.where(f_inv_i < min_f_i, min_f_i, f_inv_i)
+                a_k_new_inv = jnp.einsum("i,ik->k", N_i / f_i_inv_safe, b_ik)
+
+                a_k_new_inv_safe = jnp.where(a_k_new_inv < min_f_i, min_f_i, a_k_new_inv)
+                a_k_new = H_k / a_k_new_inv_safe
+                a_k_new = a_k_new / jnp.sum(a_k_new)
+
+                return a_k_new, 1 / f_i_inv_safe
+
+            def norm(a_k, x):
+                a_k_p = T(a_k, x)[0]
+
+                if log_sum_exp:
+                    a_k = jnp.exp(a_k)
+                    a_k_p = jnp.exp(a_k_p)
+
+                return 0.5 * jnp.sum((a_k - a_k_p) ** 2) / jnp.sum(a_k > 0)
+
+            def kl_div(a_k, x):
+                a_k_p, f = T(a_k, x)
+
+                a_k = jnp.where(a_k >= min_f_i, a_k, min_f_i)
+                a_k_p = jnp.where(a_k_p >= min_f_i, a_k_p, min_f_i)
+
+                return jnp.sum(a_k * (jnp.log(a_k) - jnp.log(a_k_p)))
+
+            import jaxopt
+
+            solver = jaxopt.ProjectedGradient(
+                fun=norm,
+                projection=jaxopt.projection.projection_simplex,  # prob space is simplex
+                maxiter=2000,
+                tol=wham_eps,
+            )
+
+            print("solving wham")
+
+            out = solver.run(a_k, x=(b_ik, N_i, H_k))
+
+            print("wham done")
+
+            a_k = out.params
+
+            if verbose:
+                n, k = norm(a_k, (b_ik, N_i)), kl_div(a_k, (b_ik, N_i))
+                print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
+
+            _, f = T(a_k, (b_ik, N_i))
+
+            log_f = jnp.log(f)
+            log_a_k = jnp.log(a_k)
+
+        # compute sum of weights in log space
+        alpha = -jnp.inf
+        h = 0
+
+        def get_max(log_w, alpha):
+            val = log_w
+
+            max_new = jnp.max(val)
+            max_tot = jnp.max(jnp.array([alpha, max_new]))
+
+            return max_tot, max_new > alpha, max_tot - alpha
+
+        for ui, c in zip(u_unstacked, log_f):
+            w_log = ui - c
+
+            alpha, alpha_changed, d_alpha = get_max(w_log, alpha)
+
+            # shift all probs by the change in alpha
+            if alpha_changed:
+                h = h - d_alpha
+
+            p_new = jnp.sum(jnp.exp(w_log - alpha))
+
+            h = jnp.log(jnp.exp(h) + p_new)
+
+        h = h + alpha
+
+        print(f"{jnp.exp(h)=} { jnp.min(log_a_k)/ beta / kjmol=}kjmol")
+
+        # sum
+        w_stacked = jnp.hstack([jnp.exp(ui - c - h) for ui, c in zip(u_unstacked, log_f)])
+
+        # calculate u  offsets
+
+        w_stacked = self.check_w(w_stacked)
+        w_stacked, n = self.norm_w(w_stacked, ret_n=True)
+
+        print(f"n={n} {w_stacked.shape=}")
+
+        # add log N, such that e^(beta (u+u_offset)) averages to 1
+        u_offsets = (-log_f - jnp.min(log_a_k) + jnp.log(w_stacked.shape[0])) / beta
+
+        # normed such that e^(beta (u+u_offset)) averages to 1
+
+        return self._unstack_weights(sd, w_stacked), u_offsets
+
+    def get_bincount(
+        self,
+        cv_0: list[CV] | None = None,
+        n_hist=40,
+        margin=0.1,
+        chunk_size=None,
+        use_w=False,
+    ):
+        if cv_0 is None:
+            cv_0 = self.cv
+
+        grid_bounds, _, constants = CvMetric.bounds_from_cv(
+            cv_0,
+            margin=margin,
+            chunk_size=chunk_size,
+            n=20,
+        )
+
+        if constants:
+            print("not performing koopman weighing because of constants in cv")
+            # koopman = False
+            return None
+
+        cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+            metric=self.collective_variable.metric,
+            n_grid=n_hist,
+            grid_bounds=grid_bounds,
+            chunk_size=chunk_size,
+        )
+
+        grid_nums, _ = self.apply_cv(
+            closest,
+            cv_0,
+            chunk_size=chunk_size,
+            macro_chunk=1000,
+        )
+
+        if use_w:
+            w = self._weights
+        else:
+            w = None
+
+        hist = get_histo(grid_nums, w)
+
+        bin_counts = [hist[i.cv].reshape((-1,)) for i in grid_nums]
+
+        return bin_counts
 
     @staticmethod
     def _transform(
@@ -2551,6 +3120,7 @@ class data_loader_output:
         koopman_weight=False,
         symmetric=False,
         w: list[jax.Array] | None = None,
+        w_t: list[jax.Array] | None = None,
         eps=1e-6,
         eps_pre=1e-3,
         max_features=500,
@@ -2580,8 +3150,14 @@ class data_loader_output:
             t = sum([cvi.shape[0] for cvi in cv_0])
             w = [jnp.ones((cvi.shape[0],)) / t for cvi in cv_0]
 
+        if w_t is None:
+            print("W_t koopman model not given, will use w")
+
+            w_t = w
+
         return KoopmanModel.create(
             w=w,
+            w_t=w_t,
             cv_0=cv_0,
             cv_tau=cv_tau,
             nl=nl,
@@ -2712,6 +3288,8 @@ class data_loader_output:
             jit_f=jit_f,
         )
 
+        # jax.debug.inspect_array_sharding(out[0], callback=print)
+
         if x_t is not None:
             z, z_t = out
         else:
@@ -2729,14 +3307,90 @@ class data_loader_output:
         return z, z_t
 
     @staticmethod
-    def _get_fes_bias_from_weights(
+    def _apply_bias(
+        x: list[CV],
+        bias: Bias,
+        chunk_size=None,
+        macro_chunk=10000,
+        verbose=False,
+        shmap=True,
+    ) -> list[Bias]:
+        def f(x, _):
+            b = bias.compute_from_cv(
+                x,
+                chunk_size=chunk_size,
+                shmap=False,
+            )[0]
+
+            return x.replace(cv=b.reshape((-1, 1)))
+
+        if shmap:
+            # TODO 0909 09:41:06.108200 3141823 collective_ops_utils.h:306] This thread has been waiting for 5000ms for and may be stuck: participant AllReduceParticipantData{rank=27, element_count=1, type=PRED, rendezvous_key=RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}} waiting for all participants to arrive at rendezvous RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}
+            f = jax.jit(f)
+            f = padded_shard_map(f, shmap_kwargs(pmap=True))
+
+        out, _ = data_loader_output._apply(
+            x=x,
+            f=f,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
+            jit_f=not shmap,
+        )
+
+        return [a.cv[:, 0] for a in out]
+
+    def apply_bias(self, bias: Bias, chunk_size=None, macro_chunk=10000, verbose=False, shmap=True) -> list[Bias]:
+        return data_loader_output._apply_bias(
+            x=self.cv,
+            bias=bias,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
+            shmap=shmap,
+        )
+
+    def get_point(
+        self,
+        point: CV,
+        key=jax.random.PRNGKey(0),
+    ) -> tuple[CV, SystemParams, NeighbourList | None, TrajectoryInfo]:
+        import jax.numpy as jnp
+
+        from IMLCV.implementations.bias import HarmonicBias
+
+        center_bias = HarmonicBias.create(cvs=self.collective_variable, k=50.0, q0=point)
+        center = self.apply_bias(
+            bias=center_bias,
+        )
+
+        p = jnp.exp(-jnp.hstack(center) / (300 * kjmol))
+        p /= jnp.sum(p)
+
+        n = []
+
+        for i, x in enumerate(self.cv):
+            n.append(jnp.stack([jnp.full(x.shape[0], i), jnp.arange(x.shape[0])], axis=1))
+
+        n = jnp.vstack(n)
+
+        idx = jax.random.choice(key, a=n, p=p, shape=(), replace=True)
+
+        return (
+            self.cv[idx[0]][idx[1]],
+            self.sp[idx[0]][idx[1]],
+            self.nl[idx[0]][idx[1]] if self.nl is not None else self.sti.neighbour_list_info,
+            self.ti[idx[0]],
+        )
+
+    @staticmethod
+    def get_fes_bias_from_weights(
         T,
         weights: list[jax.Array],
         collective_variable: CollectiveVariable,
         cv: list[CV],
         samples_per_bin=10,
         min_samples_per_bin: int | None = 3,
-        n_max=50,
+        n_max=40,
         n_grid=None,
         max_bias=None,
         chunk_size=None,
@@ -2748,13 +3402,17 @@ class data_loader_output:
         samples = sum([cvi.shape[0] for cvi in cv])
 
         if n_grid is None:
-            n_grid = CvMetric.get_n(samples_per_bin=samples_per_bin, samples=samples, n_dims=cv[0].shape[1])
+            n_grid = CvMetric.get_n(
+                samples_per_bin=samples_per_bin,
+                samples=samples,
+                n_dims=cv[0].shape[1],
+            )
 
         if n_grid > n_max:
             # print(f"reducing n_grid from {n_grid} to {n_max}")
             n_grid = n_max
-
-        # print(f"getting bounds {n_grid=}")
+        # else:
+        #     print(f"{n_grid=}")
 
         if n_grid <= 1:
             raise
@@ -2768,9 +3426,8 @@ class data_loader_output:
             percentile=1e-6,
         )
 
-        # print(f"{grid_bounds=}")
-
         # # do not update periodic bounds
+
         grid_bounds = jax.vmap(
             lambda x, y: jnp.where(collective_variable.metric.periodicities, x, y),
             in_axes=(1, 1),
@@ -2779,6 +3436,8 @@ class data_loader_output:
             collective_variable.metric.bounding_box,
             grid_bounds,
         )
+
+        # print(f"{grid_bounds=}")
 
         cv_mid, nums, _, closest, get_histo = data_loader_output._histogram(
             n_grid=n_grid,
@@ -2794,8 +3453,9 @@ class data_loader_output:
         )
 
         p_grid = get_histo(grid_nums, weights)
+        n_grid = get_histo(grid_nums, None)
 
-        mask = p_grid > 0
+        mask = jnp.logical_and(p_grid > 0, n_grid > min_samples_per_bin)
 
         # print(f"{p_grid=}  {p_grid[p_grid<0]} {jnp.sum(p_grid>0)} ")
 
@@ -2995,6 +3655,7 @@ class data_loader_output:
         verbose=False,
         only_update=False,
         chunk_size_inner=10,
+        max=(2, 2, 2),
     ):
         if self.time_series:
             y = [*self.sp, *self.sp_t]
@@ -3005,7 +3666,7 @@ class data_loader_output:
 
         nl_info = NeighbourListInfo.create(
             r_cut=r_cut,
-            r_skin=1 * angstrom,
+            r_skin=0 * angstrom,
             z_array=self.sti.atomic_numbers,
         )
 
@@ -3021,10 +3682,10 @@ class data_loader_output:
             )
 
         if only_update:
+            # it might be possible that some neihgbour lsit are too small
+            # remove those trjaectories
 
             def f(nl_update: NeighbourListUpdate | None, sp, *_):
-                # print(f"updating neighbour list {nl_update=}")
-
                 if nl_update is None:
                     b, nn, n_xyz, _ = sp._get_neighbour_list(
                         info=nl_info,
@@ -3128,6 +3789,7 @@ class KoopmanModel:
     nl_t: list[NeighbourList] | NeighbourList | None
 
     w: list[jax.Array] | None = None
+    w_t: list[jax.Array] | None = None
     eps: float = 1e-10
 
     only_diag: bool = False
@@ -3147,6 +3809,7 @@ class KoopmanModel:
     @staticmethod
     def create(
         w: list[jax.Array] | None,
+        w_t: list[jax.Array] | None,
         cv_0: list[CV],
         cv_tau: list[CV],
         nl: list[NeighbourList] | NeighbourList | None = None,
@@ -3190,6 +3853,7 @@ class KoopmanModel:
             nl=nl,
             nl_t=nl_t,
             w=w,
+            w_t=w_t,
             calc_pi=calc_pi,
             only_diag=only_diag,
             symmetric=symmetric,
@@ -3208,10 +3872,12 @@ class KoopmanModel:
             C00 = jnp.zeros((cov.C00.shape[0] + 1, cov.C00.shape[1] + 1))
             C11 = jnp.zeros((cov.C11.shape[0] + 1, cov.C11.shape[1] + 1))
             C01 = jnp.zeros((cov.C01.shape[0] + 1, cov.C01.shape[1] + 1))
+            C10 = jnp.zeros((cov.C01.shape[0] + 1, cov.C01.shape[1] + 1))
 
             C00 = C00.at[:-1, :-1].set(cov.C00)
             C11 = C11.at[:-1, :-1].set(cov.C11)
             C01 = C01.at[:-1, :-1].set(cov.C01)
+            C10 = C10.at[:-1, :-1].set(cov.C10)
 
             C00 = C00.at[-1, -1].set(1)
             C00 = C00.at[-1, :-1].set(cov.pi_0)
@@ -3225,6 +3891,10 @@ class KoopmanModel:
             C01 = C01.at[-1, :-1].set(cov.pi_1)
             C01 = C01.at[:-1, -1].set(cov.pi_0)
 
+            C10 = C10.at[-1, -1].set(1)
+            C10 = C10.at[-1, :-1].set(cov.pi_0)
+            C10 = C10.at[:-1, -1].set(cov.pi_1)
+
             pi_0 = jnp.zeros((cov.pi_0.shape[0] + 1,))
             pi_1 = jnp.zeros((cov.pi_1.shape[0] + 1,))
 
@@ -3234,6 +3904,7 @@ class KoopmanModel:
             cov.C00 = C00
             cov.C11 = C11
             cov.C01 = C01
+            cov.C10 = C10
 
             # if trans is not None:
             #     trans = trans * CvTrans.from_cv_function(KoopmanModel._add_1)
@@ -3267,6 +3938,7 @@ class KoopmanModel:
         cov.C00 = cov.C00[argmask, :][:, argmask]
         cov.C11 = cov.C11[argmask, :][:, argmask]
         cov.C01 = cov.C01[argmask, :][:, argmask]
+        cov.C10 = cov.C10[argmask, :][:, argmask]
 
         if calc_pi:
             cov.pi_0 = cov.pi_0[argmask]
@@ -3312,13 +3984,17 @@ class KoopmanModel:
             cov.pi_0 = cov.pi_0
             cov.pi_1 = cov.pi_1
 
-        Kt = W0 @ cov.C01 @ W1.T
+        # C10 is computed with w1, not w0
+
+        T_tilde = W1 @ cov.C10 @ W0.T
+
+        # Kt = W0 @ cov.C10.T @ W1.T
 
         if verbose:
             print("koopman': SVD")
 
         # same U,sigma,V as in main text
-        U, s, VT = jax.numpy.linalg.svd(Kt, hermitian=symmetric)
+        U, s, VT = jax.numpy.linalg.svd(T_tilde.T, hermitian=symmetric)
 
         # W0 and W1 are whitening transforms. A whitening transform is still whitening after a rotation
         W0 = U.T @ W0
@@ -3343,6 +4019,7 @@ class KoopmanModel:
             nl=nl,
             nl_t=nl_t,
             w=w,
+            w_t=w_t,
             add_1=add_1,
             max_features=max_features,
             max_features_pre=max_features_pre,
@@ -3353,8 +4030,6 @@ class KoopmanModel:
             trans=trans,
             T_scale=T_scale,
             argmask=argmask,
-            # argmask_0=argmask[argmask_0],
-            # argmask_1=argmask[argmask_1],
             only_diag=only_diag,
             eps=eps,
             shape=cov.C01.shape[0],
@@ -3387,8 +4062,6 @@ class KoopmanModel:
         if out_dim is None:
             out_dim = self.s.shape[0]
 
-        print(f"{self.W0.shape=} {self.W1.shape=} {self.cov.C00.shape=} {self.s.shape=}")
-
         Tk = self.W1[:out_dim, :].T @ jnp.diag(self.s[:out_dim]) @ self.W0[:out_dim, :] @ self.cov.C00
 
         return Tk
@@ -3408,15 +4081,6 @@ class KoopmanModel:
 
     def f(self, out_dim=None):
         o = self.W0.T
-
-        # # find eigenvalues largest non constant eigenvalues
-        # idx = jnp.abs(self.s - 1) < 1e-6
-
-        # if (l := jnp.sum(idx)) != 0:
-        #     print(f"found {jnp.sum(idx)} constant eigenvalues, removing {self.s[idx]=}")
-        #     o = o[:, jnp.logical_not(idx)]
-
-        # if l==0 and (self.add_1   )
 
         o = o[:, :out_dim]
 
@@ -3479,17 +4143,23 @@ class KoopmanModel:
 
         out_dim = self.s.shape[0]
 
+        # this should be C00^-1 C11 T_k
+
         # only use largest eigenvalues of the koopman model
         A = self.W0[:out_dim, :] @ self.cov.C11 @ self.W1[:out_dim, :].T @ jnp.diag(self.s[:out_dim])
 
         from scipy.sparse.linalg import eigs
 
-        l, v = eigs(
-            A=np.array(A),
-            sigma=1,
-            k=10,
-            which="LM",
-        )
+        try:
+            l, v = eigs(
+                A=np.array(A),
+                sigma=1 + 1e-6,  # find eigenvalues closest to 1
+                k=20,
+                which="LM",
+            )
+        except Exception as e:
+            print(f"{e=}, aborting")
+            return self.w, False
 
         print(f"{l=} ")
 
@@ -3569,8 +4239,9 @@ class KoopmanModel:
         w_out = CV.stack(*w_out_cv).cv
 
         w_orig = jnp.hstack(self.w)
+        w_orig_t = jnp.hstack(self.w_t)
 
-        def _norm(w, a=False):
+        def _norm(w, a=True):
             w = jnp.where(jnp.sum(w) > 0, w, -w)
             n_neg = jnp.sum(w < 0)
             w = w * w_orig
@@ -3583,7 +4254,7 @@ class KoopmanModel:
             w /= n
 
             w_pos = jnp.where(w > 0, w, 0)
-            w_neg = jnp.where(w < 0, -w, 0)
+            w_neg = jnp.where(w <= 0, -w, 0)
 
             return w, w_pos, jnp.sum(w_neg), n_neg / w.shape[0]
 
@@ -3664,6 +4335,7 @@ class KoopmanModel:
 
         kw = dict(
             w=new_w,
+            w_t=self.w_t,
             cv_0=self.cv_0,
             cv_tau=self.cv_tau,
             nl=self.nl,
@@ -3703,6 +4375,7 @@ class KoopmanModel:
 class Covariances:
     C00: jax.Array | None
     C01: jax.Array | None
+    C10: jax.Array | None
     C11: jax.Array | None
     pi_0: jax.Array | None
     pi_1: jax.Array | None
@@ -3720,6 +4393,7 @@ class Covariances:
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
         w: list[Array] | None = None,
+        w_t: list[Array] | None = None,
         calc_pi=True,
         macro_chunk=1000,
         chunk_size=None,
@@ -3730,6 +4404,7 @@ class Covariances:
         symmetric=False,
         calc_C00=True,
         calc_C01=True,
+        calc_C10=True,
         calc_C11=True,
     ) -> Covariances:
         time_series = cv_1 is not None
@@ -3738,13 +4413,15 @@ class Covariances:
             n = sum([cvi.shape[0] for cvi in cv_0])
             w = [jnp.ones((cvi.shape[0],)) / n for cvi in cv_0]
 
+        if time_series:
+            if w_t is None:
+                w_t = w
+
         if T_scale != 1:
-            w = [wi ** (1 / T_scale) for wi in w]
-            s = jnp.sum(jnp.hstack(w))
-            w = [wi / s for wi in w]
+            raise NotImplementedError("T_scale not implemented")
 
         @jax.jit
-        def cov_pi(carry, cv_0: CV, cv1: CV | None, w):
+        def cov_pi(carry, cv_0: CV, cv1: CV | None, w, w_t=None):
             # print(f"{cv_0=} {cv1=}")
 
             x0 = cv_0.cv
@@ -3753,7 +4430,7 @@ class Covariances:
             else:
                 x1 = None
 
-            (C00, C01, C11, pi0, pi1) = carry
+            (C00, C01, C10, C11, pi0, pi1) = carry
 
             def c(x, y, w, c_pre):
                 if only_diag:
@@ -3783,13 +4460,16 @@ class Covariances:
                 if calc_C01:
                     C01 = c(x0, x1, w, C01)
 
+                if calc_C10:
+                    C10 = c(x1, x0, w, C10)
+
                 if calc_C11:
                     C11 = c(x1, x1, w, C11)
 
                 if calc_pi:
                     pi1 = p(x1, w, pi1)
 
-            return (C00, C01, C11, pi0, pi1)
+            return (C00, C01, C10, C11, pi0, pi1)
 
         if trans_f is not None:
 
@@ -3829,12 +4509,13 @@ class Covariances:
             macro_chunk=macro_chunk,
             verbose=True,
             chunk_func=cov_pi,
-            chunk_func_init_args=(None, None, None, None, None),
+            chunk_func_init_args=(None, None, None, None, None, None),
             w=w,
+            w_t=w_t,
             jit_f=False,
         )
 
-        C00, C01, C11, pi_0, pi_1 = out
+        C00, C01, C10, C11, pi_0, pi_1 = out
 
         if calc_pi:
             if only_diag:
@@ -3846,6 +4527,8 @@ class Covariances:
                         C11 -= pi_1**2
                     if calc_C01:
                         C01 -= pi_0 * pi_1
+                    if calc_C10:
+                        C10 -= pi_1 * pi_0
 
             else:
                 if calc_C00:
@@ -3855,10 +4538,13 @@ class Covariances:
                         C11 -= jnp.outer(pi_1, pi_1)
                     if calc_C01:
                         C01 -= jnp.outer(pi_0, pi_1)
+                    if calc_C10:
+                        C10 -= jnp.outer(pi_1, pi_0)
 
         cov = Covariances(
             C00=C00,
             C01=C01,
+            C10=C10,
             C11=C11,
             pi_0=pi_0,
             pi_1=pi_1,
@@ -4018,6 +4704,7 @@ class Covariances:
     def symmetrize(self):
         C00 = self.C00
         C01 = self.C01
+        C10 = self.C10
         C11 = self.C11
 
         pi = None
@@ -4029,6 +4716,9 @@ class Covariances:
             if C01 is not None:
                 C01 += jnp.outer(self.pi_0, self.pi_1)
 
+            if C10 is not None:
+                C10 += jnp.outer(self.pi_1, self.pi_0)
+
             if C11 is not None:
                 C11 += jnp.outer(self.pi_1, self.pi_1)
 
@@ -4036,18 +4726,24 @@ class Covariances:
 
             C00 -= jnp.outer(pi, pi)
             C01 -= jnp.outer(pi, pi)
+            C10 -= jnp.outer(pi, pi)
             C11 -= jnp.outer(pi, pi)
 
         C00 = (1 / 2) * (self.C00 + self.C11)
 
         if C01 is not None:
-            C01 = (1 / 2) * (self.C01 + self.C01.T)
+            C01 = (1 / 2) * (self.C01 + self.C10.T)
+
+        if C10 is not None:
+            C10 = (1 / 2) * (self.C10 + self.C01.T)
+
         if C11 is not None:
             C11 = C00
 
         return Covariances(
             C00=C00,
             C01=C01,
+            C10=C10,
             C11=C11,
             pi_0=pi,
             pi_1=pi,

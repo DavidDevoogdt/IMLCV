@@ -7,12 +7,10 @@ from itertools import combinations_with_replacement
 import jax
 import jax.numpy as jnp
 from flax.struct import dataclass, field
-from numpy.linalg import LinAlgError
-from scipy.linalg.lapack import dgesv
 from scipy.special import comb
 
 from IMLCV.base.CV import CV, CvMetric
-from IMLCV.tools._rbfinterp_pythran import _build_evaluation_coefficients, _build_system, _polynomial_matrix, cv_vals
+from IMLCV.tools._rbfinterp_pythran import _eval_system, cv_vals, evaluate_system
 
 __all__ = ["RBFInterpolator", "cv_vals"]
 
@@ -117,24 +115,28 @@ def _build_and_solve_system(
         Domain scaling used to create the polynomial matrix.
 
     """
-    lhs, rhs = _build_system(y, metric, d, smoothing, kernel, epsilon, powers)
-    _, _, coeffs, info = dgesv(lhs, rhs, overwrite_a=True, overwrite_b=True)
-    if info < 0:
-        raise ValueError(f"The {-info}-th argument had an illegal value.")
-    elif info > 0:
-        msg = "Singular matrix."
-        nmonos = powers.shape[0]
-        if nmonos > 0:
-            pmat = _polynomial_matrix(y, metric=metric, powers=powers)
-            rank = jnp.linalg.matrix_rank(pmat)
-            if rank < nmonos:
-                msg = (
-                    "Singular matrix. The matrix of monomials evaluated at "
-                    "the data point coordinates does not have full column "
-                    f"rank ({rank}/{nmonos})."
-                )
 
-        raise LinAlgError(msg)
+    from jax.tree_util import Partial
+
+    s = d.shape[1]
+    r = powers.shape[0]
+
+    f = Partial(
+        _eval_system,
+        y=y,
+        metric=metric,
+        d=d,
+        smoothing=smoothing,
+        kernel=kernel,
+        epsilon=epsilon,
+        powers=powers,
+    )
+
+    coeffs, _ = jax.scipy.sparse.linalg.cg(
+        A=f,
+        b=jnp.vstack([d, jnp.zeros((r, s))]),
+        tol=1e-12,
+    )
 
     return coeffs
 
@@ -256,53 +258,12 @@ class RBFInterpolator:
             y=y.replace(_stack_dims=None),
             d=d,
             d_shape=d_shape,
-            # d_dtype=d_dtype,
             smoothing=smoothing,
             kernel=kernel,
             epsilon=epsilon,
             powers=powers,
             metric=metric,
         )
-
-    def _chunk_evaluator(self, x: CV, y: CV, coeffs):
-        """
-        Evaluate the interpolation while controlling memory consumption.
-        We chunk the input if we need more memory than specified.
-
-        Parameters
-        ----------
-        x : (Q, N) float ndarray
-            array of points on which to evaluate
-        y: (P, N) float ndarray
-            array of points on which we know function values
-        shift: (N, ) ndarray
-            Domain shift used to create the polynomial matrix.
-        scale : (N,) float ndarray
-            Domain scaling used to create the polynomial matrix.
-        coeffs: (P+R, S) float ndarray
-            Coefficients in front of basis functions
-        memory_budget: int
-            Total amount of memory (in units of sizeof(float)) we wish
-            to devote for storing the array of coefficients for
-            interpolated points. If we need more memory than that, we
-            chunk the input.
-
-        Returns
-        -------
-        (Q, S) float ndarray
-        Interpolated array
-        """
-
-        vec = _build_evaluation_coefficients(
-            x,
-            y,
-            self.metric,
-            self.kernel,
-            self.epsilon,
-            self.powers,
-        )
-        out = jnp.dot(vec, coeffs)
-        return out
 
     def __call__(self, x: CV):
         """Evaluate the interpolant at `x`.
@@ -331,14 +292,15 @@ class RBFInterpolator:
                 "Expected the second axis of `x` to have length " f"{self.y.shape[1]}.",
             )
 
-        out = self._chunk_evaluator(
+        out = evaluate_system(
+            self._coeffs,
             x,
             self.y,
-            self._coeffs,
+            self.metric,
+            self.kernel,
+            self.epsilon,
+            self.powers,
         )
-
-        # out = out.view(self.d_dtype)
-        # return out
 
         if isbatched:
             return out.reshape((nx, -1))
@@ -356,6 +318,3 @@ class RBFInterpolator:
             state["y"] = state["y"].replace(_stack_dims=None)
 
         self.__init__(**state)
-
-    # def __eq__(self, other):
-    #     return pytreenode_equal(self, other)

@@ -128,6 +128,7 @@ def _sb_descriptor(
     reshape,
     n_max,
     l_max,
+    bessel_fun="jax",
 ):
     assert nl is not None, "provide neighbourlist for sb describport"
 
@@ -165,6 +166,7 @@ def _sb_descriptor(
         r_cut=r_cut,
         n_max=n_max,
         l_max=l_max,
+        bessel_fun=bessel_fun,
     )
 
     a = p_i(
@@ -195,6 +197,7 @@ def sb_descriptor(
     reshape=True,
     chunk_size_atoms=None,
     chunk_size_neigbourgs=None,
+    bessel_fun="jax",
 ) -> CvFlow:
     return CvFlow.from_function(
         _sb_descriptor,
@@ -206,6 +209,7 @@ def sb_descriptor(
             "reshape",
             "n_max",
             "l_max",
+            "bessel_fun",
         ],
         r_cut=r_cut,
         chunk_size_atoms=chunk_size_atoms,
@@ -214,6 +218,7 @@ def sb_descriptor(
         reshape=reshape,
         n_max=n_max,
         l_max=l_max,
+        bessel_fun=bessel_fun,
     )
 
 

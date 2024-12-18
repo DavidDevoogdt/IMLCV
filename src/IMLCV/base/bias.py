@@ -402,43 +402,43 @@ class Bias(ABC):
         name: str | None = None,
         # weights: list[Array] | None = None,
         traj: list[CV] | None = None,
+        dlo_kwargs=None,
+        dlo=None,
         vmax=None,
         map=False,
         inverted=False,
-        margin=None,
+        margin=0.1,
         dpi=300,
         T=300 * kelvin,
+        samples_per_bin=5,
         **kwargs,
     ):
         from IMLCV.base.CVDiscovery import Transformer
 
-        # get the bias points. convert to probability such that it can be further used
-        # if traj is None:
-        _, cv, _, _ = self.collective_variable.metric.grid(n=50, margin=0.1)
-        # traj = cv
+        # option: if every weight is None, then we can use the bias to compute the weights
+        # this might be a bad idea if there is not enough data
 
-        w = self.compute_from_cv(cv)[0]
+        if traj is None and dlo is not None:
+            assert dlo_kwargs is not None
+            traj = dlo.data_loader(**dlo_kwargs).cv
+
+        bias = self
 
         if inverted:
-            w = -w
-
-        w -= jnp.min(w)
-        w = jnp.exp(-w / (boltzmann * T))
-        w /= jnp.sum(w)
-
-        weights = [w]
+            print("inverting bias")
+            bias = BiasModify.create(fun=lambda x: -x, bias=bias)
 
         Transformer.plot_app(
             collective_variables=[self.collective_variable],
             cv_data=[traj] if traj is not None else None,
-            cv_data_weight=[[cv]],
+            # weight=[weights] if weights is not None else None,
             name=name,
             color_trajectories=True,
             margin=margin,
             plot_FES=True,
-            weight=weights,
+            biases=[bias],
             vmax=vmax,
-            samples_per_bin=10,
+            samples_per_bin=samples_per_bin,
             min_samples_per_bin=1,
             dpi=dpi,
             T=T,
@@ -446,19 +446,16 @@ class Bias(ABC):
             cv_titles=None,
         )
 
-    def resample(self, cv_grid: CV | None = None, n=None, margin=0.2) -> Bias:
-        from IMLCV.implementations.bias import RbfBias
+    def resample(self, cv_grid: CV | None = None, n=40, margin=0.3) -> Bias:
+        # return same bias, but as gridded bias
+        from IMLCV.implementations.bias import GridBias
 
-        if cv_grid is None:
-            _, cv_grid, _ = self.collective_variable.metric.grid(n=n, margin=margin)
-
-        bias, _ = self.compute_from_cv(cv_grid)
-
-        return RbfBias.create(
-            cv=cv_grid,
+        return GridBias.create(
             cvs=self.collective_variable,
-            vals=bias,
-            kernel="thin_plate_spline",
+            bias=self,
+            n=n,
+            bounds=None,
+            margin=margin,
         )
 
     def save(self, filename: str | Path):
@@ -563,8 +560,81 @@ class Bias(ABC):
 
         return kl
 
-    # def __eq__(self, other):
-    #     return pytreenode_equal(self, other)
+    def slice(
+        self,
+        T,
+        inverted=True,
+        samples_per_bin=50,
+        min_samples_per_bin=1,
+        vmax=None,
+        n_max_bias=2e4,
+        margin=0.2,
+    ) -> dict[int, dict[tuple[int], Bias]]:
+        free_energies = []
+
+        n_grid = int(n_max_bias ** (1 / self.collective_variable.n))
+
+        _, _, cv, bounds = self.collective_variable.metric.grid(
+            n=n_grid + 1,
+            margin=margin,
+        )
+
+        w = self.apply([cv])[0]
+
+        if inverted:
+            w = -w
+
+        w -= jnp.min(w)
+        w = jnp.exp(-w / (boltzmann * T))
+        w /= jnp.sum(w)
+
+        # weight grid
+        w = w.reshape((n_grid,) * self.collective_variable.n)
+
+        cvi = self.collective_variable
+
+        free_energies = dict()
+
+        from itertools import combinations
+
+        a = tuple([i for i in range(cvi.n)])
+
+        free_energies[cvi.n] = dict()
+        free_energies[cvi.n][a] = self
+
+        for nd in range(cvi.n):
+            free_energies[nd + 1] = dict()
+
+            for tup in combinations(range(cvi.n), nd + 1):
+                dims = jnp.arange(cvi.n)
+                dims = jnp.delete(dims, jnp.array(tup))
+
+                w_tup = jnp.sum(w, axis=dims)
+
+                values = (boltzmann * T) * jnp.log(w_tup)
+
+                from IMLCV.implementations.bias import GridBias
+
+                fes_nd = GridBias(
+                    collective_variable=self.collective_variable[tup],
+                    n=n_grid + 1,  # todo
+                    vals=values,
+                    bounds=bounds[jnp.array(tup)],
+                )
+
+                free_energies[nd + 1][tup] = fes_nd
+
+        return free_energies
+
+    def apply(self, cvs: list[CV], shmap=True, macro_chunk_size=10000):
+        from IMLCV.base.rounds import data_loader_output
+
+        return data_loader_output._apply_bias(
+            bias=self,
+            x=cvs,
+            shmap=True,
+            macro_chunk=macro_chunk_size,
+        )
 
 
 @partial(dataclass, frozen=False, eq=False)

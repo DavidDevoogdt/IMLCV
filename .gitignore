@@ -67,6 +67,7 @@ notebooks/alanine_dipeptide_LDA_*/*
 
 notebooks/alanine_dipeptide_sd_*/*
 notebooks/test*
+perov_images/*
 
 .pip_cache/*
 
@@ -90,3 +91,7 @@ workdir/scaling.png
 workdir/schaling.py
 **/.ipynb_checkpoints/**
 src/IMLCV/data/mace/2023-12-10-mace-128-L0_epoch-199.model
+
+
+nglview/*
+workdir/*

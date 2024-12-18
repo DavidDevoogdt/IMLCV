@@ -40,7 +40,7 @@ def _normalize_output(conversion):
 
 @jax.vmap
 def _distance_line_from_origin(slope, intercept):
-    v = slope**2 + 1
+    v = slope**2 + 1.0
     return jnp.abs(intercept) / jnp.sqrt(v)
 
 
@@ -61,9 +61,9 @@ def _get_bounds(l):
 
         @jax.vmap
         def _t(t):
-            top1 = (284517 * m1 - 94839 * m3) * sub2
-            top2 = (838422 * m3 + 769860 * m2 + 731718 * m1) * l * sub2 - (769860 * t) * l
-            bottom = (632260 * m3 - 126452 * m2) * sub2 + 126452 * t
+            top1 = (284517.0 * m1 - 94839.0 * m3) * sub2
+            top2 = (838422 * m3 + 769860.0 * m2 + 731718.0 * m1) * l * sub2 - (769860.0 * t) * l
+            bottom = (632260.0 * m3 - 126452.0 * m2) * sub2 + 126452.0 * t
 
             return top1 / bottom, top2 / bottom
 
@@ -99,7 +99,7 @@ def _to_linear(c):
 
 
 def _y_to_l(y):
-    return jnp.where(y <= _epsilon, y / _kappa, 116 * jnp.pow(y / _ref_y, 1 / 3) - 16)
+    return jnp.where(y <= _epsilon, y / _kappa, 116.0 * jnp.pow(y / _ref_y, 1 / 3) - 16)
 
 
 def _l_to_y(l):
@@ -115,33 +115,33 @@ def rgb_to_xyz(rgb):
 
 
 def xyz_to_luv(xyz):
-    x, y, z = xyz
+    x, y, z = xyz[0], xyz[1], xyz[2]
     l = _y_to_l(y)
 
-    divider = x + 15 * y + 3 * z
+    divider = x + 15.0 * y + 3.0 * z
 
-    var_u = 4 * x / divider
-    var_v = 9 * y / divider
-    u = 13 * l * (var_u - _ref_u)
-    v = 13 * l * (var_v - _ref_v)
+    var_u = 4.0 * x / divider
+    var_v = 9.0 * y / divider
+    u = 13.0 * l * (var_u - _ref_u)
+    v = 13.0 * l * (var_v - _ref_v)
 
     return jnp.array([l, u, v])
 
 
 def luv_to_xyz(luv):
-    l, u, v = luv
+    l, u, v = luv[0], luv[1], luv[2]
 
-    var_u = u / (13 * l) + _ref_u
-    var_v = v / (13 * l) + _ref_v
+    var_u = u / (13.0 * l) + _ref_u
+    var_v = v / (13.0 * l) + _ref_v
     y = _l_to_y(l)
-    x = y * 9 * var_u / (4 * var_v)
-    z = y * (12 - 3 * var_u - 20 * var_v) / (4 * var_v)
+    x = y * 9.0 * var_u / (4.0 * var_v)
+    z = y * (12 - 3.0 * var_u - 20.0 * var_v) / (4.0 * var_v)
 
     return jnp.where(l > 0, jnp.array([x, y, z]), jnp.array([0.0, 0.0, 0.0]))
 
 
 def luv_to_lch(luv):
-    l, u, v = luv
+    l, u, v = luv[0], luv[1], luv[2]
     c = jnp.hypot(u, v)
 
     hrad = jnp.atan2(v, u)
@@ -154,7 +154,7 @@ def luv_to_lch(luv):
 
 
 def lch_to_luv(lch):
-    l, c, h = lch
+    l, c, h = lch[0], lch[1], lch[2]
     hrad = jnp.radians(h)
     u = jnp.cos(hrad) * c
     v = jnp.sin(hrad) * c
@@ -162,9 +162,9 @@ def lch_to_luv(lch):
 
 
 def hsluv_to_lch(hsl):
-    h, s, l = hsl
+    h, s, l = hsl[0], hsl[1], hsl[2]
     _hx_max = _max_chroma_for_lh(l, h)
-    c = _hx_max / 100 * s
+    c = _hx_max / 100.0 * s
 
     return jnp.select(
         [l > 100, l < 1e-08, True], [jnp.array([100.0, 0.0, h]), jnp.array([0.0, 0.0, h]), jnp.array([l, c, h])]
@@ -172,35 +172,38 @@ def hsluv_to_lch(hsl):
 
 
 def lch_to_hsluv(lsh):
-    l, c, h = lsh
+    l, c, h = lsh[0], lsh[1], lsh[2]
 
     _hx_max = _max_chroma_for_lh(l, h)
     s = c / _hx_max * 100
 
     return jnp.select(
-        [l > 100 - 1e-7, l < 1e-08, True], [jnp.array([h, 0.0, 100.0]), jnp.array([h, 0.0, 0.0]), jnp.array([h, s, l])]
+        [l > 100.0 - 1e-7, l < 1e-08, True],
+        [jnp.array([h, 0.0, 100.0]), jnp.array([h, 0.0, 0.0]), jnp.array([h, s, l])],
     )
 
 
 def hpluv_to_lch(hsl):
-    h, s, l = hsl
+    h, s, l = hsl[0], hsl[1], hsl[2]
 
     _hx_max = _max_safe_chroma_for_l(l)
-    c = _hx_max / 100 * s
+    c = _hx_max / 100.0 * s
 
     return jnp.select(
-        [l > 100 - 1e-7, l < 1e-08, True], [jnp.array([100.0, 0.0, h]), jnp.array([0.0, 0.0, h]), jnp.array([l, c, h])]
+        [l > 100.0 - 1e-7, l < 1e-08, True],
+        [jnp.array([100.0, 0.0, h]), jnp.array([0.0, 0.0, h]), jnp.array([l, c, h])],
     )
 
 
 def lch_to_hpluv(lch):
-    l, c, h = lch
+    l, c, h = lch[0], lch[1], lch[2]
 
     _hx_max = _max_safe_chroma_for_l(l)
-    s = c / _hx_max * 100
+    s = c / _hx_max * 100.0
 
     jnp.select(
-        [l > 100 - 1e-7, l < 1e-08, True], [jnp.array([h, 0.0, 100.0]), jnp.array([h, 0.0, 0.0]), jnp.array([h, s, l])]
+        [l > 100.0 - 1e-7, l < 1e-08, True],
+        [jnp.array([h, 0.0, 100.0]), jnp.array([h, 0.0, 0.0]), jnp.array([h, s, l])],
     )
 
 

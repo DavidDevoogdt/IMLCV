@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as onp
 import scipy.special
 from jax import custom_jvp, pure_callback
-from jax.custom_batching import custom_vmap
 
 from IMLCV.tools.bessel_jn import bessel_jn
 
@@ -18,14 +17,17 @@ from IMLCV.tools.bessel_jn import bessel_jn
 
 def generate_bessel(function, type, sign=1, exp_scaled=False):
     def _function(v, x):
-        v, x = onp.asarray(v), onp.asarray(x)
+        v = onp.asarray(v)
+        x = onp.asarray(x)
 
-        return function(v, x).astype(x.dtype)
+        # dims are expanded, ufunc takes
+        out = function(v, x)
 
-    @custom_vmap
-    def cv_inner(v, z):
+        return jnp.array(out, dtype=x.dtype)
+
+    def cv_inner(v: int, z: float):
         res_dtype_shape = jax.ShapeDtypeStruct(
-            shape=v.shape,
+            shape=(),
             dtype=z.dtype,
         )
 
@@ -34,23 +36,8 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             res_dtype_shape,
             v,
             z,
-            vectorized=True,
+            vmap_method="expand_dims",
         )
-
-    @cv_inner.def_vmap
-    def _function_vmap(axis_size, in_batched, v, x):
-        v_batched, x_batched = in_batched
-
-        if not (v_batched and x_batched):
-            a = jax.lax.broadcast(v, [axis_size]) if x_batched else v
-            b = jax.lax.broadcast(x, [axis_size]) if v_batched else x
-        else:
-            a = v
-            b = x
-
-        out = cv_inner(a, b)
-
-        return out, True
 
     @custom_jvp
     def cv(v, z):
@@ -136,35 +123,6 @@ kv = generate_bessel(scipy.special.kv, sign=-1, type=1)
 iv = generate_bessel(scipy.special.iv, sign=+1, type=1)
 
 
-# @partial(custom_jvp, nondiff_argnums=(0,))
-# @partial(jax.jit, static_argnums=0)
-# def spherical_jn(v, x):
-#     out = csphjy(v, x)
-
-#     return jnp.real(out)
-
-
-# @spherical_jn.defjvp
-# def cv_jvp(v, primals, tangents):
-#     (x,) = primals
-#     (dx,) = tangents
-
-#     o = spherical_jn(v + 1, x)
-
-#     primal_out = o[:-1]
-
-#     v_vec = jnp.arange(1, v + 1)
-
-#     tangents_out = jnp.array([-o[1]])
-
-#     if v != 0:
-#         tangents_out = jnp.concatenate(
-#             [tangents_out, (v_vec * o[v_vec - 1] - (v_vec + 1) * o[v_vec + 1]) / (2 * v_vec + 1)]
-#         )
-
-#     return primal_out, tangents_out * dx
-
-
 # https://github.com/tpudlik/sbf/blob/master/algos/d_recur_miller.py
 
 ORDER = 100  # Following Jablonski (1994)
@@ -242,7 +200,7 @@ def spherical_jn_jvp(n, primals, tangents):
 
 # spherical_jn = csphjy
 
-# spherical_jn = generate_bessel(scipy.special.spherical_jn, type=2)
+spherical_jn_b = generate_bessel(scipy.special.spherical_jn, type=2)
 spherical_yn = generate_bessel(scipy.special.spherical_yn, type=2)
 
 ive = generate_bessel(scipy.special.ive, sign=+1, type=1, exp_scaled=True)

@@ -1,3 +1,5 @@
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 
@@ -78,74 +80,42 @@ def cv_vals(x: CV, powers, metric: CvMetric):
     return scale(metric.min_cv(x.cv), metric=metric) ** powers
 
 
-def kernel_vector(x: CV, y: CV, metric: CvMetric, epsilon, kernel_func):
-    """Evaluate RBFs, with centers at `y`, at the point `x`."""
-
-    def f0(y):
-        return kernel_func(cv_norm(x, y, metric, epsilon))
-
-    f1 = jax.vmap(f0)
-
-    out0 = f1(y)
-
-    return out0
-
-
-def polynomial_vector(x: CV, powers, metric: CvMetric):
-    """Evaluate monomials, with exponents from `powers`, at the point `x`."""
-
-    def g(x, powers):
-        return cv_vals(x, powers, metric=metric)
-
-    def f0(powers):
-        return jnp.prod(g(x, powers))
-
-    f1 = jax.vmap(f0)
-    out0 = f1(powers)
-
-    return out0
-
-
-def kernel_matrix(x: CV, metric: CvMetric, eps, kernel_func):
+@partial(jax.jit, static_argnums=(5))
+def eval_kernel_matrix(a, x: CV, y: CV, metric: CvMetric, eps, kernel_func):
     """Evaluate RBFs, with centers at `x`, at `x`."""
 
+    @partial(jax.vmap, in_axes=(None, 0), out_axes=1)
+    @partial(jax.vmap, in_axes=(0, None), out_axes=0)
     def f00(x, y):
-        return cv_norm(x, y, metric, eps)
+        return kernel_func(cv_norm(x, y, metric, eps))
 
-    f10 = jax.vmap(f00, in_axes=(0, None), out_axes=0)
-    f11 = jax.vmap(f10, in_axes=(None, 0), out_axes=1)
-
-    out_norm = f11(x, x)
-    out_kernel = jax.vmap(jax.vmap(kernel_func))(out_norm)
-
-    return out_kernel
+    return jnp.einsum("ij,js-> is", f00(x, y), a)
 
 
-def polynomial_matrix(x: CV, metric: CvMetric, powers):
+@jax.jit
+def eval_polynomial_matrix(x: CV, metric: CvMetric, powers):
     """Evaluate monomials, with exponents from `powers`, at `x`."""
 
     def g(x, powers):
         return cv_vals(x, powers, metric=metric)
 
+    @partial(jax.vmap, in_axes=(None, 0), out_axes=1)
+    @partial(jax.vmap, in_axes=(0, None), out_axes=0)
     def f00(x, powers):
         return jnp.prod(g(x, powers))
 
-    f10 = jax.vmap(f00, in_axes=(0, None), out_axes=0)
-    f11 = jax.vmap(f10, in_axes=(None, 0), out_axes=1)
+    pm = f00(x, powers)
 
-    return f11(x, powers)
-
-
-def _polynomial_matrix(x: CV, powers, metric):
-    """Return monomials, with exponents from `powers`, evaluated at `x`."""
-    assert isinstance(x, CV)
-
-    out = polynomial_matrix(x=x, metric=metric, powers=powers)
-    return out
+    return pm
 
 
-def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers):
-    """Build the system used to solve for the RBF interpolant coefficients.
+def _eval_system(coeff, y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers):
+    """eval the system used to solve for the RBF interpolant coefficients.
+
+
+    it evaluates
+    y(x) = sum_i a_i phi(||x - x_i||) + sum_j b_j p(x)_j
+    p(y)_j a_{ij} = 0
 
     Parameters
     ----------
@@ -168,30 +138,23 @@ def _build_system(y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers
         Left-hand side matrix.
     rhs : (P + R, S) float ndarray
         Right-hand side matrix.
-    shift : (N,) float ndarray
-        Domain shift used to create the polynomial matrix.
-    scale : (N,) float ndarray
-        Domain scaling used to create the polynomial matrix.
+
 
     """
-    # p = d.shape[0]
-    s = d.shape[1]
-    r = powers.shape[0]
+
+    a = coeff[: y.shape[0], :]
+    b = coeff[y.shape[0] :, :]
+
     kernel_func = NAME_TO_FUNC[kernel]
 
-    # Transpose to make the array fortran contiguous. This is required for
-    # dgesv to not make a copy of lhs.
-    K = kernel_matrix(y, metric, epsilon, kernel_func) + jnp.diag(smoothing)
-    P = polynomial_matrix(y, metric=metric, powers=powers)
-    lhs = jnp.block([[K, P], [P.T, jnp.zeros((P.shape[1], P.shape[1]))]])
+    Ka = eval_kernel_matrix(a, y, y, metric, epsilon, kernel_func) + smoothing @ a
+    Pb = eval_polynomial_matrix(y, metric=metric, powers=powers)
 
-    # Transpose to make the array fortran contiguous.
-    rhs = jnp.vstack([d, jnp.zeros((r, s))])
-
-    return lhs, rhs
+    return jnp.vstack([Ka + jnp.dot(Pb, b), Pb.T @ a])
 
 
-def _build_evaluation_coefficients(
+def evaluate_system(
+    coeffs,
     x: CV,
     y: CV,
     metric: CvMetric,
@@ -224,18 +187,11 @@ def _build_evaluation_coefficients(
     (Q, P + R) float ndarray
 
     """
+    a, b = coeffs[: y.shape[0], :], coeffs[y.shape[0] :, :]
+
     kernel_func = NAME_TO_FUNC[kernel]
 
-    def kv(x):
-        return kernel_vector(x, y, metric, epsilon, kernel_func)
-
-    kv0 = jax.vmap(kv)(x)
-
-    def pv(x):
-        return polynomial_vector(x, powers, metric=metric)
-
-    pv0 = jax.vmap(pv)(x)
-
-    vec0 = jnp.hstack([kv0, pv0])
-
-    return vec0
+    return (
+        eval_kernel_matrix(a, x, y, metric, epsilon, kernel_func)
+        + eval_polynomial_matrix(x, metric=metric, powers=powers) @ b
+    )
