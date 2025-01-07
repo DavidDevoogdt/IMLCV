@@ -1371,7 +1371,7 @@ class Transformer:
                 ),
                 verbose=False,
                 macro_chunk=320,
-                shmap=False,
+                shmap=True,
             )
 
         else:

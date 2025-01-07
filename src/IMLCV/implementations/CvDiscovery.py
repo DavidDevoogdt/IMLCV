@@ -503,7 +503,7 @@ class TransformerMAF(Transformer):
             max_features=max_features,
             max_features_pre=max_features_pre,
             w=w,
-            calc_pi=True,
+            calc_pi=True,  # removes mean of the features
             koopman_weight=False,
             add_1=False,
             trans=trans,
@@ -533,7 +533,7 @@ class TransformerMAF(Transformer):
         out_dim = self.outdim
 
         for i in range(self.outdim - 1):
-            if ts[i + 1] / ts[0] < 1 / 10:
+            if ts[i + 1] / ts[0] < 1 / 100:
                 (print(f"cv {i+1} is too small compared to cv {0} (fraction= {ts[i+1]/ ts[0]}), cutting off "),)
                 out_dim = i + 1
                 break

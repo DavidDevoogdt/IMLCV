@@ -140,7 +140,12 @@ class Observable:
                 print(".", end="")
 
                 cvs = CV.combine(*[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv])
-                f = Partial(self.bias.compute_from_cv, diff=False, chunk_size=chunk_size)
+                f = Partial(
+                    self.bias.compute_from_cv,
+                    diff=False,
+                    chunk_size=chunk_size,
+                    shmap=False,
+                )
 
                 if shmap:
                     f = padded_shard_map(f)
@@ -346,10 +351,33 @@ class Observable:
         # get weights based on koopman theory. the CVs are binned with indicators
 
         if koopman:
+            if plot_selected_points:
+                print("determinig bias wham")
+                fes_bias_wham = dlo.get_fes_bias_from_weights(
+                    weights=dlo._weights,
+                    cv=dlo.cv,
+                    n_grid=n_max,
+                    T=dlo.sti.T,
+                    collective_variable=dlo.collective_variable,
+                    chunk_size=chunk_size,
+                    macro_chunk=macro_chunk,
+                    samples_per_bin=samples_per_bin,
+                    min_samples_per_bin=min_samples_per_bin,
+                )
+
+                print("plotting wham")
+                fes_bias_wham.plot(
+                    name="FES_bias_wham.png",
+                    # traj=dlo.cv,
+                    margin=0.1,
+                    vmax=max_bias,
+                    inverted=False,
+                    n=200,
+                )
+
             weights = dlo.koopman_weight(
-                koopman=koopman,
                 indicator_CV=True,
-                n_max=n_max,
+                n_max_koopman=n_max,
                 samples_per_bin=samples_per_bin,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,

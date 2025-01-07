@@ -198,11 +198,6 @@ def padded_shard_map(
 
         shape = int(in_tree_flat[0].shape[axis])
 
-        # if shape <= n_devices:
-        #     print(f"reduce devices to {shape}")
-        #     n_devices = shape
-        #     devices = devices[:n_devices]
-
         rem = shape % n_devices
 
         if rem != 0:
@@ -215,7 +210,6 @@ def padded_shard_map(
         reshape_shmap = False
 
         def f_inner(*args):
-            # print(f"inside f inner {args=}")
             return f(*args)
 
         def f_flat(*tree_flat):
@@ -223,10 +217,8 @@ def padded_shard_map(
                 _f = f_inner
             elif reshape_shmap:
                 if not explicit_shmap:
-                    # tree_flat = [_n_unpad(x, axis=axis, reshape=True, trim=False, shape=None) for x in tree_flat]
                     _f = vmap(f_inner, in_axes=0 if move_axis else axis)  # vmap over sharded axis
                 else:
-                    # print(f"{tree_flat=}")
                     tree_flat = [
                         x[0 if move_axis else axis, :] for x in tree_flat
                     ]  # sharding keeps axis, pmap removes it
@@ -234,11 +226,7 @@ def padded_shard_map(
             else:
                 _f = f_inner
 
-            # print(f"{tree_flat=}")
-
             args = tree_unflatten(tree_def, tree_flat)
-
-            # print(f"{args=}")
 
             out = _f(*args)
 
@@ -328,14 +316,8 @@ def padded_shard_map(
 
         out = tree_unflatten(out_tree_def, out_flat)
 
-        # print(f"final {out=}")
-
         if verbose:
             print(f"done sharding {f=}")
-
-        # single_sharding = jax.sharding.SingleDeviceSharding(devices[0])
-
-        # out = jax.device_put(out, single_sharding)
 
         return out
 
@@ -1023,8 +1005,8 @@ class SystemParams:
             def _res(coor):
                 return res(coor, sp, take_num, shmap)
 
-            # if shmap:
-            #     _res = padded_shard_map(_res, shmap_kwargs)
+            if shmap:
+                _res = padded_shard_map(_res, shmap_kwargs)
 
             if take_num == 0:
                 n = _res(sp.coordinates)
@@ -1058,14 +1040,7 @@ class SystemParams:
 
             num_neighs = int(nn)
 
-            # jax.debug.print("num_neighs {}", num_neighs)
-
         if only_update:
-            # new_update = NeighbourListUpdate.create(
-            #     num_neighs=num_neighs,
-            #     nxyz=new_nxyz,
-            # )
-
             return (
                 b,
                 num_neighs,
@@ -1115,7 +1090,7 @@ class SystemParams:
         chunk_size=None,
         chunk_size_inner=10,
         verbose=False,
-        shmap=True,
+        shmap=False,
         shmap_kwargs: shmap_kwargs = shmap_kwargs(),
         only_update=False,
     ) -> NeighbourList | None:

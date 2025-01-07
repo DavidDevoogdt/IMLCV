@@ -384,7 +384,7 @@ class TrajectoryInfo:
         for name in [*self._items_scal, *self._items_vec]:
             prop = self.__getattribute__(name)
             if prop is not None:
-                hf[name] = prop
+                hf[name] = prop.__array__()  # save as numpy array
 
         hf.attrs.create("_capacity", self._capacity)
         hf.attrs.create("_size", self._size)
@@ -403,7 +403,7 @@ class TrajectoryInfo:
             # if key == "static_info":
             #     tic = StaticTrajectoryInfo._load(hf[key])
             # continue
-            props[key] = val[:]
+            props[key] = jnp.array(val[:])
 
         for key, val in hf.attrs.items():
             attrs[key] = val
@@ -476,7 +476,9 @@ class TrajectoryInfo:
     def e_bias(self, val):
         assert val.shape[0] == self._size
 
-        self._e_bias[: self._size] = val
+        val = jnp.array(val)
+
+        self._e_bias = self._e_bias.at[: self._size].set(val)
 
     @property
     def e_bias_gpos(self) -> Array | None:
@@ -524,7 +526,7 @@ class TrajectoryInfo:
     def t(self, val):
         assert val.shape[0] == self._size
 
-        self._t[: self._size] = val
+        self._t = self._t.at[: self._size].set(val)
 
     @property
     def shape(self):

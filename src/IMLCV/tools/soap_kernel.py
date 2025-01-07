@@ -47,6 +47,7 @@ def p_i(
 
         if shmap:
             f = padded_shard_map(f, shmap_kwargs)
+
         return f(sp, nl)
 
     ps, pd = p

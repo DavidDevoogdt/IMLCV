@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import jax
+import jax.numpy as jnp
 from molmod.constants import boltzmann
 from molmod.units import kjmol
 
@@ -95,7 +96,7 @@ class Scheme:
         scale_n: int | None = None,
         cv_round: int | None = None,
         ignore_invalid=False,
-        eps=0.1,
+        eps=0.1,  # overlap between wave functions
         min_traj_length=None,
         recalc_cv=False,
         only_finished=True,
@@ -103,16 +104,17 @@ class Scheme:
         T_scale=10,
     ):
         m = self.bias.collective_variable.metric
-        _, cv_grid, _, _ = m.grid(n)
+        grid, cv_grid, _, _ = m.grid(n)
+
+        # sigma =
 
         if k is None:
-            # 0.1*N *Kb*T
-            k = eps * self.sti.T * boltzmann * self.sti.atomic_numbers.shape[0]
+            b = jnp.array([a[-1] - a[0] for a in grid])
+            mu = jnp.array([(a[1] - a[0]) / 2 for a in grid])
 
-        k /= ((m.bounding_box[:, 1] - m.bounding_box[:, 0]) / 2) ** 2
-        if scale_n is None:
-            scale_n = n
-        k *= scale_n**2
+            k = (2 * b / mu * jax.scipy.special.erfinv(1 - eps)) ** 2 * self.sti.T * boltzmann
+
+            print(f"{k*kjmol=}")
 
         biases = [
             HarmonicBias.create(
