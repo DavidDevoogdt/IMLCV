@@ -10,7 +10,13 @@ from flax.struct import dataclass, field
 from scipy.special import comb
 
 from IMLCV.base.CV import CV, CvMetric
-from IMLCV.tools._rbfinterp_pythran import _eval_system, cv_vals, evaluate_system
+from IMLCV.tools._rbfinterp_pythran import (
+    NAME_TO_FUNC,
+    cv_vals,
+    eval_kernel_matrix,
+    eval_polynomial_matrix,
+    evaluate_system,
+)
 
 __all__ = ["RBFInterpolator", "cv_vals"]
 
@@ -116,27 +122,23 @@ def _build_and_solve_system(
 
     """
 
-    from jax.tree_util import Partial
-
     s = d.shape[1]
     r = powers.shape[0]
 
-    f = Partial(
-        _eval_system,
-        y=y,
-        metric=metric,
-        d=d,
-        smoothing=smoothing,
-        kernel=kernel,
-        epsilon=epsilon,
-        powers=powers,
-    )
+    kernel_func = NAME_TO_FUNC[kernel]
 
-    coeffs, _ = jax.scipy.sparse.linalg.cg(
-        A=f,
-        b=jnp.vstack([d, jnp.zeros((r, s))]),
-        tol=1e-12,
+    K = eval_kernel_matrix(y, y, metric, epsilon, kernel_func) + jnp.diag(smoothing)
+    P = eval_polynomial_matrix(y, metric=metric, powers=powers)
+
+    A = jnp.block(
+        [
+            [K, P],
+            [P.T, jnp.zeros((r, r))],
+        ]
     )
+    b = jnp.vstack([d, jnp.zeros((r, s))])
+
+    coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
 
     return coeffs
 

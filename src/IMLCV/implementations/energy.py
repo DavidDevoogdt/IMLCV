@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import ase
 import jax.numpy as jnp
 import numpy as np
 from molmod.units import angstrom, electronvolt
@@ -14,32 +15,31 @@ class YaffEnergy(Energy):
         self,
         f,  #: Callable[[], yaff.ForceField],
     ) -> None:
-        import yaff
-        import yaff.ForceField
+        # import yaff.ForceField
 
         super().__init__()
         self.f = f
-        self.ff: yaff.ForceField = f()
+        self.ff = f()
 
     @property
     def cell(self):
         out = self.ff.system.cell.rvecs[:]  # empty cell represented as array with shape (0,3)
         if out.size == 0:
             return None
-        return jnp.array(out)
+        return jnp.asarray(out)
 
     @cell.setter
     def cell(self, cell):
         if cell is None:
             return
 
-        cell = np.array(cell, dtype=np.double)
+        cell = np.asarray(cell, dtype=np.double)
 
         self.ff.update_rvecs(cell)
 
     @property
     def coordinates(self):
-        return jnp.array(self.ff.system.pos[:])
+        return jnp.asarray(self.ff.system.pos[:])
 
     @coordinates.setter
     def coordinates(self, coordinates):
@@ -83,6 +83,8 @@ class AseEnergy(Energy):
 
         if calculator is not None:
             self.atoms.calc = self.calculator
+        else:
+            self.atoms.calc = self._calculator()
 
     @property
     def cell(self):
@@ -98,15 +100,13 @@ class AseEnergy(Energy):
         if cell is None:
             return
 
-        import ase
-
         self.atoms.set_cell(ase.geometry.Cell(np.array(cell) / angstrom))
 
     @property
     def coordinates(self):
         # return jnp.asarray(self.atoms.get_positions() * angstrom)
 
-        return jnp.array(self.atoms.arrays["positions"]) * angstrom
+        return jnp.asarray(self.atoms.arrays["positions"]) * angstrom
 
     @coordinates.setter
     def coordinates(self, coordinates):
@@ -124,8 +124,8 @@ class AseEnergy(Energy):
 
         try:
             energy = self.atoms.get_potential_energy() * electronvolt
-        except BaseException:
-            self._handle_exception()
+        except BaseException as e:
+            self._handle_exception(e)
 
         gpos_out = None
         vtens_out = None
@@ -139,13 +139,17 @@ class AseEnergy(Energy):
             stress = self.atoms.get_stress(voigt=False)
             vtens_out = volume * stress * electronvolt
 
-        return EnergyResult(energy, gpos_out, vtens_out)
+        return EnergyResult(
+            jnp.asarray(energy, dtype=jnp.float64),
+            jnp.asarray(gpos_out, dtype=jnp.float64) if gpos else None,
+            jnp.asarray(vtens_out, dtype=jnp.float64) if vir else None,
+        )
 
     def _calculator(self):  # -> ase.calculators.calculator.Calculator:
         raise NotImplementedError
 
-    def _handle_exception(self):
-        raise EnergyError("Ase failed to provide an energy\n")
+    def _handle_exception(self, e=None):
+        raise EnergyError(f"Ase failed to provide an energy\nexception {e=}")
 
     def __getstate__(self):
         extra_args = {
@@ -266,7 +270,8 @@ class Cp2kEnergy(AseEnergy):
 
         return calc
 
-    def _handle_exception(self):
+    def _handle_exception(self, e=None):
+        print(f"{e=}")
         p = f"{self.atoms.calc.directory}/cp2k.out"
         assert os.path.exists(p), "no cp2k output file after failure"
         with open(p) as f:
@@ -317,7 +322,13 @@ class MACEASE(AseEnergy):
     def _calculator(self):
         from mace.calculators import mace_mp
 
-        return mace_mp(model="medium", dispersion=False, default_dtype="float64", device="cpu")
+        return mace_mp(
+            model="medium",
+            dispersion=False,
+            default_dtype="float32",
+            device="cpu",
+            # compile_mode="default", #doens't compute stress
+        )
 
     def __getstate__(self):
         dict = {

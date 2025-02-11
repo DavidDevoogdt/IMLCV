@@ -63,13 +63,13 @@ class Observable:
         dlo: data_loader_output | None = None,
         update_bounding_box=True,
         bounds_percentile=1,
-        samples_per_bin=20,
-        min_samples_per_bin=5,
+        samples_per_bin=5,
+        min_samples_per_bin=1,
         n=None,
         n_max=30,
         temp=None,
         chunk_size=None,
-        shmap=True,
+        shmap=False,
         rounds: Rounds = None,
     ):
         if dlo is None:
@@ -194,8 +194,8 @@ class Observable:
         num_rnds=4,
         start_r=1,
         update_bounding_box=True,
-        samples_per_bin=20,
-        min_samples_per_bin=5,
+        samples_per_bin=5,
+        min_samples_per_bin=1,
         chunk_size=None,
         n_max=60,
         n=None,
@@ -203,7 +203,7 @@ class Observable:
         dlo=None,
         directory=None,
         temp=None,
-        shmap=True,
+        shmap=False,
         only_finished=True,
         bounds_percentile=1,
         max_bias=None,
@@ -308,9 +308,9 @@ class Observable:
         min_traj_length=None,
         only_finished=True,
         chunk_size=None,
-        macro_chunk=10000,
+        macro_chunk=1000,
         T_scale=10,
-        n_max=30,
+        n_max=50,
         cv_round=None,
         koopman=True,
         plot_selected_points=True,
@@ -318,9 +318,10 @@ class Observable:
         verbose=True,
         max_bias=None,
         kooopman_wham=None,
-        samples_per_bin=20,
-        min_samples_per_bin=5,
+        samples_per_bin=5,
+        min_samples_per_bin=1,
         resample=True,
+        direct_bias=True,
     ):
         if cv_round is None:
             cv_round = rounds.cv
@@ -328,7 +329,7 @@ class Observable:
         if kooopman_wham is None:
             kooopman_wham = cv_round == 1
 
-        dlo = rounds.data_loader(
+        dlo, fb = rounds.data_loader(
             num=num_rnds,
             out=out,
             lag_n=lag_n,
@@ -337,7 +338,7 @@ class Observable:
             new_r_cut=None,
             min_traj_length=min_traj_length,
             only_finished=only_finished,
-            time_series=True,
+            time_series=koopman,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             T_scale=T_scale,
@@ -346,9 +347,38 @@ class Observable:
             n_max=n_max,
             wham=kooopman_wham,
             uniform=True,
+            output_FES_bias=True,
+            samples_per_bin=samples_per_bin,
         )
 
+        fes_bias_wham_p = fb[0]
+
         # get weights based on koopman theory. the CVs are binned with indicators
+
+        if direct_bias:
+            fes_bias_wham = fes_bias_wham_p
+        else:
+            fes_bias_wham = dlo.get_fes_bias_from_weights(
+                weights=dlo._weights,
+                cv=dlo.cv,
+                n_grid=n_max,
+                T=dlo.sti.T,
+                collective_variable=dlo.collective_variable,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                # samples_per_bin=samples_per_bin,
+                # min_samples_per_bin=min_samples_per_bin,
+            )
+
+            print("plotting wham")
+            fes_bias_wham_p.plot(
+                name="FES_bias_wham.png",
+                # traj=dlo.cv,
+                margin=0.1,
+                vmax=max_bias,
+                inverted=False,
+                n=200,
+            )
 
         if koopman:
             if plot_selected_points:
@@ -383,25 +413,35 @@ class Observable:
                 macro_chunk=macro_chunk,
                 verbose=verbose,
             )
+
+            fes_bias_tot = dlo.get_fes_bias_from_weights(
+                weights=weights,
+                cv=dlo.cv,
+                n_grid=n_max,
+                T=dlo.sti.T,
+                collective_variable=dlo.collective_variable,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+            )
+            if resample:
+                fes_bias_tot = fes_bias_tot.resample(n=n_max)
+
         else:
-            weights = dlo._weights
+            fes_bias_tot = fes_bias_wham
 
         print("gettingg FES Bias")
 
-        fes_bias_tot = dlo.get_fes_bias_from_weights(
-            weights=weights,
-            cv=dlo.cv,
-            n_grid=n_max,
-            T=dlo.sti.T,
-            collective_variable=dlo.collective_variable,
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            samples_per_bin=samples_per_bin,
-            min_samples_per_bin=min_samples_per_bin,
+        print("plotting")
+        fes_bias_tot.plot(
+            name="FES_bias.png",
+            # traj=dlo.cv,
+            margin=0.1,
+            vmax=max_bias,
+            inverted=False,
+            n=200,
         )
-
-        if resample:
-            fes_bias_tot = fes_bias_tot.resample()
 
         if plot_selected_points:
             print("plotting")
@@ -425,7 +465,7 @@ class Observable:
         min_traj_length=None,
         only_finished=True,
         chunk_size=None,
-        macro_chunk=10000,
+        macro_chunk=1000,
         T_scale=10,
         n_max=30,
         cv_round=None,
@@ -435,9 +475,10 @@ class Observable:
         verbose=True,
         max_bias=None,
         kooopman_wham=None,
-        samples_per_bin=20,
-        min_samples_per_bin=5,
+        samples_per_bin=5,
+        min_samples_per_bin=1,
         executors=Executors.training,
+        direct_bias=True,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -465,6 +506,7 @@ class Observable:
             kooopman_wham=kooopman_wham,
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
+            direct_bias=direct_bias,
         )
 
         if executors is None:
@@ -489,8 +531,8 @@ class Observable:
         start_r=1,
         rbf_kernel="linear",
         rbf_degree=None,
-        samples_per_bin=20,
-        min_samples_per_bin=5,
+        samples_per_bin=5,
+        min_samples_per_bin=1,
         chunk_size=None,
         macro_chunk=10000,
         update_bounding_box=True,  # make boudning box bigger for FES calculation
@@ -498,7 +540,7 @@ class Observable:
         min_traj_length=None,
         margin=0.1,
         only_finished=True,
-        shmap=True,
+        shmap=False,
         thermolib=False,
         lag_n=30,
         out=int(1e5),
@@ -509,6 +551,7 @@ class Observable:
         verbose=True,
         koopman_wham=None,
         executors=Executors.training,
+        direct_bias=True,
     ):
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
@@ -523,6 +566,7 @@ class Observable:
                 map=False,
                 dlo=self.rounds,
                 dlo_kwargs=dict(
+                    out=-1,  # max number of points to plot
                     num=1,
                     ignore_invalid=False,
                     cv_round=self.cv_round,
@@ -579,44 +623,31 @@ class Observable:
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
                 executors=executors,
+                direct_bias=direct_bias,
             )
 
-        if plot:
-            fold = str(self.rounds.path(c=self.cv_round))
+        # if plot:
+        #     fold = str(self.rounds.path(c=self.cv_round))
 
-            pf = []
+        #     pf = []
 
-            pf.append(
-                bash_app_python(function=Bias.static_plot)(
-                    bias=fes_bias_tot,
-                    outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.png")],
-                    execution_folder=fold,
-                    name=f"FES_bias_{self.rnd}_inverted_{choice}.png",
-                    inverted=False,
-                    label="Free Energy [kJ/mol]",
-                    stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
-                    stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
-                    margin=margin,
-                    vmax=vmax,
-                    n=200,
-                ),
-            )
+        #     pf.append(
+        #         bash_app_python(function=Bias.static_plot)(
+        #             bias=fes_bias_tot,
+        #             outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.png")],
+        #             execution_folder=fold,
+        #             name=f"FES_bias_{self.rnd}_inverted_{choice}.png",
+        #             inverted=False,
+        #             label="Free Energy [kJ/mol]",
+        #             stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
+        #             stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
+        #             margin=margin,
+        #             vmax=vmax,
+        #             n=200,
+        #         ),
+        #     )
 
-            # pf.append(
-            #     bash_app_python(function=Bias.static_plot)(
-            #         bias=fes_bias_tot,
-            #         outputs=[File(f"{fold}/FES_bias_{self.rnd}_{choice}.png")],
-            #         execution_folder=fold,
-            #         name=f"FES_bias_{self.rnd}_{choice}.png",
-            #         stdout=f"FES_bias_{self.rnd}_{choice}.stdout",
-            #         stderr=f"FES_bias_{self.rnd}_{choice}.stderr",
-            #         margin=margin,
-            #         vmax=vmax,
-            #         n=200,
-            #     ),
-            # )
-
-            for f in pf:
-                f.result()
+        #     for f in pf:
+        #         f.result()
 
         return fes_bias_tot

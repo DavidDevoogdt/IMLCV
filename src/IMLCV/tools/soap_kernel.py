@@ -13,8 +13,9 @@ from jax import Array, lax, vmap
 from jax.tree_util import Partial
 from scipy.special import legendre as sp_legendre
 
-from IMLCV.base.CV import NeighbourList, SystemParams, padded_shard_map, shmap_kwargs
-from IMLCV.tools.bessel_callback import ive, spherical_jn
+from IMLCV.base.CV import NeighbourList, ShmapKwargs, SystemParams, padded_shard_map
+from IMLCV.external.quadrature import quad
+from IMLCV.tools.bessel_callback import ie_n, spherical_jn
 
 
 @partial(jax.jit, static_argnums=(1,))
@@ -32,8 +33,8 @@ def p_i(
     chunk_size_neigbourgs=None,
     chunk_size_atoms=None,
     chunk_size_batch=None,
-    shmap=True,
-    shmap_kwargs=shmap_kwargs(),
+    shmap=False,
+    shmap_kwargs=ShmapKwargs.create(),
 ):
     if sp.batched:
         f = Partial(
@@ -93,41 +94,11 @@ def legendre_l(l, pj, pk):
     return legendre(cos_ang, l)
 
 
-def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
+def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
-    def phi(n, n_max, r, r_cut, sigma_a):
-        return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2))
-
-    @partial(vmap, in_axes=(None, 0, None), out_axes=1)
-    @partial(vmap, in_axes=(0, None, None), out_axes=0)
-    def I_prime_ml(n, l_vec, r_ij):
-        def f(r):
-            # https://mathworld.wolfram.com/ModifiedSphericalBesselFunctionoftheFirstKind.html
-            def fi(r, r_ij):
-                return (
-                    r ** (3 / 2)
-                    * jnp.sqrt(sigma_a**2 * jnp.pi / (2 * r_ij))
-                    * phi(n, n_max, r, r_cut, sigma_a)
-                    * jnp.exp(-((r - r_ij) ** 2) / (2 * sigma_a**2))
-                    * ive(l_vec + 0.5, r * r_ij / sigma_a**2)
-                )
-
-            return jnp.where(
-                r > 0,
-                jnp.where(
-                    r_ij > 0,
-                    fi(jnp.where(r > 0, r, 1), jnp.where(r_ij > 0, r_ij, 1)),
-                    0.0,
-                ),
-                0.0,
-            )
-
-        x = jnp.linspace(0, r_cut, num=num)
-        y = vmap(f)(x)
-
-        return jnp.apply_along_axis(lambda y: jax.scipy.integrate.trapezoid(y=y, x=x), axis=0, arr=y)
+    # n_max = float(n_max)
 
     def f_cut(r):
         return lax.cond(
@@ -136,68 +107,269 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=50):
             lambda: lax.cond(
                 r < r_cut - r_delta,
                 lambda: 1.0,
-                lambda: 0.5 * (1 + jnp.cos(jnp.pi * (r - r_cut + r_delta) / r_delta)),
+                lambda: 1.0 / (1 + jnp.exp((r - r_cut + r_delta / 2) / r_delta * 15)),
             ),
         )
 
-    def S_nm(ind):
-        def g(r):
-            return phi(ind[0], n_max, r, r_cut, sigma_a) * phi(ind[1], n_max, r, r_cut, sigma_a) * r**2
+    if basis == "gto":
+        # https://lab-cosmo.github.io/librascal/SOAP.html
+        # TODO: integrates analytically
 
-        x = jnp.linspace(0, r_cut, num=num)
-        y = g(x)
+        # print(f"ignoring {sigma_a=}")
 
-        return jax.scipy.integrate.trapezoid(y=y, x=x)
+        # sigma_a = sigma_b
 
-    l_vec = jnp.arange(0, l_max + 1)
-    n_vec = jnp.arange(0, n_max + 1)
+        def _phi(n, n_max, r, r_cut, sigma_a, l, l_max):
+            # compress in the x direction
+            r_scale = r_cut * (n + 1) / (n_max + 1)
 
-    print("Check indexing of meshgrid for SOAP!")
+            a = -jnp.log(1e-3) / r_scale**2
 
-    indices = jnp.array(jnp.meshgrid(n_vec, n_vec))
+            # we want this to be 1e-3 at r_scale=1
 
-    S = jnp.apply_along_axis(S_nm, axis=0, arr=indices)
+            return r**l * jnp.exp(-a * r**2) * f_cut(r)
 
-    L, V = jnp.linalg.eigh(S)
-    L = jnp.where(L < 0, jnp.zeros_like(L), L)
+    elif basis == "loc_gaussians":
 
-    U = jnp.diag(jnp.sqrt(L)) @ V.T
-    U_inv_nm = jnp.linalg.pinv(U)
+        def _phi(n, n_max, r, r_cut, sigma_a, l, l_max):
+            return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2)) * f_cut(
+                r
+            )
+    elif basis == "cos":
 
-    l_list = list(range(l_max + 1))
+        def _phi_0(n, n_max, r, r_cut, sigma_a, l, l_max):
+            return (
+                (r / r_cut) ** l
+                * (jnp.cos(r / r_cut * (n + 0.5) * jnp.pi))
+                * jnp.where(r > r_cut, 0, 1)
+            )
+
+        # make derivatives zero at r_cut
+
+        def _phi_1(n, n_max, r, r_cut, sigma_a, l, l_max):
+            return _phi_0(n, n_max, r, r_cut, sigma_a, l, l_max) / (n + 1 / 2) + _phi_0(
+                n + 1, n_max, r, r_cut, sigma_a, l, l_max
+            ) / (n + 3 / 2)
+
+        _phi = _phi_1
+
+    else:
+        raise ValueError(f"{basis=} not known")
+
+    if sigma_a != 0:
+
+        @partial(jax.jit, static_argnums=(0, 1))
+        def I_prime_ml(
+            n_max,
+            l_max,
+            r_ij,
+            sigma_a,
+            r_cut,
+        ):
+            def _f(
+                r,
+                r_ij,
+                # sigma_a,
+                # r_cut,
+            ):
+                # https://mathworld.wolfram.com/ModifiedSphericalBesselFunctionoftheFirstKind.html
+
+                r_safe = jnp.where(r > 0, r, 1)
+
+                # this is exp version
+                ive_l = ie_n(
+                    l_max, r_safe * r_ij / sigma_a**2, half=True
+                )  # exponential scaled, corrected in c
+
+                phi_nl = jax.vmap(
+                    jax.vmap(
+                        _phi,
+                        in_axes=(0, None, None, None, None, None, None),
+                        out_axes=0,
+                    ),
+                    in_axes=(None, None, None, None, None, 0, None),
+                    out_axes=1,
+                )(
+                    jnp.arange(n_max + 1, dtype=jnp.int64),
+                    n_max,
+                    r_safe,
+                    r_cut,
+                    sigma_a,
+                    jnp.arange(l_max + 1, dtype=jnp.int64),
+                    l_max,
+                )
+
+                c = (
+                    r ** (3 / 2)
+                    * jnp.sqrt(sigma_a**2 * jnp.pi / (2 * r_ij))
+                    * jnp.exp(-((r_safe - r_ij) ** 2) / (2 * sigma_a**2))
+                )
+
+                @partial(vmap, in_axes=(0, 1), out_axes=1)
+                @partial(vmap, in_axes=(None, 0), out_axes=0)
+                def _mul(_l, _n):
+                    out = _l * _n * c
+
+                    return jnp.where(
+                        r > 0,
+                        out,
+                        0.0,
+                    )
+
+                out = _mul(ive_l, phi_nl)
+
+                return out
+
+            I_prime = quad(_f, 1e-10, r_cut, n=num)(
+                r_ij,
+                # sigma_a,
+                # r_cut,
+            )
+
+            return I_prime
+
+    else:
+        # print("using delta function")
+
+        @partial(jax.jit, static_argnums=(0, 1))
+        def I_prime_ml(
+            n_max,
+            l_max,
+            r_ij,
+            sigma_a,
+            r_cut,
+        ):
+            phi_nl = jax.vmap(
+                jax.vmap(
+                    _phi,
+                    in_axes=(0, None, None, None, None, None, None),
+                    out_axes=0,
+                ),
+                in_axes=(None, None, None, None, None, 0, None),
+                out_axes=1,
+            )(
+                jnp.arange(n_max + 1, dtype=jnp.int64),
+                n_max,
+                r_ij,
+                r_cut,
+                sigma_a,
+                jnp.arange(l_max + 1, dtype=jnp.int64),
+                l_max,
+            )
+
+            return phi_nl  # * r_ij**2 this term is also not used in SB
+
+    def S_nm(n, m):
+        def g(r, sigma_a, r_cut, n_max):
+            _phi_nl = jax.vmap(_phi, in_axes=(None, None, None, None, None, 0, None))(
+                n,
+                n_max,
+                r,
+                r_cut,
+                sigma_a,
+                jnp.arange(l_max + 1, dtype=jnp.int64),
+                l_max,
+            )
+
+            _phi_ml = jax.vmap(_phi, in_axes=(None, None, None, None, None, 0, None))(
+                m,
+                n_max,
+                r,
+                r_cut,
+                sigma_a,
+                jnp.arange(l_max + 1, dtype=jnp.int64),
+                l_max,
+            )
+
+            return _phi_nl * _phi_ml * r**2
+
+        return quad(g, 1e-10, r_cut, n=101)(sigma_a, r_cut, n_max)
+
+    S_nml = jnp.zeros((n_max + 1, n_max + 1, l_max + 1))
+
+    for n in range(int(n_max) + 1):
+        for m in range(int(n_max) + 1):
+            S_nml = S_nml.at[n, m, :].set(S_nm(n, m))
+
+    # jax.debug.print("S {}", S_nml)
+
+    @partial(jax.vmap, in_axes=(2), out_axes=(2))
+    def _u_inv(S):
+        U = jnp.linalg.cholesky(S)
+        U_inv_nml = jnp.linalg.pinv(U)
+        return U_inv_nml
+
+    U_inv_nml = _u_inv(S_nml)
+
+    # print("U_inv {}", U_inv_nml)
+    # jax.debug.print("U inv {}", U_inv_nml)
 
     def _l(p_ij, p_ik):
-        return jnp.array([legendre_l(l, p_ij, p_ik) for l in l_list])
+        return jnp.array([legendre_l(l, p_ij, p_ik) for l in range(l_max + 1)])
 
-    def a_nlj(r_ij):
-        return U_inv_nm @ I_prime_ml(n_vec, l_vec, r_ij) * f_cut(r_ij)
+    def a_nlj(r_ij, sigma_a, r_cut, U_inv_nml):
+        I_nl = I_prime_ml(
+            n_max,
+            l_max,
+            r_ij,
+            sigma_a,
+            r_cut,
+        )
+
+        @partial(jax.vmap, in_axes=(2, 1), out_axes=1)
+        def _g_nl(
+            U_inv_l,
+            I_nl,
+        ):
+            return U_inv_l @ I_nl
+
+        return _g_nl(
+            U_inv_nml,
+            I_nl,
+        )
 
     def _p_i_soap_2_s(p_ij, atom_index_j):
         r_ij2 = jnp.dot(p_ij, p_ij)
-        r_ij2 = jax.lax.cond(r_ij2 == 0, lambda: jnp.ones_like(r_ij2), lambda: r_ij2)
+        r_ij_safe = jnp.where(r_ij2 <= 1e-15, jnp.ones_like(r_ij2), r_ij2)
 
-        shape = jax.eval_shape(a_nlj, r_ij2)
+        a_jnl_safe = a_nlj(jnp.sqrt(r_ij_safe), sigma_a, r_cut, U_inv_nml)
 
-        a_jnl = jax.lax.cond(
-            r_ij2 == 0,
-            lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
-            lambda: a_nlj(jnp.sqrt(r_ij2)),
+        a_jnl = jnp.where(
+            r_ij2 <= 1e-15,
+            jnp.full_like(a_jnl_safe, fill_value=0.0),
+            a_jnl_safe,
         )
 
         return a_jnl
 
     # @jit
     def _p_i_soap_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
-        a_nlj = data_j
-        a_nlk = data_k
-        b_ljk = _l(p_ij, p_ik)
+        a_nl_j = data_j
+        a_nl_k = data_k
+        b_l_jk = _l(p_ij, p_ik)
+
+        n_vec = jnp.arange(n_max + 1)
+        l_vec = jnp.arange(l_max + 1)
+
+        # this ensures that l<=n
+        @partial(vmap, in_axes=(None, 0, None), out_axes=1)
+        @partial(vmap, in_axes=(0, None, None), out_axes=0)
+        def a_nml_l(n, l, a):
+            return lax.cond(
+                l <= n,
+                lambda: a[n - l, l],
+                lambda: jnp.zeros_like(a[0, 0]),
+            )
+
+        g_nml_l_j = a_nml_l(n_vec, l_vec, a_nl_j)
+        g_nml_l_k = a_nml_l(n_vec, l_vec, a_nl_k)
 
         return jnp.einsum(
             "l,al,bl,l->abl",
             4 * jnp.pi * (2 * l_vec + 1),
-            a_nlj,
-            a_nlk,
-            b_ljk,
+            g_nml_l_j,
+            g_nml_l_k,
+            b_l_jk,
         )
 
     return _p_i_soap_2_s, _p_i_soap_2_d
@@ -210,7 +382,11 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
     assert l_max <= n_max, "l_max should be smaller or equal to n_max"
 
     if bessel_fun == "jax":
-        spherical_jn_2 = jax.vmap(jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1), in_axes=(None, 1), out_axes=2)
+        spherical_jn_2 = jax.vmap(
+            jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1),
+            in_axes=(None, 1),
+            out_axes=2,
+        )
     elif bessel_fun == "scipy":
         from jax import custom_jvp
 
@@ -252,7 +428,9 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
         raise ValueError(f"{bessel_fun=} not supported")
 
     def spherical_jn_zeros(n, m):
-        x0 = jnp.array((scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2)
+        x0 = jnp.array(
+            (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
+        )
 
         return vmap(
             lambda x: jaxopt.GradientDescent(
@@ -269,7 +447,9 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
         zeros = spherical_jn_zeros(n, m)
 
-        zeros_guess = (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
+        zeros_guess = (
+            scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)
+        ) / 2
 
         x = jnp.linspace(0, jnp.max(zeros), num=1000)
         y = jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1)(n, x)[n, :]
@@ -293,44 +473,45 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
     # n+1th zero of spherical bessel function of the first kind
     u_ln = jnp.array([spherical_jn_zeros(int(n), l_max + 2) for n in range(n_max + 2)])
 
-    # print(f"{spherical_jn_2(l_max + 1, u_ln)}")
-
-    # # perform check
-    # @partial(vmap, in_axes=(0, None))
-    # @partial(vmap, in_axes=(None, 0))
-    # def _check(n, l):
-    #     return spherical_jn(l_max + 1, u_ln[l, n])[l]
-
-    # print(f"{_check(n_vec, l_vec)=}")
-
-    def e(x):
-        l, n = x
-        return (
-            u_ln[l, n - 1] ** 2
-            * u_ln[l, n + 1] ** 2
-            / ((u_ln[l, n - 1] ** 2 + u_ln[l, n] ** 2) * (u_ln[l, n + 1] ** 2 + u_ln[l, n] ** 2))
-        )
-
-    e_nl = jnp.apply_along_axis(
-        func1d=e,
-        axis=0,
-        arr=jnp.array(jnp.meshgrid(jnp.arange(l_max + 2), jnp.arange(n_max + 2))),
-    )
-
     s_lln = spherical_jn_2(l_max + 1, u_ln)
 
     @partial(vmap, in_axes=(0, None, None))
     @partial(vmap, in_axes=(None, 0, None))
     def f_nl(n, l, sj):
         return (
-            u_ln[l, n + 1] / s_lln[l + 1, l, n] * sj[l, l, n] - u_ln[l, n] / s_lln[l + 1, l, n + 1] * sj[l, l, n + 1]
+            u_ln[l, n + 1] / s_lln[l + 1, l, n] * sj[l, l, n]
+            - u_ln[l, n] / s_lln[l + 1, l, n + 1] * sj[l, l, n + 1]
         ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1] ** 2) / r_cut**3) ** (0.5)
 
     l_list = list(range(l_max + 1))
     l_vec = jnp.array(l_list)
     n_vec = jnp.arange(n_max + 1)
 
-    nm1_vec = jnp.arange(n_max)
+    # nm1_vec = jnp.arange(n_max)
+
+    # perform gramm shmidt
+
+    def g(r):
+        sj = spherical_jn_2(l_max, r * u_ln / r_cut)
+
+        n_range = jnp.arange(n_max + 1)
+        l_range = jnp.arange(l_max + 1)
+
+        _f_nl = f_nl(n_range, l_range, sj)
+
+        return jnp.einsum("nl,ml->nml", _f_nl, _f_nl) * r**2
+
+    S_nml = quad(g, 1e-10, r_cut, n=50)()
+
+    @partial(jax.vmap, in_axes=(2), out_axes=(2))
+    def _u_inv(S):
+        U = jnp.linalg.cholesky(S)
+        U_inv_nml = jnp.linalg.pinv(U)
+        return U_inv_nml
+
+    U_inv_nml = _u_inv(S_nml)
+
+    # jax.debug.print("S={}, U_inv={}", S_nml, U_inv_nml)
 
     @jax.jit
     def _l(p_ij, p_ik):
@@ -340,31 +521,47 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
         sj = spherical_jn_2(l_max, r * u_ln / r_cut)
         fnl = f_nl(n_vec, l_vec, sj)
 
-        def body(args, n):
-            def inner(args):
-                d_xlm, g_xlm = args
+        @partial(jax.vmap, in_axes=(2, 1), out_axes=1)
+        def _g_nl(
+            U_inv_l,
+            fnl,
+        ):
+            return U_inv_l @ fnl
 
-                d_xl = 1 - e_nl[n, l_vec] / d_xlm
-                g_xl = 1 / jnp.sqrt(d_xl) * (fnl[n, :] + jnp.sqrt(e_nl[n, l_vec] / d_xlm) * g_xlm)
-
-                return (d_xl, g_xl), g_xl
-
-            def first(args):
-                return (jnp.ones_like(fnl[0, :]), fnl[0, :]), fnl[0, :]
-
-            return jax.lax.cond(n == 0, first, inner, args)
-
-        state, out = lax.scan(
-            f=body,
-            init=(
-                fnl[0, :] * 0 + 1,
-                fnl[0, :],
-            ),
-            xs=nm1_vec,
-            unroll=True,
+        return _g_nl(
+            U_inv_nml,
+            fnl,
         )
 
-        return out
+        # def body(args, n):
+        #     def inner(args):
+        #         d_xlm, g_xlm = args
+
+        #         d_xl = 1 - e_nl[n, l_vec] / d_xlm
+        #         g_xl = (
+        #             1
+        #             / jnp.sqrt(d_xl)
+        #             * (fnl[n, :] + jnp.sqrt(e_nl[n, l_vec] / d_xlm) * g_xlm)
+        #         )
+
+        #         return (d_xl, g_xl), g_xl
+
+        #     def first(args):
+        #         return (jnp.ones_like(fnl[0, :]), fnl[0, :]), fnl[0, :]
+
+        #     return jax.lax.cond(n == 0, first, inner, args)
+
+        # state, out = lax.scan(
+        #     f=body,
+        #     init=(
+        #         fnl[0, :] * 0 + 1,
+        #         fnl[0, :],
+        #     ),
+        #     xs=nm1_vec,
+        #     # unroll=True,
+        # )
+
+        # return out
 
     def _p_i_sb_2_s(p_ij, atom_index_j):
         r_ij_sq = jnp.dot(p_ij, p_ij)
@@ -402,6 +599,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
         b_ljk = _l(p_ij, p_ik)
 
+        # this ensures that l<=n
         @partial(vmap, in_axes=(None, 0, None), out_axes=1)
         @partial(vmap, in_axes=(0, None, None), out_axes=0)
         def a_nml_l(n, l, a):

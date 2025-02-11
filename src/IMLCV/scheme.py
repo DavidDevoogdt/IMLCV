@@ -104,15 +104,16 @@ class Scheme:
         T_scale=10,
     ):
         m = self.bias.collective_variable.metric
-        grid, cv_grid, _, _ = m.grid(n)
+        grid, _, cv_grid, _ = m.grid(
+            n + 1,
+            margin=0.1,
+        )
 
         # sigma =
 
         if k is None:
-            b = jnp.array([a[-1] - a[0] for a in grid])
-            mu = jnp.array([(a[1] - a[0]) / 2 for a in grid])
-
-            k = (2 * b / mu * jax.scipy.special.erfinv(1 - eps)) ** 2 * self.sti.T * boltzmann
+            mu = jnp.array([a[1] - a[0] for a in grid])
+            k = (2 / mu * jax.scipy.special.erfinv(1 - eps)) ** 2 * self.sti.T * boltzmann
 
             print(f"{k*kjmol=}")
 
@@ -154,8 +155,8 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
-        samples_per_bin=20,
-        min_samples_per_bin=5,
+        samples_per_bin=5,
+        min_samples_per_bin=1,
         init_max_grad=None,
         plot=True,
         choice="rbf",
@@ -178,6 +179,7 @@ class Scheme:
         lag_n=30,
         koopman_wham=None,
         out=-1,
+        direct_bias=True,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -258,6 +260,7 @@ class Scheme:
                 lag_n=lag_n,
                 koopman_wham=koopman_wham,
                 out=out,
+                direct_bias=direct_bias,
             )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)
@@ -289,8 +292,8 @@ class Scheme:
         test=False,
         max_bias=None,
         transform_bias=True,
-        samples_per_bin=50,
-        min_samples_per_bin=5,
+        samples_per_bin=5,
+        min_samples_per_bin=1,
         percentile=1e-1,
         use_executor=True,
         n_max=30,

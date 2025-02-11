@@ -48,7 +48,7 @@ class hkFunBase(CvFunBase):
         nl: NeighbourList,
         reverse=False,
         conditioners: list[CV] | None = None,
-        shmap=True,
+        shmap=False,
     ) -> CV:
         assert conditioners is None
         assert not reverse

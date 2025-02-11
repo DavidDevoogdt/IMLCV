@@ -242,6 +242,7 @@ def config(
             if cpu_cluster is not None:
                 assert cpu_cluster in [
                     "cpu_milan",
+                    "cpu_milan_rhel_9",
                     "cpu_rome",
                     "cpu_rome_512",
                     "cpu_rome_all",
@@ -413,7 +414,7 @@ def config(
                     mem=min_memery_per_node,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=512,
+                    max_blocks=2048,
                     parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=singlepoint_nodes,
@@ -438,7 +439,7 @@ def config(
                         label=label,
                         init_blocks=1,
                         min_blocks=0,
-                        max_blocks=512,
+                        max_blocks=2048,
                         parallelism=1,
                         parsl_tasks_per_block=1,
                         threads_per_core=default_threads,

@@ -291,6 +291,7 @@ class GridBias(Bias):
     n: jax.Array
     bounds: jax.Array
     vals: jax.Array
+    order: int = field(pytree_node=False, default=1)
 
     @classmethod
     def create(
@@ -300,6 +301,7 @@ class GridBias(Bias):
         n=30,
         bounds: Array | None = None,
         margin=0.1,
+        order=1,
     ) -> RbfBias:
         grid, cv, cv_mid, bounds = cvs.metric.grid(
             n=n,
@@ -316,6 +318,7 @@ class GridBias(Bias):
             n=n,
             vals=vals,
             bounds=bounds,
+            order=order,
         )
 
     def _compute(self, cvs: CV):
@@ -325,4 +328,9 @@ class GridBias(Bias):
 
         import jax.scipy as jsp
 
-        return jsp.ndimage.map_coordinates(self.vals, coords * (self.n - 1), mode="nearest", order=1)
+        return jsp.ndimage.map_coordinates(
+            self.vals,
+            coords * (self.n - 1),
+            mode="nearest",
+            order=1,
+        )

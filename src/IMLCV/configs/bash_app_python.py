@@ -247,6 +247,7 @@ if __name__ == "__main__":
 
     jax.config.update("jax_platform_name", "cpu")
     jax.config.update("jax_enable_x64", True)
+    jax.config.update("jax_pmap_no_rank_reduction", False)
 
     import IMLCV  # noqa: F401
 

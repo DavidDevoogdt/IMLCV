@@ -505,7 +505,7 @@ class TransformerMAF(Transformer):
             w=w,
             calc_pi=True,  # removes mean of the features
             koopman_weight=False,
-            add_1=False,
+            add_1=True,
             trans=trans,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
@@ -518,13 +518,13 @@ class TransformerMAF(Transformer):
         )
 
         # # # weight and make reversible
-        # km = km.weighted_model(
-        #     chunk_size=chunk_size,
-        #     macro_chunk=macro_chunk,
-        #     verbose=True,
-        #     symmetric=True,
-        #     add_1=False,
-        # )
+        km = km.weighted_model(
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            verbose=True,
+            symmetric=True,
+            add_1=False,
+        )
 
         ts = km.timescales() / nanosecond
 
@@ -533,7 +533,7 @@ class TransformerMAF(Transformer):
         out_dim = self.outdim
 
         for i in range(self.outdim - 1):
-            if ts[i + 1] / ts[0] < 1 / 100:
+            if ts[i + 1] / ts[0] < 1 / 10:
                 (print(f"cv {i+1} is too small compared to cv {0} (fraction= {ts[i+1]/ ts[0]}), cutting off "),)
                 out_dim = i + 1
                 break

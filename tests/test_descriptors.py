@@ -14,7 +14,7 @@ from jax import grad, vmap
 
 from IMLCV.base.CV import CollectiveVariable, NeighbourListInfo, SystemParams
 from IMLCV.implementations.CV import get_sinkhorn_divergence_2, sb_descriptor, soap_descriptor
-from IMLCV.tools.bessel_callback import iv, ive, jv, kv, kve, spherical_jn, spherical_yn, yv
+from IMLCV.tools.bessel_callback import iv, ive, ive_b, jv, kv, kve, spherical_jn, spherical_yn, yv
 from IMLCV.tools.soap_kernel import p_inl_sb
 
 
@@ -174,7 +174,7 @@ def test_SB_basis():
 def test_bessel():
     for func, name, sp, dsp, wz in zip(
         [jv, yv, iv, kv, spherical_jn, spherical_yn, ive, kve],
-        ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv", "ive", "kve"],
+        ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv", "ive", "ive_b" "kve"],
         [
             scipy.special.jv,
             scipy.special.yv,
@@ -182,6 +182,7 @@ def test_bessel():
             scipy.special.kv,
             scipy.special.spherical_jn,
             scipy.special.spherical_yn,
+            scipy.special.ive,
             scipy.special.ive,
             scipy.special.kve,
         ],
@@ -192,6 +193,7 @@ def test_bessel():
             scipy.special.kvp,
             lambda x, y: scipy.special.spherical_jn(x, y, derivative=True),
             lambda x, y: scipy.special.spherical_yn(x, y, derivative=True),
+            None,
             None,
             None,
         ],
@@ -247,17 +249,21 @@ def test_bessel():
     def i1e(x):
         return ive(1, x)
 
+    def i1eb(x):
+        return ive_b(1, x)
+
     def i1e2(x):
         return iv(1, x) * jnp.exp(-jnp.abs(x))
 
     assert jnp.linalg.norm(vmap(i1e)(x) - vmap(i1e2)(x)) < 1e-5
+    assert jnp.linalg.norm(vmap(i1eb)(x) - vmap(i1e2)(x)) < 1e-5
     assert jnp.linalg.norm(vmap(grad(i1e))(x) - vmap(grad(i1e2))(x)) < 1e-5
 
 
 def test_bessel_2():
     for func, name, sp, dsp, wz in zip(
         [spherical_jn],
-        [" spherical_jv"],
+        ["spherical_jv"],
         [scipy.special.spherical_jn],
         [lambda x, y: scipy.special.spherical_jn(x, y, derivative=True)],
         [0],
@@ -298,6 +304,8 @@ if __name__ == "__main__":
     # with jax.disable_jit():
     # test_SOAP_SB_sinkhorn(cell=True, pp="sb")
     # test_bessel_2()
-    test_SB_basis()
+    # test_SB_basis()
+
+    test_bessel()
 
     # print(jax.vmap(spherical_jn, in_axes=(None, 0))(5, jnp.ones(5)))

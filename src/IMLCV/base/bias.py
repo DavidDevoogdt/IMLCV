@@ -14,7 +14,7 @@ from flax.struct import dataclass, field
 from jax import Array, value_and_grad, vmap
 from jax.tree_util import Partial
 from molmod.constants import boltzmann
-from molmod.units import angstrom, electronvolt, kelvin
+from molmod.units import kelvin, kjmol
 from typing_extensions import Self
 
 from IMLCV import unpickler
@@ -22,10 +22,10 @@ from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
     NeighbourList,
+    ShmapKwargs,
     SystemParams,
     padded_shard_map,
     padded_vmap,
-    shmap_kwargs,
 )
 
 if TYPE_CHECKING:
@@ -62,14 +62,14 @@ class EnergyResult:
 
         return EnergyResult(energy=self.energy + other.energy, gpos=gpos, vtens=vtens)
 
-    def __str__(self) -> str:
-        str = f"energy [eV]: {self.energy/electronvolt}"
-        if self.gpos is not None:
-            str += f"\ndE/dx^i_j [eV/angstrom] \n {self.gpos[:]*angstrom/electronvolt}"
-        if self.vtens is not None:
-            str += f"\n  virial [eV] \n {self.vtens[:] / electronvolt }"
+        # def __str__(self) -> str:
+        #     str = f"energy [eV]: {self.energy/electronvolt}"
+        #     if self.gpos is not None:
+        #         str += f"\ndE/dx^i_j [eV/angstrom] \n {self.gpos[:]*angstrom/electronvolt}"
+        #     if self.vtens is not None:
+        #         str += f"\n  virial [eV] \n {self.vtens[:] / electronvolt }"
 
-        return str
+        # return str
 
     # def __getstate__(self ):
     #     print(f"pickling {self.__class__}")
@@ -118,8 +118,8 @@ class Energy:
     def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
         pass
 
-    def _handle_exception(self):
-        return ""
+    def _handle_exception(self, e=None):
+        return f"{e=}"
 
     def compute_from_system_params(
         self,
@@ -127,7 +127,8 @@ class Energy:
         vir=False,
         sp: SystemParams | None = None,
         nl: NeighbourList | None = None,
-        shmap=True,
+        shmap=False,
+        shmap_kwarg=ShmapKwargs.create(),
     ) -> EnergyResult:
         if sp is not None:
             self.sp = sp
@@ -240,11 +241,11 @@ class Bias(ABC):
         gpos=False,
         vir=False,
         chunk_size: int | None = None,
-        shmap=True,
+        shmap=False,
         use_jac=False,
         push_jac=False,
         rel=False,
-        shmap_kwargs=shmap_kwargs(),
+        shmap_kwargs=ShmapKwargs.create(),
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -259,6 +260,7 @@ class Bias(ABC):
                     gpos=gpos,
                     vir=vir,
                     shmap=False,
+                    shmap_kwargs=None,
                 ),
                 chunk_size=chunk_size,
             )
@@ -359,8 +361,8 @@ class Bias(ABC):
         cvs: CV,
         diff=False,
         chunk_size=None,
-        shmap=True,
-        shmap_kwargs=shmap_kwargs(),
+        shmap=False,
+        shmap_kwargs=ShmapKwargs.create(),
     ) -> tuple[CV, CV | None]:
         """compute the energy and derivative.
 
@@ -404,13 +406,13 @@ class Bias(ABC):
         traj: list[CV] | None = None,
         dlo_kwargs=None,
         dlo=None,
-        vmax=None,
+        vmax=100 * kjmol,
         map=False,
         inverted=False,
         margin=0.1,
         dpi=300,
         T=300 * kelvin,
-        samples_per_bin=5,
+        # samples_per_bin=5,
         **kwargs,
     ):
         from IMLCV.base.CVDiscovery import Transformer
@@ -431,19 +433,17 @@ class Bias(ABC):
         Transformer.plot_app(
             collective_variables=[self.collective_variable],
             cv_data=[traj] if traj is not None else None,
-            # weight=[weights] if weights is not None else None,
             name=name,
             color_trajectories=True,
             margin=margin,
             plot_FES=True,
             biases=[bias],
             vmax=vmax,
-            samples_per_bin=samples_per_bin,
-            min_samples_per_bin=1,
             dpi=dpi,
             T=T,
             indicate_cv_data=False,
             cv_titles=None,
+            **kwargs,
         )
 
     def resample(self, cv_grid: CV | None = None, n=40, margin=0.3) -> Bias:
@@ -539,13 +539,27 @@ class Bias(ABC):
 
         return bounds
 
-    def kl_divergence(self, other: Bias, T: float, symmetric=True, margin=0.2, sign=1.0, n=50):
+    def kl_divergence(
+        self,
+        other: Bias,
+        T: float,
+        symmetric=True,
+        margin=0.2,
+        sign=1.0,
+        n=40,
+    ):
         _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=margin)
 
-        p_self = jnp.exp(sign * self.compute_from_cv(cvs)[0] / (T * boltzmann))
+        u0 = sign * self.compute_from_cv(cvs)[0] / (T * boltzmann)
+        u0 -= jnp.max(u0)
+
+        p_self = jnp.exp(u0)
         p_self /= jnp.sum(p_self)
 
-        p_other = jnp.exp(sign * other.compute_from_cv(cvs)[0] / (T * boltzmann))
+        u1 = sign * other.compute_from_cv(cvs)[0] / (T * boltzmann)
+        u1 -= jnp.max(u1)
+
+        p_other = jnp.exp(u1)
         p_other /= jnp.sum(p_other)
 
         @vmap
@@ -564,11 +578,10 @@ class Bias(ABC):
         self,
         T,
         inverted=True,
-        samples_per_bin=50,
-        min_samples_per_bin=1,
         vmax=None,
-        n_max_bias=2e4,
+        n_max_bias=1e5,
         margin=0.2,
+        macro_chunk=10000,
     ) -> dict[int, dict[tuple[int], Bias]]:
         free_energies = []
 
@@ -579,14 +592,14 @@ class Bias(ABC):
             margin=margin,
         )
 
-        w = self.apply([cv])[0]
+        w = self.apply([cv], macro_chunk_size=macro_chunk)[0]
 
         if inverted:
             w = -w
 
-        w -= jnp.min(w)
+        w -= jnp.nanmin(w)
         w = jnp.exp(-w / (boltzmann * T))
-        w /= jnp.sum(w)
+        w /= jnp.nansum(w)
 
         # weight grid
         w = w.reshape((n_grid,) * self.collective_variable.n)
@@ -608,10 +621,12 @@ class Bias(ABC):
             for tup in combinations(range(cvi.n), nd + 1):
                 dims = jnp.arange(cvi.n)
                 dims = jnp.delete(dims, jnp.array(tup))
+                dims = tuple([int(a) for a in dims])
 
-                w_tup = jnp.sum(w, axis=dims)
+                w_tup = jnp.nansum(w, axis=dims)
 
                 values = (boltzmann * T) * jnp.log(w_tup)
+                values -= jnp.max(values)
 
                 from IMLCV.implementations.bias import GridBias
 
@@ -626,13 +641,13 @@ class Bias(ABC):
 
         return free_energies
 
-    def apply(self, cvs: list[CV], shmap=True, macro_chunk_size=10000):
+    def apply(self, cvs: list[CV], shmap=False, macro_chunk_size=10000):
         from IMLCV.base.rounds import data_loader_output
 
         return data_loader_output._apply_bias(
             bias=self,
             x=cvs,
-            shmap=True,
+            shmap=False,
             macro_chunk=macro_chunk_size,
         )
 

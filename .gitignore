@@ -49,12 +49,10 @@ cover/*
 MANIFEST
 
 # Per-project virtualenvs
-.venv*/
-.conda*/
-.python-version
+micromamba/
 
-.vscode-server/*
-
+.vscode-server
+.ruff_cache
 
 # large folders
 dist/*
@@ -62,16 +60,20 @@ tmp/*
 src/IMLCV/examples/output/*
 
 notebooks/alanine_dipeptide_LDA/*
+notebooks/alanine_dipeptide_LDA_*/*
+notebooks/alanine_dipeptide_sd_*/*
+
+notebooks/test*
+perov_images
+
+.pip_cache
+
+saved_out
+
+notebooks/alanine_dipeptide_LDA/*
 
 notebooks/alanine_dipeptide_LDA_*/*
-
-notebooks/alanine_dipeptide_sd_*/*
-notebooks/test*
-perov_images/*
-
-.pip_cache/*
-
-saved_output/*
+put
 
 Miniconda3/*
 Miniconda3.sh

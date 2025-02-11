@@ -22,6 +22,7 @@ DATA_ROOT = ROOT_DIR / "data"
 def alanine_dipeptide_yaff(
     cv="backbone_dihedrals",
     bias: Callable[[CollectiveVariable], Bias] | None = None,
+    r_cut=None,
 ):
     T = 300 * kelvin
 
@@ -36,7 +37,7 @@ def alanine_dipeptide_yaff(
         ),
         screen_log=100,
         equilibration=0 * units.femtosecond,
-        r_cut=None,
+        r_cut=r_cut,
     )
 
     if cv == "backbone_dihedrals":
@@ -47,12 +48,19 @@ def alanine_dipeptide_yaff(
                 bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
             ),
         )
-
+    elif cv == "backbone_dihedrals_theta":
+        cv0 = CollectiveVariable(
+            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16)) + dihedral(numbers=(1, 4, 6, 8))),
+            metric=CvMetric.create(
+                periodicities=[True, True, True],
+                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi], [-np.pi, np.pi]],
+            ),
+        )
     elif cv is None:
         cv0 = NoneCV()
     else:
         raise ValueError(
-            f"unknown value {cv} for cv choos 'soap_dist' or 'backbone_dihedrals'",
+            f"unknown value {cv} for cv 'backbone_dihedrals'",
         )
 
     if bias is None:

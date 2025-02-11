@@ -80,8 +80,8 @@ def cv_vals(x: CV, powers, metric: CvMetric):
     return scale(metric.min_cv(x.cv), metric=metric) ** powers
 
 
-@partial(jax.jit, static_argnums=(5))
-def eval_kernel_matrix(a, x: CV, y: CV, metric: CvMetric, eps, kernel_func):
+@partial(jax.jit, static_argnums=(4))
+def eval_kernel_matrix(x: CV, y: CV, metric: CvMetric, eps, kernel_func):
     """Evaluate RBFs, with centers at `x`, at `x`."""
 
     @partial(jax.vmap, in_axes=(None, 0), out_axes=1)
@@ -89,7 +89,7 @@ def eval_kernel_matrix(a, x: CV, y: CV, metric: CvMetric, eps, kernel_func):
     def f00(x, y):
         return kernel_func(cv_norm(x, y, metric, eps))
 
-    return jnp.einsum("ij,js-> is", f00(x, y), a)
+    return f00(x, y)
 
 
 @jax.jit
@@ -107,50 +107,6 @@ def eval_polynomial_matrix(x: CV, metric: CvMetric, powers):
     pm = f00(x, powers)
 
     return pm
-
-
-def _eval_system(coeff, y: CV, metric: CvMetric, d, smoothing, kernel, epsilon, powers):
-    """eval the system used to solve for the RBF interpolant coefficients.
-
-
-    it evaluates
-    y(x) = sum_i a_i phi(||x - x_i||) + sum_j b_j p(x)_j
-    p(y)_j a_{ij} = 0
-
-    Parameters
-    ----------
-    y : (P, N) float ndarray
-        Data point coordinates.
-    d : (P, S) float ndarray
-        Data values at `y`.
-    smoothing : (P,) float ndarray
-        Smoothing parameter for each data point.
-    kernel : str
-        Name of the RBF.
-    epsilon : float
-        Shape parameter.
-    powers : (R, N) int ndarray
-        The exponents for each monomial in the polynomial.
-
-    Returns
-    -------
-    lhs : (P + R, P + R) float ndarray
-        Left-hand side matrix.
-    rhs : (P + R, S) float ndarray
-        Right-hand side matrix.
-
-
-    """
-
-    a = coeff[: y.shape[0], :]
-    b = coeff[y.shape[0] :, :]
-
-    kernel_func = NAME_TO_FUNC[kernel]
-
-    Ka = eval_kernel_matrix(a, y, y, metric, epsilon, kernel_func) + smoothing @ a
-    Pb = eval_polynomial_matrix(y, metric=metric, powers=powers)
-
-    return jnp.vstack([Ka + jnp.dot(Pb, b), Pb.T @ a])
 
 
 def evaluate_system(
@@ -192,6 +148,6 @@ def evaluate_system(
     kernel_func = NAME_TO_FUNC[kernel]
 
     return (
-        eval_kernel_matrix(a, x, y, metric, epsilon, kernel_func)
+        eval_kernel_matrix(x, y, metric, epsilon, kernel_func) @ a
         + eval_polynomial_matrix(x, metric=metric, powers=powers) @ b
     )
