@@ -2802,7 +2802,7 @@ class data_loader_output:
         if cv_t is None:
             cv_t = self.cv_t
 
-        # https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.7b00373
+        # https://pubs.acs.org/doi/full/10.1021/acs.jctc.7b00373
 
         u_unstacked = []
         beta = 1 / (self.sti.T * boltzmann)
@@ -2820,10 +2820,6 @@ class data_loader_output:
             u = beta * e  # - u0
 
             u_unstacked.append(u)
-
-        # print(f"masked = {[ int(jnp.sum(m)) for m in u_masks]} {bias_cutoff/ kjmol=}")
-
-        # cv_0 = [cv_0_i[m_i] for cv_0_i, m_i in zip(cv_0, u_masks)]
 
         sd = [a.shape[0] for a in cv_0]
         tot_samples = sum(sd)
@@ -2888,9 +2884,10 @@ class data_loader_output:
             # macro_chunk=macro_chunk,
         )
 
-        # print(f"{jnp.exp(hist)=}")
-        hist_mask = log_hist > -jnp.inf
+        hist_mask = log_hist > jnp.log(5)
         print(f"{jnp.sum(hist_mask)=}")
+
+        # get histos and expectations values e^-beta U_a
 
         len_a = len(u_unstacked)
         len_i = int(jnp.sum(hist_mask))
@@ -2918,88 +2915,172 @@ class data_loader_output:
             log_b_a = jnp.where(log_hist_a_weights == -jnp.inf, -jnp.inf, log_hist_a_num - log_hist_a_weights)
             log_b_ai = log_b_ai.at[a, :].set(log_b_a)
 
-        print("")
-
-        # we still need transition matrices, which can be generate from grid_nums
-        N_a_ik = jnp.zeros((len_a, len_i, len_i))
-        # from N_ik: fom k to i
-
         idx = jnp.arange(hist_mask.shape[0])[hist_mask]
         idx_inv = jnp.zeros(hist_mask.shape[0], dtype=jnp.int_)
         idx_inv = idx_inv.at[hist_mask].set(jnp.arange(jnp.sum(hist_mask)))
 
-        # todo: make N_a_ik sparse
+        # find transitions counts, make sparse arrays
+
+        list_unique = []
+        list_counts = []
+        list_unique_all = []
+
+        diag_unique = []
+        diag_counts = []
 
         for a, g_i in enumerate(grid_nums):
-            N_a_ik = N_a_ik.at[a, idx_inv[g_i.cv[1:]], idx_inv[g_i.cv[:-1]]].add(1)
+            u, c = jnp.unique(jnp.hstack([idx_inv[g_i.cv[1:]], idx_inv[g_i.cv[:-1]]]), axis=0, return_counts=True)
 
-        # only keep states with at least one input and one output
-        N_own = jnp.sum(jax.vmap(lambda x: x - jnp.diag(jnp.diag(x)))(N_a_ik), axis=0)
-        in_out_mask = jnp.logical_and(jnp.sum(N_own, axis=0) > 0, jnp.sum(N_own, axis=1) > 0)
+            list_unique_all.append(jnp.unique(u))
 
-        N_a_ik = N_a_ik[:, in_out_mask, :][:, :, in_out_mask]
-        log_b_ai = log_b_ai[:, in_out_mask]
-        len_i = int(jnp.sum(in_out_mask))
-        log_t_a_i = jnp.log(jnp.sum(N_a_ik, axis=1))
-        log_denom_k = jnp.sum(jnp.sum(jax.vmap(lambda x: x - jnp.diag(jnp.diag(x)))(N_a_ik), axis=0), axis=0)
+            diag = u[:, 0] == u[:, 1]
 
-        print(f"{log_b_ai=}")
+            diag_vals = c[diag]
 
-        # perform dhammed equations to obtain p_i
+            diag_unique.append(jnp.hstack([jnp.full((diag_vals.shape[0], 1), a), u[diag, 0].reshape(-1, 1)]))
+            diag_counts.append(diag_vals)
 
-        def log_sum_exp_safe(*x):
-            x = jnp.stack(x, axis=0)
+            c = c.at[diag].set(0)
 
-            x_max = jnp.max(x)
+            # print(u)
 
-            log_e = jnp.where(x_max == -jnp.inf, 0, jnp.log(jnp.sum(jnp.exp(x - x_max))))
+            u = jnp.hstack([jnp.full((u.shape[0], 1), a), u])
 
-            return x_max + log_e
+            list_unique.append(u)
+            list_counts.append(c)
+
+        list_unique = jnp.vstack(list_unique)
+        list_counts = jnp.hstack(list_counts)
+
+        diag_unique = jnp.vstack(diag_unique)
+        diag_counts = jnp.hstack(diag_counts)
+
+        from jax.experimental.sparse import BCOO, sparsify
+
+        N_a_ik = BCOO((list_counts, list_unique), shape=(len_a, len_i, len_i))
+        # t_a_k: sum_i  N_a_ik
+        # in prev, diqg elems are removed
+        t_a_k = sparsify(lambda x: jnp.sum(x, axis=(1)))(N_a_ik) + BCOO(
+            (diag_counts, diag_unique), shape=(len_a, len_i)
+        )
+
+        _counts_out = sparsify(lambda x: jnp.sum(x, axis=(0, 1)))(N_a_ik).todense()
+        _counts_in = sparsify(lambda x: jnp.sum(x, axis=(0, 2)))(N_a_ik).todense()
+
+        log_denom_k = jnp.log(_counts_out)
+
+        max_bins_per_run = max([a.shape[0] for a in list_unique_all])
+        print(f"{max_bins_per_run=}")
+
+        # cahnge dat structure. instead of storing all i and k, ze store used s and tm per md run a
+
+        bin_list = jnp.full((len_a, max_bins_per_run), -1)
+        log_bias_a_t = jnp.full((len_a, max_bins_per_run), -jnp.inf)
+
+        t_a_t = jnp.full((len_a, max_bins_per_run), -1)
+        N_a_st = jnp.full((len_a, max_bins_per_run, max_bins_per_run), -1)
 
         @jax.jit
-        def T(log_p, x):
-            log_t_a_i, log_b_ai, N_a_ik = x
+        def upd(bin_list, log_bias_a_t, t_a_t, N_a_st, a, n):
+            bin_list = bin_list.at[a, : len(n)].set(n)
+            log_bias_a_t = log_bias_a_t.at[a, : len(n)].set(log_b_ai[a, n])
+            t_a_t = t_a_t.at[a, : len(n)].set(t_a_k[a, n].todense())
 
-            def _nom_a_ij(i, k, a):
-                __nom = jnp.log((N_a_ik[a, i, k] + N_a_ik[a, k, i])) + log_t_a_i[a, k] + log_b_ai[a, k]
-                __denom = log_sum_exp_safe(
-                    log_t_a_i[a, k] + log_b_ai[a, k] - log_p[k], log_t_a_i[a, i] + log_b_ai[a, i] - log_p[i]
-                )
+            N_a_st = N_a_st.at[a, : len(n), : len(n)].set(N_a_ik[a, n, :][:, n].todense())
 
-                return jnp.where(__nom == -jnp.inf, -jnp.inf, __nom - __denom)
+            return bin_list, log_bias_a_t, t_a_t, N_a_st
 
-            log_nom_a_ik = jax.vmap(
-                jax.vmap(jax.vmap(_nom_a_ij, in_axes=(None, None, 0), out_axes=0), in_axes=(0, None, None), out_axes=1),
-                in_axes=(None, 0, None),
-                out_axes=2,
-            )(
-                jnp.arange(len_i, dtype=jnp.int_),
-                jnp.arange(len_i, dtype=jnp.int_),
-                jnp.arange(len_a, dtype=jnp.int_),
-            )
+        for a, n in enumerate(list_unique_all):
+            print(".", flush=True, end="")
 
-            # sum over zeroth exis
-            log_nom_ik = jax.vmap(jax.vmap(log_sum_exp_safe, in_axes=(1)), in_axes=(2))(log_nom_a_ik)
+            bin_list, log_bias_a_t, t_a_t, N_a_st = upd(bin_list, log_bias_a_t, t_a_t, N_a_st, a, n)
 
-            # sum over 1st  axis
-            log_nom_k = jax.vmap(log_sum_exp_safe, in_axes=1)(log_nom_ik)
-            log_nom_k = jax.vmap(log_sum_exp_safe, in_axes=(0, 0))(
-                log_nom_k, jnp.where(jnp.diag(log_nom_ik) == -jnp.inf, -jnp.inf, -jnp.diag(log_nom_ik))
-            )
+        # to sum over all i != k, ze need to create index
+
+        @jax.vmap
+        def _idx_k(k):
+            return jnp.sum(bin_list == k)
+
+        max_k_in_runs = jnp.max(_idx_k(jnp.arange(len_i)))
+
+        assert max_k_in_runs <= len_a
+
+        print(f"{max_k_in_runs=}")
+
+        @jax.vmap
+        def _arg_k(k):
+            return jnp.argwhere(bin_list == k, size=max_k_in_runs, fill_value=-1)
+
+        k_pos = _arg_k(jnp.arange(len_i))
+
+        # define fixed point fun
+
+        @jax.jit
+        def T(log_p):
+            @partial(jax.vmap, in_axes=0, out_axes=0)  # a
+            @partial(jax.vmap, in_axes=(0, 1, None, 0, None, 0, None, 0), out_axes=0)  # s
+            @partial(jax.vmap, in_axes=(0, 0, 0, None, 0, None, 0, None), out_axes=0)  # t
+            def _nom(N_st, N_ts, t_t, t_s, u_t, u_s, log_p_t, log_p_s):
+                use = jnp.logical_and(N_ts != -1, N_st != -1)
+
+                nom = jnp.log(N_st + N_ts) + u_t + jnp.log(t_t)
+
+                m = jnp.max(jnp.array([u_t - log_p_t, u_s - log_p_s]))
+
+                m = jnp.where(m == -jnp.inf, 0, m)
+
+                denom = jnp.log(t_t * jnp.exp(u_t - log_p_t - m) + t_s * jnp.exp(u_s - log_p_s - m)) + m
+
+                return jnp.where(use, nom - denom, -jnp.inf)
+
+            @partial(jax.vmap, in_axes=(None, 0), out_axes=0)
+            def _log_p(log_p, bin_list_a):
+                return log_p[bin_list_a]
+
+            log_p_t = _log_p(log_p, bin_list)
+
+            log_nom_a_st = _nom(N_a_st, N_a_st, t_a_t, t_a_t, log_bias_a_t, log_bias_a_t, log_p_t, log_p_t)
+
+            @partial(jax.vmap, in_axes=0, out_axes=0)
+            @partial(jax.vmap, in_axes=1, out_axes=0)  # sum over s (i) axis
+            def _out_a_t(out_s):
+                m = jnp.nanmax(out_s)
+
+                m = jnp.where(m == -jnp.inf, 0, m)
+                return jnp.log(jnp.nansum(jnp.exp(out_s - m))) + m
+
+            log_nom_a_t = _out_a_t(log_nom_a_st)
+            # log_denom_a_t = _out_a_t(log_denom_a_st)
+
+            @partial(jax.vmap, in_axes=(0, None))
+            def _get_k(k_pos, arr):
+                @jax.vmap
+                def _get_k_n(k_pos_n):
+                    b = jnp.all(k_pos_n == jnp.array([-1, -1]))
+                    return jnp.where(b, -jnp.inf, arr[k_pos_n[0], k_pos_n[1]])
+
+                log_out = _get_k_n(k_pos)
+
+                m = jnp.nanmax(log_out)
+                m = jnp.where(m == -jnp.inf, 0, m)
+
+                return jnp.log(jnp.nansum(jnp.exp(log_out - m))) + m
+
+            log_nom_k = _get_k(k_pos, log_nom_a_t)
 
             log_p = log_nom_k - log_denom_k
 
-            mp = jnp.max(log_p)
-
-            log_p -= jnp.log(jnp.sum(jnp.exp(log_p - mp))) + mp
+            m = jnp.max(log_p)
+            log_p -= jnp.log(jnp.sum(jnp.exp(log_p - m))) + m
 
             return log_p
 
+        # get fixed point
         import jaxopt
 
         solver = jaxopt.FixedPointIteration(
             fixed_point_fun=T,
-            maxiter=200,
+            maxiter=100,
             tol=wham_eps,
         )
 
@@ -3008,7 +3089,7 @@ class data_loader_output:
         log_p = jnp.log(jnp.ones((len_i)) / len_i)
 
         # with jax.debug_nans():
-        out = solver.run(log_p, x=(log_t_a_i, log_b_ai, N_a_ik))
+        out = solver.run(log_p)
 
         print("dham done")
 
@@ -3017,53 +3098,86 @@ class data_loader_output:
         # if verbose:
         print(f" {out.state.iter_num=} {out.state.error=} {log_p=}")
 
-        log_a_k = -log_p
+        # get per sample weights
+        @jax.jit
+        def w_k(log_p):
+            @partial(jax.vmap, in_axes=0, out_axes=0)  # a
+            @partial(jax.vmap, in_axes=(0, 1, None, 0, None, 0, None, 0), out_axes=0)  # s
+            @partial(jax.vmap, in_axes=(0, 0, 0, None, 0, None, 0, None), out_axes=0)  # t
+            def _nom(N_st, N_ts, t_t, t_s, u_t, u_s, log_p_t, log_p_s):
+                use = jnp.logical_and(N_ts != -1, N_st != -1)
 
-        def __f(i, k, a):
-            __nom = jnp.log((N_a_ik[a, i, k] + N_a_ik[a, k, i])) + log_t_a_i[a, k] + log_b_ai[a, k]
-            __denom = log_sum_exp_safe(
-                log_t_a_i[a, k] + log_b_ai[a, k] - log_p[k], log_t_a_i[a, i] + log_b_ai[a, i] - log_p[i]
-            )
+                nom = jnp.log(N_st + N_ts) + u_t  # ommited, t_t is count and e^{beta U} is
 
-            return jnp.where(__nom == -jnp.inf, -jnp.inf, __nom - __denom)
+                m = jnp.max(jnp.array([u_t - log_p_t, u_s - log_p_s]))
 
-        log_F_a_ik = jax.vmap(
-            jax.vmap(jax.vmap(__f, in_axes=(None, None, 0), out_axes=0), in_axes=(0, None, None), out_axes=1),
-            in_axes=(None, 0, None),
-            out_axes=2,
-        )(
-            jnp.arange(len_i, dtype=jnp.int_),
-            jnp.arange(len_i, dtype=jnp.int_),
-            jnp.arange(len_a, dtype=jnp.int_),
-        )
+                m = jnp.where(m == -jnp.inf, 0, m)
 
-        # sum over samples i
-        log_F_a_k = jax.vmap(lambda a, b: jax.vmap(log_sum_exp_safe, in_axes=(0))(a) - b, in_axes=(2, 0))(
-            log_F_a_ik, log_denom_k
-        )
+                denom = jnp.log(t_t * jnp.exp(u_t - log_p_t - m) + t_s * jnp.exp(u_s - log_p_s - m)) + m
 
+                return jnp.where(use, nom - denom, -jnp.inf)
+
+            @partial(jax.vmap, in_axes=(None, 0), out_axes=0)
+            def _log_p(log_p, bin_list_a):
+                return log_p[bin_list_a]
+
+            log_p_t = _log_p(log_p, bin_list)
+
+            log_nom_a_st = _nom(N_a_st, N_a_st, t_a_t, t_a_t, log_bias_a_t, log_bias_a_t, log_p_t, log_p_t)
+
+            @partial(jax.vmap, in_axes=0)
+            @partial(jax.vmap, in_axes=1)  # sum over s (i) axis
+            def _out_a_t(out_s):
+                m = jnp.nanmax(out_s)
+
+                m = jnp.where(m == -jnp.inf, 0, m)
+                return jnp.log(jnp.nansum(jnp.exp(out_s - m))) + m
+
+            log_nom_a_t = _out_a_t(log_nom_a_st)
+
+            @partial(jax.vmap, in_axes=(0, 0))
+            def _out_a_k(log_nom_a_t, bin_t):
+                x = jnp.full((len_i,), -jnp.inf)
+                x = x.at[bin_t].set(log_nom_a_t)
+                x -= log_denom_k
+
+                return x
+
+            return _out_a_k(log_nom_a_t, bin_list)
+
+        x_a_k = w_k(log_p)
         out_weights = []
 
-        # for u, g, c in zip(u_unstacked, grid_nums, log_F_a_k):
-        #     pass
-        out_weights = [jnp.exp(ui) for ui in u_unstacked]
+        s = 0
 
-        print(f"{out_weights=} ")
+        for a in range(len_a):
+            grid_nums_a = grid_nums[a]
+
+            w = jnp.exp(x_a_k[a, idx_inv[grid_nums_a.cv]]).reshape(-1)
+
+            s += jnp.sum(w)
+
+            out_weights.append(w)
+
+        out_weights = [oi / s for oi in out_weights]
 
         if not return_bias:
             return out_weights
 
         # divide by grid spacing?
-        fes_grid = -log_a_k / beta
+        fes_grid = -log_p / beta
         fes_grid -= jnp.min(fes_grid)
 
-        print(f"{fes_grid}")
+        print("computing rbf")
+
+        from IMLCV.implementations.bias import RbfBias
 
         bias = RbfBias.create(
             cvs=self.collective_variable,
-            cv=cv_mid[hist_mask][in_out_mask],
+            cv=cv_mid[hist_mask],
             kernel="linear",
             vals=-fes_grid,
+            # epsilon=1 / (0.815 * jnp.array([b[1] - b[0] for b in bins])),
         )
 
         return out_weights, bias
@@ -3083,6 +3197,7 @@ class data_loader_output:
         min_f_i=1e-30,
         log_sum_exp=True,
         return_bias=False,
+        min_samples=5,
         lagrangian=True,
     ):
         if cv_0 is None:
@@ -3097,13 +3212,6 @@ class data_loader_output:
         u_unstacked = []
         beta = 1 / (self.sti.T * boltzmann)
 
-        # nm_tot = []
-        # n_tot = 0
-
-        # u_offset_mean = []
-
-        # u_masks = []
-
         for ti_i in self.ti:
             e = ti_i.e_bias
 
@@ -3112,22 +3220,9 @@ class data_loader_output:
                     print("WARNING: no bias enerrgy found")
                 e = jnp.zeros((ti_i.sp.shape[0],))
 
-            # u0 = beta * jnp.mean(e)
-            # u_offset_mean.append(u0)
-
             u = beta * e  # - u0
 
-            # u_mask_i = jnp.abs(u - u0) < bias_cutoff * beta
-
-            # u_masks.append(u_mask_i)
-
-            # u = jnp.clip(u - u0, -bias_cutoff * jnp.log(10), bias_cutoff * jnp.log(10))
-
             u_unstacked.append(u)
-
-        # print(f"masked = {[ int(jnp.sum(m)) for m in u_masks]} {bias_cutoff/ kjmol=}")
-
-        # cv_0 = [cv_0_i[m_i] for cv_0_i, m_i in zip(cv_0, u_masks)]
 
         sd = [a.shape[0] for a in cv_0]
         tot_samples = sum(sd)
@@ -3193,7 +3288,7 @@ class data_loader_output:
         )
 
         # print(f"{jnp.exp(hist)=}")
-        hist_mask = log_hist > -jnp.inf
+        hist_mask = log_hist >= jnp.log(min_samples)
         print(f"{jnp.sum(hist_mask)=}")
 
         log_b_ik = jnp.full((len(u_unstacked), jnp.sum(hist_mask)), -jnp.inf)
@@ -3406,8 +3501,9 @@ class data_loader_output:
 
         denom_k = -vmap(log_sum_exp_safe, in_axes=(None, None, 1))(log_N_i, log_f_i, log_b_ik)
 
-        denom_hist = jnp.zeros_like(log_hist).reshape(-1)
-        denom_hist = denom_hist.at[hist_mask].set(jnp.exp(denom_k))
+        denom_hist = jnp.full_like(log_hist, -jnp.inf).reshape(-1)
+        denom_hist = denom_hist.at[hist_mask].set(denom_k)
+        denom_hist = jnp.exp(denom_hist)
 
         out_weights = []
 
@@ -3415,8 +3511,6 @@ class data_loader_output:
 
         for i, (ui, c) in enumerate(zip(u_unstacked, log_f_i)):
             grid_nums_i = grid_nums[i]
-
-            print(f"{grid_nums_i.cv=}")
 
             w = denom_hist[grid_nums_i.cv].reshape(-1)
 
@@ -3426,52 +3520,6 @@ class data_loader_output:
 
         print(f"{jnp.hstack(out_weights)=} {s=}")
 
-        # alpha = -jnp.inf
-        # h = 0
-
-        # def get_max(log_w, alpha):
-        #     val = log_w
-
-        #     max_new = jnp.max(val)
-        #     max_tot = jnp.max(jnp.array([alpha, max_new]))
-
-        #     return max_tot, max_new > alpha, max_tot - alpha
-
-        # x_in = []
-
-        # for i, (ui, c) in enumerate(zip(u_unstacked, log_f_i)):
-        #     grid_nums_i = grid_nums[i]
-
-        #     w_log = -denom_k[grid_nums_i.cv]
-        #     x_in.append(w_log)
-
-        #     alpha, alpha_changed, d_alpha = get_max(w_log, alpha)
-
-        #     # shift all probs by the change in alpha
-        #     if alpha_changed:
-        #         h = h - d_alpha
-
-        #     p_new = jnp.sum(jnp.exp(w_log - alpha))
-
-        #     h = jnp.log(jnp.exp(h) + p_new)
-
-        # h = h + alpha
-
-        # print(f"{h=} {jnp.exp(h)=} { jnp.min(-log_a_k/ beta) / kjmol=}kjmol")
-
-        # w_stacked = jnp.hstack([jnp.exp(ui - c - h) for ui, c in zip(u_unstacked, x_in)])
-
-        # print(f"{w_stacked=}, {jnp.mean(w_stacked)=}, {jnp.std(w_stacked)=}")
-
-        # out_weights = self._unstack_weights(sd, w_stacked)
-
-        # out_weights = []
-
-        # for ow_i, m_i in zip(out_weights_masked, u_masks):
-        #     x = jnp.zeros_like(m_i, dtype=ow_i.dtype)
-        #     x = x.at[m_i].set(ow_i)
-        #     out_weights.append(x)
-
         if not return_bias:
             return out_weights
 
@@ -3480,21 +3528,6 @@ class data_loader_output:
         fes_grid -= jnp.min(fes_grid)
 
         print("computing rbf")
-
-        # n = n_hist - 1
-        # colvar = self.collective_variable
-
-        # vals = jnp.full(n**colvar.n, jnp.nan)
-        # vals = vals.at[hist_mask].set(-fes_grid)
-        # vals = vals.reshape((n,) * colvar.n)
-
-        # bias = GridBias(
-        #     collective_variable=colvar,
-        #     n=n,
-        #     vals=vals,
-        #     bounds=grid_bounds,
-        #     order=0,
-        # )
 
         bias = RbfBias.create(
             cvs=self.collective_variable,
