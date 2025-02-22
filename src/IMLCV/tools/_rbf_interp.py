@@ -202,8 +202,13 @@ class RBFInterpolator:
             raise ValueError(f"`kernel` must be one of {_AVAILABLE}.")
 
         if metric.periodicities.any():
-            if kernel != "multiquadric" and kernel != "linear":
-                print(f" The chosen kernel {kernel} is not suitable for periodic data. Switching to linear kernel")
+            min_degree = _NAME_TO_MIN_DEGREE.get(kernel, -1)
+
+            if min_degree > 0:
+                print(
+                    f" The chosen kernel {kernel} is not suitable for periodic data because it requires degree {min_degree=}>0.  Switching to linear kernel"
+                )
+
                 kernel = "linear"
 
         if epsilon is None:
@@ -211,7 +216,8 @@ class RBFInterpolator:
                 epsilon = 1.0
             else:
                 raise ValueError(
-                    "`epsilon` must be specified if `kernel` is not one of " f"{_SCALE_INVARIANT}.",
+                    "`epsilon` must be specified if `kernel` is not one of "
+                    f"{_SCALE_INVARIANT}.",
                 )
         else:
             epsilon = jnp.array(epsilon)

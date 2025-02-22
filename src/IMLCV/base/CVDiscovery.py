@@ -100,8 +100,8 @@ class Transformer:
         transform_FES=True,
         max_fes_bias=100 * kjmol,
         n_max=60,
-        samples_per_bin=1,
-        min_samples_per_bin=1,
+        samples_per_bin=20,
+        min_samples_per_bin=3,
         verbose=True,
         cv_titles=None,
         vmax=100 * kjmol,
@@ -144,15 +144,24 @@ class Transformer:
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery_pre.png"),
                 collective_variables=[dlo.collective_variable],
-                cv_data=[dlo.cv],
+                cv_data=None,
                 biases=[bias_orig],
                 margin=0.1,
                 T=dlo.sti.T,
                 plot_FES=True,
                 cv_titles=cv_titles,
                 vmax=max_fes_bias,
-                # samples_per_bin=samples_per_bin,
-                # min_samples_per_bin=min_samples_per_bin,
+            )
+
+            Transformer.plot_app(
+                name=str(plot_folder / "cvdiscovery_pre_data.png"),
+                collective_variables=[dlo.collective_variable],
+                cv_data=[dlo.cv],
+                margin=0.1,
+                T=dlo.sti.T,
+                plot_FES=True,
+                cv_titles=cv_titles,
+                vmax=max_fes_bias,
             )
 
         print("starting pre_fit")
@@ -261,16 +270,35 @@ class Transformer:
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery.png"),
                 collective_variables=[dlo.collective_variable, new_collective_variable],
-                cv_data=[[dlo.cv, dlo.cv], [x, x]],
-                biases=[[dlo.ground_bias, dlo.ground_bias], [bias, bias]],
+                cv_data=[
+                    [dlo.cv, x],
+                    [dlo.cv, x],
+                ],
+                biases=[
+                    [dlo.ground_bias, bias],
+                    [dlo.ground_bias, bias],
+                ],
                 margin=0.1,
                 T=dlo.sti.T,
                 plot_FES=True,
                 cv_titles=cv_titles,
                 duplicate_cv_data=False,
                 vmax=max_fes_bias,
-                # samples_per_bin=samples_per_bin,
-                # min_samples_per_bin=min_samples_per_bin,
+            )
+
+            Transformer.plot_app(
+                name=str(plot_folder / "cvdiscovery_data.png"),
+                collective_variables=[dlo.collective_variable, new_collective_variable],
+                cv_data=[
+                    [dlo.cv, x],
+                    [dlo.cv, x],
+                ],
+                margin=0.1,
+                T=dlo.sti.T,
+                plot_FES=True,
+                cv_titles=cv_titles,
+                duplicate_cv_data=False,
+                vmax=max_fes_bias,
             )
 
         return x, new_collective_variable, bias
@@ -291,8 +319,9 @@ class Transformer:
     @staticmethod
     def plot_app(
         collective_variables: list[CollectiveVariable],
-        cv_data: list[list[CV]] | list[list[list[CV]]] | None,
+        cv_data: list[list[CV]] | list[list[list[CV]]] | None = None,
         biases: list[Bias] | list[list[Bias]] | None = None,
+        indicate_plots: None | str | list[list[str]] = "lightblue",
         duplicate_cv_data=True,
         name: str | Path | None = None,
         labels=None,
@@ -306,25 +335,70 @@ class Transformer:
         vmax=100 * kjmol,
         dpi=300,
         n_max_bias=1e6,
-        indicate_cv_data=True,
+        row_color=None,
+        # indicate_cv_data=True,
         macro_chunk=10000,
         cmap="jet",
-        **kwargs,
+        offset=True,
+        bar_label="FES [kJ/mol]",
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
         """data sorted according to data,then cv"""
 
+        assert not (cv_data is None and biases is None), "data or bias must be provided"
+
+        if biases is None:
+            plot_FES = False
+
         ncv = len(collective_variables)
 
         if duplicate_cv_data:
             if cv_data is not None:
-                cv_data = [[a] * ncv for a in cv_data]
+                cv_data = [cv_data] * ncv
 
             if biases is not None:
-                biases = [[b] * ncv for b in biases]
+                biases = [biases] * ncv
 
-        if plot_FES:
+        assert (cv_data is not None) or (
+            biases is not None
+        ), "data or bias must be provided"
+
+        # do consistency checks
+        ndata = len(cv_data) if cv_data is not None else len(biases)
+
+        if cv_data is not None:
+            assert len(cv_data) == ndata, "data must have the same length as cv"
+
+        if biases is not None:
+            assert len(biases) == ndata, "bias must have the same length as cv"
+
+        for nd in range(ndata):
+            if cv_data is not None:
+                assert len(cv_data[nd]) == ncv, "data must have the same length as cv"
+
+            if biases is not None:
+                assert len(biases[nd]) == ncv, "bias must have the same length as cv"
+
+        skip = jnp.full((ndata, ncv), False)
+
+        # check if data and bias are None for
+        for i in range(ndata):
+            for j in range(ncv):
+                has_cv_data = False
+                if cv_data is not None:
+                    if cv_data[i][j] is not None:
+                        has_cv_data = True
+
+                has_bias = False
+                if biases is not None:
+                    if biases[i][j] is not None:
+                        has_bias = True
+
+                if (not has_cv_data) and (not has_bias):
+                    skip = skip.at[i, j].set(True)
+
+        if plot_FES and biases is not None:
             # assert biases is not None, "bias must be provided if plot_FES=True"
 
             # assert weight is not None or biases is not None, "bias or weight must be provided if plot_FES=True"
@@ -337,14 +411,20 @@ class Transformer:
 
                 for bij in bi:
                     bij: Bias
-                    fesses_i.append(
+
+                    b_slice = (
                         bij.slice(
                             n_max_bias=n_max_bias,
                             T=T,
                             margin=margin,
                             macro_chunk=macro_chunk,
+                            offset=offset,
                         )
+                        if bij is not None
+                        else None
                     )
+
+                    fesses_i.append(b_slice)
 
                 fesses.append(fesses_i)
 
@@ -354,7 +434,7 @@ class Transformer:
             cv_titles = [f"cv_{i}" for i in range(ncv)]
 
         if data_titles is None and not duplicate_cv_data:
-            data_titles = [f"data_{i}" for i in range(ncv)]
+            data_titles = [f"data_{i}" for i in range(ndata)]
 
         inoutdims = [collective_variables[n].n for n in range(ncv)]
 
@@ -369,45 +449,58 @@ class Transformer:
 
         if cv_data is not None:
             print("obtaining colors")
-            rgb_data = [
-                Transformer._get_color_data(
-                    a=cv_data[n][n],
-                    dim=inoutdims[n],
+
+            rgb_data = []
+
+            for n in range(ndata):
+                if row_color is not None:
+                    rc = row_color[n]
+                    print(f"data column {n=}, cv row {rc=}")
+                else:
+                    rc = jnp.min(jnp.array([n, ncv - 1]))
+
+                rgb_out = Transformer._get_color_data(
+                    a=cv_data[n][rc],
+                    dim=inoutdims[rc],
                     color_trajectories=color_trajectories,
-                    metric=metrics[n],
+                    metric=metrics[rc],
                     margin=margin,
                 ).cv
-                for n in range(ncv)
-            ]
+
+                rgb_data.append(rgb_out)
             print("done")
         else:
-            rgb_data = [None] * ncv
+            rgb_data = [None] * ndata
 
-        for data_in, in_out, axes in Transformer._grid_spec_iterator(
+        for data_in, cv_in, axes in Transformer._grid_spec_iterator(
             fig=fig,
             dims=inoutdims,
+            ncv=ncv,
+            ndata=ndata,
+            skip=skip,
             cv_titles=cv_titles,
             data_titles=data_titles,
-            indicate_cv_data=indicate_cv_data,
+            indicate_plots=indicate_plots,
+            bar_label=bar_label,
+            # indicate_cv_data=indicate_cv_data,
             cmap=plt.get_cmap(cmap),
             vmin=vmin,
             vmax=vmax,
         ):
-            dim = inoutdims[in_out]
+            dim = inoutdims[cv_in]
 
-            if cv_data is None:
-                data_proc = None
-            else:
-                data_proc = CV.stack(*cv_data[in_out][data_in]).cv
+            data_proc = None
+            if cv_data is not None:
+                if cv_data[data_in][cv_in] is not None:
+                    data_proc = CV.stack(*cv_data[data_in][cv_in]).cv
+                    if dim == 1:
+                        x = []
+                        for i, ai in enumerate(cv_data[data_in][cv_in]):
+                            x.append(ai.cv * 0 + i)
+
+                        data_proc = jnp.hstack([data_proc, jnp.vstack(x)])
 
             if dim == 1:
-                if cv_data is not None:
-                    x = []
-                    for i, ai in enumerate(cv_data[in_out][data_in]):
-                        x.append(ai.cv * 0 + i)
-
-                    data_proc = jnp.hstack([data_proc, jnp.vstack(x)])
-
                 f = Transformer._plot_1d
             elif dim == 2:
                 f = Transformer._plot_2d
@@ -436,14 +529,14 @@ class Transformer:
                 grid=axes,
                 data=data_proc,
                 colors=rgb_data[data_in] if rgb_data is not None else None,
-                labels=(labels[in_out][0:dim] if labels[data_in] is not None else "xyzw")
+                labels=(labels[cv_in][0:dim] if labels[cv_in] is not None else "xyzw")
                 if labels is not None
                 else "xyzw",
-                collective_variable=collective_variables[in_out],
+                collective_variable=collective_variables[cv_in],
                 indices=tuple([i for i in range(dim)]),
                 # weight=weight is not None,
                 margin=margin,
-                fesses=fesses[in_out][data_in] if plot_FES else None,
+                fesses=fesses[data_in][cv_in] if plot_FES else None,
                 vmax=vmax,
                 T=T,
                 cmap=plt.get_cmap(cmap),
@@ -469,29 +562,36 @@ class Transformer:
     def _grid_spec_iterator(
         fig: Figure,
         dims,
+        ncv,
+        ndata,
+        skip,
         vmin,
         vmax,
         cmap,
         bar_label="FES [kJ/mol]",
         cv_titles=None,
         data_titles=None,
-        indicate_cv_data=True,
+        indicate_plots=None,
+        # indicate_cv_data=True,
     ) -> Iterator[tuple[list[int], int, list[plt.Axes], list[plt.Axes]]]:
-        r = [1 if max(dims) < 3 else 2] * len(dims)
+        spaces = 1 if max(dims) < 3 else 2
 
-        w_tot = [0.3, *r, 0.1, 0.05]  # extra 0.05 is to make the title fit
-        h_tot = [0.1, *r]
+        w_tot = [0.3, *[spaces] * ncv, 0.05, 0.1]  # extra 0.05 is to make the title fit
+        h_tot = [0.1, *[spaces] * ndata]
 
         fig.set_figwidth(sum(w_tot) * 3, forward=True)
         fig.set_figheight(sum(h_tot) * 3, forward=True)
 
+        w_space = 0.1
+        h_space = 0.1
+
         spec = fig.add_gridspec(
-            nrows=len(dims) + 1,
-            ncols=len(dims) + 3,
+            nrows=ndata + 1,
+            ncols=ncv + 3,
             width_ratios=w_tot,
             height_ratios=h_tot,
-            wspace=0.1,
-            hspace=0.1,
+            wspace=w_space,
+            hspace=h_space,
         )
 
         norm = mpl.colors.Normalize(vmin=vmin / kjmol, vmax=vmax / kjmol)
@@ -506,56 +606,62 @@ class Transformer:
         )
         ax_cbar.set_ylabel(bar_label)
 
-        for data_in in range(len(dims)):
-            for cv_in in range(len(dims)):
+        for data_in in range(ndata):
+            for cv_in in range(ncv):
+                if skip[data_in, cv_in]:
+                    continue
+
                 yield (
                     data_in,
                     cv_in,
                     spec[data_in + 1, cv_in + 1],
                 )
 
-        if indicate_cv_data:
+        if indicate_plots is not None:
             # indicate CV data pair
-            for i in range(1, len(dims) + 1):
-                s = spec[i, i]
-                pos = s.get_position(fig)
+            for i in range(ndata):
+                for j in range(ncv):
+                    if isinstance(indicate_plots, str):
+                        if i == j:
+                            c_ij = indicate_plots
+                        else:
+                            c_ij = None
+                    else:
+                        c_ij = indicate_plots[i][j]
 
-                fig.patches.extend(
-                    [
-                        plt.Rectangle(
-                            (pos.x0, pos.y0),
-                            pos.x1 - pos.x0,
-                            pos.y1 - pos.y0,
-                            fill=True,
-                            color="lightblue",
-                            zorder=-10,
-                            transform=fig.transFigure,
-                            figure=fig,
-                        )
-                    ]
-                )
+                    if c_ij is None:
+                        continue
 
-        # indicate discovered CV
-        if data_titles is not None:
-            for i in range(1, len(dims)):
-                if not isinstance(data_titles[i], int):
-                    continue
-
-                if not isinstance(data_titles[i - 1], int):
-                    continue
-
-                if data_titles[i] == data_titles[i - 1] + 1:
-                    s = spec[i, i + 1]
+                    s = spec[i + 1, j + 1]
                     pos = s.get_position(fig)
+
+                    nrows, ncols = spec.get_geometry()
+                    subplot_params = spec.get_subplot_params(fig)
+                    left = subplot_params.left
+                    right = subplot_params.right
+                    bottom = subplot_params.bottom
+                    top = subplot_params.top
+                    wspace = subplot_params.wspace
+                    hspace = subplot_params.hspace
+                    tot_width = right - left
+                    tot_height = top - bottom
+
+                    # calculate accumulated heights of columns
+                    cell_h = tot_height / (nrows + hspace * (nrows - 1))
+                    sep_h = hspace * cell_h
+
+                    # # calculate accumulated widths of rows
+                    cell_w = tot_width / (ncols + wspace * (ncols - 1))
+                    sep_w = wspace * cell_w
 
                     fig.patches.extend(
                         [
                             plt.Rectangle(
-                                (pos.x0, pos.y0),
-                                pos.x1 - pos.x0,
-                                pos.y1 - pos.y0,
+                                (pos.x0 - sep_w, pos.y0 - sep_h),
+                                pos.x1 - pos.x0 + sep_w,
+                                pos.y1 - pos.y0 + sep_h,
                                 fill=True,
-                                color="lightgreen",
+                                color=c_ij,
                                 zorder=-10,
                                 transform=fig.transFigure,
                                 figure=fig,
@@ -581,7 +687,7 @@ class Transformer:
         if data_titles is not None:
             s0 = spec[1, 0]
             pos0 = s0.get_position(fig)
-            s1 = spec[len(dims), 0]
+            s1 = spec[ndata, 0]
             pos1 = s1.get_position(fig)
 
             fig.text(
@@ -593,7 +699,7 @@ class Transformer:
                 rotation=90,
             )
 
-        for i in range(len(dims)):
+        for i in range(ncv):
             s = spec[0, i + 1]
             pos = s.get_position(fig)
 
@@ -606,6 +712,7 @@ class Transformer:
                     va="center",
                 )
 
+        for i in range(ndata):
             if data_titles is not None:
                 s = spec[i + 1, 0]
                 pos = s.get_position(fig)
@@ -636,6 +743,8 @@ class Transformer:
         cmap=plt.get_cmap("jet"),
         **scatter_kwargs,
     ):
+        # same as plot 2d but without y axis
+
         gs = grid.subgridspec(
             ncols=1,
             nrows=2,
@@ -658,6 +767,11 @@ class Transformer:
 
         x_lim = [x_l[0] - m_x, x_l[1] + m_x]
 
+        if data is not None:
+            y_lim = [jnp.min(data[:, 1]) - 0.5, jnp.max(data[:, 1]) + 0.5]
+        else:
+            y_lim = [0, 1]
+
         # create inset
         if data is not None:
             ax.scatter(
@@ -673,20 +787,38 @@ class Transformer:
         ax.set_yticks([])
         ax.set_yticklabels([])
 
-        if fesses is None:
-            in_xlim = jnp.logical_and(data[:, 0] > -margin, data[:, 0] < 1 + margin)
-            n_points = jnp.sum(in_xlim)
-            if n_points != 0:
-                n_bins = 3 * int(1 + jnp.ceil(jnp.log2(n_points)))
-            else:
-                n_bins = 10
+        ax.patch.set_alpha(0)
 
-                ax_histx.hist(data[:, 0], bins=n_bins, range=[-margin, 1 + margin])
+        if fesses is None:
+            if data is not None:
+                in_xlim = jnp.logical_and(data[:, 0] > x_lim[0], data[:, 0] < x_lim[1])
+                n_points = jnp.sum(in_xlim)
+                n_bins = n_points // 50
+
+                x_bins = jnp.linspace(x_lim[0], x_lim[1], n_bins + 1)
+
+                bins_x_center = (x_bins[1:] + x_bins[:-1]) / 2
+
+                # raw number of points
+                H, _ = jnp.histogramdd(
+                    data,
+                    bins=n_bins,
+                    range=[x_lim, y_lim],
+                )
+
+                x_count = jax.vmap(jnp.sum, in_axes=0)(H)
+                x_count /= jnp.sum(x_count)
+
+                ax_histx.plot(bins_x_center, x_count, color="tab:blue")
+
+                ax_histx.patch.set_alpha(0)
 
         else:
             x_range = jnp.linspace(x_lim[0], x_lim[1], 500)
 
-            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
+            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(
+                CV(cv=jnp.array(x_range).reshape((-1, 1)))
+            )
 
             ax_histx.scatter(
                 x_range,
@@ -737,6 +869,7 @@ class Transformer:
         T=None,
         print_labels=False,
         cmap=plt.get_cmap("jet"),
+        plot_y=True,
         **scatter_kwargs,
     ):
         gs = grid.subgridspec(
@@ -765,7 +898,9 @@ class Transformer:
         y_lim = [y_l[0] - m_y, y_l[1] + m_y]
 
         if fesses is not None:
-            assert indices is not None, "FES_indices must be provided if FES is provided"
+            assert (
+                indices is not None
+            ), "FES_indices must be provided if FES is provided"
 
             FES = fesses[2][indices]
 
@@ -797,7 +932,7 @@ class Transformer:
 
             bias = bias.reshape(len(bins[0]) - 1, len(bins[1]) - 1)
 
-            bias -= jnp.max(bias)
+            # bias -= jnp.max(bias)
 
             # imshow shows in middel of image
             _dx = (bins[0][1] - bins[0][0]) / 2
@@ -807,7 +942,12 @@ class Transformer:
                 -bias / (kjmol),
                 cmap=cmap,
                 origin="lower",
-                extent=[bins[0][0] - _dx, bins[0][-1] + _dx, bins[1][0] - _dx, bins[1][-1] + _dx],
+                extent=[
+                    bins[0][0] - _dx,
+                    bins[0][-1] + _dx,
+                    bins[1][0] - _dx,
+                    bins[1][-1] + _dx,
+                ],
                 vmin=vmin / kjmol,
                 vmax=vmax / kjmol,
                 aspect="auto",
@@ -846,12 +986,19 @@ class Transformer:
                 ax_histx.plot(bins_x_center, x_count, color="tab:blue")
                 ax_histy.plot(y_count, bins_y_center, color="tab:blue")
 
+                ax_histx.patch.set_alpha(0)
+                ax_histy.patch.set_alpha(0)
+
         else:
             x_range = jnp.linspace(x_lim[0], x_lim[1], 500)
             y_range = jnp.linspace(y_lim[0], y_lim[1], 500)
 
-            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
-            y_fes, _ = fesses[1][(indices[1],)].compute_from_cv(CV(cv=jnp.array(y_range).reshape((-1, 1))))
+            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(
+                CV(cv=jnp.array(x_range).reshape((-1, 1)))
+            )
+            y_fes, _ = fesses[1][(indices[1],)].compute_from_cv(
+                CV(cv=jnp.array(y_range).reshape((-1, 1)))
+            )
 
             ax_histx.scatter(
                 x_range,
@@ -915,6 +1062,8 @@ class Transformer:
         ax.set_yticklabels([])
 
         ax.tick_params(axis="both", length=1)
+
+        ax.patch.set_alpha(0)
 
         if print_labels and indices is not None and labels is not None:
             ax.set_xlabel(labels[indices[0]], labelpad=-1)
@@ -1008,16 +1157,20 @@ class Transformer:
                 shmap=False,
             )[0]
 
-            bias -= jnp.max(bias)
+            # bias -= jnp.max(bias)
 
             normed_val = -(bias - vmin) / (vmax - vmin)
+
+            normed_val = jnp.clip(normed_val, 0, 1)
 
             in_range = jnp.logical_and(normed_val >= 0, normed_val <= 1)
 
             color_bias = cmap(normed_val)
 
             # add alpha channel
-            color_bias[:, 3] = jnp.exp(-3 * normed_val) / n_grid  # if all points in row are the same, the alpha is 1
+            color_bias[:, 3] = (
+                jnp.exp(-3 * normed_val) / n_grid
+            )  # if all points in row are the same, the alpha is 1
 
             shm = (len(bins[0]) - 1, len(bins[1]) - 1, len(bins[2]) - 1)
             sh = (len(bins[0]), len(bins[1]), len(bins[2]))
@@ -1098,7 +1251,8 @@ class Transformer:
                             # 3D array of strings, or 4D array with last axis rgb
                             if np.shape(color)[:3] != filled.shape:
                                 raise ValueError(
-                                    "When multidimensional, {} must match the shape of " "filled".format(name)
+                                    "When multidimensional, {} must match the shape of "
+                                    "filled".format(name)
                                 )
                             return color
                         else:
@@ -1121,7 +1275,9 @@ class Transformer:
                     self.auto_scale_xyz(x, y, z)
 
                     # points lying on corners of a square
-                    square = np.array([[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], dtype=np.intp)
+                    square = np.array(
+                        [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], dtype=np.intp
+                    )
 
                     voxel_faces = defaultdict(list)
 
@@ -1153,9 +1309,13 @@ class Transformer:
                                     p2 = permute.dot([p, q, r2])
                                     i1 = tuple(p1)
                                     i2 = tuple(p2)
-                                    if filled[i1] and (internal_faces or not filled[i2]):
+                                    if filled[i1] and (
+                                        internal_faces or not filled[i2]
+                                    ):
                                         voxel_faces[i1].append(p2 + square_rot)
-                                    elif (internal_faces or not filled[i1]) and filled[i2]:
+                                    elif (internal_faces or not filled[i1]) and filled[
+                                        i2
+                                    ]:
                                         voxel_faces[i2].append(p2 + square_rot)
 
                                 # draw upper faces
@@ -1181,7 +1341,12 @@ class Transformer:
                                 face[:, 2] = z[ind]
                                 faces.append(face)
 
-                        poly = art3d.Poly3DCollection(faces, facecolors=facecolors[coord], edgecolors=None, **kwargs)
+                        poly = art3d.Poly3DCollection(
+                            faces,
+                            facecolors=facecolors[coord],
+                            edgecolors=None,
+                            **kwargs,
+                        )
                         self.add_collection3d(poly)
                         polygons[coord] = poly
 
@@ -1251,6 +1416,8 @@ class Transformer:
 
         # ax0.view_init(40, -30, 0)
         ax0.set_box_aspect(None, zoom=1.1)
+
+        ax0.patch.set_alpha(0)
 
         # plot 2d fesses individually
         from itertools import combinations
@@ -1340,8 +1507,12 @@ class Transformer:
             _min_val = min_val - (max_val - min_val) * margin
 
             if metric is not None:
-                max_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(pp, max_val, _max_val)
-                min_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(pp, min_val, _min_val)
+                max_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(
+                    pp, max_val, _max_val
+                )
+                min_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(
+                    pp, min_val, _min_val
+                )
             else:
                 max_val = _max_val
                 min_val = _min_val
@@ -1378,7 +1549,13 @@ class Transformer:
                 lab = jnp.array([data_col[0] * (360 - b[0]), 75, data_col[1] * 60 + 20])
 
             elif dim == 3:
-                lab = jnp.array([data_col[0] * (360 - b[0]), data_col[1] * 60 + 20, data_col[2] * 60 + 20])
+                lab = jnp.array(
+                    [
+                        data_col[0] * (360 - b[0]),
+                        data_col[1] * 60 + 20,
+                        data_col[2] * 60 + 20,
+                    ]
+                )
             else:
                 raise ValueError("dim must be 1, 2 or 3")
 
@@ -1415,7 +1592,9 @@ class Transformer:
         else:
             from jax.tree_util import Partial
 
-            _f = Partial(_f, nl=None, c=None, shmap=None, shmap_kwargs=None, close=close, dim=dim)
+            _f = Partial(
+                _f, nl=None, c=None, shmap=None, shmap_kwargs=None, close=close, dim=dim
+            )
             _f = jax.vmap(_f)
             # _f = jax.jit(_f)
 

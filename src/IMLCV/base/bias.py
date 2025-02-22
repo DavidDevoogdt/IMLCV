@@ -190,6 +190,9 @@ class Bias(ABC):
     start: int | None = field(pytree_node=False, default=0)
     step: int | None = field(pytree_node=False, default=1)
     finalized: bool = field(pytree_node=False, default=False)
+    slice_exponent: float = field(pytree_node=False, default=1.0)
+    log_exp_slice: bool = field(pytree_node=False, default=True)
+    slice_mean: bool = field(pytree_node=False, default=False)
 
     @classmethod
     def create(clz, *args, **kwargs) -> Self:
@@ -349,9 +352,9 @@ class Bias(ABC):
                 # e_vir = jnp.einsum("ji,jl->il", sp.cell, de.cell) + jnp.einsum(
                 #     "ni,nl->il", sp.coordinates, de.coordinates
                 # )
-                e_vir = jnp.einsum("ij,k,klj->il", sp.cell, de.cv, jac.cell) + jnp.einsum(
-                    "ni,j,jnl->il", sp.coordinates, de.cv, jac.coordinates
-                )
+                e_vir = jnp.einsum(
+                    "ij,k,klj->il", sp.cell, de.cv, jac.cell
+                ) + jnp.einsum("ni,j,jnl->il", sp.coordinates, de.cv, jac.coordinates)
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 
@@ -402,7 +405,6 @@ class Bias(ABC):
     def plot(
         self,
         name: str | None = None,
-        # weights: list[Array] | None = None,
         traj: list[CV] | None = None,
         dlo_kwargs=None,
         dlo=None,
@@ -412,7 +414,6 @@ class Bias(ABC):
         margin=0.1,
         dpi=300,
         T=300 * kelvin,
-        # samples_per_bin=5,
         **kwargs,
     ):
         from IMLCV.base.CVDiscovery import Transformer
@@ -432,16 +433,17 @@ class Bias(ABC):
 
         Transformer.plot_app(
             collective_variables=[self.collective_variable],
-            cv_data=[traj] if traj is not None else None,
+            cv_data=[[traj]] if traj is not None else None,
+            duplicate_cv_data=False,
             name=name,
             color_trajectories=True,
             margin=margin,
             plot_FES=True,
-            biases=[bias],
+            biases=[[bias]],
             vmax=vmax,
             dpi=dpi,
             T=T,
-            indicate_cv_data=False,
+            indicate_plots=None,
             cv_titles=None,
             **kwargs,
         )
@@ -550,13 +552,13 @@ class Bias(ABC):
     ):
         _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=margin)
 
-        u0 = sign * self.compute_from_cv(cvs)[0] / (T * boltzmann)
+        u0 = sign * self.apply([cvs])[0] / (T * boltzmann)
         u0 -= jnp.max(u0)
 
         p_self = jnp.exp(u0)
         p_self /= jnp.sum(p_self)
 
-        u1 = sign * other.compute_from_cv(cvs)[0] / (T * boltzmann)
+        u1 = sign * other.apply([cvs])[0] / (T * boltzmann)
         u1 -= jnp.max(u1)
 
         p_other = jnp.exp(u1)
@@ -582,26 +584,24 @@ class Bias(ABC):
         n_max_bias=1e5,
         margin=0.2,
         macro_chunk=10000,
+        offset=True,
     ) -> dict[int, dict[tuple[int], Bias]]:
         free_energies = []
 
         n_grid = int(n_max_bias ** (1 / self.collective_variable.n))
 
-        _, _, cv, bounds = self.collective_variable.metric.grid(
-            n=n_grid + 1,
+        _, cv, _, bounds = self.collective_variable.metric.grid(
+            n=n_grid,
             margin=margin,
         )
 
         w = self.apply([cv], macro_chunk_size=macro_chunk)[0]
 
-        if inverted:
-            w = -w
+        w /= boltzmann * T
 
-        w -= jnp.nanmin(w)
-        w = jnp.exp(-w / (boltzmann * T))
-        w /= jnp.nansum(w)
+        if self.log_exp_slice:
+            w = jnp.exp(w)
 
-        # weight grid
         w = w.reshape((n_grid,) * self.collective_variable.n)
 
         cvi = self.collective_variable
@@ -610,10 +610,7 @@ class Bias(ABC):
 
         from itertools import combinations
 
-        a = tuple([i for i in range(cvi.n)])
-
         free_energies[cvi.n] = dict()
-        free_energies[cvi.n][a] = self
 
         for nd in range(cvi.n):
             free_energies[nd + 1] = dict()
@@ -623,16 +620,33 @@ class Bias(ABC):
                 dims = jnp.delete(dims, jnp.array(tup))
                 dims = tuple([int(a) for a in dims])
 
-                w_tup = jnp.nansum(w, axis=dims)
+                w_sum = jnp.nansum(w**self.slice_exponent, axis=dims)
 
-                values = (boltzmann * T) * jnp.log(w_tup)
-                values -= jnp.max(values)
+                if self.slice_mean:
+                    print(f"mean slice {self.slice_mean=}")
+                    w_sum /= jnp.nansum(w * 1, axis=dims)
+
+                w_sum = w_sum ** (1 / self.slice_exponent)
+
+                if self.log_exp_slice:
+                    # output is log exp slice
+                    values = (boltzmann * T) * jnp.log(w_sum)
+
+                else:
+                    print(f"{w_sum=}")
+                    values = -w_sum * (boltzmann * T)
+
+                # if inverted:
+                #     values = -values
+
+                if offset:
+                    values -= jnp.max(values)
 
                 from IMLCV.implementations.bias import GridBias
 
                 fes_nd = GridBias(
                     collective_variable=self.collective_variable[tup],
-                    n=n_grid + 1,  # todo
+                    n=n_grid,
                     vals=values,
                     bounds=bounds[jnp.array(tup)],
                 )
@@ -694,7 +708,14 @@ class CompositeBias(Bias):
         )
 
     def _compute(self, cvs):
-        return self.fun(jnp.array([jnp.reshape(self.biases[i]._compute(cvs), ()) for i in range(len(self.biases))]))
+        return self.fun(
+            jnp.array(
+                [
+                    jnp.reshape(self.biases[i]._compute(cvs), ())
+                    for i in range(len(self.biases))
+                ]
+            )
+        )
 
     def update_bias(
         self,
@@ -721,7 +742,9 @@ class BiasModify(Bias):
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
 
     @classmethod
-    def create(clz, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}) -> Self:  # type: ignore[override]
+    def create(
+        clz, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}
+    ) -> Self:  # type: ignore[override]
         return BiasModify(
             collective_variable=bias.collective_variable,
             fun=fun,
@@ -734,7 +757,9 @@ class BiasModify(Bias):
         )
 
     def _compute(self, cvs):
-        return jnp.reshape(self.fun(self.bias._compute(cvs), **self.kwargs, **self.static_kwargs), ())
+        return jnp.reshape(
+            self.fun(self.bias._compute(cvs), **self.kwargs, **self.static_kwargs), ()
+        )
 
     def update_bias(
         self,

@@ -120,7 +120,10 @@ class Observable:
         # TODO: use metric grid to generate bins and center
         # bins, cv_grid, mid_cv_grid = dlo.collective_variable.metric.grid(n, endpoints=True)
 
-        bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
+        bins = [
+            np.linspace(mini, maxi, n, endpoint=True, dtype=np.double)
+            for mini, maxi in bounding_box
+        ]
 
         from thermolib.thermodynamics.bias import BiasPotential2D
         from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
@@ -139,7 +142,9 @@ class Observable:
             def __call__(self, *cv):
                 print(".", end="")
 
-                cvs = CV.combine(*[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv])
+                cvs = CV.combine(
+                    *[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv]
+                )
                 f = Partial(
                     self.bias.compute_from_cv,
                     diff=False,
@@ -157,7 +162,10 @@ class Observable:
             def print_pars(self, *pars_units):
                 pass
 
-        bias_wrapped = [_ThermoBiasND(bias=b, chunk_size=chunk_size, num=i) for i, b in enumerate(biases)]
+        bias_wrapped = [
+            _ThermoBiasND(bias=b, chunk_size=chunk_size, num=i)
+            for i, b in enumerate(biases)
+        ]
 
         histo = HistogramND.from_wham(
             # bins=[np.array(b, dtype=np.double) for b in bins],
@@ -377,7 +385,6 @@ class Observable:
                 margin=0.1,
                 vmax=max_bias,
                 inverted=False,
-                n=200,
             )
 
         if koopman:
@@ -402,7 +409,6 @@ class Observable:
                     margin=0.1,
                     vmax=max_bias,
                     inverted=False,
-                    n=200,
                 )
 
             weights = dlo.koopman_weight(
@@ -440,7 +446,6 @@ class Observable:
             margin=0.1,
             vmax=max_bias,
             inverted=False,
-            n=200,
         )
 
         if plot_selected_points:
@@ -451,7 +456,6 @@ class Observable:
                 margin=0.1,
                 vmax=max_bias,
                 inverted=False,
-                n=200,
             )
 
         return fes_bias_tot
@@ -580,7 +584,6 @@ class Observable:
                 ),
                 margin=margin,
                 vmax=vmax,
-                n=200,
             )
 
         if thermolib:
@@ -625,29 +628,5 @@ class Observable:
                 executors=executors,
                 direct_bias=direct_bias,
             )
-
-        # if plot:
-        #     fold = str(self.rounds.path(c=self.cv_round))
-
-        #     pf = []
-
-        #     pf.append(
-        #         bash_app_python(function=Bias.static_plot)(
-        #             bias=fes_bias_tot,
-        #             outputs=[File(f"{fold}/FES_bias_{self.rnd}_inverted_{choice}.png")],
-        #             execution_folder=fold,
-        #             name=f"FES_bias_{self.rnd}_inverted_{choice}.png",
-        #             inverted=False,
-        #             label="Free Energy [kJ/mol]",
-        #             stdout=f"FES_bias_{self.rnd}_inverted_{choice}.stdout",
-        #             stderr=f"FES_bias_{self.rnd}_inverted_{choice}.stderr",
-        #             margin=margin,
-        #             vmax=vmax,
-        #             n=200,
-        #         ),
-        #     )
-
-        #     for f in pf:
-        #         f.result()
 
         return fes_bias_tot

@@ -277,7 +277,9 @@ class TranformerAutoEncoder(Transformer):
         return cv, cv_t, un_atomize * f_enc, w
 
 
-def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, outdim, solver):
+def _LDA_trans(
+    cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, outdim, solver
+):
     if solver == "eigen":
 
         def f(cv, scalings):
@@ -318,9 +320,12 @@ def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, mean)
     )
 
 
-def _scale_trans(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, scale_factor):
+def _scale_trans(
+    cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, scale_factor
+):
     return CV(
-        (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
+        (alpha.T @ cv.cv - scale_factor[0, :])
+        / (scale_factor[1, :] - scale_factor[0, :]),
         _stack_dims=cv._stack_dims,
         _combine_dims=cv._combine_dims,
         atomic=cv.atomic,
@@ -397,7 +402,9 @@ class TransoformerLDA(Transformer):
                 labels,
             )
 
-            lda_cv = CvTrans.from_cv_function(_LDA_trans, alpha=alpha, outdim=self.outdim, solver=solver)
+            lda_cv = CvTrans.from_cv_function(
+                _LDA_trans, alpha=alpha, outdim=self.outdim, solver=solver
+            )
             cv, _, _ = lda_cv.compute_cv_trans(cv)
 
             cvs = CV.unstack(cv)
@@ -435,13 +442,23 @@ class TransoformerLDA(Transformer):
                 jnp.array(mu_i),
             )
 
-            obersevations_within = CV.stack(*[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)])
+            obersevations_within = CV.stack(
+                *[cv_i - mu_i for mu_i, cv_i in zip(mu_i, normed_cv_u)]
+            )
             observations_between = CV.stack(*[cv_i - mu for cv_i in normed_cv_u])
 
             from sklearn.covariance import LedoitWolf
 
-            cov_w = LedoitWolf(assume_centered=True).fit(obersevations_within.cv).covariance_
-            cov_b = LedoitWolf(assume_centered=True).fit(observations_between.cv).covariance_
+            cov_w = (
+                LedoitWolf(assume_centered=True)
+                .fit(obersevations_within.cv)
+                .covariance_
+            )
+            cov_b = (
+                LedoitWolf(assume_centered=True)
+                .fit(observations_between.cv)
+                .covariance_
+            )
 
             manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=self.outdim)
 
@@ -465,7 +482,9 @@ class TransoformerLDA(Transformer):
 
             scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
 
-            _g = CvTrans.from_cv_function(_scale_trans, alpha=alpha, scale_factor=scale_factor)
+            _g = CvTrans.from_cv_function(
+                _scale_trans, alpha=alpha, scale_factor=scale_factor
+            )
 
             cv = _g.compute_cv_trans(cv)[0]
             if cv_t is not None:
@@ -505,7 +524,7 @@ class TransformerMAF(Transformer):
             w=w,
             calc_pi=True,  # removes mean of the features
             koopman_weight=False,
-            add_1=True,
+            add_1=False,
             trans=trans,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
@@ -514,17 +533,17 @@ class TransformerMAF(Transformer):
             eps=1e-6,  # if this is too small, the eigenvalues might become unstable
             eps_pre=1e-6,  # if this is too small, the eigenvalues might become unstable
             # max_features_pre=500,
-            symmetric=False,
+            symmetric=True,
         )
 
         # # # weight and make reversible
-        km = km.weighted_model(
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            verbose=True,
-            symmetric=True,
-            add_1=False,
-        )
+        # km = km.weighted_model(
+        #     chunk_size=chunk_size,
+        #     macro_chunk=macro_chunk,
+        #     verbose=True,
+        #     symmetric=True,
+        #     add_1=False,
+        # )
 
         ts = km.timescales() / nanosecond
 
@@ -534,7 +553,11 @@ class TransformerMAF(Transformer):
 
         for i in range(self.outdim - 1):
             if ts[i + 1] / ts[0] < 1 / 10:
-                (print(f"cv {i+1} is too small compared to cv {0} (fraction= {ts[i+1]/ ts[0]}), cutting off "),)
+                (
+                    print(
+                        f"cv {i+1} is too small compared to cv {0} (fraction= {ts[i+1]/ ts[0]}), cutting off "
+                    ),
+                )
                 out_dim = i + 1
                 break
 

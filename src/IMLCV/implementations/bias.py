@@ -33,6 +33,28 @@ class MinBias(CompositeBias):
         return b
 
 
+# @partial(dataclass, frozen=False, eq=False)
+# class DiffBias(Bias):
+#     biases: Iterable[Bias]
+#     beta: float
+
+#     def _compute(self, cvs: CV):
+#         return -jnp.exp(-self.beta * self.biases[0]._compute(cvs))* jnp.abs(self.biases[0]._compute(cvs) - self.biases[1]._compute(cvs))
+#         # return jnp.exp(-self.beta * self.biases[0]._compute(cvs)) * jnp.abs(
+#         #     self.biases[0]._compute(cvs) - self.biases[1]._compute(cvs)
+#         # )
+
+#     @classmethod
+#     def create(clz, biases: Iterable[Bias], T=300 * kelvin) -> Self:
+#         assert len(biases) == 2
+
+#         return DiffBias(
+#             biases=biases,
+#             beta=1 / (T * boltzmann),
+#             collective_variable=biases[0].collective_variable,
+#         )
+
+
 @partial(dataclass, frozen=False, eq=False)
 class HarmonicBias(Bias):
     """Harmonic bias potential centered arround q0 with force constant k."""
@@ -222,7 +244,9 @@ class BiasMTD(Bias):
 
         deltas = jnp.apply_along_axis(f, axis=1, arr=self.q0s)
 
-        exparg = jnp.einsum("ji,ji,i -> j", deltas, deltas, 1.0 / (2.0 * self.sigmas**2.0))
+        exparg = jnp.einsum(
+            "ji,ji,i -> j", deltas, deltas, 1.0 / (2.0 * self.sigmas**2.0)
+        )
         energy = jnp.sum(jnp.exp(-exparg) * self.Ks)
 
         return energy
@@ -250,9 +274,12 @@ class RbfBias(Bias):
         smoothing=0.0,
         degree=None,
         finalized=True,
+        slice_exponent=1,
+        log_exp_slice=True,
+        slice_mean=False,
     ) -> Self:
         assert cv.batched
-        assert cv.shape[1] == cvs.n
+        assert cv.shape[1] == cvs.n, f"{cv.shape}[1] != {cvs.n}"
         assert len(vals.shape) == 1
         assert cv.shape[0] == vals.shape[0]
 
@@ -272,6 +299,9 @@ class RbfBias(Bias):
             step=step,
             rbf=rbf,
             finalized=finalized,
+            slice_exponent=slice_exponent,
+            log_exp_slice=log_exp_slice,
+            slice_mean=slice_mean,
         )
 
     def _compute(self, cvs: CV):
@@ -303,7 +333,7 @@ class GridBias(Bias):
         margin=0.1,
         order=1,
     ) -> RbfBias:
-        grid, cv, cv_mid, bounds = cvs.metric.grid(
+        grid, cv, _, bounds = cvs.metric.grid(
             n=n,
             bounds=bounds,
             margin=margin,
