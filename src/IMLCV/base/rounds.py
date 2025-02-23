@@ -1166,31 +1166,49 @@ class Rounds(ABC):
 
                 # p is constructed such that the samples are uniformly samples but no more samples than the numbers of samples per bin is taken
 
-                full = jnp.full(out.shape, False)
+                bc_stack = jnp.hstack(bin_count)
 
-                out_p = jnp.zeros_like(out, dtype=jnp.float64)
+                print(f"{bc_stack.shape=}")
+
+                full = jnp.full(bc_stack.shape, False)
+
+                out_p = jnp.zeros_like(bc_stack, dtype=jnp.float64)
 
                 # n_bins = jnp.sum(1 / out[~full])
 
                 while True:
+                    print(".")
+
                     _select = out - jnp.sum(full)
 
-                    _n_bins = jnp.sum(1 / out[~full])
+                    _n_bins = jnp.sum(1 / bc_stack[~full])
 
-                    p = _select / _n_bins / out[~full]
+                    p = _select / _n_bins / bc_stack[~full]
                     _full = p >= 1
 
                     if jnp.sum(_full) == 0:
                         out_p = out_p.at[~full].set(p)
                         break
 
-                    out_p = out_p.at[~full].set(1 / out[~full])
+                    if jnp.sum(~_full) == 0:
+                        print("no more data points available")
+                        out = jnp.sum(full)
+
+                        break
+
+                    out_p = out_p.at[~full].set(1 / bc_stack[~full])
 
                     full = full.at[~full].set(_full)
 
+                ni = 0
+
                 for wi, bi in zip(weight, bin_count):
-                    w.append(out_p)
-                    rw.append(wi / out_p)
+                    out_p_i = out_p[ni : ni + bi.shape[0]]
+
+                    w.append(out_p_i)
+                    rw.append(wi / out_p_i)
+
+                    ni += bi.shape[0]
 
             else:
                 w = []
@@ -1306,10 +1324,12 @@ class Rounds(ABC):
                         w_fes.append(w_fes_i)
 
                     if reweight_inverse_bincount:
-                        bincount_i = remove_lag(
+                        w_bincount_i = remove_lag(
                             bincount[n],
                             c_i,
                         )
+
+                        w_bincount.append(w_bincount_i)
 
             key, indices, out_reweights = choose(
                 key=key,
