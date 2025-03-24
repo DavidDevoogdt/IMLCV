@@ -154,6 +154,7 @@ class TrajectoryInfo:
     _e_bias: Array | None = None
 
     _w: Array | None = None
+    _rho: Array | None = None
 
     _cv: Array | None = None
     _cv_orig: Array | None = None  # usefull to reconstruct CV discovery
@@ -179,6 +180,7 @@ class TrajectoryInfo:
         "_P",
         "_err",
         "_w",
+        "_rho",
     ]
     _items_vec = [
         "_positions",
@@ -197,6 +199,7 @@ class TrajectoryInfo:
         cv: Array | None = None,
         cv_orig: Array | None = None,
         w: Array | None = None,
+        rho: Array | None = None,
         T: Array | None = None,
         P: Array | None = None,
         err: Array | None = None,
@@ -220,6 +223,7 @@ class TrajectoryInfo:
             "_cv": cv,
             "_cv_orig": cv_orig,
             "_w": w,
+            "_rho": rho,
             "_T": T,
             "_P": P,
             "_err": err,
@@ -260,6 +264,8 @@ class TrajectoryInfo:
             # _e_pot_gpos=self._e_pot_gpos[slz, :] if self._e_pot_gpos is not None else None,
             # _e_pot_vtens=self._e_pot_vtens[slz, :] if self._e_pot_vtens is not None else None,
             _e_bias=self._e_bias[slz,] if self._e_bias is not None else None,
+            _w=self._w[slz,] if self._w is not None else None,
+            _rho=self._rho[slz,] if self._rho is not None else None,
             # _e_bias_gpos=self._e_bias_gpos[slz, :] if self._e_bias_gpos is not None else None,
             # _e_bias_vtens=self._e_bias_vtens[slz, :] if self._e_bias_vtens is not None else None,
             _cv=self._cv[slz, :] if self._cv is not None else None,
@@ -281,6 +287,8 @@ class TrajectoryInfo:
             "_charges": ti_out._charges,
             "_e_pot": ti_out._e_pot,
             "_e_bias": ti_out._e_bias,
+            "_w": ti_out._w,
+            "_rho": ti_out._rho,
             "_cv": ti_out._cv,
             "_T": ti_out._T,
             "_P": ti_out._P,
@@ -302,6 +310,8 @@ class TrajectoryInfo:
             d["_charges"] = upd(d["_charges"], t._charges, index)
             d["_e_pot"] = upd(d["_e_pot"], t._e_pot, index)
             d["_e_bias"] = upd(d["_e_bias"], t._e_bias, index)
+            d["_w"] = upd(d["_w"], t._w, index)
+            d["_rho"] = upd(d["_rho"], t._rho, index)
             d["_cv"] = upd(d["_cv"], t._cv, index)
             d["_T"] = upd(d["_T"], t._T, index)
             d["_P"] = upd(d["_P"], t._P, index)
@@ -466,6 +476,12 @@ class TrajectoryInfo:
         if self._w is None:
             return None
         return self._w[0 : self._size]
+
+    @property
+    def rho(self) -> Array | None:
+        if self._rho is None:
+            return None
+        return self._rho[0 : self._size]
 
     @property
     def e_bias(self) -> Array | None:

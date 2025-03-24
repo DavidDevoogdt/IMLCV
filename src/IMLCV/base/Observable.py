@@ -120,10 +120,7 @@ class Observable:
         # TODO: use metric grid to generate bins and center
         # bins, cv_grid, mid_cv_grid = dlo.collective_variable.metric.grid(n, endpoints=True)
 
-        bins = [
-            np.linspace(mini, maxi, n, endpoint=True, dtype=np.double)
-            for mini, maxi in bounding_box
-        ]
+        bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
         from thermolib.thermodynamics.bias import BiasPotential2D
         from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
@@ -142,9 +139,7 @@ class Observable:
             def __call__(self, *cv):
                 print(".", end="")
 
-                cvs = CV.combine(
-                    *[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv]
-                )
+                cvs = CV.combine(*[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv])
                 f = Partial(
                     self.bias.compute_from_cv,
                     diff=False,
@@ -162,10 +157,7 @@ class Observable:
             def print_pars(self, *pars_units):
                 pass
 
-        bias_wrapped = [
-            _ThermoBiasND(bias=b, chunk_size=chunk_size, num=i)
-            for i, b in enumerate(biases)
-        ]
+        bias_wrapped = [_ThermoBiasND(bias=b, chunk_size=chunk_size, num=i) for i, b in enumerate(biases)]
 
         histo = HistogramND.from_wham(
             # bins=[np.array(b, dtype=np.double) for b in bins],
@@ -215,7 +207,7 @@ class Observable:
         only_finished=True,
         bounds_percentile=1,
         max_bias=None,
-        rbf_kernel="linear",
+        rbf_kernel="multiquadric",
         rbf_degree=None,
     ):
         if temp is None:
@@ -354,9 +346,11 @@ class Observable:
             # divide_by_histogram=divide_by_histogram,
             n_max=n_max,
             wham=kooopman_wham,
-            uniform=True,
+            # uniform=True,
             output_FES_bias=True,
+            reweight_inverse_bincount=True,
             samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
         )
 
         fes_bias_wham_p = fb[0]
@@ -368,12 +362,14 @@ class Observable:
         else:
             fes_bias_wham = dlo.get_fes_bias_from_weights(
                 weights=dlo._weights,
+                rho=dlo._rho,
                 cv=dlo.cv,
                 n_grid=n_max,
                 T=dlo.sti.T,
                 collective_variable=dlo.collective_variable,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
+                max_bias=max_bias,
                 # samples_per_bin=samples_per_bin,
                 # min_samples_per_bin=min_samples_per_bin,
             )
@@ -383,7 +379,7 @@ class Observable:
                 name="FES_bias_wham.png",
                 # traj=dlo.cv,
                 margin=0.1,
-                vmax=max_bias,
+                # vmax=max_bias,
                 inverted=False,
             )
 
@@ -392,6 +388,59 @@ class Observable:
                 print("determinig bias wham")
                 fes_bias_wham = dlo.get_fes_bias_from_weights(
                     weights=dlo._weights,
+                    rho=dlo._rho,
+                    cv=dlo.cv,
+                    n_grid=n_max,
+                    T=dlo.sti.T,
+                    collective_variable=dlo.collective_variable,
+                    chunk_size=chunk_size,
+                    macro_chunk=macro_chunk,
+                    samples_per_bin=samples_per_bin,
+                    # max_bias=max_bias,
+                    min_samples_per_bin=min_samples_per_bin,
+                )
+
+                print("plotting wham")
+                fes_bias_wham.plot(
+                    name="FES_bias_wham.png",
+                    # traj=dlo.cv,
+                    margin=0.1,
+                    # vmax=max_bias,
+                    inverted=False,
+                )
+
+            weights, w_corr = dlo.koopman_weight(
+                # indicator_CV=True,
+                n_max_koopman=n_max,
+                samples_per_bin=samples_per_bin,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+                output_w_corr=True,
+                correlation=True,
+                koopman_eps=0,
+                koopman_eps_pre=0,
+                add_1=False,
+            )
+
+            fes_bias_tot = dlo.get_fes_bias_from_weights(
+                weights=weights,
+                rho=dlo._rho,
+                cv=dlo.cv,
+                n_grid=n_max,
+                T=dlo.sti.T,
+                collective_variable=dlo.collective_variable,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                # max_bias=max_bias,
+            )
+
+            if plot_selected_points:
+                fes_bias_tot_corr = dlo.get_fes_bias_from_weights(
+                    weights=w_corr,
+                    rho=dlo._rho,
                     cv=dlo.cv,
                     n_grid=n_max,
                     T=dlo.sti.T,
@@ -402,35 +451,14 @@ class Observable:
                     min_samples_per_bin=min_samples_per_bin,
                 )
 
-                print("plotting wham")
-                fes_bias_wham.plot(
-                    name="FES_bias_wham.png",
+                fes_bias_tot_corr.plot(
+                    name="FES_bias_corr.png",
                     # traj=dlo.cv,
                     margin=0.1,
-                    vmax=max_bias,
+                    vmax=max_bias / 4,
                     inverted=False,
                 )
 
-            weights = dlo.koopman_weight(
-                indicator_CV=True,
-                n_max_koopman=n_max,
-                samples_per_bin=samples_per_bin,
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
-                verbose=verbose,
-            )
-
-            fes_bias_tot = dlo.get_fes_bias_from_weights(
-                weights=weights,
-                cv=dlo.cv,
-                n_grid=n_max,
-                T=dlo.sti.T,
-                collective_variable=dlo.collective_variable,
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
-            )
             if resample:
                 fes_bias_tot = fes_bias_tot.resample(n=n_max)
 
@@ -533,7 +561,7 @@ class Observable:
         choice="rbf",
         num_rnds=8,
         start_r=1,
-        rbf_kernel="linear",
+        rbf_kernel="multiquadric",
         rbf_degree=None,
         samples_per_bin=5,
         min_samples_per_bin=1,

@@ -132,17 +132,11 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
     elif basis == "loc_gaussians":
 
         def _phi(n, n_max, r, r_cut, sigma_a, l, l_max):
-            return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2)) * f_cut(
-                r
-            )
+            return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2)) * f_cut(r)
     elif basis == "cos":
 
         def _phi_0(n, n_max, r, r_cut, sigma_a, l, l_max):
-            return (
-                (r / r_cut) ** l
-                * (jnp.cos(r / r_cut * (n + 0.5) * jnp.pi))
-                * jnp.where(r > r_cut, 0, 1)
-            )
+            return (r / r_cut) ** l * (jnp.cos(r / r_cut * (n + 0.5) * jnp.pi)) * jnp.where(r > r_cut, 0, 1)
 
         # make derivatives zero at r_cut
 
@@ -177,9 +171,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
                 r_safe = jnp.where(r > 0, r, 1)
 
                 # this is exp version
-                ive_l = ie_n(
-                    l_max, r_safe * r_ij / sigma_a**2, half=True
-                )  # exponential scaled, corrected in c
+                ive_l = ie_n(l_max, r_safe * r_ij / sigma_a**2, half=True)  # exponential scaled, corrected in c
 
                 phi_nl = jax.vmap(
                     jax.vmap(
@@ -428,9 +420,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
         raise ValueError(f"{bessel_fun=} not supported")
 
     def spherical_jn_zeros(n, m):
-        x0 = jnp.array(
-            (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
-        )
+        x0 = jnp.array((scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2)
 
         return vmap(
             lambda x: jaxopt.GradientDescent(
@@ -447,9 +437,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
         zeros = spherical_jn_zeros(n, m)
 
-        zeros_guess = (
-            scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)
-        ) / 2
+        zeros_guess = (scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2
 
         x = jnp.linspace(0, jnp.max(zeros), num=1000)
         y = jax.vmap(spherical_jn, in_axes=(None, 0), out_axes=1)(n, x)[n, :]
@@ -479,8 +467,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
     @partial(vmap, in_axes=(None, 0, None))
     def f_nl(n, l, sj):
         return (
-            u_ln[l, n + 1] / s_lln[l + 1, l, n] * sj[l, l, n]
-            - u_ln[l, n] / s_lln[l + 1, l, n + 1] * sj[l, l, n + 1]
+            u_ln[l, n + 1] / s_lln[l + 1, l, n] * sj[l, l, n] - u_ln[l, n] / s_lln[l + 1, l, n + 1] * sj[l, l, n + 1]
         ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1] ** 2) / r_cut**3) ** (0.5)
 
     l_list = list(range(l_max + 1))

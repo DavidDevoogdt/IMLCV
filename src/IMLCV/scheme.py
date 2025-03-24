@@ -106,8 +106,10 @@ class Scheme:
         m = self.bias.collective_variable.metric
         grid, _, cv_grid, _ = m.grid(
             n + 1,
-            margin=0.1,
+            margin=0.0,
         )
+
+        print(f"{grid=}")
 
         # sigma =
 
@@ -126,6 +128,8 @@ class Scheme:
             )
             for cv in cv_grid
         ]
+
+        print(f"{len(biases)=}")
 
         if self.rounds.cv == 0 and self.rounds.round == 0:
             sp0 = SystemParams.stack(*[self.md.sp] * len(biases))
@@ -150,7 +154,7 @@ class Scheme:
         self,
         rnds=10,
         convergence_kl=0.1,
-        init=0,
+        # init=0,
         steps=5e4,
         K=None,
         update_metric=False,
@@ -180,6 +184,7 @@ class Scheme:
         koopman_wham=None,
         out=-1,
         direct_bias=True,
+        init=False,
     ):
         if plot_umbrella is None:
             plot_umbrella = plot
@@ -189,19 +194,19 @@ class Scheme:
 
         print(f"{cv_round=}")
 
-        if init != 0:
-            print(f"running init round with {init} steps")
+        # if init != 0:
+        #     print(f"running init round with {init} steps")
 
-            self.grid_umbrella(
-                steps=init,
-                n=n,
-                k=K,
-                max_grad=init_max_grad,
-                plot=plot_umbrella,
-                cv_round=cv_round,
-                eps=eps_umbrella,
-            )
-            # self.rounds.invalidate_data(c=cv_round)
+        #     self.grid_umbrella(
+        #         steps=init,
+        #         n=n,
+        #         k=K,
+        #         max_grad=init_max_grad,
+        #         plot=plot_umbrella,
+        #         cv_round=cv_round,
+        #         eps=eps_umbrella,
+        #     )
+        #     # self.rounds.invalidate_data(c=cv_round)
 
         i_0 = self.rounds.get_round(c=cv_round)
 

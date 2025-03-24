@@ -352,9 +352,9 @@ class Bias(ABC):
                 # e_vir = jnp.einsum("ji,jl->il", sp.cell, de.cell) + jnp.einsum(
                 #     "ni,nl->il", sp.coordinates, de.coordinates
                 # )
-                e_vir = jnp.einsum(
-                    "ij,k,klj->il", sp.cell, de.cv, jac.cell
-                ) + jnp.einsum("ni,j,jnl->il", sp.coordinates, de.cv, jac.coordinates)
+                e_vir = jnp.einsum("ij,k,klj->il", sp.cell, de.cv, jac.cell) + jnp.einsum(
+                    "ni,j,jnl->il", sp.coordinates, de.cv, jac.coordinates
+                )
 
         return cvs, EnergyResult(ener, e_gpos, e_vir)
 
@@ -595,14 +595,19 @@ class Bias(ABC):
             margin=margin,
         )
 
-        w = self.apply([cv], macro_chunk_size=macro_chunk)[0]
+        x = self.apply([cv], macro_chunk_size=macro_chunk)[0]
 
-        w /= boltzmann * T
+        if not self.log_exp_slice:
+            x /= boltzmann * T
+        else:
+            x /= boltzmann * T
 
-        if self.log_exp_slice:
-            w = jnp.exp(w)
+        # if self.log_exp_slice:
+        #     w = jnp.exp(w)
 
-        w = w.reshape((n_grid,) * self.collective_variable.n)
+        # print(f"{x=}")
+
+        x = x.reshape((n_grid,) * self.collective_variable.n)
 
         cvi = self.collective_variable
 
@@ -610,7 +615,7 @@ class Bias(ABC):
 
         from itertools import combinations
 
-        free_energies[cvi.n] = dict()
+        # free_energies[cvi.n] = dict()
 
         for nd in range(cvi.n):
             free_energies[nd + 1] = dict()
@@ -620,27 +625,67 @@ class Bias(ABC):
                 dims = jnp.delete(dims, jnp.array(tup))
                 dims = tuple([int(a) for a in dims])
 
-                w_sum = jnp.nansum(w**self.slice_exponent, axis=dims)
+                # print(f"{tup=} {dims=} ")
 
-                if self.slice_mean:
-                    print(f"mean slice {self.slice_mean=}")
-                    w_sum /= jnp.nansum(w * 1, axis=dims)
+                # print(f"{w_max=}")
 
-                w_sum = w_sum ** (1 / self.slice_exponent)
+                # print(f"{self.log_exp_slice=}")
+
+                if self.log_exp_slice:
+
+                    def _f(x):
+                        x_max = jnp.max(x)
+
+                        return (
+                            jnp.log(jnp.nansum(jnp.exp((x - x_max) * self.slice_exponent)))
+                            + x_max * self.slice_exponent
+                        )
+
+                    # print(f"{tup=}")
+
+                    for i, d in enumerate(jnp.flip(jnp.array(tup))):
+                        # print(f"vmapping over {i=} {d=} {d-i=}")
+
+                        n_before = len(tup) - i - 1
+
+                        # print(f"{n_before=} {d=} {i=} {d-n_before}")
+
+                        _f = jax.vmap(_f, in_axes=int(d - n_before))
+
+                    x_sum = _f(x)
+                    # result is in reverse order
+
+                    # x_sum = jnp.transpose(x_sum)  # reverses order of all axes
+
+                    # x_sum = jnp.apply_over_axes(_f, x, dims)
+
+                else:
+                    x_sum = jnp.nansum(x**self.slice_exponent, axis=dims)
+
+                # print(f"{x_sum=}")
+
+                if self.log_exp_slice:
+                    x_sum /= self.slice_exponent
+                else:
+                    x_sum = x_sum ** (1 / self.slice_exponent)
+
+                # print(f"{x_sum=}")
 
                 if self.log_exp_slice:
                     # output is log exp slice
-                    values = (boltzmann * T) * jnp.log(w_sum)
+                    values = x_sum * boltzmann * T
 
                 else:
-                    print(f"{w_sum=}")
-                    values = -w_sum * (boltzmann * T)
+                    print(f"{x_sum=}")
+                    values = x_sum * (boltzmann * T)
 
                 # if inverted:
                 #     values = -values
 
-                if offset:
-                    values -= jnp.max(values)
+                if offset and self.log_exp_slice:
+                    values -= jnp.nanmax(values)
+
+                # print(f"{values=}")
 
                 from IMLCV.implementations.bias import GridBias
 
@@ -708,14 +753,7 @@ class CompositeBias(Bias):
         )
 
     def _compute(self, cvs):
-        return self.fun(
-            jnp.array(
-                [
-                    jnp.reshape(self.biases[i]._compute(cvs), ())
-                    for i in range(len(self.biases))
-                ]
-            )
-        )
+        return self.fun(jnp.array([jnp.reshape(self.biases[i]._compute(cvs), ()) for i in range(len(self.biases))]))
 
     def update_bias(
         self,
@@ -742,9 +780,7 @@ class BiasModify(Bias):
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
 
     @classmethod
-    def create(
-        clz, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}
-    ) -> Self:  # type: ignore[override]
+    def create(clz, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}) -> Self:  # type: ignore[override]
         return BiasModify(
             collective_variable=bias.collective_variable,
             fun=fun,
@@ -757,9 +793,7 @@ class BiasModify(Bias):
         )
 
     def _compute(self, cvs):
-        return jnp.reshape(
-            self.fun(self.bias._compute(cvs), **self.kwargs, **self.static_kwargs), ()
-        )
+        return jnp.reshape(self.fun(self.bias._compute(cvs), **self.kwargs, **self.static_kwargs), ())
 
     def update_bias(
         self,

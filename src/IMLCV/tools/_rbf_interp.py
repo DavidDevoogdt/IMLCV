@@ -136,7 +136,25 @@ def _build_and_solve_system(
             [P.T, jnp.zeros((r, r))],
         ]
     )
+
+    # # print(f"{P=}")
+
+    # # might be unstable
+
+    # l, U = jnp.linalg.eigh(A)
+
+    # # print(f"{l}  {U[:,0]} ")
+
+    # l_max = jnp.max(jnp.abs(l))
+    # l_min = jnp.min(jnp.abs(l))
+
+    # print(f"Condition number of A: {l_max/l_min} {l_max=} {l_min=}")
+
     b = jnp.vstack([d, jnp.zeros((r, s))])
+
+    # coeffs = U @ jnp.diag(jnp.where(jnp.abs(l) / jnp.abs(l_max) > 1e-10, 1 / l, 0)) @ U.T @ b
+
+    # print(f"{b.shape=} {coeffs.shape=} {coeffs=}")
 
     coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
 
@@ -165,7 +183,7 @@ class RBFInterpolator:
         metric: CvMetric,
         d: jax.Array,
         smoothing=0.0,
-        kernel="thin_plate_spline",
+        kernel="multiquadric",
         epsilon=None,
         degree=None,
     ):
@@ -216,8 +234,7 @@ class RBFInterpolator:
                 epsilon = 1.0
             else:
                 raise ValueError(
-                    "`epsilon` must be specified if `kernel` is not one of "
-                    f"{_SCALE_INVARIANT}.",
+                    "`epsilon` must be specified if `kernel` is not one of " f"{_SCALE_INVARIANT}.",
                 )
         else:
             epsilon = jnp.array(epsilon)

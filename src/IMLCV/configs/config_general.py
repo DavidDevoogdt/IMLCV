@@ -27,6 +27,7 @@ class Executors(Enum):
     default = "default"
     training = "training"
     reference = "reference"
+    threadpool = "threadpool"
 
 
 class ReferenceCommands(Enum):
@@ -117,7 +118,7 @@ def config(
 
     global PARSL_DICT
 
-    for k, l, p in zip(["default", "training", "reference"], labels, precommands):
+    for k, l, p in zip(["default", "training", "reference", "threadpool"], labels, precommands):
         PARSL_DICT[k] = [l, p]
 
     global REFERENCE_COMMANDS

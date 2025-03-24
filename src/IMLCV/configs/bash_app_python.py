@@ -15,7 +15,7 @@ def bash_app_python(
     function=None,
     executors=None,
     uses_mpi=False,  # used in jax.distributed.initialize()
-    pickle_extension="json",
+    pickle_extension="p",
     pass_files=False,
     auto_log=False,
     profile=False,
@@ -176,7 +176,7 @@ def bash_app_python(
             if not auto_log:
                 load_inp = [*load_inp, File(stdout), File(stderr), File(lockfile)]
 
-            return python_app(load, executors=PARSL_DICT["default"][0])(
+            return python_app(load, executors=PARSL_DICT["threadpool"][0])(
                 inputs=load_inp,
                 outputs=outp,
             )

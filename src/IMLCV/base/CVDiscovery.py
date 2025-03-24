@@ -113,39 +113,42 @@ class Transformer:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
 
         w = dlo._weights
+        rho = dlo._rho
 
-        # print("getting weights")
-        # w = dlo.wham_weight(
-        #     chunk_size=chunk_size,
-        #     macro_chunk=macro_chunk,
-        #     verbose=verbose,
-        #     samples_per_bin=samples_per_bin,
-        #     n_max=n_max,
-        # )
+        from IMLCV.base.rounds import data_loader_output
 
-        # w_orig = w
+        bias: Bias = data_loader_output.get_fes_bias_from_weights(
+            dlo.sti.T,
+            weights=w,
+            rho=rho,
+            collective_variable=dlo.collective_variable,
+            cv=dlo.cv,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
+            n_max=n_max,
+            max_bias=max_fes_bias,
+            macro_chunk=macro_chunk,
+            chunk_size=chunk_size,
+        )
 
         if plot:
-            from IMLCV.base.rounds import data_loader_output
-
-            bias_orig: Bias = data_loader_output.get_fes_bias_from_weights(
-                dlo.sti.T,
-                weights=w,
-                collective_variable=dlo.collective_variable,
-                cv=dlo.cv,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
-                n_max=n_max,
-                max_bias=max_fes_bias,
-                macro_chunk=macro_chunk,
-                chunk_size=chunk_size,
+            Transformer.plot_app(
+                name=str(plot_folder / "cvdiscovery_pre_bias.png"),
+                collective_variables=[dlo.collective_variable],
+                cv_data=None,
+                biases=[dlo.ground_bias],
+                margin=0.1,
+                T=dlo.sti.T,
+                plot_FES=True,
+                cv_titles=cv_titles,
+                vmax=max_fes_bias,
             )
 
             Transformer.plot_app(
-                name=str(plot_folder / "cvdiscovery_pre.png"),
+                name=str(plot_folder / "cvdiscovery_pre_data_bias.png"),
                 collective_variables=[dlo.collective_variable],
                 cv_data=None,
-                biases=[bias_orig],
+                biases=[bias],
                 margin=0.1,
                 T=dlo.sti.T,
                 plot_FES=True,
@@ -157,6 +160,46 @@ class Transformer:
                 name=str(plot_folder / "cvdiscovery_pre_data.png"),
                 collective_variables=[dlo.collective_variable],
                 cv_data=[dlo.cv],
+                margin=0.1,
+                T=dlo.sti.T,
+                plot_FES=True,
+                cv_titles=cv_titles,
+                vmax=max_fes_bias,
+            )
+
+        # koopman_weight
+
+        (w,) = dlo.koopman_weight(
+            verbose=verbose,
+            n_max_koopman=n_max,
+            samples_per_bin=samples_per_bin,
+            chunk_size=chunk_size,
+            correlation=True,
+            koopman_eps=0,
+            koopman_eps_pre=0,
+            add_1=False,
+        )
+
+        bias_km: Bias = data_loader_output.get_fes_bias_from_weights(
+            dlo.sti.T,
+            weights=w,
+            rho=rho,
+            collective_variable=dlo.collective_variable,
+            cv=dlo.cv,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
+            n_max=n_max,
+            max_bias=max_fes_bias,
+            macro_chunk=macro_chunk,
+            chunk_size=chunk_size,
+        )
+
+        if plot:
+            Transformer.plot_app(
+                name=str(plot_folder / "cvdiscovery_pre_data_bias_km.png"),
+                collective_variables=[dlo.collective_variable],
+                cv_data=None,
+                biases=[bias_km],
                 margin=0.1,
                 T=dlo.sti.T,
                 plot_FES=True,
@@ -240,9 +283,10 @@ class Transformer:
             print("transforming FES")
             from IMLCV.base.rounds import data_loader_output
 
-            bias: Bias = data_loader_output.get_fes_bias_from_weights(
+            bias_new: Bias = data_loader_output.get_fes_bias_from_weights(
                 dlo.sti.T,
                 weights=w,
+                rho=rho,
                 collective_variable=new_collective_variable,
                 cv=x,
                 samples_per_bin=samples_per_bin,
@@ -253,10 +297,10 @@ class Transformer:
                 chunk_size=chunk_size,
             )
 
-            bias.resample()
+            # bias.resample()
 
             if plot:
-                bias.plot(
+                bias_new.plot(
                     name=str(plot_folder / "transformed_fes.png"),
                     margin=0.1,
                     inverted=False,
@@ -264,7 +308,7 @@ class Transformer:
                 )
 
         else:
-            bias = NoneBias.create(new_collective_variable)
+            bias_new = NoneBias.create(new_collective_variable)
 
         if plot:
             Transformer.plot_app(
@@ -275,8 +319,8 @@ class Transformer:
                     [dlo.cv, x],
                 ],
                 biases=[
-                    [dlo.ground_bias, bias],
-                    [dlo.ground_bias, bias],
+                    [bias, bias_new],
+                    [bias, bias_new],
                 ],
                 margin=0.1,
                 T=dlo.sti.T,
@@ -301,7 +345,7 @@ class Transformer:
                 vmax=max_fes_bias,
             )
 
-        return x, new_collective_variable, bias
+        return x, new_collective_variable, bias_new
 
     def _fit(
         self,
@@ -360,9 +404,7 @@ class Transformer:
             if biases is not None:
                 biases = [biases] * ncv
 
-        assert (cv_data is not None) or (
-            biases is not None
-        ), "data or bias must be provided"
+        assert (cv_data is not None) or (biases is not None), "data or bias must be provided"
 
         # do consistency checks
         ndata = len(cv_data) if cv_data is not None else len(biases)
@@ -816,9 +858,7 @@ class Transformer:
         else:
             x_range = jnp.linspace(x_lim[0], x_lim[1], 500)
 
-            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(
-                CV(cv=jnp.array(x_range).reshape((-1, 1)))
-            )
+            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
 
             ax_histx.scatter(
                 x_range,
@@ -898,9 +938,7 @@ class Transformer:
         y_lim = [y_l[0] - m_y, y_l[1] + m_y]
 
         if fesses is not None:
-            assert (
-                indices is not None
-            ), "FES_indices must be provided if FES is provided"
+            assert indices is not None, "FES_indices must be provided if FES is provided"
 
             FES = fesses[2][indices]
 
@@ -993,12 +1031,8 @@ class Transformer:
             x_range = jnp.linspace(x_lim[0], x_lim[1], 500)
             y_range = jnp.linspace(y_lim[0], y_lim[1], 500)
 
-            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(
-                CV(cv=jnp.array(x_range).reshape((-1, 1)))
-            )
-            y_fes, _ = fesses[1][(indices[1],)].compute_from_cv(
-                CV(cv=jnp.array(y_range).reshape((-1, 1)))
-            )
+            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
+            y_fes, _ = fesses[1][(indices[1],)].compute_from_cv(CV(cv=jnp.array(y_range).reshape((-1, 1))))
 
             ax_histx.scatter(
                 x_range,
@@ -1168,9 +1202,7 @@ class Transformer:
             color_bias = cmap(normed_val)
 
             # add alpha channel
-            color_bias[:, 3] = (
-                jnp.exp(-3 * normed_val) / n_grid
-            )  # if all points in row are the same, the alpha is 1
+            color_bias[:, 3] = jnp.exp(-3 * normed_val) / n_grid  # if all points in row are the same, the alpha is 1
 
             shm = (len(bins[0]) - 1, len(bins[1]) - 1, len(bins[2]) - 1)
             sh = (len(bins[0]), len(bins[1]), len(bins[2]))
@@ -1251,8 +1283,7 @@ class Transformer:
                             # 3D array of strings, or 4D array with last axis rgb
                             if np.shape(color)[:3] != filled.shape:
                                 raise ValueError(
-                                    "When multidimensional, {} must match the shape of "
-                                    "filled".format(name)
+                                    "When multidimensional, {} must match the shape of " "filled".format(name)
                                 )
                             return color
                         else:
@@ -1275,9 +1306,7 @@ class Transformer:
                     self.auto_scale_xyz(x, y, z)
 
                     # points lying on corners of a square
-                    square = np.array(
-                        [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], dtype=np.intp
-                    )
+                    square = np.array([[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]], dtype=np.intp)
 
                     voxel_faces = defaultdict(list)
 
@@ -1309,13 +1338,9 @@ class Transformer:
                                     p2 = permute.dot([p, q, r2])
                                     i1 = tuple(p1)
                                     i2 = tuple(p2)
-                                    if filled[i1] and (
-                                        internal_faces or not filled[i2]
-                                    ):
+                                    if filled[i1] and (internal_faces or not filled[i2]):
                                         voxel_faces[i1].append(p2 + square_rot)
-                                    elif (internal_faces or not filled[i1]) and filled[
-                                        i2
-                                    ]:
+                                    elif (internal_faces or not filled[i1]) and filled[i2]:
                                         voxel_faces[i2].append(p2 + square_rot)
 
                                 # draw upper faces
@@ -1427,6 +1452,8 @@ class Transformer:
         for i, _indices in enumerate(combinations(indices, 2)):
             idx = jnp.array(_indices)
 
+            print(f"{idx=}")
+
             Transformer._plot_2d(
                 fig=fig,
                 grid=positions[i],
@@ -1447,7 +1474,7 @@ class Transformer:
     def _get_color_data(
         a: list[CV],
         dim: int,
-        color_trajectories=True,
+        color_trajectories=False,
         color_1d=True,
         metric: CvMetric | None = None,
         max_val=None,
@@ -1507,12 +1534,8 @@ class Transformer:
             _min_val = min_val - (max_val - min_val) * margin
 
             if metric is not None:
-                max_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(
-                    pp, max_val, _max_val
-                )
-                min_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(
-                    pp, min_val, _min_val
-                )
+                max_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(pp, max_val, _max_val)
+                min_val = jax.vmap(lambda p, x, y: jnp.where(p, x, y))(pp, min_val, _min_val)
             else:
                 max_val = _max_val
                 min_val = _min_val
@@ -1525,7 +1548,7 @@ class Transformer:
 
         print(close)
 
-        def _f(color_data, nl, c, shmap, shmap_kwargs, close, dim):
+        def _f(color_data, nl, c, shmap, shmap_kwargs, close, dim, pp):
             # print(f"{color_data=} {close=} {dim=}")
             if close:
                 data_col = color_data.cv
@@ -1534,40 +1557,58 @@ class Transformer:
 
             data_col = jnp.clip(data_col, 0.0, 1.0)
 
-            # https://www.hsluv.org/
-            # hue 0-360 sat 0-100 lighness 0-1000
+            periodicities = jnp.array([False, False, False])
 
-            if metric is not None:
-                b = jax.vmap(lambda p: jnp.where(p, 0, 20))(pp)
-            else:
-                b = jnp.array([20, 20, 20])
+            if pp is not None:
+                periodicities = periodicities.at[: pp.shape[0]].set(pp)
+
+            # https://www.hsluv.org/
+            # hue 0-360 sat 0-100 lighness 0-100
 
             if dim == 1:
-                lab = jnp.array([data_col[0] * (360 - b[0]), 75, 40])
+                lab = jnp.array([data_col[0] * 360, 75, 40])
+
+                per = jnp.array([periodicities[0], False, False])
 
             elif dim == 2:
-                lab = jnp.array([data_col[0] * (360 - b[0]), 75, data_col[1] * 60 + 20])
+                lab = jnp.array([data_col[0] * 360, 75, data_col[1] * 100])
+                per = jnp.array([periodicities[0], False, periodicities[1]])
 
             elif dim == 3:
-                lab = jnp.array(
-                    [
-                        data_col[0] * (360 - b[0]),
-                        data_col[1] * 60 + 20,
-                        data_col[2] * 60 + 20,
-                    ]
-                )
-            else:
-                raise ValueError("dim must be 1, 2 or 3")
+                lab = jnp.array([data_col[0] * 360, data_col[1] * 100, data_col[2] * 100])
 
-            # print(f"{lab=}")
+                per = jnp.array([periodicities[0], periodicities[1], periodicities[2]])
+
+            # hue
+            lab = lab.at[0].set(
+                jnp.where(
+                    per[0],
+                    lab[0],  # data already periodic
+                    lab[0] / 360 * 320 + 20,
+                )
+            )
+
+            # sat
+            lab = lab.at[1].set(
+                jnp.where(
+                    per[1],
+                    60 * (jnp.sin(lab[1] / 100 * 2 * jnp.pi) + 1) / 2 + 20,
+                    lab[1] * 0.6 + 20,
+                )
+            )
+
+            # lightness
+            lab = lab.at[2].set(
+                jnp.where(
+                    per[2],
+                    60 * (jnp.sin(lab[2] / 100 * 2 * jnp.pi) + 1) / 2 + 20,
+                    lab[2] * 0.6 + 20,
+                )
+            )
 
             rgb = hsluv_to_rgb(lab)
 
-            # print(f"{rgb=} { rgb.shape=}")
-
             out = color_data.replace(cv=rgb)
-
-            # print(f"{out=}")
 
             return out
 
@@ -1583,6 +1624,7 @@ class Transformer:
                     static_argnames=["close", "dim"],
                     close=close,
                     dim=dim,
+                    pp=pp,
                 ),
                 verbose=False,
                 macro_chunk=320,
@@ -1592,9 +1634,7 @@ class Transformer:
         else:
             from jax.tree_util import Partial
 
-            _f = Partial(
-                _f, nl=None, c=None, shmap=None, shmap_kwargs=None, close=close, dim=dim
-            )
+            _f = Partial(_f, nl=None, c=None, shmap=None, shmap_kwargs=None, close=close, dim=dim, pp=pp)
             _f = jax.vmap(_f)
             # _f = jax.jit(_f)
 

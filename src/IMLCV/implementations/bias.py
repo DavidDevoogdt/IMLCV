@@ -244,9 +244,7 @@ class BiasMTD(Bias):
 
         deltas = jnp.apply_along_axis(f, axis=1, arr=self.q0s)
 
-        exparg = jnp.einsum(
-            "ji,ji,i -> j", deltas, deltas, 1.0 / (2.0 * self.sigmas**2.0)
-        )
+        exparg = jnp.einsum("ji,ji,i -> j", deltas, deltas, 1.0 / (2.0 * self.sigmas**2.0))
         energy = jnp.sum(jnp.exp(-exparg) * self.Ks)
 
         return energy
@@ -269,7 +267,7 @@ class RbfBias(Bias):
         cv: CV,
         start=None,
         step=None,
-        kernel="linear",
+        kernel="multiquadric",
         epsilon=None,
         smoothing=0.0,
         degree=None,

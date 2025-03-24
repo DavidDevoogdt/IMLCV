@@ -1038,7 +1038,6 @@ class SystemParams:
 
         # cannot be jitted
         if sp.cell is not None:
-            # if nxyz is None:
             if sp.batched:
                 new_nxyz = jnp.max(
                     vmap(
@@ -3115,9 +3114,9 @@ class CvMetric:
             b = self.bounding_box
 
             if margin is not None:
-                diff = (b[:, 1] - b[:, 0]) * margin
+                diff = b[:, 1] - b[:, 0]
 
-                diff = jnp.where(diff < 1e-12, 1, diff)
+                diff = jnp.where(diff < 1e-12, 1, diff * margin)
 
                 diff = jnp.where(self.periodicities, 0, diff)  # if periodic, do not add bounds
 

@@ -319,10 +319,12 @@ def config(
         default_labels = []
         training_labels = []
         reference_labels = []
+        threadpool_labels = []
 
         default_pre_commands = []
         training_pre_commands = []
         reference_pre_commands = []
+        threadpool_pre_commands = []
 
         reference_command = None
 
@@ -452,11 +454,19 @@ def config(
                     default_labels.append(label)
                     default_pre_commands.append(pre_command)
 
-        pre_commands = [
-            default_pre_commands,
-            training_pre_commands,
-            reference_pre_commands,
-        ]
+        pre_commands = [default_pre_commands, training_pre_commands, reference_pre_commands, threadpool_pre_commands]
+
+    label = "threadpool"
+
+    tp = ThreadPoolExecutor(
+        label=label,
+        max_threads=default_threads,
+        working_dir=str(Path(path_internal) / label),
+    )
+
+    execs.append(tp)
+    threadpool_labels.append(label)
+    threadpool_pre_commands.append("")
 
     pre_commands_filtered = []
 
@@ -467,4 +477,9 @@ def config(
             for pci in pc[1:]:
                 assert pci == pc[0], "all pre_commands should be the same per category"
 
-    return execs, [default_labels, training_labels, reference_labels], pre_commands_filtered, reference_command
+    return (
+        execs,
+        [default_labels, training_labels, reference_labels, threadpool_labels],
+        pre_commands_filtered,
+        reference_command,
+    )
