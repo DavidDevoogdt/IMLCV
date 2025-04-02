@@ -97,3 +97,7 @@ src/IMLCV/data/mace/2023-12-10-mace-128-L0_epoch-199.model
 
 nglview/*
 workdir/*
+plot.pdf
+.gitignore
+plot_data.pdf
+plot_data.png

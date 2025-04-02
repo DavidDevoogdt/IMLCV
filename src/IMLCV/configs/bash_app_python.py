@@ -15,7 +15,7 @@ def bash_app_python(
     function=None,
     executors=None,
     uses_mpi=False,  # used in jax.distributed.initialize()
-    pickle_extension="p",
+    pickle_extension="json",
     pass_files=False,
     auto_log=False,
     profile=False,

@@ -454,19 +454,19 @@ def config(
                     default_labels.append(label)
                     default_pre_commands.append(pre_command)
 
+        label = "threadpool"
+
+        tp = ThreadPoolExecutor(
+            label=label,
+            max_threads=default_threads,
+            working_dir=str(Path(path_internal) / label),
+        )
+
+        execs.append(tp)
+        threadpool_labels.append(label)
+        threadpool_pre_commands.append("")
+
         pre_commands = [default_pre_commands, training_pre_commands, reference_pre_commands, threadpool_pre_commands]
-
-    label = "threadpool"
-
-    tp = ThreadPoolExecutor(
-        label=label,
-        max_threads=default_threads,
-        working_dir=str(Path(path_internal) / label),
-    )
-
-    execs.append(tp)
-    threadpool_labels.append(label)
-    threadpool_pre_commands.append("")
 
     pre_commands_filtered = []
 

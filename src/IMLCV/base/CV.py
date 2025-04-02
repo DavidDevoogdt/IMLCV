@@ -3094,8 +3094,12 @@ class CvMetric:
         )
 
     @staticmethod
-    def get_n(samples_per_bin, samples, n_dims):
-        return int((samples / samples_per_bin) ** (1 / n_dims))
+    def get_n(samples_per_bin, samples, n_dims, max_bins=None):
+        f = samples / samples_per_bin
+        if max_bins is not None:
+            f = jnp.min(jnp.array([f, max_bins]))
+
+        return int(f ** (1 / n_dims))
 
     def grid(self, n=30, bounds=None, margin=0.1, indexing="ij"):
         """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.

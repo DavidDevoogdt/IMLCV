@@ -93,6 +93,7 @@ def _build_and_solve_system(
     kernel,
     epsilon,
     powers,
+    check=True,
 ):
     """Build and solve the RBF interpolation system of equations.
 
@@ -121,7 +122,7 @@ def _build_and_solve_system(
         Domain scaling used to create the polynomial matrix.
 
     """
-
+    p = y.shape[0]
     s = d.shape[1]
     r = powers.shape[0]
 
@@ -137,6 +138,62 @@ def _build_and_solve_system(
         ]
     )
 
+    b = jnp.vstack([d, jnp.zeros((r, s))])
+
+    # A can be decomposed wiht shur complement
+    # K is not psd and can be (pivoted) chol decomposed
+
+    # L_K = jnp.linalg.cholesky(K)
+    # L_K_inv = jax.scipy.linalg.solve_triangular(L_K, jnp.eye(L_K.shape[0]))
+    # mS = P.T @ L_K_inv.T @ L_K_inv @ P  # minus shur complement
+    # L_S = jnp.linalg.cholesky(mS)
+
+    # print(f"{L_K=} {K=} {L_S=}")
+
+    # print(f"{jnp.linalg.eigh(K)=}")
+
+    # y1 = jax.scipy.linalg.solve_triangular(
+    #     jnp.block(
+    #         [
+    #             [L_K, jnp.zeros((p, r))],
+    #             [P.T @ L_K_inv, -L_S],
+    #         ]
+    #     ),
+    #     d,
+    #     lower=True,
+    # )
+
+    # coeffs = jax.scipy.linalg.solve_triangular(
+    #     jnp.block(
+    #         [
+    #             [L_K.T, L_K_inv.T @ P],
+    #             [jnp.zeros((r, p)), L_S.T],
+    #         ]
+    #     ),
+    #     y1,
+    # )
+
+    # K = W W.T  #chol, W triu
+    # S = 0- P K^(-1) P.T
+
+    # import scipy
+
+    # # this is pivoted cholesky
+    # cho = scipy.linalg.lapack.dpstrf
+
+    # X, P, r, info = cho(A, tol=1e-12, lower=True)
+    # X = jnp.array(X)
+    # pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
+    # X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)
+    # X = X[:, :r][:r, :]
+
+    # print(f"rbf {r=} {A.shape=} {A=}")
+
+    # y1 = jax.scipy.linalg.solve_triangular(X, pi.T @ b)
+    # y2 = jax.scipy.linalg.solve_triangular(X.T, y1)
+
+    # coeffs = pi @ y2
+
     # # print(f"{P=}")
 
     # # might be unstable
@@ -150,13 +207,14 @@ def _build_and_solve_system(
 
     # print(f"Condition number of A: {l_max/l_min} {l_max=} {l_min=}")
 
-    b = jnp.vstack([d, jnp.zeros((r, s))])
-
     # coeffs = U @ jnp.diag(jnp.where(jnp.abs(l) / jnp.abs(l_max) > 1e-10, 1 / l, 0)) @ U.T @ b
 
     # print(f"{b.shape=} {coeffs.shape=} {coeffs=}")
 
+    # if check:
     coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
+
+    # print(f"{coeffs-coeffs2=} {jnp.linalg.norm(coeffs-coeffs2)=}")
 
     return coeffs
 

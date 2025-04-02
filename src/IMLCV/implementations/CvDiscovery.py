@@ -504,17 +504,17 @@ class TransformerMAF(Transformer):
             max_features=max_features,
             max_features_pre=max_features_pre,
             w=w,
-            calc_pi=False,
+            calc_pi=False,  # we want to find constant mode
             add_1=False,
             trans=trans,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=True,
             out_dim=None,
-            eps=1e-7,
+            eps=1e-10,
             eps_pre=1e-4,
             symmetric=False,
-            correlation=True,
+            correlation=False,
         )
 
         # # # # weight and make reversible
@@ -524,8 +524,8 @@ class TransformerMAF(Transformer):
             verbose=True,
             symmetric=True,
             add_1=False,
-            calc_pi=False,
-            eps=1e-7,
+            calc_pi=True,
+            eps=1e-10,
             eps_pre=1e-4,
         )
 

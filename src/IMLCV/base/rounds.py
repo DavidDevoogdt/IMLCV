@@ -584,7 +584,7 @@ class Rounds(ABC):
         macro_chunk=2000,
         macro_chunk_nl=5000,
         only_update_nl=False,
-        n_max=50,
+        n_max=1e5,
         wham=True,
         scale_times=False,
         reweight_to_fes=False,
@@ -1227,7 +1227,9 @@ class Rounds(ABC):
             # #     selection = jnp.hstack(selection)
 
             # else:
-            selection = jnp.ones_like(jnp.hstack(p_select))
+
+            selection = jnp.where(jnp.hstack(p_select) * jnp.hstack(weight) > 0, 1.0, 0.0)
+            # selection = jnp.ones_like(jnp.hstack(p_select))
 
             if (ns := jnp.sum(jnp.isnan(selection))) != 0:
                 print(f"found {ns=} nan in p_select")
@@ -1247,10 +1249,6 @@ class Rounds(ABC):
                 p=selection,
                 replace=False,
             )
-
-            # print(
-            #     f"{jnp.sum(selection[indices])/jnp.sum( selection):.1%} of weight selected with {out/selection.shape[0]:.1%} of the samples"
-            # )
 
             # reweight each bin such that prob sums to 1 per bin
 
@@ -1975,6 +1973,7 @@ class Rounds(ABC):
         T_scale=10,
         macro_chunk=2000,
         lag_n=20,
+        use_fes_bias=True,
     ):
         if cv_round is None:
             cv_round = self.cv
@@ -2383,7 +2382,7 @@ class Rounds(ABC):
         min_samples_per_bin=1,
         percentile=1e-1,
         use_executor=True,
-        n_max=50,
+        n_max=1e5,
         vmax=100 * kjmol,
         macro_chunk=1000,
         macro_chunk_nl: int = 5000,
@@ -2482,7 +2481,7 @@ class Rounds(ABC):
         samples_per_bin=5,
         min_samples_per_bin=1,
         percentile=1e-1,
-        n_max=50,
+        n_max=1e5,
         vmax=100 * kjmol,
         verbose=True,
     ):
@@ -2960,13 +2959,13 @@ class data_loader_output:
     def koopman_weight(
         self,
         w=None,
-        samples_per_bin=2,
-        n_max_koopman=40,
+        samples_per_bin=50,
+        n_max_koopman=1e5,
         out_dim=-1,
         chunk_size=None,
         indicator_CV=True,
-        koopman_eps=1e-10,
-        koopman_eps_pre=1e-10,
+        koopman_eps=0,
+        koopman_eps_pre=0,
         cv_0: list[CV] | None = None,
         cv_t: list[CV] | None = None,
         macro_chunk=1000,
@@ -3017,10 +3016,8 @@ class data_loader_output:
             samples_per_bin=samples_per_bin,
             samples=tot_samples,
             n_dims=ndim,
+            max_bins=n_max_koopman,
         )
-
-        if n_hist > n_max_koopman:
-            n_hist = n_max_koopman
 
         if verbose:
             print(f"using {n_hist=}")
@@ -3040,39 +3037,45 @@ class data_loader_output:
             if constants:
                 print("not performing koopman weighing because of constants in cv")
                 # koopman = False
-                skip = True
-            else:
-                cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
-                    metric=self.collective_variable.metric,
-                    n_grid=n_hist,
-                    grid_bounds=grid_bounds,
-                    chunk_size=chunk_size,
-                )
+                out = [self._weights]
 
-                grid_nums, grid_nums_t = self.apply_cv(
-                    closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk
-                )
+                if output_w_corr:
+                    out.append(None)
 
-                w_pos = [(a > 0) * 1.0 for a in w]
+                if return_km:
+                    out.append(None)
 
-                hist = get_histo(grid_nums, w_pos)
+                return out
 
-                hist_t = get_histo(grid_nums_t, w_pos)
+            cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+                metric=self.collective_variable.metric,
+                n_grid=n_hist,
+                grid_bounds=grid_bounds,
+                chunk_size=chunk_size,
+            )
 
-                mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
+            grid_nums, grid_nums_t = self.apply_cv(closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk)
 
-                @partial(CvTrans.from_cv_function, mask=mask)
-                def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
-                    out = jnp.zeros((hist.shape[0],))
-                    out = out.at[cv.cv].set(1)
-                    out = jnp.take(out, mask)
+            w_pos = [(a > 0) * 1.0 for a in w]
 
-                    return cv.replace(cv=out)
+            hist = get_histo(grid_nums, w_pos)
 
-                cv_km = grid_nums
-                cv_km_t = grid_nums_t
+            hist_t = get_histo(grid_nums_t, w_pos)
 
-                tr = get_indicator
+            mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
+
+            @partial(CvTrans.from_cv_function, mask=mask)
+            def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
+                out = jnp.zeros((hist.shape[0],))
+                out = out.at[cv.cv].set(1)
+                out = jnp.take(out, mask)
+
+                return cv.replace(cv=out)
+
+            cv_km = grid_nums
+            cv_km_t = grid_nums_t
+
+            tr = get_indicator
 
         else:
             cv_km = cv_0
@@ -3088,15 +3091,12 @@ class data_loader_output:
             cv_tau=cv_km_t,
             nl=None,
             w=w,
-            # w_t=self._weights_t,
             rho=self._rho,
-            # rho_t=self._rho_t,
             add_1=add_1,
             method="tcca",
             symmetric=False,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            # out_dim=None,
             verbose=verbose,
             eps=koopman_eps,
             eps_pre=koopman_eps_pre,
@@ -3141,7 +3141,7 @@ class data_loader_output:
     def dhamed_weight(
         self,
         samples_per_bin=5,
-        n_max=30,
+        n_max=1e5,
         chunk_size=None,
         wham_eps=1e-7,
         cv_0: list[CV] | None = None,
@@ -3195,10 +3195,8 @@ class data_loader_output:
             samples_per_bin=samples_per_bin,
             samples=tot_samples,
             n_dims=ndim,
+            max_bins=n_max,
         )
-
-        if n_hist > n_max:
-            n_hist = n_max
 
         if verbose:
             print(f"using {n_hist=}")
@@ -3569,7 +3567,7 @@ class data_loader_output:
     def wham_weight(
         self,
         samples_per_bin=10,
-        n_max=100,
+        n_max=1e5,
         chunk_size=None,
         wham_eps=1e-7,
         cv_0: list[CV] | None = None,
@@ -3577,13 +3575,13 @@ class data_loader_output:
         macro_chunk=1000,
         verbose=False,
         margin=0.1,
-        bias_cutoff=100 * kjmol,  # bigger values can lead to nans, about 10^-17
+        bias_cutoff=300 * kjmol,  # bigger values can lead to nans, about 10^-17
         min_f_i=1e-30,
         log_sum_exp=True,
         return_bias=False,
         return_std_bias=False,
         min_samples=3,
-        lagrangian=True,
+        lagrangian=False,
         max_sigma=5 * kjmol,
         sparse_inverse=True,
         inverse_sigma_weighting=False,
@@ -3605,6 +3603,10 @@ class data_loader_output:
         u_unstacked = []
         beta = 1 / (self.sti.T * boltzmann)
 
+        # print(f"capped")
+
+        high_b = []
+
         for ti_i in self.ti:
             e = ti_i.e_bias
 
@@ -3613,9 +3615,20 @@ class data_loader_output:
                     print("WARNING: no bias enerrgy found")
                 e = jnp.zeros((ti_i.sp.shape[0],))
 
-            u = beta * e  # - u0
+            e -= jnp.min(e)
+
+            # if (p := jnp.sum(e > bias_cutoff)) > 0:
+            #     high_b.append(p)
+            #     e = e.at[e > bias_cutoff].set(bias_cutoff)
+
+            u = beta * e
 
             u_unstacked.append(u)
+
+        if len(high_b) > 0:
+            print(
+                f"{len(high_b)}/{len(self.ti)} trajectories have points wiht very high bias > {bias_cutoff/kjmol}kjmol. capping {jnp.array(high_b)=}"
+            )
 
         sd = [a.shape[0] for a in cv_0]
         tot_samples = sum(sd)
@@ -3633,10 +3646,8 @@ class data_loader_output:
             samples_per_bin=samples_per_bin,
             samples=tot_samples,
             n_dims=ndim,
+            max_bins=n_max,
         )
-
-        if n_hist > n_max:
-            n_hist = n_max
 
         if verbose:
             print(f"using {n_hist=}")
@@ -3691,25 +3702,58 @@ class data_loader_output:
         idx_inv = jnp.full(hist_mask.shape[0], -1)
         idx_inv = idx_inv.at[hist_mask].set(jnp.arange(jnp.sum(hist_mask)))
 
-        # print(f"{idx_inv=}")
-
         grid_nums_mask = [g.replace(cv=idx_inv[g.cv]) for g in grid_nums]
 
-        # print(f"{grid_nums_mask=}")
+        x = jnp.full((0, n_hist_mask), False)
+
+        for fni, gn in enumerate(grid_nums_mask):
+            b = jnp.full(n_hist_mask + 1, False)
+            b = b.at[gn.cv.reshape(-1)].set(True)
+            b = b[:-1]
+
+            in_rows, new_rows = jax.vmap(
+                lambda u, v: (jnp.logical_and(u, v).any(), jnp.logical_or(u, v)), in_axes=(None, 0)
+            )(b, x)
+
+            if in_rows.any():
+                n = jnp.sum(in_rows)
+
+                rr = jnp.argwhere(in_rows).reshape(-1)
+
+                if n == 1:  # add visited parts to row
+                    x = x.at[rr[0], :].set(new_rows[rr[0], :])
+
+                else:  # merge connected parts
+                    rows = jnp.vstack([x[rr, :], b])
+                    new_row = jnp.any(rows, axis=0)
+
+                    x = x.at[rr[0], :].set(new_row)
+
+                    x = jnp.delete(x, rr[1:], 0)
+
+            else:  # create row
+                x = jnp.vstack([x, b])
+
+        num_labels = x.shape[0]
+
+        labels = jax.vmap(lambda x: jnp.argwhere(x, size=1).reshape(()), in_axes=1)(x)
+        if num_labels > 1:
+            print(f"found {num_labels} different regions {labels=}")
+
+        x_labels = jnp.hstack([x, jnp.full((x.shape[0], 1), False)])
 
         m_log_b_ik = jnp.full((len(u_unstacked), jnp.sum(hist_mask)), -jnp.inf)
-
         H_k = jnp.zeros((jnp.sum(hist_mask),))
-
         N_i = []
-
         len_i = len(u_unstacked)
+        label_i = []
 
         for i in range(len_i):
             if verbose:
                 print(".", end="", flush=True)
                 if (i + 1) % 100 == 0:
                     print("")
+
             # log sum exp(-u_i)
             log_hist_i_weights = get_histo(
                 [grid_nums_mask[i]],
@@ -3737,177 +3781,212 @@ class data_loader_output:
 
             m_log_b_ik = m_log_b_ik.at[i, :].set(log_b_k)
 
-            # samples_in_bin.append(
-            #     jnp.where(
-            #         grid_nums_mask[i].cv.reshape((-1)) == -1, 0, log_hist_i_num[grid_nums_mask[i].cv.reshape((-1))]
-            #     )
-            # )
+            # assign label to trajectory
+            labels_i = jnp.sum(x_labels[:, grid_nums_mask[i].cv.reshape(-1)], axis=1)
+            label_i.append(jnp.argmax(labels_i))
+
+        _m_log_b_ik = m_log_b_ik
+        _H_k = H_k
+        _log_H_k = jnp.log(_H_k)
+        _N_i = jnp.array(N_i)
+        _a_k = jnp.ones((_m_log_b_ik.shape[1],))
+        _log_a_k = jnp.log(_a_k)
+        _log_f_i = jnp.log(jnp.ones((_m_log_b_ik.shape[0],)))
+
+        label_i = jnp.array(label_i).reshape((-1))
 
         print(f"{jnp.max(m_log_b_ik)=}")
 
-        log_H_k = jnp.log(H_k)
+        for nl in range(0, num_labels):
+            mk = labels == nl
 
-        a_k = jnp.ones((m_log_b_ik.shape[1],))
-        a_k /= jnp.sum(a_k)
+            mi = label_i == nl
+            print(f"running wham with {jnp.sum(mk)} bins and {jnp.sum(mi)=}")
 
-        N_i = jnp.array(N_i)
+            log_H_k = _log_H_k[mk]
+            m_log_b_ik = _m_log_b_ik[mi, :][:, mk]
 
-        log_N_tot = jnp.log(jnp.sum(N_i))
+            a_k = jnp.ones((m_log_b_ik.shape[1],))
+            a_k /= jnp.sum(a_k)
 
-        log_a_k = jnp.log(a_k)
-        log_N_i = jnp.log(N_i)
+            N_i = jnp.array(_N_i)[mi]
 
-        if log_sum_exp:
-            # m_log_b_ik = jnp.log(b_ik)
+            log_N_tot = jnp.log(jnp.sum(N_i))
 
-            print(f"{jnp.min(m_log_b_ik)=} {jnp.max(m_log_b_ik)=}")
+            log_a_k = jnp.log(a_k)
+            log_N_i = jnp.log(N_i)
 
-            def log_sum_exp_safe(*x):
-                x = jnp.sum(jnp.stack(x, axis=0), axis=0)
+            assert (
+                int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0
+            ), f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
 
-                x_max = jnp.max(x)
+            if log_sum_exp:
+                # m_log_b_ik = jnp.log(b_ik)
 
-                e = jnp.sum(jnp.exp(x - x_max))
+                print(f"{jnp.min(m_log_b_ik)=} {jnp.max(m_log_b_ik)=}")
 
-                # safegaurd is needed to prevent infities in error for kl divergence
-                # e_safe = jnp.where(e < jnp.log(min_f_i), jnp.log(min_f_i), e)
+                def log_sum_exp_safe(*x):
+                    x = jnp.sum(jnp.stack(x, axis=0), axis=0)
 
-                return x_max + jnp.log(e)
+                    x_max = jnp.max(x)
 
-            @jax.jit
-            def T(log_a_k, log_x):
-                m_log_b_ik, log_N_i, log_H_k = log_x
+                    e = jnp.sum(jnp.exp(x - x_max))
 
-                # get log f_i
+                    # safegaurd is needed to prevent infities in error for kl divergence
+                    # e_safe = jnp.where(e < jnp.log(min_f_i), jnp.log(min_f_i), e)
+
+                    return x_max + jnp.log(e)
+
+                @jax.jit
+                def T(log_a_k, log_x):
+                    m_log_b_ik, log_N_i, log_H_k = log_x
+
+                    # get log f_i
+                    log_f_i = -vmap(log_sum_exp_safe, in_axes=(None, 0))(log_a_k, m_log_b_ik)
+
+                    # get a_k from f_i
+                    log_a_k = log_H_k - vmap(log_sum_exp_safe, in_axes=(None, None, 1))(log_N_i, log_f_i, m_log_b_ik)
+
+                    # norm a_k
+                    log_a_k_norm = log_sum_exp_safe(log_a_k)
+
+                    return log_a_k - log_a_k_norm
+
+                @jax.jit
+                def norm(log_a_k, log_x):
+                    log_a_k_p = T(log_a_k, log_x)
+
+                    return 0.5 * jnp.sum((jnp.exp(log_a_k) - jnp.exp(log_a_k_p)) ** 2)
+
+                @jax.jit
+                def kl_div(log_a_k, log_x):
+                    log_a_k_p = T(log_a_k, log_x)
+
+                    return jnp.sum(jnp.exp(log_a_k) * (log_a_k - log_a_k_p))
+
+                import jaxopt
+
+                @jax.jit
+                def A(log_a_k, log_x):
+                    m_log_b_ik, log_N_i, log_H_k = log_x
+
+                    return jnp.sum(
+                        jnp.exp(log_N_i - log_N_tot) * vmap(log_sum_exp_safe, in_axes=(None, 0))(log_a_k, m_log_b_ik)
+                    ) - jnp.sum(jnp.exp(log_H_k - log_N_tot) * log_a_k)
+
+                print("solving wham")
+                log_x = (m_log_b_ik, log_N_i, log_H_k)
+
+                if lagrangian:
+                    solver = jaxopt.LBFGS(
+                        fun=A,
+                        tol=1e-12,
+                        implicit_diff=True,
+                        maxiter=10000,
+                    )
+                    # print("solving wham")
+
+                    out = solver.run(log_a_k, log_x=log_x)
+
+                    log_a_k = out.params
+
+                    print(f"{ log_sum_exp_safe(log_a_k) =}, should be 0")
+
+                else:
+                    # every action is performed in log space. For summation in real space, the largest log value is subtracted from all values. The norm is then calculated in real space
+
+                    solver = jaxopt.AndersonAcceleration(
+                        fixed_point_fun=T,
+                        history_size=5,
+                        tol=1e-5,
+                        implicit_diff=True,
+                        maxiter=10000,
+                    )
+
+                    out = solver.run(log_a_k, log_x=log_x)
+
+                    log_a_k = out.params
+
+                print(f"wham done! {out.state.error=}")
+
+                log_a_k -= log_sum_exp_safe(log_a_k)  # not normed for lagrangian approach
                 log_f_i = -vmap(log_sum_exp_safe, in_axes=(None, 0))(log_a_k, m_log_b_ik)
 
-                # get a_k from f_i
-                log_a_k = log_H_k - vmap(log_sum_exp_safe, in_axes=(None, None, 1))(log_N_i, log_f_i, m_log_b_ik)
-
-                # norm a_k
-                log_a_k_norm = log_sum_exp_safe(log_a_k)
-
-                return log_a_k - log_a_k_norm
-
-            @jax.jit
-            def norm(log_a_k, log_x):
-                log_a_k_p = T(log_a_k, log_x)
-
-                return 0.5 * jnp.sum((jnp.exp(log_a_k) - jnp.exp(log_a_k_p)) ** 2)
-
-            @jax.jit
-            def kl_div(log_a_k, log_x):
-                log_a_k_p = T(log_a_k, log_x)
-
-                return jnp.sum(jnp.exp(log_a_k) * (log_a_k - log_a_k_p))
-
-            import jaxopt
-
-            @jax.jit
-            def A(log_a_k, log_x):
-                m_log_b_ik, log_N_i, log_H_k = log_x
-
-                return jnp.sum(
-                    jnp.exp(log_N_i - log_N_tot) * vmap(log_sum_exp_safe, in_axes=(None, 0))(log_a_k, m_log_b_ik)
-                ) - jnp.sum(jnp.exp(log_H_k - log_N_tot) * log_a_k)
-
-            if lagrangian:
-                solver = jaxopt.LBFGS(
-                    fun=A,
-                    tol=1e-12,
-                    implicit_diff=True,
-                    maxiter=10000,
-                )
-                # print("solving wham")
+                if verbose:
+                    n, k = norm(log_a_k, log_x), kl_div(log_a_k, log_x)
+                    print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
 
             else:
-                # every action is performed in log space. For summation in real space, the largest log value is subtracted from all values. The norm is then calculated in real space
+                b_ik = jnp.exp(m_log_b_ik)
 
-                solver = jaxopt.AndersonAcceleration(
-                    fixed_point_fun=T,
-                    history_size=5,
-                    tol=1e-5,
-                    implicit_diff=True,
-                    maxiter=10000,
+                @jax.jit
+                def T(a_k, x):
+                    b_ik, N_i, H_k = x
+
+                    f_inv_i = jnp.einsum("k,ik->i", a_k, b_ik)
+                    f_i_inv_safe = jnp.where(f_inv_i < min_f_i, min_f_i, f_inv_i)
+                    a_k_new_inv = jnp.einsum("i,ik->k", N_i / f_i_inv_safe, b_ik)
+
+                    a_k_new_inv_safe = jnp.where(a_k_new_inv < min_f_i, min_f_i, a_k_new_inv)
+                    a_k_new = H_k / a_k_new_inv_safe
+                    a_k_new = a_k_new / jnp.sum(a_k_new)
+
+                    return a_k_new, 1 / f_i_inv_safe
+
+                def norm(a_k, x):
+                    a_k_p = T(a_k, x)[0]
+
+                    if log_sum_exp:
+                        a_k = jnp.exp(a_k)
+                        a_k_p = jnp.exp(a_k_p)
+
+                    return 0.5 * jnp.sum((a_k - a_k_p) ** 2) / jnp.sum(a_k > 0)
+
+                def kl_div(a_k, x):
+                    a_k_p, f = T(a_k, x)
+
+                    a_k = jnp.where(a_k >= min_f_i, a_k, min_f_i)
+                    a_k_p = jnp.where(a_k_p >= min_f_i, a_k_p, min_f_i)
+
+                    return jnp.sum(a_k * (jnp.log(a_k) - jnp.log(a_k_p)))
+
+                import jaxopt
+
+                solver = jaxopt.ProjectedGradient(
+                    fun=norm,
+                    projection=jaxopt.projection.projection_simplex,  # prob space is simplex
+                    maxiter=2000,
+                    tol=wham_eps,
                 )
 
-            print("solving wham")
-            log_x = (m_log_b_ik, log_N_i, log_H_k)
+                print("solving wham")
 
-            out = solver.run(log_a_k, log_x=log_x)
+                out = solver.run(a_k, x=(b_ik, N_i, H_k))
 
-            print(f"wham done! {out.state.error=}")
+                print("wham done")
 
-            print("solved")
+                a_k = out.params
 
-            log_a_k = out.params
-            log_a_k -= log_sum_exp_safe(log_a_k)  # not normed for lagrangian approach
+                if verbose:
+                    n, k = norm(a_k, (b_ik, N_i)), kl_div(a_k, (b_ik, N_i))
+                    print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
 
-            log_f_i = -vmap(log_sum_exp_safe, in_axes=(None, 0))(log_a_k, m_log_b_ik)
+                _, f = T(a_k, (b_ik, N_i))
 
-            if verbose:
-                n, k = norm(log_a_k, log_x), kl_div(log_a_k, log_x)
-                print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
+                log_f_i = jnp.log(f)
+                log_a_k = jnp.log(a_k)
 
-        else:
-            b_ik = jnp.exp(m_log_b_ik)
+            _log_a_k = _log_a_k.at[mk].set(log_a_k)
+            _log_f_i = _log_f_i.at[mi].set(log_f_i)
 
-            @jax.jit
-            def T(a_k, x):
-                b_ik, N_i, H_k = x
+        log_a_k = _log_a_k
+        log_f_i = _log_f_i
+        m_log_b_ik = _m_log_b_ik
+        N_i = _N_i
+        log_N_i = jnp.log(N_i)
+        log_H_k = _log_H_k
 
-                f_inv_i = jnp.einsum("k,ik->i", a_k, b_ik)
-                f_i_inv_safe = jnp.where(f_inv_i < min_f_i, min_f_i, f_inv_i)
-                a_k_new_inv = jnp.einsum("i,ik->k", N_i / f_i_inv_safe, b_ik)
-
-                a_k_new_inv_safe = jnp.where(a_k_new_inv < min_f_i, min_f_i, a_k_new_inv)
-                a_k_new = H_k / a_k_new_inv_safe
-                a_k_new = a_k_new / jnp.sum(a_k_new)
-
-                return a_k_new, 1 / f_i_inv_safe
-
-            def norm(a_k, x):
-                a_k_p = T(a_k, x)[0]
-
-                if log_sum_exp:
-                    a_k = jnp.exp(a_k)
-                    a_k_p = jnp.exp(a_k_p)
-
-                return 0.5 * jnp.sum((a_k - a_k_p) ** 2) / jnp.sum(a_k > 0)
-
-            def kl_div(a_k, x):
-                a_k_p, f = T(a_k, x)
-
-                a_k = jnp.where(a_k >= min_f_i, a_k, min_f_i)
-                a_k_p = jnp.where(a_k_p >= min_f_i, a_k_p, min_f_i)
-
-                return jnp.sum(a_k * (jnp.log(a_k) - jnp.log(a_k_p)))
-
-            import jaxopt
-
-            solver = jaxopt.ProjectedGradient(
-                fun=norm,
-                projection=jaxopt.projection.projection_simplex,  # prob space is simplex
-                maxiter=2000,
-                tol=wham_eps,
-            )
-
-            print("solving wham")
-
-            out = solver.run(a_k, x=(b_ik, N_i, H_k))
-
-            print("wham done")
-
-            a_k = out.params
-
-            if verbose:
-                n, k = norm(a_k, (b_ik, N_i)), kl_div(a_k, (b_ik, N_i))
-                print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
-
-            _, f = T(a_k, (b_ik, N_i))
-
-            log_f_i = jnp.log(f)
-            log_a_k = jnp.log(a_k)
+        good_md_i = jnp.full(True, len_i)
 
         if return_std_bias or inverse_sigma_weighting or smooth_bias:
             nk = log_a_k.shape[0]
@@ -4020,7 +4099,18 @@ class data_loader_output:
             sigma_fi = jnp.where(sigma_fi < 0, 0, jnp.sqrt(sigma_fi))
 
             print(f"{jnp.mean(sigma_ak/beta/kjmol)=} {jnp.max(sigma_ak/beta/kjmol)=}  ")
+            # print(f"{jnp.sort(sigma_ak/beta/kjmol)=}")
             print(f"{jnp.mean(sigma_fi/beta/kjmol)=}")
+
+            # print(f"{jnp.sort(sigma_fi/beta/kjmol)=}")
+
+            # good_md_i = sigma_fi / beta > 10 * kjmol
+
+            # if (n := jnp.sum(good_md_i)) < len_i:
+            #     print(f"{len_i-n} bins have sigma E bigger than 10 kjmol, removing")
+            #     # raise
+
+            # log_a_k = jnp.where(sigma_ak > 10 * kjmol * beta, jnp.nan, log_a_k)
 
         log_denom_k = -vmap(log_sum_exp_safe, in_axes=(None, None, 1))(log_N_i, log_f_i, m_log_b_ik)
         log_denom_k = jnp.hstack([log_denom_k, jnp.array([-jnp.inf])])
@@ -4037,28 +4127,28 @@ class data_loader_output:
 
         samples_in_bin = []
 
-        # # only integratesof bins k if part of simulation i
-        @partial(jax.vmap, in_axes=(None, 0, 0))  # i
-        def _s(log_a_k, log_f_i, m_log_b_ik):
-            @jax.vmap  # k
-            def _s_i(log_a_k, m_log_b_ik):
-                log_nom = log_a_k + m_log_b_ik
+        # # # only integratesof bins k if part of simulation i
+        # @partial(jax.vmap, in_axes=(None, 0, 0))  # i
+        # def _s(log_a_k, log_f_i, m_log_b_ik):
+        #     @jax.vmap  # k
+        #     def _s_i(log_a_k, m_log_b_ik):
+        #         log_nom = log_a_k + m_log_b_ik
 
-                log_denom = jnp.where(m_log_b_ik == -jnp.inf, -jnp.inf, log_a_k)
+        #         log_denom = jnp.where(m_log_b_ik == -jnp.inf, -jnp.inf, log_a_k)
 
-                return log_nom, log_denom
+        #         return log_nom, log_denom
 
-            log_nom, log_denom = _s_i(log_a_k, m_log_b_ik)
+        #     log_nom, log_denom = _s_i(log_a_k, m_log_b_ik)
 
-            m = jnp.max(log_nom)
-            log_nom = jnp.log(jnp.sum(jnp.exp(log_nom - m))) + m
+        #     m = jnp.max(log_nom)
+        #     log_nom = jnp.log(jnp.sum(jnp.exp(log_nom - m))) + m
 
-            m = jnp.max(log_denom)
-            log_denom = jnp.log(jnp.sum(jnp.exp(log_denom - m))) + m
+        #     m = jnp.max(log_denom)
+        #     log_denom = jnp.log(jnp.sum(jnp.exp(log_denom - m))) + m
 
-            return log_nom - log_denom
+        #     return log_nom - log_denom
 
-        log_c_i = -_s(log_a_k, log_f_i, m_log_b_ik)
+        # log_c_i = -_s(log_a_k, log_f_i, m_log_b_ik)
 
         s = 0
 
@@ -4069,23 +4159,30 @@ class data_loader_output:
 
         for i, (_u_i, _log_f_i) in enumerate(zip(u_unstacked, log_f_i)):
             gi = grid_nums_mask[i].cv.reshape(-1)
+            if not good_md_i[i]:
+                print(f"skipping {i=}")
 
-            w = jnp.exp(_u_i - _log_f_i)
+                w = jnp.zeros_like(_u_i)
+                p_select = jnp.zeros_like(_u_i)
 
-            p_select = jnp.exp(m_log_b_ik[i, gi] + _log_f_i + log_denom_k[gi])
+            else:
+                w = jnp.exp(_u_i - _log_f_i)
 
-            # selection criterium should be high enough to prevent numerical issues
-            w = jnp.where(p_select <= 1e-16, 0, w)
+                p_select = jnp.exp(m_log_b_ik[i, gi] + _log_f_i + log_denom_k[gi])
+
+                # selection criterium should be high enough to prevent numerical issues
+                w = jnp.where(p_select <= 0, 0, w)
+
+            samples_in_bin.append(jnp.exp(log_H_k_ext[gi]))
 
             w_out.append(w)
             p_select_out.append(p_select)
 
             s += jnp.sum(w * p_select)
 
-            samples_in_bin.append(jnp.exp(log_H_k_ext[gi]))
-
             if output_time_scaling:
-                time_scaling.append(jnp.exp(-(_u_i - log_c_i[i])))
+                raise
+                # time_scaling.append(jnp.exp(-(_u_i - log_c_i[i])))
                 # time_scaling.append(1 / w)
 
         # if output_free_energy:
@@ -4288,7 +4385,7 @@ class data_loader_output:
         nl: NeighbourList | None = None,
         nl_t: NeighbourList | None = None,
         method="tcca",
-        koopman_weight=False,
+        # koopman_weight=False,
         only_return_weights=False,
         symmetric=False,
         rho: list[jax.Array] | None = None,
@@ -4296,7 +4393,7 @@ class data_loader_output:
         w: list[jax.Array] | None = None,
         # w_t: list[jax.Array] | None = None,
         eps=1e-12,
-        eps_pre=1e-12,
+        eps_pre=None,
         max_features=5000,
         max_features_pre=5000,
         out_dim=-1,
@@ -4373,7 +4470,7 @@ class data_loader_output:
             method=method,
             symmetric=symmetric,
             out_dim=out_dim,
-            koopman_weight=koopman_weight,
+            # koopman_weight=koopman_weight,
             max_features=max_features,
             max_features_pre=max_features_pre,
             tau=self.tau,
@@ -4604,8 +4701,8 @@ class data_loader_output:
         cv: list[CV],
         samples_per_bin=5,
         min_samples_per_bin: int | None = 1,
-        n_max=40,
-        n_grid=None,
+        n_max=1e5,
+        # n_grid=None,
         max_bias=None,
         chunk_size=None,
         macro_chunk=1000,
@@ -4617,18 +4714,13 @@ class data_loader_output:
 
         samples = sum([cvi.shape[0] for cvi in cv])
 
-        if n_grid is None:
-            n_grid = CvMetric.get_n(
-                samples_per_bin=samples_per_bin,
-                samples=samples,
-                n_dims=cv[0].shape[1],
-            )
-
-        if n_grid > n_max:
-            # print(f"reducing n_grid from {n_grid} to {n_max}")
-            n_grid = n_max
-        # else:
-        #     print(f"{n_grid=}")
+        # if n_grid is None:
+        n_grid = CvMetric.get_n(
+            samples_per_bin=samples_per_bin,
+            samples=samples,
+            n_dims=cv[0].shape[1],
+            max_bins=n_max,
+        )
 
         if n_grid <= 1:
             raise
@@ -4668,45 +4760,28 @@ class data_loader_output:
             chunk_size=chunk_size,
         )
 
+        w_log = [jnp.log(wi) + jnp.log(rhoi) for wi, rhoi in zip(weights, rho)]
+
         w_rho_grid = get_histo(
             grid_nums,
-            [wi * rho for wi, rho in zip(weights, rho)],
+            w_log,
+            macro_chunk=macro_chunk,
+            log_w=True,
+        )
+
+        n_grid = get_histo(
+            grid_nums,
+            [x > -jnp.inf for x in w_log],
             macro_chunk=macro_chunk,
         )
 
-        # w_rho = get_histo(
-        #     grid_nums,
-        #     rho,
-        #     macro_chunk=macro_chunk,
-        # )
-
-        mask = w_rho_grid > 0
+        mask = jnp.logical_and(w_rho_grid > -jnp.inf, n_grid >= min_samples_per_bin)
 
         print(f"{w_rho_grid.shape=} {jnp.sum(mask)=}")
 
         p_grid = w_rho_grid[mask]  # / w_rho[mask]
 
-        # rho_grid = get_histo(
-        #     grid_nums,
-        #     rho,
-        #     macro_chunk=macro_chunk,
-        # )
-
-        # mask = jnp.logical_and(rho_grid > 0, w_rho_grid > 0)
-
-        # print(f"{w_rho_grid.shape=} {rho_grid.shape=} {jnp.sum(mask)=}")
-
-        # p_grid = w_rho_grid[mask] / rho_grid[mask]
-
-        # p_grid = jnp.where( rho_grid >= 1e-16, w_rho_grid / rho_grid, 0)
-
-        # mask = jnp.logical_and(p_grid > 0, n_grid >= min_samples_per_bin)
-
-        # # print(f"{p_grid=}  {p_grid[p_grid<0]} {jnp.sum(p_grid>0)} ")
-
-        # p_grid = p_grid[mask]
-
-        fes_grid = -jnp.log(p_grid) / beta
+        fes_grid = -p_grid / beta
         fes_grid -= jnp.min(fes_grid)
 
         print(f"{cv_mid[mask].shape=}")
@@ -5052,7 +5127,7 @@ class KoopmanModel:
     # rho_t: list[jax.Array] | None = None
 
     eps: float = 1e-10
-    eps_pre: float = 1e-10
+    eps_pre: float | None = None
 
     only_diag: bool = False
     calc_pi: bool = True
@@ -5081,13 +5156,13 @@ class KoopmanModel:
         cv_tau: list[CV],
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
-        add_1=True,
+        add_1=False,
         eps=1e-14,
-        eps_pre=1e-14,
+        eps_pre=None,
         method="tcca",
         symmetric=False,
         out_dim=-1,  # maximum dimension for koopman model
-        koopman_weight=False,
+        # koopman_weight=False,
         max_features=5000,
         max_features_pre=5000,
         tau=None,
@@ -5113,16 +5188,77 @@ class KoopmanModel:
 
         print(f"{out_dim=}")
 
+        print(f"{calc_pi=} {add_1=}   ")
+
+        w_log = [jnp.log(wi) + jnp.log(rhoi) for wi, rhoi in zip(w, rho)]
+
+        z = jnp.hstack(w_log)
+        z_max = jnp.max(z)
+        norm = jnp.log(jnp.sum(jnp.exp(z - z_max))) + z_max
+
+        w = [jnp.exp(w_log_i - norm) for w_log_i in w_log]
+
+        s = 0
+        for wi in w:
+            s += jnp.sum(wi)
+
+        print(f"{s=}")
+
+        # if correlation_whiten:
+        #     print(f"performing pre pass for correlation ")
+
+        #     pre_cov = Covariances.create(
+        #         cv_0=cv_0,
+        #         cv_1=cv_tau,
+        #         nl=nl,
+        #         nl_t=nl_t,
+        #         w=w,
+        #         w_t=w,
+        #         calc_pi=True,
+        #         only_diag=False,
+        #         symmetric=False,
+        #         chunk_size=chunk_size,
+        #         macro_chunk=macro_chunk,
+        #         trans_f=trans,
+        #         trans_g=trans,
+        #     )
+
+        #     pre_sigma = jnp.abs(pre_cov.pi_0)
+
+        #     print(f"{jnp.sort(pre_sigma)=}")
+
+        #     if eps_pre is not None:
+        #         pre_mask = jnp.argwhere(pre_sigma > eps_pre).reshape((-1,))
+        #         pre_sigma = pre_sigma[pre_mask]
+        #     else:
+        #         pre_mask = None
+
+        #     pre_tr = CvTrans.from_cv_function(
+        #         data_loader_output._transform,
+        #         static_argnames=["add_1", "add_1_pre"],
+        #         add_1=False,
+        #         add_1_pre=False,
+        #         q=None,
+        #         l=1 / pre_sigma,
+        #         pi=None,
+        #         argmask=pre_mask,
+        #     )
+
+        #     if trans is None:
+        #         trans = pre_tr
+        #     else:
+        #         trans = trans * pre_tr
+
         cov = Covariances.create(
             cv_0=cv_0,
             cv_1=cv_tau,
             nl=nl,
             nl_t=nl_t,
-            w=[wi * rhoi for wi, rhoi in zip(w, rho)],
-            w_t=[wi * rhoi for wi, rhoi in zip(w, rho)],
+            w=w,
+            w_t=w,
             calc_pi=calc_pi or add_1,
             only_diag=only_diag,
-            symmetric=symmetric and not koopman_weight,
+            symmetric=symmetric,
             T_scale=T_scale,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
@@ -5145,7 +5281,7 @@ class KoopmanModel:
             )
 
             if verbose:
-                print(f"{jnp.sum(argmask_pre)=} {jnp.sum(~argmask_pre)=} ")
+                print(f"{jnp.sum(argmask_pre)=} {jnp.sum(~argmask_pre)=} {jnp.diag(cov.C00)=} {eps_pre=}")
 
             if jnp.sum(argmask_pre) == 0:
                 print(
@@ -5164,7 +5300,7 @@ class KoopmanModel:
             argmask = argmask[argmask_pre]
 
         # start with argmask for auto covariance. Remove all features with variances that are too small, or auto covariance that are too small
-        if auto_cov_threshold is not None:
+        if (auto_cov_threshold is not None) or (max_features_pre is not None):
             auto_cov = jnp.einsum(
                 "i,i,i->i",
                 jnp.diag(cov.C00) ** (-0.5),
@@ -5173,14 +5309,13 @@ class KoopmanModel:
             )
             argmask_cov = jnp.argsort(auto_cov, descending=True).reshape(-1)
 
-            argmask_cov = argmask_cov[auto_cov[argmask_cov] > auto_cov_threshold]
+            if auto_cov_threshold is not None:
+                argmask_cov = argmask_cov[auto_cov[argmask_cov] > auto_cov_threshold]
 
             if max_features_pre is not None:
                 if argmask_cov.shape[0] > max_features_pre:
                     argmask_cov = argmask_cov[:max_features_pre]
                     print(f"reducing argmask_cov to {max_features_pre}")
-            else:
-                print(f"{argmask_cov.shape=}")
 
             cov.C00 = cov.C00[argmask_cov, :][:, argmask_cov]
             cov.C11 = cov.C11[argmask_cov, :][:, argmask_cov]
@@ -5192,8 +5327,6 @@ class KoopmanModel:
                 cov.pi_1 = cov.pi_1[argmask_cov]
 
             argmask = argmask[argmask_cov]
-
-        print(f"{argmask.shape=}")
 
         # if add_1:
         if add_1:
@@ -5213,33 +5346,31 @@ class KoopmanModel:
                 ]
             )
 
-            if not koopman_weight:
-                C01 = jnp.block(
+            C01 = jnp.block(
+                [
+                    [cov.C01, cov.pi_0.reshape((-1, 1)) if not calc_pi else jnp.zeros((cov.C01.shape[1], 1))],
                     [
-                        [cov.C01, cov.pi_0.reshape((-1, 1)) if not calc_pi else jnp.zeros((cov.C01.shape[1], 1))],
-                        [
-                            cov.pi_1.reshape((1, -1)) if not calc_pi else jnp.zeros((1, cov.C01.shape[0])),
-                            jnp.array([1]),
-                        ],
-                    ]
-                )
+                        cov.pi_1.reshape((1, -1)) if not calc_pi else jnp.zeros((1, cov.C01.shape[0])),
+                        jnp.array([1]),
+                    ],
+                ]
+            )
 
-                C11 = jnp.block(
+            C11 = jnp.block(
+                [
+                    [cov.C11, cov.pi_1.reshape((-1, 1)) if not calc_pi else jnp.zeros((cov.C11.shape[1], 1))],
                     [
-                        [cov.C11, cov.pi_1.reshape((-1, 1)) if not calc_pi else jnp.zeros((cov.C11.shape[1], 1))],
-                        [
-                            cov.pi_1.reshape((1, -1)) if not calc_pi else jnp.zeros((1, cov.C11.shape[0])),
-                            jnp.array([1]),
-                        ],
-                    ]
-                )
+                        cov.pi_1.reshape((1, -1)) if not calc_pi else jnp.zeros((1, cov.C11.shape[0])),
+                        jnp.array([1]),
+                    ],
+                ]
+            )
 
             cov.C10 = C10
             cov.C00 = C00
 
-            if not koopman_weight:
-                cov.C01 = C01
-                cov.C11 = C11
+            cov.C01 = C01
+            cov.C11 = C11
 
             if not calc_pi:
                 cov.pi_0 = None
@@ -5255,6 +5386,7 @@ class KoopmanModel:
             verbose=verbose,
             use_scipy=use_scipy,
             correlation=correlation_whiten,
+            max_features=max_features,
         )
 
         if verbose:
@@ -5263,191 +5395,25 @@ class KoopmanModel:
         if verbose:
             print("diagonalizing C11")
 
-        if not koopman_weight:
-            if symmetric:
-                W1 = W0
-                # argmask_1 = argmask_0
-                # _trans_g = _trans_f
+        if symmetric:
+            W1 = W0
+            # argmask_1 = argmask_0
+            # _trans_g = _trans_f
 
-            else:
-                W1 = cov.whiten(
-                    "C11",
-                    epsilon=eps,
-                    epsilon_pre=eps_pre,
-                    verbose=verbose,
-                    use_scipy=use_scipy,
-                    correlation=correlation_whiten,
-                )
-                if verbose:
-                    print(f"{W1.shape=}")
+        else:
+            W1 = cov.whiten(
+                "C11",
+                epsilon=eps,
+                epsilon_pre=eps_pre,
+                verbose=verbose,
+                use_scipy=use_scipy,
+                correlation=correlation_whiten,
+                max_features=max_features,
+            )
+            if verbose:
+                print(f"{W1.shape=}")
 
         print("reweighing")
-
-        # if koopman_weight:
-        #     KT = W0 @ cov.C10 @ W0.T
-
-        #     from scipy.sparse.linalg import eigs
-
-        #     e, v = eigs(KT.__array__(), k=3)
-        #     print(f"koopman reweighing {e=}")
-
-        #     e, v = jnp.array(e), jnp.array(v)
-
-        #     if (p := jnp.sum(jnp.abs(e - 1) < 1e-10)) > 1:
-        #         m = jnp.abs(e - 1) < 1e-10
-        #         e = e[m]
-        #         v = v[:, m]
-
-        #         if p == 2 and add_1:
-        #             print("found 2 eigenvalues close to 1, picking the one that does not relate to the added 1")
-        #             f0 = v[-1, 0]
-        #             f1 = v[-1, 1]
-
-        #             n = f1 - f0  # norm such that eigenvalue sums to 1
-
-        #             f0 /= n
-        #             f1 /= n
-
-        #             v = f1 * v[:, [0]] - f0 * v[:, [1]]
-        #             e = f1 * e[0] - f0 * e[1]
-
-        #             # print(f"{v=}")
-
-        #         else:
-        #             print(f"found {p} eigenvalues close to 1, picking one at random")
-        #             print("TODO: implement maximum entropy selection")
-        #             e = e[0]
-        #             v = v[:, 0]
-        #     else:
-        #         idx = jnp.argmin(jnp.abs(e - 1))
-
-        #         e = e[idx]
-        #         v = v[:, [idx]]
-
-        #     if jnp.abs(e - 1) > 1e-10:
-        #         print(f"found eigenvalue {e} with {jnp.abs(e-1)=}, not reweighing")
-
-        #         if only_return_weights:
-        #             return w, None
-
-        #     else:
-
-        #         def w_transform(
-        #             cv,
-        #             nl,
-        #             _,
-        #             shmap,
-        #             shmap_kwargs,
-        #             argmask: jnp.Array | None = None,
-        #             pi: jnp.Array | None = None,
-        #             add_1: bool = False,
-        #             q: jnp.Array | None = None,
-        #         ):
-        #             x = cv.cv
-
-        #             if argmask is not None:
-        #                 x = x[argmask]
-
-        #             if pi is not None:
-        #                 x = x - pi
-
-        #             if add_1:
-        #                 x = jnp.hstack([x, jnp.array([1])])
-
-        #             if q is not None:
-        #                 x = x @ q
-
-        #             # print(f"{x.shape=}")
-
-        #             return cv.replace(cv=x, _combine_dims=None)
-
-        #         w_trans = CvTrans.from_cv_function(
-        #             w_transform,
-        #             static_argnames=["add_1"],
-        #             add_1=add_1,
-        #             q=W0.T @ v,
-        #             pi=cov.pi_0,
-        #             argmask=argmask,
-        #         )
-
-        #         w_corr_cv, _ = data_loader_output.apply_cv(
-        #             f=w_trans,
-        #             x=cv_0,
-        #             x_t=None,
-        #             nl_t=None,
-        #             macro_chunk=macro_chunk,
-        #             chunk_size=chunk_size,
-        #             verbose=verbose,
-        #         )
-
-        #         w_corr = []
-        #         w_new = []
-
-        #         sign = None
-
-        #         s_corr = 0
-        #         s_new = 0
-
-        #         n_neg = 0
-
-        #         for x, wi in zip(w_corr_cv, w):
-        #             if sign is None:
-        #                 sign = jnp.sign(jnp.sum(jnp.real(x.cv)))
-
-        #             x = jnp.real(x.cv) * sign
-        #             x = x.reshape(-1)
-
-        #             m = x <= 0
-        #             n_neg += jnp.sum(m)
-        #             x = jnp.where(m, 0, x)
-
-        #             s_corr += jnp.sum(x)
-        #             w_corr.append(x)
-
-        #             y = wi * x
-        #             s_new += jnp.sum(y)
-        #             w_new.append(y)
-
-        #         w_corr = [x / s_corr for x in w_corr]
-        #         w_new = [x / s_new for x in w_new]
-
-        #         print(f"corrected weights, recomputing model {w_corr[0].shape=} {w_new[0].shape=} ({n_neg=})")
-
-        #         if only_return_weights:
-        #             return w_new, w_corr
-
-        #         return KoopmanModel.create(
-        #             w=w_new,
-        #             # w_t=w_new,
-        #             rho=rho,
-        #             # rho_t=rho,
-        #             cv_0=cv_0,
-        #             cv_tau=cv_tau,
-        #             nl=nl,
-        #             nl_t=nl_t,
-        #             add_1=add_1,
-        #             eps=eps,
-        #             method=method,
-        #             symmetric=symmetric,
-        #             koopman_weight=False,
-        #             out_dim=out_dim,
-        #             max_features=max_features,
-        #             max_features_pre=max_features_pre,
-        #             tau=tau,
-        #             macro_chunk=macro_chunk,
-        #             chunk_size=chunk_size,
-        #             verbose=verbose,
-        #             trans=trans,
-        #             T_scale=T_scale,
-        #             only_diag=only_diag,
-        #             calc_pi=calc_pi,
-        #             use_scipy=use_scipy,
-        #             auto_cov_threshold=auto_cov_threshold,
-        #             sparse=sparse,
-        #             # n_modes=n_modes,
-        #             scaled_tau=scaled_tau,
-        #             only_return_weights=only_return_weights,
-        #         )
 
         T_tilde = W1 @ cov.C10 @ W0.T
 
@@ -5731,7 +5697,10 @@ class KoopmanModel:
             # print("no eigenvalues found close to 1")
             # return self.w, None, False
             out_dim = 1
-            print(f"using closest eigenvalue to 1: {self.s=}")
+
+            i = int(jnp.min(jnp.array([5, self.s.shape[0]])))
+
+            print(f"using closest eigenvalue to 1: {self.s[:i]=}")
 
         print("reweighing, new A")
 
@@ -6054,7 +6023,6 @@ class Covariances:
         if trans_g is not None:
 
             def g_func(x, nl):
-                # print(f"g_func {x=}")
                 return trans_g.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)[0]
 
             g_func = jax.jit(g_func)
@@ -6129,14 +6097,14 @@ class Covariances:
         self,
         choice,
         epsilon: float = 1e-6,
-        epsilon_pre: float = 1e-12,
+        epsilon_pre: float | None = 1e-12,
         out_dim=None,
         max_features=None,
         verbose=False,
         use_scipy=True,
         filter_argmask=True,
         correlation=True,
-        cholesky=False,
+        cholesky=True,
     ):
         # returns W such that W C W.T = I and hence w.T W = C^-1
 
@@ -6159,6 +6127,9 @@ class Covariances:
         if correlation:
             V_0 = jnp.max(V)
 
+            if epsilon_pre is None:
+                epsilon_pre = 0
+
             m_pre = V / V_0 < epsilon_pre**2
 
             print(f"removing {jnp.sum(m_pre)} eig. {V_0=}")
@@ -6169,25 +6140,75 @@ class Covariances:
         else:
             P = C
 
-        # W = jnp.linalg.sqrtm(P)
+        if cholesky:
+            import scipy
 
-        # G, Theta, _ = jnp.linalg.svd(P)
-        theta, G = jnp.linalg.eigh(P)
+            # this is pivoted cholesky
+            cho = scipy.linalg.lapack.dpstrf
 
-        # print(f"{theta=} ")
-        idx = jnp.argmax(theta)
+            X, P, r, info = cho(P, tol=epsilon, lower=True)
+            X = jnp.array(X)
 
-        mask = theta / theta[idx] > epsilon**2
+            # print(f"{X=}")
 
-        print(f"{jnp.sum(mask)=} {theta[mask]=} {theta[~mask]=}")
+            pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
+            X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)  # set upper half to zero
+            X = X[:r, :][:, :r]
 
-        theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta), 0)
+            err = jnp.linalg.norm(pi.T @ C @ pi - X @ X.T)
 
-        W = jnp.einsum(
-            "i,ji->ij",
-            theta_inv,
-            G,
-        )
+            print(f" rank reduced chol {err=} rank {r} ")
+
+            # if max_features is not None:
+            #     if r > max_features:
+            #         print(f"whiten: reducing dim to {max_features=}")
+            #         X = X[:, :max_features][:max_features, :]
+            #         pi = pi[:, :max_features]
+            #         r = max_features
+
+            # X is lower triu, but the shape of x is nxr
+            # X=QR transform R in into a nxr upper triangular block
+            # R contains relevant vectors and a 0 block
+
+            Q, R, _ = jax.scipy.linalg.qr(X, pivoting=True)
+
+            print(f"{jnp.diag(R)=}")
+            print(f"{jnp.linalg.norm(R[r:, :])=}")
+
+            Q = Q[:, :r]
+            R = R[:r, :]
+
+            R_inv = jax.scipy.linalg.solve_triangular(R, jnp.eye(*R.shape))
+
+            if (m := jnp.abs(jnp.diag(R)) < epsilon).any():
+                print(f"found small diagonal elements in diag R, removing  {jnp.sum(m)} elements")
+
+                R_inv = R_inv[m, :]
+
+            W = R_inv @ Q.T @ pi.T
+
+        else:
+            theta, G = jnp.linalg.eigh(P)
+
+            # print(f"{theta=} ")
+            idx = jnp.argmax(theta)
+            mask = theta / theta[idx] > epsilon**2
+
+            print(f"{jnp.sum(mask)=} {theta[mask]=} {theta[~mask]=}")
+
+            theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta[mask]), 0)
+
+            if max_features is not None:
+                print(f"whiten: reducing dim to {max_features=}")
+                theta_inv = theta_inv[0:max_features]
+
+            W = jnp.einsum(
+                "i,ji->ij",
+                theta_inv,
+                G,
+            )
+
+            W = W[mask, :]
 
         if correlation:
             W = jnp.einsum(
@@ -6195,8 +6216,6 @@ class Covariances:
                 W,
                 V_sqrt_inv,
             )
-
-        W = W[mask, :]
 
         print(f"{jnp.linalg.norm(W @ C @ W.T - jnp.eye(W.shape[0]))=}")
 

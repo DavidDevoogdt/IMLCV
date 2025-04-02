@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 from jax.tree_util import Partial
-from molmod.units import kjmol, picosecond
+from molmod.units import kelvin, kjmol, picosecond
 from parsl import File
 
 from IMLCV.base.bias import Bias, BiasModify
@@ -66,7 +66,7 @@ class Observable:
         samples_per_bin=5,
         min_samples_per_bin=1,
         n=None,
-        n_max=30,
+        n_max=1e5,
         temp=None,
         chunk_size=None,
         shmap=False,
@@ -107,15 +107,16 @@ class Observable:
         bd = [i.shape[0] for i in trajs]
 
         if n is None:
-            n = CvMetric.get_n(samples_per_bin, bd, trajs[0].shape[1])
+            n = CvMetric.get_n(
+                samples_per_bin,
+                bd,
+                trajs[0].shape[1],
+                max_bins=n_max,
+            )
 
             print(f"n: {n}")
 
         assert n >= 4, "sample more points"
-
-        if n > n_max:
-            print(f"truncating number of bins {n=} to {n_max=}")
-            n = n_max
 
         # TODO: use metric grid to generate bins and center
         # bins, cv_grid, mid_cv_grid = dlo.collective_variable.metric.grid(n, endpoints=True)
@@ -197,7 +198,7 @@ class Observable:
         samples_per_bin=5,
         min_samples_per_bin=1,
         chunk_size=None,
-        n_max=60,
+        n_max=1e5,
         n=None,
         min_traj_length=None,
         dlo=None,
@@ -310,7 +311,7 @@ class Observable:
         chunk_size=None,
         macro_chunk=1000,
         T_scale=10,
-        n_max=50,
+        n_max=1e5,
         cv_round=None,
         koopman=True,
         plot_selected_points=True,
@@ -318,9 +319,9 @@ class Observable:
         verbose=True,
         max_bias=None,
         kooopman_wham=None,
-        samples_per_bin=5,
-        min_samples_per_bin=1,
-        resample=True,
+        samples_per_bin=10,
+        min_samples_per_bin=5,
+        resample=False,
         direct_bias=True,
     ):
         if cv_round is None:
@@ -357,6 +358,16 @@ class Observable:
 
         # get weights based on koopman theory. the CVs are binned with indicators
 
+        if plot_selected_points:
+            print("plotting wham")
+            fes_bias_wham_p.plot(
+                name="FES_bias_wham.png",
+                # traj=dlo.cv,
+                margin=0.1,
+                vmax=max_bias,
+                inverted=False,
+            )
+
         if direct_bias:
             fes_bias_wham = fes_bias_wham_p
         else:
@@ -364,60 +375,34 @@ class Observable:
                 weights=dlo._weights,
                 rho=dlo._rho,
                 cv=dlo.cv,
-                n_grid=n_max,
+                n_max=n_max,
                 T=dlo.sti.T,
                 collective_variable=dlo.collective_variable,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 max_bias=max_bias,
-                # samples_per_bin=samples_per_bin,
-                # min_samples_per_bin=min_samples_per_bin,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
             )
 
-            print("plotting wham")
-            fes_bias_wham_p.plot(
-                name="FES_bias_wham.png",
-                # traj=dlo.cv,
-                margin=0.1,
-                # vmax=max_bias,
-                inverted=False,
-            )
-
-        if koopman:
             if plot_selected_points:
-                print("determinig bias wham")
-                fes_bias_wham = dlo.get_fes_bias_from_weights(
-                    weights=dlo._weights,
-                    rho=dlo._rho,
-                    cv=dlo.cv,
-                    n_grid=n_max,
-                    T=dlo.sti.T,
-                    collective_variable=dlo.collective_variable,
-                    chunk_size=chunk_size,
-                    macro_chunk=macro_chunk,
-                    samples_per_bin=samples_per_bin,
-                    # max_bias=max_bias,
-                    min_samples_per_bin=min_samples_per_bin,
-                )
-
                 print("plotting wham")
                 fes_bias_wham.plot(
-                    name="FES_bias_wham.png",
+                    name="FES_bias_wham_data.png",
                     # traj=dlo.cv,
                     margin=0.1,
-                    # vmax=max_bias,
+                    vmax=max_bias,
                     inverted=False,
                 )
 
+        if koopman:
             weights, w_corr = dlo.koopman_weight(
-                # indicator_CV=True,
                 n_max_koopman=n_max,
                 samples_per_bin=samples_per_bin,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 verbose=verbose,
                 output_w_corr=True,
-                correlation=True,
                 koopman_eps=0,
                 koopman_eps_pre=0,
                 add_1=False,
@@ -427,22 +412,30 @@ class Observable:
                 weights=weights,
                 rho=dlo._rho,
                 cv=dlo.cv,
-                n_grid=n_max,
+                n_max=n_max,
                 T=dlo.sti.T,
                 collective_variable=dlo.collective_variable,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
-                # max_bias=max_bias,
             )
+
+            if plot_selected_points:
+                fes_bias_tot.plot(
+                    name="FES_bias_koopman.png",
+                    # traj=dlo.cv,
+                    margin=0.1,
+                    vmax=max_bias,
+                    inverted=False,
+                )
 
             if plot_selected_points:
                 fes_bias_tot_corr = dlo.get_fes_bias_from_weights(
                     weights=w_corr,
                     rho=dlo._rho,
                     cv=dlo.cv,
-                    n_grid=n_max,
+                    n_max=n_max,
                     T=dlo.sti.T,
                     collective_variable=dlo.collective_variable,
                     chunk_size=chunk_size,
@@ -459,22 +452,11 @@ class Observable:
                     inverted=False,
                 )
 
-            if resample:
-                fes_bias_tot = fes_bias_tot.resample(n=n_max)
+            # if resample:
+            #     fes_bias_tot = fes_bias_tot.resample(n=n_max)
 
         else:
             fes_bias_tot = fes_bias_wham
-
-        print("gettingg FES Bias")
-
-        print("plotting")
-        fes_bias_tot.plot(
-            name="FES_bias.png",
-            # traj=dlo.cv,
-            margin=0.1,
-            vmax=max_bias,
-            inverted=False,
-        )
 
         if plot_selected_points:
             print("plotting")
@@ -484,6 +466,17 @@ class Observable:
                 margin=0.1,
                 vmax=max_bias,
                 inverted=False,
+            )
+
+            from IMLCV.base.CVDiscovery import Transformer
+
+            Transformer.plot_app(
+                collective_variables=[dlo.collective_variable],
+                cv_data=[[dlo.cv]],
+                duplicate_cv_data=False,
+                plot_FES=True,
+                T=300 * kelvin,
+                margin=0.1,
             )
 
         return fes_bias_tot
@@ -499,7 +492,7 @@ class Observable:
         chunk_size=None,
         macro_chunk=1000,
         T_scale=10,
-        n_max=30,
+        n_max=1e5,
         cv_round=None,
         directory=None,
         koopman=True,
@@ -568,7 +561,7 @@ class Observable:
         chunk_size=None,
         macro_chunk=10000,
         update_bounding_box=True,  # make boudning box bigger for FES calculation
-        n_max=60,
+        n_max=1e5,
         min_traj_length=None,
         margin=0.1,
         only_finished=True,

@@ -99,7 +99,7 @@ class Transformer:
         jac=jax.jacrev,
         transform_FES=True,
         max_fes_bias=100 * kjmol,
-        n_max=60,
+        n_max=1e5,
         samples_per_bin=20,
         min_samples_per_bin=3,
         verbose=True,
@@ -174,7 +174,7 @@ class Transformer:
             n_max_koopman=n_max,
             samples_per_bin=samples_per_bin,
             chunk_size=chunk_size,
-            correlation=True,
+            correlation=False,
             koopman_eps=0,
             koopman_eps_pre=0,
             add_1=False,
@@ -296,8 +296,6 @@ class Transformer:
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
             )
-
-            # bias.resample()
 
             if plot:
                 bias_new.plot(
