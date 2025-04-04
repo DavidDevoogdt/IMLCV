@@ -13,7 +13,7 @@ from IMLCV.base.CV import CvTrans, SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
-from IMLCV.base.rounds import Rounds, data_loader_output
+from IMLCV.base.rounds import DataLoaderOutput, Rounds
 from IMLCV.implementations.bias import HarmonicBias
 
 
@@ -293,7 +293,7 @@ class Scheme:
         self,
         transformer: Transformer,
         dlo_kwargs={},
-        dlo: data_loader_output | None = None,
+        dlo: DataLoaderOutput | None = None,
         chunk_size=None,
         plot=True,
         new_r_cut=None,
@@ -343,7 +343,7 @@ class Scheme:
         self,
         cv_trans: CvTrans,
         dlo_kwargs=None,
-        dlo: data_loader_output | None = None,
+        dlo: DataLoaderOutput | None = None,
         chunk_size=None,
         new_r_cut=None,
         plot=True,

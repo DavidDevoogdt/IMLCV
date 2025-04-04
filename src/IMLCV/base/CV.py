@@ -498,6 +498,7 @@ def macro_chunk_map(
     verbose=False,
     chunk_func=None,
     chunk_func_init_args=None,
+    chunk_func_kwargs={},
     w: list[Array] | None = None,
     w_t: list[Array] | None = None,
     print_every=10,
@@ -3154,7 +3155,7 @@ class CvMetric:
         margin=None,
         chunk_size=None,
         n=40,
-        macro_chunk=1000,
+        macro_chunk=20000,
         verbose=False,
     ):
         n = int(n)
@@ -3173,9 +3174,11 @@ class CvMetric:
 
         bounding_box = jnp.vstack((mini, maxi)).T
 
+        ndim = bounding_box.shape[0]
+
         constants = False
 
-        for i in range(bounding_box.shape[0]):
+        for i in range(ndim):
             if jnp.abs(bounding_box[i, 0] - bounding_box[i, 1]) <= 1e-12:
                 print(f"WARNING: CV in dimension {i} is constant, increase margin to avoid division by zero.")
 
@@ -3186,34 +3189,40 @@ class CvMetric:
 
         # do bin count over range
 
-        from IMLCV.base.rounds import data_loader_output
+        from IMLCV.base.rounds import DataLoaderOutput
+        from IMLCV.implementations.CV import _cv_slice
 
-        cv_mid, nums, bins, closest_trans, get_histo = data_loader_output._histogram(
-            metric=CvMetric.create(
-                periodicities=[False for _ in mini],
-                bounding_box=bounding_box,
-            ),
-            grid_bounds=bounding_box,
-            n_grid=n,
-        )
-
-        grid_nums, _ = data_loader_output.apply_cv(
-            f=closest_trans,
-            x=cv_0,
-            macro_chunk=macro_chunk,
-            verbose=verbose,
-            chunk_size=chunk_size,
-        )
-
-        hist = get_histo(grid_nums, weights=weights)
-        hist = jnp.reshape(hist, (n - 1,) * len(mini))
-
-        hist /= jnp.sum(hist)
-
-        # integrate ranges and find cutoff
         bounds = jnp.zeros((cv_0[0].shape[1], 2))
-        for i in range(cv_0[0].shape[1]):
-            cummul = jnp.cumulative_sum(vmap(jnp.sum, in_axes=i)(hist))
+
+        for dim in range(ndim):
+            # print(f"new iterated bounds {dim=}")
+
+            cv_mid, nums, bins, closest_trans, get_histo = DataLoaderOutput._histogram(
+                metric=CvMetric.create(
+                    periodicities=[False],
+                    bounding_box=bounding_box[[0], :],
+                ),
+                grid_bounds=bounding_box[[0], :],
+                n_grid=n,
+            )
+
+            grid_nums, _ = DataLoaderOutput.apply_cv(
+                f=CvTrans.from_cv_function(_cv_slice, indices=jnp.array([dim])) * closest_trans,
+                x=cv_0,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+                chunk_size=chunk_size,
+            )
+
+            hist = get_histo(
+                grid_nums,
+                weights=weights,
+            )
+            # hist = jnp.reshape(hist, (n - 1,) * len(mini))
+
+            hist /= jnp.sum(hist)
+
+            cummul = hist
 
             v0 = jnp.argwhere(cummul > percentile / 100)
             if len(v0) == 0:
@@ -3228,10 +3237,10 @@ class CvMetric:
             else:
                 n_max = jnp.max(v0)
 
-            bounds = bounds.at[i, 0].set(bins[i][n_min])  # lower end
-            bounds = bounds.at[i, 1].set(bins[i][n_max + 2])  # higher end
+            bounds = bounds.at[dim, 0].set(bins[0][n_min])  # lower end
+            bounds = bounds.at[dim, 1].set(bins[0][n_max + 2])  # higher end
 
-        # update bounds with margin
+            # update bounds with margin
 
         bounds_margin = (bounds[:, 1] - bounds[:, 0]) * margin
         # bounds_margin = jnp.where(   self.periodicities, )
@@ -3247,7 +3256,7 @@ class CvMetric:
 
             return x.replace(cv=jnp.reshape(b, (1,)), _combine_dims=None)
 
-        mask, _ = data_loader_output.apply_cv(
+        mask, _ = DataLoaderOutput.apply_cv(
             x=cv_0,
             f=get_mask,
             macro_chunk=macro_chunk,

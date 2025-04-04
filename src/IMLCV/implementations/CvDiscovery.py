@@ -9,7 +9,7 @@ from molmod.units import nanosecond
 
 from IMLCV.base.CV import CV, CvFun, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.base.rounds import data_loader_output
+from IMLCV.base.rounds import DataLoaderOutput
 from IMLCV.implementations.CV import trunc_svd, un_atomize
 
 
@@ -105,7 +105,7 @@ class TranformerAutoEncoder(Transformer):
         cv: list[CV],
         cv_t: list[CV] | None,
         w: list[jax.Array],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         nunits=250,
         nlayers=3,
         lr=1e-4,
@@ -360,7 +360,7 @@ class TransoformerLDA(Transformer):
         cv_list: list[CV],
         cv_t: list[CV] | None,
         w: list[jax.Array],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         kernel=False,
         optimizer=None,
         chunk_size=None,
@@ -484,7 +484,7 @@ class TransformerMAF(Transformer):
         x: list[CV],
         x_t: list[CV] | None,
         w: list[jax.Array],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         max_features=500,
         max_features_pre=500,
         macro_chunk=1000,

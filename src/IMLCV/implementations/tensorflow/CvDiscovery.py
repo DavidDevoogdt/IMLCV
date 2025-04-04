@@ -10,7 +10,7 @@ from jax.tree_util import Partial
 
 from IMLCV.base.CV import CV, CvFunBase, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.base.rounds import data_loader_output
+from IMLCV.base.rounds import DataLoaderOutput
 from IMLCV.implementations.CV import un_atomize
 
 
@@ -104,7 +104,7 @@ class TranformerUMAP(Transformer):
         x: list[CV],
         x_t: list[CV] | None,
         w: list[Array],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         decoder=False,
         nunits=256,
         nlayers=3,

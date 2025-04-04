@@ -11,7 +11,7 @@ from parsl import File
 
 from IMLCV.base.bias import Bias, BiasModify
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
-from IMLCV.base.rounds import Rounds, data_loader_output
+from IMLCV.base.rounds import DataLoaderOutput, Rounds
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import RbfBias, _clip
@@ -60,7 +60,7 @@ class Observable:
     @staticmethod
     def _fes_nd_thermolib(
         dlo_kwargs,
-        dlo: data_loader_output | None = None,
+        dlo: DataLoaderOutput | None = None,
         update_bounding_box=True,
         bounds_percentile=1,
         samples_per_bin=5,
@@ -372,12 +372,7 @@ class Observable:
             fes_bias_wham = fes_bias_wham_p
         else:
             fes_bias_wham = dlo.get_fes_bias_from_weights(
-                weights=dlo._weights,
-                rho=dlo._rho,
-                cv=dlo.cv,
                 n_max=n_max,
-                T=dlo.sti.T,
-                collective_variable=dlo.collective_variable,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 max_bias=max_bias,
@@ -410,11 +405,7 @@ class Observable:
 
             fes_bias_tot = dlo.get_fes_bias_from_weights(
                 weights=weights,
-                rho=dlo._rho,
-                cv=dlo.cv,
                 n_max=n_max,
-                T=dlo.sti.T,
-                collective_variable=dlo.collective_variable,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 samples_per_bin=samples_per_bin,
@@ -433,11 +424,7 @@ class Observable:
             if plot_selected_points:
                 fes_bias_tot_corr = dlo.get_fes_bias_from_weights(
                     weights=w_corr,
-                    rho=dlo._rho,
-                    cv=dlo.cv,
                     n_max=n_max,
-                    T=dlo.sti.T,
-                    collective_variable=dlo.collective_variable,
                     chunk_size=chunk_size,
                     macro_chunk=macro_chunk,
                     samples_per_bin=samples_per_bin,
@@ -477,6 +464,7 @@ class Observable:
                 plot_FES=True,
                 T=300 * kelvin,
                 margin=0.1,
+                name="points.png",
             )
 
         return fes_bias_tot

@@ -17,7 +17,7 @@ from IMLCV.external.hsluv import hsluv_to_rgb
 from IMLCV.implementations.CV import _scale_cv_trans, identity_trans, scale_cv_trans
 
 if TYPE_CHECKING:
-    from IMLCV.base.rounds import data_loader_output
+    from IMLCV.base.rounds import DataLoaderOutput
 
 
 class Transformer:
@@ -41,7 +41,7 @@ class Transformer:
 
     def pre_fit(
         self,
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         chunk_size=None,
         shmap=True,
         shmap_kwargs=ShmapKwargs.create(),
@@ -90,7 +90,7 @@ class Transformer:
 
     def fit(
         self,
-        dlo: data_loader_output | None,
+        dlo: DataLoaderOutput | None,
         chunk_size=None,
         plot=True,
         plot_folder: str | Path | None = None,
@@ -115,14 +115,9 @@ class Transformer:
         w = dlo._weights
         rho = dlo._rho
 
-        from IMLCV.base.rounds import data_loader_output
+        from IMLCV.base.rounds import DataLoaderOutput
 
-        bias: Bias = data_loader_output.get_fes_bias_from_weights(
-            dlo.sti.T,
-            weights=w,
-            rho=rho,
-            collective_variable=dlo.collective_variable,
-            cv=dlo.cv,
+        bias: Bias = dlo.get_fes_bias_from_weights(
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
             n_max=n_max,
@@ -180,12 +175,8 @@ class Transformer:
             add_1=False,
         )
 
-        bias_km: Bias = data_loader_output.get_fes_bias_from_weights(
-            dlo.sti.T,
+        bias_km: Bias = dlo._get_fes_bias_from_weights(
             weights=w,
-            rho=rho,
-            collective_variable=dlo.collective_variable,
-            cv=dlo.cv,
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
             n_max=n_max,
@@ -281,9 +272,9 @@ class Transformer:
 
         if transform_FES:
             print("transforming FES")
-            from IMLCV.base.rounds import data_loader_output
+            from IMLCV.base.rounds import DataLoaderOutput
 
-            bias_new: Bias = data_loader_output.get_fes_bias_from_weights(
+            bias_new: Bias = DataLoaderOutput.get_fes_bias_from_weights(
                 dlo.sti.T,
                 weights=w,
                 rho=rho,
@@ -350,7 +341,7 @@ class Transformer:
         x: list[CV],
         x_t: list[CV] | None,
         w: list[jax.Array],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,
@@ -478,7 +469,7 @@ class Transformer:
 
         inoutdims = [collective_variables[n].n for n in range(ncv)]
 
-        print(f"{inoutdims=}")
+        print(f"Plotting, dims: {inoutdims} {name if name is not None else ''}")
 
         plt.rc("text", usetex=False)
         plt.rc("font", family="DejaVu Sans", size=16)
@@ -944,7 +935,7 @@ class Transformer:
             FES = None
 
         if FES is not None:
-            print("obtaining 2d fes")
+            # print("obtaining 2d fes")
 
             # cv grid is centered
             bins, _, cv_grid, _ = metric.grid(
@@ -954,9 +945,9 @@ class Transformer:
                 indexing="xy",
             )
 
-            from IMLCV.base.rounds import data_loader_output
+            from IMLCV.base.rounds import DataLoaderOutput
 
-            bias = data_loader_output._apply_bias(
+            bias = DataLoaderOutput._apply_bias(
                 x=[cv_grid],
                 bias=FES,
                 macro_chunk=1000,
@@ -964,7 +955,7 @@ class Transformer:
                 shmap=False,
             )[0]
 
-            print(f"fes: {bias=}")
+            # print(f"fes: {bias=}")
 
             bias = bias.reshape(len(bins[0]) - 1, len(bins[1]) - 1)
 
@@ -1169,7 +1160,7 @@ class Transformer:
 
             # cmap = plt.get_cmap("jet")
 
-            print("obtaining 2d fes")
+            # print("obtaining 2d fes")
 
             n_grid = 30
 
@@ -1179,9 +1170,9 @@ class Transformer:
                 indexing="ij",
             )
 
-            from IMLCV.base.rounds import data_loader_output
+            from IMLCV.base.rounds import DataLoaderOutput
 
-            bias = data_loader_output._apply_bias(
+            bias = DataLoaderOutput._apply_bias(
                 x=[cv_mid],
                 bias=bias,
                 macro_chunk=1000,
@@ -1450,7 +1441,7 @@ class Transformer:
         for i, _indices in enumerate(combinations(indices, 2)):
             idx = jnp.array(_indices)
 
-            print(f"{idx=}")
+            # print(f"{idx=}")
 
             Transformer._plot_2d(
                 fig=fig,
@@ -1611,11 +1602,11 @@ class Transformer:
             return out
 
         if use_macro_chunk:
-            from IMLCV.base.rounds import data_loader_output
+            from IMLCV.base.rounds import DataLoaderOutput
 
             # print(f"{a=}")
 
-            out, _ = data_loader_output.apply_cv(
+            out, _ = DataLoaderOutput.apply_cv(
                 x=a,
                 f=CvTrans.from_cv_function(
                     _f,
@@ -1678,7 +1669,7 @@ class CombineTransformer(Transformer):
         x: list[CV],
         x_t: list[CV] | None,
         w: list[jax.Array],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,
@@ -1714,7 +1705,7 @@ class IdentityTransformer(Transformer):
         x: list[CV],
         x_t: list[CV] | None,
         w: list[jax.Array],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,

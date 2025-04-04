@@ -302,17 +302,6 @@ class Rounds(ABC):
         only_finished=False,
         ext="xyz",
     ):
-        # if format == "xyz":
-        #     from ase.io.extxyz import write_extxyz
-
-        #     def writer(file, atoms):
-        #         write_extxyz(file, atoms)
-        # elif format == "cif":
-        #     from ase.io.cif import write_cif
-
-        #     def writer(file, atoms):
-        #         write_cif(file, atoms)
-
         if c is None:
             c = self.cv
 
@@ -327,10 +316,7 @@ class Rounds(ABC):
             ),
         ):
             print(f"writing {i} {round.round=} {trajejctory.num=} {ext=}")
-            # with open(
-            #     self.path(c=c, r=round.round, i=trajejctory.num) / "trajectory.xyz",
-            #     mode="w" if format == "xyz" else "wb",
-            # ) as f:
+
             if repeat is not None:
                 atoms = [a.repeat(repeat) for a in atoms]
 
@@ -593,7 +579,7 @@ class Rounds(ABC):
         weighing_method="WHAM",
         samples_per_bin=10,
         min_samples_per_bin=3,
-    ) -> data_loader_output:
+    ) -> DataLoaderOutput:
         if cv_round is None:
             cv_round = self.cv
 
@@ -653,6 +639,8 @@ class Rounds(ABC):
         weights: list[Array] = []
         p_select: list[Array] = []
         grid_nums: list[Array] = []
+
+        labels: list[Array] = []
 
         # if reweight_to_fes:
         #     fes_weights: list[Array] = []
@@ -839,7 +827,7 @@ class Rounds(ABC):
                 if verbose:
                     print(f"getting weights for cv_round {cvi} {len(sp_c)} trajectories")
 
-                dlo = data_loader_output(
+                dlo = DataLoaderOutput(
                     sp=sp_c,
                     cv=cv_c,
                     ti=ti_c,
@@ -879,6 +867,8 @@ class Rounds(ABC):
                 # if reweight_to_fes:
                 #     w_fes_c = weight_output.free_energy
 
+                labels_c = weight_output.labels
+
                 if reweight_inverse_bincount:
                     bincount_c = weight_output.bin_counts
                     # n_bin = weight_output.n_bins
@@ -903,6 +893,8 @@ class Rounds(ABC):
 
                 gn_c = [CV(cv=jnp.zeros((spi.shape[0], 1), dtype=jnp.integer)) for spi in sp_c]
 
+                labels_c = [0] * len(sp_c)
+
                 # if reweight_to_fes:
                 #     w_fes_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
 
@@ -919,6 +911,8 @@ class Rounds(ABC):
             weights.extend(w_c)
             p_select.extend(p_c)
             grid_nums.extend(gn_c)
+
+            labels.extend(labels_c)
 
             # if reweight_to_fes:
             #     fes_weights.extend(w_fes_c)
@@ -945,6 +939,8 @@ class Rounds(ABC):
             weights_new: list[Array] = []
             p_select_new: list[Array] = []
             grid_nums_new: list[Array] = []
+
+            labels_new: list[Array] = []
 
             # if reweight_to_fes:
             #     fes_weights_new: list[Array] = []
@@ -975,6 +971,7 @@ class Rounds(ABC):
                 weights_new.append(weights[n])
                 p_select_new.append(p_select[n])
                 grid_nums_new.append(grid_nums[n])
+                labels_new.append(labels[n])
 
                 # if reweight_to_fes:
                 #     fes_weights_new.append(fes_weights[n])
@@ -992,6 +989,7 @@ class Rounds(ABC):
             weights = weights_new
             p_select = p_select_new
             grid_nums = grid_nums_new
+            labels = labels_new
 
             # if reweight_to_fes:
             #     fes_weights = fes_weights_new
@@ -1161,75 +1159,8 @@ class Rounds(ABC):
         ):
             key, key_return = split(key, 2)
 
-            # if reweight_inverse_bincount and bin_count is not None:
-            #     selection = jnp.where(jnp.hstack(bin_count) == 0, 0, 1 / jnp.hstack(bin_count))
-
-            # #     # p is constructed such that the samples are uniformly samples but no more samples than the numbers of samples per bin is taken
-
-            # #     bc_stack = jnp.hstack(bin_count)
-
-            # #     # it is possible that the bin count is zero, because the bin has been discarded
-            # #     bc_stack_inv = jnp.where(bc_stack == 0, 0, 1 / bc_stack)
-
-            # #     full = jnp.full(bc_stack.shape, False)
-
-            # #     out_p = jnp.ones_like(bc_stack_inv)
-
-            # #     while True:
-            # #         print(".")
-
-            # #         _select = out - jnp.sum(full)
-
-            # #         _n_bins = jnp.sum(bc_stack_inv[~full])
-
-            # #         select_per_bin = _select / _n_bins
-
-            # #         # the odds to select a data point from a given bin
-            # #         p = select_per_bin * bc_stack_inv[~full]
-            # #         _full = p >= 1
-
-            # #         # none of the remaining bins is overfilled
-            # #         if jnp.sum(_full) == 0:
-            # #             print("all data fits in bins  ")
-            # #             out_p = out_p.at[~full].set(p)
-
-            # #             break
-
-            # #         # all the bins are  overfilled.
-            # #         if jnp.sum(~_full) == 0:
-            # #             print("all bins are full")
-
-            # #             break
-
-            # #         full = full.at[~full].set(_full)
-
-            # #     p_corr = out_p
-            # #     # p_corr_inv = jnp.where(p_corr == 0, 0, 1 / p_corr)
-
-            # #     ni = 0
-
-            # #     # weight_new = []
-            # #     p_select_new = []
-            # #     selection = []
-
-            # #     for wi, bi, pi in zip(weight, bin_count, p_select):
-            # #         out_p_i = p_corr[ni : ni + bi.shape[0]]
-            # #         # out_p_i_inv = p_corr_inv[ni : ni + bi.shape[0]]
-
-            # #         selection.append(out_p_i)
-            # #         # p_select_new.append(pi * out_p_i_inv)  # rho is saved separately, no need to do
-
-            # #         ni += bi.shape[0]
-
-            # #     # weight = weight_new
-            # #     # p_select = p_select_new
-
-            # #     selection = jnp.hstack(selection)
-
-            # else:
-
-            selection = jnp.where(jnp.hstack(p_select) * jnp.hstack(weight) > 0, 1.0, 0.0)
-            # selection = jnp.ones_like(jnp.hstack(p_select))
+            # more selects the most certain samples per bin
+            selection = jnp.hstack(p_select)
 
             if (ns := jnp.sum(jnp.isnan(selection))) != 0:
                 print(f"found {ns=} nan in p_select")
@@ -1259,24 +1190,29 @@ class Rounds(ABC):
 
             # print(f"{grid_nums_stack.shape=} {nn=}  {jnp.hstack(p_select).shape=} ")
 
-            rho_grid = data_loader_output.get_histo(
+            log_p_selection = jnp.log(selection)
+
+            rho_grid = DataLoaderOutput.get_histo(
                 [grid_nums_stack],
-                [selection],
+                [log_p_selection],
                 macro_chunk=macro_chunk,
                 nn=nn,
+                log_w=True,
             )
 
             # print(f"{rho_grid=}")
 
-            rho_grid_new = data_loader_output.get_histo(
+            rho_grid_new = DataLoaderOutput.get_histo(
                 [grid_nums_stack[indices]],
-                [selection],
+                [log_p_selection[indices]],
+                # [selection],
                 macro_chunk=macro_chunk,
                 nn=nn,
+                log_w=True,
             )
 
             print(
-                f"{jnp.sum(rho_grid_new)/jnp.sum(rho_grid):.1%} of weight selected with {out/selection.shape[0]:.1%} of the samples"
+                f"on average {jnp.mean(jnp.exp(rho_grid_new - rho_grid)):.1%} of weight selected per bin with {out/selection.shape[0]:.1%} of the samples"
             )
 
             print(f"selection reweighing")
@@ -1284,13 +1220,9 @@ class Rounds(ABC):
             p_select_new = []
 
             for grid_num_i, p_select_i in zip(grid_nums, p_select):
-                # print(f"{grid_num_i.shape=} {p_select_i.shape=}")
-
                 gi = grid_num_i.cv.reshape((-1,))
-
-                f = jnp.where(rho_grid_new[gi] == 0, 0, rho_grid[gi] / rho_grid_new[gi])
-
-                p_select_new.append(p_select_i * f)
+                p_i_new = jnp.exp(jnp.log(p_select_i) + rho_grid[gi] - rho_grid_new[gi])
+                p_select_new.append(p_i_new)
 
             p_select = p_select_new
 
@@ -1301,6 +1233,7 @@ class Rounds(ABC):
             return w
 
         out_indices = []
+        out_labels = []
 
         n_list = []
 
@@ -1310,7 +1243,7 @@ class Rounds(ABC):
             out_reweights = []
             out_rhos = []
 
-            for n, (w_i, ps_i, c_i, gn_i) in enumerate(zip(weights, p_select, c_list, grid_nums)):
+            for n, (w_i, ps_i, c_i, gn_i, l_i) in enumerate(zip(weights, p_select, c_list, grid_nums, labels)):
                 # if w_i is not None:
                 w_i = remove_lag(
                     w_i,
@@ -1349,6 +1282,7 @@ class Rounds(ABC):
                 out_reweights.extend(reweight)
                 out_rhos.extend(rerho)
                 n_list.append(n)
+                out_labels.append(l_i)
 
         else:
             # w_fes = None
@@ -1434,6 +1368,8 @@ class Rounds(ABC):
                     count += n_i
 
                     continue
+
+                out_labels.append(labels[n])
 
                 out_indices.append(index)
 
@@ -1618,6 +1554,7 @@ class Rounds(ABC):
             _weights=out_weights,
             scaled_tau=scale_times,
             _rho=out_rho,
+            labels=out_labels,
         )
 
         if time_series:
@@ -1631,7 +1568,7 @@ class Rounds(ABC):
                 _rho_t=out_rho_t,
             )
 
-        dlo = data_loader_output(
+        dlo = DataLoaderOutput(
             **dlo_kwargs,
         )
 
@@ -2366,7 +2303,7 @@ class Rounds(ABC):
         self,
         transformer: Transformer,
         dlo_kwargs=None,
-        dlo: data_loader_output | None = None,
+        dlo: DataLoaderOutput | None = None,
         chunk_size=None,
         plot=True,
         new_r_cut=None,
@@ -2464,7 +2401,7 @@ class Rounds(ABC):
         rounds: Rounds,
         transformer: Transformer,
         dlo_kwargs={},
-        dlo: data_loader_output | None = None,
+        dlo: DataLoaderOutput | None = None,
         chunk_size=None,
         macro_chunk=1000,
         macro_chunk_nl: int = 5000,
@@ -2535,7 +2472,7 @@ class Rounds(ABC):
         self,
         cv_trans: CvTrans,
         dlo_kwargs=None,
-        dlo: data_loader_output | None = None,
+        dlo: DataLoaderOutput | None = None,
         chunk_size=None,
         cv_round_from=None,
         cv_round_to=None,
@@ -2596,7 +2533,7 @@ class Rounds(ABC):
         new_bias: Bias,
         cv_round_from: int,
         cvs_new: list[CV],
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         new_r_cut=None,
         save_samples=True,
         save_multiple_cvs=False,
@@ -2647,7 +2584,7 @@ class Rounds(ABC):
 
     def _copy_from_previous_round(
         self,
-        dlo: data_loader_output,
+        dlo: DataLoaderOutput,
         new_cvs: list[CV],
         invalidate: bool = False,
         cv_round: int | None = None,
@@ -2694,27 +2631,23 @@ class WeightOutput:
 
     time_scaling: list[Array] | None = None
 
-    # free_energy: list[Array] | None = None
-    # bin_counts_i: list[Array] | None = None
     bin_counts: list[Array] | None = None
     grid_nums: list[Array] | None = None
-
-    # n_bins: int | None = None
 
     FES_bias: Bias | None = None
     FES_bias_std: Bias | None = None
 
-    # log_space: bool = False
+    labels: list[Array] | None = None
 
 
 @dataclass(repr=False)
-class data_loader_output:
+class DataLoaderOutput:
     sp: list[SystemParams]
-
     cv: list[CV]
     sti: StaticMdInfo
     ti: list[TrajectoryInfo]
     collective_variable: CollectiveVariable
+    labels: list[Array] | None = None
     nl: list[NeighbourList] | NeighbourList | None = None
     sp_t: list[SystemParams] | None = None
     nl_t: list[NeighbourList] | NeighbourList | None = None
@@ -2750,6 +2683,9 @@ class data_loader_output:
             if self.ti is not None:
                 d["ti"] = [self.ti[i]]
 
+            if self.labels is not None:
+                d["labels"] = [self.labels[i]]
+
             if self.time_series:
                 if self.sp_t is not None:
                     d["sp_t"] = [self.sp_t[i]]
@@ -2760,18 +2696,18 @@ class data_loader_output:
                 if self.ti_t is not None:
                     d["ti_t"] = [self.ti_t[i]]
 
+            raise "not fully implemented"
+
             if self.bias is not None:
                 d["bias"] = [self.bias[i]]
 
-            yield data_loader_output(**d)
+            yield DataLoaderOutput(**d)
 
     def __add__(self, other):
-        assert isinstance(other, data_loader_output)
+        assert isinstance(other, DataLoaderOutput)
 
         assert self.time_series == other.time_series
-        # assert (
-        #     self.collective_variable == other.collective_variable
-        # ), "dlo cannot be added because the collective variables are different"
+
         if self.tau is not None:
             assert self.tau == other.tau
         else:
@@ -2807,14 +2743,56 @@ class data_loader_output:
             else:
                 print("ground_bias not the same, omitting")
 
-        return data_loader_output(**kwargs)
+        return DataLoaderOutput(**kwargs)
+
+    @staticmethod
+    @partial(jax.jit, static_argnames=["log_w"])
+    def _get_histo(x, cvi: CV, _, weights, weights_t, log_w, nn_range):
+        alpha_factors, h = x
+
+        cvi = cvi.cv[:, 0]
+
+        if not log_w:
+            wi = jnp.ones_like(cvi) if weights is None else weights
+            h = h.at[cvi].add(wi)
+
+            return (alpha_factors, h)
+
+        if alpha_factors is None:
+            alpha_factors = jnp.full_like(h, -jnp.inf)
+
+        # this log of hist. all calculations are done in log space to avoid numerical issues
+        w_log = jnp.zeros_like(cvi) if weights is None else weights
+
+        @partial(jax.vmap, in_axes=(0, None, None, 0))
+        def get_max(ref_num, data_num, log_w, alpha):
+            val = jnp.where(data_num == ref_num, log_w, -jnp.inf)
+
+            max_new = jnp.max(val)
+            max_tot = jnp.max(jnp.array([alpha, max_new]))
+
+            return max_tot, max_new > alpha, max_tot - alpha
+
+        alpha_factors, alpha_factors_changed, d_alpha = get_max(nn_range, cvi, w_log, alpha_factors)
+
+        # shift all probs by the change in alpha
+        h = jnp.where(alpha_factors_changed, h - d_alpha, h)
+
+        m = alpha_factors != -jnp.inf
+
+        p_new = jnp.zeros_like(h)
+        p_new = p_new.at[cvi].add(jnp.exp(w_log - alpha_factors[cvi]))
+
+        h = jnp.where(m, jnp.log(jnp.exp(h) + p_new), h)
+
+        return (alpha_factors, h)
 
     @staticmethod
     def get_histo(
         data_nums: list[CV],
         weights: None | list[Array] = None,
         log_w=False,
-        macro_chunk=1000,
+        macro_chunk=10000,
         verbose=False,
         shape_mask=None,
         nn=-1,
@@ -2830,47 +2808,6 @@ class data_loader_output:
         if shape_mask is not None:
             nn_range = nn_range.at[-1].set(-1)
 
-        # @jax.jit
-        def _get_histo(x, cvi: CV, _, weights, weights_t):
-            alpha_factors, h = x
-
-            cvi = cvi.cv[:, 0]
-
-            if not log_w:
-                wi = jnp.ones_like(cvi) if weights is None else weights
-                h = h.at[cvi].add(wi)
-
-                return (alpha_factors, h)
-
-            if alpha_factors is None:
-                alpha_factors = jnp.full_like(h, -jnp.inf)
-
-            # this log of hist. all calculations are done in log space to avoid numerical issues
-            w_log = jnp.zeros_like(cvi) if weights is None else weights
-
-            @partial(jax.vmap, in_axes=(0, None, None, 0))
-            def get_max(ref_num, data_num, log_w, alpha):
-                val = jnp.where(data_num == ref_num, log_w, -jnp.inf)
-
-                max_new = jnp.max(val)
-                max_tot = jnp.max(jnp.array([alpha, max_new]))
-
-                return max_tot, max_new > alpha, max_tot - alpha
-
-            alpha_factors, alpha_factors_changed, d_alpha = get_max(nn_range, cvi, w_log, alpha_factors)
-
-            # shift all probs by the change in alpha
-            h = jnp.where(alpha_factors_changed, h - d_alpha, h)
-
-            m = alpha_factors != -jnp.inf
-
-            p_new = jnp.zeros_like(h)
-            p_new = p_new.at[cvi].add(jnp.exp(w_log - alpha_factors[cvi]))
-
-            h = jnp.where(m, jnp.log(jnp.exp(h) + p_new), h)
-
-            return (alpha_factors, h)
-
         h = jnp.zeros((nn,))
 
         alpha_factors, h = macro_chunk_map(
@@ -2879,7 +2816,7 @@ class data_loader_output:
             y=data_nums,
             macro_chunk=macro_chunk,
             verbose=verbose,
-            chunk_func=_get_histo,
+            chunk_func=Partial(DataLoaderOutput._get_histo, nn_range=nn_range, log_w=log_w),
             chunk_func_init_args=(None, h),
             w=weights,
             jit_f=True,
@@ -2912,7 +2849,7 @@ class data_loader_output:
 
         nums = closest_trans.compute_cv_trans(cv_mid, chunk_size=chunk_size)[0].cv
 
-        return cv_mid, nums, bins, closest_trans, partial(data_loader_output.get_histo, nn=cv_mid.shape[0])
+        return cv_mid, nums, bins, closest_trans, partial(DataLoaderOutput.get_histo, nn=cv_mid.shape[0])
 
     @staticmethod
     def _unstack_weights(stack_dims, weights: Array) -> list[Array]:
@@ -2960,7 +2897,7 @@ class data_loader_output:
         self,
         w=None,
         samples_per_bin=50,
-        n_max_koopman=1e5,
+        max_bins=1e5,
         out_dim=-1,
         chunk_size=None,
         indicator_CV=True,
@@ -2984,7 +2921,6 @@ class data_loader_output:
             cv_0 = self.cv
 
         sd = [a.shape[0] for a in cv_0]
-        tot_samples = sum(sd)
 
         ndim = cv_0[0].shape[1]
 
@@ -3002,42 +2938,29 @@ class data_loader_output:
 
         assert self._weights_t is not None
 
-        # print("using precomputed weights")
-        # w_stacked = jnp.hstack(self._weights)
-        # w_stacked = self.check_w(w_stacked)
-        # w_stacked = self.norm_w(w_stacked)
-
-        # if self.time_series:
-        #     w_stacked_t = jnp.hstack(self._weights_t)
-        #     w_stacked_t = self.check_w(w_stacked_t)
-        #     w_stacked_t = self.norm_w(w_stacked_t)
-
-        n_hist = CvMetric.get_n(
-            samples_per_bin=samples_per_bin,
-            samples=tot_samples,
-            n_dims=ndim,
-            max_bins=n_max_koopman,
-        )
-
-        if verbose:
-            print(f"using {n_hist=}")
-
         if verbose:
             print("koopman weights")
+
+        labels = jnp.array(self.labels) if self.labels is not None else jnp.ones((len(cv_0),))
+        unique_labels = jnp.unique(labels)
+
+        if len(unique_labels) > 1:
+            print(f"running koopman weights for {len(unique_labels)} disconnected regions")
 
         if indicator_CV:
             print("getting bounds")
             grid_bounds, _, constants = CvMetric.bounds_from_cv(
                 cv_0,
                 margin=margin,
-                chunk_size=chunk_size,
+                # chunk_size=chunk_size,
                 n=20,
             )
 
             if constants:
-                print("not performing koopman weighing because of constants in cv")
+                print(f"not performing koopman weighing because of constants in cv")
                 # koopman = False
-                out = [self._weights]
+
+                out = [w]
 
                 if output_w_corr:
                     out.append(None)
@@ -3047,7 +2970,19 @@ class data_loader_output:
 
                 return out
 
-            cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+            tot_samples = sum(sd)
+
+            n_hist = CvMetric.get_n(
+                samples_per_bin=samples_per_bin,
+                samples=tot_samples,
+                n_dims=ndim,
+                max_bins=max_bins,
+            )
+
+            if verbose:
+                print(f"using {n_hist=}")
+
+            cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
                 metric=self.collective_variable.metric,
                 n_grid=n_hist,
                 grid_bounds=grid_bounds,
@@ -3056,85 +2991,132 @@ class data_loader_output:
 
             grid_nums, grid_nums_t = self.apply_cv(closest, cv_0, cv_t, chunk_size=chunk_size, macro_chunk=macro_chunk)
 
-            w_pos = [(a > 0) * 1.0 for a in w]
+        _sd = sd
+        _cv_0 = cv_0
+        _cv_t = cv_t
+        _weights = w
+        _grid_nums = grid_nums
+        _grid_nums_t = grid_nums_t
+        _rho = self._rho
 
-            hist = get_histo(grid_nums, w_pos)
+        w_out = [None] * len(sd)
+        w_corr_out = [None] * len(sd)
+        km_out = []
 
-            hist_t = get_histo(grid_nums_t, w_pos)
+        for label in unique_labels:
+            print(f"calculating koopman weights for {label=}")
 
-            mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
+            label_mask = [int(a) for a in jnp.argwhere(labels == label).reshape((-1,))]
 
-            @partial(CvTrans.from_cv_function, mask=mask)
-            def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
-                out = jnp.zeros((hist.shape[0],))
-                out = out.at[cv.cv].set(1)
-                out = jnp.take(out, mask)
+            sd = []
+            cv_0 = []
+            weights = []
+            grid_nums = []
+            grid_nums_t = []
+            rho = []
 
-                return cv.replace(cv=out)
+            for idx in label_mask:
+                sd.append(_sd[idx])
+                cv_0.append(_cv_0[idx])
+                weights.append(_weights[idx])
+                grid_nums.append(_grid_nums[idx])
+                grid_nums_t.append(_grid_nums_t[idx])
+                rho.append(_rho[idx])
 
-            cv_km = grid_nums
-            cv_km_t = grid_nums_t
+            if indicator_CV:
+                print("getting bounds")
 
-            tr = get_indicator
+                w_pos = [(a > 0) * 1.0 for a in weights]
 
-        else:
-            cv_km = cv_0
-            cv_km_t = cv_t
+                hist = get_histo(grid_nums, w_pos)
+                hist_t = get_histo(grid_nums_t, w_pos)
 
-            tr = None
+                mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
 
-        if verbose:
-            print("constructing koopman model")
+                @partial(CvTrans.from_cv_function, mask=mask)
+                def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
+                    out = jnp.zeros((hist.shape[0],))
+                    out = out.at[cv.cv].set(1)
+                    out = jnp.take(out, mask)
 
-        km = self.koopman_model(
-            cv_0=cv_km,
-            cv_tau=cv_km_t,
-            nl=None,
-            w=w,
-            rho=self._rho,
-            add_1=add_1,
-            method="tcca",
-            symmetric=False,
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            verbose=verbose,
-            eps=koopman_eps,
-            eps_pre=koopman_eps_pre,
-            trans=tr,
-            max_features=max_features_koopman,
-            max_features_pre=max_features_koopman,
-            only_diag=only_diag,
-            calc_pi=calc_pi,
-            scaled_tau=self.scaled_tau,
-            sparse=sparse,
-            out_dim=out_dim,
-            correlation=correlation,
-        )
+                    return cv.replace(cv=out)
 
-        w_unstacked, w_corr, b = km.koopman_weight(
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            verbose=verbose,
-        )
+                cv_km = grid_nums
+                cv_km_t = grid_nums_t
 
-        if not b:
-            print("koopman reweighing failed")
+                tr = get_indicator
 
-        w_stacked = jnp.hstack(w_unstacked)
-        w_stacked = self.check_w(w_stacked)
-        w_stacked = self.norm_w(w_stacked)
+            else:
+                cv_km = cv_0
+                cv_km_t = cv_t
 
-        out = [self._unstack_weights(sd, w_stacked)]
+                tr = None
+
+            if verbose:
+                print("constructing koopman model")
+
+            km = self.koopman_model(
+                cv_0=cv_km,
+                cv_tau=cv_km_t,
+                nl=None,
+                w=weights,
+                rho=rho,
+                add_1=add_1,
+                method="tcca",
+                symmetric=False,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+                eps=koopman_eps,
+                eps_pre=koopman_eps_pre,
+                trans=tr,
+                max_features=max_features_koopman,
+                max_features_pre=max_features_koopman,
+                only_diag=only_diag,
+                calc_pi=calc_pi,
+                scaled_tau=self.scaled_tau,
+                sparse=sparse,
+                out_dim=out_dim,
+                correlation=correlation,
+            )
+
+            w_unstacked, w_corr, b = km.koopman_weight(
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+            )
+
+            if not b:
+                print(f"koopman reweighing failed for {label=}")
+
+            w_stacked = jnp.hstack(w_unstacked)
+            w_stacked = self.check_w(w_stacked)
+            w_stacked = self.norm_w(w_stacked)
+            w_unstacked = self._unstack_weights(sd, w_stacked)
+
+            if w_corr is not None and output_w_corr:
+                w_stacked_corr = jnp.hstack(w_corr)
+                w_stacked_corr = self.check_w(w_stacked_corr)
+                w_stacked_corr = self.norm_w(w_stacked_corr)
+                w_corr = self._unstack_weights(sd, w_stacked_corr)
+
+            for n, idx in enumerate(label_mask):
+                w_out[idx] = w_unstacked[n]
+                if w_corr is not None and output_w_corr:
+                    w_corr_out[idx] = w_corr[n]
+
+            if return_km:
+                km_out.append(None)
+
+        sd = _sd
+
+        out = [w_out]
 
         if output_w_corr:
-            w_corr_stacked = jnp.hstack(w_corr)
-            w_corr_stacked = self.check_w(w_corr_stacked)
-            w_corr_stacked = self.norm_w(w_corr_stacked)
-
-            out.append(self._unstack_weights(sd, w_corr_stacked))
+            out.append(w_corr_out)
 
         if return_km:
-            out.append(km)
+            out.append(km_out)
 
         return out
 
@@ -3205,12 +3187,12 @@ class data_loader_output:
         grid_bounds, _, constants = CvMetric.bounds_from_cv(
             cv_0,
             margin=margin,
-            chunk_size=chunk_size,
+            # chunk_size=chunk_size,
             n=20,
         )
 
         print("getting histo")
-        cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+        cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
             metric=self.collective_variable.metric,
             n_grid=n_hist,
             grid_bounds=grid_bounds,
@@ -3588,7 +3570,7 @@ class data_loader_output:
         output_bincount=True,
         output_free_energy=True,
         output_time_scaling=True,
-        smooth_bias=True,
+        smooth_bias=False,
         max_bias_margin=0.1,
     ) -> WeightOutput:
         if cv_0 is None:
@@ -3656,14 +3638,15 @@ class data_loader_output:
         grid_bounds, _, constants = CvMetric.bounds_from_cv(
             cv_0,
             margin=margin,
-            chunk_size=chunk_size,
+            # chunk_size=chunk_size,
+            # macro_chunk=macro_chunk,
             n=20,
         )
 
         print(f"{grid_bounds=}")
 
         print("getting histo")
-        cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+        cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
             metric=self.collective_variable.metric,
             n_grid=n_hist,
             grid_bounds=grid_bounds,
@@ -4168,7 +4151,7 @@ class data_loader_output:
             else:
                 w = jnp.exp(_u_i - _log_f_i)
 
-                p_select = jnp.exp(m_log_b_ik[i, gi] + _log_f_i + log_denom_k[gi])
+                p_select = jnp.exp(-(_u_i - _log_f_i) + log_denom_k[gi])
 
                 # selection criterium should be high enough to prevent numerical issues
                 w = jnp.where(p_select <= 0, 0, w)
@@ -4192,6 +4175,7 @@ class data_loader_output:
             "weights": w_out,
             "p_select": p_select_out,
             "grid_nums": grid_nums,
+            "labels": labels[:-1],
         }
 
         output_weight_kwargs["bin_counts"] = samples_in_bin
@@ -4317,7 +4301,7 @@ class data_loader_output:
             # koopman = False
             return None
 
-        cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+        cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
             metric=self.collective_variable.metric,
             n_grid=n_hist,
             grid_bounds=grid_bounds,
@@ -4492,7 +4476,7 @@ class data_loader_output:
         x: list[CV] | None = None,
         x_t: list[CV] | None = None,
         macro_chunk=1000,
-    ) -> tuple[data_loader_output, CV, CV]:
+    ) -> tuple[DataLoaderOutput, CV, CV]:
         if x is None:
             x = self.cv
 
@@ -4559,7 +4543,7 @@ class data_loader_output:
             f = jax.jit(f)
             f = padded_shard_map(f, kwargs=shmap_kwargs)  # (pmap=True))
 
-        return data_loader_output._apply(
+        return DataLoaderOutput._apply(
             x=x,
             x_t=x_t,
             nl=nl,
@@ -4583,7 +4567,8 @@ class data_loader_output:
         jit_f=True,
         print_every=10,
     ):
-        print("inside _apply")
+        if verbose:
+            print("inside _apply")
         out = macro_chunk_map(
             f=f,
             op=x[0].__class__.stack,
@@ -4596,7 +4581,8 @@ class data_loader_output:
             jit_f=jit_f,
             print_every=print_every,
         )
-        print("outside _apply")
+        if verbose:
+            print("outside _apply")
         # jax.debug.inspect_array_sharding(out[0], callback=print)
 
         if x_t is not None:
@@ -4639,7 +4625,7 @@ class data_loader_output:
             f = jax.jit(f)
             f = padded_shard_map(f, kwargs=shmap_kwargs)  # (pmap=True))
 
-        out, _ = data_loader_output._apply(
+        out, _ = DataLoaderOutput._apply(
             x=x,
             f=f,
             macro_chunk=macro_chunk,
@@ -4650,7 +4636,7 @@ class data_loader_output:
         return [a.cv[:, 0] for a in out]
 
     def apply_bias(self, bias: Bias, chunk_size=None, macro_chunk=1000, verbose=False, shmap=False) -> list[Bias]:
-        return data_loader_output._apply_bias(
+        return DataLoaderOutput._apply_bias(
             x=self.cv,
             bias=bias,
             chunk_size=chunk_size,
@@ -4692,8 +4678,51 @@ class data_loader_output:
             self.ti[idx[0]],
         )
 
-    @staticmethod
     def get_fes_bias_from_weights(
+        self,
+        cv: list[CV] | None = None,
+        weights: list[Array] | None = None,
+        rho: list[Array] | None = None,
+        samples_per_bin=5,
+        min_samples_per_bin: int | None = 1,
+        n_grid=None,
+        n_max=1e5,
+        max_bias=None,
+        chunk_size=None,
+        macro_chunk=1000,
+        max_bias_margin=0.2,
+        rbf_bias=True,
+        kernel="multiquadric",
+    ):
+        if cv is None:
+            cv = self.cv
+
+        if weights is None:
+            weights = self._weights
+
+        if rho is None:
+            rho = self._rho
+
+        return DataLoaderOutput._get_fes_bias_from_weights(
+            T=self.sti.T,
+            weights=weights,
+            rho=rho,
+            collective_variable=self.collective_variable,
+            cv=cv,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
+            n_max=n_max,
+            n_grid=n_grid,
+            max_bias=max_bias,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            max_bias_margin=max_bias_margin,
+            rbf_bias=rbf_bias,
+            kernel=kernel,
+        )
+
+    @staticmethod
+    def _get_fes_bias_from_weights(
         T,
         weights: list[jax.Array],
         rho: list[jax.Array],
@@ -4702,7 +4731,7 @@ class data_loader_output:
         samples_per_bin=5,
         min_samples_per_bin: int | None = 1,
         n_max=1e5,
-        # n_grid=None,
+        n_grid=None,
         max_bias=None,
         chunk_size=None,
         macro_chunk=1000,
@@ -4714,13 +4743,13 @@ class data_loader_output:
 
         samples = sum([cvi.shape[0] for cvi in cv])
 
-        # if n_grid is None:
-        n_grid = CvMetric.get_n(
-            samples_per_bin=samples_per_bin,
-            samples=samples,
-            n_dims=cv[0].shape[1],
-            max_bins=n_max,
-        )
+        if n_grid is None:
+            n_grid = CvMetric.get_n(
+                samples_per_bin=samples_per_bin,
+                samples=samples,
+                n_dims=cv[0].shape[1],
+                max_bins=n_max,
+            )
 
         if n_grid <= 1:
             raise
@@ -4745,7 +4774,7 @@ class data_loader_output:
             grid_bounds,
         )
 
-        cv_mid, nums, bins, closest, get_histo = data_loader_output._histogram(
+        cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
             n_grid=n_grid,
             grid_bounds=grid_bounds,
             metric=collective_variable.metric,
@@ -4753,7 +4782,7 @@ class data_loader_output:
 
         print(f"{cv_mid.shape=}")
 
-        grid_nums, _ = data_loader_output.apply_cv(
+        grid_nums, _ = DataLoaderOutput.apply_cv(
             x=cv,
             f=closest,
             macro_chunk=macro_chunk,
@@ -4827,7 +4856,7 @@ class data_loader_output:
 
         # get bins for new CV
         grid_bounds_new, _, _ = CvMetric.bounds_from_cv(new_cv, margin=0.1)
-        cv_mid_new, nums_new, _, closest_new, get_histo_new = data_loader_output._histogram(
+        cv_mid_new, nums_new, _, closest_new, get_histo_new = DataLoaderOutput._histogram(
             n_grid=n_grid_new,
             grid_bounds=grid_bounds_new,
             metric=new_colvar.metric,
@@ -4836,7 +4865,7 @@ class data_loader_output:
 
         # get bins for old CV
         grid_bounds_old, _, _ = CvMetric.bounds_from_cv(old_cv, margin=0.1)
-        cv_mid_old, nums_old, _, closest_old, get_histo_old = data_loader_output._histogram(
+        cv_mid_old, nums_old, _, closest_old, get_histo_old = DataLoaderOutput._histogram(
             n_grid=n_grid_old,
             grid_bounds=grid_bounds_old,
             metric=self.collective_variable.metric,
@@ -5106,11 +5135,6 @@ class KoopmanModel:
     W0: jax.Array
     W1: jax.Array
 
-    # U: jax.Array
-    # VT: jax.Array
-
-    # argmask_0: jax.Array | None
-    # argmask_1: jax.Array | None
     argmask: jax.Array | None
 
     shape: int
@@ -5121,10 +5145,7 @@ class KoopmanModel:
     nl_t: list[NeighbourList] | NeighbourList | None
 
     w: list[jax.Array] | None = None
-    # w_t: list[jax.Array] | None = None
-
     rho: list[jax.Array] | None = None
-    # rho_t: list[jax.Array] | None = None
 
     eps: float = 1e-10
     eps_pre: float | None = None
@@ -5149,9 +5170,7 @@ class KoopmanModel:
     @staticmethod
     def create(
         w: list[jax.Array] | None,
-        # w_t: list[jax.Array] | None,
         rho: list[jax.Array] | None,
-        # rho_t: list[jax.Array] | None,
         cv_0: list[CV],
         cv_tau: list[CV],
         nl: list[NeighbourList] | NeighbourList | None = None,
@@ -5162,7 +5181,6 @@ class KoopmanModel:
         method="tcca",
         symmetric=False,
         out_dim=-1,  # maximum dimension for koopman model
-        # koopman_weight=False,
         max_features=5000,
         max_features_pre=5000,
         tau=None,
@@ -5204,51 +5222,6 @@ class KoopmanModel:
 
         print(f"{s=}")
 
-        # if correlation_whiten:
-        #     print(f"performing pre pass for correlation ")
-
-        #     pre_cov = Covariances.create(
-        #         cv_0=cv_0,
-        #         cv_1=cv_tau,
-        #         nl=nl,
-        #         nl_t=nl_t,
-        #         w=w,
-        #         w_t=w,
-        #         calc_pi=True,
-        #         only_diag=False,
-        #         symmetric=False,
-        #         chunk_size=chunk_size,
-        #         macro_chunk=macro_chunk,
-        #         trans_f=trans,
-        #         trans_g=trans,
-        #     )
-
-        #     pre_sigma = jnp.abs(pre_cov.pi_0)
-
-        #     print(f"{jnp.sort(pre_sigma)=}")
-
-        #     if eps_pre is not None:
-        #         pre_mask = jnp.argwhere(pre_sigma > eps_pre).reshape((-1,))
-        #         pre_sigma = pre_sigma[pre_mask]
-        #     else:
-        #         pre_mask = None
-
-        #     pre_tr = CvTrans.from_cv_function(
-        #         data_loader_output._transform,
-        #         static_argnames=["add_1", "add_1_pre"],
-        #         add_1=False,
-        #         add_1_pre=False,
-        #         q=None,
-        #         l=1 / pre_sigma,
-        #         pi=None,
-        #         argmask=pre_mask,
-        #     )
-
-        #     if trans is None:
-        #         trans = pre_tr
-        #     else:
-        #         trans = trans * pre_tr
-
         cov = Covariances.create(
             cv_0=cv_0,
             cv_1=cv_tau,
@@ -5281,7 +5254,7 @@ class KoopmanModel:
             )
 
             if verbose:
-                print(f"{jnp.sum(argmask_pre)=} {jnp.sum(~argmask_pre)=} {jnp.diag(cov.C00)=} {eps_pre=}")
+                print(f"{jnp.sum(argmask_pre)=} {jnp.sum(~argmask_pre)=}  {eps_pre=}")
 
             if jnp.sum(argmask_pre) == 0:
                 print(
@@ -5612,7 +5585,7 @@ class KoopmanModel:
         o = o[:, :out_dim]
 
         tr = CvTrans.from_cv_function(
-            data_loader_output._transform,
+            DataLoaderOutput._transform,
             static_argnames=["add_1", "add_1_pre"],
             add_1=False,
             add_1_pre=self.add_1,
@@ -5657,7 +5630,7 @@ class KoopmanModel:
         o = o[:out_dim, :]
 
         tr = CvTrans.from_cv_function(
-            data_loader_output._transform,
+            DataLoaderOutput._transform,
             static_argnames=["add_1", "add_1_pre"],
             add_1=False,
             add_1_pre=self.add_1,
@@ -5757,7 +5730,7 @@ class KoopmanModel:
         # v = v[[idx_v],:]
 
         f_trans_2 = CvTrans.from_cv_function(
-            data_loader_output._transform,
+            DataLoaderOutput._transform,
             q=self.W0[out_idx[idx], :].T,
             l=None,
             pi=self.cov.pi_0 if self.calc_pi else None,
@@ -5774,7 +5747,7 @@ class KoopmanModel:
 
         tr = f_trans_2 * _get_w
 
-        w_out_cv, _ = data_loader_output.apply_cv(
+        w_out_cv, _ = DataLoaderOutput.apply_cv(
             f=tr,
             x=self.cv_0,
             x_t=None,
@@ -5804,7 +5777,7 @@ class KoopmanModel:
 
         w_pos, wf_neg, f_neg = jax.vmap(_norm, in_axes=1)(w_corr)
 
-        print(f"{w_pos=}")
+        print(f"{jnp.mean(w_pos)=} {jnp.std(w_pos)=}")
 
         mode = jnp.argmin(f_neg)
 
@@ -5815,8 +5788,8 @@ class KoopmanModel:
         w_new = w_orig * w_corr
         w_new /= jnp.sum(w_new)
 
-        w_new = data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_new)
-        w_corr = data_loader_output._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_corr)
+        w_new = DataLoaderOutput._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_new)
+        w_corr = DataLoaderOutput._unstack_weights([cvi.shape[0] for cvi in self.cv_0], w_corr)
 
         return w_new, w_corr, True
 
@@ -6172,9 +6145,6 @@ class Covariances:
 
             Q, R, _ = jax.scipy.linalg.qr(X, pivoting=True)
 
-            print(f"{jnp.diag(R)=}")
-            print(f"{jnp.linalg.norm(R[r:, :])=}")
-
             Q = Q[:, :r]
             R = R[:r, :]
 
@@ -6198,10 +6168,6 @@ class Covariances:
 
             theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta[mask]), 0)
 
-            if max_features is not None:
-                print(f"whiten: reducing dim to {max_features=}")
-                theta_inv = theta_inv[0:max_features]
-
             W = jnp.einsum(
                 "i,ji->ij",
                 theta_inv,
@@ -6216,6 +6182,11 @@ class Covariances:
                 W,
                 V_sqrt_inv,
             )
+
+        if max_features is not None:
+            if W.shape[0] > max_features:
+                print(f"whiten: reducing dim to {max_features=}")
+                W = W[:max_features, :]
 
         print(f"{jnp.linalg.norm(W @ C @ W.T - jnp.eye(W.shape[0]))=}")
 

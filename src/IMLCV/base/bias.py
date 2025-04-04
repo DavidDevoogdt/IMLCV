@@ -701,9 +701,9 @@ class Bias(ABC):
         return free_energies
 
     def apply(self, cvs: list[CV], shmap=False, macro_chunk_size=10000):
-        from IMLCV.base.rounds import data_loader_output
+        from IMLCV.base.rounds import DataLoaderOutput
 
-        return data_loader_output._apply_bias(
+        return DataLoaderOutput._apply_bias(
             bias=self,
             x=cvs,
             shmap=False,
