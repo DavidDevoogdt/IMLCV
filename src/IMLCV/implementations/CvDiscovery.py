@@ -494,7 +494,8 @@ class TransformerMAF(Transformer):
     ) -> tuple[CV, CvTrans]:
         print("getting koopman")
 
-        # this computes the
+        # first, make an unweighed model to check if there are separated regions that need to be reweighed
+
         km = dlo.koopman_model(
             cv_0=x,
             cv_tau=x_t,
@@ -510,6 +511,78 @@ class TransformerMAF(Transformer):
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=True,
+            out_dim=20,
+            eps=1e-10,
+            eps_pre=1e-4,
+            symmetric=False,
+            correlation=False,
+        )
+
+        _f = km.f(
+            out_dim=self.outdim,
+            skip_first=True,
+        )
+        cv_colvar_f, cv_colvar_t_f = dlo.apply_cv(
+            _f,
+            x=x,
+            x_t=x_t,
+            macro_chunk=macro_chunk,
+            verbose=True,
+        )
+
+        _, labels = dlo.get_bincount(
+            cv_0=cv_colvar_f,
+            output_labels=True,
+            samples_per_bin=20,
+            min_samples_per_bin=3,
+            # samples_per_bin=1,
+        )
+
+        labels = jnp.array(labels)
+
+        rho = dlo._rho
+
+        region_norms = []
+        out_norms = jnp.zeros_like(labels)
+
+        for unique_label in jnp.unique(labels):
+            mask = jnp.argwhere(labels == unique_label).reshape((-1))
+
+            s_log = [jnp.log(w[mi]) + jnp.log(rho[mi]) for mi in mask]
+            s_log = jnp.hstack(s_log)
+            s_log_max = jnp.max(s_log)
+
+            n = jnp.log(jnp.sum(jnp.exp(s_log - s_log_max))) + s_log_max
+
+            region_norms.append(jnp.exp(n))
+
+            out_norms = out_norms.at[mask].set(n)
+
+        print(f"{jnp.array(region_norms)=}")
+
+        w_new = [jnp.exp(jnp.log(wi) - ni) for wi, ni in zip(w, out_norms)]
+
+        w = w_new
+
+        # print(f"{w=} {x=} {len(x)=} {len(w)=}")
+
+        print(f"calculating real koopman model")
+
+        km = dlo.koopman_model(
+            cv_0=x,
+            cv_tau=x_t,
+            nl=dlo.nl,
+            nl_t=dlo.nl_t,
+            method="tcca",
+            max_features=max_features,
+            max_features_pre=max_features_pre,
+            w=w,
+            calc_pi=False,
+            add_1=False,
+            trans=trans,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            verbose=True,
             out_dim=None,
             eps=1e-10,
             eps_pre=1e-4,
@@ -517,7 +590,6 @@ class TransformerMAF(Transformer):
             correlation=False,
         )
 
-        # # # # weight and make reversible
         km = km.weighted_model(
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,

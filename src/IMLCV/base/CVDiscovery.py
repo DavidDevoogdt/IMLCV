@@ -166,7 +166,7 @@ class Transformer:
 
         (w,) = dlo.koopman_weight(
             verbose=verbose,
-            n_max_koopman=n_max,
+            max_bins=n_max,
             samples_per_bin=samples_per_bin,
             chunk_size=chunk_size,
             correlation=False,
@@ -175,7 +175,7 @@ class Transformer:
             add_1=False,
         )
 
-        bias_km: Bias = dlo._get_fes_bias_from_weights(
+        bias_km: Bias = dlo.get_fes_bias_from_weights(
             weights=w,
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
@@ -274,7 +274,7 @@ class Transformer:
             print("transforming FES")
             from IMLCV.base.rounds import DataLoaderOutput
 
-            bias_new: Bias = DataLoaderOutput.get_fes_bias_from_weights(
+            bias_new: Bias = DataLoaderOutput._get_fes_bias_from_weights(
                 dlo.sti.T,
                 weights=w,
                 rho=rho,

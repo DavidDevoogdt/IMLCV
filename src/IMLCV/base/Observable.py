@@ -392,7 +392,7 @@ class Observable:
 
         if koopman:
             weights, w_corr = dlo.koopman_weight(
-                n_max_koopman=n_max,
+                max_bins=n_max,
                 samples_per_bin=samples_per_bin,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,

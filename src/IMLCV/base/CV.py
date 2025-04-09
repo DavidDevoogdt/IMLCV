@@ -523,7 +523,7 @@ def macro_chunk_map(
             chunk_func = jit(chunk_func)
 
     def single_chunk():
-        # print("performing single chunk")
+        print("performing single chunk")
 
         stack_dims = tuple([yi.shape[0] for yi in y])
 
@@ -3155,8 +3155,8 @@ class CvMetric:
         margin=None,
         chunk_size=None,
         n=40,
-        macro_chunk=20000,
-        verbose=False,
+        macro_chunk=5000,
+        verbose=True,
     ):
         n = int(n)
 
@@ -3195,28 +3195,37 @@ class CvMetric:
         bounds = jnp.zeros((cv_0[0].shape[1], 2))
 
         for dim in range(ndim):
-            # print(f"new iterated bounds {dim=}")
+            print(f"new iterated bounds {dim=}")
 
             cv_mid, nums, bins, closest_trans, get_histo = DataLoaderOutput._histogram(
                 metric=CvMetric.create(
                     periodicities=[False],
-                    bounding_box=bounding_box[[0], :],
+                    bounding_box=bounding_box[[dim], :],
                 ),
-                grid_bounds=bounding_box[[0], :],
+                grid_bounds=bounding_box[[dim], :],
                 n_grid=n,
             )
 
-            grid_nums, _ = DataLoaderOutput.apply_cv(
-                f=CvTrans.from_cv_function(_cv_slice, indices=jnp.array([dim])) * closest_trans,
-                x=cv_0,
-                macro_chunk=macro_chunk,
-                verbose=verbose,
-                chunk_size=chunk_size,
-            )
+            print(f"getting grid nums")
+
+            f = CvTrans.from_cv_function(_cv_slice, indices=jnp.array([dim])) * closest_trans
+
+            _f = f.compute_cv
+
+            def f(x, nl):
+                return _f(
+                    x,
+                    nl,
+                    chunk_size=chunk_size,
+                    shmap=False,
+                )[0]
+
+            f = jax.jit(f)
 
             hist = get_histo(
-                grid_nums,
+                cv_0,
                 weights=weights,
+                f_func=f,
             )
             # hist = jnp.reshape(hist, (n - 1,) * len(mini))
 

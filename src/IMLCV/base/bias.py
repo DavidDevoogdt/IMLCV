@@ -548,7 +548,7 @@ class Bias(ABC):
         symmetric=True,
         margin=0.2,
         sign=1.0,
-        n=40,
+        n=200,
     ):
         _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=margin)
 
