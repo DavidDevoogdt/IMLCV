@@ -9,10 +9,10 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from matplotlib.figure import Figure
-from IMLCV.base.UnitsConstants import kjmol
 
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvFlow, CvMetric, CvTrans, ShmapKwargs
+from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
 from IMLCV.implementations.CV import _scale_cv_trans, identity_trans, scale_cv_trans
 

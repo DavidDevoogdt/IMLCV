@@ -5,8 +5,6 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-from IMLCV.base.UnitsConstants import boltzmann
-from IMLCV.base.UnitsConstants import kjmol
 
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CvTrans, SystemParams
@@ -14,6 +12,7 @@ from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
+from IMLCV.base.UnitsConstants import boltzmann, kjmol
 from IMLCV.implementations.bias import HarmonicBias
 
 

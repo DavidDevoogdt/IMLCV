@@ -13,19 +13,17 @@ import cloudpickle
 import h5py
 import jax.numpy as jnp
 import jsonpickle
+from ase.data import atomic_masses
 from flax.struct import dataclass as flax_dataclass
 from flax.struct import field
 from jax import Array, jit
 from jax.lax import dynamic_update_slice_in_dim
-
-from ase.data import atomic_masses
-
-from IMLCV.base.UnitsConstants import angstrom, bar, kjmol, amu
 from typing_extensions import Self
 
 from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, ShmapKwargs, SystemParams
+from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
 
 ######################################
 #             Trajectory             #

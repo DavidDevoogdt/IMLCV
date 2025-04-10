@@ -14,7 +14,7 @@ from ase import Atoms, units
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
-from IMLCV.base.UnitsConstants import angstrom, bar, femtosecond, kelvin, electronvolt
+from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
 
 if TYPE_CHECKING:
     import yaff

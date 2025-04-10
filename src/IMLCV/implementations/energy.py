@@ -4,9 +4,9 @@ from pathlib import Path
 import ase
 import jax.numpy as jnp
 import numpy as np
-from IMLCV.base.UnitsConstants import angstrom, electronvolt
 
 from IMLCV.base.bias import Energy, EnergyError, EnergyResult
+from IMLCV.base.UnitsConstants import angstrom, electronvolt
 from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
 
 

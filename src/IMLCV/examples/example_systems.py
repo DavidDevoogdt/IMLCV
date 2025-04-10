@@ -4,18 +4,16 @@ import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
-from IMLCV.base.UnitsConstants import femtosecond
-
-from IMLCV.base.UnitsConstants import angstrom, kelvin, kjmol, bar, atm
 
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
+from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import NoneCV, Volume, dihedral
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
-from IMLCV.implementations.MdEngine import YaffEngine, AseEngine
+from IMLCV.implementations.MdEngine import AseEngine, YaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"
 

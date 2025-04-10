@@ -19,7 +19,7 @@ pip install cython==0.29.36 numpy wheel
 
 #requires password
 # pip install thermolib@git+https://github.ugent.be/lvduyfhu/ThermoLIB@david
-# pip install yaff@git+https://github.com/molmod/yaff.git 
+# pip install yaff@git+https://github.com/molmod/yaff.git
 
 
 pip install -e .

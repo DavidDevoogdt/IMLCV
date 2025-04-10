@@ -13,8 +13,6 @@ import jsonpickle
 from flax.struct import dataclass, field
 from jax import Array, value_and_grad, vmap
 from jax.tree_util import Partial
-from IMLCV.base.UnitsConstants import boltzmann
-from IMLCV.base.UnitsConstants import kelvin, kjmol
 from typing_extensions import Self
 
 from IMLCV import unpickler
@@ -27,6 +25,7 @@ from IMLCV.base.CV import (
     padded_shard_map,
     padded_vmap,
 )
+from IMLCV.base.UnitsConstants import boltzmann, kelvin, kjmol
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import MDEngine

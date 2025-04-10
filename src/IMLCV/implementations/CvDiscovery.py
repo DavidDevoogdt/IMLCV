@@ -5,11 +5,11 @@ import jax.numpy as jnp
 from flax import linen as nn
 from flax.training import train_state
 from jax import Array, jit, random, vmap
-from IMLCV.base.UnitsConstants import nanosecond
 
 from IMLCV.base.CV import CV, CvFun, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.rounds import DataLoaderOutput
+from IMLCV.base.UnitsConstants import nanosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize
 
 

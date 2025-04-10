@@ -1801,6 +1801,7 @@ class SystemParams:
 
     def to_ase(self, static_trajectory_info: StaticMdInfo):
         from ase import Atoms
+
         from IMLCV.base.UnitsConstants import angstrom
 
         return Atoms(

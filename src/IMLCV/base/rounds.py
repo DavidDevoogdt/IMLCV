@@ -20,8 +20,6 @@ import numpy as np
 from jax import Array, vmap
 from jax.random import PRNGKey, choice, split
 from jax.tree_util import Partial
-from IMLCV.base.UnitsConstants import boltzmann
-from IMLCV.base.UnitsConstants import kjmol
 from parsl.data_provider.files import File
 
 from IMLCV.base.bias import Bias, BiasModify, CompositeBias, NoneBias
@@ -42,6 +40,7 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo
+from IMLCV.base.UnitsConstants import boltzmann, kjmol
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import GridBias, RbfBias, _clip
@@ -1615,6 +1614,7 @@ class Rounds(ABC):
         ignore_invalid=False,
     ):
         import ase
+
         from IMLCV.base.UnitsConstants import angstrom
 
         for round, trajejctory in self.iter(
@@ -2186,9 +2186,9 @@ class Rounds(ABC):
             # print(f"initial weights {w_init=}")
 
         else:
-            assert sp0.shape[0] == len(biases), (
-                f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
-            )
+            assert (
+                sp0.shape[0] == len(biases)
+            ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
 
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
@@ -3833,9 +3833,9 @@ class DataLoaderOutput:
             log_a_k = jnp.log(a_k)
             log_N_i = jnp.log(N_i)
 
-            assert int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0, (
-                f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
-            )
+            assert (
+                int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0
+            ), f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
 
             if log_sum_exp:
                 # m_log_b_ik = jnp.log(b_ik)
@@ -4717,9 +4717,9 @@ class DataLoaderOutput:
             z_t = None
 
         for i in range(len(z)):
-            assert z[i].shape[0] == x[i].shape[0], (
-                f" shapes do not match {[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
-            )
+            assert (
+                z[i].shape[0] == x[i].shape[0]
+            ), f" shapes do not match {[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
 
             if x_t is not None:
                 assert z[i].shape[0] == z_t[i].shape[0]

@@ -3,10 +3,10 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import pytest
-from IMLCV.base.UnitsConstants import angstrom, kjmol
 
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.rounds import Rounds
+from IMLCV.base.UnitsConstants import angstrom, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import alanine_dipeptide_refs, alanine_dipeptide_yaff
 from IMLCV.implementations.CV import CV, NeighbourList, NeighbourListInfo, NoneCV, SystemParams, sb_descriptor

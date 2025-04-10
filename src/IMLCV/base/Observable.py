@@ -6,12 +6,12 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 from jax.tree_util import Partial
-from IMLCV.base.UnitsConstants import kelvin, kjmol, picosecond
 from parsl import File
 
 from IMLCV.base.bias import Bias, BiasModify
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
+from IMLCV.base.UnitsConstants import kelvin, kjmol, picosecond
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import RbfBias, _clip
