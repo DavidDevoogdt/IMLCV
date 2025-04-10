@@ -3,8 +3,8 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from molmod import units
-from molmod.units import kelvin
+
+from IMLCV.base.UnitsConstants import kelvin, kjmol, femtosecond
 
 from IMLCV.base.bias import Bias, BiasF, CompositeBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvFlow, CvMetric, CvTrans, NeighbourListInfo, SystemParams
@@ -119,14 +119,14 @@ def test_combine_bias():
 
     bias1 = BiasMTD.create(
         cvs=cv0,
-        K=2.0 * units.kjmol,
+        K=2.0 * kjmol,
         sigmas=jnp.array([0.35, 0.35]),
         start=25,
         step=500,
     )
     bias2 = BiasMTD.create(
         cvs=cv0,
-        K=0.5 * units.kjmol,
+        K=0.5 * kjmol,
         sigmas=jnp.array([0.1, 0.1]),
         start=50,
         step=250,
@@ -136,8 +136,8 @@ def test_combine_bias():
 
     stic = StaticMdInfo(
         T=T,
-        timestep=2.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
         write_step=1,
         atomic_numbers=jnp.array(
             [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
@@ -161,7 +161,7 @@ def test_bias_save(tmpdir):
     yaffmd = alanine_dipeptide_yaff(
         bias=lambda cv0: BiasMTD.create(
             cvs=cv0,
-            K=2.0 * units.kjmol,
+            K=2.0 * kjmol,
             sigmas=jnp.array([0.35, 0.35]),
             start=25,
             step=500,

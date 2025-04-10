@@ -9,7 +9,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from matplotlib.figure import Figure
-from molmod.units import kjmol
+from IMLCV.base.UnitsConstants import kjmol
 
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvFlow, CvMetric, CvTrans, ShmapKwargs
@@ -172,7 +172,7 @@ class Transformer:
             correlation=False,
             koopman_eps=0,
             koopman_eps_pre=0,
-            add_1=False,
+            add_1=True,
         )
 
         bias_km: Bias = dlo.get_fes_bias_from_weights(
@@ -1272,7 +1272,7 @@ class Transformer:
                             # 3D array of strings, or 4D array with last axis rgb
                             if np.shape(color)[:3] != filled.shape:
                                 raise ValueError(
-                                    "When multidimensional, {} must match the shape of " "filled".format(name)
+                                    "When multidimensional, {} must match the shape of filled".format(name)
                                 )
                             return color
                         else:
@@ -1678,7 +1678,7 @@ class CombineTransformer(Transformer):
         trans = None
 
         for i, t in enumerate(self.transformers):
-            print(f"fitting transformer {i+1}/{len(self.transformers)}")
+            print(f"fitting transformer {i + 1}/{len(self.transformers)}")
 
             x, x_t, trans_t, _ = t._fit(
                 x,

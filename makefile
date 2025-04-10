@@ -13,7 +13,7 @@ test:
 
 clean:
 	rm -rf IMLCV/.parsl_scripts
-	rm -rf IMLCV/.runinfo
+	# rm -rf IMLCV/.runinfo
 	rm -rf IMLCV/.ase_calculators
 	rm -rf IMLCV/.bash_python_app
 	rm -rf IMLCV/test/output/hpc_perovskite

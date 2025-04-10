@@ -3,7 +3,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import pytest
-from molmod.units import angstrom, kjmol
+from IMLCV.base.UnitsConstants import angstrom, kjmol
 
 from IMLCV.base.bias import NoneBias
 from IMLCV.base.rounds import Rounds

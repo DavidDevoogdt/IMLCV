@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import ase
+import ase.units
 import jax.numpy as jnp
 import numpy as np
+from ase import Atoms, units
 
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
+from IMLCV.base.UnitsConstants import angstrom, bar, femtosecond, kelvin, electronvolt
 
 if TYPE_CHECKING:
     import yaff
@@ -99,8 +104,6 @@ class YaffEngine(MDEngine):
                 super().__init__()
 
             def __call__(self, iterative: VerletIntegrator):
-                # print("iterative.time", iterative.time)
-
                 kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
 
                 if hasattr(iterative, "press"):
@@ -299,48 +302,175 @@ class YaffSys:
         return self.pos.shape[0]
 
 
-# class PlumedEngine(YaffEngine):
-#     # Energy - kJ/mol
-#     # Length - nanometers
-#     # Time - picoseconds
+class AseEngine(MDEngine):
+    """MD engine with ASE as backend."""
 
-#     # https://github.com/giorginolab/plumed2-pycv/tree/v2.8-pycv/src/pycv
-#     # pybias  https://raimis.github.io/plumed-pybias/
+    _verlet_initialized: bool = False
+    _verlet: yaff.sampling.VerletIntegrator | None = None
 
-#     # pycv doesn't work with cell vectors?
-#     # this does ? https://github.com/giorginolab/plumed2-pycv/blob/v2.8-pycv/src/pycv/PythonFunction.cpp
-#     # see https://github.com/giorginolab/plumed2-pycv/blob/v2.6-pycv-devel/regtest/pycv/rt-f2/plumed.dat
+    @staticmethod
+    def create(
+        bias: Bias,
+        energy: Energy,
+        static_trajectory_info: StaticMdInfo,
+        trajectory_info: TrajectoryInfo | None = None,
+        trajectory_file=None,
+        sp: SystemParams | None = None,
+        **kwargs,
+    ) -> AseEngine:
+        cont = False
 
-#     plumed_dat = """
-#     LOAD FILE=libpybias.so
+        if trajectory_file is not None:
+            trajectory_file = Path(trajectory_file)
+            # continue with existing file if it exists
+            if Path(trajectory_file).exists():
+                trajectory_info = TrajectoryInfo.load(trajectory_file)
+                cont = True
 
-#     dist: DISTANCE ATOMS=1,2
+            if trajectory_info._size is None:
+                cont = False
 
+        if not cont:
+            kwargs["step"] = 1
+            if sp is not None:
+                energy.sp = sp
 
-#     rc: PYTHONCV ATOMS=1,4,3 IMPORT=curvature FUNCTION=r
+        else:
+            kwargs["step"] = trajectory_info._size
+            energy.sp = trajectory_info.sp[-1]
+            if trajectory_info.t is not None:
+                kwargs["time0"] = time()
 
-#     # Creat a PyBias action, which executes "bias.py"
-#     PYBIAS ARG=rc
+        return AseEngine(
+            bias=bias,
+            energy=energy,
+            static_trajectory_info=static_trajectory_info,
+            trajectory_info=trajectory_info,
+            trajectory_file=trajectory_file,
+            **kwargs,
+        )
 
+    def update_sp(self, atoms: Atoms):
+        """Update the system parameters with the current atoms object."""
 
-#     RESTRAINT ARG=rc AT=0 KAPPA=0 SLOPE=1
-#     """
+        self.sp = SystemParams(
+            coordinates=jnp.array(atoms.get_positions() / ase.units.Ang * angstrom),
+            cell=jnp.array(atoms.get_cell() / ase.units.Ang * angstrom) if atoms.pbc.all() else None,
+        )
 
-#     def __init__(
-#         self,
-#         bias: Bias,
-#         static_trajectory_info: StaticMdInfo,
-#         energy: Energy,
-#         trajectory_file=None,
-#         sp: SystemParams | None = None,
-#     ) -> None:
-#         super().__init__(
-#             bias,
-#             static_trajectory_info,
-#             energy,
-#             trajectory_file,
-#             sp,
-#             additional_parts=[
-#                 libplumed.ForcePartPlumed(timestep=static_trajectory_info.timestep),
-#             ],
-#         )
+    def _setup_verlet(self):
+        # everyhting stays the same, except the position as linked to the true positions
+
+        from ase.calculators.calculator import Calculator
+        from ase.md.nose_hoover_chain import NoseHooverChainNVT
+        from ase.md.npt import NPT
+
+        self.atoms = Atoms(
+            numbers=self.static_trajectory_info.atomic_numbers,
+            positions=self.sp.coordinates * ase.units.Ang / angstrom,
+            cell=self.sp.cell * ase.units.Ang / angstrom if self.sp.cell is not None else None,
+        )
+
+        if self.static_trajectory_info.barostat:
+            dyn = NPT(
+                atoms=self.atoms,
+                timestep=self.static_trajectory_info.timestep,
+                pfactor=(self.static_trajectory_info.timecon_baro / femtosecond * ase.units.fs) ** 2 * 0.6,
+                ttime=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
+                externalstress=self.static_trajectory_info.P / bar * ase.units.bar,
+                temperature_K=self.static_trajectory_info.T * kelvin / ase.units.kelvin,
+            )
+
+        else:
+            dyn = NoseHooverChainNVT(
+                atoms=self.atoms,
+                timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
+                temperature_K=self.static_trajectory_info.T * kelvin / ase.units.kelvin,
+                tdamp=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
+            )
+
+        class AseCalculator(Calculator):
+            implemented_properties = ["energy", "forces", "stress"]
+
+            def __init__(self, engine: AseEngine):
+                self.engine = weakref.proxy(engine)
+                super().__init__(atoms=self.engine.atoms)
+
+            def calculate(self, atoms, properties, system_changes):
+                gpos = "forces" in properties
+                vtens = "stress" in properties
+
+                self.engine.update_sp(atoms)
+
+                energy = self.engine.get_energy(
+                    gpos=gpos,
+                    vtens=vtens,
+                )
+
+                cv, bias = self.engine.get_bias(
+                    gpos=gpos,
+                    vtens=vtens,
+                )
+
+                res = energy + bias
+
+                # print(f"{res=}")
+
+                self.engine.last_ener = energy
+                self.engine.last_bias = bias
+                self.engine.last_cv = cv
+
+                self.results = {
+                    "energy": res.energy * ase.units.eV / electronvolt,
+                }
+
+                if res.gpos is not None:
+                    self.results["forces"] = -res.gpos / electronvolt * angstrom
+
+                if res.vtens is not None:
+                    vol = self.engine.atoms.get_volume()  #
+                    self.results["stress"] = res.vtens / vol / electronvolt * angstrom**3
+
+        calc = AseCalculator(self)
+        self.calc = calc
+
+        class MDLogger:
+            def __init__(
+                self,
+                engine: AseEngine,
+            ):
+                self.engine = weakref.proxy(engine)
+
+            def __del__(self):
+                self.close()
+
+            def close(self):
+                pass
+
+            def __call__(self):
+                temp = self.engine.atoms.get_temperature()
+
+                t = self.engine._verlet.get_time() / (1000 * units.fs)
+
+                kwargs = dict(t=t, T=temp, err=0.0)
+
+                # TODO
+                # if hasattr(iterative, "press"):
+                #     kwargs["P"] = iterative.press
+
+                self.engine.save_step(**kwargs)
+
+        dyn.attach(
+            MDLogger(self),
+            interval=1,
+        )
+
+        self._verlet = dyn
+
+        self._verlet_initialized = True
+
+    def _run(self, steps):
+        if not self._verlet_initialized:
+            self._setup_verlet()
+
+        self._verlet.run(int(steps))

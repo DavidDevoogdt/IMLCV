@@ -4,8 +4,9 @@ import ase.io
 import ase.units
 import jax.numpy as jnp
 import numpy as np
-from molmod import units
-from molmod.units import angstrom, kelvin, kjmol
+from IMLCV.base.UnitsConstants import femtosecond
+
+from IMLCV.base.UnitsConstants import angstrom, kelvin, kjmol, bar, atm
 
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams
@@ -14,7 +15,7 @@ from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import NoneCV, Volume, dihedral
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
-from IMLCV.implementations.MdEngine import YaffEngine
+from IMLCV.implementations.MdEngine import YaffEngine, AseEngine
 
 DATA_ROOT = ROOT_DIR / "data"
 
@@ -28,15 +29,15 @@ def alanine_dipeptide_yaff(
 
     tic = StaticMdInfo(
         T=T,
-        timestep=2.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
         write_step=100,
         atomic_numbers=jnp.array(
             [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
             dtype=int,
         ),
         screen_log=100,
-        equilibration=0 * units.femtosecond,
+        equilibration=0 * femtosecond,
         r_cut=r_cut,
     )
 
@@ -73,6 +74,68 @@ def alanine_dipeptide_yaff(
     from yaff.test.common import get_alaninedipeptide_amber99ff
 
     mde = YaffEngine.create(
+        energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
+        static_trajectory_info=tic,
+        bias=bias_cv0,
+    )
+
+    return mde
+
+
+def alanine_dipeptide_ase(
+    cv="backbone_dihedrals",
+    bias: Callable[[CollectiveVariable], Bias] | None = None,
+    r_cut=None,
+):
+    T = 300 * kelvin
+
+    tic = StaticMdInfo(
+        T=T,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        write_step=100,
+        atomic_numbers=jnp.array(
+            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
+            dtype=int,
+        ),
+        screen_log=100,
+        equilibration=0 * femtosecond,
+        r_cut=r_cut,
+    )
+
+    if cv == "backbone_dihedrals":
+        cv0 = CollectiveVariable(
+            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
+            metric=CvMetric.create(
+                periodicities=[True, True],
+                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
+            ),
+        )
+    elif cv == "backbone_dihedrals_theta":
+        cv0 = CollectiveVariable(
+            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16)) + dihedral(numbers=(1, 4, 6, 8))),
+            metric=CvMetric.create(
+                periodicities=[True, True, True],
+                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi], [-np.pi, np.pi]],
+            ),
+        )
+    elif cv is None:
+        cv0 = NoneCV()
+    else:
+        raise ValueError(
+            f"unknown value {cv} for cv 'backbone_dihedrals'",
+        )
+
+    if bias is None:
+        bias_cv0 = NoneBias.create(collective_variable=cv0)
+    else:
+        bias_cv0 = bias(cv0)
+
+    print(bias_cv0)
+
+    from yaff.test.common import get_alaninedipeptide_amber99ff
+
+    mde = AseEngine.create(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         static_trajectory_info=tic,
         bias=bias_cv0,
@@ -146,8 +209,8 @@ def alanine_dipeptide_refs():
 
 
 def mil53_yaff():
-    T = 300 * units.kelvin
-    P = 1 * units.atm
+    T = 300 * kelvin
+    P = 1 * atm
 
     import yaff
 
@@ -181,9 +244,9 @@ def mil53_yaff():
     st = StaticMdInfo(
         T=T,
         P=P,
-        timestep=1.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=200.0 * units.femtosecond,
+        timestep=1.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        timecon_baro=200.0 * femtosecond,
         write_step=1,
         screen_log=1,
         atomic_numbers=energy.ff.system.numbers,
@@ -250,13 +313,13 @@ def CsPbI3(cv=None, unit_cells=[2]):
 
     tic = StaticMdInfo(
         write_step=1,
-        T=300 * units.kelvin,
-        P=1.0 * units.bar,
-        timestep=2.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=500.0 * units.femtosecond,
+        T=300 * kelvin,
+        P=1.0 * bar,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        timecon_baro=500.0 * femtosecond,
         atomic_numbers=z_array,
-        equilibration=0 * units.femtosecond,
+        equilibration=0 * femtosecond,
         screen_log=1,
         r_cut=r_cut,
     )
@@ -329,13 +392,13 @@ def CsPbI3_MACE(unit_cells=[2]):
 
     tic = StaticMdInfo(
         write_step=50,
-        T=300 * units.kelvin,
-        P=1.0 * units.bar,
-        timestep=2.0 * units.femtosecond,
-        timecon_thermo=100.0 * units.femtosecond,
-        timecon_baro=500.0 * units.femtosecond,
+        T=300 * kelvin,
+        P=1.0 * bar,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        timecon_baro=500.0 * femtosecond,
         atomic_numbers=z_array,
-        equilibration=0 * units.femtosecond,
+        equilibration=0 * femtosecond,
         screen_log=50,
         r_cut=r_cut,
     )

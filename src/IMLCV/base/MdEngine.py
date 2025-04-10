@@ -1,7 +1,4 @@
-"""MD engine class peforms MD simulations in a given NVT/NPT ensemble.
-
-Currently, the MD is done with YAFF
-"""
+"""MD engine class peforms MD simulations in a given NVT/NPT ensemble."""
 
 from __future__ import annotations
 
@@ -20,8 +17,10 @@ from flax.struct import dataclass as flax_dataclass
 from flax.struct import field
 from jax import Array, jit
 from jax.lax import dynamic_update_slice_in_dim
-from molmod.periodic import periodic
-from molmod.units import angstrom, bar, kjmol
+
+from ase.data import atomic_masses
+
+from IMLCV.base.UnitsConstants import angstrom, bar, kjmol, amu
 from typing_extensions import Self
 
 from IMLCV import unpickler
@@ -74,7 +73,7 @@ class StaticMdInfo:
 
     @property
     def masses(self):
-        return jnp.array([periodic[int(n)].mass for n in self.atomic_numbers])
+        return jnp.array([atomic_masses[int(n)] for n in self.atomic_numbers]) * amu
 
     @property
     def thermostat(self):
@@ -658,7 +657,7 @@ class MDEngine(ABC):
         nneigh = nl.nneighs()
 
         if jnp.mean(nneigh) <= 2.0:
-            raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh-1}")
+            raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh - 1}")
 
         if jnp.max(nneigh) > 100:
             raise ValueError(f"neighbour list is too large for at leat one  atom {nneigh=}")
@@ -778,34 +777,34 @@ class MDEngine(ABC):
         )
 
         if self.step == 1:
-            str = f"{ 'step': ^10s}"
-            str += f"|{ 'cons err': ^10s}"
-            str += f"|{ 'e_pot[Kj/mol]': ^15s}"
-            str += f"|{ 'e_bias[Kj/mol]': ^15s}"
+            str = f"{'step': ^10s}"
+            str += f"|{'cons err': ^10s}"
+            str += f"|{'e_pot[Kj/mol]': ^15s}"
+            str += f"|{'e_bias[Kj/mol]': ^15s}"
             if ti._P is not None:
                 str += f"|{'P[bar]': ^10s}"
             str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
             ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-            str += f"|{ ss  : ^13s}"
+            str += f"|{ss: ^13s}"
             str += f"|{' CV': ^10s}"
             print(str, sep="")
-            print(f"{'='*len(str)}")
+            print(f"{'=' * len(str)}")
 
         if self.step % self.static_trajectory_info.screen_log == 0:
-            str = f"{  self.step : >10d}"
+            str = f"{self.step: >10d}"
             assert ti._err is not None
             assert ti._T is not None
             assert ti._e_pot is not None
             assert ti._e_bias is not None
 
-            str += f"|{  ti._err[0] : >10.4f}"
-            str += f"|{  ti._e_pot[0]  /kjmol : >15.8f}"
-            str += f"|{  ti._e_bias[0] /kjmol : >15.8f}"
+            str += f"|{ti._err[0]: >10.4f}"
+            str += f"|{ti._e_pot[0] / kjmol: >15.8f}"
+            str += f"|{ti._e_bias[0] / kjmol: >15.8f}"
             if ti._P is not None:
-                str += f" { ti._P[0]/bar : >10.2f}"
-            str += f" { ti._T[0] : >10.2f} { time()-self.time0 : >11.2f}"
-            str += f"|{  jnp.max(jnp.linalg.norm(self.last_bias.gpos,axis=1) /kjmol*angstrom ) : >13.2f}"
-            str += f"| {ti._cv[0,:]}"
+                str += f" {ti._P[0] / bar: >10.2f}"
+            str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
+            str += f"|{jnp.max(jnp.linalg.norm(self.last_bias.gpos, axis=1) / kjmol * angstrom): >13.2f}"
+            str += f"| {ti._cv[0, :]}"
             print(str)
 
         # write step to trajectory
@@ -884,7 +883,7 @@ class MDEngine(ABC):
 
         except Exception as e:
             print(
-                f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
+                f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0 else ''} but got exception",
             )
             raise e
 

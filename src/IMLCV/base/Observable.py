@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 from jax.tree_util import Partial
-from molmod.units import kelvin, kjmol, picosecond
+from IMLCV.base.UnitsConstants import kelvin, kjmol, picosecond
 from parsl import File
 
 from IMLCV.base.bias import Bias, BiasModify
@@ -261,7 +261,7 @@ class Observable:
         if max_bias is not None:
             fs_min = -max_bias
 
-        print(f"min fs: {-fs_min/kjmol} kjmol")
+        print(f"min fs: {-fs_min / kjmol} kjmol")
 
         fslist = []
         # smoothing_list = []
@@ -400,7 +400,7 @@ class Observable:
                 output_w_corr=True,
                 koopman_eps=0,
                 koopman_eps_pre=0,
-                add_1=False,
+                add_1=True,
             )
 
             fes_bias_tot = dlo.get_fes_bias_from_weights(

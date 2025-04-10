@@ -20,8 +20,8 @@ import numpy as np
 from jax import Array, vmap
 from jax.random import PRNGKey, choice, split
 from jax.tree_util import Partial
-from molmod.constants import boltzmann
-from molmod.units import kjmol
+from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.base.UnitsConstants import kjmol
 from parsl.data_provider.files import File
 
 from IMLCV.base.bias import Bias, BiasModify, CompositeBias, NoneBias
@@ -1132,7 +1132,7 @@ class Rounds(ABC):
 
             ll = jnp.hstack(ll)
 
-            print(f"average lag index { ll } {jnp.mean(ll)=}")
+            print(f"average lag index {ll} {jnp.mean(ll)=}")
 
         total = sum(c_list)
 
@@ -1212,7 +1212,7 @@ class Rounds(ABC):
             )
 
             print(
-                f"on average {jnp.mean(jnp.exp(rho_grid_new - rho_grid)):.1%} of weight selected per bin with {out/selection.shape[0]:.1%} of the samples"
+                f"on average {jnp.mean(jnp.exp(rho_grid_new - rho_grid)):.1%} of weight selected per bin with {out / selection.shape[0]:.1%} of the samples"
             )
 
             print(f"selection reweighing")
@@ -1532,12 +1532,14 @@ class Rounds(ABC):
             else:
                 if len(arr) != 0:
                     print(
-                        f"WARNING:time steps are not equal, {jnp.array(arr)} out of { out   } trajectories have different time steps"
+                        f"WARNING:time steps are not equal, {jnp.array(arr)} out of {out} trajectories have different time steps"
                     )
 
-                from molmod.units import femtosecond
+                from IMLCV.base.UnitsConstants import femtosecond
 
-                print(f"tau = {tau/femtosecond:.2f} fs, lag_time*timestep = {lag_n* sti.timestep/ femtosecond:.2f} fs")
+                print(
+                    f"tau = {tau / femtosecond:.2f} fs, lag_time*timestep = {lag_n * sti.timestep / femtosecond:.2f} fs"
+                )
 
         ###################
 
@@ -1613,7 +1615,7 @@ class Rounds(ABC):
         ignore_invalid=False,
     ):
         import ase
-        from molmod import angstrom
+        from IMLCV.base.UnitsConstants import angstrom
 
         for round, trajejctory in self.iter(
             stop=r,
@@ -2184,9 +2186,9 @@ class Rounds(ABC):
             # print(f"initial weights {w_init=}")
 
         else:
-            assert (
-                sp0.shape[0] == len(biases)
-            ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
+            assert sp0.shape[0] == len(biases), (
+                f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
+            )
 
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
@@ -2885,7 +2887,7 @@ class DataLoaderOutput:
             w_stacked = jnp.where(jnp.isinf(w_stacked), 0, w_stacked)
 
         if jnp.any(w_stacked < 0):
-            print(f"WARNING: w_stacked has {jnp.sum(w_stacked<0)} neg values")
+            print(f"WARNING: w_stacked has {jnp.sum(w_stacked < 0)} neg values")
             w_stacked = jnp.where(w_stacked < 0, 0, w_stacked)
 
         if jnp.sum(w_stacked) < 1e-16:
@@ -2913,7 +2915,7 @@ class DataLoaderOutput:
         verbose=False,
         max_features_koopman=5000,
         margin=0.1,
-        add_1=False,
+        add_1=True,
         only_diag=False,
         calc_pi=False,
         sparse=True,
@@ -3630,7 +3632,7 @@ class DataLoaderOutput:
 
         if len(high_b) > 0:
             print(
-                f"{len(high_b)}/{len(self.ti)} trajectories have points wiht very high bias > {bias_cutoff/kjmol}kjmol. capping {jnp.array(high_b)=}"
+                f"{len(high_b)}/{len(self.ti)} trajectories have points wiht very high bias > {bias_cutoff / kjmol}kjmol. capping {jnp.array(high_b)=}"
             )
 
         sd = [a.shape[0] for a in cv_0]
@@ -3831,9 +3833,9 @@ class DataLoaderOutput:
             log_a_k = jnp.log(a_k)
             log_N_i = jnp.log(N_i)
 
-            assert (
-                int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0
-            ), f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
+            assert int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0, (
+                f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
+            )
 
             if log_sum_exp:
                 # m_log_b_ik = jnp.log(b_ik)
@@ -4346,10 +4348,10 @@ class DataLoaderOutput:
             n=20,
         )
 
-        if constants:
-            print("not returning bincount, constant dim")
-            # koopman = False
-            return None
+        # if constants:
+        #     print("not returning bincount, removing constant dim")
+        #     # koopman = False
+        #     return None
 
         cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
             metric=self.collective_variable.metric,
@@ -4388,7 +4390,8 @@ class DataLoaderOutput:
         hist_mask = hist >= min_samples_per_bin
 
         n_hist_mask = jnp.sum(hist_mask)
-        # print(f" {n_hist_mask=} {jnp.sum( jnp.logical_and(hist_mask< min_samples, hist != 0))=}")
+
+        print(f" {n_hist_mask=}")
 
         # lookup to convert grid num to new grid num wihtout empty bins
         idx_inv = jnp.full(hist_mask.shape[0], -1)
@@ -4430,7 +4433,7 @@ class DataLoaderOutput:
 
         labels = jax.vmap(lambda x: jnp.argwhere(x, size=1).reshape(()), in_axes=1)(x)
         if num_labels > 1:
-            print(f"found {num_labels} different regions {labels=}")
+            print(f"found {num_labels}")
 
         # print(f"{labels=} {labels.shape=}")
 
@@ -4443,6 +4446,8 @@ class DataLoaderOutput:
         for i in range(len_i):
             labels_i = jnp.sum(x_labels[:, grid_nums_mask[i].cv.reshape(-1)], axis=1)
             label_i.append(jnp.argmax(labels_i))
+
+        print(f"{jnp.array(label_i)=}")
 
         return bin_counts, label_i
 
@@ -4501,7 +4506,7 @@ class DataLoaderOutput:
         max_features=5000,
         max_features_pre=5000,
         out_dim=-1,
-        add_1=False,
+        add_1=True,
         chunk_size=None,
         macro_chunk=1000,
         verbose=False,
@@ -4712,9 +4717,9 @@ class DataLoaderOutput:
             z_t = None
 
         for i in range(len(z)):
-            assert (
-                z[i].shape[0] == x[i].shape[0]
-            ), f" shapes do not match {[zi.shape[0] for  zi in z ]} != {[xi.shape[0] for xi in x]}"
+            assert z[i].shape[0] == x[i].shape[0], (
+                f" shapes do not match {[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
+            )
 
             if x_t is not None:
                 assert z[i].shape[0] == z_t[i].shape[0]
@@ -5140,7 +5145,7 @@ class DataLoaderOutput:
         else:
             y = [*self.sp]
 
-        from molmod.units import angstrom
+        from IMLCV.base.UnitsConstants import angstrom
 
         nl_info = NeighbourListInfo.create(
             r_cut=r_cut,
@@ -5295,7 +5300,7 @@ class KoopmanModel:
         cv_tau: list[CV],
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
-        add_1=False,
+        add_1=True,
         eps=1e-14,
         eps_pre=None,
         method="tcca",
@@ -5328,6 +5333,18 @@ class KoopmanModel:
 
         print(f"{calc_pi=} {add_1=}   ")
 
+        if add_1:
+            print("adding 1 to  basis set")
+
+            from IMLCV.implementations.CV import append_trans
+
+            _add_1 = append_trans(v=jnp.array([1]))
+
+            if trans is None:
+                trans = _add_1
+            else:
+                trans *= _add_1
+
         w_log = [jnp.log(wi) + jnp.log(rhoi) for wi, rhoi in zip(w, rho)]
 
         z = jnp.hstack(w_log)
@@ -5349,7 +5366,7 @@ class KoopmanModel:
             nl_t=nl_t,
             w=w,
             w_t=w,
-            calc_pi=calc_pi or add_1,
+            calc_pi=calc_pi,
             only_diag=only_diag,
             symmetric=symmetric,
             T_scale=T_scale,
@@ -5358,12 +5375,6 @@ class KoopmanModel:
             trans_f=trans,
             trans_g=trans,
         )
-
-        if not calc_pi and add_1:
-            cov.C00 += jnp.outer(cov.pi_0, cov.pi_0)
-            cov.C11 += jnp.outer(cov.pi_1, cov.pi_1)
-            cov.C01 += jnp.outer(cov.pi_0, cov.pi_1)
-            cov.C10 += jnp.outer(cov.pi_1, cov.pi_0)
 
         argmask = jnp.arange(cov.C00.shape[0])
 
@@ -5386,7 +5397,7 @@ class KoopmanModel:
             cov.C01 = cov.C01[argmask_pre, :][:, argmask_pre]
             cov.C10 = cov.C10[argmask_pre, :][:, argmask_pre]
 
-            if calc_pi or add_1:
+            if calc_pi:
                 cov.pi_0 = cov.pi_0[argmask_pre]
                 cov.pi_1 = cov.pi_1[argmask_pre]
 
@@ -5415,59 +5426,11 @@ class KoopmanModel:
             cov.C01 = cov.C01[argmask_cov, :][:, argmask_cov]
             cov.C10 = cov.C10[argmask_cov, :][:, argmask_cov]
 
-            if calc_pi or add_1:
+            if calc_pi:
                 cov.pi_0 = cov.pi_0[argmask_cov]
                 cov.pi_1 = cov.pi_1[argmask_cov]
 
             argmask = argmask[argmask_cov]
-
-        # if add_1:
-        if add_1:
-            print("adding 1 to T_tilde")
-
-            C10 = jnp.block(
-                [
-                    [cov.C10, jnp.zeros((cov.C10.shape[1], 1)) if calc_pi else cov.pi_1.reshape((-1, 1))],
-                    [jnp.zeros((1, cov.C10.shape[0])) if calc_pi else cov.pi_0.reshape((1, -1)), jnp.array([1])],
-                ]
-            )
-
-            C00 = jnp.block(
-                [
-                    [cov.C00, jnp.zeros((cov.C00.shape[1], 1)) if calc_pi else cov.pi_0.reshape((-1, 1))],
-                    [jnp.zeros((1, cov.C00.shape[0])) if calc_pi else cov.pi_0.reshape((1, -1)), jnp.array([1])],
-                ]
-            )
-
-            C01 = jnp.block(
-                [
-                    [cov.C01, cov.pi_0.reshape((-1, 1)) if not calc_pi else jnp.zeros((cov.C01.shape[1], 1))],
-                    [
-                        cov.pi_1.reshape((1, -1)) if not calc_pi else jnp.zeros((1, cov.C01.shape[0])),
-                        jnp.array([1]),
-                    ],
-                ]
-            )
-
-            C11 = jnp.block(
-                [
-                    [cov.C11, cov.pi_1.reshape((-1, 1)) if not calc_pi else jnp.zeros((cov.C11.shape[1], 1))],
-                    [
-                        cov.pi_1.reshape((1, -1)) if not calc_pi else jnp.zeros((1, cov.C11.shape[0])),
-                        jnp.array([1]),
-                    ],
-                ]
-            )
-
-            cov.C10 = C10
-            cov.C00 = C00
-
-            cov.C01 = C01
-            cov.C11 = C11
-
-            if not calc_pi:
-                cov.pi_0 = None
-                cov.pi_1 = None
 
         if verbose:
             print("diagonalizing C00")
@@ -5663,19 +5626,19 @@ class KoopmanModel:
     def tot_trans(self):
         tr = self.trans
 
-        if self.add_1:
-            if tr is not None:
-                tr *= CvTrans.from_cv_function(KoopmanModel._add_1)
+        # if self.add_1:
+        #     if tr is not None:
+        #         tr *= CvTrans.from_cv_function(KoopmanModel._add_1)
 
-            else:
-                tr = CvTrans.from_cv_function(KoopmanModel._add_1)
+        #     else:
+        #         tr = CvTrans.from_cv_function(KoopmanModel._add_1)
 
         return tr
 
     def f(
         self,
         out_dim=None,
-        remove_constant=True,
+        remove_constant=False,
         constant_threshold=1e-6,
         skip_first=None,
     ):
@@ -5691,10 +5654,6 @@ class KoopmanModel:
             print(f"skipping first mode")
 
         if remove_constant:
-            # o = o[:, 1:]
-
-            # if self.add_1:
-
             nc = jnp.abs(1 - s) < constant_threshold
 
             if jnp.sum(nc) > 0:
@@ -5708,7 +5667,7 @@ class KoopmanModel:
             DataLoaderOutput._transform,
             static_argnames=["add_1", "add_1_pre"],
             add_1=False,
-            add_1_pre=self.add_1,
+            add_1_pre=False,
             q=o,
             pi=self.cov.pi_0,
             argmask=self.argmask,
@@ -5722,7 +5681,7 @@ class KoopmanModel:
     def g(
         self,
         out_dim=None,
-        remove_constant=True,
+        remove_constant=False,
         constant_threshold=1e-6,
         skip_first=None,
     ):
@@ -5753,7 +5712,7 @@ class KoopmanModel:
             DataLoaderOutput._transform,
             static_argnames=["add_1", "add_1_pre"],
             add_1=False,
-            add_1_pre=self.add_1,
+            add_1_pre=False,
             q=o,
             pi=self.cov.pi_1,
             argmask=self.argmask,
@@ -5772,6 +5731,7 @@ class KoopmanModel:
         retarget=True,
         epsilon=1e-5,
         max_entropy=True,
+        out_dim=None,
     ) -> tuple[list[jax.Array], bool]:
         # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
         # create T_k in the trans basis
@@ -5785,7 +5745,8 @@ class KoopmanModel:
 
         # out_dim = min(max(int(jnp.sum(jnp.abs(1 - self.s) < epsilon)), 5), self.s.shape[0])
 
-        out_dim = int(jnp.sum(jnp.abs(1 - self.s) < epsilon))
+        if out_dim is None:
+            out_dim = int(jnp.sum(jnp.abs(1 - self.s) < epsilon))
         if out_dim == 0:
             # print("no eigenvalues found close to 1")
             # return self.w, None, False
@@ -5811,51 +5772,17 @@ class KoopmanModel:
 
         print(f"{l[out_idx]=} {out_idx=}")
 
-        mask = jnp.abs(l[out_idx] - 1) < epsilon
-
-        # if jnp.sum(mask) == 0:
-        #     print(f"no eigenvalues found close to 1 {l=}")
-        #     return self.w, None, False
-
-        # if jnp.sum(mask) <1:
-        #     print(f"multiple eigenvalues found close to 1 {l[mask]=}")
-        #     return self.w, None, False
-
-        idx = jnp.argmin(jnp.abs(l[out_idx] - 1)).reshape((1,))
-        print(f"{idx=} {out_idx[idx]=}")
-        l, v = l[out_idx[idx]], v[:, out_idx[idx]]
-
-        v /= jnp.sign(jnp.sum(v))
-
-        # we should be left with one of the options
-        idx_v = jnp.argmin(jnp.abs(1 - v))
-
-        # mode = out_idx[idx][idx_v]
-
-        print(f"selecting mode {idx_v=} {v=}")
-
-        if jnp.sum(jnp.abs(1 - v[idx_v]) < epsilon) == 1:
-            print(f"found unique eigenmode {l=} {v=}, cleaning close to zero elements")
-
-            v = jnp.round(v)
-
-            print(f"{v=}")
+        l, v = l[out_idx], v[:, out_idx]
 
         l, v = jnp.real(l), jnp.real(v)
 
-        # pi = v
-        # n_pi = jnp.abs(jnp.sum(pi))
-        # pi /= jnp.abs(jnp.sum(pi))
-
-        # v = v[[idx_v],:]
-
         f_trans_2 = CvTrans.from_cv_function(
             DataLoaderOutput._transform,
-            q=self.W0[out_idx[idx], :].T,
+            q=self.W0[out_idx, :].T,
             l=None,
             pi=self.cov.pi_0 if self.calc_pi else None,
             argmask=self.argmask,
-            add_1_pre=self.add_1,
+            add_1_pre=False,
             static_argnames=["add_1_pre"],
         )
 
@@ -5899,11 +5826,18 @@ class KoopmanModel:
 
         print(f"{jnp.mean(w_pos)=} {jnp.std(w_pos)=}")
 
-        mode = jnp.argmin(f_neg)
+        x = jnp.logical_and(wf_neg == 0, f_neg == 0)
 
-        w_corr = w_pos[mode, :]
+        nm = jnp.sum(x)
 
-        print(f"{f_neg=} {wf_neg=} {mode=} ")
+        if nm == 0:
+            print(f"didn't find modes with positive weights, aborting {f_neg=} {w_pos}")
+            return self.w, None, False
+
+        if nm > 1:
+            print(f"found multiple modes with positive weights, merging {f_neg=} {w_pos}")
+
+        w_corr = jnp.sum(w_pos[x, :], axis=0)
 
         w_new = w_orig * w_corr
         w_new /= jnp.sum(w_new)
@@ -5918,12 +5852,14 @@ class KoopmanModel:
         chunk_size=None,
         macro_chunk=1000,
         verbose=False,
+        out_dim=None,
         **kwargs,
     ) -> KoopmanModel:
         new_w, new_w_corr, b = self.koopman_weight(
             verbose=verbose,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
+            out_dim=out_dim,
         )
 
         if not b:

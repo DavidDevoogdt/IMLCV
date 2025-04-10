@@ -1137,6 +1137,23 @@ def _un_atomize(
 un_atomize = CvTrans.from_cv_function(_un_atomize)
 
 
+def _append_trans(
+    x: CV,
+    nl,
+    _,
+    shmap,
+    shmap_kwargs,
+    v: Array,
+):
+    # print(f"x {x.cv.shape=}")
+
+    return x.replace(cv=jnp.hstack([jnp.reshape(x.cv, (-1,)), v]))
+
+
+def append_trans(v: Array):
+    return CvTrans.from_cv_function(_append_trans, v=v)
+
+
 def _stack_reduce(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, op):
     cvs = cv.split(cv.stack_dims)
 

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-from molmod.constants import boltzmann
-from molmod.units import kjmol
+from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.base.UnitsConstants import kjmol
 
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CvTrans, SystemParams

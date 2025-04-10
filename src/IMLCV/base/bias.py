@@ -13,8 +13,8 @@ import jsonpickle
 from flax.struct import dataclass, field
 from jax import Array, value_and_grad, vmap
 from jax.tree_util import Partial
-from molmod.constants import boltzmann
-from molmod.units import kelvin, kjmol
+from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.base.UnitsConstants import kelvin, kjmol
 from typing_extensions import Self
 
 from IMLCV import unpickler

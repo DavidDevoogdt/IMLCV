@@ -3,7 +3,8 @@ import os
 from pathlib import Path
 
 from parsl import HighThroughputExecutor, WorkQueueExecutor
-from parsl.channels import LocalChannel
+
+# from parsl.channels import LocalChannel
 from parsl.executors.base import ParslExecutor
 from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig
 from parsl.executors.threads import ThreadPoolExecutor
@@ -23,7 +24,7 @@ def get_slurm_provider(
     cpu_cluster,
     gpu_cluster=None,
     account=None,
-    channel=LocalChannel(),
+    # channel=LocalChannel(),
     gpu=False,
     parsl_tasks_per_block=None,
     threads_per_core: int | None = None,
@@ -52,7 +53,7 @@ def get_slurm_provider(
 export MAMBA_EXE=/dodrio/scratch/projects/2024_026/IMLCV/bin/micromamba
 export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/2024_026/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312_2
+micromamba activate py312
 which python
             """
         elif env == "stevin":
@@ -60,7 +61,7 @@ which python
 export MAMBA_EXE=/dodrio/scratch/projects/IMLCV/bin/micromamba
 export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/IMLCV/micromamba
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312_2
+micromamba activate py312
 which python
 """
 
@@ -105,7 +106,7 @@ which python
     worker_init += f"mpirun -report-bindings -np {total_cores} echo 'a' " if load_cp2k else ""
 
     common_kwargs = {
-        "channel": channel,
+        # "channel": channel,
         "init_blocks": init_blocks,
         "min_blocks": min_blocks,
         "max_blocks": max_blocks,
@@ -236,6 +237,7 @@ def config(
     default_threads=4,
     training_on_threads=False,
     training_cores=12,
+    load_cp2k=False,
 ):
     def get_kwargs(cpu_cluster=None, gpu_cluster=None):
         if env == "hortense":
@@ -422,7 +424,7 @@ def config(
                     threads_per_core=singlepoint_nodes,
                     parsl_cores=False,
                     wall_time=walltime,
-                    load_cp2k=True,
+                    load_cp2k=load_cp2k,
                     **kw,
                 )
 
