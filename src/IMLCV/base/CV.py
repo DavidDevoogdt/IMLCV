@@ -523,7 +523,7 @@ def macro_chunk_map(
             chunk_func = jit(chunk_func)
 
     def single_chunk():
-        print("performing single chunk")
+        # print("performing single chunk")
 
         stack_dims = tuple([yi.shape[0] for yi in y])
 
@@ -722,7 +722,7 @@ def macro_chunk_map(
                     dte = dt0 + (dt - dt0) / (n_iter) * (n_chunks + (rem != 0))
 
                     print(
-                        f"\ntime: {dt:%H:%M:%S}.{dt.microsecond // 1000:03d}, estimated end time {dte:%H:%M:%S}.{dte.microsecond // 1000:03d}:, {n_iter:>3}/{n_chunks+ (rem != 0)}:",
+                        f"\ntime: {dt:%H:%M:%S}.{dt.microsecond // 1000:03d}, estimated end time {dte:%H:%M:%S}.{dte.microsecond // 1000:03d}:, {n_iter:>3}/{n_chunks + (rem != 0)}:",
                         end="",
                         flush=True,
                     )
@@ -3155,7 +3155,7 @@ class CvMetric:
         weights: list[Array] | None = None,
         margin=None,
         chunk_size=None,
-        n=40,
+        n=400,
         macro_chunk=5000,
         verbose=True,
     ):
@@ -3240,17 +3240,25 @@ class CvMetric:
             else:
                 n_min = jnp.min(v0)
 
+                # lower end
+                if n_min > 0:
+                    n_min -= 1
+
             v0 = jnp.argwhere(cummul < 1 - percentile / 100)
 
             if len(v0) == 0:
-                n_max = n - 2
+                n_max = n
             else:
                 n_max = jnp.max(v0)
 
-            bounds = bounds.at[dim, 0].set(bins[0][n_min])  # lower end
-            bounds = bounds.at[dim, 1].set(bins[0][n_max + 2])  # higher end
+                # higher end
+                if n_max < n - 1:
+                    n_max += 1
 
-            # update bounds with margin
+            bounds = bounds.at[dim, 0].set(bins[0][n_min])
+            bounds = bounds.at[dim, 1].set(bins[0][n_max])
+
+        # update bounds with margin
 
         bounds_margin = (bounds[:, 1] - bounds[:, 0]) * margin
         # bounds_margin = jnp.where(   self.periodicities, )
@@ -3967,9 +3975,9 @@ class _CvTrans:
         )
 
     def __mul__(self, other):
-        assert isinstance(
-            other, self._cv_trans
-        ), f"can only multiply by {self._cv_trans} object, instead got {type(other)}"
+        assert isinstance(other, self._cv_trans), (
+            f"can only multiply by {self._cv_trans} object, instead got {type(other)}"
+        )
         return self._cv_trans(
             trans=(
                 *self.trans,

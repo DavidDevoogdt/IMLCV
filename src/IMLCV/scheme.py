@@ -183,8 +183,9 @@ class Scheme:
         lag_n=30,
         koopman_wham=None,
         out=-1,
-        direct_bias=True,
+        direct_bias=False,
         init=False,
+        first_round_without_bias=False,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -228,7 +229,11 @@ class Scheme:
         for i in range(i_0, rnds):
             print(f"running round {i=} with {steps} steps")
 
-            if i == 1:
+            without_bias = first_round_without_bias and i == 1
+
+            # print(f"{without_bias=} {i=} {first_round_without_bias=}")
+
+            if without_bias:
                 print(f"running first round wihtout biases")
 
             self.grid_umbrella(
@@ -239,7 +244,7 @@ class Scheme:
                 scale_n=scale_n,
                 cv_round=cv_round,
                 ignore_invalid=False,
-                eps=eps_umbrella if i > 1 else 1,
+                eps=eps_umbrella if not without_bias else 1,
                 min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
                 recalc_cv=recalc_cv,
                 only_finished=i > 1 and only_finished,

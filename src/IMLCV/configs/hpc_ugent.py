@@ -129,13 +129,13 @@ which python
             "partition": cpu_part if not gpu else gpu_part,
             "account": account,
             "exclusive": False,
-            "cores_per_node": total_cores,
+            # "cores_per_node": 1,#total_cores,
             "mem_per_node": mem,
             "walltime": wall_time,
             "cmd_timeout": 60,
         }
 
-        sheduler_options = ""
+        sheduler_options = f"\n#SBATCH --ntasks-per-node={threads_per_core}"
 
         if gpu:
             sheduler_options += (
@@ -151,7 +151,8 @@ which python
         )
 
     # let slurm use the cores as threads
-    pre_command = f"srun  -N 1 -n 1 -c {threads_per_core} --cpu-bind=no --export=ALL"
+    # pre_command = f"srun  -N 1 -n 1 -c {threads_per_core} --cpu-bind=no --export=ALL"
+    pre_command = f"export JAX_NUM_CPU_DEVICES={threads_per_core}; "
 
     ref_comm = {
         "cp2k": "export OMP_NUM_THREADS=1; mpirun -report-bindings  -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi cp2k_shell.psmp ",
@@ -194,6 +195,7 @@ which python
             worker_options=" ".join(worker_options),
             coprocess=False,
             worker_executable="work_queue_worker",
+            # scaling_cores_per_worker=threads_per_core,
         )
 
     elif executor == "task_vine":
@@ -211,7 +213,7 @@ which python
         executor: ParslExecutor = HighThroughputExecutor(
             label=label,
             working_dir=str(Path(path_internal) / label),
-            cores_per_worker=threads_per_core,
+            cores_per_worker=1,
             provider=provider,
             drain_period=int(wall_time_s),
         )
@@ -327,6 +329,13 @@ def config(
         training_pre_commands = []
         reference_pre_commands = []
         threadpool_pre_commands = []
+
+        resources = {
+            "default": {"cores": default_threads},
+            "training": {"cores": training_cores},
+            "reference": {"cores": singlepoint_nodes},
+            "threadpool": {"cores": default_threads},
+        }
 
         reference_command = None
 
@@ -484,4 +493,5 @@ def config(
         [default_labels, training_labels, reference_labels, threadpool_labels],
         pre_commands_filtered,
         reference_command,
+        resources,
     )

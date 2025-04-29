@@ -98,7 +98,7 @@ class Transformer:
         percentile=5.0,
         jac=jax.jacrev,
         transform_FES=True,
-        max_fes_bias=100 * kjmol,
+        max_fes_bias=None,
         n_max=1e5,
         samples_per_bin=20,
         min_samples_per_bin=3,
@@ -115,11 +115,13 @@ class Transformer:
         w = dlo._weights
         rho = dlo._rho
 
+        print(f"computing bias")
+
         from IMLCV.base.rounds import DataLoaderOutput
 
         bias: Bias = dlo.get_fes_bias_from_weights(
-            samples_per_bin=samples_per_bin,
-            min_samples_per_bin=min_samples_per_bin,
+            samples_per_bin=5,
+            min_samples_per_bin=1,
             n_max=n_max,
             max_bias=max_fes_bias,
             macro_chunk=macro_chunk,
@@ -127,18 +129,6 @@ class Transformer:
         )
 
         if plot:
-            Transformer.plot_app(
-                name=str(plot_folder / "cvdiscovery_pre_bias.png"),
-                collective_variables=[dlo.collective_variable],
-                cv_data=None,
-                biases=[dlo.ground_bias],
-                margin=0.1,
-                T=dlo.sti.T,
-                plot_FES=True,
-                cv_titles=cv_titles,
-                vmax=max_fes_bias,
-            )
-
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery_pre_data_bias.png"),
                 collective_variables=[dlo.collective_variable],
@@ -167,9 +157,9 @@ class Transformer:
         (w,) = dlo.koopman_weight(
             verbose=verbose,
             max_bins=n_max,
-            samples_per_bin=samples_per_bin,
+            samples_per_bin=10,
             chunk_size=chunk_size,
-            correlation=False,
+            # correlation=False,
             koopman_eps=0,
             koopman_eps_pre=0,
             add_1=True,
@@ -177,8 +167,8 @@ class Transformer:
 
         bias_km: Bias = dlo.get_fes_bias_from_weights(
             weights=w,
-            samples_per_bin=samples_per_bin,
-            min_samples_per_bin=min_samples_per_bin,
+            samples_per_bin=5,
+            min_samples_per_bin=1,
             n_max=n_max,
             max_bias=max_fes_bias,
             macro_chunk=macro_chunk,
@@ -280,8 +270,8 @@ class Transformer:
                 rho=rho,
                 collective_variable=new_collective_variable,
                 cv=x,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
+                samples_per_bin=5,
+                min_samples_per_bin=1,
                 n_max=n_max,
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
@@ -824,7 +814,10 @@ class Transformer:
             if data is not None:
                 in_xlim = jnp.logical_and(data[:, 0] > x_lim[0], data[:, 0] < x_lim[1])
                 n_points = jnp.sum(in_xlim)
-                n_bins = n_points // 50
+
+                n_bins = int(4 * jnp.round(n_points ** (1 / 3)))
+
+                # print(f"{n_points=} {n_bins=} ")
 
                 x_bins = jnp.linspace(x_lim[0], x_lim[1], n_bins + 1)
 
@@ -993,7 +986,11 @@ class Transformer:
                 in_xlim = jnp.logical_and(data[:, 0] > x_lim[0], data[:, 0] < x_lim[1])
                 in_ylim = jnp.logical_and(data[:, 1] > y_lim[0], data[:, 1] < y_lim[1])
                 n_points = jnp.sum(jnp.logical_and(in_xlim, in_ylim))
-                n_bins = n_points // 50
+
+                n_bins = int(4 * jnp.round(n_points ** (1 / 3)))
+
+                # print(f"{n_points=} {n_bins=} ")
+                # n_bins = n_points // 50
 
                 x_bins = jnp.linspace(x_lim[0], x_lim[1], n_bins + 1)
                 y_bins = jnp.linspace(y_lim[0], y_lim[1], n_bins + 1)

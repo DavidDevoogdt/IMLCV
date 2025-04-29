@@ -306,7 +306,7 @@ class AseEngine(MDEngine):
     """MD engine with ASE as backend."""
 
     _verlet_initialized: bool = False
-    _verlet: yaff.sampling.VerletIntegrator | None = None
+    _verlet: ase.md.md.MolecularDynamics | None = None
 
     @staticmethod
     def create(

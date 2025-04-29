@@ -490,6 +490,8 @@ class TransformerMAF(Transformer):
         macro_chunk=1000,
         chunk_size=None,
         trans=None,
+        eps=1e-10,
+        eps_pre=1e-5,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         print("getting koopman")
@@ -570,6 +572,55 @@ class TransformerMAF(Transformer):
 
         print(f"calculating real koopman model")
 
+        # km = dlo.koopman_model(
+        #     cv_0=x,
+        #     cv_tau=x_t,
+        #     nl=dlo.nl,
+        #     nl_t=dlo.nl_t,
+        #     method="tcca",
+        #     max_features=max_features,
+        #     max_features_pre=max_features_pre,
+        #     w=w,
+        #     calc_pi=False,
+        #     add_1=True,
+        #     trans=trans,
+        #     chunk_size=chunk_size,
+        #     macro_chunk=macro_chunk,
+        #     verbose=True,
+        #     out_dim=None,
+        #     eps=1e-12,
+        #     eps_pre=1e-7,
+        #     symmetric=False,
+        #     correlation=False,
+        # )
+
+        ############### use km to find number of regions
+
+        # f = km.f(
+        #     out_dim=out_dim,
+        #     skip_first=True,  # if there are multiple regions, there are multiple constant modes that mix up to usefull descriptors
+        # )
+
+        # cv_colvar_f, cv_colvar_t_f = dlo.apply_cv(
+        #     f,
+        #     x=x,
+        #     x_t=x_t,
+        #     macro_chunk=macro_chunk,
+        #     verbose=True,
+        # )
+
+        # _, labels = dlo.get_bincount(
+        #     cv_0=cv_colvar_f,
+        #     output_labels=True,
+        #     # samples_per_bin=1,
+        # )
+
+        # num_regions = len(jnp.unique(jnp.array(labels)))
+
+        ############
+
+        # print(f"looking for constant mode with {num_regions=}")
+
         km = dlo.koopman_model(
             cv_0=x,
             cv_tau=x_t,
@@ -586,43 +637,15 @@ class TransformerMAF(Transformer):
             macro_chunk=macro_chunk,
             verbose=True,
             out_dim=None,
-            eps=1e-10,
-            eps_pre=1e-4,
-            symmetric=False,
+            eps=eps,
+            eps_pre=eps_pre,
+            symmetric=True,
             correlation=False,
         )
 
-        ############### use km to find number of regions
-
-        f = km.f(
-            out_dim=out_dim,
-            skip_first=True,  # if there are multiple regions, there are multiple constant modes that mix up to usefull descriptors
-        )
-
-        cv_colvar_f, cv_colvar_t_f = dlo.apply_cv(
-            f,
-            x=x,
-            x_t=x_t,
-            macro_chunk=macro_chunk,
-            verbose=True,
-        )
-
-        _, labels = dlo.get_bincount(
-            cv_0=cv_colvar_f,
-            output_labels=True,
-            # samples_per_bin=1,
-        )
-
-        num_regions = len(jnp.unique(jnp.array(labels)))
-
-        ############
-
-        print(f"looking for constant mode with {num_regions=}")
-
-        km = km.weighted_model(
-            out_dim=num_regions,
-            symmetric=True,
-        )
+        # km = km.weighted_model(
+        #     symmetric=True,
+        # )
 
         ##########
 
@@ -633,7 +656,7 @@ class TransformerMAF(Transformer):
         print(f"timescales {ts[0 : min(self.outdim + 5, len(ts - 1))]} ns")
 
         for i in range(self.outdim):
-            if ts[i] / ts[0] < 1 / 50:
+            if ts[i] / ts[0] < 1 / 100:
                 (print(f"cv {i} is too small compared to ref (fraction= {ts[i] / ts[0]}), cutting off "),)
                 out_dim = i
                 break

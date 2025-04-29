@@ -221,7 +221,7 @@ class Observable:
             "num": num_rnds,
             "cv_round": self.cv_round,
             "start": start_r,
-            "split_data": False,
+            # "split_data": False,
             "new_r_cut": None,
             "min_traj_length": min_traj_length,
             "get_bias_list": True,
@@ -322,7 +322,7 @@ class Observable:
         samples_per_bin=10,
         min_samples_per_bin=5,
         resample=False,
-        direct_bias=True,
+        direct_bias=False,
     ):
         if cv_round is None:
             cv_round = rounds.cv
@@ -368,6 +368,18 @@ class Observable:
                 inverted=False,
             )
 
+            from IMLCV.base.CVDiscovery import Transformer
+
+            Transformer.plot_app(
+                collective_variables=[dlo.collective_variable],
+                cv_data=[[dlo.cv]],
+                duplicate_cv_data=False,
+                plot_FES=True,
+                T=300 * kelvin,
+                margin=0.1,
+                name="points.png",
+            )
+
         if direct_bias:
             fes_bias_wham = fes_bias_wham_p
         else:
@@ -376,8 +388,8 @@ class Observable:
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 max_bias=max_bias,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
+                samples_per_bin=20,
+                min_samples_per_bin=1,
             )
 
             if plot_selected_points:
@@ -393,14 +405,15 @@ class Observable:
         if koopman:
             weights, w_corr = dlo.koopman_weight(
                 max_bins=n_max,
-                samples_per_bin=samples_per_bin,
+                samples_per_bin=20,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 verbose=verbose,
                 output_w_corr=True,
-                koopman_eps=0,
+                koopman_eps=1e-10,
                 koopman_eps_pre=0,
-                add_1=True,
+                correlation=True,
+                # add_1=True,
             )
 
             fes_bias_tot = dlo.get_fes_bias_from_weights(
@@ -408,8 +421,8 @@ class Observable:
                 n_max=n_max,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
+                samples_per_bin=20,
+                min_samples_per_bin=1,
             )
 
             if plot_selected_points:
@@ -427,8 +440,8 @@ class Observable:
                     n_max=n_max,
                     chunk_size=chunk_size,
                     macro_chunk=macro_chunk,
-                    samples_per_bin=samples_per_bin,
-                    min_samples_per_bin=min_samples_per_bin,
+                    samples_per_bin=20,
+                    min_samples_per_bin=1,
                 )
 
                 fes_bias_tot_corr.plot(
@@ -455,18 +468,6 @@ class Observable:
                 inverted=False,
             )
 
-            from IMLCV.base.CVDiscovery import Transformer
-
-            Transformer.plot_app(
-                collective_variables=[dlo.collective_variable],
-                cv_data=[[dlo.cv]],
-                duplicate_cv_data=False,
-                plot_FES=True,
-                T=300 * kelvin,
-                margin=0.1,
-                name="points.png",
-            )
-
         return fes_bias_tot
 
     def fes_nd_weights(
@@ -491,7 +492,7 @@ class Observable:
         samples_per_bin=5,
         min_samples_per_bin=1,
         executors=Executors.training,
-        direct_bias=True,
+        direct_bias=False,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -564,7 +565,7 @@ class Observable:
         verbose=True,
         koopman_wham=None,
         executors=Executors.training,
-        direct_bias=True,
+        direct_bias=False,
     ):
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)

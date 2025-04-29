@@ -18,6 +18,9 @@ py_env = " which python"
 
 
 PARSL_DICT = {}
+
+RESOURCES_DICT = {}
+
 REFERENCE_COMMANDS = {
     "cp2k": "mpirun cp2k_shell.psmp",
 }
@@ -84,14 +87,14 @@ def config(
         path_internal = ROOT_DIR / ".runinfo"
 
     if env == "local":
-        execs, labels, precommands, ref_comm = get_config_local(
+        execs, labels, precommands, ref_comm, resources = get_config_local(
             path_internal,
             ref_threads=local_ref_threads,
             max_threads=max_threads_local,
             work_queue=work_queue_local,
         )
     elif env == "hortense" or env == "stevin":
-        execs, labels, precommands, ref_comm = config_ugent(
+        execs, labels, precommands, ref_comm, resources = config_ugent(
             env=env,
             path_internal=path_internal,
             singlepoint_nodes=singlepoint_nodes,
@@ -124,5 +127,9 @@ def config(
     global REFERENCE_COMMANDS
 
     REFERENCE_COMMANDS.update(ref_comm)
+
+    global RESOURCES_DICT
+
+    RESOURCES_DICT.update(resources)
 
     parsl.load(config=config)

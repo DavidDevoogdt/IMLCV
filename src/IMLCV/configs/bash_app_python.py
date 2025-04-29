@@ -22,12 +22,14 @@ def bash_app_python(
     remove_stdout=True,
     remove_stderr=True,
 ):
-    from IMLCV.configs.config_general import PARSL_DICT, REFERENCE_COMMANDS, Executors
+    from IMLCV.configs.config_general import PARSL_DICT, REFERENCE_COMMANDS, Executors, RESOURCES_DICT
 
     if executors is None:
         executors = Executors.default
 
     labels, precommand = PARSL_DICT[executors.value]
+
+    resources = RESOURCES_DICT[executors.value]
 
     def decorator(func):
         def wrapper(
@@ -84,11 +86,11 @@ def bash_app_python(
 
             if not auto_log:
                 stdout = str(
-                    rename_num(execution_folder / (f"{ func.__name__}.stdout" if stdout is None else Path(stdout)), i)
+                    rename_num(execution_folder / (f"{func.__name__}.stdout" if stdout is None else Path(stdout)), i)
                 )
 
                 stderr = str(
-                    rename_num(execution_folder / (f"{ func.__name__}.stderr" if stderr is None else Path(stderr)), i)
+                    rename_num(execution_folder / (f"{func.__name__}.stderr" if stderr is None else Path(stderr)), i)
                 )
             else:
                 stdout = AUTO_LOGNAME
@@ -128,11 +130,15 @@ def bash_app_python(
                     with open(filename, "rb+") as f:
                         cloudpickle.dump((func, args, kwargs, REFERENCE_COMMANDS), f)
 
-                return f"{precommand} python  -u { os.path.realpath( __file__ ) } --folder { str(execution_folder) } --file_in { file_in  }  --file_out  { file_out  }  {'--uses_mpi' if uses_mpi else ''}   {'--profile' if profile else ''} "
+                return f"{precommand} python  -u {os.path.realpath(__file__)} --folder {str(execution_folder)} --file_in {file_in}  --file_out  {file_out}  {'--uses_mpi' if uses_mpi else ''}   {'--profile' if profile else ''} "
 
             fun.__name__ = func.__name__
 
-            future: AppFuture = bash_app(function=fun, executors=labels)(
+            future: AppFuture = bash_app(
+                function=fun,
+                executors=labels,
+                # parsl_resource_specification=resources,
+            )(
                 inputs=[*inp, File(str(file_in)), File(str(execution_folder))],
                 outputs=[*outp, File(str(file_out))],
                 stdout=stdout,
@@ -242,12 +248,12 @@ if __name__ == "__main__":
 
     import os
 
-    os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={len(os.sched_getaffinity(0))}"
+    # os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={len(os.sched_getaffinity(0))}"
     import jax
 
     jax.config.update("jax_platform_name", "cpu")
     jax.config.update("jax_enable_x64", True)
-    jax.config.update("jax_pmap_no_rank_reduction", False)
+    # jax.config.update("jax_pmap_no_rank_reduction", False)
 
     import IMLCV  # noqa: F401
 
