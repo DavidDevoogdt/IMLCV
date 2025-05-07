@@ -5,15 +5,16 @@ import ase.units
 import jax.numpy as jnp
 import numpy as np
 
-from IMLCV.base.bias import Bias, NoneBias
+from IMLCV.base.bias import Bias, BiasF, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
-from IMLCV.implementations.CV import NoneCV, Volume, dihedral
+from IMLCV.implementations.CV import NoneCV, Volume, dihedral, position_index
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
 from IMLCV.implementations.MdEngine import AseEngine, YaffEngine
+
 
 DATA_ROOT = ROOT_DIR / "data"
 
@@ -453,3 +454,64 @@ def CsPbI3_refs(x, y, z, input_atoms=None):
             refs += sp_a
 
     return refs, z_arr, atoms
+
+
+def toy_1d():
+    T = 300 * kelvin
+
+    #1 hydrogen
+
+    tic = StaticMdInfo(
+        T=T,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        write_step=100,
+        atomic_numbers=jnp.array(
+            [1,],
+            dtype=int,
+        ),
+        screen_log=100,
+        equilibration=0 * femtosecond,
+        r_cut=None,
+    )
+
+
+    sp0 =  SystemParams( coordinates = jnp.array( [[0.1,0,0]]  ), cell=None  )
+    sp1 = SystemParams( coordinates = jnp.array( [[0.6,0,0]]  ), cell=None  )
+    
+    cv0 = CollectiveVariable(
+        f=position_index( indices=jnp.array([[0,0]]) , sp=sp0 ),
+        metric=CvMetric.create(
+            periodicities=[False,],
+            bounding_box=[[0, 1],],
+        ),
+    )
+
+
+    bias_cv0 = NoneBias.create(collective_variable=cv0)
+    
+
+
+    def g(cvs,*_):
+        x = cvs.cv[0]
+
+
+        print(f"{x=}")
+
+        return -1*kjmol * jnp.log(jnp.exp(-8 * (x-0.1)**2) + jnp.exp(-(6 * (x - 0.6) ** 2) + 0.2))
+
+
+    energy = BiasF( collective_variable=cv0,g=g  )
+ 
+    # 1D
+
+
+
+    mde = AseEngine.create(
+        energy=energy,
+        static_trajectory_info=tic,
+        bias=bias_cv0,
+        sp=sp0,
+    )
+
+    return mde,[sp0,sp1]

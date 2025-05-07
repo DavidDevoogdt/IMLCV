@@ -16,6 +16,8 @@ from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
 
+# from IMLCV.base.MdEngine import StaticMdInfo
+
 if TYPE_CHECKING:
     import yaff
     import yaff.analysis.biased_sampling
@@ -46,9 +48,9 @@ class YaffEngine(MDEngine):
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
+        sp: SystemParams ,
         trajectory_info: TrajectoryInfo | None = None,
         trajectory_file=None,
-        sp: SystemParams | None = None,
         additional_parts=[],
         **kwargs,
     ) -> YaffEngine:
@@ -68,12 +70,11 @@ class YaffEngine(MDEngine):
 
         if not cont:
             create_kwargs["step"] = 1
-            if sp is not None:
-                energy.sp = sp
+
 
         else:
             create_kwargs["step"] = trajectory_info._size
-            energy.sp = trajectory_info.sp[-1]
+            sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
                 create_kwargs["time0"] = time()
 
@@ -82,6 +83,7 @@ class YaffEngine(MDEngine):
         return YaffEngine(
             bias=bias,
             energy=energy,
+            sp=sp,
             static_trajectory_info=static_trajectory_info,
             trajectory_info=trajectory_info,
             trajectory_file=trajectory_file,
@@ -313,9 +315,10 @@ class AseEngine(MDEngine):
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
+        sp: SystemParams | None = None,
         trajectory_info: TrajectoryInfo | None = None,
         trajectory_file=None,
-        sp: SystemParams | None = None,
+        
         **kwargs,
     ) -> AseEngine:
         cont = False
@@ -332,12 +335,12 @@ class AseEngine(MDEngine):
 
         if not cont:
             kwargs["step"] = 1
-            if sp is not None:
-                energy.sp = sp
+            # if sp is not None:
+                # energy.sp = sp
 
         else:
             kwargs["step"] = trajectory_info._size
-            energy.sp = trajectory_info.sp[-1]
+            sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
                 kwargs["time0"] = time()
 
@@ -347,6 +350,7 @@ class AseEngine(MDEngine):
             static_trajectory_info=static_trajectory_info,
             trajectory_info=trajectory_info,
             trajectory_file=trajectory_file,
+            sp=sp,
             **kwargs,
         )
 
@@ -378,14 +382,14 @@ class AseEngine(MDEngine):
                 pfactor=(self.static_trajectory_info.timecon_baro / femtosecond * ase.units.fs) ** 2 * 0.6,
                 ttime=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
                 externalstress=self.static_trajectory_info.P / bar * ase.units.bar,
-                temperature_K=self.static_trajectory_info.T * kelvin / ase.units.kelvin,
+                temperature_K=self.static_trajectory_info.T * kelvin , # ase kelvin =1
             )
 
         else:
             dyn = NoseHooverChainNVT(
                 atoms=self.atoms,
                 timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
-                temperature_K=self.static_trajectory_info.T * kelvin / ase.units.kelvin,
+                temperature_K=self.static_trajectory_info.T * kelvin , # ase kelvin=1
                 tdamp=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
             )
 
@@ -411,6 +415,8 @@ class AseEngine(MDEngine):
                     gpos=gpos,
                     vtens=vtens,
                 )
+
+                print(f"{energy=} {bias=} {cv=}")
 
                 res = energy + bias
 
@@ -474,3 +480,5 @@ class AseEngine(MDEngine):
             self._setup_verlet()
 
         self._verlet.run(int(steps))
+
+

@@ -83,6 +83,17 @@ def distance_descriptor():
     return CvFlow.from_function(_distance)
 
 
+def _position_index(sp:SystemParams,_nl,_c,shmap, shmap_kwargs, idx):
+
+   
+
+    return CV(cv=sp.coordinates.reshape(-1)[idx])
+
+def position_index(indices,sp):
+    idx = jnp.ravel_multi_index(indices.T, sp.coordinates.shape)
+
+    return CvFlow.from_function( _position_index, idx=idx)
+
 def _dihedral(sp: SystemParams, _nl, _c, shmap, shmap_kwargs, numbers):
     coor = sp.coordinates
     p0 = coor[numbers[0]]

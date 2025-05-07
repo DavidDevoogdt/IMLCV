@@ -122,17 +122,18 @@ class Energy:
 
     def compute_from_system_params(
         self,
+        sp: SystemParams,
         gpos=False,
         vir=False,
-        sp: SystemParams | None = None,
         nl: NeighbourList | None = None,
         shmap=False,
         shmap_kwarg=ShmapKwargs.create(),
     ) -> EnergyResult:
-        if sp is not None:
-            self.sp = sp
+       
+        self.sp = sp
 
-        # try:
+        print(f"computing energy")
+
         return self._compute_coor(gpos=gpos, vir=vir)
 
     def save(self, filename: str | Path):
@@ -234,6 +235,7 @@ class Bias(ABC):
             "push_jac",
             "rel",
             "shmap_kwargs",
+            "return_cv"
         ],
     )
     def compute_from_system_params(
@@ -248,6 +250,7 @@ class Bias(ABC):
         push_jac=False,
         rel=False,
         shmap_kwargs=ShmapKwargs.create(),
+        return_cv=False,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -355,7 +358,10 @@ class Bias(ABC):
                     "ni,j,jnl->il", sp.coordinates, de.cv, jac.coordinates
                 )
 
-        return cvs, EnergyResult(ener, e_gpos, e_vir)
+        if return_cv:
+            return cvs, EnergyResult(ener, e_gpos, e_vir)
+        
+        return EnergyResult(ener, e_gpos, e_vir)
 
     @partial(jax.jit, static_argnames=["diff", "chunk_size", "shmap", "shmap_kwargs"])
     def compute_from_cv(

@@ -564,10 +564,13 @@ class MDEngine(ABC):
 
     bias: Bias
     energy: Energy
+    sp:SystemParams
     static_trajectory_info: StaticMdInfo
     trajectory_info: TrajectoryInfo | None = None
     trajectory_file: Path | None = None
     time0: float = field(default_factory=time)
+    
+
 
     step: int = 1
 
@@ -618,13 +621,13 @@ class MDEngine(ABC):
             **kwargs,
         )
 
-    @property
-    def sp(self) -> SystemParams:
-        return self.energy.sp
+    # @property
+    # def sp(self) -> SystemParams:
+    #     return self.energy.sp
 
-    @sp.setter
-    def sp(self, sp: SystemParams):
-        self.energy.sp = sp
+    # @sp.setter
+    # def sp(self, sp: SystemParams):
+    #     self.energy.sp = sp
 
     @property
     def nl(self) -> NeighbourList | None:
@@ -850,6 +853,7 @@ class MDEngine(ABC):
             push_jac=push_jac,
             rel=rel,
             shmap_kwargs=shmap_kwargs,
+            return_cv=True,
         )
 
         return cv, ener
