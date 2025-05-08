@@ -282,7 +282,7 @@ class Cp2kEnergy(AseEnergy):
         file = "\n".join(lines[-out:])
 
         raise EnergyError(
-            f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is { file}",
+            f"The cp2k calculator failed to provide an energy. The end of the output from cp2k.out is {file}",
         )
 
     def __getstate__(self):
@@ -302,7 +302,7 @@ class Cp2kEnergy(AseEnergy):
         if (p := Path(cp2k_inp)).is_absolute():
             n = p.parts.index("src")
             cp2k_inp = Path(*p.parts[n + 2 :])
-            assert (ROOT_DIR / cp2k_inp).exists(), f"cannot find {ROOT_DIR/cp2k_inp}"
+            assert (ROOT_DIR / cp2k_inp).exists(), f"cannot find {ROOT_DIR / cp2k_inp}"
 
             print(f"setting {cp2k_inp}  instead of absoulte path {p}")
 

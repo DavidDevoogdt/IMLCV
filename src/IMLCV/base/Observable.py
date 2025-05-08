@@ -559,7 +559,7 @@ class Observable:
         lag_n=30,
         out=int(1e5),
         T_scale=10,
-        vmax=None,
+        vmax=100 * kjmol,
         koopman=True,
         # divide_by_histogram=True,
         verbose=True,

@@ -2,13 +2,14 @@ from typing import Callable
 
 import ase.io
 import ase.units
+import jax
 import jax.numpy as jnp
 import numpy as np
 
-from IMLCV.base.bias import Bias, BiasF, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams
+from IMLCV.base.bias import Bias, BiasF, NoneBias, Energy, EnergyFn
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams, CvFlow
 from IMLCV.base.MdEngine import StaticMdInfo
-from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
+from IMLCV.base.UnitsConstants import angstrom, electronvolt, atm, bar, femtosecond, kelvin, kjmol, boltzmann
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import NoneCV, Volume, dihedral, position_index
@@ -456,56 +457,84 @@ def CsPbI3_refs(x, y, z, input_atoms=None):
     return refs, z_arr, atoms
 
 
-def toy_1d():
-    T = 300 * kelvin
+def _ener_3d_muller_brown(cvs, *_):
+    x, y = cvs.cv
 
-    #1 hydrogen
+    A_i = jnp.array([-200, -100, -170, 15])
+    a = jnp.array([-1, -1, -6.5, 0.7])
+    b = jnp.array([0, 0, 11, 0.6])
+    c = jnp.array([-10, -10, -6.5, 0.7])
+    _x = jnp.array([1, 0, -0.5, -1])
+    _y = jnp.array([0, 0.5, 1.5, 1])
+
+    def V_2d(x, y):
+        return jnp.sum(A_i * jnp.exp((a * (x - _x) ** 2 + b * (x - _x) * (y - _y) + c * (y - _y) ** 2)))
+
+    ener = V_2d(x, y)
+
+    return ener.reshape(()) * kjmol
+
+
+def _3d_muller_brown_cvs(sp: SystemParams, _nl, _c, shmap, shmap_kwargs):
+    # x1, x2, x3 = sp.coordinates[0, :]
+    # x4, x5 = sp.coordinates[1, :2]
+
+    # x = jnp.sqrt(x1**2 + x2**2 + 1e-7 * x5**2)
+    # y = jnp.sqrt(x3**2 + x4**2)
+
+    x = sp.coordinates[0, 0]
+    y = sp.coordinates[0, 1]
+
+    return CV(cv=jnp.array([x, y]))
+
+
+def f_3d_Muller_Brown(sp: SystemParams, _):
+    cvs = _3d_muller_brown_cvs(sp, _, _, _, _)
+
+    return _ener_3d_muller_brown(cvs)
+
+
+def toy_1d():
+    # 1 carbon
 
     tic = StaticMdInfo(
-        T=T,
+        T=300 * kelvin,
         timestep=2.0 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
         write_step=100,
-        atomic_numbers=jnp.array(
-            [1,],
-            dtype=int,
-        ),
+        atomic_numbers=jnp.array([6], dtype=int),
         screen_log=100,
         equilibration=0 * femtosecond,
         r_cut=None,
     )
 
+    sp0 = SystemParams(
+        coordinates=jnp.array([[-0.5, 1.5, 0]]),
+        cell=None,
+    )
 
-    sp0 =  SystemParams( coordinates = jnp.array( [[0.1,0,0]]  ), cell=None  )
-    sp1 = SystemParams( coordinates = jnp.array( [[0.6,0,0]]  ), cell=None  )
-    
+    sp1 = SystemParams(
+        coordinates=jnp.array([[0.6, 0.0, 0]]),
+        cell=None,
+    )
+
     cv0 = CollectiveVariable(
-        f=position_index( indices=jnp.array([[0,0]]) , sp=sp0 ),
+        f=CvFlow.from_function(_3d_muller_brown_cvs),
         metric=CvMetric.create(
-            periodicities=[False,],
-            bounding_box=[[0, 1],],
+            periodicities=[False, False],
+            bounding_box=jnp.array([[-1.5, 1.0], [-0.5, 2.0]]),
         ),
     )
 
+    fes_0 = BiasF.create(cvs=cv0, g=_ener_3d_muller_brown)
 
     bias_cv0 = NoneBias.create(collective_variable=cv0)
-    
 
+    energy = EnergyFn(
+        f=f_3d_Muller_Brown,
+    )
 
-    def g(cvs,*_):
-        x = cvs.cv[0]
-
-
-        print(f"{x=}")
-
-        return -1*kjmol * jnp.log(jnp.exp(-8 * (x-0.1)**2) + jnp.exp(-(6 * (x - 0.6) ** 2) + 0.2))
-
-
-    energy = BiasF( collective_variable=cv0,g=g  )
- 
     # 1D
-
-
 
     mde = AseEngine.create(
         energy=energy,
@@ -514,4 +543,4 @@ def toy_1d():
         sp=sp0,
     )
 
-    return mde,[sp0,sp1]
+    return mde, [sp0, sp1], fes_0

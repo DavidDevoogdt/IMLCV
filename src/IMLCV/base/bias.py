@@ -85,6 +85,14 @@ class EnergyError(Exception):
 
 class Energy:
     @property
+    def nl(self):
+        return None
+
+    @nl.setter
+    def nl(self, nl):
+        return
+
+    @property
     @abstractmethod
     def cell(self):
         pass
@@ -129,10 +137,8 @@ class Energy:
         shmap=False,
         shmap_kwarg=ShmapKwargs.create(),
     ) -> EnergyResult:
-       
         self.sp = sp
-
-        print(f"computing energy")
+        self.nl = nl
 
         return self._compute_coor(gpos=gpos, vir=vir)
 
@@ -165,6 +171,72 @@ class Energy:
                 self = cloudpickle.load(f)
 
         return self
+
+
+@partial(dataclass, frozen=False, eq=False)
+class EnergyFn(Energy):
+    f: Callable = field(pytree_node=False)
+    _sp: SystemParams | None = None
+    _nl: NeighbourList | None = None
+    kwargs: dict = field(pytree_node=True, default_factory=dict)
+    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
+
+    @property
+    def nl(self):
+        return self._nl
+
+    @nl.setter
+    def nl(self, nl):
+        self._nl = nl
+
+    @property
+    def cell(self):
+        return self._sp.cell
+
+    @cell.setter
+    def cell(self, cell):
+        self._sp.cell = cell
+
+    @property
+    def coordinates(self):
+        return self._sp.coordinates
+
+    @coordinates.setter
+    def coordinates(self, coordinates):
+        self._sp.coordinates = coordinates
+
+    @property
+    def sp(self) -> SystemParams:
+        return self._sp
+
+    @sp.setter
+    def sp(self, sp: SystemParams):
+        self._sp = sp
+
+    @partial(jax.jit, static_argnames=["gpos", "vir"])
+    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
+        def _energy(sp, nl):
+            return self.f(sp, nl, **self.static_kwargs, **self.kwargs)
+
+        e = _energy(self.sp, self.nl)
+
+        e_gpos = None
+        e_vir = None
+
+        if gpos or vir:
+            dedsp = jax.jacrev(_energy)(self.sp, self.nl)
+
+            if gpos:
+                e_gpos = dedsp.coordinates
+
+            if vir:
+                e_vir = jnp.einsum("ij,il->jl", self.sp.cell, dedsp.cell)
+
+        return EnergyResult(
+            energy=e,
+            gpos=e_gpos,
+            vtens=e_vir,
+        )
 
 
 class PlumedEnerg(Energy):
@@ -235,7 +307,7 @@ class Bias(ABC):
             "push_jac",
             "rel",
             "shmap_kwargs",
-            "return_cv"
+            "return_cv",
         ],
     )
     def compute_from_system_params(
@@ -360,7 +432,7 @@ class Bias(ABC):
 
         if return_cv:
             return cvs, EnergyResult(ener, e_gpos, e_vir)
-        
+
         return EnergyResult(ener, e_gpos, e_vir)
 
     @partial(jax.jit, static_argnames=["diff", "chunk_size", "shmap", "shmap_kwargs"])
@@ -514,7 +586,7 @@ class Bias(ABC):
 
         except Exception as e:
             print(
-                f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0  else ''} but got exception",
+                f"tried to initialize {self.__class__} with from {statedict=} {f'{removed=}' if len(removed) == 0 else ''} but got exception",
             )
             raise e
 

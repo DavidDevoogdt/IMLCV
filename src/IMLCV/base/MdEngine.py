@@ -564,16 +564,13 @@ class MDEngine(ABC):
 
     bias: Bias
     energy: Energy
-    sp:SystemParams
+    sp: SystemParams
     static_trajectory_info: StaticMdInfo
     trajectory_info: TrajectoryInfo | None = None
     trajectory_file: Path | None = None
     time0: float = field(default_factory=time)
-    
-
 
     step: int = 1
-
     last_bias: EnergyResult = EnergyResult(energy=jnp.array(0))
     last_ener: EnergyResult = EnergyResult(energy=jnp.array(0))
     last_cv: CV | None = None

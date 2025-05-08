@@ -174,7 +174,7 @@ class Scheme:
         recalc_cv=False,
         only_finished=True,
         plot_umbrella=False,
-        max_bias=None,
+        max_bias=100 * kjmol,
         n_max_fes=1e5,
         thermolib=False,
         macro_chunk=10000,

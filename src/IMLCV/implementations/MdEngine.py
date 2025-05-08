@@ -48,7 +48,7 @@ class YaffEngine(MDEngine):
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
-        sp: SystemParams ,
+        sp: SystemParams,
         trajectory_info: TrajectoryInfo | None = None,
         trajectory_file=None,
         additional_parts=[],
@@ -70,7 +70,6 @@ class YaffEngine(MDEngine):
 
         if not cont:
             create_kwargs["step"] = 1
-
 
         else:
             create_kwargs["step"] = trajectory_info._size
@@ -304,11 +303,13 @@ class YaffSys:
         return self.pos.shape[0]
 
 
+@dataclass
 class AseEngine(MDEngine):
     """MD engine with ASE as backend."""
 
     _verlet_initialized: bool = False
     _verlet: ase.md.md.MolecularDynamics | None = None
+    langevin: bool = False
 
     @staticmethod
     def create(
@@ -318,7 +319,7 @@ class AseEngine(MDEngine):
         sp: SystemParams | None = None,
         trajectory_info: TrajectoryInfo | None = None,
         trajectory_file=None,
-        
+        langevin=True,
         **kwargs,
     ) -> AseEngine:
         cont = False
@@ -336,7 +337,7 @@ class AseEngine(MDEngine):
         if not cont:
             kwargs["step"] = 1
             # if sp is not None:
-                # energy.sp = sp
+            # energy.sp = sp
 
         else:
             kwargs["step"] = trajectory_info._size
@@ -344,15 +345,20 @@ class AseEngine(MDEngine):
             if trajectory_info.t is not None:
                 kwargs["time0"] = time()
 
-        return AseEngine(
+        self = AseEngine(
             bias=bias,
             energy=energy,
             static_trajectory_info=static_trajectory_info,
             trajectory_info=trajectory_info,
             trajectory_file=trajectory_file,
             sp=sp,
+            # langevin=langevin,
             **kwargs,
         )
+
+        self.langevin = langevin
+
+        return self
 
     def update_sp(self, atoms: Atoms):
         """Update the system parameters with the current atoms object."""
@@ -366,6 +372,7 @@ class AseEngine(MDEngine):
         # everyhting stays the same, except the position as linked to the true positions
 
         from ase.calculators.calculator import Calculator
+        from ase.md.langevin import Langevin
         from ase.md.nose_hoover_chain import NoseHooverChainNVT
         from ase.md.npt import NPT
 
@@ -376,22 +383,35 @@ class AseEngine(MDEngine):
         )
 
         if self.static_trajectory_info.barostat:
+            if self.langevin:
+                print(f"langevin cannot be combined with npt")
+
             dyn = NPT(
                 atoms=self.atoms,
                 timestep=self.static_trajectory_info.timestep,
                 pfactor=(self.static_trajectory_info.timecon_baro / femtosecond * ase.units.fs) ** 2 * 0.6,
                 ttime=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
                 externalstress=self.static_trajectory_info.P / bar * ase.units.bar,
-                temperature_K=self.static_trajectory_info.T * kelvin , # ase kelvin =1
+                temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin =1
             )
 
         else:
-            dyn = NoseHooverChainNVT(
-                atoms=self.atoms,
-                timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
-                temperature_K=self.static_trajectory_info.T * kelvin , # ase kelvin=1
-                tdamp=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
-            )
+            if self.langevin:
+                dyn = Langevin(
+                    atoms=self.atoms,
+                    timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
+                    temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin=1
+                    friction=0.01 / ase.units.fs,
+                    fixcm=False,
+                )
+
+            else:
+                dyn = NoseHooverChainNVT(
+                    atoms=self.atoms,
+                    timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
+                    temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin=1
+                    tdamp=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
+                )
 
         class AseCalculator(Calculator):
             implemented_properties = ["energy", "forces", "stress"]
@@ -416,7 +436,7 @@ class AseEngine(MDEngine):
                     vtens=vtens,
                 )
 
-                print(f"{energy=} {bias=} {cv=}")
+                # print(f"{energy=} {bias=} {cv=}")
 
                 res = energy + bias
 
@@ -480,5 +500,3 @@ class AseEngine(MDEngine):
             self._setup_verlet()
 
         self._verlet.run(int(steps))
-
-
