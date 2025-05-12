@@ -14,7 +14,7 @@ from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import NoneCV, Volume, dihedral, position_index
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
-from IMLCV.implementations.MdEngine import AseEngine, YaffEngine
+from IMLCV.implementations.MdEngine import AseEngine, YaffEngine, NewYaffEngine
 
 
 DATA_ROOT = ROOT_DIR / "data"
@@ -317,7 +317,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
         P=1.0 * bar,
         timestep=2.0 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
-        timecon_baro=500.0 * femtosecond,
+        timecon_baro=100.0 * femtosecond,
         atomic_numbers=z_array,
         equilibration=0 * femtosecond,
         screen_log=1,
@@ -536,7 +536,7 @@ def toy_1d():
 
     # 1D
 
-    mde = AseEngine.create(
+    mde = NewYaffEngine.create(
         energy=energy,
         static_trajectory_info=tic,
         bias=bias_cv0,
@@ -544,3 +544,126 @@ def toy_1d():
     )
 
     return mde, [sp0, sp1], fes_0
+
+
+def _toy_periodic_cvs(sp: SystemParams, _nl, _c, shmap, shmap_kwargs):
+    x = sp.volume()
+
+    return CV(cv=jnp.array([x]))
+
+
+def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
+    # sigma = 2 ** (-1 / 6) * (1.5 * angstrom)
+
+    r0 = 1.5 * angstrom
+
+    def f(r_ij, _):
+        r2 = jnp.sum(r_ij**2)
+
+        r2_safe = jnp.where(r2 < 1e-10, 1e-10, r2)
+        r = jnp.where(r2 > 1e-10, jnp.sqrt(r2_safe), 0.0)
+
+        return -10 * kjmol * jnp.log(jnp.exp(-5 * (r - r0) ** 2) + jnp.exp(-5 * (r - 2 * r0) ** 2))
+
+    _, ener_bond = _nl0.apply_fun_neighbour(sp, f, r_cut=jnp.inf, exclude_self=True)
+
+    V = sp.volume()
+
+    E_vol = (
+        -10.0 * kjmol * jnp.log(jnp.exp(-0.001 * (V - (2 * r0) ** 3) ** 2) + jnp.exp(-0.001 * (V - (4 * r0) ** 3) ** 2))
+    )
+
+    # print(f"V: {V}, E_vol: {E_vol}")
+
+    return jnp.sum(ener_bond) + E_vol
+
+
+def toy_periodic_phase_trans():
+    tic = StaticMdInfo(
+        T=300 * kelvin,
+        P=1 * atm,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        timecon_baro=500.0 * femtosecond,
+        write_step=100,
+        atomic_numbers=jnp.array(
+            [6] * 8,
+            dtype=int,
+        ),
+        screen_log=100,
+        equilibration=0 * femtosecond,
+        r_cut=None,
+    )
+
+    # from jax import Array
+    from jax.numpy import float64
+
+    Array = jax.numpy.array
+
+    r0 = 1.5 * angstrom
+
+    sp0 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ]
+        )
+        * r0,
+        cell=jnp.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        * 2
+        * r0,
+    )
+
+    from IMLCV.base.CV import NeighbourListInfo
+
+    _nl0 = sp0.get_neighbour_list(
+        info=NeighbourListInfo.create(
+            r_cut=r0 * 1.1,
+            z_array=tic.atomic_numbers,
+        )
+    )
+
+    sp1 = SystemParams(
+        coordinates=sp0.coordinates * 2,
+        cell=sp0.cell * 2,
+    )
+
+    cv0 = CollectiveVariable(
+        f=CvFlow.from_function(_toy_periodic_cvs),
+        metric=CvMetric.create(
+            periodicities=[False],
+            bounding_box=jnp.array(
+                [
+                    [0.8 * (2 * r0) ** 3, 1.2 * (4 * r0) ** 3],
+                ]
+            ),
+        ),
+    )
+
+    bias_cv0 = NoneBias.create(collective_variable=cv0)
+
+    energy = EnergyFn(f=f_toy_periodic, kwargs={"_nl0": _nl0})
+
+    # 1D
+
+    mde = NewYaffEngine.create(
+        energy=energy,
+        static_trajectory_info=tic,
+        bias=bias_cv0,
+        sp=sp0,
+    )
+
+    return mde, [sp0, sp1]

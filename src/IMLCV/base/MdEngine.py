@@ -575,6 +575,7 @@ class MDEngine(ABC):
     last_ener: EnergyResult = EnergyResult(energy=jnp.array(0))
     last_cv: CV | None = None
     _nl: NeighbourList | None = None
+    r_skin = 1.0 * angstrom
 
     @classmethod
     def create(
@@ -635,7 +636,7 @@ class MDEngine(ABC):
             info = NeighbourListInfo.create(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,
-                r_skin=1.0 * angstrom,
+                r_skin=self.r_skin,
             )
 
             nl = self.sp.get_neighbour_list(info)  # jitted update
@@ -655,7 +656,7 @@ class MDEngine(ABC):
         nneigh = nl.nneighs()
 
         if jnp.mean(nneigh) <= 2.0:
-            raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh - 1}")
+            raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh - 1} {self.sp=}")
 
         if jnp.max(nneigh) > 100:
             raise ValueError(f"neighbour list is too large for at leat one  atom {nneigh=}")

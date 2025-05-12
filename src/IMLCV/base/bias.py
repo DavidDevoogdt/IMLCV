@@ -218,6 +218,8 @@ class EnergyFn(Energy):
         def _energy(sp, nl):
             return self.f(sp, nl, **self.static_kwargs, **self.kwargs)
 
+        # print(f"{self.sp=} {self.nl=}")
+
         e = _energy(self.sp, self.nl)
 
         e_gpos = None
@@ -230,13 +232,19 @@ class EnergyFn(Energy):
                 e_gpos = dedsp.coordinates
 
             if vir:
-                e_vir = jnp.einsum("ij,il->jl", self.sp.cell, dedsp.cell)
+                e_vir = jnp.einsum("ij,il->jl", self.sp.cell, dedsp.cell) + jnp.einsum(
+                    "ni,nl->il", self.sp.coordinates, dedsp.coordinates
+                )
 
-        return EnergyResult(
+        res = EnergyResult(
             energy=e,
             gpos=e_gpos,
             vtens=e_vir,
         )
+
+        # jax.debug.print("{}", res)
+
+        return res
 
 
 class PlumedEnerg(Energy):

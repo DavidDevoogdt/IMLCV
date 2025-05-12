@@ -329,6 +329,61 @@ class Rounds(ABC):
                 format=ext,
             )
 
+
+    def plot_round(self, c=None, r=None, name_bias=None,name_points=None,dlo_kwargs={},plot_kwargs={}):
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+
+        if name_bias is None:
+            name_bias = self.path(c=c) / f"bias_{r}.png"
+
+        if name_points is None:
+            name_points = self.path(c=c) / f"bias_data_{r}.png"
+
+
+        print(f"{c=} {r=}")
+
+        dlo = self.data_loader(
+            num=1,
+            out=-1,
+            cv_round=c,
+            stop=r,
+            new_r_cut=None,
+            weight=False,
+            **dlo_kwargs,
+            
+        )
+
+        b = self.get_bias(c=c, r=r)
+
+        Transformer.plot_app(
+            collective_variables=[ dlo.collective_variable],
+            biases = [[b]],
+            duplicate_cv_data=False,
+            T=dlo.sti.T,
+            name=name_bias,
+            plot_FES=True,
+            **plot_kwargs
+
+        )
+
+        Transformer.plot_app(
+            collective_variables=[ dlo.collective_variable],
+            biases = [[b]],
+            cv_data = [[dlo.cv]],
+            name=name_points,
+            T=dlo.sti.T,
+            plot_FES=True,
+            duplicate_cv_data=False,
+            **plot_kwargs,
+        )
+
+
+
     ######################################
     #             storage                #
     ######################################
@@ -921,7 +976,7 @@ class Rounds(ABC):
                 bincount.extend(bincount_c)
 
             if get_bias_list:
-                bias_list.extent(bias_c)
+                bias_list.extend(bias_c)
 
         ###################
         if verbose:
