@@ -555,7 +555,7 @@ def _toy_periodic_cvs(sp: SystemParams, _nl, _c, shmap, shmap_kwargs):
 def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
     # sigma = 2 ** (-1 / 6) * (1.5 * angstrom)
 
-    r0 = 1.5 * angstrom
+    r0 = 1.501 * angstrom
 
     def f(r_ij, _):
         r2 = jnp.sum(r_ij**2)
@@ -575,7 +575,7 @@ def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
 
     # print(f"V: {V}, E_vol: {E_vol}")
 
-    return jnp.sum(ener_bond) + E_vol
+    return jnp.sum(ener_bond) + E_vol + 0.1 * kjmol
 
 
 def toy_periodic_phase_trans():

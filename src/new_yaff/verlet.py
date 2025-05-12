@@ -23,18 +23,25 @@
 # --
 """Generic Verlet integrator"""
 
-import numpy as np
+# import numpy as np
 
 from IMLCV.base.UnitsConstants import boltzmann
 from new_yaff.iterative import (
     AttributeStateItem,
     CellStateItem,
     Hook,
-    Iterative,
+    # Iterative,
     PosStateItem,
     StateItem,
 )
 from new_yaff.utils import get_random_vel
+import jax.numpy as jnp
+from flax.struct import dataclass, field
+from new_yaff.ff import YaffFF
+from new_yaff.system import YaffSys
+import jax
+
+from functools import partial
 
 
 class TemperatureStateItem(StateItem):
@@ -48,41 +55,137 @@ class TemperatureStateItem(StateItem):
         yield "ndof", iterative.ndof
 
 
-class VerletIntegrator(Iterative):
-    default_state = [
-        AttributeStateItem("counter"),
-        AttributeStateItem("time"),
-        AttributeStateItem("epot"),
-        PosStateItem(),
-        AttributeStateItem("vel"),
-        AttributeStateItem("rmsd_delta"),
-        AttributeStateItem("rmsd_gpos"),
-        AttributeStateItem("ekin"),
-        TemperatureStateItem(),
-        AttributeStateItem("etot"),
-        AttributeStateItem("econs"),
-        AttributeStateItem("cons_err"),
-        AttributeStateItem("ptens"),
-        AttributeStateItem("vtens"),
-        AttributeStateItem("press"),
-        CellStateItem(),
-    ]
+@partial(dataclass, frozen=False)
+class ConsErrTracker:
+    """
+    A class that tracks the errors on the conserved quantity.
+    Given its superior numerical accuracy, the algorithm below
+    is used to calculate the running average. Its properties are discussed
+    in Donald Knuth's Art of Computer Programming, vol. 2, p. 232, 3rd edition.
+    """
 
-    log_name = "VERLET"
+    counter: int = 0
+    ekin_m: float = 0.0
+    ekin_s: float = 0.0
+    econs_m: float = 0.0
+    econs_s: float = 0.0
 
-    def __init__(
-        self,
-        ff,
-        timestep=None,
-        state=None,
-        hooks=None,
+    def update(self, ekin, econs):
+        if self.counter == 0:
+            self.ekin_m = ekin
+            self.econs_m = econs
+        else:
+            ekin_tmp = ekin - self.ekin_m
+            self.ekin_m += ekin_tmp / (self.counter + 1)
+            self.ekin_s += ekin_tmp * (ekin - self.ekin_m)
+            econs_tmp = econs - self.econs_m
+            self.econs_m += econs_tmp / (self.counter + 1)
+            self.econs_s += econs_tmp * (econs - self.econs_m)
+        self.counter += 1
+
+    def get(self):
+        if self.counter > 1:
+            # Returns the square root of the ratio of the
+            # variance in Ekin to the variance in Econs
+            return jnp.sqrt(self.econs_s / self.ekin_s)
+        return 0.0
+
+
+class VerletHook(Hook):
+    """Specialized Verlet hook.
+
+    This is mainly used for the implementation of thermostats and barostats.
+    """
+
+    def __init__(self, start=0, step=1):
+        """
+        **Optional arguments:**
+
+        start
+             The first iteration at which this hook should be called.
+
+        step
+             The hook will be called every `step` iterations.
+        """
+        self.econs_correction = 0.0
+        Hook.__init__(self, start=0, step=1)
+
+    def __call__(self, iterative):
+        pass
+
+    def init(self, iterative):
+        raise NotImplementedError
+
+    def pre(self, iterative):
+        raise NotImplementedError
+
+    def post(self, iterative):
+        raise NotImplementedError
+
+
+@partial(dataclass, frozen=False)
+class VerletIntegrator:
+    ff: YaffFF
+
+    pos: jax.Array
+    vel: jax.Array
+    masses: jax.Array
+    timestep: float
+
+    epot: float = 0.0
+    etot: float = 0.0
+    econs: float = 0.0
+    cons_err: float = 0.0
+    ptens: jax.Array = field(default_factory=lambda: jnp.zeros((3, 3)))
+    press: float = 0.0
+    rmsd_delta: float = 0.0
+    rmsd_gpos: float = 0.0
+    counter: int = 0
+    time: float = 0.0
+    gpos: jax.Array | None = None
+    delta: jax.Array | None = None
+    acc: jax.Array | None = None
+    vtens: jax.Array | None = None
+    rvecs: jax.Array | None = None
+    ndof: int = None
+    posoud: jax.Array | None = field(default=None)
+
+    hooks: list[VerletHook] = field(default_factory=list)
+
+    _cons_err_tracker: ConsErrTracker = field(default_factory=ConsErrTracker)
+
+    state_list: list[StateItem] = field(
+        default_factory=lambda: [
+            AttributeStateItem("counter"),
+            AttributeStateItem("time"),
+            AttributeStateItem("epot"),
+            PosStateItem(),
+            AttributeStateItem("vel"),
+            AttributeStateItem("rmsd_delta"),
+            AttributeStateItem("rmsd_gpos"),
+            AttributeStateItem("ekin"),
+            TemperatureStateItem(),
+            AttributeStateItem("etot"),
+            AttributeStateItem("econs"),
+            AttributeStateItem("cons_err"),
+            AttributeStateItem("ptens"),
+            AttributeStateItem("vtens"),
+            AttributeStateItem("press"),
+        ]
+    )
+
+    def create(
+        # self,
+        ff: YaffFF,
+        hooks: list[VerletHook | Hook],
+        timestep,
         vel0=None,
         temp0=300,
         scalevel0=True,
         time0=None,
         ndof=None,
         counter0=None,
-        restart_h5=None,
+        key=42,
     ):
         """
         **Arguments:**
@@ -131,77 +234,42 @@ class VerletIntegrator(Iterative):
         counter0
             The counter value associated with the initial state.
 
-        restart_h5
-            HDF5 object containing the restart information
         """
         # Assign init arguments
-        if timestep is None and restart_h5 is None:
-            raise AssertionError("No Verlet timestep is found")
-        self.ndof = ndof
-        self.hooks = hooks
-        self.restart_h5 = restart_h5
 
-        # Retrieve the necessary properties if restarting. Restart objects
-        # are overwritten by optional arguments in VerletIntegrator
-        if self.restart_h5 is None:
-            # set None variables to default value
-            if time0 is None:
-                time0 = 0.0
-            if counter0 is None:
-                counter0 = 0
-            self.pos = ff.system.pos.copy()
-            self.rvecs = ff.system.cell.rvecs.copy()
-            self.timestep = timestep
-            self.time = time0
-        else:
-            # Arguments associated with the unit cell and positions are always retrieved
-            tgrp = self.restart_h5["trajectory"]
-            self.pos = tgrp["pos"][-1, :, :]
-            ff.update_pos(self.pos)
-            if "cell" in tgrp:
-                self.rvecs = tgrp["cell"][-1, :, :]
-                ff.update_rvecs(self.rvecs)
-            else:
-                self.rvecs = None
-            # Arguments which can be provided in the VerletIntegrator object are only
-            # taken from the restart file if not provided explicitly
-            if time0 is None:
-                self.time = tgrp["time"][-1]
-            else:
-                self.time = time0
-            if counter0 is None:
-                counter0 = tgrp["counter"][-1]
-            if vel0 is None:
-                vel0 = tgrp["vel"][-1, :, :]
-            if timestep is None:
-                self.timestep = self.restart_h5["/restart/timestep"][()]
-            self._restart_add_hooks(self.restart_h5, ff)
+        if ff.system.masses is None:
+            ff.system.set_standard_masses()
+
+        d = dict(
+            ndof=ndof,
+            time=time0 if time0 is not None else 0.0,
+            counter=counter0 if counter0 is not None else 0,
+            pos=ff.system.pos.copy(),
+            rvecs=ff.system.cell.rvecs.copy(),
+            timestep=timestep,
+            masses=ff.system.masses,
+            vel=vel0
+            if vel0 is not None
+            else get_random_vel(temp0, scalevel0, ff.system.masses, key=jax.random.PRNGKey(key)),
+            gpos=jnp.zeros(ff.system.pos.shape, float),
+            delta=jnp.zeros(ff.system.pos.shape, float),
+            vtens=jnp.zeros((3, 3), float),
+            hooks=hooks,
+            ff=ff,
+        )
+
+        self = VerletIntegrator(**d)
 
         # Verify the hooks: combine thermostat and barostat if present
         self._verify_hooks()
 
-        # The integrator needs masses. If not available, take default values.
-        if ff.system.masses is None:
-            ff.system.set_standard_masses()
-        self.masses = ff.system.masses
-
-        # Set random initial velocities if needed.
-        if vel0 is None:
-            self.vel = get_random_vel(temp0, scalevel0, self.masses)
-        else:
-            self.vel = vel0.copy()
-
         # Working arrays
-        self.gpos = np.zeros(self.pos.shape, float)
-        self.delta = np.zeros(self.pos.shape, float)
-        self.vtens = np.zeros((3, 3), float)
 
         # Tracks quality of the conserved quantity
-        self._cons_err_tracker = ConsErrTracker(restart_h5)
-        Iterative.__init__(self, ff, state, self.hooks, counter0)
+        # self._cons_err_tracker = ConsErrTracker()
+        self.initialize()
 
-    def _add_default_hooks(self):
-        pass
+        return self
 
     def _verify_hooks(self):
         thermo = None
@@ -252,9 +320,14 @@ class VerletIntegrator(Iterative):
 
     def initialize(self):
         # Standard initialization of Verlet algorithm
-        self.gpos[:] = 0.0
+
+        self.gpos = jnp.zeros(self.pos.shape, float)
+        self.delta = jnp.zeros(self.pos.shape, float)
+        self.vtens = jnp.zeros((3, 3), float)
+
         self.ff.update_pos(self.pos)
-        self.epot = self.ff.compute(self.gpos)
+        self.epot, self.gpos, _ = self.ff.compute(self.gpos)
+
         self.acc = -self.gpos / self.masses.reshape(-1, 1)
         self.posoud = self.pos.copy()
 
@@ -266,8 +339,9 @@ class VerletIntegrator(Iterative):
             self.ndof = self.pos.size
 
         # Common post-processing of the initialization
-        self.compute_properties(self.restart_h5)
-        Iterative.initialize(self)  # Includes calls to conventional hooks
+        self.compute_properties()
+
+        self.call_hooks()
 
     def propagate(self):
         # Allow specialized hooks to modify the state before the regular verlet
@@ -279,9 +353,13 @@ class VerletIntegrator(Iterative):
         self.vel += 0.5 * self.acc * self.timestep
         self.pos += self.timestep * self.vel
         self.ff.update_pos(self.pos)
-        self.gpos[:] = 0.0
-        self.vtens[:] = 0.0
-        self.epot = self.ff.compute(self.gpos, self.vtens)
+
+        self.gpos = self.gpos.at[:].set(0.0)
+        self.vtens = self.vtens.at[:].set(0.0)
+        self.epot, self.gpos, self.vtens = self.ff.compute(self.gpos, self.vtens)
+
+        # print(f"propagate {self.gpos=}")
+
         self.acc = -self.gpos / self.masses.reshape(-1, 1)
         self.vel += 0.5 * self.acc * self.timestep
         self.ekin = self._compute_ekin()
@@ -291,13 +369,15 @@ class VerletIntegrator(Iterative):
 
         # Calculate the total position change
         self.posnieuw = self.pos.copy()
-        self.delta[:] = self.posnieuw - self.posoud
-        self.posoud[:] = self.posnieuw
+        self.delta = self.posnieuw - self.posoud
+        self.posoud = self.posnieuw.copy()
 
         # Common post-processing of a single step
         self.time += self.timestep
         self.compute_properties()
-        Iterative.propagate(self)  # Includes call to conventional hooks
+
+        self.counter += 1
+        self.call_hooks()
 
     def _compute_ekin(self):
         """Auxiliary routine to compute the kinetic energy
@@ -306,9 +386,9 @@ class VerletIntegrator(Iterative):
         """
         return 0.5 * (self.vel**2 * self.masses.reshape(-1, 1)).sum()
 
-    def compute_properties(self, restart_h5=None):
-        self.rmsd_gpos = np.sqrt((self.gpos**2).mean())
-        self.rmsd_delta = np.sqrt((self.delta**2).mean())
+    def compute_properties(self):
+        self.rmsd_gpos = jnp.sqrt((self.gpos**2).mean())
+        self.rmsd_delta = jnp.sqrt((self.delta**2).mean())
         self.ekin = self._compute_ekin()
         self.temp = self.ekin / self.ndof * 2.0 / boltzmann
         self.etot = self.ekin + self.epot
@@ -316,17 +396,28 @@ class VerletIntegrator(Iterative):
         for hook in self.hooks:
             if isinstance(hook, VerletHook):
                 self.econs += hook.econs_correction
-        if restart_h5 is not None:
-            self.econs = restart_h5["trajectory/econs"][-1]
-        else:
-            self._cons_err_tracker.update(self.ekin, self.econs)
+
+        self._cons_err_tracker.update(self.ekin, self.econs)
         self.cons_err = self._cons_err_tracker.get()
         if self.ff.system.cell.nvec > 0:
-            self.ptens = (np.dot(self.vel.T * self.masses, self.vel) - self.vtens) / self.ff.system.cell.volume
-            self.press = np.trace(self.ptens) / 3
+            self.ptens = (jnp.dot(self.vel.T * self.masses, self.vel) - self.vtens) / self.ff.system.cell.volume
+            self.press = jnp.trace(self.ptens) / 3
 
     def finalize(self):
         pass
+
+    def call_hooks(self):
+        state_updated = False
+        # from yaff.sampling.io import RestartWriter
+
+        for hook in self.hooks:
+            if hook.expects_call(self.counter):
+                if not state_updated:
+                    for item in self.state_list:
+                        item.update(self)
+                    state_updated = True
+
+                hook(self)
 
     def call_verlet_hooks(self, kind):
         # In this call, the state items are not updated. The pre and post calls
@@ -345,78 +436,13 @@ class VerletIntegrator(Iterative):
                 else:
                     raise NotImplementedError
 
-
-class VerletHook(Hook):
-    """Specialized Verlet hook.
-
-    This is mainly used for the implementation of thermostats and barostats.
-    """
-
-    def __init__(self, start=0, step=1):
-        """
-        **Optional arguments:**
-
-        start
-             The first iteration at which this hook should be called.
-
-        step
-             The hook will be called every `step` iterations.
-        """
-        self.econs_correction = 0.0
-        Hook.__init__(self, start=0, step=1)
-
-    def __call__(self, iterative):
-        pass
-
-    def init(self, iterative):
-        raise NotImplementedError
-
-    def pre(self, iterative):
-        raise NotImplementedError
-
-    def post(self, iterative):
-        raise NotImplementedError
-
-
-class ConsErrTracker(object):
-    """
-    A class that tracks the errors on the conserved quantity.
-    Given its superior numerical accuracy, the algorithm below
-    is used to calculate the running average. Its properties are discussed
-    in Donald Knuth's Art of Computer Programming, vol. 2, p. 232, 3rd edition.
-    """
-
-    def __init__(self, restart_h5=None):
-        if restart_h5 is None:
-            self.counter = 0
-            self.ekin_m = 0.0
-            self.ekin_s = 0.0
-            self.econs_m = 0.0
-            self.econs_s = 0.0
+    def run(self, nstep=None):
+        if nstep is None:
+            while True:
+                if self.propagate():
+                    break
         else:
-            tgrp = restart_h5["trajectory"]
-            self.counter = tgrp["counter"][-1]
-            self.ekin_m = tgrp["ekin_m"][-1]
-            self.ekin_s = tgrp["ekin_s"][-1]
-            self.econs_m = tgrp["econs_m"][-1]
-            self.econs_s = tgrp["econs_s"][-1]
-
-    def update(self, ekin, econs):
-        if self.counter == 0:
-            self.ekin_m = ekin
-            self.econs_m = econs
-        else:
-            ekin_tmp = ekin - self.ekin_m
-            self.ekin_m += ekin_tmp / (self.counter + 1)
-            self.ekin_s += ekin_tmp * (ekin - self.ekin_m)
-            econs_tmp = econs - self.econs_m
-            self.econs_m += econs_tmp / (self.counter + 1)
-            self.econs_s += econs_tmp * (econs - self.econs_m)
-        self.counter += 1
-
-    def get(self):
-        if self.counter > 1:
-            # Returns the square root of the ratio of the
-            # variance in Ekin to the variance in Econs
-            return np.sqrt(self.econs_s / self.ekin_s)
-        return 0.0
+            for i in range(nstep):
+                if self.propagate():
+                    break
+        self.finalize()

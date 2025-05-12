@@ -25,90 +25,205 @@
 
 from __future__ import division
 
-import numpy as np
+# import numpy as np
+
+from flax.struct import dataclass, field
+import jax.numpy as jnp
+
+from functools import partial
+
+from IMLCV.base.MdEngine import MDEngine, StaticMdInfo
 
 
-class Iterative(object):
-    default_state = []
-    log_name = "ITER"
+# @dataclass
+# class YaffSys:
+#     _md: MDEngine
+#     _tic: StaticMdInfo
 
-    def __init__(self, ff, state=None, hooks=None, counter0=0):
-        """
-        **Arguments:**
+#     @dataclass
+#     class YaffCell:
+#         _md: MDEngine
 
-        ff
-             The ForceField instance used in the iterative algorithm
+#         @property
+#         def rvecs(self):
+#             if self._md.sp.cell is None:
+#                 return jnp.zeros((0, 3))
+#             return jnp.array(self._md.sp.cell)
 
-        **Optional arguments:**
+#         @rvecs.setter
+#         def rvecs(self, rvecs):
+#             self._md.sp.cell = jnp.array(rvecs)
 
-        state
-             A list with state items. State items are simple objects
-             that take or derive a property from the current state of the
-             iterative algorithm.
+#         def update_rvecs(self, rvecs):
+#             self.rvecs = rvecs
 
-        hooks
-             A function (or a list of functions) that is called after every
-             iterative.
+#         @property
+#         def nvec(self):
+#             return self.rvecs.shape[0]
 
-        counter0
-             The counter value associated with the initial state.
-        """
-        self.ff = ff
-        if state is None:
-            self.state_list = [state_item.copy() for state_item in self.default_state]
-        else:
-            # self.state_list = state
-            self.state_list = [state_item.copy() for state_item in self.default_state]
-            self.state_list += state
-        self.state = dict((item.key, item) for item in self.state_list)
-        if hooks is None:
-            self.hooks = []
-        elif hasattr(hooks, "__len__"):
-            self.hooks = hooks
-        else:
-            self.hooks = [hooks]
-        self._add_default_hooks()
-        self.counter0 = counter0
-        self.counter = counter0
+#         @property
+#         def volume(self):
+#             if self.nvec == 0:
+#                 return jnp.nan
 
-        self.initialize()
+#             vol_unsigned = jnp.linalg.det(self.rvecs)
+#             if vol_unsigned < 0:
+#                 print("cell volume was negative")
 
-    def _add_default_hooks(self):
-        pass
+#             return jnp.abs(vol_unsigned)
 
-    def initialize(self):
-        self.call_hooks()
+#     def __post_init__(self):
+#         self._cell = self.YaffCell(_md=self._md)
 
-    def call_hooks(self):
-        state_updated = False
-        # from yaff.sampling.io import RestartWriter
+#     @property
+#     def numbers(self):
+#         return self._tic.atomic_numbers
 
-        for hook in self.hooks:
-            if hook.expects_call(self.counter):
-                if not state_updated:
-                    for item in self.state_list:
-                        item.update(self)
-                    state_updated = True
+#     @property
+#     def masses(self):
+#         return jnp.array(self._tic.masses)
 
-                hook(self)
+#     @property
+#     def charges(self):
+#         return None
 
-    def run(self, nstep=None):
-        if nstep is None:
-            while True:
-                if self.propagate():
-                    break
-        else:
-            for i in range(nstep):
-                if self.propagate():
-                    break
-        self.finalize()
+#     @property
+#     def cell(self):
+#         return self._cell
 
-    def propagate(self):
-        self.counter += 1
-        self.call_hooks()
+#     @property
+#     def pos(self):
+#         return jnp.array(self._md.sp.coordinates)
 
-    def finalize():
-        raise NotImplementedError
+#     @pos.setter
+#     def pos(self, pos):
+#         self._md.sp.coordinates = jnp.array(pos)
+
+#     @property
+#     def natom(self):
+#         return self.pos.shape[0]
+
+
+# class YaffFF:
+#     def __init__(
+#         self,
+#         md_engine: YaffEngine,
+#         name="IMLCV_YAFF_forcepart",
+#         additional_parts=[],
+#     ):
+#         self.md_engine = md_engine
+
+#         self.energy = 0.0
+#         self.gpos = jnp.zeros((self.system.natom, 3), float)
+#         self.vtens = jnp.zeros((3, 3), float)
+#         self.clear()
+
+#     @property
+#     def system(self):
+#         return self.md_engine.yaff_system
+
+#     @system.setter
+#     def system(self, sys):
+#         assert sys == self.system
+
+#     @property
+#     def sp(self):
+#         return self.md_engine.sp
+
+#     def update_rvecs(self, rvecs):
+#         self.clear()
+#         self.system.cell.rvecs = rvecs
+
+#     def update_pos(self, pos):
+#         self.clear()
+#         self.system.pos = pos
+
+#     def _internal_compute(self, gpos, vtens):
+#         # print(f"inside _internal_compute {gpos=} {vtens=} {self.sp=}  ")
+
+#         energy = self.md_engine.get_energy(
+#             gpos is not None,
+#             vtens is not None and self.md_engine.sp.cell is not None,
+#         )
+
+#         cv, bias = self.md_engine.get_bias(
+#             gpos is not None,
+#             vtens is not None and self.md_engine.sp.cell is not None,
+#         )
+
+#         res = energy + bias
+
+#         self.md_engine.last_ener = energy
+#         self.md_engine.last_bias = bias
+#         self.md_engine.last_cv = cv
+
+#         if res.gpos is not None:
+#             gpos[:] += jnp.array(res.gpos, dtype=np.float64)
+#         if res.vtens is not None:
+#             vtens[:] += jnp.array(res.vtens, dtype=np.float64)
+
+#         return res.energy
+
+#     def clear(self):
+#         self.energy = jnp.nan
+#         self.gpos[:] = jnp.nan
+#         self.vtens[:] = jnp.nan
+
+#     def compute(self, gpos=None, vtens=None):
+#         """Compute the energy and optionally some derivatives for this FF (part)
+
+#         The only variable inputs for the compute routine are the atomic
+#         positions and the cell vectors, which can be changed through the
+#         ``update_rvecs`` and ``update_pos`` methods. All other aspects of
+#         a force field are considered to be fixed between subsequent compute
+#         calls. If changes other than positions or cell vectors are needed,
+#         one must construct new ``ForceField`` and/or ``ForcePart`` objects.
+
+#         **Optional arguments:**
+
+#         gpos
+#                 The derivatives of the energy towards the Cartesian coordinates
+#                 of the atoms. ('g' stands for gradient and 'pos' for positions.)
+#                 This must be a writeable numpy array with shape (N, 3) where N
+#                 is the number of atoms.
+
+#         vtens
+#                 The force contribution to the pressure tensor. This is also
+#                 known as the virial tensor. It represents the derivative of the
+#                 energy towards uniform deformations, including changes in the
+#                 shape of the unit cell. (v stands for virial and 'tens' stands
+#                 for tensor.) This must be a writeable numpy array with shape (3,
+#                 3). Note that the factor 1/V is not included.
+
+#         The energy is returned. The optional arguments are Fortran-style
+#         output arguments. When they are present, the corresponding results
+#         are computed and **added** to the current contents of the array.
+#         """
+#         if gpos is None:
+#             my_gpos = None
+#         else:
+#             my_gpos = self.gpos
+#             my_gpos[:] = 0.0
+#         if vtens is None:
+#             my_vtens = None
+#         else:
+#             my_vtens = self.vtens
+#             my_vtens[:] = 0.0
+#         self.energy = self._internal_compute(my_gpos, my_vtens)
+#         if jnp.isnan(self.energy):
+#             raise ValueError("The energy is not-a-number (nan).")
+#         if gpos is not None:
+#             if jnp.isnan(my_gpos).any():
+#                 raise ValueError("Some gpos element(s) is/are not-a-number (nan).")
+#             gpos += my_gpos
+#         if vtens is not None:
+#             if jnp.isnan(my_vtens).any():
+#                 raise ValueError("Some vtens element(s) is/are not-a-number (nan).")
+#             vtens += my_vtens
+
+#         # print(f"inside compute {self.energy=} {gpos=} {vtens=}")
+
+#         return self.energy
 
 
 class StateItem(object):
@@ -120,7 +235,7 @@ class StateItem(object):
     def update(self, iterative):
         self.value = self.get_value(iterative)
         if self.shape is None:
-            if isinstance(self.value, np.ndarray):
+            if isinstance(self.value, jnp.ndarray):
                 self.shape = self.value.shape
                 self.dtype = self.value.dtype
             else:
@@ -167,19 +282,6 @@ class CellStateItem(StateItem):
 
     def get_value(self, iterative):
         return iterative.ff.system.cell.rvecs
-
-
-# class EPotContribStateItem(StateItem):
-#     """Keeps track of all the contributions to the potential energy."""
-
-#     def __init__(self):
-#         StateItem.__init__(self, "epot_contribs")
-
-#     def get_value(self, iterative):
-#         return np.array([part.energy for part in iterative.ff.parts])
-
-#     def iter_attrs(self, iterative):
-#         yield "epot_contrib_names", np.array([part.name for part in iterative.ff.parts], dtype="S")
 
 
 class Hook(object):

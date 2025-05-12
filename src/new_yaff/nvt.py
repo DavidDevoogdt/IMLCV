@@ -25,22 +25,14 @@
 
 from __future__ import division
 
-import numpy as np
+# import numpy as np
+import jax.numpy as jnp
 
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
 from new_yaff.iterative import StateItem
 from new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
-from new_yaff.verlet import VerletHook
-
-# __all__ = [
-#     "AndersenThermostat",
-#     "BerendsenThermostat",
-#     "LangevinThermostat",
-#     "CSVRThermostat",
-#     "GLEThermostat",
-#     "NHCThermostat",
-#     "NHCAttributeStateItem",
-# ]
+from new_yaff.verlet import VerletHook, VerletIntegrator
+import jax
 
 
 class AndersenThermostat(VerletHook):
@@ -83,19 +75,24 @@ class AndersenThermostat(VerletHook):
         self.annealing = annealing
         VerletHook.__init__(self, start, step)
 
-    def init(self, iterative):
+    def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
         clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
 
-    def pre(self, iterative, G1_add=None):
+    def pre(self, iterative: VerletIntegrator, G1_add=None):
         # Andersen thermostat step before usual Verlet hook, since it largely affects the velocities
         # Needed to correct the conserved quantity
         ekin_before = iterative._compute_ekin()
         # Change the (selected) velocities
+        key, key0 = jax.random.split(self.key)
+        self.key = key
+
         if self.select is None:
-            iterative.vel[:] = get_random_vel(self.temp, False, iterative.masses)
+            iterative.vel = get_random_vel(self.temp, False, iterative.masses, key0)
         else:
-            iterative.vel[self.select] = get_random_vel(self.temp, False, iterative.masses, self.select)
+            iterative.vel = iterative.vel.at[self.select].set(
+                get_random_vel(self.temp, False, iterative.masses, self.select, key0)
+            )
         # Zero any external momenta after choosing new velocities
         clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
         # Update the kinetic energy and the reference for the conserved quantity
@@ -104,7 +101,7 @@ class AndersenThermostat(VerletHook):
         # Optional annealing
         self.temp *= self.annealing
 
-    def post(self, iterative, G1_add=None):
+    def post(self, iterative: VerletIntegrator, G1_add=None):
         pass
 
 
@@ -142,22 +139,22 @@ class BerendsenThermostat(VerletHook):
         self.restart = restart
         VerletHook.__init__(self, start, 1)
 
-    def init(self, iterative):
+    def init(self, iterative: VerletIntegrator):
         if not self.restart:
             # It is mandatory to zero the external momenta.
             clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
 
-    def pre(self, iterative, G1_add=None):
+    def pre(self, iterative: VerletIntegrator, G1_add=None):
         ekin = iterative.ekin
         temp_inst = 2.0 * iterative.ekin / (boltzmann * iterative.ndof)
-        c = np.sqrt(1 + iterative.timestep / self.timecon * (self.temp / temp_inst - 1))
-        iterative.vel[:] = c * iterative.vel
+        c = jnp.sqrt(1 + iterative.timestep / self.timecon * (self.temp / temp_inst - 1))
+        iterative.vel = iterative.vel.at[:].set(c * iterative.vel)
         iterative.ekin = iterative._compute_ekin()
         self.econs_correction += (1 - c**2) * ekin
 
-    def post(self, iterative, G1_add=None):
+    def post(self, iterative: VerletIntegrator, G1_add=None):
         pass
 
 
@@ -166,7 +163,7 @@ class LangevinThermostat(VerletHook):
     kind = "stochastic"
     method = "thermostat"
 
-    def __init__(self, temp, start=0, timecon=100 * femtosecond):
+    def __init__(self, temp, start=0, timecon=100 * femtosecond, key_init=42):
         """
         This is an implementation of the Langevin thermostat. The algorithm
         is described in:
@@ -188,30 +185,34 @@ class LangevinThermostat(VerletHook):
         """
         self.temp = temp
         self.timecon = timecon
+        self.key = jax.random.PRNGKey(key_init)
         VerletHook.__init__(self, start, 1)
 
-    def init(self, iterative):
+    def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
         clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
 
-    def pre(self, iterative, G1_add=None):
+    def pre(self, iterative: VerletIntegrator, G1_add=None):
         ekin0 = iterative.ekin
         # Actual update
         self.thermo(iterative)
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1
 
-    def post(self, iterative, G1_add=None):
+    def post(self, iterative: VerletIntegrator, G1_add=None):
         ekin0 = iterative.ekin
         # Actual update
         self.thermo(iterative)
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1
 
-    def thermo(self, iterative):
-        c1 = np.exp(-iterative.timestep / self.timecon / 2)
-        c2 = np.sqrt((1.0 - c1**2) * self.temp * boltzmann / iterative.masses).reshape(-1, 1)
-        iterative.vel[:] = c1 * iterative.vel + c2 * np.random.normal(0, 1, iterative.vel.shape)
+    def thermo(self, iterative: VerletIntegrator):
+        key, key1 = jax.random.split(self.key, 2)
+        self.key = key
+
+        c1 = jnp.exp(-iterative.timestep / self.timecon / 2)
+        c2 = jnp.sqrt((1.0 - c1**2) * self.temp * boltzmann / iterative.masses).reshape(-1, 1)
+        iterative.vel = c1 * iterative.vel + c2 * jax.random.normal(key1, shape=iterative.vel.shape)
         iterative.ekin = iterative._compute_ekin()
 
 
@@ -249,26 +250,26 @@ class CSVRThermostat(VerletHook):
         self.timecon = timecon
         VerletHook.__init__(self, start, 1)
 
-    def init(self, iterative):
+    def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
         clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
         self.kin = 0.5 * iterative.ndof * boltzmann * self.temp
 
-    def pre(self, iterative, G1_add=None):
-        c = np.exp(-iterative.timestep / self.timecon)
-        R = np.random.normal(0, 1)
-        S = (np.random.normal(0, 1, iterative.ndof - 1) ** 2).sum()
+    def pre(self, iterative: VerletIntegrator, G1_add=None):
+        c = jnp.exp(-iterative.timestep / self.timecon)
+        R = jnp.random.normal(0, 1)
+        S = (jnp.random.normal(0, 1, iterative.ndof - 1) ** 2).sum()
         iterative.ekin = iterative._compute_ekin()
         fact = (1 - c) * self.kin / iterative.ndof / iterative.ekin
-        alpha = np.sign(R + np.sqrt(c / fact)) * np.sqrt(c + (S + R**2) * fact + 2 * R * np.sqrt(c * fact))
-        iterative.vel[:] = alpha * iterative.vel
+        alpha = jnp.sign(R + jnp.sqrt(c / fact)) * jnp.sqrt(c + (S + R**2) * fact + 2 * R * jnp.sqrt(c * fact))
+        iterative.vel = alpha * iterative.vel
         iterative.ekin_new = alpha**2 * iterative.ekin
         self.econs_correction += (1 - alpha**2) * iterative.ekin
         iterative.ekin = iterative.ekin_new
 
-    def post(self, iterative, G1_add=None):
+    def post(self, iterative: VerletIntegrator, G1_add=None):
         pass
 
 
@@ -309,40 +310,40 @@ class GLEThermostat(VerletHook):
         self.c_p = c_p
         if self.c_p is None:
             # Assume equilibrium dynamics if c_p is not provided
-            self.c_p = boltzmann * self.temp * np.eye(self.ns + 1)
+            self.c_p = boltzmann * self.temp * jnp.eye(self.ns + 1)
         VerletHook.__init__(self, start, 1)
 
-    def init(self, iterative):
+    def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta
         clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
         # Initialize the additional momenta
-        self.s = 0.5 * boltzmann * self.temp * np.random.normal(size=(self.ns, iterative.pos.size))
+        self.s = 0.5 * boltzmann * self.temp * jnp.random.normal(size=(self.ns, iterative.pos.size))
         # Determine the update matrices
-        eigval, eigvec = np.linalg.eig(-self.a_p * iterative.timestep / 2)
-        self.t = np.dot(eigvec * np.exp(eigval), np.linalg.inv(eigvec)).real
-        self.S = stabilized_cholesky_decomp(self.c_p - np.dot(np.dot(self.t, self.c_p), self.t.T)).real
+        eigval, eigvec = jnp.linalg.eig(-self.a_p * iterative.timestep / 2)
+        self.t = jnp.dot(eigvec * jnp.exp(eigval), jnp.linalg.inv(eigvec)).real
+        self.S = stabilized_cholesky_decomp(self.c_p - jnp.dot(jnp.dot(self.t, self.c_p), self.t.T)).real
         # Store the number of atoms for later use
         self.n_atoms = iterative.pos.shape[0]
 
-    def pre(self, iterative, G1_add=None):
+    def pre(self, iterative: VerletIntegrator, G1_add=None):
         self.thermo(iterative)
 
-    def post(self, iterative, G1_add=None):
+    def post(self, iterative: VerletIntegrator, G1_add=None):
         self.thermo(iterative)
 
-    def thermo(self, iterative):
+    def thermo(self, iterative: VerletIntegrator):
         ekin0 = iterative.ekin
         # define a (3N,) vector of rescaled momenta
-        p = np.dot(np.diag(np.sqrt(iterative.masses)), iterative.vel).reshape(-1)
+        p = jnp.dot(jnp.diag(jnp.sqrt(iterative.masses)), iterative.vel).reshape(-1)
         # extend the s to include the real momenta
-        s_extended_old = np.vstack([p, self.s])
+        s_extended_old = jnp.vstack([p, self.s])
         # update equation
-        s_extended_new = np.dot(self.t, s_extended_old) + np.dot(
-            self.S, np.random.normal(size=(self.ns + 1, 3 * self.n_atoms))
+        s_extended_new = jnp.dot(self.t, s_extended_old) + jnp.dot(
+            self.S, jnp.random.normal(size=(self.ns + 1, 3 * self.n_atoms))
         )
         # store the new variables in the correct place
-        iterative.vel[:] = np.dot(
-            np.diag(np.sqrt(1.0 / iterative.masses)), s_extended_new[0, :].reshape((self.n_atoms, 3))
+        iterative.vel = jnp.dot(
+            jnp.diag(jnp.sqrt(1.0 / iterative.masses)), s_extended_new[0, :].reshape((self.n_atoms, 3))
         )
         self.s[:] = s_extended_new[1 : s_extended_new.shape[0], :]
         # update the kinetic energy
@@ -353,7 +354,7 @@ class GLEThermostat(VerletHook):
 
 
 class NHChain(object):
-    def __init__(self, length, timestep, temp, ndof, pos0, vel0, timecon=100 * femtosecond):
+    def __init__(self, length, timestep, temp, ndof, pos0, vel0, timecon=100 * femtosecond, key_init=42):
         # parameters
         self.length = length
         self.timestep = timestep
@@ -374,17 +375,19 @@ class NHChain(object):
         if self.restart_pos:
             self.pos = pos0.copy()
         else:
-            self.pos = np.zeros(length)
+            self.pos = jnp.zeros(length)
         if self.restart_vel:
             self.vel = vel0.copy()
         else:
-            self.vel = np.zeros(length)
+            self.vel = jnp.zeros(length)
+
+        self.key = jax.random.PRNGKey(key_init)
 
     def set_ndof(self, ndof):
         # set the masses according to the time constant
         self.ndof = ndof
-        angfreq = 2 * np.pi / self.timecon
-        self.masses = np.ones(self.length) * (boltzmann * self.temp / angfreq**2)
+        angfreq = 2 * jnp.pi / self.timecon
+        self.masses = jnp.ones(self.length) * (boltzmann * self.temp / angfreq**2)
         self.masses[0] *= ndof
         if not self.restart_vel:
             self.vel = self.get_random_vel_therm()
@@ -392,7 +395,11 @@ class NHChain(object):
     def get_random_vel_therm(self):
         # generate random velocities for the thermostat velocities using a Gaussian distribution
         shape = self.length
-        return np.random.normal(0, np.sqrt(self.masses * boltzmann * self.temp), shape) / self.masses
+
+        key, key0 = jax.random.split(self.key)
+        self.key = key
+
+        return jax.random.normal(key0, shape=shape) * jnp.sqrt(self.masses * boltzmann * self.temp) / self.masses
 
     def __call__(self, ekin, vel, G1_add):
         def do_bead(k, ekin):
@@ -415,11 +422,11 @@ class NHChain(object):
                 self.vel[k] += g * self.timestep / 4
             else:
                 # iL vxi_{k-1} h/8
-                self.vel[k] *= np.exp(-self.vel[k + 1] * self.timestep / 8)
+                self.vel[k] *= jnp.exp(-self.vel[k + 1] * self.timestep / 8)
                 # iL G_k h/4
                 self.vel[k] += g * self.timestep / 4
                 # iL vxi_{k-1} h/8
-                self.vel[k] *= np.exp(-self.vel[k + 1] * self.timestep / 8)
+                self.vel[k] *= jnp.exp(-self.vel[k + 1] * self.timestep / 8)
 
         # Loop over chain in reverse order
         for k in range(self.length - 1, -1, -1):
@@ -428,7 +435,7 @@ class NHChain(object):
         # iL xi (all) h/2
         self.pos += self.vel * self.timestep / 2
         # iL Cv (all) h/2
-        factor = np.exp(-self.vel[0] * self.timestep / 2)
+        factor = jnp.exp(-self.vel[0] * self.timestep / 2)
         vel *= factor
         ekin *= factor**2
 
@@ -496,7 +503,7 @@ class NHCThermostat(VerletHook):
         self.chain = NHChain(chainlength, 0.0, temp, 0, chain_pos0, chain_vel0, timecon)
         VerletHook.__init__(self, start, 1)
 
-    def init(self, iterative):
+    def init(self, iterative: VerletIntegrator):
         if not self.restart:
             # It is mandatory to zero the external momenta
             clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
@@ -507,13 +514,15 @@ class NHCThermostat(VerletHook):
         self.chain.timestep = iterative.timestep
         self.chain.set_ndof(iterative.ndof)
 
-    def pre(self, iterative, G1_add=None):
+    def pre(self, iterative: VerletIntegrator, G1_add=None):
         vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
-        iterative.vel[:] = vel_new
+        # iterative.vel[:] = vel_new
+        iterative.vel = iterative.vel.at[:].set(vel_new)
 
-    def post(self, iterative, G1_add=None):
+    def post(self, iterative: VerletIntegrator, G1_add=None):
         vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
-        iterative.vel[:] = vel_new
+        # iterative.vel[:] = vel_new
+        iterative.vel = iterative.vel.at[:].set(vel_new)
         self.econs_correction = self.chain.get_econs_correction()
 
 
@@ -522,7 +531,7 @@ class NHCAttributeStateItem(StateItem):
         StateItem.__init__(self, "thermo_" + attr)
         self.attr = attr
 
-    def get_value(self, iterative):
+    def get_value(self, iterative: VerletIntegrator):
         chain = None
         from yaff.sampling.npt import TBCombination
 

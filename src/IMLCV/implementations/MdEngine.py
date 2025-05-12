@@ -18,6 +18,7 @@ from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
 import new_yaff.npt
+import new_yaff.system
 
 # from IMLCV.base.MdEngine import StaticMdInfo
 
@@ -608,128 +609,9 @@ class NewYaffEngine(MDEngine):
             def expects_call(self, counter):
                 return True
 
-        class YaffFF:
-            def __init__(
-                self,
-                md_engine: YaffEngine,
-                name="IMLCV_YAFF_forcepart",
-                additional_parts=[],
-            ):
-                self.md_engine = md_engine
+        from new_yaff.ff import YaffFF
 
-                self.energy = 0.0
-                self.gpos = np.zeros((self.system.natom, 3), float)
-                self.vtens = np.zeros((3, 3), float)
-                self.clear()
-
-            @property
-            def system(self):
-                return self.md_engine.yaff_system
-
-            @system.setter
-            def system(self, sys):
-                assert sys == self.system
-
-            @property
-            def sp(self):
-                return self.md_engine.sp
-
-            def update_rvecs(self, rvecs):
-                self.clear()
-                self.system.cell.rvecs = rvecs
-
-            def update_pos(self, pos):
-                self.clear()
-                self.system.pos = pos
-
-            def _internal_compute(self, gpos, vtens):
-                # print(f"inside _internal_compute {gpos=} {vtens=} {self.sp=}  ")
-
-                energy = self.md_engine.get_energy(
-                    gpos is not None,
-                    vtens is not None and self.md_engine.sp.cell is not None,
-                )
-
-                cv, bias = self.md_engine.get_bias(
-                    gpos is not None,
-                    vtens is not None and self.md_engine.sp.cell is not None,
-                )
-
-                res = energy + bias
-
-                self.md_engine.last_ener = energy
-                self.md_engine.last_bias = bias
-                self.md_engine.last_cv = cv
-
-                if res.gpos is not None:
-                    gpos[:] += np.array(res.gpos, dtype=np.float64)
-                if res.vtens is not None:
-                    vtens[:] += np.array(res.vtens, dtype=np.float64)
-
-                return res.energy
-
-            def clear(self):
-                self.energy = np.nan
-                self.gpos[:] = np.nan
-                self.vtens[:] = np.nan
-
-            def compute(self, gpos=None, vtens=None):
-                """Compute the energy and optionally some derivatives for this FF (part)
-
-                The only variable inputs for the compute routine are the atomic
-                positions and the cell vectors, which can be changed through the
-                ``update_rvecs`` and ``update_pos`` methods. All other aspects of
-                a force field are considered to be fixed between subsequent compute
-                calls. If changes other than positions or cell vectors are needed,
-                one must construct new ``ForceField`` and/or ``ForcePart`` objects.
-
-                **Optional arguments:**
-
-                gpos
-                        The derivatives of the energy towards the Cartesian coordinates
-                        of the atoms. ('g' stands for gradient and 'pos' for positions.)
-                        This must be a writeable numpy array with shape (N, 3) where N
-                        is the number of atoms.
-
-                vtens
-                        The force contribution to the pressure tensor. This is also
-                        known as the virial tensor. It represents the derivative of the
-                        energy towards uniform deformations, including changes in the
-                        shape of the unit cell. (v stands for virial and 'tens' stands
-                        for tensor.) This must be a writeable numpy array with shape (3,
-                        3). Note that the factor 1/V is not included.
-
-                The energy is returned. The optional arguments are Fortran-style
-                output arguments. When they are present, the corresponding results
-                are computed and **added** to the current contents of the array.
-                """
-                if gpos is None:
-                    my_gpos = None
-                else:
-                    my_gpos = self.gpos
-                    my_gpos[:] = 0.0
-                if vtens is None:
-                    my_vtens = None
-                else:
-                    my_vtens = self.vtens
-                    my_vtens[:] = 0.0
-                self.energy = self._internal_compute(my_gpos, my_vtens)
-                if np.isnan(self.energy):
-                    raise ValueError("The energy is not-a-number (nan).")
-                if gpos is not None:
-                    if np.isnan(my_gpos).any():
-                        raise ValueError("Some gpos element(s) is/are not-a-number (nan).")
-                    gpos += my_gpos
-                if vtens is not None:
-                    if np.isnan(my_vtens).any():
-                        raise ValueError("Some vtens element(s) is/are not-a-number (nan).")
-                    vtens += my_vtens
-
-                # print(f"inside compute {self.energy=} {gpos=} {vtens=}")
-
-                return self.energy
-
-        self._yaff_ener = YaffFF(
+        self._yaff_ener = YaffFF.create(
             md_engine=self,
             # additional_parts=self.additional_parts,
         )
@@ -760,9 +642,9 @@ class NewYaffEngine(MDEngine):
 
         from new_yaff.verlet import VerletIntegrator
 
-        self._verlet = VerletIntegrator(
-            self._yaff_ener,
-            self.static_trajectory_info.timestep,
+        self._verlet = VerletIntegrator.create(
+            ff=self._yaff_ener,
+            timestep=self.static_trajectory_info.timestep,
             temp0=self.static_trajectory_info.T,
             hooks=hooks,
         )
@@ -779,5 +661,5 @@ class NewYaffEngine(MDEngine):
         self._verlet.run(int(steps))
 
     @property
-    def yaff_system(self) -> YaffSys:
-        return YaffSys(self, self.static_trajectory_info)
+    def yaff_system(self) -> new_yaff.system.YaffSys:
+        return new_yaff.system.YaffSys(self, self.static_trajectory_info)

@@ -25,10 +25,12 @@
 
 from __future__ import division
 
-import numpy as np
+import jax.numpy as jnp
 
 # from molmod import boltzmann
 from IMLCV.base.UnitsConstants import boltzmann
+
+import jax
 
 # __all__ = [
 #     "get_random_vel",
@@ -45,7 +47,13 @@ from IMLCV.base.UnitsConstants import boltzmann
 # ]
 
 
-def get_random_vel(temp0, scalevel0, masses, select=None):
+def get_random_vel(
+    temp0,
+    scalevel0,
+    masses,
+    key: jax.random.PRNGKey,
+    select=None,
+):
     """Generate random atomic velocities using a Maxwell-Boltzmann distribution
 
     **Arguments:**
@@ -70,13 +78,14 @@ def get_random_vel(temp0, scalevel0, masses, select=None):
     option is used, the shape of the results is (M, 3), where M is the length
     of the select array.
     """
+
     if select is not None:
         masses = masses[select]
     shape = len(masses), 3
-    result = np.random.normal(0, 1, shape) * np.sqrt(boltzmann * temp0 / masses).reshape(-1, 1)
+    result = jax.random.normal(key, shape) * jnp.sqrt(boltzmann * temp0 / masses).reshape(-1, 1)
     if scalevel0 and temp0 > 0:
         temp = (result**2 * masses.reshape(-1, 1)).mean() / boltzmann
-        scale = np.sqrt(temp0 / temp)
+        scale = jnp.sqrt(temp0 / temp)
         result *= scale
     return result
 
@@ -97,9 +106,9 @@ def remove_com_moment(vel, masses):
     rigid body motion from the atomic velocities.
     """
     # compute the center of mass velocity
-    com_vel = np.dot(masses, vel) / masses.sum()
+    com_vel = jnp.dot(masses, vel) / masses.sum()
     # subtract this com velocity vector from each atomic velocity
-    vel[:] -= com_vel
+    vel -= com_vel
 
 
 def remove_angular_moment(pos, vel, masses):
@@ -125,7 +134,7 @@ def remove_angular_moment(pos, vel, masses):
     """
     # translate a copy of the positions, such that the center of mass is in the origin
     pos = pos.copy()
-    com_pos = np.dot(masses, pos) / masses.sum()
+    com_pos = jnp.dot(masses, pos) / masses.sum()
     pos -= com_pos
     # compute the inertia tensor
     iner_tens = inertia_tensor(pos, masses)
@@ -134,7 +143,7 @@ def remove_angular_moment(pos, vel, masses):
     # compute the angular velocity vector
     ang_vel = angular_velocity(ang_mom, iner_tens)
     # subtract the rigid body angular velocities from the atomic velocities
-    vel[:] -= rigid_body_angular_velocities(pos, ang_vel)
+    vel -= rigid_body_angular_velocities(pos, ang_vel)
 
 
 def clean_momenta(pos, vel, masses, cell):
@@ -178,7 +187,7 @@ def inertia_tensor(pos, masses):
 
     **Returns:** a (3, 3) array containing the inertia tensor.
     """
-    return np.identity(3) * (masses.reshape(-1, 1) * pos**2).sum() - np.dot(pos.T, masses.reshape(-1, 1) * pos)
+    return jnp.identity(3) * (masses.reshape(-1, 1) * pos**2).sum() - jnp.dot(pos.T, masses.reshape(-1, 1) * pos)
 
 
 def angular_moment(pos, vel, masses):
@@ -198,10 +207,13 @@ def angular_moment(pos, vel, masses):
     **Returns:** a (3,) array with the angular momentum vector.
     """
     lin_moms = masses.reshape(-1, 1) * vel
-    ang_mom = np.zeros(3, float)
-    ang_mom[0] = (pos[:, 1] * lin_moms[:, 2] - pos[:, 2] * lin_moms[:, 1]).sum()
-    ang_mom[1] = (pos[:, 2] * lin_moms[:, 0] - pos[:, 0] * lin_moms[:, 2]).sum()
-    ang_mom[2] = (pos[:, 0] * lin_moms[:, 1] - pos[:, 1] * lin_moms[:, 0]).sum()
+
+    ang_mom = jnp.sum(jax.vmap(jnp.linalg.cross)(pos, lin_moms), axis=0)
+
+    # ang_mom = jnp.zeros(3, float)
+    # ang_mom[0] = (pos[:, 1] * lin_moms[:, 2] - pos[:, 2] * lin_moms[:, 1]).sum()
+    # ang_mom[1] = (pos[:, 2] * lin_moms[:, 0] - pos[:, 0] * lin_moms[:, 2]).sum()
+    # ang_mom[2] = (pos[:, 0] * lin_moms[:, 1] - pos[:, 1] * lin_moms[:, 0]).sum()
     return ang_mom
 
 
@@ -227,19 +239,19 @@ def angular_velocity(ang_mom, iner_tens, epsilon=1e-10):
 
     In principle these routine should merely return::
 
-        np.linalg.solve(inter_tens, ang_mom).
+        jnp.linalg.solve(inter_tens, ang_mom).
 
     However, when the inertia tensor has zero eigenvalues (linear molecules,
     single atoms), this routine will use a proper pseudo inverse of the
     inertia tensor.
     """
-    evals, evecs = np.linalg.eigh(iner_tens)
+    evals, evecs = jnp.linalg.eigh(iner_tens)
     # select the significant part of the decomposition
     mask = evals > epsilon
     evals = evals[mask]
     evecs = evecs[:, mask]
     # compute the pseudoinverse
-    return np.dot(evecs, np.dot(evecs.T, ang_mom) / evals)
+    return jnp.dot(evecs, jnp.dot(evecs.T, ang_mom) / evals)
 
 
 def rigid_body_angular_velocities(pos, ang_vel):
@@ -256,11 +268,8 @@ def rigid_body_angular_velocities(pos, ang_vel):
     **Returns:** An (N, 3) array with atomic velocities in the rigid body.
     Note that the linear momentum is zero.
     """
-    vel = np.zeros(pos.shape, float)
-    vel[:, 0] = ang_vel[1] * pos[:, 2] - ang_vel[2] * pos[:, 1]
-    vel[:, 1] = ang_vel[2] * pos[:, 0] - ang_vel[0] * pos[:, 2]
-    vel[:, 2] = ang_vel[0] * pos[:, 1] - ang_vel[1] * pos[:, 0]
-    return vel
+
+    return jax.vmap(jnp.linalg.cross, in_axes=(None, 0))(ang_vel, pos)
 
 
 def get_ndof_internal_md(natom, nper):
@@ -316,14 +325,14 @@ def cell_symmetrize(ff, vector_list=None, tensor_list=None):
     # store the unit cell tensor
     cell = ff.system.cell.rvecs.copy()
     # SVD decomposition of cell tensor
-    U, s, Vt = np.linalg.svd(cell)
+    U, s, Vt = jnp.linalg.svd(cell)
     # definition of the rotation matrix to symmetrize cell tensor
-    rot_mat = np.dot(Vt.T, U.T)
+    rot_mat = jnp.dot(Vt.T, U.T)
     # symmetrize cell tensor and update cell
-    cell = np.dot(cell, rot_mat)
+    cell = jnp.dot(cell, rot_mat)
     ff.update_rvecs(cell)
     # also update the new atomic positions
-    pos_new = np.dot(ff.system.pos, rot_mat)
+    pos_new = jnp.dot(ff.system.pos, rot_mat)
     ff.update_pos(pos_new)
     # initialize the new vector and tensor lists
     new_vector_list = []
@@ -331,11 +340,11 @@ def cell_symmetrize(ff, vector_list=None, tensor_list=None):
     # update the additional vectors from vector_list
     if vector_list is not None:
         for i in range(len(vector_list)):
-            new_vector_list.append(np.dot(vector_list[i], rot_mat))
+            new_vector_list.append(jnp.dot(vector_list[i], rot_mat))
     # update the additional tensors from tensor_list
     if tensor_list is not None:
         for i in range(len(tensor_list)):
-            new_tensor_list.append(np.dot(np.dot(rot_mat.T, tensor_list[i]), rot_mat))
+            new_tensor_list.append(jnp.dot(jnp.dot(rot_mat.T, tensor_list[i]), rot_mat))
     return new_vector_list, new_tensor_list
 
 
@@ -359,33 +368,33 @@ def cell_lower(rvecs):
         to newrvecs
     """
     assert rvecs.shape == (3, 3), "Only 3D periodic systems supported!"
-    newrvecs = np.zeros(rvecs.shape)
+    newrvecs = jnp.zeros(rvecs.shape)
     A = rvecs[0]
     B = rvecs[1]
     C = rvecs[2]
-    assert np.dot(np.cross(A, B), C) > 0, "Cell vectors should form right-handed basis!"
+    assert jnp.dot(jnp.cross(A, B), C) > 0, "Cell vectors should form right-handed basis!"
     # a vector
-    newrvecs[0, 0] = np.linalg.norm(A)
+    newrvecs[0, 0] = jnp.linalg.norm(A)
     # b vector
-    newrvecs[1, 0] = np.dot(B, A) / newrvecs[0, 0]
+    newrvecs[1, 0] = jnp.dot(B, A) / newrvecs[0, 0]
     #    if newrvecs[1,0] > 0.5*newrvecs[0,0]: newrvecs[1,0] -= newrvecs[0,0]
-    newrvecs[1, 1] = np.linalg.norm(np.cross(A, B)) / newrvecs[0, 0]
+    newrvecs[1, 1] = jnp.linalg.norm(jnp.cross(A, B)) / newrvecs[0, 0]
     # c vector
-    newrvecs[2, 0] = np.dot(C, A) / newrvecs[0, 0]
+    newrvecs[2, 0] = jnp.dot(C, A) / newrvecs[0, 0]
     #    if newrvecs[2,0] > 0.5*newrvecs[0,0]: newrvecs[2,0] -= newrvecs[0,0]
-    newrvecs[2, 1] = (np.dot(B, C) - newrvecs[1, 0] * newrvecs[2, 0]) / newrvecs[1, 1]
+    newrvecs[2, 1] = (jnp.dot(B, C) - newrvecs[1, 0] * newrvecs[2, 0]) / newrvecs[1, 1]
     #    if newrvecs[2,1] > 0.5*newrvecs[1,1]: newrvecs[2,1] -= newrvecs[1,1]
-    newrvecs[2, 2] = np.sqrt(np.dot(C, C) - newrvecs[2, 0] ** 2 - newrvecs[2, 1] ** 2)
+    newrvecs[2, 2] = jnp.sqrt(jnp.dot(C, C) - newrvecs[2, 0] ** 2 - newrvecs[2, 1] ** 2)
     # transformation matrix
-    rot = np.zeros(rvecs.shape)
-    rot[0] = np.cross(B, C)
-    rot[1] = np.cross(C, A)
-    rot[2] = np.cross(A, B)
-    rot = np.dot(newrvecs.transpose(), rot) / np.abs(np.linalg.det(rvecs))
+    rot = jnp.zeros(rvecs.shape)
+    rot[0] = jnp.cross(B, C)
+    rot[1] = jnp.cross(C, A)
+    rot[2] = jnp.cross(A, B)
+    rot = jnp.dot(newrvecs.transpose(), rot) / jnp.abs(jnp.linalg.det(rvecs))
     return newrvecs, rot
 
 
-def get_random_vel_press(mass, temp):
+def get_random_vel_press(mass, temp, key: jax.random.PRNGKey):
     """Generates symmetric tensor of barostat velocities
 
     **Arguments:**
@@ -398,18 +407,18 @@ def get_random_vel_press(mass, temp):
     """
     shape = 3, 3
     # generate random 3x3 tensor
-    rand = np.random.normal(0, np.sqrt(mass * boltzmann * temp), shape) / mass
-    vel_press = np.zeros(shape)
+    rand = jax.random.normal(key, shape=shape) * jnp.sqrt(mass * boltzmann * temp) / mass
+    vel_press = jnp.zeros(shape)
     # create initial symmetric pressure velocity tensor
     for i in range(3):
         for j in range(3):
             if i >= j:
-                vel_press[i, j] = rand[i, j]
+                vel_press = vel_press.at[i, j].set(rand[i, j])
             else:
-                vel_press[i, j] = rand[j, i]
+                vel_press = vel_press.at[i, j].set(rand[j, i])
             # correct for p_ab = p_ba, hence only 1 dof if a != b
             if i != j:
-                vel_press[i, j] /= np.sqrt(2)
+                vel_press = vel_press.at[i, j].set(vel_press[i, j] / jnp.sqrt(2))
     return vel_press
 
 
@@ -445,19 +454,19 @@ def stabilized_cholesky_decomp(mat):
     Do LDL^T and transform to MM^T with negative diagonal entries of D put equal to zero
     Assume mat is square and symmetric (but not necessarily positive definite).
     """
-    if np.all(np.linalg.eigvals(mat) > 0):
-        return np.linalg.cholesky(mat)  # usual cholesky decomposition
+    if jnp.all(jnp.linalg.eigvals(mat) > 0):
+        return jnp.linalg.cholesky(mat)  # usual cholesky decomposition
     else:
         n = int(mat.shape[0])
-        D = np.zeros(n)
-        L = np.zeros(mat.shape)
+        D = jnp.zeros(n)
+        L = jnp.zeros(mat.shape)
 
-        for i in np.arange(n):
+        for i in jnp.arange(n):
             L[i, i] = 1
 
-            for j in np.arange(i):
+            for j in jnp.arange(i):
                 L[i, j] = mat[i, j]
-                for k in np.arange(j):
+                for k in jnp.arange(j):
                     L[i, j] -= L[i, k] * L[j, k] * D[k]
 
                 if abs(D[j]) > 1e-12:
@@ -466,8 +475,8 @@ def stabilized_cholesky_decomp(mat):
                     L[i, j] = 0
 
             D[i] = mat[i, i]
-            for k in np.arange(i):
+            for k in jnp.arange(i):
                 D[i] -= L[i, k] * L[i, k] * D[k]
 
-        D = np.sqrt(D.clip(min=0))
+        D = jnp.sqrt(D.clip(min=0))
         return L * D
