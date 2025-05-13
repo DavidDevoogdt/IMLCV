@@ -122,7 +122,7 @@ class Energy:
         self.coordinates = sp.coordinates
 
     @abstractmethod
-    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
+    def _compute_coor(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
         pass
 
     def _handle_exception(self, e=None):
@@ -137,10 +137,10 @@ class Energy:
         shmap=False,
         shmap_kwarg=ShmapKwargs.create(),
     ) -> EnergyResult:
-        self.sp = sp
-        self.nl = nl
+        # self.sp = sp
+        # self.nl = nl
 
-        return self._compute_coor(gpos=gpos, vir=vir)
+        return self._compute_coor(sp, nl, gpos=gpos, vir=vir)
 
     def save(self, filename: str | Path):
         filename = Path(filename)
@@ -214,26 +214,26 @@ class EnergyFn(Energy):
         self._sp = sp
 
     @partial(jax.jit, static_argnames=["gpos", "vir"])
-    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
+    def _compute_coor(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
         def _energy(sp, nl):
             return self.f(sp, nl, **self.static_kwargs, **self.kwargs)
 
-        # print(f"{self.sp=} {self.nl=}")
+        # print(f"in energy {sp=} {nl=}")
 
-        e = _energy(self.sp, self.nl)
+        e = _energy(sp, nl)
 
         e_gpos = None
         e_vir = None
 
         if gpos or vir:
-            dedsp = jax.jacrev(_energy)(self.sp, self.nl)
+            dedsp = jax.jacrev(_energy)(sp, nl)
 
             if gpos:
                 e_gpos = dedsp.coordinates
 
             if vir:
-                e_vir = jnp.einsum("ij,il->jl", self.sp.cell, dedsp.cell) + jnp.einsum(
-                    "ni,nl->il", self.sp.coordinates, dedsp.coordinates
+                e_vir = jnp.einsum("ij,il->jl", sp.cell, dedsp.cell) + jnp.einsum(
+                    "ni,nl->il", sp.coordinates, dedsp.coordinates
                 )
 
         res = EnergyResult(
@@ -241,8 +241,6 @@ class EnergyFn(Energy):
             gpos=e_gpos,
             vtens=e_vir,
         )
-
-        # jax.debug.print("{}", res)
 
         return res
 

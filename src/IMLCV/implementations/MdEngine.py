@@ -19,6 +19,7 @@ from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
 import new_yaff.npt
 import new_yaff.system
+import new_yaff.verlet
 
 # from IMLCV.base.MdEngine import StaticMdInfo
 
@@ -537,9 +538,17 @@ class NewYaffEngine(MDEngine):
     """
 
     _verlet_initialized: bool = False
-    _verlet: yaff.sampling.VerletIntegrator | None = None
+    _verlet: new_yaff.verlet.VerletIntegrator | None = None
     _yaff_ener: Any | None = None
     # additional_parts: list[Any] = field(default_factory=list)
+
+    # @property
+    # def sp(self) -> SystemParams:
+    #     raise NotImplementedError
+
+    # @sp.setter
+    # def sp(self, sp: SystemParams):
+    #     raise NotImplementedError
 
     @classmethod
     def create(  # type: ignore[override]
@@ -599,12 +608,22 @@ class NewYaffEngine(MDEngine):
                 super().__init__()
 
             def __call__(self, iterative: new_yaff.verlet.VerletIntegrator):
-                kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
+                kwargs = dict(
+                    t=iterative.time,
+                    T=iterative.temp,
+                    err=iterative.cons_err,
+                    cv=iterative.cv,
+                    e_bias=iterative.e_bias,
+                    e_pot=iterative.epot - iterative.e_bias,
+                )
 
                 if hasattr(iterative, "press"):
                     kwargs["P"] = iterative.press
 
                 self.md_engine.save_step(**kwargs)
+
+                self.md_engine.sp = iterative.ff.system.sp
+                self.md_engine.update_nl()
 
             def expects_call(self, counter):
                 return True
@@ -616,26 +635,25 @@ class NewYaffEngine(MDEngine):
             # additional_parts=self.additional_parts,
         )
 
+        thermo = None
+
         if self.static_trajectory_info.thermostat:
             from new_yaff.nvt import LangevinThermostat
 
-            hooks.append(
-                LangevinThermostat(
-                    temp=self.static_trajectory_info.T,
-                    timecon=self.static_trajectory_info.timecon_thermo,
-                ),
+            thermo = LangevinThermostat(
+                temp=self.static_trajectory_info.T,
+                timecon=self.static_trajectory_info.timecon_thermo,
             )
+
+        baro = None
         if self.static_trajectory_info.barostat:
             from new_yaff.npt import LangevinBarostat
 
-            hooks.append(
-                LangevinBarostat(
-                    ff=self._yaff_ener,
-                    temp=self.static_trajectory_info.T,
-                    press=self.static_trajectory_info.P,
-                    timecon=self.static_trajectory_info.timecon_baro,
-                    anisotropic=True,
-                ),
+            baro = LangevinBarostat(
+                temp=self.static_trajectory_info.T,
+                press=self.static_trajectory_info.P,
+                timecon=self.static_trajectory_info.timecon_baro,
+                anisotropic=True,
             )
 
         hooks.append(myHook(self))
@@ -646,7 +664,9 @@ class NewYaffEngine(MDEngine):
             ff=self._yaff_ener,
             timestep=self.static_trajectory_info.timestep,
             temp0=self.static_trajectory_info.T,
-            hooks=hooks,
+            other_hooks=hooks,
+            thermostat=thermo,
+            barostat=baro,
         )
 
         self._verlet_initialized = True
@@ -660,6 +680,6 @@ class NewYaffEngine(MDEngine):
             self._setup_verlet()
         self._verlet.run(int(steps))
 
-    @property
-    def yaff_system(self) -> new_yaff.system.YaffSys:
-        return new_yaff.system.YaffSys(self, self.static_trajectory_info)
+    # @property
+    # def yaff_system(self) -> new_yaff.system.YaffSys:
+    #     return new_yaff.system.YaffSys(self, self.static_trajectory_info)

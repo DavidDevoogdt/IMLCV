@@ -23,6 +23,8 @@
 # --
 """Generic Verlet integrator"""
 
+from __future__ import annotations
+
 from dataclasses import KW_ONLY
 from functools import partial
 
@@ -31,6 +33,7 @@ import jax.numpy as jnp
 from flax.struct import dataclass, field
 
 from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.base.CV import CV
 from new_yaff.ff import YaffFF
 from new_yaff.iterative import (
     AttributeStateItem,
@@ -70,24 +73,21 @@ class ConsErrTracker:
     econs_s: float = 0.0
 
     def update(self, ekin, econs):
-        if self.counter == 0:
-            self.ekin_m = ekin
-            self.econs_m = econs
-        else:
-            ekin_tmp = ekin - self.ekin_m
-            self.ekin_m += ekin_tmp / (self.counter + 1)
-            self.ekin_s += ekin_tmp * (ekin - self.ekin_m)
-            econs_tmp = econs - self.econs_m
-            self.econs_m += econs_tmp / (self.counter + 1)
-            self.econs_s += econs_tmp * (econs - self.econs_m)
+        # if self.counter == 0:
+        #     self.ekin_m = ekin
+        #     self.econs_m = econs
+        # else:
+        ekin_tmp = ekin - self.ekin_m
+        self.ekin_m += ekin_tmp / (self.counter + 1)
+        self.ekin_s += ekin_tmp * (ekin - self.ekin_m)
+        econs_tmp = econs - self.econs_m
+        self.econs_m += econs_tmp / (self.counter + 1)
+        self.econs_s += econs_tmp * (econs - self.econs_m)
+
         self.counter += 1
 
     def get(self):
-        if self.counter > 1:
-            # Returns the square root of the ratio of the
-            # variance in Ekin to the variance in Econs
-            return jnp.sqrt(self.econs_s / self.ekin_s)
-        return 0.0
+        return jnp.where(self.counter > 1, jnp.sqrt(self.econs_s / self.ekin_s), 0.0)
 
 
 @partial(dataclass, frozen=False)
@@ -104,14 +104,38 @@ class VerletHook(Hook):
     def __call__(self, iterative):
         pass
 
-    def init(self, iterative):
+    def init(self, iterative) -> tuple[VerletHook, VerletIntegrator]:
         raise NotImplementedError
 
-    def pre(self, iterative):
+    def pre(self, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
         raise NotImplementedError
 
-    def post(self, iterative):
+    def post(self, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
         raise NotImplementedError
+
+
+@partial(dataclass, frozen=False)
+class NVE(VerletHook):
+    _: KW_ONLY
+
+    """Specialized Verlet hook.
+
+    This is mainly used for the implementation of thermostats and barostats.
+    """
+
+    econs_correction: float = 0.0
+
+    def __call__(self, iterative):
+        return
+
+    def init(self, iterative) -> tuple[VerletHook, "VerletIntegrator"]:
+        return
+
+    def pre(self, iterative: "VerletIntegrator") -> tuple[VerletHook, "VerletIntegrator"]:
+        return
+
+    def post(self, iterative: "VerletIntegrator") -> tuple[VerletHook, "VerletIntegrator"]:
+        return
 
 
 @partial(dataclass, frozen=False)
@@ -123,6 +147,10 @@ class VerletIntegrator:
     masses: jax.Array
     timestep: float
 
+    verlet_hook: VerletHook
+
+    temp: float | None = 0.0
+    ekin: float | None = 0.0
     epot: float = 0.0
     etot: float = 0.0
     econs: float = 0.0
@@ -139,14 +167,17 @@ class VerletIntegrator:
     vtens: jax.Array | None = None
     rvecs: jax.Array | None = None
     ndof: int = None
+    cv: jax.Array | None = None
+    e_bias: float | None = None
 
     pos_old: jax.Array | None = field(default=None)
 
-    hooks: list[VerletHook] = field(default_factory=list)
+    other_hooks: list[Hook] = field(pytree_node=False, default_factory=list)
 
     _cons_err_tracker: ConsErrTracker = field(default_factory=ConsErrTracker)
 
     state_list: list[StateItem] = field(
+        pytree_node=False,
         default_factory=lambda: [
             AttributeStateItem(key="counter"),
             AttributeStateItem(key="time"),
@@ -164,14 +195,18 @@ class VerletIntegrator:
             AttributeStateItem(key="ptens"),
             AttributeStateItem(key="vtens"),
             AttributeStateItem(key="press"),
-        ]
+            AttributeStateItem(key="e_bias"),
+            AttributeStateItem(key="cv"),
+        ],
     )
 
     def create(
         # self,
         ff: YaffFF,
-        hooks: list[VerletHook | Hook],
+        other_hooks: list[Hook],
         timestep,
+        thermostat: VerletHook | None = None,
+        barostat: VerletHook | None = None,
         vel0=None,
         temp0=300,
         scalevel0=True,
@@ -233,6 +268,29 @@ class VerletIntegrator:
         if ff.system.masses is None:
             ff.system.set_standard_masses()
 
+        # # Look for the presence of a thermostat and/or barostat
+
+        if thermostat is not None:
+            assert thermostat.method == "thermostat"
+
+        if barostat is not None:
+            assert barostat.method == "barostat"
+
+        if thermostat is None and barostat is None:
+            vh = NVE()
+            print("sampling NVE ensemble")
+        elif thermostat is not None and barostat is None:
+            print(f"sampling NVT ensemble {thermostat.name=}")
+            vh = thermostat
+        elif thermostat is not None and barostat is not None:
+            from new_yaff.npt import TBCombination
+
+            print(f"sampling NPT ensemble {thermostat.name=} {barostat.name=}")
+            vh = TBCombination(thermostat=thermostat, barostat=barostat)
+        else:
+            print(f"sampling NPE ensemble  {barostat.name=}")
+            vh = barostat
+
         d = dict(
             ndof=ndof,
             time=time0 if time0 is not None else 0.0,
@@ -247,56 +305,12 @@ class VerletIntegrator:
             gpos=jnp.zeros(ff.system.pos.shape, float),
             delta=jnp.zeros(ff.system.pos.shape, float),
             vtens=jnp.zeros((3, 3), float),
-            hooks=hooks,
             ff=ff,
+            other_hooks=other_hooks,
+            verlet_hook=vh,
         )
 
         self = VerletIntegrator(**d)
-
-        # Verify the hooks: combine thermostat and barostat if present
-
-        # Look for the presence of a thermostat and/or barostat
-        if hasattr(self.hooks, "__len__"):
-            for index, hook in enumerate(self.hooks):
-                if hook.method == "thermostat":
-                    thermo = hook
-                    index_thermo = index
-                elif hook.method == "barostat":
-                    baro = hook
-                    index_baro = index
-        elif self.hooks is not None:
-            if self.hooks.method == "thermostat":
-                thermo = self.hooks
-            elif self.hooks.method == "barostat":
-                baro = self.hooks
-
-        # If both are present, delete them and generate TBCombination element
-        if thermo is not None and baro is not None:
-            from new_yaff.npt import TBCombination
-
-            print("Both thermostat and barostat are present separately and will be merged")
-
-            del self.hooks[max(index_thermo, index_thermo)]
-            del self.hooks[min(index_thermo, index_baro)]
-            self.hooks.append(TBCombination(thermostat=thermo, barostat=baro))
-
-        if hasattr(self.hooks, "__len__"):
-            for hook in self.hooks:
-                if hook.name == "TBCombination":
-                    thermo = hook.thermostat
-                    baro = hook.barostat
-        elif self.hooks is not None:
-            if self.hooks.name == "TBCombination":
-                thermo = self.hooks.thermostat
-                baro = self.hooks.barostat
-
-        # if log.do_warning:
-        if thermo is not None:
-            print("Temperature coupling achieved through " + str(thermo.name) + " thermostat")
-        if baro is not None:
-            print("Pressure coupling achieved through " + str(baro.name) + " barostat")
-
-        # init arrays
 
         self.initialize()
 
@@ -309,47 +323,50 @@ class VerletIntegrator:
         self.delta = jnp.zeros(self.pos.shape, float)
         self.vtens = jnp.zeros((3, 3), float)
 
-        self.ff.update_pos(self.pos)
-        self.epot, self.gpos, _ = self.ff.compute(self.gpos)
+        self.ff.pos = self.pos
+        self.epot, self.gpos, _, (bias, cv) = self.ff.compute(self.gpos)
+
+        self.cv, self.e_bias = cv, bias
 
         self.acc = -self.gpos / self.masses.reshape(-1, 1)
         self.pos_old = self.pos.copy()
 
         # Allow for specialized initializations by the Verlet hooks.
-        self.call_verlet_hooks("init")
+        self.verlet_hook, self = self.verlet_hook.init(self)
 
         # Configure the number of degrees of freedom if needed
         if self.ndof is None:
             self.ndof = self.pos.size
 
         # Common post-processing of the initialization
-        self.compute_properties()
+        self = self.compute_properties()
 
         self.call_hooks()
 
+    @jax.jit
     def propagate(self):
         # Allow specialized hooks to modify the state before the regular verlet
         # step.
-        self.call_verlet_hooks("pre")
+        self.verlet_hook, self = self.verlet_hook.pre(self)
 
         # Regular verlet step
         self.acc = -self.gpos / self.masses.reshape(-1, 1)
         self.vel += 0.5 * self.acc * self.timestep
         self.pos += self.timestep * self.vel
-        self.ff.update_pos(self.pos)
+        self.ff.system.pos = self.pos
 
         self.gpos = self.gpos.at[:].set(0.0)
         self.vtens = self.vtens.at[:].set(0.0)
-        self.epot, self.gpos, self.vtens = self.ff.compute(self.gpos, self.vtens)
+        self.epot, self.gpos, self.vtens, (bias, cv) = self.ff.compute(self.gpos, self.vtens)
 
-        # print(f"propagate {self.gpos=}")
+        self.cv, self.e_bias = cv, bias
 
         self.acc = -self.gpos / self.masses.reshape(-1, 1)
         self.vel += 0.5 * self.acc * self.timestep
         self.ekin = self._compute_ekin()
 
         # Allow specialized verlet hooks to modify the state after the step
-        self.call_verlet_hooks("post")
+        self.verlet_hook, self = self.verlet_hook.post(self)
 
         # Calculate the total position change
         pos_new = self.pos
@@ -358,11 +375,15 @@ class VerletIntegrator:
 
         # Common post-processing of a single step
         self.time += self.timestep
-        self.compute_properties()
+        self = self.compute_properties()
 
         self.counter += 1
-        self.call_hooks()
 
+        # print(f"inside {self.vel=}")
+
+        return self
+
+    @jax.jit
     def _compute_ekin(self):
         """Auxiliary routine to compute the kinetic energy
 
@@ -370,6 +391,7 @@ class VerletIntegrator:
         """
         return 0.5 * jnp.sum((self.vel**2 * self.masses.reshape(-1, 1)))
 
+    @jax.jit
     def compute_properties(self):
         # self.rmsd_gpos = jnp.sqrt((self.gpos**2).mean())
         self.rmsd_gpos = jnp.linalg.norm(self.gpos)
@@ -378,9 +400,8 @@ class VerletIntegrator:
         self.temp = self.ekin / self.ndof * 2.0 / boltzmann
         self.etot = self.ekin + self.epot
         self.econs = self.etot
-        for hook in self.hooks:
-            if isinstance(hook, VerletHook):
-                self.econs += hook.econs_correction
+
+        self.econs += self.verlet_hook.econs_correction
 
         self._cons_err_tracker.update(self.ekin, self.econs)
         self.cons_err = self._cons_err_tracker.get()
@@ -388,14 +409,15 @@ class VerletIntegrator:
             self.ptens = (jnp.dot(self.vel.T * self.masses, self.vel) - self.vtens) / self.ff.system.cell.volume
             self.press = jnp.trace(self.ptens) / 3
 
+        return self
+
     def finalize(self):
         pass
 
     def call_hooks(self):
         state_updated = False
-        # from yaff.sampling.io import RestartWriter
 
-        for hook in self.hooks:
+        for hook in [self.verlet_hook, *self.other_hooks]:
             if hook.expects_call(self.counter):
                 if not state_updated:
                     for item in self.state_list:
@@ -404,30 +426,13 @@ class VerletIntegrator:
 
                 hook(self)
 
-    def call_verlet_hooks(self, kind):
-        # In this call, the state items are not updated. The pre and post calls
-        # of the verlet hooks can rely on the specific implementation of the
-        # VerletIntegrator and need not to rely on the generic state item
-        # interface.
-
-        for hook in self.hooks:
-            if isinstance(hook, VerletHook) and hook.expects_call(self.counter):
-                if kind == "init":
-                    hook.init(self)
-                elif kind == "pre":
-                    hook.pre(self)
-                elif kind == "post":
-                    hook.post(self)
-                else:
-                    raise NotImplementedError
-
     def run(self, nstep=None):
         if nstep is None:
             while True:
-                if self.propagate():
-                    break
+                self = self.propagate()
+                self.call_hooks()
         else:
             for i in range(nstep):
-                if self.propagate():
-                    break
+                self = self.propagate()
+                self.call_hooks()
         self.finalize()

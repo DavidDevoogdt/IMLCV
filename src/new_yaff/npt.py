@@ -62,6 +62,12 @@ class TBCombination(VerletHook):
     step_thermo: int | None = None
     step_baro: int | None = None
 
+    baro_expects_call: bool = field(pytree_node=False, default=True)
+    thermo_expects_call: bool = field(pytree_node=False, default=True)
+
+    chainvel0: float | None = None
+    G1_add: float | None = None
+
     """
     VerletHook combining an arbitrary Thermostat and Barostat instance, which
     ensures these instances are called in the correct succession, and possible
@@ -80,6 +86,12 @@ class TBCombination(VerletHook):
     def init(self, iterative: VerletIntegrator):
         self.step_thermo = self.thermostat.step
         self.step_baro = self.barostat.step
+
+        # different steps is curently disabled for jax
+
+        assert self.step_baro == self.step_thermo, "different steps is curently disabled for jax"
+        assert self.step_baro == 1, "different steps is curently disabled for jax"
+
         self.step = min(self.thermostat.step, self.barostat.step)
 
         if not self.verify():
@@ -88,8 +100,8 @@ class TBCombination(VerletHook):
         # verify whether ndof is given as an argument
         set_ndof = iterative.ndof is not None
         # initialize the thermostat and barostat separately
-        self.thermostat.init(iterative)
-        self.barostat.init(iterative)
+        self.thermostat, iterative = self.thermostat.init(iterative)
+        self.barostat, iterative, self.barostat.init(iterative)
         # ensure ndof = 3N if the center of mass movement is not suppressed and ndof is not determined by the user
         from new_yaff.nvt import GLEThermostat, LangevinThermostat
 
@@ -104,9 +116,11 @@ class TBCombination(VerletHook):
         self.chainvel0 = None
         self.G1_add = None
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator):
         # determine whether the barostat should be called
-        if self.expectscall(iterative, "baro"):
+        if self.baro_expects_call:
             from new_yaff.nvt import NHCThermostat
 
             if isinstance(self.thermostat, NHCThermostat):
@@ -114,27 +128,29 @@ class TBCombination(VerletHook):
                 # v_{xi,1} is needed to update v_g
                 self.chainvel0 = self.thermostat.chain.vel[0]
             # actual barostat update
-            self.barostat.pre(iterative, self.chainvel0)
+            self.barostat, iterative = self.barostat.pre(iterative, self.chainvel0)
         # determine whether the thermostat should be called
-        if self.expectscall(iterative, "thermo"):
+        if self.thermo_expects_call:
             if isinstance(self.barostat, MTKBarostat):
                 # in case the thermostat is coupled with a MTK barostat:
                 # update equation of v_{xi,1} is altered via G_1
                 self.G1_add = self.barostat.add_press_cont()
             # actual thermostat update
-            self.thermostat.pre(iterative, self.G1_add)
+            self.thermostat, iterative = self.thermostat.pre(iterative, self.G1_add)
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator):
         # determine whether the thermostat should be called
-        if self.expectscall(iterative, "thermo"):
+        if self.thermo_expects_call:
             if isinstance(self.barostat, MTKBarostat):
                 # in case the thermostat is coupled with a MTK barostat:
                 # update equation of v_{xi,1} is altered via G_1
                 self.G1_add = self.barostat.add_press_cont()
             # actual thermostat update
-            self.thermostat.post(iterative, self.G1_add)
+            self.thermostat, iterative = self.thermostat.post(iterative, self.G1_add)
         # determine whether the barostat should be called
-        if self.expectscall(iterative, "baro"):
+        if self.baro_expects_call:
             from new_yaff.nvt import NHCThermostat
 
             if isinstance(self.thermostat, NHCThermostat):
@@ -142,7 +158,7 @@ class TBCombination(VerletHook):
                 # v_{xi,1} is needed to update v_g
                 self.chainvel0 = self.thermostat.chain.vel[0]
             # actual barostat update
-            self.barostat.post(iterative, self.chainvel0)
+            self.barostat, iterative = self.barostat.post(iterative, self.chainvel0)
         # update the correction on E_cons due to thermostat and barostat
         self.econs_correction = self.thermostat.econs_correction + self.barostat.econs_correction
         if isinstance(self.thermostat, NHCThermostat):
@@ -154,12 +170,19 @@ class TBCombination(VerletHook):
                 baro_ndof = self.barostat.baro_ndof
                 self.econs_correction += baro_ndof * kt * self.thermostat.chain.pos[0]
 
-    def expectscall(self, iterative: VerletIntegrator, kind):
-        # returns whether the thermostat/barostat should be called in this iteration
-        if kind == "thermo":
-            return iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
-        if kind == "baro":
-            return iterative.counter >= self.start and (iterative.counter - self.start) % self.step_baro == 0
+        return self, iterative
+
+    # def expectscall(self, iterative: VerletIntegrator, kind):
+    #     return True
+
+    def __call__(self, iterative):
+        self.thermo_expects_call = (
+            iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
+        )
+
+        self.baro_expects_call = (
+            iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
+        )
 
     def verify(self):
         # returns whether the thermostat and barostat instances are currently supported by yaff
@@ -231,19 +254,23 @@ class McDonaldBarostat(VerletHook):
     """
 
     def init(self, iterative: VerletIntegrator):
-        pass
+        return self, iterative
 
     def pre(self, iterative: VerletIntegrator, chainvel0=None):
-        pass
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, chainvel0=None):
         def compute(pos, rvecs):
             iterative.pos = pos
             iterative.gpos = iterative.gpos.at[:].set(0.0)
-            iterative.ff.update_rvecs(rvecs)
-            iterative.ff.update_pos(pos)
-            iterative.epot, iterative.gpos, _ = iterative.ff.compute(iterative.gpos)
+
+            iterative.ff.rvecs = rvecs
+            iterative.ff.system.pos = pos
+
+            iterative.epot, iterative.gpos, _, _ = iterative.ff.compute(iterative.gpos)
             iterative.acc = -iterative.gpos / iterative.masses.reshape(-1, 1)
+
+            return iterative
 
         natom = iterative.ff.system.natom
         # Change the logarithm of the volume isotropically.
@@ -258,7 +285,7 @@ class McDonaldBarostat(VerletHook):
         rvecs0 = iterative.ff.system.cell.rvecs.copy()
         pos0 = iterative.pos.copy()
         # Scale the system and recompute the energy
-        compute(pos0 * scale, rvecs0 * scale)
+        iterative = compute(pos0 * scale, rvecs0 * scale)
         epot1 = iterative.epot
         vol1 = iterative.ff.system.cell.volume
         # Compute the acceptance ratio
@@ -270,7 +297,9 @@ class McDonaldBarostat(VerletHook):
             self.econs_correction += epot0 - epot1
         else:
             # revert the cell and the positions in the original state
-            compute(pos0, rvecs0)
+            iterative = compute(pos0, rvecs0)
+
+        return self, iterative
 
 
 @partial(dataclass, frozen=False)
@@ -285,8 +314,6 @@ class BerendsenBarostat(VerletHook):
     press: float
     timecon_press: float = 1000 * femtosecond
     beta: float = 4.57e-5 / bar
-
-    ff: YaffFF
 
     anisotropic: bool = True
     vol_constraint = False
@@ -332,10 +359,10 @@ class BerendsenBarostat(VerletHook):
 
     def init(self, iterative: VerletIntegrator):
         self.mass_press = 3.0 * self.timecon / self.beta
-        self.dim = self.ff.system.cell.nvec
+        self.dim = iterative.ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
 
-        self.cell = self.ff.system.cell.rvecs.copy()
+        self.cell = iterative.ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
         if not self.restart:
@@ -348,14 +375,16 @@ class BerendsenBarostat(VerletHook):
 
         iterative.vtens = iterative.vtens.at[:].set(0.0)
 
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
         # rescaling of the barostat mass, to be in accordance with Langevin and MTTK
         self.mass_press *= jnp.sqrt(iterative.ndof)
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator, chainvel0=None):
-        pass
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, chainvel0=None):
         # for bookkeeping purposes
@@ -386,9 +415,11 @@ class BerendsenBarostat(VerletHook):
         iterative.gpos = iterative.gpos.at[:].set(0.0)
 
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
         epot1 = iterative.epot
         self.econs_correction += epot0 - epot1
+
+        return self, iterative
 
 
 @partial(dataclass, frozen=False)
@@ -399,7 +430,6 @@ class LangevinBarostat(VerletHook):
 
     _: KW_ONLY
 
-    ff: YaffFF
     temp: float
     press: float
 
@@ -407,8 +437,12 @@ class LangevinBarostat(VerletHook):
 
     cell: jax.Array | None = None
     timecon: float = 1000 * femtosecond
-    anisotropic: bool = True
-    vol_constraint: bool = False
+    anisotropic: bool = field(pytree_node=False, default=True)
+    vol_constraint: bool = field(pytree_node=False, default=False)
+
+    vel_press: float | None = None
+    timestep_press: float | None = None
+    mass_press: float | None = None
 
     dim: int | None = None
     baro_ndof: int | None = None
@@ -446,15 +480,15 @@ class LangevinBarostat(VerletHook):
     """
 
     def init(self, iterative: VerletIntegrator, rand_int=42):
-        self.dim = self.ff.system.cell.nvec
+        self.dim = iterative.ff.system.cell.nvec
 
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
 
         if self.anisotropic:
             # symmetrize the cell tensor
-            cell_symmetrize(self.ff)
+            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, _, _ = cell_symmetrize(iterative.ff)
 
-        self.cell = self.ff.system.cell.rvecs.copy()
+        self.cell = iterative.ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
         iterative.pos, iterative.vel = clean_momenta(
@@ -481,34 +515,40 @@ class LangevinBarostat(VerletHook):
         # after symmetrising the cell tensor
         iterative.gpos = iterative.gpos.at[:].set(0.0)
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
-        self.prng = jax.random.PRNGKey(rand_int)
+        # self.prng = jax.random.PRNGKey(rand_int)
+
+        return self, iterative
 
     def pre(self, iterative: VerletIntegrator, chainvel0=None):
         # bookkeeping
         epot0 = iterative.epot
         ekin0 = iterative.ekin
         # the actual update
-        self.baro(iterative, chainvel0)
+        self, iterative = self.baro(iterative, chainvel0)
         # some more bookkeeping
         epot1 = iterative.epot
         ekin1 = iterative.ekin
         self.econs_correction += epot0 - epot1 + ekin0 - ekin1
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, chainvel0=None):
         # bookkeeping
         epot0 = iterative.epot
         ekin0 = iterative.ekin
         # the actual update
-        self.baro(iterative, chainvel0)
+        self, iterative = self.baro(iterative, chainvel0)
         # some more bookkeeping
         epot1 = iterative.epot
         ekin1 = iterative.ekin
         self.econs_correction += epot0 - epot1 + ekin0 - ekin1
 
+        return self, iterative
+
     def baro(self, iterative: VerletIntegrator, chainvel0):
-        def update_baro_vel():
+        def update_baro_vel(self):
             # updates the barostat velocity tensor
             # iL h/(8*tau)
             self.vel_press *= jnp.exp(-self.timestep_press / (8 * self.timecon))
@@ -522,7 +562,7 @@ class LangevinBarostat(VerletHook):
                 ptens_vol
                 + (2.0 * iterative.ekin / iterative.ndof - self.press * iterative.ff.system.cell.volume) * jnp.eye(3)
             ) / self.mass_press
-            R = self.getR()
+            R, self = self.getR()
             if self.vol_constraint:
                 G -= jnp.trace(G) / self.dim * jnp.eye(self.dim)
                 R -= jnp.trace(R) / self.dim * jnp.eye(self.dim)
@@ -537,8 +577,10 @@ class LangevinBarostat(VerletHook):
                 # iL v_{xi} v_g h/8: extra contribution due to NHC thermostat
                 self.vel_press *= jnp.exp(-self.timestep_press * chainvel0 / 8)
 
+            return self
+
         # first part of the barostat velocity tensor update
-        update_baro_vel()
+        self = update_baro_vel(self)
 
         # iL v_g h/2
         if self.anisotropic:
@@ -553,18 +595,17 @@ class LangevinBarostat(VerletHook):
             rvecs_new = c * iterative.rvecs
 
         # update the positions and cell vectors
-        iterative.ff.update_pos(pos_new)
+        iterative.ff.system.cell.rvecs = rvecs_new
+        iterative.ff.system.pos = pos_new
+
         iterative.pos = pos_new
-        iterative.ff.update_rvecs(rvecs_new)
-        # iterative.rvecs[:] = rvecs_new
         iterative.rvecs = rvecs_new
 
         # update the potential energy
 
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
         # -iL (v_g + Tr(v_g)/ndof) h/2
         if self.anisotropic:
@@ -586,14 +627,16 @@ class LangevinBarostat(VerletHook):
         iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update
-        update_baro_vel()
+        self = update_baro_vel(self)
+
+        return self, iterative
 
     def getR(self):
         shape = 3, 3
         # generate random 3x3 tensor
 
-        key, key0 = jax.random.split(self.prng)
-        self.prng = key
+        key, key0 = jax.random.split(self.key)
+        self.key = key
 
         rand = jax.random.normal(key0, shape=shape) * jnp.sqrt(
             2 * self.mass_press * boltzmann * self.temp / (self.timestep_press * self.timecon)
@@ -606,7 +649,7 @@ class LangevinBarostat(VerletHook):
                     R = R.at[i, j].set(rand[i, j])
                 else:
                     R = R.at[i, j].set(rand[j, i])
-        return R
+        return R, self
 
 
 @partial(dataclass, frozen=False)
@@ -617,7 +660,6 @@ class MTKBarostat(VerletHook):
 
     _: KW_ONLY
 
-    ff: YaffFF
     temp: float
     press: float
 
@@ -684,14 +726,14 @@ class MTKBarostat(VerletHook):
     """
 
     def init(self, iterative: VerletIntegrator):
-        self.dim = self.ff.system.cell.nvec
+        self.dim = iterative.ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
 
         if self.anisotropic:
             # symmetrize the cell tensor
-            cell_symmetrize(self.ff)
+            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, _, _ = cell_symmetrize(iterative.ff)
 
-        self.cell = self.ff.system.cell.rvecs.copy()
+        self.cell = iterative.ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
         if not self.restart:
@@ -726,14 +768,16 @@ class MTKBarostat(VerletHook):
         iterative.gpos = iterative.gpos.at[:].set(0.0)
 
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
+
+        return self, iterative
 
     def pre(self, iterative: VerletIntegrator, chainvel0=None):
         if self.baro_thermo is not None:
             # overrule the chainvel0 argument in the TBC instance
             chainvel0 = self.baro_thermo.chain.vel[0]
         # propagate the barostat
-        self.baro(iterative, chainvel0)
+        self, iterative = self.baro(iterative, chainvel0)
         # propagate the barostat thermostat if present
         if self.baro_thermo is not None:
             # determine the barostat kinetic energy
@@ -742,6 +786,8 @@ class MTKBarostat(VerletHook):
             vel_press_copy = jnp.zeros(self.vel_press.shape)
             vel_press_copy[:] = self.vel_press
             dummy_vel, dummy_ekin = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, chainvel0=None):
         # propagate the barostat thermostat if present
@@ -755,7 +801,7 @@ class MTKBarostat(VerletHook):
             # overrule the chainvel0 argument in the TBC instance
             chainvel0 = self.baro_thermo.chain.vel[0]
         # propagate the barostat
-        self.baro(iterative, chainvel0)
+        self, iterative = self.baro(iterative, chainvel0)
         # calculate the correction due to the barostat alone
         self.econs_correction = self._compute_ekin_baro()
         # add the PV term if the volume is not constrained
@@ -764,6 +810,8 @@ class MTKBarostat(VerletHook):
         if self.baro_thermo is not None:
             # add the correction due to the barostat thermostat
             self.econs_correction += self.baro_thermo.chain.get_econs_correction()
+
+        return self, iterative
 
     def baro(self, iterative: VerletIntegrator, chainvel0):
         def update_baro_vel():
@@ -816,7 +864,7 @@ class MTKBarostat(VerletHook):
         iterative.gpos = iterative.gpos.at[:].set(0.0)
 
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
         # -iL (v_g + Tr(v_g)/ndof) h/2
         if self.anisotropic:
@@ -839,6 +887,8 @@ class MTKBarostat(VerletHook):
 
         # second part of the barostat velocity tensor update
         update_baro_vel()
+
+        self, iterative
 
     def add_press_cont(self):
         kt = self.temp * boltzmann
@@ -869,8 +919,6 @@ class PRBarostat(VerletHook):
     temp: float
     press: float | jax.Array
     timecon_press: float = 1000 * femtosecond
-
-    ff: YaffFF
 
     anisotropic: bool = True
     vol_constraint = False
@@ -932,22 +980,24 @@ class PRBarostat(VerletHook):
         if not isinstance(self.press, jax.Array):
             self.press = self.press * jnp.eye(3)
 
-        self.dim = self.ff.system.cell.nvec
+        self.dim = iterative.ff.system.cell.nvec
 
         self.P = jnp.trace(self.press) / 3
         self.S_ani = self.press - self.P * jnp.eye(3)
         self.S_ani = 0.5 * (
             self.S_ani + self.S_ani.T
         )  # only symmetric part of stress tensor contributes to individual motion
-        self.cellinv0 = jnp.linalg.inv(self.ff.system.cell.rvecs.copy())
-        self.vol0 = self.ff.system.cell.volume
+        self.cellinv0 = jnp.linalg.inv(iterative.ff.system.cell.rvecs.copy())
+        self.vol0 = iterative.ff.system.cell.volume
         # definition of Sigma = V_0*h_0^{-1} S_ani h_0^{-T}
         self.Sigma = self.vol0 * jnp.dot(jnp.dot(self.cellinv0.T, self.S_ani), self.cellinv0)
 
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
         if self.anisotropic and not self.restart:
             # symmetrize the cell and stress tensor
-            vc, tn = cell_symmetrize(self.ff, tensor_list=[self.press])
+            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, vc, tn = cell_symmetrize(
+                iterative.ff, tensor_list=[self.press]
+            )
             self.press = tn[0]
 
         self.timestep_press = iterative.timestep
@@ -985,22 +1035,25 @@ class PRBarostat(VerletHook):
         iterative.gpos = iterative.gpos.at[:].set(0.0)
 
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
+
+        return self, iterative
 
     def pre(self, iterative: VerletIntegrator, chainvel0=None):
         if self.baro_thermo is not None:
             # overrule the chainvel0 argument in the TBC instance
             chainvel0 = self.baro_thermo.chain.vel[0]
         # propagate the barostat
-        self.baro(iterative, chainvel0)
+        self, iterative = self.baro(iterative, chainvel0)
         # propagate the barostat thermostat if present
         if self.baro_thermo is not None:
             # determine the barostat kinetic energy
             ekin_baro = self._compute_ekin_baro()
             # update the barostat thermostat, without updating v_g (done in self.baro)
-            vel_press_copy = jnp.zeros(self.vel_press.shape)
-            vel_press_copy[:] = self.vel_press
+            vel_press_copy = self.vel_press
             dummy_vel, dummy_ekin = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, chainvel0=None):
         # propagate the barostat thermostat if present
@@ -1014,7 +1067,7 @@ class PRBarostat(VerletHook):
             # overrule the chainvel0 argument in the TBC instance
             chainvel0 = self.baro_thermo.chain.vel[0]
         # propagate the barostat
-        self.baro(iterative, chainvel0)
+        self, iterative = self.baro(iterative, chainvel0)
         # calculate the correction due to the barostat alone
         h = iterative.rvecs.copy()
         self.econs_correction = (
@@ -1026,6 +1079,8 @@ class PRBarostat(VerletHook):
         if self.baro_thermo is not None:
             # add the correction due to the barostat thermostat
             self.econs_correction += self.baro_thermo.chain.get_econs_correction()
+
+        return self, iterative
 
     def baro(self, iterative: VerletIntegrator, chainvel0):
         def update_baro_vel():
@@ -1086,11 +1141,13 @@ class PRBarostat(VerletHook):
         iterative.gpos = iterative.gpos.at[:].set(0.0)
 
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
         iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update
         update_baro_vel()
+
+        return self, iterative
 
     def add_press_cont(self):
         kt = self.temp * boltzmann
@@ -1121,8 +1178,6 @@ class TadmorBarostat(VerletHook):
     temp: float
     press: float | jax.Array
     timecon_press: float = 1000 * femtosecond
-
-    ff: YaffFF
 
     anisotropic: bool = True
     vol_constraint = False
@@ -1183,14 +1238,14 @@ class TadmorBarostat(VerletHook):
     """
 
     def init(self, iterative: VerletIntegrator):
-        self.dim = self.ff.system.cell.nvec
+        self.dim = iterative.ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
         if self.anisotropic and not self.restart:
             # symmetrize the cell tensor
-            cell_symmetrize(self.ff)
-        self.cell = self.ff.system.cell.rvecs.copy()
+            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, _, _ = cell_symmetrize(iterative.ff)
+        self.cell = iterative.ff.system.cell.rvecs.copy()
         self.cellinv0 = jnp.linalg.inv(self.cell)
-        self.vol0 = self.ff.system.cell.volume
+        self.vol0 = iterative.ff.system.cell.volume
         # definition of h0^{-1} S h_0^{-T}
         self.Strans = jnp.dot(jnp.dot(self.cellinv0, self.press), self.cellinv0.T)
 
@@ -1227,7 +1282,9 @@ class TadmorBarostat(VerletHook):
         iterative.gpos = iterative.gpos.at[:].set(0.0)
 
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
+
+        return self, iterative
 
     def pre(self, iterative: VerletIntegrator, chainvel0=None):
         if self.baro_thermo is not None:
@@ -1243,6 +1300,8 @@ class TadmorBarostat(VerletHook):
             vel_press_copy = jnp.zeros(self.vel_press.shape)
             vel_press_copy[:] = self.vel_press
             dummy_vel, dummy_ekin = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, chainvel0=None):
         # propagate the barostat thermostat if present
@@ -1271,6 +1330,8 @@ class TadmorBarostat(VerletHook):
         if self.baro_thermo is not None:
             # add the correction due to the barostat thermostat
             self.econs_correction += self.baro_thermo.chain.get_econs_correction()
+
+        return self, iterative
 
     def baro(self, iterative: VerletIntegrator, chainvel0):
         def update_baro_vel():
@@ -1320,7 +1381,7 @@ class TadmorBarostat(VerletHook):
         # update the potential energy
         iterative.gpos = iterative.gpos.at[:].set(0.0)
         iterative.vtens = iterative.vtens.at[:].set(0.0)
-        iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
+        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
         # -iL (Tr(v_g)/ndof) h/2
         if self.anisotropic:

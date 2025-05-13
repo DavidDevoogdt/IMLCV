@@ -279,7 +279,10 @@ class Observable:
         fslist = jnp.array(fslist)
         bounds = jnp.array(bounds)
 
-        eps = fs.shape[0] / (bounds[:, 1] - bounds[:, 0])
+        eps = fs.shape[0] / (
+            (bounds[:, 1] - bounds[:, 0])
+            / (self.collective_variable.metric.bounds[:, 1] - self.collective_variable.metric.bounds[:, 0])
+        )
 
         fes_bias_tot = RbfBias.create(
             cvs=self.collective_variable,

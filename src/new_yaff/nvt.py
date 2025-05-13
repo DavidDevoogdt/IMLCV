@@ -86,6 +86,8 @@ class AndersenThermostat(VerletHook):
             iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
         )
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         # Andersen thermostat step before usual Verlet hook, since it largely affects the velocities
         # Needed to correct the conserved quantity
@@ -110,8 +112,10 @@ class AndersenThermostat(VerletHook):
         # Optional annealing
         self.temp *= self.annealing
 
+        return self, iterative
+
     def post(self, iterative: VerletIntegrator, G1_add=None):
-        pass
+        return self, iterative
 
 
 @partial(dataclass, frozen=False)
@@ -156,6 +160,8 @@ class BerendsenThermostat(VerletHook):
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         ekin = iterative.ekin
         temp_inst = 2.0 * iterative.ekin / (boltzmann * iterative.ndof)
@@ -164,8 +170,10 @@ class BerendsenThermostat(VerletHook):
         iterative.ekin = iterative._compute_ekin()
         self.econs_correction += (1 - c**2) * ekin
 
+        return self, iterative
+
     def post(self, iterative: VerletIntegrator, G1_add=None):
-        pass
+        return self, iterative
 
 
 @partial(dataclass, frozen=False)
@@ -186,28 +194,35 @@ class LangevinThermostat(VerletHook):
             iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
         )
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         ekin0 = iterative.ekin
         # Actual update
-        self.thermo(iterative)
+        self, iterative = self.thermo(iterative)
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, G1_add=None):
         ekin0 = iterative.ekin
         # Actual update
-        self.thermo(iterative)
+        self, iterative = self.thermo(iterative)
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1
 
+        return self, iterative
+
     def thermo(self, iterative: VerletIntegrator):
-        key, key1 = jax.random.split(self.key, 2)
-        self.key = key
+        self.key, key1 = jax.random.split(self.key, 2)
 
         c1 = jnp.exp(-iterative.timestep / self.timecon / 2)
         c2 = jnp.sqrt((1.0 - c1**2) * self.temp * boltzmann / iterative.masses).reshape(-1, 1)
         iterative.vel = c1 * iterative.vel + c2 * jax.random.normal(key1, shape=iterative.vel.shape)
         iterative.ekin = iterative._compute_ekin()
+
+        return self, iterative
 
 
 @partial(dataclass, frozen=False)
@@ -256,6 +271,8 @@ class CSVRThermostat(VerletHook):
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
         self.kin = 0.5 * iterative.ndof * boltzmann * self.temp
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         c = jnp.exp(-iterative.timestep / self.timecon)
         R = jnp.random.normal(0, 1)
@@ -268,8 +285,10 @@ class CSVRThermostat(VerletHook):
         self.econs_correction += (1 - alpha**2) * iterative.ekin
         iterative.ekin = iterative.ekin_new
 
+        return self, iterative
+
     def post(self, iterative: VerletIntegrator, G1_add=None):
-        pass
+        return self, iterative
 
 
 @partial(dataclass, frozen=False)
@@ -287,6 +306,10 @@ class GLEThermostat(VerletHook):
     c_p: jax.Array | None = None
     ns: int | None = None
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
+
+    t: float | None = None
+    S: float | None = None
+    n_atoms: int | None = None
 
     """
     This hook implements the coloured noise thermostat. The equations
@@ -333,11 +356,17 @@ class GLEThermostat(VerletHook):
         # Store the number of atoms for later use
         self.n_atoms = iterative.pos.shape[0]
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator, G1_add=None):
-        self.thermo(iterative)
+        self, iterative = self.thermo(iterative)
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, G1_add=None):
-        self.thermo(iterative)
+        self, iterative = self.thermo(iterative)
+
+        return self, iterative
 
     def thermo(self, iterative: VerletIntegrator):
         ekin0 = iterative.ekin
@@ -362,6 +391,8 @@ class GLEThermostat(VerletHook):
         # update the conserved quantity
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1
+
+        return self, iterative
 
 
 @partial(dataclass, frozen=False)
@@ -423,7 +454,7 @@ class NHChain(object):
         return jax.random.normal(key0, shape=shape) * jnp.sqrt(self.masses * boltzmann * self.temp) / self.masses
 
     def __call__(self, ekin, vel, G1_add):
-        def do_bead(k, ekin):
+        def do_bead(k, ekin, self):
             # Compute g
             if k == 0:
                 # coupling with atoms (and barostat)
@@ -449,9 +480,11 @@ class NHChain(object):
                 # iL vxi_{k-1} h/8
                 self.vel = self.vel.at[k].mul(jnp.exp(-self.vel[k + 1] * self.timestep / 8))
 
+            return self
+
         # Loop over chain in reverse order
         for k in range(self.length - 1, -1, -1):
-            do_bead(k, ekin)
+            self = do_bead(k, ekin, self)
 
         # iL xi (all) h/2
         self.pos += self.vel * self.timestep / 2
@@ -462,7 +495,7 @@ class NHChain(object):
 
         # Loop over chain in forward order
         for k in range(0, self.length):
-            do_bead(k, ekin)
+            self = do_bead(k, ekin, self)
         return vel, ekin
 
     def get_econs_correction(self):
@@ -533,16 +566,22 @@ class NHCThermostat(VerletHook):
         self.chain.timestep = iterative.timestep
         self.chain.set_ndof(iterative.ndof)
 
+        return self, iterative
+
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
         # iterative.vel[:] = vel_new
         iterative.vel = vel_new
+
+        return self, iterative
 
     def post(self, iterative: VerletIntegrator, G1_add=None):
         vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
         # iterative.vel[:] = vel_new
         iterative.vel = vel_new
         self.econs_correction = self.chain.get_econs_correction()
+
+        return self, iterative
 
 
 class NHCAttributeStateItem(StateItem):

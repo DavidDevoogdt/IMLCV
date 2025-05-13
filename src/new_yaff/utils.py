@@ -320,10 +320,10 @@ def cell_symmetrize(ff, vector_list=None, tensor_list=None):
     rot_mat = jnp.dot(Vt.T, U.T)
     # symmetrize cell tensor and update cell
     cell = jnp.dot(cell, rot_mat)
-    ff.update_rvecs(cell)
+    # ff.update_rvecs(cell)
     # also update the new atomic positions
     pos_new = jnp.dot(ff.system.pos, rot_mat)
-    ff.update_pos(pos_new)
+    # ff.update_pos(pos_new)
     # initialize the new vector and tensor lists
     new_vector_list = []
     new_tensor_list = []
@@ -335,7 +335,7 @@ def cell_symmetrize(ff, vector_list=None, tensor_list=None):
     if tensor_list is not None:
         for i in range(len(tensor_list)):
             new_tensor_list.append(jnp.dot(jnp.dot(rot_mat.T, tensor_list[i]), rot_mat))
-    return new_vector_list, new_tensor_list
+    return cell, pos_new, new_vector_list, new_tensor_list
 
 
 def cell_lower(rvecs):
@@ -446,27 +446,27 @@ def stabilized_cholesky_decomp(mat):
     """
     if jnp.all(jnp.linalg.eigvals(mat) > 0):
         return jnp.linalg.cholesky(mat)  # usual cholesky decomposition
-    else:
-        n = int(mat.shape[0])
-        D = jnp.zeros(n)
-        L = jnp.zeros(mat.shape)
 
-        for i in jnp.arange(n):
-            L[i, i] = 1
+    n = int(mat.shape[0])
+    D = jnp.zeros(n)
+    L = jnp.zeros(mat.shape)
 
-            for j in jnp.arange(i):
-                L[i, j] = mat[i, j]
-                for k in jnp.arange(j):
-                    L[i, j] -= L[i, k] * L[j, k] * D[k]
+    for i in jnp.arange(n):
+        L[i, i] = 1
 
-                if abs(D[j]) > 1e-12:
-                    L[i, j] *= 1.0 / D[j]
-                else:
-                    L[i, j] = 0
+        for j in jnp.arange(i):
+            L[i, j] = mat[i, j]
+            for k in jnp.arange(j):
+                L[i, j] -= L[i, k] * L[j, k] * D[k]
 
-            D[i] = mat[i, i]
-            for k in jnp.arange(i):
-                D[i] -= L[i, k] * L[i, k] * D[k]
+            if abs(D[j]) > 1e-12:
+                L[i, j] *= 1.0 / D[j]
+            else:
+                L[i, j] = 0
 
-        D = jnp.sqrt(D.clip(min=0))
-        return L * D
+        D[i] = mat[i, i]
+        for k in jnp.arange(i):
+            D[i] -= L[i, k] * L[i, k] * D[k]
+
+    D = jnp.sqrt(D.clip(min=0))
+    return L * D

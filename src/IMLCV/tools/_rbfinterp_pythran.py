@@ -51,7 +51,7 @@ NAME_TO_FUNC = {
 
 
 def scale(val, metric: CvMetric):
-    return val / (metric.bounding_box[:, 1] - metric.bounding_box[:, 0]) * 2
+    return (val - metric.bounding_box[:, 0]) / (metric.bounding_box[:, 1] - metric.bounding_box[:, 0])
 
 
 def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
@@ -67,8 +67,8 @@ def cv_norm(x: CV, y: CV, metric: CvMetric, eps):
         jnp.sum(
             jnp.where(
                 metric.periodicities,
-                (jnp.sin(x_min * jnp.pi) - jnp.sin(y_min * jnp.pi)) ** 2
-                + (jnp.cos(x_min * jnp.pi) - jnp.cos(y_min * jnp.pi)) ** 2,
+                (jnp.sin(2 * x_min * jnp.pi) - jnp.sin(2 * y_min * jnp.pi)) ** 2
+                + (jnp.cos(2 * x_min * jnp.pi) - jnp.cos(2 * y_min * jnp.pi)) ** 2,
                 (x_min - y_min) ** 2,
             )
             * eps**2

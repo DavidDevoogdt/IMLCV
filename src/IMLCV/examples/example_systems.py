@@ -555,7 +555,12 @@ def _toy_periodic_cvs(sp: SystemParams, _nl, _c, shmap, shmap_kwargs):
 def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
     # sigma = 2 ** (-1 / 6) * (1.5 * angstrom)
 
+    # print(f"inside f toy {sp=} {_nl0=}")
+
     r0 = 1.501 * angstrom
+
+    def gauss_1d(r, r0, a=1.0):
+        return jnp.exp(-a * ((r - r0) / (r0)) ** 2) * (jnp.sqrt(a) / (r0))
 
     def f(r_ij, _):
         r2 = jnp.sum(r_ij**2)
@@ -563,16 +568,16 @@ def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
         r2_safe = jnp.where(r2 < 1e-10, 1e-10, r2)
         r = jnp.where(r2 > 1e-10, jnp.sqrt(r2_safe), 0.0)
 
-        return -0.5 * kjmol * jnp.log(jnp.exp(-5 * (r - r0) ** 2) + jnp.exp(-5 * (r - 2 * r0) ** 2))
+        return -0.5 * kjmol * jnp.log(gauss_1d(r, r0, a=20.0) + gauss_1d(r, 2 * r0, a=20.0))
 
     _, ener_bond = _nl0.apply_fun_neighbour(sp, f, r_cut=jnp.inf, exclude_self=True)
 
     V = sp.volume()
 
-    def rel_v(v, r):
-        return (v - r**3) / (r**3)
+    def gauss_3d(v, r, a=1.0):
+        return jnp.exp(-a * ((v - r**3) / (r**3)) ** 2) * (jnp.sqrt(a) / (r**3))
 
-    E_vol = -50.0 * kjmol * jnp.log(jnp.exp(-1 * rel_v(V, 2 * r0) ** 2) + jnp.exp(-1 * rel_v(V, 4 * r0) ** 2))
+    E_vol = (-5.0 * jnp.log(gauss_3d(V, r0, 2) + gauss_3d(V, 2 * r0, 16)) - 24) * kjmol
 
     return jnp.sum(ener_bond) + E_vol
 
@@ -646,7 +651,7 @@ def toy_periodic_phase_trans():
             periodicities=[False],
             bounding_box=jnp.array(
                 [
-                    [0.8 * (2 * r0) ** 3, 1.2 * (4 * r0) ** 3],
+                    [0.1 * (2 * r0) ** 3, 1.5 * (4 * r0) ** 3],
                 ]
             ),
         ),

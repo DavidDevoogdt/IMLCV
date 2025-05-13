@@ -571,10 +571,8 @@ class MDEngine(ABC):
     time0: float = field(default_factory=time)
 
     step: int = 1
-    last_bias: EnergyResult = EnergyResult(energy=jnp.array(0))
-    last_ener: EnergyResult = EnergyResult(energy=jnp.array(0))
-    last_cv: CV | None = None
-    _nl: NeighbourList | None = None
+
+    nl: NeighbourList | None = None
     r_skin = 1.0 * angstrom
 
     @classmethod
@@ -608,6 +606,8 @@ class MDEngine(ABC):
             create_kwargs["step"] = trajectory_info._size
             energy.sp = trajectory_info.sp[-1]
 
+        self.update_nl()
+
         kwargs.update(create_kwargs)
 
         return self(
@@ -619,16 +619,7 @@ class MDEngine(ABC):
             **kwargs,
         )
 
-    # @property
-    # def sp(self) -> SystemParams:
-    #     return self.energy.sp
-
-    # @sp.setter
-    # def sp(self, sp: SystemParams):
-    #     self.energy.sp = sp
-
-    @property
-    def nl(self) -> NeighbourList | None:
+    def update_nl(self):
         if self.static_trajectory_info.r_cut is None:
             return None
 
@@ -642,8 +633,8 @@ class MDEngine(ABC):
             nl = self.sp.get_neighbour_list(info)  # jitted update
             b = True
         else:
-            nl = self._nl
-            b = not self._nl.needs_update(self.sp)
+            nl = self.nl
+            b = not self.nl.needs_update(self.sp)
 
         if not b:
             print("nl - update")
@@ -663,8 +654,7 @@ class MDEngine(ABC):
 
         # nl = jax.device_put(nl, jax.devices("cpu")[0])
 
-        self._nl = nl
-        return nl
+        self.nl = nl
 
     def save(self, file):
         filename = Path(file)
@@ -757,7 +747,7 @@ class MDEngine(ABC):
 
         return self.trajectory_info._shrink_capacity()
 
-    def save_step(self, T=None, P=None, t=None, err=None, canonicalize=False):
+    def save_step(self, T=None, P=None, t=None, err=None, cv=None, e_bias=None, e_pot=None, canonicalize=False):
         if canonicalize:
             sp = self.nl.canonicalized_sp(self.sp)
         else:
@@ -766,9 +756,9 @@ class MDEngine(ABC):
         ti = TrajectoryInfo.create(
             positions=sp.coordinates,
             cell=sp.cell,
-            e_pot=self.last_ener.energy,
-            e_bias=self.last_bias.energy,
-            cv=self.last_cv.cv,
+            e_pot=e_pot,
+            e_bias=e_bias,
+            cv=cv,
             T=T,
             P=P,
             t=t,
@@ -802,7 +792,7 @@ class MDEngine(ABC):
             if ti._P is not None:
                 str += f" {ti._P[0] / bar: >10.2f}"
             str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
-            str += f"|{jnp.max(jnp.linalg.norm(self.last_bias.gpos, axis=1) / kjmol * angstrom): >13.2f}"
+            # str += f"|{jnp.max(jnp.linalg.norm(self.last_bias.gpos, axis=1) / kjmol * angstrom): >13.2f}"
             str += f"| {ti._cv[0, :]}"
             print(str)
 
@@ -820,7 +810,7 @@ class MDEngine(ABC):
 
         self.step += 1
 
-    def get_energy(self, gpos: bool = False, vtens: bool = False) -> EnergyResult:
+    def get_energy(self, sp: SystemParams, gpos: bool = False, vtens: bool = False) -> EnergyResult:
         def f(sp, nl):
             return self.energy.compute_from_system_params(
                 gpos=gpos,
@@ -829,10 +819,11 @@ class MDEngine(ABC):
                 nl=nl,
             )
 
-        return f(self.sp, self.nl)
+        return f(sp, self.nl)
 
     def get_bias(
         self,
+        sp: SystemParams,
         gpos: bool = False,
         vtens: bool = False,
         shmap: bool = False,
@@ -842,7 +833,7 @@ class MDEngine(ABC):
         shmap_kwargs=ShmapKwargs.create(),
     ) -> tuple[CV, EnergyResult]:
         cv, ener = self.bias.compute_from_system_params(
-            sp=self.sp,
+            sp=sp,
             nl=self.nl,
             gpos=gpos,
             vir=vtens,
