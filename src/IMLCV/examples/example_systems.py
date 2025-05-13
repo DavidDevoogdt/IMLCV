@@ -563,19 +563,18 @@ def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
         r2_safe = jnp.where(r2 < 1e-10, 1e-10, r2)
         r = jnp.where(r2 > 1e-10, jnp.sqrt(r2_safe), 0.0)
 
-        return -10 * kjmol * jnp.log(jnp.exp(-5 * (r - r0) ** 2) + jnp.exp(-5 * (r - 2 * r0) ** 2))
+        return -0.5 * kjmol * jnp.log(jnp.exp(-5 * (r - r0) ** 2) + jnp.exp(-5 * (r - 2 * r0) ** 2))
 
     _, ener_bond = _nl0.apply_fun_neighbour(sp, f, r_cut=jnp.inf, exclude_self=True)
 
     V = sp.volume()
 
-    E_vol = (
-        -10.0 * kjmol * jnp.log(jnp.exp(-0.001 * (V - (2 * r0) ** 3) ** 2) + jnp.exp(-0.001 * (V - (4 * r0) ** 3) ** 2))
-    )
+    def rel_v(v, r):
+        return (v - r**3) / (r**3)
 
-    # print(f"V: {V}, E_vol: {E_vol}")
+    E_vol = -50.0 * kjmol * jnp.log(jnp.exp(-1 * rel_v(V, 2 * r0) ** 2) + jnp.exp(-1 * rel_v(V, 4 * r0) ** 2))
 
-    return jnp.sum(ener_bond) + E_vol + 0.1 * kjmol
+    return jnp.sum(ener_bond) + E_vol
 
 
 def toy_periodic_phase_trans():
@@ -584,7 +583,7 @@ def toy_periodic_phase_trans():
         P=1 * atm,
         timestep=2.0 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
-        timecon_baro=500.0 * femtosecond,
+        timecon_baro=200.0 * femtosecond,
         write_step=100,
         atomic_numbers=jnp.array(
             [6] * 8,
@@ -663,7 +662,7 @@ def toy_periodic_phase_trans():
         energy=energy,
         static_trajectory_info=tic,
         bias=bias_cv0,
-        sp=sp0,
+        sp=sp1,
     )
 
     return mde, [sp0, sp1]

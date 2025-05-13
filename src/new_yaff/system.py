@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from functools import partial
 
 import jax.numpy as jnp
-# import numpy as np
-
+from flax.struct import dataclass
 
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo
-from flax.struct import dataclass, field
-from functools import partial
-# from IMLCV.base.MdEngine import StaticMdInfo
 
 
 @partial(dataclass, frozen=False)

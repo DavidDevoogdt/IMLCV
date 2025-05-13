@@ -23,30 +23,29 @@
 # --
 """Generic Verlet integrator"""
 
-# import numpy as np
+from dataclasses import KW_ONLY
+from functools import partial
+
+import jax
+import jax.numpy as jnp
+from flax.struct import dataclass, field
 
 from IMLCV.base.UnitsConstants import boltzmann
+from new_yaff.ff import YaffFF
 from new_yaff.iterative import (
     AttributeStateItem,
     CellStateItem,
     Hook,
-    # Iterative,
     PosStateItem,
     StateItem,
 )
 from new_yaff.utils import get_random_vel
-import jax.numpy as jnp
-from flax.struct import dataclass, field
-from new_yaff.ff import YaffFF
-from new_yaff.system import YaffSys
-import jax
-
-from functools import partial
 
 
+@partial(dataclass, frozen=False)
 class TemperatureStateItem(StateItem):
-    def __init__(self):
-        StateItem.__init__(self, "temp")
+    _: KW_ONLY
+    key: str = field(pytree_node=False, default="temp")
 
     def get_value(self, iterative):
         return getattr(iterative, "temp", None)
@@ -91,24 +90,16 @@ class ConsErrTracker:
         return 0.0
 
 
+@partial(dataclass, frozen=False)
 class VerletHook(Hook):
+    _: KW_ONLY
+
     """Specialized Verlet hook.
 
     This is mainly used for the implementation of thermostats and barostats.
     """
 
-    def __init__(self, start=0, step=1):
-        """
-        **Optional arguments:**
-
-        start
-             The first iteration at which this hook should be called.
-
-        step
-             The hook will be called every `step` iterations.
-        """
-        self.econs_correction = 0.0
-        Hook.__init__(self, start=0, step=1)
+    econs_correction: float = 0.0
 
     def __call__(self, iterative):
         pass
@@ -148,7 +139,8 @@ class VerletIntegrator:
     vtens: jax.Array | None = None
     rvecs: jax.Array | None = None
     ndof: int = None
-    posoud: jax.Array | None = field(default=None)
+
+    pos_old: jax.Array | None = field(default=None)
 
     hooks: list[VerletHook] = field(default_factory=list)
 
@@ -156,21 +148,22 @@ class VerletIntegrator:
 
     state_list: list[StateItem] = field(
         default_factory=lambda: [
-            AttributeStateItem("counter"),
-            AttributeStateItem("time"),
-            AttributeStateItem("epot"),
+            AttributeStateItem(key="counter"),
+            AttributeStateItem(key="time"),
+            AttributeStateItem(key="epot"),
             PosStateItem(),
-            AttributeStateItem("vel"),
-            AttributeStateItem("rmsd_delta"),
-            AttributeStateItem("rmsd_gpos"),
-            AttributeStateItem("ekin"),
+            CellStateItem(),
+            AttributeStateItem(key="vel"),
+            AttributeStateItem(key="rmsd_delta"),
+            AttributeStateItem(key="rmsd_gpos"),
+            AttributeStateItem(key="ekin"),
             TemperatureStateItem(),
-            AttributeStateItem("etot"),
-            AttributeStateItem("econs"),
-            AttributeStateItem("cons_err"),
-            AttributeStateItem("ptens"),
-            AttributeStateItem("vtens"),
-            AttributeStateItem("press"),
+            AttributeStateItem(key="etot"),
+            AttributeStateItem(key="econs"),
+            AttributeStateItem(key="cons_err"),
+            AttributeStateItem(key="ptens"),
+            AttributeStateItem(key="vtens"),
+            AttributeStateItem(key="press"),
         ]
     )
 
@@ -261,21 +254,6 @@ class VerletIntegrator:
         self = VerletIntegrator(**d)
 
         # Verify the hooks: combine thermostat and barostat if present
-        self._verify_hooks()
-
-        # Working arrays
-
-        # Tracks quality of the conserved quantity
-        # self._cons_err_tracker = ConsErrTracker()
-        self.initialize()
-
-        return self
-
-    def _verify_hooks(self):
-        thermo = None
-        index_thermo = 0
-        baro = None
-        index_baro = 0
 
         # Look for the presence of a thermostat and/or barostat
         if hasattr(self.hooks, "__len__"):
@@ -300,7 +278,7 @@ class VerletIntegrator:
 
             del self.hooks[max(index_thermo, index_thermo)]
             del self.hooks[min(index_thermo, index_baro)]
-            self.hooks.append(TBCombination(thermo, baro))
+            self.hooks.append(TBCombination(thermostat=thermo, barostat=baro))
 
         if hasattr(self.hooks, "__len__"):
             for hook in self.hooks:
@@ -318,6 +296,12 @@ class VerletIntegrator:
         if baro is not None:
             print("Pressure coupling achieved through " + str(baro.name) + " barostat")
 
+        # init arrays
+
+        self.initialize()
+
+        return self
+
     def initialize(self):
         # Standard initialization of Verlet algorithm
 
@@ -329,7 +313,7 @@ class VerletIntegrator:
         self.epot, self.gpos, _ = self.ff.compute(self.gpos)
 
         self.acc = -self.gpos / self.masses.reshape(-1, 1)
-        self.posoud = self.pos.copy()
+        self.pos_old = self.pos.copy()
 
         # Allow for specialized initializations by the Verlet hooks.
         self.call_verlet_hooks("init")
@@ -368,9 +352,9 @@ class VerletIntegrator:
         self.call_verlet_hooks("post")
 
         # Calculate the total position change
-        self.posnieuw = self.pos.copy()
-        self.delta = self.posnieuw - self.posoud
-        self.posoud = self.posnieuw.copy()
+        pos_new = self.pos
+        self.delta = pos_new - self.pos_old
+        self.pos_old = pos_new
 
         # Common post-processing of a single step
         self.time += self.timestep
@@ -384,10 +368,11 @@ class VerletIntegrator:
 
         This is used internally and often also by the Verlet hooks.
         """
-        return 0.5 * (self.vel**2 * self.masses.reshape(-1, 1)).sum()
+        return 0.5 * jnp.sum((self.vel**2 * self.masses.reshape(-1, 1)))
 
     def compute_properties(self):
-        self.rmsd_gpos = jnp.sqrt((self.gpos**2).mean())
+        # self.rmsd_gpos = jnp.sqrt((self.gpos**2).mean())
+        self.rmsd_gpos = jnp.linalg.norm(self.gpos)
         self.rmsd_delta = jnp.sqrt((self.delta**2).mean())
         self.ekin = self._compute_ekin()
         self.temp = self.ekin / self.ndof * 2.0 / boltzmann

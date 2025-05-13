@@ -23,28 +23,12 @@
 # --
 """Auxiliary routines for initial velocities"""
 
-from __future__ import division
-
 import jax.numpy as jnp
 
-# from molmod import boltzmann
+
 from IMLCV.base.UnitsConstants import boltzmann
 
 import jax
-
-# __all__ = [
-#     "get_random_vel",
-#     "remove_com_moment",
-#     "remove_angular_moment",
-#     "clean_momenta",
-#     "angular_moment",
-#     "get_ndof_internal_md",
-#     "cell_symmetrize",
-#     "cell_lower",
-#     "get_random_vel_press",
-#     "get_ndof_baro",
-#     "stabilized_cholesky_decomp",
-# ]
 
 
 def get_random_vel(
@@ -110,6 +94,8 @@ def remove_com_moment(vel, masses):
     # subtract this com velocity vector from each atomic velocity
     vel -= com_vel
 
+    return vel
+
 
 def remove_angular_moment(pos, vel, masses):
     """Zero the global angular momentum.
@@ -145,6 +131,8 @@ def remove_angular_moment(pos, vel, masses):
     # subtract the rigid body angular velocities from the atomic velocities
     vel -= rigid_body_angular_velocities(pos, ang_vel)
 
+    return pos, vel
+
 
 def clean_momenta(pos, vel, masses, cell):
     """Remove any relevant external momenta
@@ -164,14 +152,16 @@ def clean_momenta(pos, vel, masses, cell):
     cell
          A Cell instance describing the periodic boundary conditions.
     """
-    remove_com_moment(vel, masses)
+    vel = remove_com_moment(vel, masses)
     if cell.nvec == 0:
         # remove all angular momenta
-        remove_angular_moment(pos, vel, masses)
+        pos, vel = remove_angular_moment(pos, vel, masses)
     elif cell.nvec == 1:
         # TODO: only the angular momentum about the cell vector has to be
         # projected out
         raise NotImplementedError
+
+    return pos, vel
 
 
 def inertia_tensor(pos, masses):
@@ -394,7 +384,7 @@ def cell_lower(rvecs):
     return newrvecs, rot
 
 
-def get_random_vel_press(mass, temp, key: jax.random.PRNGKey):
+def get_random_vel_press(mass, temp, key):
     """Generates symmetric tensor of barostat velocities
 
     **Arguments:**

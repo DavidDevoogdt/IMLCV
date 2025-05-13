@@ -25,59 +25,66 @@
 
 from __future__ import division
 
-# import numpy as np
+from dataclasses import KW_ONLY
+from functools import partial
+
+import jax
 import jax.numpy as jnp
+from flax.struct import dataclass, field
 
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
 from new_yaff.iterative import StateItem
 from new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
 from new_yaff.verlet import VerletHook, VerletIntegrator
-import jax
 
 
+@partial(dataclass, frozen=False)
 class AndersenThermostat(VerletHook):
     name = "Andersen"
     kind = "stochastic"
     method = "thermostat"
 
-    def __init__(self, temp, start=0, step=1, select=None, annealing=1.0):
-        """
-        This is an implementation of the Andersen thermostat. The method
-        is described in:
+    _: KW_ONLY
 
-             Andersen, H. C. J. Chem. Phys. 1980, 72, 2384-2393.
+    temp: float
+    select: jax.Array | None = None
+    annealing: float = 1.0
 
-        **Arguments:**
+    """
+    This is an implementation of the Andersen thermostat. The method
+    is described in:
 
-        temp
-             The average temperature of the NVT ensemble
+            Andersen, H. C. J. Chem. Phys. 1980, 72, 2384-2393.
 
-        **Optional arguments:**
+    **Arguments:**
 
-        start
-             The first iteration at which this hook is called
+    temp
+            The average temperature of the NVT ensemble
 
-        step
-             The number of iterations between two subsequent calls to this
-             hook.
+    **Optional arguments:**
 
-        select
-             An array of atom indexes to indicate which atoms controlled by
-             the thermostat.
+    start
+            The first iteration at which this hook is called
 
-        annealing
-             After every call to this hook, the temperature is multiplied
-             with this annealing factor. This effectively cools down the
-             system.
-        """
-        self.temp = temp
-        self.select = select
-        self.annealing = annealing
-        VerletHook.__init__(self, start, step)
+    step
+            The number of iterations between two subsequent calls to this
+            hook.
+
+    select
+            An array of atom indexes to indicate which atoms controlled by
+            the thermostat.
+
+    annealing
+            After every call to this hook, the temperature is multiplied
+            with this annealing factor. This effectively cools down the
+            system.
+    """
 
     def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
-        clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
 
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         # Andersen thermostat step before usual Verlet hook, since it largely affects the velocities
@@ -94,7 +101,9 @@ class AndersenThermostat(VerletHook):
                 get_random_vel(self.temp, False, iterative.masses, self.select, key0)
             )
         # Zero any external momenta after choosing new velocities
-        clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         # Update the kinetic energy and the reference for the conserved quantity
         ekin_after = iterative._compute_ekin()
         self.econs_correction += ekin_before - ekin_after
@@ -105,44 +114,45 @@ class AndersenThermostat(VerletHook):
         pass
 
 
+@partial(dataclass, frozen=False)
 class BerendsenThermostat(VerletHook):
     name = "Berendsen"
     kind = "deterministic"
     method = "thermostat"
 
-    def __init__(self, temp, start=0, timecon=100 * femtosecond, restart=False):
-        """
-        This is an implementation of the Berendsen thermostat. The algorithm
-        is described in:
+    _: KW_ONLY
 
-             Berendsen, H. J. C.; Postma, J. P. M.; van Gunsteren, W. F.;
-             Dinola, A.; Haak, J. R. J. Chem. Phys. 1984, 81, 3684-3690
+    temp: float
+    timecon: float = 100 * femtosecond
 
-        **Arguments:**
+    """
+    This is an implementation of the Berendsen thermostat. The algorithm
+    is described in:
 
-        temp
-             The temperature of thermostat.
+            Berendsen, H. J. C.; Postma, J. P. M.; van Gunsteren, W. F.;
+            Dinola, A.; Haak, J. R. J. Chem. Phys. 1984, 81, 3684-3690
 
-        **Optional arguments:**
+    **Arguments:**
 
-        start
-             The step at which the thermostat becomes active.
+    temp
+            The temperature of thermostat.
 
-        timecon
-             The time constant of the Berendsen thermostat.
+    **Optional arguments:**
 
-         restart
-             Indicates whether the initalisation should be carried out.
-        """
-        self.temp = temp
-        self.timecon = timecon
-        self.restart = restart
-        VerletHook.__init__(self, start, 1)
+    start
+            The step at which the thermostat becomes active.
+
+    timecon
+            The time constant of the Berendsen thermostat.
+
+    """
 
     def init(self, iterative: VerletIntegrator):
         if not self.restart:
             # It is mandatory to zero the external momenta.
-            clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+            iterative.pos, iterative.vel = clean_momenta(
+                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            )
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
 
@@ -150,7 +160,7 @@ class BerendsenThermostat(VerletHook):
         ekin = iterative.ekin
         temp_inst = 2.0 * iterative.ekin / (boltzmann * iterative.ndof)
         c = jnp.sqrt(1 + iterative.timestep / self.timecon * (self.temp / temp_inst - 1))
-        iterative.vel = iterative.vel.at[:].set(c * iterative.vel)
+        iterative.vel = c * iterative.vel
         iterative.ekin = iterative._compute_ekin()
         self.econs_correction += (1 - c**2) * ekin
 
@@ -158,39 +168,23 @@ class BerendsenThermostat(VerletHook):
         pass
 
 
+@partial(dataclass, frozen=False)
 class LangevinThermostat(VerletHook):
     name = "Langevin"
     kind = "stochastic"
     method = "thermostat"
 
-    def __init__(self, temp, start=0, timecon=100 * femtosecond, key_init=42):
-        """
-        This is an implementation of the Langevin thermostat. The algorithm
-        is described in:
+    _: KW_ONLY
 
-             Bussi, G.; Parrinello, M. Phys. Rev. E 2007, 75, 056707
-
-        **Arguments:**
-
-        temp
-             The temperature of thermostat.
-
-        **Optional arguments:**
-
-        start
-             The step at which the thermostat becomes active.
-
-        timecon
-             The time constant of the Langevin thermostat.
-        """
-        self.temp = temp
-        self.timecon = timecon
-        self.key = jax.random.PRNGKey(key_init)
-        VerletHook.__init__(self, start, 1)
+    temp: float
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
+    timecon: float = 100 * femtosecond
 
     def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
-        clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
 
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         ekin0 = iterative.ekin
@@ -216,43 +210,48 @@ class LangevinThermostat(VerletHook):
         iterative.ekin = iterative._compute_ekin()
 
 
+@partial(dataclass, frozen=False)
 class CSVRThermostat(VerletHook):
     name = "CSVR"
     kind = "stochastic"
     method = "thermostat"
 
-    def __init__(self, temp, start=0, timecon=100 * femtosecond):
-        """
-         This is an implementation of the CSVR thermostat. The equations are
-         derived in:
+    _: KW_ONLY
 
-             Bussi, G.; Donadio, D.; Parrinello, M. J. Chem. Phys. 2007,
-             126, 014101
+    temp: float
+    timecon: float = 100 * femtosecond
+    kin: float | None = None
 
-         The implementation (used here) is derived in
+    """
+        This is an implementation of the CSVR thermostat. The equations are
+        derived in:
 
-             Bussi, G.; Parrinello, M. Comput. Phys. Commun. 2008, 179, 26-29
+            Bussi, G.; Donadio, D.; Parrinello, M. J. Chem. Phys. 2007,
+            126, 014101
 
-        **Arguments:**
+        The implementation (used here) is derived in
 
-        temp
-             The temperature of thermostat.
+            Bussi, G.; Parrinello, M. Comput. Phys. Commun. 2008, 179, 26-29
 
-        **Optional arguments:**
+    **Arguments:**
 
-        start
-             The step at which the thermostat becomes active.
+    temp
+            The temperature of thermostat.
 
-        timecon
-             The time constant of the CSVR thermostat.
-        """
-        self.temp = temp
-        self.timecon = timecon
-        VerletHook.__init__(self, start, 1)
+    **Optional arguments:**
+
+    start
+            The step at which the thermostat becomes active.
+
+    timecon
+            The time constant of the CSVR thermostat.
+    """
 
     def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
-        clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
         self.kin = 0.5 * iterative.ndof * boltzmann * self.temp
@@ -273,49 +272,58 @@ class CSVRThermostat(VerletHook):
         pass
 
 
+@partial(dataclass, frozen=False)
 class GLEThermostat(VerletHook):
     name = "GLE"
     kind = "stochastic"
     method = "thermostat"
 
-    def __init__(self, temp, a_p, c_p=None, start=0):
-        """
-        This hook implements the coloured noise thermostat. The equations
-        are derived in:
+    _: KW_ONLY
 
-            Ceriotti, M.; Bussi, G.; Parrinello, M J. Chem. Theory Comput.
-            2010, 6, 1170-1180.
+    temp: float
+    timecon: float = 100 * femtosecond
+    kin: float | None = None
+    a_p: jax.Array
+    c_p: jax.Array | None = None
+    ns: int | None = None
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-        **Arguments:**
+    """
+    This hook implements the coloured noise thermostat. The equations
+    are derived in:
 
-        temp
-            The temperature of thermostat.
+        Ceriotti, M.; Bussi, G.; Parrinello, M J. Chem. Theory Comput.
+        2010, 6, 1170-1180.
 
-        a_p
-            Square drift matrix, with elements fitted to the specific problem.
+    **Arguments:**
+
+    temp
+        The temperature of thermostat.
+
+    a_p
+        Square drift matrix, with elements fitted to the specific problem.
 
 
-        **Optional arguments:**
+    **Optional arguments:**
 
-        c_p
-            Square static covariance matrix. In equilibrium, its elements are fixed.
-            For non-equilibrium dynamics, its elements should be fitted.
+    c_p
+        Square static covariance matrix. In equilibrium, its elements are fixed.
+        For non-equilibrium dynamics, its elements should be fitted.
 
-        start
-            The step at which the thermostat becomes active.
-        """
-        self.temp = temp
-        self.ns = int(a_p.shape[0] - 1)
-        self.a_p = a_p
-        self.c_p = c_p
+    start
+        The step at which the thermostat becomes active.
+    """
+
+    def init(self, iterative: VerletIntegrator):
+        self.ns = int(self.a_p.shape[0] - 1)
         if self.c_p is None:
             # Assume equilibrium dynamics if c_p is not provided
             self.c_p = boltzmann * self.temp * jnp.eye(self.ns + 1)
-        VerletHook.__init__(self, start, 1)
 
-    def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta
-        clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         # Initialize the additional momenta
         self.s = 0.5 * boltzmann * self.temp * jnp.random.normal(size=(self.ns, iterative.pos.size))
         # Determine the update matrices
@@ -338,8 +346,11 @@ class GLEThermostat(VerletHook):
         # extend the s to include the real momenta
         s_extended_old = jnp.vstack([p, self.s])
         # update equation
+
+        self.key, key0 = jax.random.split(self.key, 2)
+
         s_extended_new = jnp.dot(self.t, s_extended_old) + jnp.dot(
-            self.S, jnp.random.normal(size=(self.ns + 1, 3 * self.n_atoms))
+            self.S, jax.random.normal(key0, shape=(self.ns + 1, 3 * self.n_atoms))
         )
         # store the new variables in the correct place
         iterative.vel = jnp.dot(
@@ -353,35 +364,45 @@ class GLEThermostat(VerletHook):
         self.econs_correction += ekin0 - ekin1
 
 
+@partial(dataclass, frozen=False)
 class NHChain(object):
-    def __init__(self, length, timestep, temp, ndof, pos0, vel0, timecon=100 * femtosecond, key_init=42):
-        # parameters
-        self.length = length
-        self.timestep = timestep
-        self.temp = temp
-        self.timecon = timecon
-        # verify whether positions and velocities are taken from a restart
-        self.restart_pos = False
-        self.restart_vel = False
-        if pos0 is not None:
+    _: KW_ONLY
+
+    lenth: int = 3
+    timestep: float
+    temp: float
+    timecon: float = 100 * femtosecond
+
+    restart_pos: bool = False
+    restart_vel: bool = False
+
+    pos0: jax.Array | None = None
+    vel0: jax.Array | None = None
+
+    masses: jax.Array | None = None
+
+    ndof: int = 0
+
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
+
+    def __post_init__(self):
+        if self.pos0 is not None:
             self.restart_pos = True
-        if vel0 is not None:
+        if self.vel0 is not None:
             self.restart_vel = True
 
-        if ndof > 0:  # avoid setting self.masses with zero gaussian-width in set_ndof if ndof=0
-            self.set_ndof(ndof)
+        if self.ndof > 0:  # avoid setting self.masses with zero gaussian-width in set_ndof if ndof=0
+            self.set_ndof(self.ndof)
 
         # allocate degrees of freedom
         if self.restart_pos:
-            self.pos = pos0.copy()
+            self.pos = self.pos0.copy()
         else:
-            self.pos = jnp.zeros(length)
+            self.pos = jnp.zeros(self.length)
         if self.restart_vel:
-            self.vel = vel0.copy()
+            self.vel = self.vel0.copy()
         else:
-            self.vel = jnp.zeros(length)
-
-        self.key = jax.random.PRNGKey(key_init)
+            self.vel = jnp.zeros(self.length)
 
     def set_ndof(self, ndof):
         # set the masses according to the time constant
@@ -419,14 +440,14 @@ class NHChain(object):
             # Lioville operators on relevant part of the chain
             if k == self.length - 1:
                 # iL G_k h/4
-                self.vel[k] += g * self.timestep / 4
+                self.vel = self.vel.at[k].add(g * self.timestep / 4)
             else:
                 # iL vxi_{k-1} h/8
-                self.vel[k] *= jnp.exp(-self.vel[k + 1] * self.timestep / 8)
+                self.vel = self.vel.at[k].mul(jnp.exp(-self.vel[k + 1] * self.timestep / 8))
                 # iL G_k h/4
-                self.vel[k] += g * self.timestep / 4
+                self.vel = self.vel.at[k].add(g * self.timestep / 4)
                 # iL vxi_{k-1} h/8
-                self.vel[k] *= jnp.exp(-self.vel[k + 1] * self.timestep / 8)
+                self.vel = self.vel.at[k].mul(jnp.exp(-self.vel[k + 1] * self.timestep / 8))
 
         # Loop over chain in reverse order
         for k in range(self.length - 1, -1, -1):
@@ -447,66 +468,64 @@ class NHChain(object):
     def get_econs_correction(self):
         kt = boltzmann * self.temp
         # correction due to the thermostat
-        return 0.5 * (self.vel**2 * self.masses).sum() + kt * (self.ndof * self.pos[0] + self.pos[1:].sum())
+        return 0.5 * jnp.sum(self.vel**2 * self.masses) + kt * (self.ndof * self.pos[0] + jnp.sum(self.pos[1:]))
 
 
+@partial(dataclass, frozen=False)
 class NHCThermostat(VerletHook):
     name = "NHC"
     kind = "deterministic"
     method = "thermostat"
 
-    def __init__(
-        self, temp, start=0, timecon=100 * femtosecond, chainlength=3, chain_pos0=None, chain_vel0=None, restart=False
-    ):
-        """
-        This hook implements the Nose-Hoover chain thermostat. The equations
-        are derived in:
+    _: KW_ONLY
 
-            Martyna, G. J.; Klein, M. L.; Tuckerman, M. J. Chem. Phys. 1992,
-            97, 2635-2643.
+    temp: float
+    chain: NHChain
 
-        The implementation (used here) of a symplectic integrator of the
-        Nose-Hoover chain thermostat is discussed in:
+    """
+    This hook implements the Nose-Hoover chain thermostat. The equations
+    are derived in:
 
-            Martyna, G. J.;  Tuckerman, M. E.;  Tobias, D. J.;  Klein,
-            M. L. Mol. Phys. 1996, 87, 1117-1157.
+        Martyna, G. J.; Klein, M. L.; Tuckerman, M. J. Chem. Phys. 1992,
+        97, 2635-2643.
 
-        **Arguments:**
+    The implementation (used here) of a symplectic integrator of the
+    Nose-Hoover chain thermostat is discussed in:
 
-        temp
-            The temperature of thermostat.
+        Martyna, G. J.;  Tuckerman, M. E.;  Tobias, D. J.;  Klein,
+        M. L. Mol. Phys. 1996, 87, 1117-1157.
 
-        **Optional arguments:**
+    **Arguments:**
 
-        start
-            The step at which the thermostat becomes active.
+    temp
+        The temperature of thermostat.
 
-        timecon
-            The time constant of the Nose-Hoover thermostat.
+    **Optional arguments:**
 
-        chainlength
-            The number of beads in the Nose-Hoover chain.
+    start
+        The step at which the thermostat becomes active.
 
-        chain_pos0
-            The initial thermostat chain positions
+    timecon
+        The time constant of the Nose-Hoover thermostat.
 
-        chain_vel0
-            The initial thermostat chain velocities
+    chainlength
+        The number of beads in the Nose-Hoover chain.
 
-        restart
-            Indicates whether the initalisation should be carried out
-        """
-        self.temp = temp
-        self.restart = restart
-        # At this point, the timestep and the number of degrees of freedom are
-        # not known yet
-        self.chain = NHChain(chainlength, 0.0, temp, 0, chain_pos0, chain_vel0, timecon)
-        VerletHook.__init__(self, start, 1)
+    chain_pos0
+        The initial thermostat chain positions
+
+    chain_vel0
+        The initial thermostat chain velocities
+
+    restart
+        Indicates whether the initalisation should be carried out
+    """
 
     def init(self, iterative: VerletIntegrator):
-        if not self.restart:
-            # It is mandatory to zero the external momenta
-            clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+        # It is mandatory to zero the external momenta
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         # If needed, determine the number of _internal_ degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
@@ -517,12 +536,12 @@ class NHCThermostat(VerletHook):
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
         # iterative.vel[:] = vel_new
-        iterative.vel = iterative.vel.at[:].set(vel_new)
+        iterative.vel = vel_new
 
     def post(self, iterative: VerletIntegrator, G1_add=None):
         vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
         # iterative.vel[:] = vel_new
-        iterative.vel = iterative.vel.at[:].set(vel_new)
+        iterative.vel = vel_new
         self.econs_correction = self.chain.get_econs_correction()
 
 
@@ -533,7 +552,7 @@ class NHCAttributeStateItem(StateItem):
 
     def get_value(self, iterative: VerletIntegrator):
         chain = None
-        from yaff.sampling.npt import TBCombination
+        from new_yaff.npt import TBCombination
 
         for hook in iterative.hooks:
             if isinstance(hook, NHCThermostat):

@@ -25,12 +25,13 @@
 
 from __future__ import division
 
+from dataclasses import KW_ONLY
+from functools import partial
+
 import jax
-
-# import numpy as np
 import jax.numpy as jnp
+from flax.struct import dataclass, field
 
-# from molmod import boltzmann, femtosecond, kjmol, bar, atm
 from IMLCV.base.UnitsConstants import (
     bar,
     boltzmann,
@@ -38,6 +39,7 @@ from IMLCV.base.UnitsConstants import (
 )
 from new_yaff.ff import YaffFF
 from new_yaff.iterative import StateItem
+from new_yaff.nvt import NHCThermostat
 from new_yaff.utils import (
     cell_symmetrize,
     clean_momenta,
@@ -48,38 +50,41 @@ from new_yaff.utils import (
 from new_yaff.verlet import VerletHook, VerletIntegrator
 
 
+@partial(dataclass, frozen=False)
 class TBCombination(VerletHook):
     name = "TBCombination"
 
-    def __init__(self, thermostat, barostat, start=0):
-        """
-        VerletHook combining an arbitrary Thermostat and Barostat instance, which
-        ensures these instances are called in the correct succession, and possible
-        coupling between both is handled correctly.
+    _: KW_ONLY
 
-        **Arguments:**
+    thermostat: VerletHook
+    barostat: VerletHook
 
-        thermostat
-            A Thermostat instance
+    step_thermo: int | None = None
+    step_baro: int | None = None
 
-        barostat
-            A Barostat instance
+    """
+    VerletHook combining an arbitrary Thermostat and Barostat instance, which
+    ensures these instances are called in the correct succession, and possible
+    coupling between both is handled correctly.
 
-        """
-        self.thermostat = thermostat
-        self.barostat = barostat
-        self.start = start
-        # verify if thermostat and barostat instances are currently supported in yaff
-        if not self.verify():
-            self.barostat = thermostat
-            self.thermostat = barostat
-            if not self.verify():
-                raise TypeError("The Thermostat or Barostat instance is not supported (yet)")
-        self.step_thermo = self.thermostat.step
-        self.step_baro = self.barostat.step
-        VerletHook.__init__(self, start, min(self.step_thermo, self.step_baro))
+    **Arguments:**
+
+    thermostat
+        A Thermostat instance
+
+    barostat
+        A Barostat instance
+
+    """
 
     def init(self, iterative: VerletIntegrator):
+        self.step_thermo = self.thermostat.step
+        self.step_baro = self.barostat.step
+        self.step = min(self.thermostat.step, self.barostat.step)
+
+        if not self.verify():
+            raise TypeError("The Thermostat or Barostat instance is not supported (yet)")
+
         # verify whether ndof is given as an argument
         set_ndof = iterative.ndof is not None
         # initialize the thermostat and barostat separately
@@ -185,44 +190,45 @@ class TBCombination(VerletHook):
         return thermo_correct and baro_correct
 
 
+@partial(dataclass, frozen=False)
 class McDonaldBarostat(VerletHook):
     name = "McDonald"
     kind = "stochastic"
     method = "barostat"
 
-    def __init__(self, temp, press, start=0, step=1, amp=1e-3, rand_int=42):
-        """
-        Warning: this code is not fully tested yet!
+    _: KW_ONLY
 
-        **Arguments:**
+    temp: float
+    press: float
+    amp: float = 1e-3
+    dim: int = 3
+    baro_ndof: int = 1
 
-        temp
-             The average temperature of the jnp. ensemble
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-        press
-             The external pressure of the jnp. ensemble
+    """
+    Warning: this code is not fully tested yet!
 
-        **Optional arguments:**
+    **Arguments:**
 
-        start
-             The first iteration at which this hook is called
+    temp
+            The average temperature of the jnp. ensemble
 
-        step
-             The number of iterations between two subsequent calls to this
-             hook.
+    press
+            The external pressure of the jnp. ensemble
 
-        amp
-             The amplitude of the changes in the logarithm of the volume.
-        """
-        self.temp = temp
-        self.press = press
-        self.amp = amp
-        self.dim = 3
-        self.baro_ndof = 1
+    **Optional arguments:**
 
-        self.prng = jax.random.PRNGKey(rand_int)
+    start
+            The first iteration at which this hook is called
 
-        VerletHook.__init__(self, start, step)
+    step
+            The number of iterations between two subsequent calls to this
+            hook.
+
+    amp
+            The amplitude of the changes in the logarithm of the volume.
+    """
 
     def init(self, iterative: VerletIntegrator):
         pass
@@ -242,8 +248,8 @@ class McDonaldBarostat(VerletHook):
         natom = iterative.ff.system.natom
         # Change the logarithm of the volume isotropically.
 
-        key, key0, key1 = jax.random.split(self.prng, 3)
-        self.prng = key
+        key, key0, key1 = jax.random.split(self.key, 3)
+        self.key = key
 
         scale = jnp.exp(jax.random.uniform(key0, minval=-self.amp, maxval=self.amp))
         # Keep track of old state
@@ -267,79 +273,75 @@ class McDonaldBarostat(VerletHook):
             compute(pos0, rvecs0)
 
 
+@partial(dataclass, frozen=False)
 class BerendsenBarostat(VerletHook):
     name = "Berendsen"
     kind = "deterministic"
     method = "barostat"
 
-    def __init__(
-        self,
-        ff: YaffFF,
-        temp,
-        press,
-        start=0,
-        step=1,
-        timecon=1000 * femtosecond,
-        beta=4.57e-5 / bar,
-        anisotropic=True,
-        vol_constraint=False,
-        restart=False,
-    ):
-        """
-        This hook implements the Berendsen barostat. The equations are derived in:
+    _: KW_ONLY
 
-            Berendsen, H. J. C.; Postma, J. P. M.; van Gunsteren, W. F.;
-            Dinola, A.; Haak, J. R. J. Chem. Phys. 1984, 81, 3684-3690
+    temp: float
+    press: float
+    timecon_press: float = 1000 * femtosecond
+    beta: float = 4.57e-5 / bar
 
-        **Arguments:**
+    ff: YaffFF
 
-        ff
-            A ForceField instance.
+    anisotropic: bool = True
+    vol_constraint = False
+    mass_press: float | None = None
+    dim: int = None
+    baro_ndof: int | None = None
+    cell: jax.Array | None = None
 
-        temp
-            The temperature of thermostat.
+    """
+    This hook implements the Berendsen barostat. The equations are derived in:
 
-        press
-            The applied pressure for the barostat.
+        Berendsen, H. J. C.; Postma, J. P. M.; van Gunsteren, W. F.;
+        Dinola, A.; Haak, J. R. J. Chem. Phys. 1984, 81, 3684-3690
 
-        **Optional arguments:**
+    **Arguments:**
 
-        start
-            The step at which the thermostat becomes active.
+    ff
+        A ForceField instance.
 
-        timecon
-            The time constant of the Berendsen barostat.
+    temp
+        The temperature of thermostat.
 
-        beta
-            The isothermal compressibility, conventionally the compressibility of liquid water
+    press
+        The applied pressure for the barostat.
 
-        anisotropic
-            Defines whether anisotropic cell fluctuations are allowed.
+    **Optional arguments:**
 
-        vol_constraint
-            Defines whether the volume is allowed to fluctuate.
-        """
-        self.temp = temp
-        self.press = press
-        self.timecon_press = timecon
-        self.beta = beta
-        self.mass_press = 3.0 * timecon / beta
-        self.anisotropic = anisotropic
-        self.vol_constraint = vol_constraint
-        self.dim = ff.system.cell.nvec
-        # determine the number of degrees of freedom associated with the unit cell
-        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
-        if self.anisotropic:
-            # symmetrize the cell tensor
-            cell_symmetrize(ff)
-        self.cell = ff.system.cell.rvecs.copy()
-        self.restart = restart
-        VerletHook.__init__(self, start, step)
+    start
+        The step at which the thermostat becomes active.
+
+    timecon
+        The time constant of the Berendsen barostat.
+
+    beta
+        The isothermal compressibility, conventionally the compressibility of liquid water
+
+    anisotropic
+        Defines whether anisotropic cell fluctuations are allowed.
+
+    vol_constraint
+        Defines whether the volume is allowed to fluctuate.
+    """
 
     def init(self, iterative: VerletIntegrator):
+        self.mass_press = 3.0 * self.timecon / self.beta
+        self.dim = self.ff.system.cell.nvec
+        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
+
+        self.cell = self.ff.system.cell.rvecs.copy()
+
         self.timestep_press = iterative.timestep
         if not self.restart:
-            clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+            iterative.pos, iterative.vel = clean_momenta(
+                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            )
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
         iterative.gpos = iterative.gpos.at[:].set(0.0)
@@ -375,88 +377,89 @@ class BerendsenBarostat(VerletHook):
         rvecs_new = jnp.dot(iterative.rvecs, mu)
         iterative.ff.update_pos(pos_new)
         # iterative.pos[:] = pos_new
-        iterative.pos = iterative.pos.at[:].set(pos_new)
+        iterative.pos = pos_new
         iterative.ff.update_rvecs(rvecs_new)
         # iterative.rvecs[:] = rvecs_new
-        iterative.rvecs = iterative.rvecs.at[:].set(rvecs_new)
+        iterative.rvecs = rvecs_new
         # calculation of the virial tensor
-        # iterative.gpos[:] = 0.0
+
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
+
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
         epot1 = iterative.epot
         self.econs_correction += epot0 - epot1
 
 
+@partial(dataclass, frozen=False)
 class LangevinBarostat(VerletHook):
     name = "Langevin"
     kind = "stochastic"
     method = "barostat"
 
-    def __init__(
-        self,
-        ff: YaffFF,
-        temp,
-        press,
-        start=0,
-        step=1,
-        timecon=1000 * femtosecond,
-        anisotropic=True,
-        vol_constraint=False,
-        key=42,
-    ):
-        """
-        This hook implements the Langevin barostat. The equations are derived in:
+    _: KW_ONLY
 
-            Feller, S. E.; Zhang, Y.; Pastor, R. W.; Brooks, B. R.
-            J. Chem. Phys. 1995, 103, 4613-4621
+    ff: YaffFF
+    temp: float
+    press: float
 
-        **Arguments:**
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-        ff
-            A ForceField instance.
+    cell: jax.Array | None = None
+    timecon: float = 1000 * femtosecond
+    anisotropic: bool = True
+    vol_constraint: bool = False
 
-        temp
-            The temperature of thermostat.
+    dim: int | None = None
+    baro_ndof: int | None = None
 
-        press
-            The applied pressure for the barostat.
+    """
+    This hook implements the Langevin barostat. The equations are derived in:
 
-        **Optional arguments:**
+        Feller, S. E.; Zhang, Y.; Pastor, R. W.; Brooks, B. R.
+        J. Chem. Phys. 1995, 103, 4613-4621
 
-        start
-            The step at which the barostat becomes active.
+    **Arguments:**
 
-        timecon
-            The time constant of the Langevin barostat.
+    ff
+        A ForceField instance.
 
-        anisotropic
-            Defines whether anisotropic cell fluctuations are allowed.
+    temp
+        The temperature of thermostat.
 
-        vol_constraint
-            Defines whether the volume is allowed to fluctuate.
-        """
-        self.temp = temp
-        self.press = press
-        self.timecon = timecon
-        self.anisotropic = anisotropic
-        self.vol_constraint = vol_constraint
-        self.dim = ff.system.cell.nvec
-        # determine the number of degrees of freedom associated with the unit cell
-        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
-        if self.anisotropic:
-            # symmetrize the cell tensor
-            cell_symmetrize(ff)
-        self.cell = ff.system.cell.rvecs.copy()
+    press
+        The applied pressure for the barostat.
 
-        self.key = jax.random.PRNGKey(key)
+    **Optional arguments:**
 
-        VerletHook.__init__(self, start, step)
+    start
+        The step at which the barostat becomes active.
+
+    timecon
+        The time constant of the Langevin barostat.
+
+    anisotropic
+        Defines whether anisotropic cell fluctuations are allowed.
+
+    vol_constraint
+        Defines whether the volume is allowed to fluctuate.
+    """
 
     def init(self, iterative: VerletIntegrator, rand_int=42):
+        self.dim = self.ff.system.cell.nvec
+
+        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
+
+        if self.anisotropic:
+            # symmetrize the cell tensor
+            cell_symmetrize(self.ff)
+
+        self.cell = self.ff.system.cell.rvecs.copy()
+
         self.timestep_press = iterative.timestep
-        clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         # set the number of internal degrees of freedom (no restriction on p_cm)
         if iterative.ndof is None:
             iterative.ndof = iterative.pos.size
@@ -551,16 +554,15 @@ class LangevinBarostat(VerletHook):
 
         # update the positions and cell vectors
         iterative.ff.update_pos(pos_new)
-        # iterative.pos[:] = pos_new
-        iterative.pos = iterative.pos.at[:].set(pos_new)
+        iterative.pos = pos_new
         iterative.ff.update_rvecs(rvecs_new)
         # iterative.rvecs[:] = rvecs_new
-        iterative.rvecs = iterative.rvecs.at[:].set(rvecs_new)
+        iterative.rvecs = rvecs_new
 
         # update the potential energy
-        # iterative.gpos[:] = 0.0
+
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
+
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
@@ -578,7 +580,7 @@ class LangevinBarostat(VerletHook):
                 jnp.exp(-((1.0 + 3.0 / iterative.ndof) * self.vel_press) * self.timestep_press / 2) * iterative.vel
             )
         # iterative.vel[:] = vel_new
-        iterative.vel = iterative.vel.at[:].set(vel_new)
+        iterative.vel = vel_new
 
         # update kinetic energy
         iterative.ekin = iterative._compute_ekin()
@@ -607,97 +609,95 @@ class LangevinBarostat(VerletHook):
         return R
 
 
+@partial(dataclass, frozen=False)
 class MTKBarostat(VerletHook):
     name = "MTTK"
     kind = "deterministic"
     method = "barostat"
 
-    def __init__(
-        self,
-        ff: YaffFF,
-        temp,
-        press,
-        start=0,
-        step=1,
-        timecon=1000 * femtosecond,
-        anisotropic=True,
-        vol_constraint=False,
-        baro_thermo=None,
-        vel_press0=None,
-        restart=False,
-        key_init=0,
-    ):
-        """
-        This hook implements the Martyna-Tobias-Klein barostat. The equations
-        are derived in:
+    _: KW_ONLY
 
-            Martyna, G. J.; Tobias, D. J.; Klein, M. L. J. Chem. Phys. 1994,
-            101, 4177-4189.
+    ff: YaffFF
+    temp: float
+    press: float
 
-        The implementation (used here) of a symplectic integrator of this
-        barostat is discussed in
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-            Martyna, G. J.;  Tuckerman, M. E.;  Tobias, D. J.;  Klein,
-            M. L. Mol. Phys. 1996, 87, 1117-1157.
+    cell: jax.Array | None = None
+    timecon: float = 1000 * femtosecond
+    anisotropic: bool = True
+    vol_constraint: bool = False
 
-        **Arguments:**
+    vel_press: jax.Array
 
-        ff
-            A ForceField instance.
+    dim: int | None = None
+    baro_ndof: int | None = None
 
-        temp
-            The temperature of thermostat.
+    baro_thermo: NHCThermostat | None = None
 
-        press
-            The applied pressure for the barostat.
+    """
+    This hook implements the Martyna-Tobias-Klein barostat. The equations
+    are derived in:
 
-        **Optional arguments:**
+        Martyna, G. J.; Tobias, D. J.; Klein, M. L. J. Chem. Phys. 1994,
+        101, 4177-4189.
 
-        start
-            The step at which the barostat becomes active.
+    The implementation (used here) of a symplectic integrator of this
+    barostat is discussed in
 
-        timecon
-            The time constant of the Martyna-Tobias-Klein barostat.
+        Martyna, G. J.;  Tuckerman, M. E.;  Tobias, D. J.;  Klein,
+        M. L. Mol. Phys. 1996, 87, 1117-1157.
 
-        anisotropic
-            Defines whether anisotropic cell fluctuations are allowed.
+    **Arguments:**
 
-        vol_constraint
-            Defines whether the volume is allowed to fluctuate.
+    ff
+        A ForceField instance.
 
-        baro_thermo
-            NHCThermostat instance, coupled directly to the barostat
+    temp
+        The temperature of thermostat.
 
-        vel_press0
-            The initial barostat velocity tensor
+    press
+        The applied pressure for the barostat.
 
-        restart
-            If true, the cell is not symmetrized initially
-        """
-        self.temp = temp
-        self.press = press
-        self.timecon_press = timecon
-        self.anisotropic = anisotropic
-        self.vol_constraint = vol_constraint
-        self.baro_thermo = baro_thermo
-        self.dim = ff.system.cell.nvec
-        self.restart = restart
-        # determine the number of degrees of freedom associated with the unit cell
-        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
-        if self.anisotropic and not self.restart:
-            # symmetrize the cell tensor
-            cell_symmetrize(ff)
-        self.cell = ff.system.cell.rvecs.copy()
-        self.vel_press = vel_press0
+    **Optional arguments:**
 
-        self.key = jax.random.PRNGKey(key_init)
+    start
+        The step at which the barostat becomes active.
 
-        VerletHook.__init__(self, start, step)
+    timecon
+        The time constant of the Martyna-Tobias-Klein barostat.
+
+    anisotropic
+        Defines whether anisotropic cell fluctuations are allowed.
+
+    vol_constraint
+        Defines whether the volume is allowed to fluctuate.
+
+    baro_thermo
+        NHCThermostat instance, coupled directly to the barostat
+
+    vel_press0
+        The initial barostat velocity tensor
+
+    restart
+        If true, the cell is not symmetrized initially
+    """
 
     def init(self, iterative: VerletIntegrator):
+        self.dim = self.ff.system.cell.nvec
+        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
+
+        if self.anisotropic:
+            # symmetrize the cell tensor
+            cell_symmetrize(self.ff)
+
+        self.cell = self.ff.system.cell.rvecs.copy()
+
         self.timestep_press = iterative.timestep
         if not self.restart:
-            clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+            iterative.pos, iterative.vel = clean_momenta(
+                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(len(iterative.ff.system.numbers), iterative.ff.system.cell.nvec)
@@ -722,9 +722,9 @@ class MTKBarostat(VerletHook):
             self.vel_press -= jnp.trace(self.vel_press) / 3 * jnp.eye(3)
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
-        # iterative.gpos[:] = 0.0
+
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
+
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
@@ -806,15 +806,15 @@ class MTKBarostat(VerletHook):
         # update the positions and cell vectors
         iterative.ff.update_pos(pos_new)
         # iterative.pos[:] = pos_new
-        iterative.pos = iterative.pos.at[:].set(pos_new)
+        iterative.pos = pos_new
         iterative.ff.update_rvecs(rvecs_new)
         # iterative.rvecs[:] = rvecs_new
-        iterative.rvecs = iterative.rvecs.at[:].set(rvecs_new)
+        iterative.rvecs = rvecs_new
 
         # update the potential energy
-        # iterative.gpos[:] = 0.0
+
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
+
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
@@ -834,7 +834,7 @@ class MTKBarostat(VerletHook):
 
         # update the velocities and the kinetic energy
         # iterative.vel[:] = vel_new
-        iterative.vel = iterative.vel.at[:].set(vel_new)
+        iterative.vel = vel_new
         iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update
@@ -858,99 +858,103 @@ class MTKBarostat(VerletHook):
             return 0.5 * self.mass_press * self.vel_press**2
 
 
+@partial(dataclass, frozen=False)
 class PRBarostat(VerletHook):
     name = "PR"
     kind = "deterministic"
     method = "barostat"
 
-    def __init__(
-        self,
-        ff: YaffFF,
-        temp,
-        press,
-        start=0,
-        step=1,
-        timecon=1000 * femtosecond,
-        anisotropic=True,
-        vol_constraint=False,
-        baro_thermo=None,
-        vel_press0=None,
-        restart=False,
-    ):
-        """
-        This hook implements the Parrinello-Rahman barostat for finite strains.
-        The equations are derived in:
+    _: KW_ONLY
 
-            Parrinello, M.; Rahman, A. J. Appl. Phys. 1981, 52, 7182-7190.
+    temp: float
+    press: float | jax.Array
+    timecon_press: float = 1000 * femtosecond
 
-        **Arguments:**
+    ff: YaffFF
 
-        ff
-            A ForceField instance.
+    anisotropic: bool = True
+    vol_constraint = False
+    mass_press: float | None = None
+    dim: int = None
+    baro_ndof: int | None = None
+    cell: jax.Array | None = None
+    baro_thermo: NHCThermostat | None = None
 
-        temp
-            The temperature of thermostat.
+    P: jax.Array | None = None
+    S_ani: jax.Array | None = None
+    cellinv0: jax.Array | None = None
+    vol0: jax.Array | None = None
+    Sigma: jax.Array | None = None
+    vel_press: jax.Array | None = None
 
-        press
-            The applied pressure for the barostat.
+    """
+    This hook implements the Parrinello-Rahman barostat for finite strains.
+    The equations are derived in:
 
-        **Optional arguments:**
+        Parrinello, M.; Rahman, A. J. Appl. Phys. 1981, 52, 7182-7190.
 
-        start
-            The step at which the barostat becomes active.
+    **Arguments:**
 
-        timecon
-            The time constant of the Tadmor-Miller barostat.
+    ff
+        A ForceField instance.
 
-        anisotropic
-            Defines whether anisotropic cell fluctuations are allowed.
+    temp
+        The temperature of thermostat.
 
-        vol_constraint
-            Defines whether the volume is allowed to fluctuate.
+    press
+        The applied pressure for the barostat.
 
-        baro_thermo
-            NHCThermostat instance, coupled directly to the barostat
+    **Optional arguments:**
 
-        vel_press0
-            The initial barostat velocity tensor
+    start
+        The step at which the barostat becomes active.
 
-        restart
-            If true, the cell is not symmetrized initially
-        """
+    timecon
+        The time constant of the Tadmor-Miller barostat.
 
-        self.temp = temp
-        if isinstance(press, jnp.ndarray):
-            self.press = press
-        else:
-            self.press = press * jnp.eye(3)
-        self.timecon_press = timecon
-        self.anisotropic = anisotropic
-        self.vol_constraint = vol_constraint
-        self.baro_thermo = baro_thermo
-        self.dim = ff.system.cell.nvec
-        self.restart = restart
-        # determine the number of degrees of freedom associated with the unit cell
-        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
-        if self.anisotropic and not self.restart:
-            # symmetrize the cell and stress tensor
-            vc, tn = cell_symmetrize(ff, tensor_list=[self.press])
-            self.press = tn[0]
+    anisotropic
+        Defines whether anisotropic cell fluctuations are allowed.
+
+    vol_constraint
+        Defines whether the volume is allowed to fluctuate.
+
+    baro_thermo
+        NHCThermostat instance, coupled directly to the barostat
+
+    vel_press0
+        The initial barostat velocity tensor
+
+    restart
+        If true, the cell is not symmetrized initially
+    """
+
+    def init(self, iterative: VerletIntegrator):
+        if not isinstance(self.press, jax.Array):
+            self.press = self.press * jnp.eye(3)
+
+        self.dim = self.ff.system.cell.nvec
+
         self.P = jnp.trace(self.press) / 3
         self.S_ani = self.press - self.P * jnp.eye(3)
         self.S_ani = 0.5 * (
             self.S_ani + self.S_ani.T
         )  # only symmetric part of stress tensor contributes to individual motion
-        self.cellinv0 = jnp.linalg.inv(ff.system.cell.rvecs.copy())
-        self.vol0 = ff.system.cell.volume
+        self.cellinv0 = jnp.linalg.inv(self.ff.system.cell.rvecs.copy())
+        self.vol0 = self.ff.system.cell.volume
         # definition of Sigma = V_0*h_0^{-1} S_ani h_0^{-T}
         self.Sigma = self.vol0 * jnp.dot(jnp.dot(self.cellinv0.T, self.S_ani), self.cellinv0)
-        self.vel_press = vel_press0
-        VerletHook.__init__(self, start, step)
 
-    def init(self, iterative: VerletIntegrator):
+        self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
+        if self.anisotropic and not self.restart:
+            # symmetrize the cell and stress tensor
+            vc, tn = cell_symmetrize(self.ff, tensor_list=[self.press])
+            self.press = tn[0]
+
         self.timestep_press = iterative.timestep
         if not self.restart:
-            clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+            iterative.pos, iterative.vel = clean_momenta(
+                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(len(iterative.ff.system.numbers), iterative.ff.system.cell.nvec)
@@ -977,9 +981,9 @@ class PRBarostat(VerletHook):
             self.vel_press -= jnp.trace(self.vel_press) / 3 * jnp.eye(3)
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
-        # iterative.gpos[:] = 0.0
+
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
+
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
@@ -1070,17 +1074,17 @@ class PRBarostat(VerletHook):
 
         iterative.ff.update_pos(pos_new)
         # iterative.pos[:] = pos_new
-        iterative.pos = iterative.pos.at[:].set(pos_new)
+        iterative.pos = pos_new
         iterative.ff.update_rvecs(rvecs_new)
         # iterative.rvecs[:] = rvecs_new
-        iterative.rvecs = iterative.rvecs.at[:].set(rvecs_new)
+        iterative.rvecs = rvecs_new
         # iterative.vel[:] = vel_new
-        iterative.vel = iterative.vel.at[:].set(vel_new)
+        iterative.vel = vel_new
 
         # update the potential and kinetic energy
-        # iterative.gpos[:] = 0.0
+
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
+
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
         iterative.ekin = iterative._compute_ekin()
@@ -1106,91 +1110,95 @@ class PRBarostat(VerletHook):
             return 0.5 * self.mass_press * self.vel_press**2
 
 
+@partial(dataclass, frozen=False)
 class TadmorBarostat(VerletHook):
     name = "Tadmor"
     kind = "deterministic"
     method = "barostat"
 
-    def __init__(
-        self,
-        ff: YaffFF,
-        temp,
-        press,
-        start=0,
-        step=1,
-        timecon=1000 * femtosecond,
-        anisotropic=True,
-        vol_constraint=False,
-        baro_thermo=None,
-        vel_press0=None,
-        restart=False,
-    ):
-        """
-        This hook implements the Tadmor-Miller barostat for finite strains.
-        The equations are derived in:
+    _: KW_ONLY
 
-            Tadmor, E. B.; Miller, R. E. Modeling Materials: Continuum,
-            Atomistic and Multiscale Techniques 2011, 520-527.
+    temp: float
+    press: float | jax.Array
+    timecon_press: float = 1000 * femtosecond
 
-        **Arguments:**
+    ff: YaffFF
 
-        ff
-            A ForceField instance.
+    anisotropic: bool = True
+    vol_constraint = False
+    mass_press: float | None = None
+    dim: int = None
+    baro_ndof: int | None = None
 
-        temp
-            The temperature of thermostat.
+    baro_thermo: NHCThermostat | None = None
 
-        press
-            The applied second Piola-Kirchhoff tensor for the barostat.
+    vel_press: jax.Array | None = None
+    cell: jax.Array | None = None
+    cellinv0: jax.Array | None = None
+    Strans: jax.Array | None = None
+    Vol0: jax.Array | None = None
 
-        **Optional arguments:**
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-        start
-            The step at which the barostat becomes active.
+    """
+    This hook implements the Tadmor-Miller barostat for finite strains.
+    The equations are derived in:
 
-        timecon
-            The time constant of the Tadmor-Miller barostat.
+        Tadmor, E. B.; Miller, R. E. Modeling Materials: Continuum,
+        Atomistic and Multiscale Techniques 2011, 520-527.
 
-        anisotropic
-            Defines whether anisotropic cell fluctuations are allowed.
+    **Arguments:**
 
-        vol_constraint
-            Defines whether the volume is allowed to fluctuate.
+    ff
+        A ForceField instance.
 
-        baro_thermo
-            NHCThermostat instance, coupled directly to the barostat
+    temp
+        The temperature of thermostat.
 
-        vel_press0
-            The initial barostat velocity tensor
+    press
+        The applied second Piola-Kirchhoff tensor for the barostat.
 
-        restart
-            If true, the cell is not symmetrized initially
-        """
-        self.temp = temp
-        self.press = press
-        self.timecon_press = timecon
-        self.anisotropic = anisotropic
-        self.vol_constraint = vol_constraint
-        self.baro_thermo = baro_thermo
-        self.dim = ff.system.cell.nvec
-        self.restart = restart
-        # determine the number of degrees of freedom associated with the unit cell
+    **Optional arguments:**
+
+    start
+        The step at which the barostat becomes active.
+
+    timecon
+        The time constant of the Tadmor-Miller barostat.
+
+    anisotropic
+        Defines whether anisotropic cell fluctuations are allowed.
+
+    vol_constraint
+        Defines whether the volume is allowed to fluctuate.
+
+    baro_thermo
+        NHCThermostat instance, coupled directly to the barostat
+
+    vel_press0
+        The initial barostat velocity tensor
+
+    restart
+        If true, the cell is not symmetrized initially
+    """
+
+    def init(self, iterative: VerletIntegrator):
+        self.dim = self.ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
         if self.anisotropic and not self.restart:
             # symmetrize the cell tensor
-            cell_symmetrize(ff)
-        self.cell = ff.system.cell.rvecs.copy()
+            cell_symmetrize(self.ff)
+        self.cell = self.ff.system.cell.rvecs.copy()
         self.cellinv0 = jnp.linalg.inv(self.cell)
-        self.vol0 = ff.system.cell.volume
+        self.vol0 = self.ff.system.cell.volume
         # definition of h0^{-1} S h_0^{-T}
         self.Strans = jnp.dot(jnp.dot(self.cellinv0, self.press), self.cellinv0.T)
-        self.vel_press = vel_press0
-        VerletHook.__init__(self, start, step)
 
-    def init(self, iterative: VerletIntegrator):
         self.timestep_press = iterative.timestep
         if not self.restart:
-            clean_momenta(iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell)
+            iterative.pos, iterative.vel = clean_momenta(
+                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(len(iterative.ff.system.numbers), iterative.ff.system.cell.nvec)
@@ -1215,9 +1223,9 @@ class TadmorBarostat(VerletHook):
             self.vel_press -= jnp.trace(self.vel_press) / 3 * jnp.eye(3)
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
-        # iterative.gpos[:] = 0.0
+
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
+
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
@@ -1307,13 +1315,10 @@ class TadmorBarostat(VerletHook):
 
         # update the positions and cell vectors
         iterative.ff.update_rvecs(rvecs_new)
-        # iterative.rvecs[:] = rvecs_new
-        iterative.rvecs = iterative.rvecs.at[:].set(rvecs_new)
+        iterative.rvecs = rvecs_new
 
         # update the potential energy
-        # iterative.gpos[:] = 0.0
         iterative.gpos = iterative.gpos.at[:].set(0.0)
-        # iterative.vtens[:] = 0.0
         iterative.vtens = iterative.vtens.at[:].set(0.0)
         iterative.epot, iterative.gpos, iterative.vtens = iterative.ff.compute(iterative.gpos, iterative.vtens)
 
@@ -1326,7 +1331,7 @@ class TadmorBarostat(VerletHook):
 
         # update the velocities and the kinetic energy
         # iterative.vel[:] = vel_new
-        iterative.vel = iterative.vel.at[:].set(vel_new)
+        iterative.vel = vel_new
         iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update

@@ -598,7 +598,7 @@ class NewYaffEngine(MDEngine):
 
                 super().__init__()
 
-            def __call__(self, iterative: VerletIntegrator):
+            def __call__(self, iterative: new_yaff.verlet.VerletIntegrator):
                 kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
 
                 if hasattr(iterative, "press"):
@@ -621,7 +621,7 @@ class NewYaffEngine(MDEngine):
 
             hooks.append(
                 LangevinThermostat(
-                    self.static_trajectory_info.T,
+                    temp=self.static_trajectory_info.T,
                     timecon=self.static_trajectory_info.timecon_thermo,
                 ),
             )
@@ -630,9 +630,9 @@ class NewYaffEngine(MDEngine):
 
             hooks.append(
                 LangevinBarostat(
-                    self._yaff_ener,
-                    self.static_trajectory_info.T,
-                    self.static_trajectory_info.P,
+                    ff=self._yaff_ener,
+                    temp=self.static_trajectory_info.T,
+                    press=self.static_trajectory_info.P,
                     timecon=self.static_trajectory_info.timecon_baro,
                     anisotropic=True,
                 ),
