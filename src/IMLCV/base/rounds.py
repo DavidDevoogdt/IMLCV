@@ -578,6 +578,7 @@ class Rounds(ABC):
         weighing_method="WHAM",
         samples_per_bin=10,
         min_samples_per_bin=3,
+        load_weight=False,
     ) -> DataLoaderOutput:
         if cv_round is None:
             cv_round = self.cv
@@ -657,6 +658,10 @@ class Rounds(ABC):
 
         # n_bin = 0
 
+        if load_weight and lag_n != 0:
+            print("WARNING: lag_n is not 0, but load_weight is True. setting lag_n to 0")
+            lag_n = 0
+
         n_tot = 0
 
         FES_biases = []
@@ -686,6 +691,10 @@ class Rounds(ABC):
                 colvar_c = None
                 weight_c = False
 
+            if load_weight:
+                loaded_rho = []
+                loaded_w = []
+
             for round_info, traj_info in self.iter(
                 start=start,
                 stop=stop,
@@ -709,6 +718,25 @@ class Rounds(ABC):
 
                 sp0 = traj_info.ti.sp
                 cv0 = traj_info.ti.CV
+
+                if load_weight:
+                    _w_i = traj_info.ti.w
+                    _rho_i = traj_info.ti.rho
+
+                    if _w_i is None or _rho_i is None:
+                        raise ValueError(
+                            f"weights are not stored for {cvi=} {round_info.round=} {traj_info.num=}. (pass load_weight=False)   "
+                        )
+
+                    assert _w_i.shape[0] == sp0.shape[0], (
+                        f"weights and sp shape are different: {_w_i.shape=} {sp0.shape=}"
+                    )
+                    assert _rho_i.shape[0] == sp0.shape[0], (
+                        f"weights and sp shape are different: {_rho_i.shape=} {sp0.shape=}"
+                    )
+
+                    loaded_rho.append(_rho_i)
+                    loaded_w.append(_w_i)
 
                 if sp0.shape[0] != cv0.shape[0]:
                     print(
@@ -822,7 +850,24 @@ class Rounds(ABC):
             if len(sp_c) == 0:
                 continue
 
-            if weight_c:
+            if load_weight:
+                w_c = loaded_w
+                p_c = loaded_rho
+
+                gn_c = [CV(cv=jnp.zeros((spi.shape[0], 1), dtype=jnp.integer)) for spi in sp_c]
+
+                labels_c = [0] * len(sp_c)
+
+                # if reweight_to_fes:
+                #     w_fes_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
+
+                if reweight_inverse_bincount:
+                    bincount_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
+
+                if output_FES_bias:
+                    FES_biases.append(None)
+
+            elif weight_c:
                 if verbose:
                     print(f"getting weights for cv_round {cvi} {len(sp_c)} trajectories")
 
@@ -1099,7 +1144,7 @@ class Rounds(ABC):
                         lag_idx = lag_indices_max[bools]
 
                     else:
-                        c = ti_i.e_bias.shape[0] - lag_n
+                        c = ti_i._size - lag_n
                         lag_idx = jnp.arange(c) + lag_n
 
                     c_list.append(c)
@@ -1413,10 +1458,21 @@ class Rounds(ABC):
         else:
             out_biases = None
 
-        if verbose and time_series and percentage_list is not None:
-            print("interpolating data")
+        # if verbose and time_series and percentage_list is not None:
+        #     print("interpolating data")
+
+        n_tot = 0
+
+        print("gathering data")
 
         for n, indices_n, reweights_n, rho_n in zip(n_list, out_indices, out_reweights, out_rhos):
+            print(".", end="", flush=True)
+            n_tot += 1
+
+            if n_tot % 100 == 0:
+                print("")
+                n_tot = 0
+
             out_sp.append(sp[n][indices_n])
             out_cv.append(cv[n][indices_n])
 
@@ -1435,7 +1491,6 @@ class Rounds(ABC):
                     out_sp_t.append(sp[n][idx_t])
                     out_cv_t.append(cv[n][idx_t])
                     out_ti_t.append(ti[n][idx_t])
-                    # TODO: is this correct? seems to go out of bounds
                     out_weights_t.append(reweights_n[idx_t])
                     out_rho_t.append(rho_n[idx_t])
                 else:
@@ -1446,15 +1501,14 @@ class Rounds(ABC):
                     # print(f"{percentage.shape=} {sp[n][idx_t].shape=} {sp[n][idx_t_p].shape=}")
 
                     # this performs a lineat interpolation between the two points
-                    def interp(x, y, p):
-                        return jax.vmap(
-                            lambda xi, yi, pi: jax.tree_util.tree_map(
-                                lambda xii, yii: (1 - pi) * xii + pi * yii,
-                                xi,
-                                yi,
-                            ),
-                            in_axes=(0, 0, 0),
-                        )(x, y, p)
+
+                    @partial(jax.vmap, in_axes=(0, 0, 0))
+                    def interp(xi, yi, pi):
+                        return jax.tree_util.tree_map(
+                            lambda xii, yii: (1 - pi) * xii + pi * yii,
+                            xi,
+                            yi,
+                        )
 
                     # TODO: make interp a CV function and use apply
 
@@ -1474,6 +1528,7 @@ class Rounds(ABC):
             if get_bias_list:
                 out_biases.append(bias_list[n])
 
+        print("")
         # print(f"c05 {out_weights=} ")
 
         def normalize_weights(w: list[Array]):
@@ -5115,12 +5170,13 @@ class DataLoaderOutput:
         new_FES_bias_vals = FES_bias_vals + T * boltzmann * log_det
         new_FES_bias_vals -= jnp.max(new_FES_bias_vals)
 
-        weight = jnp.exp(new_FES_bias_vals / (T * boltzmann))
-        weight /= jnp.sum(weight)
+        # weight = jnp.exp(new_FES_bias_vals / (T * boltzmann))
+        # weight /= jnp.sum(weight)
 
         bounds, _, _ = self.collective_variable.metric.bounds_from_cv(
             new_cv_grid,
-            weights=weight,
+            weights=self._weight,
+            rho=self._rho,
             percentile=1e-5,
             # margin=0.1,
         )

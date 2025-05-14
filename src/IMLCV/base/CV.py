@@ -3153,6 +3153,7 @@ class CvMetric:
         cv_0: list[CV],
         percentile=0.1,
         weights: list[Array] | None = None,
+        rho: list[Array] | None = None,
         margin=None,
         chunk_size=None,
         n=400,
@@ -3162,7 +3163,7 @@ class CvMetric:
         n = int(n)
 
         if margin is None:
-            margin = percentile / 100 * 2
+            margin = percentile / 100
 
         # first find absolute bounds
 
@@ -3174,6 +3175,9 @@ class CvMetric:
             maxi = jnp.maximum(maxi, jnp.max(cvi.cv, axis=0))
 
         bounding_box = jnp.vstack((mini, maxi)).T
+
+        if verbose:
+            print(f"bounding box pre: {bounding_box=}")
 
         ndim = bounding_box.shape[0]
 
@@ -3194,6 +3198,17 @@ class CvMetric:
         from IMLCV.implementations.CV import _cv_slice
 
         bounds = jnp.zeros((cv_0[0].shape[1], 2))
+
+        if rho and weights is not None:
+            w_tot_log = [jnp.log(a) + jnp.log(b) for a, b in zip(weights, rho)]
+
+            w_log_tot = jnp.hstack(w_tot_log)
+            w_log_tot_max = jnp.max(w_log_tot)
+            w_log_tot_norm = jnp.log(jnp.sum(jnp.exp(w_log_tot - w_log_tot_max))) + w_log_tot_max
+
+            w_tot = [jnp.exp(a - w_log_tot_norm) for a in w_tot_log]
+        else:
+            w_tot = weights
 
         for dim in range(ndim):
             print(f"new iterated bounds {dim=}")
@@ -3225,14 +3240,16 @@ class CvMetric:
 
             hist = get_histo(
                 cv_0,
-                weights=weights,
+                weights=w_tot,
                 f_func=f,
             )
             # hist = jnp.reshape(hist, (n - 1,) * len(mini))
 
             hist /= jnp.sum(hist)
 
-            cummul = hist
+            cummul = jnp.cumsum(hist)
+
+            # print(f"{hist=} {cummul=}")
 
             v0 = jnp.argwhere(cummul > percentile / 100)
             if len(v0) == 0:
@@ -3241,19 +3258,21 @@ class CvMetric:
                 n_min = jnp.min(v0)
 
                 # lower end
-                if n_min > 0:
-                    n_min -= 1
+                # if n_min > 0:
+                #     n_min -= 1
 
             v0 = jnp.argwhere(cummul < 1 - percentile / 100)
 
             if len(v0) == 0:
                 n_max = n
             else:
-                n_max = jnp.max(v0)
+                n_max = jnp.max(v0) + 1
 
-                # higher end
-                if n_max < n - 1:
-                    n_max += 1
+                # # higher end
+                # if n_max < n - 1:
+                #     n_max += 1
+
+            # bins, not bins mid
 
             bounds = bounds.at[dim, 0].set(bins[0][n_min])
             bounds = bounds.at[dim, 1].set(bins[0][n_max])

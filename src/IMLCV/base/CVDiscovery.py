@@ -213,11 +213,21 @@ class Transformer:
 
         print("getting bounds")
 
+        # w_tot_log = [jnp.log(a) + jnp.log(b) for a, b in zip(w, dlo._rho)]
+
+        # w_log_tot = jnp.hstack(w_tot_log)
+        # w_log_tot_max = jnp.max(w_log_tot)
+        # w_log_tot_norm = jnp.log(jnp.sum(jnp.exp(w_log_tot - w_log_tot_max))) + w_log_tot_max
+
+        # w_tot = [jnp.exp(a - w_log_tot_norm) for a in w_tot_log]
+
         # remove outliers from the data
         bounds, mask, constants = CvMetric.bounds_from_cv(
             x,
             percentile=percentile,
-            # weights=w,
+            # margin=None,
+            weights=w,
+            rho=rho,
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
         )
@@ -270,8 +280,8 @@ class Transformer:
                 rho=rho,
                 collective_variable=new_collective_variable,
                 cv=x,
-                samples_per_bin=5,
-                min_samples_per_bin=1,
+                samples_per_bin=10,
+                min_samples_per_bin=3,
                 n_max=n_max,
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
@@ -507,6 +517,7 @@ class Transformer:
             cmap=plt.get_cmap(cmap),
             vmin=vmin,
             vmax=vmax,
+            plot_FES=plot_FES,
         ):
             dim = inoutdims[cv_in]
 
@@ -593,12 +604,19 @@ class Transformer:
         cv_titles=None,
         data_titles=None,
         indicate_plots=None,
+        plot_FES=False,
         # indicate_cv_data=True,
     ) -> Iterator[tuple[list[int], int, list[plt.Axes], list[plt.Axes]]]:
         spaces = 1 if max(dims) < 3 else 2
 
-        w_tot = [0.3, *[spaces] * ncv, 0.05, 0.1]  # extra 0.05 is to make the title fit
-        h_tot = [0.1, *[spaces] * ndata]
+        w_tot = [
+            0.3,
+            *[spaces] * ncv,
+        ]  # extra 0.05 is to make the title fit
+        if plot_FES:
+            w_tot.append(0.05)
+        w_tot.append(0.1)
+        h_tot = [0.1, *[spaces] * ndata]  # 0.1 for title
 
         fig.set_figwidth(sum(w_tot) * 3, forward=True)
         fig.set_figheight(sum(h_tot) * 3, forward=True)
@@ -607,25 +625,26 @@ class Transformer:
         h_space = 0.1
 
         spec = fig.add_gridspec(
-            nrows=ndata + 1,
-            ncols=ncv + 3,
+            nrows=len(h_tot),
+            ncols=len(w_tot),
             width_ratios=w_tot,
             height_ratios=h_tot,
             wspace=w_space,
             hspace=h_space,
         )
 
-        norm = mpl.colors.Normalize(vmin=vmin / kjmol, vmax=vmax / kjmol)
+        if plot_FES:
+            norm = mpl.colors.Normalize(vmin=vmin / kjmol, vmax=vmax / kjmol)
 
-        ax_cbar = fig.add_subplot(spec[1:, -2])
+            ax_cbar = fig.add_subplot(spec[1:, -2])
 
-        fig.colorbar(
-            mappable=mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
-            cax=ax_cbar,
-            orientation="vertical",
-            ticks=[vmin / kjmol, (vmin + vmax) / (2 * kjmol), vmax / kjmol],
-        )
-        ax_cbar.set_ylabel(bar_label)
+            fig.colorbar(
+                mappable=mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
+                cax=ax_cbar,
+                orientation="vertical",
+                ticks=[vmin / kjmol, (vmin + vmax) / (2 * kjmol), vmax / kjmol],
+            )
+            ax_cbar.set_ylabel(bar_label)
 
         for data_in in range(ndata):
             for cv_in in range(ncv):

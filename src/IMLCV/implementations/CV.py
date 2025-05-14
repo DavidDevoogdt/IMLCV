@@ -759,24 +759,17 @@ def sinkhorn_divergence_2(
     assert not x1.batched
     assert not x2.batched
 
-    eps = 100 * jnp.finfo(x1.cv.dtype).eps
+    # @vmap
 
-    @vmap
-    def p_norm(x):
-        p = x.cv
-
-        p_sq = jnp.sum(p**2)
-        m = p_sq <= eps
-        p_sq_safe = jnp.where(m, 1, p_sq)
-        # p_safe = jnp.where(m, 0.0, jnp.sqrt(p_sq_safe))
-        p_inv_safe = jnp.where(m, 0.0, 1 / jnp.sqrt(p_sq_safe))
-
-        return x.replace(cv=p * p_inv_safe)
+    # return x.replace(cv=p * p_inv_safe)
 
     # print("norming")
+    # if normalize:
+    # x1 = p_norm(x1)
+    # x2 = p_norm(x2)
 
-    x1 = p_norm(x1)
-    x2 = p_norm(x2)
+    if not normalize and scale_eps is None:
+        scale_eps = "std"
 
     src_mask, _, p1_cv = nl1.nl_split_z(x1)
     tgt_mask, tgt_split, p2_cv = nl2.nl_split_z(x2)
@@ -784,9 +777,21 @@ def sinkhorn_divergence_2(
     p1 = [a.cv.reshape(a.shape[0], -1) for a in p1_cv]
     p2 = [a.cv.reshape(a.shape[0], -1) for a in p2_cv]
 
+    # def n(p):
+    #     p_sq = jnp.sum(p**2)
+    #     m = p_sq <= eps
+    #     p_sq_safe = jnp.where(m, 1, p_sq)
+    #     # p_safe = jnp.where(m, 0.0, jnp.sqrt(p_sq_safe))
+    #     p_inv_safe = jnp.where(m, 0.0, 1 / jnp.sqrt(p_sq_safe))
+
+    #     return p_inv_safe
+
     @partial(vmap, in_axes=(None, 0), out_axes=1)
     @partial(vmap, in_axes=(0, None), out_axes=0)
     def cost(p1, p2):
+        # p1 = n(p1)
+        # p2 = n(p2)
+
         return jnp.sum((p1 - p2) ** 2)  # need square root here?
 
     def solve_svd(matvec, b: Array) -> Array:
@@ -826,30 +831,38 @@ def sinkhorn_divergence_2(
     ):
         c = cost(p1, p2)
 
-        if scale_eps is not None:
-            if scale_eps == "std":
-                s = jnp.std(c)
-            elif scale_eps == "mean":
-                s = jnp.mean(c)
-            else:
-                raise ValueError(f"{scale_eps=}")
+        # if scale_eps is not None:
+        #     if scale_eps == "std":
+        #         s = jnp.std(c)
+        #     elif scale_eps == "mean":
+        #         s = jnp.mean(c)
+        #     else:
+        #         raise ValueError(f"{scale_eps=}")
 
-            s = jnp.where(s <= 1e-12, 1, s)
+        #     s = jnp.where(s <= 1e-12, 1, s)
 
-            # jax.debug.print("s {}", s)
-            epsilon *= s
+        #     # jax.debug.print("s {}", s)
+        #     epsilon *= s
+
+        # epsilon = jax.lax.stop_gradient(epsilon)
 
         n = c.shape[0]
         m = c.shape[1]
 
-        a = jnp.ones((c.shape[0],))
-        b = jnp.ones((c.shape[1],))
+        a = jnp.ones((c.shape[0],)) / n
+        b = jnp.ones((c.shape[1],)) / m
+
+        # print(f"{a=}")
 
         from jaxopt import FixedPointIteration
 
         if lse:  # log space
             # initialization
-            g_over_eps = jnp.log(a) * epsilon
+
+            # log_a = jnp.log(a)
+            # log_b = jnp.log(b)
+
+            g_over_eps = jnp.log(b)
             c_over_eps = c / epsilon
 
             def _f0(c_over_epsilon, h_over_eps):
@@ -883,6 +896,8 @@ def sinkhorn_divergence_2(
 
             g_over_eps = out.params
             f_over_eps = out.state.aux
+
+            # jax.debug.print("f_over_eps {} err {}", f_over_eps, out.state)
 
             @partial(vmap, in_axes=(None, 0, 1), out_axes=1)
             @partial(vmap, in_axes=(0, None, 0), out_axes=0)
@@ -925,11 +940,30 @@ def sinkhorn_divergence_2(
         return P, d0
 
     # @partial(jax.jacrev, argnums=1)
+
+    # print("a")
+
     @partial(jax.value_and_grad, argnums=1)
     def get_d_p12(p1_i, p2_i):
+        def p_norm(x):
+            # p = x.cv
+            eps = 100 * jnp.finfo(x.dtype).eps
+            p = x
+
+            p_sq = jnp.sum(p**2)
+            m = p_sq <= eps
+            p_sq_safe = jnp.where(m, 1, p_sq)
+            # p_safe = jnp.where(m, 0.0, jnp.sqrt(p_sq_safe))
+            p_inv_safe = jnp.where(m, 0.0, 1 / jnp.sqrt(p_sq_safe))
+
+            return p * p_inv_safe
+
+        p1_i = p_norm(p1_i)
+        p2_i = p_norm(p2_i)
+
         _, d_12 = _core_sinkhorn(p1_i, p2_i, epsilon=alpha)
         _, d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
-        _, d_11 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
+        _, d_11 = _core_sinkhorn(p1_i, p1_i, epsilon=alpha)
 
         return -0.5 * d_11 + d_12 - 0.5 * d_22
 
@@ -969,6 +1003,7 @@ def _sinkhorn_divergence_trans_2(
     scale=None,
     push_div=False,
     scale_cost: None | str = "mean",
+    scale_eps: None | str = "std",
 ):
     assert nl is not None, "Neigbourlist required for rematch"
 
@@ -994,6 +1029,7 @@ def _sinkhorn_divergence_trans_2(
             scale=scale,
             push_div=push_div,
             scale_cost=scale_cost,
+            scale_eps=scale_eps,
         )
 
     # print(f"{pi=}")
@@ -1038,6 +1074,7 @@ def get_sinkhorn_divergence_2(
     scale=None,
     push_div=False,
     scale_cost: None | str = "mean",
+    scale_eps: None | str = "std",
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -1067,6 +1104,7 @@ def get_sinkhorn_divergence_2(
             "op",
             "push_div",
             "scale_cost",
+            "scale_eps",
         ],
         nli=nli,
         pi=pi,
@@ -1083,6 +1121,7 @@ def get_sinkhorn_divergence_2(
         scale=scale,
         push_div=push_div,
         scale_cost=scale_cost,
+        scale_eps=scale_eps,
     )
 
 

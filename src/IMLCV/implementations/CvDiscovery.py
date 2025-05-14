@@ -490,8 +490,8 @@ class TransformerMAF(Transformer):
         macro_chunk=1000,
         chunk_size=None,
         trans=None,
-        eps=1e-10,
-        eps_pre=1e-5,
+        eps=1e-6,
+        eps_pre=1e-6,
         **fit_kwargs,
     ) -> tuple[CV, CvTrans]:
         print("getting koopman")
