@@ -45,7 +45,9 @@ class YaffEnergy(Energy):
     def coordinates(self, coordinates):
         self.ff.update_pos(np.array(coordinates))
 
-    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
+    def _compute_coor(self, sp, nl, gpos=False, vir=False) -> EnergyResult:
+        self.sp = sp
+
         gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
         vtens_out = np.zeros_like(self.ff.vtens) if (vir and self.cell is not None) else None
 
@@ -112,8 +114,10 @@ class AseEnergy(Energy):
     def coordinates(self, coordinates):
         self.atoms.set_positions(np.array(coordinates / angstrom))
 
-    def _compute_coor(self, gpos=False, vir=False) -> EnergyResult:
+    def _compute_coor(self, sp, nl, gpos=False, vir=False) -> EnergyResult:
         """use unit conventions of ASE"""
+
+        self.sp = sp
 
         if self.atoms.calc is None:
             sp_save = self.sp

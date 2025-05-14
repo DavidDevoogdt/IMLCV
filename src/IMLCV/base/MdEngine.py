@@ -25,6 +25,8 @@ from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, ShmapKwargs, SystemParams
 from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
 
+import jax
+
 ######################################
 #             Trajectory             #
 ######################################
@@ -623,7 +625,7 @@ class MDEngine(ABC):
         if self.static_trajectory_info.r_cut is None:
             return None
 
-        if self._nl is None:
+        if self.nl is None:
             info = NeighbourListInfo.create(
                 r_cut=self.static_trajectory_info.r_cut,
                 z_array=self.static_trajectory_info.atomic_numbers,
@@ -819,7 +821,27 @@ class MDEngine(ABC):
                 nl=nl,
             )
 
-        return f(sp, self.nl)
+        if self.energy.external_callback:
+
+            def _mock_f(sp):
+                return EnergyResult(
+                    energy=1.0,
+                    gpos=None if not gpos else sp.coordinates,
+                    vtens=None if not vtens else sp.cell,
+                )
+
+            dtypes = jax.eval_shape(_mock_f, sp)
+
+            out = jax.pure_callback(
+                f,
+                dtypes,
+                sp,
+                self.nl,
+            )
+        else:
+            out = f(sp, self.nl)
+
+        return out
 
     def get_bias(
         self,

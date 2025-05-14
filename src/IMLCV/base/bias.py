@@ -84,6 +84,8 @@ class EnergyError(Exception):
 
 
 class Energy:
+    external_callback = True
+
     @property
     def nl(self):
         return None
@@ -175,6 +177,8 @@ class Energy:
 
 @partial(dataclass, frozen=False, eq=False)
 class EnergyFn(Energy):
+    external_callback = False
+
     f: Callable = field(pytree_node=False)
     _sp: SystemParams | None = None
     _nl: NeighbourList | None = None

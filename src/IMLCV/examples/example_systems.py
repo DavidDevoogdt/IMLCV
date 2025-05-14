@@ -15,7 +15,7 @@ from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import NoneCV, Volume, dihedral, position_index
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
 from IMLCV.implementations.MdEngine import AseEngine, YaffEngine, NewYaffEngine
-
+from IMLCV.implementations.CV import LatticeInvariants
 
 DATA_ROOT = ROOT_DIR / "data"
 
@@ -415,6 +415,68 @@ def CsPbI3_MACE(unit_cells=[2]):
     return yaffmd
 
 
+def CsPbI3_MACE_lattice(unit_cells=[2]):
+    assert isinstance(unit_cells, list)
+
+    if len(unit_cells) == 3:
+        [x, y, z] = unit_cells
+    elif len(unit_cells) == 1:
+        [n] = unit_cells
+        x = n
+        y = n
+        z = n
+    else:
+        raise ValueError(
+            f"provided unit cell {unit_cells}, please provide 1 or 3 arguments ",
+        )
+
+    refs, z_array, atoms = CsPbI3_refs(x, y, z)
+
+    energy = MACEASE(
+        atoms=atoms[0],
+    )
+
+    r_cut = 6 * angstrom
+
+    tic = StaticMdInfo(
+        write_step=50,
+        T=300 * kelvin,
+        P=1.0 * bar,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        timecon_baro=500.0 * femtosecond,
+        atomic_numbers=z_array,
+        equilibration=0 * femtosecond,
+        screen_log=50,
+        r_cut=r_cut,
+    )
+
+    from IMLCV.implementations.CV import scale_cv_trans
+
+    flow = LatticeInvariants
+
+    cvs, _ = flow.compute_cv(SystemParams.stack(*refs))
+    scale_trans = scale_cv_trans(cvs, lower=0.2, upper=0.8)
+
+    colvar = CollectiveVariable(
+        f=LatticeInvariants * scale_trans,
+        metric=CvMetric.create(
+            bounding_box=jnp.array(
+                [
+                    [0.0, 1.0],
+                ]
+                * 3
+            )
+        ),
+    )
+
+    bias = NoneBias.create(collective_variable=colvar)
+
+    yaffmd = NewYaffEngine.create(energy=energy, bias=bias, static_trajectory_info=tic, sp=refs[0])
+
+    return yaffmd, refs
+
+
 def CsPbI3_refs(x, y, z, input_atoms=None):
     fb = DATA_ROOT / "CsPbI_3" / f"{x}x{y}x{z}"
 
@@ -574,12 +636,13 @@ def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
 
     V = sp.volume()
 
-    def gauss_3d(v, r, a=1.0):
-        return jnp.exp(-a * ((v - r**3) / (r**3)) ** 2) * (jnp.sqrt(a) / (r**3))
+    def gauss_3d(v, r0, a=1.0, offset=0.0):
+        return jnp.exp(-a * ((v - r0**3) / (r0**3)) ** 2 + jnp.log(jnp.sqrt(a) / (r0**3)) - offset)
 
-    E_vol = (-5.0 * jnp.log(gauss_3d(V, r0, 2) + gauss_3d(V, 2 * r0, 16)) - 24) * kjmol
+    def f(V):
+        return (-5.0 * jnp.log(gauss_3d(V, 2 * r0, 2) + gauss_3d(V, 4 * r0, 16, -5.0)) - 24) * kjmol
 
-    return jnp.sum(ener_bond) + E_vol
+    return jnp.sum(ener_bond) + f(V)
 
 
 def toy_periodic_phase_trans():

@@ -479,7 +479,7 @@ class LangevinBarostat(VerletHook):
         Defines whether the volume is allowed to fluctuate.
     """
 
-    def init(self, iterative: VerletIntegrator, rand_int=42):
+    def init(self, iterative: VerletIntegrator):
         self.dim = iterative.ff.system.cell.nvec
 
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
@@ -676,6 +676,8 @@ class MTKBarostat(VerletHook):
     baro_ndof: int | None = None
 
     baro_thermo: NHCThermostat | None = None
+
+    timecon_press: float = 1000 * femtosecond
 
     """
     This hook implements the Martyna-Tobias-Klein barostat. The equations
