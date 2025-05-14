@@ -66,6 +66,50 @@ def _Volume(
 Volume = CvFlow.from_function(_Volume)
 
 
+def _lattice_invariants(
+    sp: SystemParams,
+    nl,
+    _,
+    shmap,
+    shmap_kwargs,
+):
+    sp_red, _ = sp.minkowski_reduce()
+
+    M = jax.vmap(jax.vmap(jnp.dot, in_axes=(0, None)), in_axes=(None, 0))(sp_red.cell, sp_red.cell)
+
+    l = jnp.linalg.eigvalsh(M)
+
+    return CV(cv=l)
+
+
+LatticeInvariants = CvFlow.from_function(_lattice_invariants)
+
+
+def _lattice_invariants_2(
+    sp: SystemParams,
+    nl,
+    _,
+    shmap,
+    shmap_kwargs,
+):
+    sp_red, _ = sp.minkowski_reduce()
+
+    c = sp_red.cell @ sp_red.cell.T
+
+    c0 = jnp.sqrt(c[0, 0])
+    c1 = jnp.sqrt(c[1, 1])
+    c2 = jnp.sqrt(c[2, 2])
+
+    a01 = jnp.arccos(jnp.abs(c[0, 1] / (c0 * c1)))
+    a12 = jnp.arccos(jnp.abs(c[1, 2] / (c1 * c2)))
+    a02 = jnp.arccos(jnp.abs(c[0, 2] / (c0 * c2)))
+
+    return CV(cv=jnp.array([c0, c1, c2, a01, a02, a12]))
+
+
+LatticeInvariants2 = CvFlow.from_function(_lattice_invariants_2)
+
+
 def _distance(x: SystemParams, *_):
     x = x.canonicalize()[0]
 
@@ -81,6 +125,16 @@ def _distance(x: SystemParams, *_):
 
 def distance_descriptor():
     return CvFlow.from_function(_distance)
+
+
+def _position_index(sp: SystemParams, _nl, _c, shmap, shmap_kwargs, idx):
+    return CV(cv=sp.coordinates.reshape(-1)[idx])
+
+
+def position_index(indices, sp):
+    idx = jnp.ravel_multi_index(indices.T, sp.coordinates.shape)
+
+    return CvFlow.from_function(_position_index, idx=idx)
 
 
 def _dihedral(sp: SystemParams, _nl, _c, shmap, shmap_kwargs, numbers):

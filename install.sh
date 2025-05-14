@@ -13,7 +13,7 @@ micromamba activate py312
 micromamba install -c conda-forge ndcctools  texlive-core
 
 #cython 3.0.0 has breaking changes
-pip install cython==0.29.36 numpy wheel
+# pip install cython==0.29.36 numpy wheel
 
 
 

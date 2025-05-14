@@ -570,6 +570,7 @@ class Transformer:
                 margin=margin,
                 fesses=fesses[data_in][cv_in] if plot_FES else None,
                 vmax=vmax,
+                vmin=vmin,
                 T=T,
                 cmap=plt.get_cmap(cmap),
                 **kwargs,

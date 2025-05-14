@@ -102,3 +102,5 @@ plot.pdf
 plot_data.pdf
 plot_data.png
 plot.png
+notebooks/*/*
+muller_brown_ref.png

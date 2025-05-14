@@ -58,8 +58,8 @@ which python
             """
         elif env == "stevin":
             py_env = """
-export MAMBA_EXE=/dodrio/scratch/projects/IMLCV/bin/micromamba
-export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/IMLCV/micromamba
+export MAMBA_EXE='/kyukon/scratch/gent/vo/000/gvo00003/vsc43693/IMLCV/IMLCV/bin/micromamba';
+export MAMBA_ROOT_PREFIX='/kyukon/scratch/gent/vo/000/gvo00003/vsc43693/IMLCV/IMLCV/micromamba';
 eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
 micromamba activate py312
 which python
@@ -278,10 +278,13 @@ def config(
                     "doduo",
                     "donphan",
                     "gallade",
+                    "shinx",
                 ]
 
+
+
             if gpu_cluster is not None:
-                assert gpu_cluster in ["joltik", "accelgor"]
+                assert gpu_cluster in ["joltik", "accelgor","litleo"]
 
             cpu = "doduo" if cpu_cluster is None else cpu_cluster
             gpu = "accelgor" if gpu_cluster is None else gpu_cluster

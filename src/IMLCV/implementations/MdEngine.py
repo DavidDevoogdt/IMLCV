@@ -11,10 +11,17 @@ import jax.numpy as jnp
 import numpy as np
 from ase import Atoms, units
 
+import new_yaff
+
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
+import new_yaff.npt
+import new_yaff.system
+import new_yaff.verlet
+
+# from IMLCV.base.MdEngine import StaticMdInfo
 
 if TYPE_CHECKING:
     import yaff
@@ -38,7 +45,7 @@ class YaffEngine(MDEngine):
     _verlet_initialized: bool = False
     _verlet: yaff.sampling.VerletIntegrator | None = None
     _yaff_ener: Any | None = None
-    additional_parts: list[Any] = field(default_factory=list)
+    # additional_parts: list[Any] = field(default_factory=list)
 
     @classmethod
     def create(  # type: ignore[override]
@@ -46,9 +53,9 @@ class YaffEngine(MDEngine):
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
+        sp: SystemParams,
         trajectory_info: TrajectoryInfo | None = None,
         trajectory_file=None,
-        sp: SystemParams | None = None,
         additional_parts=[],
         **kwargs,
     ) -> YaffEngine:
@@ -68,12 +75,10 @@ class YaffEngine(MDEngine):
 
         if not cont:
             create_kwargs["step"] = 1
-            if sp is not None:
-                energy.sp = sp
 
         else:
             create_kwargs["step"] = trajectory_info._size
-            energy.sp = trajectory_info.sp[-1]
+            sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
                 create_kwargs["time0"] = time()
 
@@ -82,6 +87,7 @@ class YaffEngine(MDEngine):
         return YaffEngine(
             bias=bias,
             energy=energy,
+            sp=sp,
             static_trajectory_info=static_trajectory_info,
             trajectory_info=trajectory_info,
             trajectory_file=trajectory_file,
@@ -235,22 +241,22 @@ class YaffEngine(MDEngine):
 
 @dataclass
 class YaffSys:
-    _ener: Energy
+    _md: MDEngine
     _tic: StaticMdInfo
 
     @dataclass
     class YaffCell:
-        _ener: Energy
+        _md: MDEngine
 
         @property
         def rvecs(self):
-            if self._ener.cell is None:
+            if self._md.sp.cell is None:
                 return np.zeros((0, 3))
-            return np.array(self._ener.cell)
+            return np.array(self._md.sp.cell)
 
         @rvecs.setter
         def rvecs(self, rvecs):
-            self._ener.cell = jnp.array(rvecs)
+            self._md.sp.cell = jnp.array(rvecs)
 
         def update_rvecs(self, rvecs):
             self.rvecs = rvecs
@@ -271,7 +277,7 @@ class YaffSys:
             return np.abs(vol_unsigned)
 
     def __post_init__(self):
-        self._cell = self.YaffCell(_ener=self._ener)
+        self._cell = self.YaffCell(_md=self._md)
 
     @property
     def numbers(self):
@@ -291,31 +297,34 @@ class YaffSys:
 
     @property
     def pos(self):
-        return np.array(self._ener.coordinates)
+        return np.array(self._md.sp.coordinates)
 
     @pos.setter
     def pos(self, pos):
-        self._ener.coordinates = jnp.array(pos)
+        self._md.sp.coordinates = jnp.array(pos)
 
     @property
     def natom(self):
         return self.pos.shape[0]
 
 
+@dataclass
 class AseEngine(MDEngine):
     """MD engine with ASE as backend."""
 
     _verlet_initialized: bool = False
     _verlet: ase.md.md.MolecularDynamics | None = None
+    langevin: bool = False
 
     @staticmethod
     def create(
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
+        sp: SystemParams | None = None,
         trajectory_info: TrajectoryInfo | None = None,
         trajectory_file=None,
-        sp: SystemParams | None = None,
+        langevin=True,
         **kwargs,
     ) -> AseEngine:
         cont = False
@@ -332,62 +341,104 @@ class AseEngine(MDEngine):
 
         if not cont:
             kwargs["step"] = 1
-            if sp is not None:
-                energy.sp = sp
+            # if sp is not None:
+            # energy.sp = sp
 
         else:
             kwargs["step"] = trajectory_info._size
-            energy.sp = trajectory_info.sp[-1]
+            sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
                 kwargs["time0"] = time()
 
-        return AseEngine(
+        self = AseEngine(
             bias=bias,
             energy=energy,
             static_trajectory_info=static_trajectory_info,
             trajectory_info=trajectory_info,
             trajectory_file=trajectory_file,
+            sp=sp,
+            # langevin=langevin,
             **kwargs,
         )
 
+        self.langevin = langevin
+
+        return self
+
     def update_sp(self, atoms: Atoms):
         """Update the system parameters with the current atoms object."""
+
+        # print(f"before {atoms=} {self.sp=}")
 
         self.sp = SystemParams(
             coordinates=jnp.array(atoms.get_positions() / ase.units.Ang * angstrom),
             cell=jnp.array(atoms.get_cell() / ase.units.Ang * angstrom) if atoms.pbc.all() else None,
         )
 
+        # print(f"after {self.sp=}")
+
     def _setup_verlet(self):
         # everyhting stays the same, except the position as linked to the true positions
 
         from ase.calculators.calculator import Calculator
+        from ase.md.langevin import Langevin
         from ase.md.nose_hoover_chain import NoseHooverChainNVT
         from ase.md.npt import NPT
+        from ase.md.nptberendsen import NPTBerendsen
+        from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
         self.atoms = Atoms(
             numbers=self.static_trajectory_info.atomic_numbers,
             positions=self.sp.coordinates * ase.units.Ang / angstrom,
             cell=self.sp.cell * ase.units.Ang / angstrom if self.sp.cell is not None else None,
+            pbc=self.sp.cell is not None,
+        )
+
+        MaxwellBoltzmannDistribution(
+            self.atoms,
+            temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin=1)
         )
 
         if self.static_trajectory_info.barostat:
+            if self.langevin:
+                print(f"langevin cannot be combined with npt")
+
             dyn = NPT(
                 atoms=self.atoms,
-                timestep=self.static_trajectory_info.timestep,
+                timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
                 pfactor=(self.static_trajectory_info.timecon_baro / femtosecond * ase.units.fs) ** 2 * 0.6,
                 ttime=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
                 externalstress=self.static_trajectory_info.P / bar * ase.units.bar,
-                temperature_K=self.static_trajectory_info.T * kelvin / ase.units.kelvin,
+                temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin =1
             )
 
+            # dyn = NPTBerendsen(
+            #     atoms=self.atoms,
+            #     timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
+            #     temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin=1
+            #     pressure=self.static_trajectory_info.P / bar * ase.units.bar,
+            #     compressibility_au=4.57e-5 / ase.units.bar,
+            #     taut=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
+            #     taup=self.static_trajectory_info.timecon_baro / femtosecond * ase.units.fs,
+            # )
+
         else:
-            dyn = NoseHooverChainNVT(
-                atoms=self.atoms,
-                timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
-                temperature_K=self.static_trajectory_info.T * kelvin / ase.units.kelvin,
-                tdamp=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
-            )
+            if self.langevin:
+                dyn = Langevin(
+                    atoms=self.atoms,
+                    timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
+                    temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin=1
+                    friction=0.01 / ase.units.fs,
+                    fixcm=False,
+                )
+
+            else:
+                dyn = NoseHooverChainNVT(
+                    atoms=self.atoms,
+                    timestep=self.static_trajectory_info.timestep / femtosecond * ase.units.fs,
+                    temperature_K=self.static_trajectory_info.T / kelvin,  # ase kelvin=1
+                    tdamp=self.static_trajectory_info.timecon_thermo / femtosecond * ase.units.fs,
+                )
 
         class AseCalculator(Calculator):
             implemented_properties = ["energy", "forces", "stress"]
@@ -412,6 +463,8 @@ class AseEngine(MDEngine):
                     vtens=vtens,
                 )
 
+                # print(f"{energy=} {bias=} {cv=}")
+
                 res = energy + bias
 
                 # print(f"{res=}")
@@ -425,11 +478,11 @@ class AseEngine(MDEngine):
                 }
 
                 if res.gpos is not None:
-                    self.results["forces"] = -res.gpos / electronvolt * angstrom
+                    self.results["forces"] = -res.gpos * (ase.units.eV / electronvolt) * (angstrom / ase.units.Ang)
 
                 if res.vtens is not None:
-                    vol = self.engine.atoms.get_volume()  #
-                    self.results["stress"] = res.vtens / vol / electronvolt * angstrom**3
+                    vol = self.engine.atoms.get_volume()  # vol already in ase units
+                    self.results["stress"] = res.vtens * (ase.units.eV / electronvolt) / vol
 
         calc = AseCalculator(self)
         self.calc = calc
@@ -450,7 +503,7 @@ class AseEngine(MDEngine):
             def __call__(self):
                 temp = self.engine.atoms.get_temperature()
 
-                t = self.engine._verlet.get_time() / (1000 * units.fs)
+                t = self.engine._verlet.get_time() * ase.units.s / (1000 * units.fs)
 
                 kwargs = dict(t=t, T=temp, err=0.0)
 
@@ -474,3 +527,159 @@ class AseEngine(MDEngine):
             self._setup_verlet()
 
         self._verlet.run(int(steps))
+
+
+@dataclass
+class NewYaffEngine(MDEngine):
+    """MD engine with YAFF as backend.
+
+    Args:
+        ff (yaff.pes.ForceField)
+    """
+
+    _verlet_initialized: bool = False
+    _verlet: new_yaff.verlet.VerletIntegrator | None = None
+    _yaff_ener: Any | None = None
+    # additional_parts: list[Any] = field(default_factory=list)
+
+    # @property
+    # def sp(self) -> SystemParams:
+    #     raise NotImplementedError
+
+    # @sp.setter
+    # def sp(self, sp: SystemParams):
+    #     raise NotImplementedError
+
+    @classmethod
+    def create(  # type: ignore[override]
+        self,
+        bias: Bias,
+        energy: Energy,
+        static_trajectory_info: StaticMdInfo,
+        sp: SystemParams,
+        trajectory_info: TrajectoryInfo | None = None,
+        trajectory_file=None,
+        # additional_parts=[],
+        **kwargs,
+    ) -> YaffEngine:
+        cont = False
+
+        create_kwargs = {}
+
+        if trajectory_file is not None:
+            trajectory_file = Path(trajectory_file)
+            # continue with existing file if it exists
+            if Path(trajectory_file).exists():
+                trajectory_info = TrajectoryInfo.load(trajectory_file)
+                cont = True
+
+            if trajectory_info._size is None:
+                cont = False
+
+        if not cont:
+            create_kwargs["step"] = 1
+
+        else:
+            create_kwargs["step"] = trajectory_info._size
+            sp = trajectory_info.sp[-1]
+            if trajectory_info.t is not None:
+                create_kwargs["time0"] = time()
+
+        kwargs.update(create_kwargs)
+
+        return NewYaffEngine(
+            bias=bias,
+            energy=energy,
+            sp=sp,
+            static_trajectory_info=static_trajectory_info,
+            trajectory_info=trajectory_info,
+            trajectory_file=trajectory_file,
+            # additional_parts=additional_parts,
+            **kwargs,
+        )
+
+    def _setup_verlet(self):
+        hooks = []
+
+        class myHook(new_yaff.iterative.Hook):
+            def __init__(self, md_engine: YaffEngine):
+                self.md_engine = md_engine
+
+                super().__init__()
+
+            def __call__(self, iterative: new_yaff.verlet.VerletIntegrator):
+                kwargs = dict(
+                    t=iterative.time,
+                    T=iterative.temp,
+                    err=iterative.cons_err,
+                    cv=iterative.cv,
+                    e_bias=iterative.e_bias,
+                    e_pot=iterative.epot - iterative.e_bias,
+                )
+
+                if hasattr(iterative, "press"):
+                    kwargs["P"] = iterative.press
+
+                self.md_engine.save_step(**kwargs)
+
+                self.md_engine.sp = iterative.ff.system.sp
+                self.md_engine.update_nl()
+
+            def expects_call(self, counter):
+                return True
+
+        from new_yaff.ff import YaffFF
+
+        self._yaff_ener = YaffFF.create(
+            md_engine=self,
+            # additional_parts=self.additional_parts,
+        )
+
+        thermo = None
+
+        if self.static_trajectory_info.thermostat:
+            from new_yaff.nvt import LangevinThermostat
+
+            thermo = LangevinThermostat(
+                temp=self.static_trajectory_info.T,
+                timecon=self.static_trajectory_info.timecon_thermo,
+            )
+
+        baro = None
+        if self.static_trajectory_info.barostat:
+            from new_yaff.npt import LangevinBarostat
+
+            baro = LangevinBarostat(
+                temp=self.static_trajectory_info.T,
+                press=self.static_trajectory_info.P,
+                timecon=self.static_trajectory_info.timecon_baro,
+                anisotropic=True,
+            )
+
+        hooks.append(myHook(self))
+
+        from new_yaff.verlet import VerletIntegrator
+
+        self._verlet = VerletIntegrator.create(
+            ff=self._yaff_ener,
+            timestep=self.static_trajectory_info.timestep,
+            temp0=self.static_trajectory_info.T,
+            other_hooks=hooks,
+            thermostat=thermo,
+            barostat=baro,
+        )
+
+        self._verlet_initialized = True
+
+    @staticmethod
+    def load(file, **kwargs) -> MDEngine:
+        return MDEngine.load(file, **kwargs)
+
+    def _run(self, steps):
+        if not self._verlet_initialized:
+            self._setup_verlet()
+        self._verlet.run(int(steps))
+
+    # @property
+    # def yaff_system(self) -> new_yaff.system.YaffSys:
+    #     return new_yaff.system.YaffSys(self, self.static_trajectory_info)
