@@ -5,16 +5,13 @@ import shutil
 import time
 from abc import ABC
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Callable
 
 import h5py
 import jax
-import jax.experimental
-import jax.experimental.sparse
-import jax.experimental.sparse.bcoo
 import jax.numpy as jnp
 import numpy as np
 from jax import Array, vmap
@@ -3095,7 +3092,7 @@ class DataLoaderOutput:
             )
 
             if constants:
-                print(f"not performing koopman weighing because of constants in cv")
+                print("not performing koopman weighing because of constants in cv")
                 # koopman = False
 
                 out = [w]
@@ -4261,9 +4258,9 @@ class DataLoaderOutput:
                 cov_sigma = jnp.diag(jnp.array(Bx))
 
             else:
-                l, V = jnp.linalg.eigh(F)
+                eigval, V = jnp.linalg.eigh(F)
 
-                l_inv = jnp.where(jnp.abs(l) < 1e-12, 0, 1 / l)
+                l_inv = jnp.where(jnp.abs(eigval) < 1e-12, 0, 1 / eigval)
 
                 # print(f"{l=}")
 
@@ -4577,7 +4574,7 @@ class DataLoaderOutput:
 
         num_labels = x.shape[0]
 
-        labels = jax.vmap(lambda x: jnp.argwhere(x, size=1).reshape(()), in_axes=1)(x)
+        # labels = jax.vmap(lambda x: jnp.argwhere(x, size=1).reshape(()), in_axes=1)(x)
         if num_labels > 1:
             print(f"found {num_labels}")
 
@@ -4639,13 +4636,10 @@ class DataLoaderOutput:
         nl: NeighbourList | None = None,
         nl_t: NeighbourList | None = None,
         method="tcca",
-        # koopman_weight=False,
         only_return_weights=False,
         symmetric=False,
         rho: list[jax.Array] | None = None,
-        # rho_t: list[jax.Array] | None = None,
         w: list[jax.Array] | None = None,
-        # w_t: list[jax.Array] | None = None,
         eps=1e-12,
         eps_pre=None,
         max_features=5000,
@@ -5812,7 +5806,7 @@ class KoopmanModel:
         if skip_first:
             s = s[1:]
             o = o[:, 1:]
-            print(f"skipping first mode")
+            print("skipping first mode")
 
         if remove_constant:
             nc = jnp.abs(1 - s) < constant_threshold
@@ -5855,7 +5849,7 @@ class KoopmanModel:
         if skip_first:
             s = s[1:]
             o = o[:, 1:]
-            print(f"skipping first mode")
+            print("skipping first mode")
 
         # this performs y =  (trans*g_trans)(x) @ Vh[:out_dim,:], but stores smaller matrices
 
@@ -6079,7 +6073,7 @@ class KoopmanModel:
 
         if skip_first:
             s = s[1:]
-            print(f"skipping first mode")
+            print("skipping first mode")
 
         if remove_constant:
             # s = s[1:]

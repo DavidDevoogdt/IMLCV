@@ -13,7 +13,7 @@ from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, SystemParams
 class YaffCell:
     rvecs: jax.Array
 
-    def create(sp):
+    def create(sp: SystemParams):
         c = sp.cell
 
         if sp.cell is None:

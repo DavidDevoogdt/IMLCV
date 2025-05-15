@@ -37,17 +37,16 @@ from IMLCV.base.UnitsConstants import (
     boltzmann,
     femtosecond,
 )
-from new_yaff.ff import YaffFF
-from new_yaff.iterative import StateItem
-from new_yaff.nvt import NHCThermostat
-from new_yaff.utils import (
+from IMLCV.new_yaff.iterative import StateItem
+from IMLCV.new_yaff.nvt import NHCThermostat
+from IMLCV.new_yaff.utils import (
     cell_symmetrize,
     clean_momenta,
     get_ndof_baro,
     get_ndof_internal_md,
     get_random_vel_press,
 )
-from new_yaff.verlet import VerletHook, VerletIntegrator
+from IMLCV.new_yaff.verlet import VerletHook, VerletIntegrator
 
 
 @partial(dataclass, frozen=False)
@@ -103,7 +102,7 @@ class TBCombination(VerletHook):
         self.thermostat, iterative = self.thermostat.init(iterative)
         self.barostat, iterative, self.barostat.init(iterative)
         # ensure ndof = 3N if the center of mass movement is not suppressed and ndof is not determined by the user
-        from new_yaff.nvt import GLEThermostat, LangevinThermostat
+        from IMLCV.new_yaff.nvt import GLEThermostat, LangevinThermostat
 
         p_cm_fluct = (
             isinstance(self.thermostat, LangevinThermostat)
@@ -121,7 +120,7 @@ class TBCombination(VerletHook):
     def pre(self, iterative: VerletIntegrator):
         # determine whether the barostat should be called
         if self.baro_expects_call:
-            from new_yaff.nvt import NHCThermostat
+            from IMLCV.new_yaff.nvt import NHCThermostat
 
             if isinstance(self.thermostat, NHCThermostat):
                 # in case the barostat is coupled with a NHC thermostat:
@@ -151,7 +150,7 @@ class TBCombination(VerletHook):
             self.thermostat, iterative = self.thermostat.post(iterative, self.G1_add)
         # determine whether the barostat should be called
         if self.baro_expects_call:
-            from new_yaff.nvt import NHCThermostat
+            from IMLCV.new_yaff.nvt import NHCThermostat
 
             if isinstance(self.thermostat, NHCThermostat):
                 # in case the barostat is coupled with a NHC thermostat:
@@ -175,7 +174,7 @@ class TBCombination(VerletHook):
     # def expectscall(self, iterative: VerletIntegrator, kind):
     #     return True
 
-    def __call__(self, iterative):
+    def __call__(self, iterative: VerletIntegrator):
         self.thermo_expects_call = (
             iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
         )
@@ -186,7 +185,7 @@ class TBCombination(VerletHook):
 
     def verify(self):
         # returns whether the thermostat and barostat instances are currently supported by yaff
-        from new_yaff.nvt import (
+        from IMLCV.new_yaff.nvt import (
             AndersenThermostat,
             BerendsenThermostat,
             CSVRThermostat,
@@ -264,7 +263,7 @@ class McDonaldBarostat(VerletHook):
             iterative.pos = pos
             iterative.gpos = iterative.gpos.at[:].set(0.0)
 
-            iterative.ff.rvecs = rvecs
+            iterative.ff.system.cell.rvecs = rvecs
             iterative.ff.system.pos = pos
 
             iterative.epot, iterative.gpos, _, _ = iterative.ff.compute(iterative.gpos)
@@ -404,10 +403,10 @@ class BerendsenBarostat(VerletHook):
         # updating the positions and cell vectors
         pos_new = jnp.dot(iterative.pos, mu)
         rvecs_new = jnp.dot(iterative.rvecs, mu)
-        iterative.ff.update_pos(pos_new)
+        iterative.ff.system.pos = pos_new
         # iterative.pos[:] = pos_new
         iterative.pos = pos_new
-        iterative.ff.update_rvecs(rvecs_new)
+        iterative.ff.system.cell.rvecs = rvecs_new
         # iterative.rvecs[:] = rvecs_new
         iterative.rvecs = rvecs_new
         # calculation of the virial tensor
@@ -548,7 +547,7 @@ class LangevinBarostat(VerletHook):
         return self, iterative
 
     def baro(self, iterative: VerletIntegrator, chainvel0):
-        def update_baro_vel(self):
+        def update_baro_vel(self: LangevinBarostat):
             # updates the barostat velocity tensor
             # iL h/(8*tau)
             self.vel_press *= jnp.exp(-self.timestep_press / (8 * self.timecon))
@@ -738,10 +737,10 @@ class MTKBarostat(VerletHook):
         self.cell = iterative.ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
-        if not self.restart:
-            iterative.pos, iterative.vel = clean_momenta(
-                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
-            )
+
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(len(iterative.ff.system.numbers), iterative.ff.system.cell.nvec)
@@ -854,10 +853,10 @@ class MTKBarostat(VerletHook):
             rvecs_new = c * iterative.rvecs
 
         # update the positions and cell vectors
-        iterative.ff.update_pos(pos_new)
+        iterative.ff.system.pos = pos_new
         # iterative.pos[:] = pos_new
         iterative.pos = pos_new
-        iterative.ff.update_rvecs(rvecs_new)
+        iterative.ff.system.cell.rvecs = rvecs_new
         # iterative.rvecs[:] = rvecs_new
         iterative.rvecs = rvecs_new
 
@@ -890,7 +889,7 @@ class MTKBarostat(VerletHook):
         # second part of the barostat velocity tensor update
         update_baro_vel()
 
-        self, iterative
+        return self, iterative
 
     def add_press_cont(self):
         kt = self.temp * boltzmann
@@ -1003,10 +1002,10 @@ class PRBarostat(VerletHook):
             self.press = tn[0]
 
         self.timestep_press = iterative.timestep
-        if not self.restart:
-            iterative.pos, iterative.vel = clean_momenta(
-                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
-            )
+
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(len(iterative.ff.system.numbers), iterative.ff.system.cell.nvec)
@@ -1129,10 +1128,10 @@ class PRBarostat(VerletHook):
         pos_new = jnp.dot(iterative.pos, rot_mat_r)
         vel_new = jnp.dot(iterative.vel, rot_mat_v)
 
-        iterative.ff.update_pos(pos_new)
+        iterative.ff.system.pos = pos_new
         # iterative.pos[:] = pos_new
         iterative.pos = pos_new
-        iterative.ff.update_rvecs(rvecs_new)
+        iterative.ff.system.cell.rvecs = rvecs_new
         # iterative.rvecs[:] = rvecs_new
         iterative.rvecs = rvecs_new
         # iterative.vel[:] = vel_new
@@ -1252,10 +1251,10 @@ class TadmorBarostat(VerletHook):
         self.Strans = jnp.dot(jnp.dot(self.cellinv0, self.press), self.cellinv0.T)
 
         self.timestep_press = iterative.timestep
-        if not self.restart:
-            iterative.pos, iterative.vel = clean_momenta(
-                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
-            )
+
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(len(iterative.ff.system.numbers), iterative.ff.system.cell.nvec)
@@ -1377,7 +1376,7 @@ class TadmorBarostat(VerletHook):
             rvecs_new = c * iterative.rvecs
 
         # update the positions and cell vectors
-        iterative.ff.update_rvecs(rvecs_new)
+        iterative.ff.system.cell.rvecs = rvecs_new
         iterative.rvecs = rvecs_new
 
         # update the potential energy
@@ -1428,14 +1427,15 @@ class MTKAttributeStateItem(StateItem):
 
     def get_value(self, iterative: VerletIntegrator):
         baro = None
-        for hook in iterative.hooks:
-            if isinstance(hook, MTKBarostat):
-                baro = hook
-                break
-            elif isinstance(hook, TBCombination):
-                if isinstance(hook.barostat, MTKBarostat):
-                    baro = hook.barostat
-                break
+
+        hook = iterative.verlet_hook
+        if isinstance(hook, MTKBarostat):
+            baro = hook
+
+        elif isinstance(hook, TBCombination):
+            if isinstance(hook.barostat, MTKBarostat):
+                baro = hook.barostat
+
         if baro is None:
             raise TypeError("Iterative does not contain an MTKBarostat hook.")
         if self.key.startswith("baro_chain_"):

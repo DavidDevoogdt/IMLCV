@@ -61,23 +61,6 @@ class EnergyResult:
 
         return EnergyResult(energy=self.energy + other.energy, gpos=gpos, vtens=vtens)
 
-        # def __str__(self) -> str:
-        #     str = f"energy [eV]: {self.energy/electronvolt}"
-        #     if self.gpos is not None:
-        #         str += f"\ndE/dx^i_j [eV/angstrom] \n {self.gpos[:]*angstrom/electronvolt}"
-        #     if self.vtens is not None:
-        #         str += f"\n  virial [eV] \n {self.vtens[:] / electronvolt }"
-
-        # return str
-
-    # def __getstate__(self ):
-    #     print(f"pickling {self.__class__}")
-    #     return  to_state_dict(self)
-
-    # def __setstate__(self, state):
-    #     print(f"unpickling {self.__class__}")
-    #     self = from_state_dict(self, state)
-
 
 class EnergyError(Exception):
     pass
@@ -230,7 +213,7 @@ class EnergyFn(Energy):
         e_vir = None
 
         if gpos or vir:
-            dedsp = jax.jacrev(_energy)(sp, nl)
+            dedsp: SystemParams = jax.jacrev(_energy)(sp, nl)
 
             if gpos:
                 e_gpos = dedsp.coordinates

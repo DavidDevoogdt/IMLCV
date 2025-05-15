@@ -33,9 +33,9 @@ import jax.numpy as jnp
 from flax.struct import dataclass, field
 
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
-from new_yaff.iterative import StateItem
-from new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
-from new_yaff.verlet import VerletHook, VerletIntegrator
+from IMLCV.new_yaff.iterative import StateItem
+from IMLCV.new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
+from IMLCV.new_yaff.verlet import VerletHook, VerletIntegrator
 
 
 @partial(dataclass, frozen=False)
@@ -236,6 +236,7 @@ class CSVRThermostat(VerletHook):
     temp: float
     timecon: float = 100 * femtosecond
     kin: float | None = None
+    key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
     """
         This is an implementation of the CSVR thermostat. The equations are
@@ -275,8 +276,11 @@ class CSVRThermostat(VerletHook):
 
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         c = jnp.exp(-iterative.timestep / self.timecon)
-        R = jnp.random.normal(0, 1)
-        S = (jnp.random.normal(0, 1, iterative.ndof - 1) ** 2).sum()
+
+        self.key, key0, key1 = jax.random.split(self.key, 3)
+
+        R = jax.random.normal(key0, ())
+        S = (jax.random.normal(key1, iterative.ndof - 1) ** 2).sum()
         iterative.ekin = iterative._compute_ekin()
         fact = (1 - c) * self.kin / iterative.ndof / iterative.ekin
         alpha = jnp.sign(R + jnp.sqrt(c / fact)) * jnp.sqrt(c + (S + R**2) * fact + 2 * R * jnp.sqrt(c * fact))
@@ -399,7 +403,7 @@ class GLEThermostat(VerletHook):
 class NHChain(object):
     _: KW_ONLY
 
-    lenth: int = 3
+    length: int = 3
     timestep: float
     temp: float
     timecon: float = 100 * femtosecond
@@ -454,7 +458,7 @@ class NHChain(object):
         return jax.random.normal(key0, shape=shape) * jnp.sqrt(self.masses * boltzmann * self.temp) / self.masses
 
     def __call__(self, ekin, vel, G1_add):
-        def do_bead(k, ekin, self):
+        def do_bead(k, ekin, self: NHChain):
             # Compute g
             if k == 0:
                 # coupling with atoms (and barostat)
@@ -591,18 +595,21 @@ class NHCAttributeStateItem(StateItem):
 
     def get_value(self, iterative: VerletIntegrator):
         chain = None
-        from new_yaff.npt import TBCombination
+        from IMLCV.new_yaff.npt import TBCombination
 
-        for hook in iterative.hooks:
-            if isinstance(hook, NHCThermostat):
-                chain = hook.chain
-                break
-            elif isinstance(hook, TBCombination):
-                if isinstance(hook.thermostat, NHCThermostat):
-                    chain = hook.thermostat.chain
-                break
+        hook = iterative.verlet_hook
+
+        # for hook in iterative.hooks:
+        if isinstance(hook, NHCThermostat):
+            chain = hook.chain
+
+        elif isinstance(hook, TBCombination):
+            if isinstance(hook.thermostat, NHCThermostat):
+                chain = hook.thermostat.chain
+
         if chain is None:
             raise TypeError("Iterative does not contain a NHCThermostat hook.")
+
         return getattr(chain, self.attr)
 
     def copy(self):

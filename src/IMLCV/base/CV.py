@@ -1,24 +1,18 @@
 from __future__ import annotations
 
-import dataclasses
 import itertools
-from abc import abstractmethod
 from dataclasses import KW_ONLY
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-import jax.flatten_util
 import jax.lax
 import jax.numpy as jnp
-import jax.scipy.optimize
 import jax.sharding as jshard
-import jaxopt.objective
 import jsonpickle
-from flax import linen as nn
 from flax.struct import dataclass, field
-from jax import Array, jacfwd, jit, vmap
+from jax import Array, jit, vmap
 from jax.experimental.shard_map import shard_map
 from jax.sharding import Mesh, PartitionSpec
 from jax.tree_util import Partial, tree_flatten, tree_unflatten
@@ -26,8 +20,6 @@ from jax.tree_util import Partial, tree_flatten, tree_unflatten
 from IMLCV import unpickler
 
 if TYPE_CHECKING:
-    import distrax
-
     from IMLCV.base.MdEngine import StaticMdInfo
 
 ######################################
@@ -203,17 +195,6 @@ def padded_shard_map(
     def apply_pmap_fn(
         *args,
         kwargs,
-        # devices,
-        # axis: int = 0,
-        # n_devices: int | None = None,
-        # axis_name: str | None = None,
-        # pmap: bool = False,
-        # explicit_shmap=False,
-        # verbose=False,
-        # device_get=True,
-        # move_axis=False,
-        # reshape_shmap=False,
-        # mesh=None,
     ):
         axis = kwargs.axis
         n_devices = kwargs.n_devices
@@ -221,7 +202,7 @@ def padded_shard_map(
         pmap = kwargs.pmap
         explicit_shmap = kwargs.explicit_shmap
         verbose = kwargs.verbose
-        device_get = kwargs.device_get
+        # device_get = kwargs.device_get
         devices = kwargs.devices
         mesh = kwargs.mesh
         reshape_shmap = False
@@ -559,7 +540,7 @@ def macro_chunk_map(
     if macro_chunk is None:
         return single_chunk()
 
-    n_prev = 0
+    # n_prev = 0
     n = 0
 
     y_chunk = []
@@ -787,7 +768,7 @@ def macro_chunk_map(
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
 
-                    n_prev = n
+                    # n_prev = n
 
                 else:
                     last_z = None
@@ -808,7 +789,7 @@ def macro_chunk_map(
                         last_chunk_yt = None
                         last_chunk_nlt = None
 
-                    n_prev = n + 1
+                    # n_prev = n + 1
 
                 w_chunk = [] if w is not None else None
 
@@ -853,7 +834,7 @@ def macro_chunk_map(
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
 
-                    n_prev = n
+                    # n_prev = n
 
                 else:
                     y_chunk = []
@@ -875,7 +856,7 @@ def macro_chunk_map(
                         last_chunk_yt = None
                         last_chunk_nlt = None
 
-                    n_prev = n + 1
+                    # n_prev = n + 1
 
         # print("repeating")
 
@@ -3222,7 +3203,7 @@ class CvMetric:
                 n_grid=n,
             )
 
-            print(f"getting grid nums")
+            print("getting grid nums")
 
             f = CvTrans.from_cv_function(_cv_slice, indices=jnp.array([dim])) * closest_trans
 

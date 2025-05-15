@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING, Any
 import ase
 import ase.units
 import jax.numpy as jnp
-import numpy as np
-from ase import Atoms, units
-
 import new_yaff
 import new_yaff.npt
 import new_yaff.system
 import new_yaff.verlet
+import numpy as np
+from ase import Atoms, units
+
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
@@ -627,7 +627,7 @@ class NewYaffEngine(MDEngine):
             def expects_call(self, counter):
                 return True
 
-        from new_yaff.ff import YaffFF
+        from IMLCV.new_yaff.ff import YaffFF
 
         self._yaff_ener = YaffFF.create(
             md_engine=self,
@@ -637,7 +637,7 @@ class NewYaffEngine(MDEngine):
         thermo = None
 
         if self.static_trajectory_info.thermostat:
-            from new_yaff.nvt import LangevinThermostat
+            from IMLCV.new_yaff.nvt import LangevinThermostat
 
             thermo = LangevinThermostat(
                 temp=self.static_trajectory_info.T,
@@ -646,7 +646,7 @@ class NewYaffEngine(MDEngine):
 
         baro = None
         if self.static_trajectory_info.barostat:
-            from new_yaff.npt import LangevinBarostat
+            from IMLCV.new_yaff.npt import LangevinBarostat
 
             baro = LangevinBarostat(
                 temp=self.static_trajectory_info.T,
@@ -657,7 +657,7 @@ class NewYaffEngine(MDEngine):
 
         hooks.append(myHook(self))
 
-        from new_yaff.verlet import VerletIntegrator
+        from IMLCV.new_yaff.verlet import VerletIntegrator
 
         self._verlet = VerletIntegrator.create(
             ff=self._yaff_ener,

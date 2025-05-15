@@ -32,17 +32,16 @@ import jax
 import jax.numpy as jnp
 from flax.struct import dataclass, field
 
-from IMLCV.base.CV import CV
 from IMLCV.base.UnitsConstants import boltzmann
-from new_yaff.ff import YaffFF
-from new_yaff.iterative import (
+from IMLCV.new_yaff.ff import YaffFF
+from IMLCV.new_yaff.iterative import (
     AttributeStateItem,
     CellStateItem,
     Hook,
     PosStateItem,
     StateItem,
 )
-from new_yaff.utils import get_random_vel
+from IMLCV.new_yaff.utils import get_random_vel
 
 
 @partial(dataclass, frozen=False)
@@ -151,6 +150,7 @@ class VerletIntegrator:
 
     temp: float | None = 0.0
     ekin: float | None = 0.0
+    ekin_new: float | None = 0.0
     epot: float = 0.0
     etot: float = 0.0
     econs: float = 0.0
@@ -166,7 +166,7 @@ class VerletIntegrator:
     acc: jax.Array | None = None
     vtens: jax.Array | None = None
     rvecs: jax.Array | None = None
-    ndof: int = None
+    ndof: int | None = None
     cv: jax.Array | None = None
     e_bias: float | None = None
 
@@ -265,8 +265,8 @@ class VerletIntegrator:
         """
         # Assign init arguments
 
-        if ff.system.masses is None:
-            ff.system.set_standard_masses()
+        # if ff.system.masses is None:
+        #     ff.system.set_standard_masses()
 
         # # Look for the presence of a thermostat and/or barostat
 
@@ -283,7 +283,7 @@ class VerletIntegrator:
             print(f"sampling NVT ensemble {thermostat.name=}")
             vh = thermostat
         elif thermostat is not None and barostat is not None:
-            from new_yaff.npt import TBCombination
+            from IMLCV.new_yaff.npt import TBCombination
 
             print(f"sampling NPT ensemble {thermostat.name=} {barostat.name=}")
             vh = TBCombination(thermostat=thermostat, barostat=barostat)
@@ -316,14 +316,14 @@ class VerletIntegrator:
 
         return self
 
-    def initialize(self):
+    def initialize(self: VerletIntegrator):
         # Standard initialization of Verlet algorithm
 
         self.gpos = jnp.zeros(self.pos.shape, float)
         self.delta = jnp.zeros(self.pos.shape, float)
         self.vtens = jnp.zeros((3, 3), float)
 
-        self.ff.pos = self.pos
+        self.ff.system.pos = self.pos
         self.epot, self.gpos, _, (bias, cv) = self.ff.compute(self.gpos)
 
         self.cv, self.e_bias = cv, bias
@@ -375,7 +375,7 @@ class VerletIntegrator:
 
         # Common post-processing of a single step
         self.time += self.timestep
-        self = self.compute_properties()
+        self: VerletIntegrator = self.compute_properties()
 
         self.counter += 1
 
@@ -426,7 +426,7 @@ class VerletIntegrator:
 
                 hook(self)
 
-    def run(self, nstep=None):
+    def run(self: VerletIntegrator, nstep=None):
         if nstep is None:
             while True:
                 self = self.propagate()

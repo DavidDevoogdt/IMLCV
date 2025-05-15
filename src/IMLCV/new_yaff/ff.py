@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 from flax.struct import dataclass, field
 
-from new_yaff.system import YaffSys
+from IMLCV.new_yaff.system import YaffSys
 
 if TYPE_CHECKING:
     from IMLCV.implementations.MdEngine import NewYaffEngine

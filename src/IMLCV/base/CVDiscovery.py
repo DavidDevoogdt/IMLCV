@@ -115,7 +115,7 @@ class Transformer:
         w = dlo._weights
         rho = dlo._rho
 
-        print(f"computing bias")
+        print("computing bias")
 
         from IMLCV.base.rounds import DataLoaderOutput
 
@@ -978,7 +978,7 @@ class Transformer:
             _dx = (bins[0][1] - bins[0][0]) / 2
             _dy = (bins[1][1] - bins[1][0]) / 2
 
-            p = ax.imshow(
+            _ = ax.imshow(
                 -bias / (kjmol),
                 cmap=cmap,
                 origin="lower",
