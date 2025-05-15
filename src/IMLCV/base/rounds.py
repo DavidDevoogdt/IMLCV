@@ -26,7 +26,6 @@ from IMLCV.base.bias import Bias, BiasModify, CompositeBias, NoneBias
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
-    CvFlow,
     CvMetric,
     CvTrans,
     NeighbourList,
@@ -2972,12 +2971,12 @@ class DataLoaderOutput:
         bins, _, cv_mid, _ = metric.grid(n=n_grid, bounds=grid_bounds)
 
         @partial(CvTrans.from_cv_function, mid=cv_mid)
-        def closest_trans(cv: CV, _nl, _, shmap, shmap_kwargs, mid: CV):
+        def closest_trans(cv: CV, _nl, shmap, shmap_kwargs, mid: CV):
             m = jnp.argmin(jnp.sum((mid.cv - cv.cv) ** 2, axis=1), keepdims=True)
 
             return cv.replace(cv=m)
 
-        nums = closest_trans.compute_cv_trans(cv_mid, chunk_size=chunk_size)[0].cv
+        nums = closest_trans.compute_cv(cv_mid, chunk_size=chunk_size)[0].cv
 
         return cv_mid, nums, bins, closest_trans, partial(DataLoaderOutput.get_histo, nn=cv_mid.shape[0])
 
@@ -3180,7 +3179,7 @@ class DataLoaderOutput:
                 mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
 
                 @partial(CvTrans.from_cv_function, mask=mask)
-                def get_indicator(cv: CV, nl, _, shmap, shmap_kwargs, mask):
+                def get_indicator(cv: CV, nl, shmap, shmap_kwargs, mask):
                     out = jnp.zeros((hist.shape[0],))
                     out = out.at[cv.cv].set(1)
                     out = jnp.take(out, mask)
@@ -4602,7 +4601,6 @@ class DataLoaderOutput:
     def _transform(
         cv,
         nl,
-        _,
         shmap,
         shmap_kwargs,
         argmask: jnp.Array | None = None,
@@ -4782,7 +4780,7 @@ class DataLoaderOutput:
     @staticmethod
     def apply_cv(
         # self,
-        f: CvTrans | CvFlow,
+        f: CvTrans | CvTrans,
         x: list[CV] | list[SystemParams] | None = None,
         x_t: list[CV] | list[SystemParams] | None = None,
         nl=None,
@@ -4796,11 +4794,11 @@ class DataLoaderOutput:
         jit_f=True,
     ) -> tuple[list[CV], list[CV] | None]:
         # if isinstance(f, CvTrans):
-        #     _f = f.compute_cv_trans
-        # elif isinstance(f, CvFlow):
-        #     _f = f.compute_cv_flow
+        #     _f = f.compute_cv
+        # elif isinstance(f,CvTrans):
+        #     _f = f.compute_cv
         # else:
-        #     raise ValueError(f"{f=} must be CvTrans or CvFlow")
+        #     raise ValueError(f"{f=} must be CvTrans orCvTrans")
         _f = f.compute_cv
 
         def f(x, nl):
@@ -5145,7 +5143,7 @@ class DataLoaderOutput:
             grid_bounds=grid_bounds_new,
             metric=new_colvar.metric,
         )
-        grid_nums_new = closest_new.compute_cv_trans(new_cv, chunk_size=chunk_size)[0].cv
+        grid_nums_new = closest_new.compute_cv(new_cv, chunk_size=chunk_size)[0].cv
 
         # get bins for old CV
         grid_bounds_old, _, _ = CvMetric.bounds_from_cv(old_cv, margin=0.1)
@@ -5154,7 +5152,7 @@ class DataLoaderOutput:
             grid_bounds=grid_bounds_old,
             metric=self.collective_variable.metric,
         )
-        grid_nums_old = closest_old.compute_cv_trans(old_cv, chunk_size=chunk_size)[0].cv
+        grid_nums_old = closest_old.compute_cv(old_cv, chunk_size=chunk_size)[0].cv
 
         # get old FES weights
         beta = 1 / (self.sti.T * boltzmann)
@@ -5232,7 +5230,7 @@ class DataLoaderOutput:
             T = self.sti.T
 
         _, cv_grid, _, _ = self.collective_variable.metric.grid(n=n_grid)
-        new_cv_grid, _, log_det = trans.compute_cv_trans(cv_grid, log_Jf=True)
+        new_cv_grid, _, log_det = trans.compute_cv(cv_grid, log_Jf=True)
 
         FES_bias_vals, _ = self.ground_bias.compute_from_cv(cv_grid)
 
@@ -5452,7 +5450,7 @@ class KoopmanModel:
     tau: float | None = None
     T_scale: float = 1.0
 
-    trans: CvTrans | CvFlow | None = None
+    trans: CvTrans | CvTrans | None = None
 
     @staticmethod
     def create(
@@ -5768,7 +5766,6 @@ class KoopmanModel:
     def _add_1(
         cv,
         nl,
-        _,
         shmap,
         shmap_kwargs,
     ):
@@ -5958,7 +5955,7 @@ class KoopmanModel:
         )
 
         @partial(CvTrans.from_cv_function, v=v)
-        def _get_w(cv: CV, _nl, _, shmap, shmap_kwargs, v: Array):
+        def _get_w(cv: CV, _nl, shmap, shmap_kwargs, v: Array):
             x = cv.cv
 
             return cv.replace(cv=jnp.einsum("i,ij->j", x, v), _combine_dims=None)
@@ -6111,8 +6108,8 @@ class Covariances:
     pi_1: jax.Array | None
 
     only_diag: bool = False
-    trans_f: CvTrans | CvFlow | None = None
-    trans_g: CvTrans | CvFlow | None = None
+    trans_f: CvTrans | CvTrans | None = None
+    trans_g: CvTrans | CvTrans | None = None
     T_scale: float = 1
     symmetric: bool = False
 
@@ -6128,8 +6125,8 @@ class Covariances:
         macro_chunk=1000,
         chunk_size=None,
         only_diag=False,
-        trans_f: CvTrans | CvFlow | None = None,
-        trans_g: CvTrans | CvFlow | None = None,
+        trans_f: CvTrans | CvTrans | None = None,
+        trans_g: CvTrans | CvTrans | None = None,
         T_scale=1,
         symmetric=False,
         calc_C00=True,

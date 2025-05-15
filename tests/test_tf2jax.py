@@ -26,18 +26,18 @@ def test_call_tf_batcher():
 
     f_t = jax2tf.call_tf(jax2tf.convert(f, with_gradient=True))
 
-    print(f"||f(x) - f_t(x)||_2 = { jnp.linalg.norm( f(x)-f_t(x) )  }")
+    print(f"||f(x) - f_t(x)||_2 = {jnp.linalg.norm(f(x) - f_t(x))}")
 
     # test vmap
     f_v = jit(vmap(f))
     f_v_t = jit(vmap(f_t))
 
-    print(f"||f(y) - f_t(y)||_2 = { jnp.linalg.norm( f_v(y)-f_v_t(y) )  }")
+    print(f"||f(y) - f_t(y)||_2 = {jnp.linalg.norm(f_v(y) - f_v_t(y))}")
 
     j = jit(jacrev(f))
     j_t = jit(jacrev(f_t))
 
-    print(f"||jac(f)(x) - jac(f_t)(x)||_2 = { jnp.linalg.norm( j(x)-j_t(x) )  }")
+    print(f"||jac(f)(x) - jac(f_t)(x)||_2 = {jnp.linalg.norm(j(x) - j_t(x))}")
 
 
 if __name__ == "__main__":

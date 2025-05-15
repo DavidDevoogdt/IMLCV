@@ -6,16 +6,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from IMLCV.base.bias import Bias, BiasF, NoneBias, Energy, EnergyFn
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, NeighbourList, SystemParams, CvFlow
+from IMLCV.base.bias import Bias, BiasF, EnergyFn, NoneBias
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
-from IMLCV.base.UnitsConstants import angstrom, electronvolt, atm, bar, femtosecond, kelvin, kjmol, boltzmann
+from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
-from IMLCV.implementations.CV import NoneCV, Volume, dihedral, position_index
+from IMLCV.implementations.CV import LatticeInvariants, NoneCV, Volume, dihedral
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
-from IMLCV.implementations.MdEngine import AseEngine, YaffEngine, NewYaffEngine
-from IMLCV.implementations.CV import LatticeInvariants
+from IMLCV.implementations.MdEngine import AseEngine, NewYaffEngine, YaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"
 
@@ -54,7 +53,11 @@ def alanine_dipeptide_yaff(
             f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16)) + dihedral(numbers=(1, 4, 6, 8))),
             metric=CvMetric.create(
                 periodicities=[True, True, True],
-                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi], [-np.pi, np.pi]],
+                bounding_box=[
+                    [-np.pi, np.pi],
+                    [-np.pi, np.pi],
+                    [-np.pi, np.pi],
+                ],
             ),
         )
     elif cv is None:
@@ -307,7 +310,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
         debug=False,
     )
 
-    from IMLCV.base.CV import CvFlow
+    from IMLCV.base.CV import CvTrans
 
     r_cut = 5 * angstrom
 
@@ -326,7 +329,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
 
     if cv == "cell_vec":
 
-        @CvFlow.from_function
+        @CvTrans.from_function
         def f(sp: SystemParams, _: NeighbourList | None):
             import jax.numpy as jnp
 
@@ -537,7 +540,7 @@ def _ener_3d_muller_brown(cvs, *_):
     return ener.reshape(()) * kjmol
 
 
-def _3d_muller_brown_cvs(sp: SystemParams, _nl, _c, shmap, shmap_kwargs):
+def _3d_muller_brown_cvs(sp: SystemParams, _nl, shmap, shmap_kwargs):
     # x1, x2, x3 = sp.coordinates[0, :]
     # x4, x5 = sp.coordinates[1, :2]
 
@@ -551,7 +554,7 @@ def _3d_muller_brown_cvs(sp: SystemParams, _nl, _c, shmap, shmap_kwargs):
 
 
 def f_3d_Muller_Brown(sp: SystemParams, _):
-    cvs = _3d_muller_brown_cvs(sp, _, _, _, _)
+    cvs = _3d_muller_brown_cvs(sp, _, _, _)
 
     return _ener_3d_muller_brown(cvs)
 
@@ -581,7 +584,7 @@ def toy_1d():
     )
 
     cv0 = CollectiveVariable(
-        f=CvFlow.from_function(_3d_muller_brown_cvs),
+        f=CvTrans.from_function(_3d_muller_brown_cvs),
         metric=CvMetric.create(
             periodicities=[False, False],
             bounding_box=jnp.array([[-1.5, 1.0], [-0.5, 2.0]]),
@@ -608,7 +611,7 @@ def toy_1d():
     return mde, [sp0, sp1], fes_0
 
 
-def _toy_periodic_cvs(sp: SystemParams, _nl, _c, shmap, shmap_kwargs):
+def _toy_periodic_cvs(sp: SystemParams, _nl, shmap, shmap_kwargs):
     x = sp.volume()
 
     return CV(cv=jnp.array([x]))
@@ -709,7 +712,7 @@ def toy_periodic_phase_trans():
     )
 
     cv0 = CollectiveVariable(
-        f=CvFlow.from_function(_toy_periodic_cvs),
+        f=CvTrans.from_function(_toy_periodic_cvs),
         metric=CvMetric.create(
             periodicities=[False],
             bounding_box=jnp.array(

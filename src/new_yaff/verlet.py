@@ -32,8 +32,8 @@ import jax
 import jax.numpy as jnp
 from flax.struct import dataclass, field
 
-from IMLCV.base.UnitsConstants import boltzmann
 from IMLCV.base.CV import CV
+from IMLCV.base.UnitsConstants import boltzmann
 from new_yaff.ff import YaffFF
 from new_yaff.iterative import (
     AttributeStateItem,

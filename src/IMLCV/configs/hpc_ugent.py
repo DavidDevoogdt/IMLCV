@@ -281,10 +281,8 @@ def config(
                     "shinx",
                 ]
 
-
-
             if gpu_cluster is not None:
-                assert gpu_cluster in ["joltik", "accelgor","litleo"]
+                assert gpu_cluster in ["joltik", "accelgor", "litleo"]
 
             cpu = "doduo" if cpu_cluster is None else cpu_cluster
             gpu = "accelgor" if gpu_cluster is None else gpu_cluster

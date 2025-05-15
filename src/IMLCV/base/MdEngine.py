@@ -11,6 +11,7 @@ from time import time
 
 import cloudpickle
 import h5py
+import jax
 import jax.numpy as jnp
 import jsonpickle
 from ase.data import atomic_masses
@@ -24,8 +25,6 @@ from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, ShmapKwargs, SystemParams
 from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
-
-import jax
 
 ######################################
 #             Trajectory             #
@@ -568,7 +567,7 @@ class MDEngine(ABC):
     energy: Energy
     sp: SystemParams
     static_trajectory_info: StaticMdInfo
-    trajectory_info: TrajectoryInfo | None = None
+    trajectory_info: TrajectoryInfo | None = field(default=None)
     trajectory_file: Path | None = None
     time0: float = field(default_factory=time)
 
@@ -697,8 +696,8 @@ class MDEngine(ABC):
                 print(f"loaded ti  {self.step=} ")
 
         self.time0 = time()
-        self._nl = None
-        # print(f"{self.sp=}")
+
+        self.update_nl()
 
         return self
 
@@ -715,6 +714,8 @@ class MDEngine(ABC):
         Args:
             steps: number of MD steps
         """
+
+        self.update_nl()
 
         if self.step != 1:
             steps = steps - self.step
@@ -900,4 +901,4 @@ class MDEngine(ABC):
             )
             raise e
 
-        self._nl = None
+        self.update_nl()

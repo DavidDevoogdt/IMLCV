@@ -12,14 +12,13 @@ import numpy as np
 from ase import Atoms, units
 
 import new_yaff
-
+import new_yaff.npt
+import new_yaff.system
+import new_yaff.verlet
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
-import new_yaff.npt
-import new_yaff.system
-import new_yaff.verlet
 
 # from IMLCV.base.MdEngine import StaticMdInfo
 

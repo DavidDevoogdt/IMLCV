@@ -107,7 +107,7 @@ def test_SOAP_SB_sinkhorn(cell, pp):
             num=50,
         )
 
-    p_ref, _ = desc.compute_cv_flow(sp1, nl1)
+    p_ref, _ = desc.compute_cv(sp1, nl1)
     nl_ref = nl1
 
     cv = CollectiveVariable(
@@ -174,7 +174,7 @@ def test_SB_basis():
 def test_bessel():
     for func, name, sp, dsp, wz in zip(
         [jv, yv, iv, kv, spherical_jn, spherical_yn, ive, kve],
-        ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv", "ive", "ive_b" "kve"],
+        ["jv", "yv", "iv", "kv", " spherical_jv", "spherical_yv", "ive", "ive_bkve"],
         [
             scipy.special.jv,
             scipy.special.yv,

@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import pytest
 
-from IMLCV.base.CV import CvFlow, SystemParams
+from IMLCV.base.CV import CvTrans, SystemParams
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.implementations.CV import dihedral
 
@@ -33,9 +33,9 @@ def test_parallel(tmp_path, config_test):
 
 
 def f_test_py_env(sp):
-    d_flow: CvFlow = dihedral((0, 1, 2, 3))
+    d_flow: CvTrans = dihedral((0, 1, 2, 3))
 
-    return d_flow.compute_cv_flow(sp, None)[0]
+    return d_flow.compute_cv(sp, None)[0]
 
 
 @pytest.mark.skip(reason="MPI not installed")

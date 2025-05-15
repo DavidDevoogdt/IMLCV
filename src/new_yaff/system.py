@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from functools import partial
 
+import jax
 import jax.numpy as jnp
 from flax.struct import dataclass
 
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, SystemParams
-import jax
 
 
 @partial(dataclass, frozen=False)

@@ -1,12 +1,9 @@
-import dataclasses
 from functools import partial
 
-import distrax
 import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from flax.linen.linear import Dense
 from jax import Array, vmap
 from jaxopt.linear_solve import solve_normal_cg
 from ott.geometry.pointcloud import PointCloud
@@ -16,10 +13,6 @@ from ott.solvers.linear import implicit_differentiation, sinkhorn
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
-    CvFlow,
-    CvFunDistrax,
-    CvFunInput,
-    CvFunNn,
     CvMetric,
     CvTrans,
     NeighbourList,
@@ -33,27 +26,26 @@ from IMLCV.base.CV import (
 ######################################
 
 
-def _identity_trans(x, nl, _, shmap, shmap_kwargs):
+def _identity_trans(x, nl, shmap, shmap_kwargs):
     return x
 
 
-def _zero_cv_trans(x: CV, nl, _, shmap, shmap_kwargs):
+def _zero_cv_trans(x: CV, nl, shmap, shmap_kwargs):
     return x.replace(cv=jnp.array([0.0]), combine_dims=None)
 
 
-def _zero_cv_flow(x: SystemParams, nl, _, shmap, shmap_kwargs):
+def _zero_cv_flow(x: SystemParams, nl, shmap, shmap_kwargs):
     return CV(cv=jnp.array([0.0]))
 
 
 identity_trans = CvTrans.from_cv_function(_identity_trans)
 zero_trans = CvTrans.from_cv_function(_zero_cv_trans)
-zero_flow = CvFlow.from_function(_zero_cv_flow)
+zero_flow = CvTrans.from_cv_function(_zero_cv_flow)
 
 
 def _Volume(
     sp: SystemParams,
     _nl,
-    _c,
     shmap,
     shmap_kwargs,
 ):
@@ -63,13 +55,12 @@ def _Volume(
     return CV(cv=jnp.array([vol]))
 
 
-Volume = CvFlow.from_function(_Volume)
+Volume = CvTrans.from_cv_function(_Volume)
 
 
 def _lattice_invariants(
     sp: SystemParams,
     nl,
-    _,
     shmap,
     shmap_kwargs,
 ):
@@ -82,13 +73,12 @@ def _lattice_invariants(
     return CV(cv=l)
 
 
-LatticeInvariants = CvFlow.from_function(_lattice_invariants)
+LatticeInvariants = CvTrans.from_cv_function(_lattice_invariants)
 
 
 def _lattice_invariants_2(
     sp: SystemParams,
     nl,
-    _,
     shmap,
     shmap_kwargs,
 ):
@@ -107,7 +97,7 @@ def _lattice_invariants_2(
     return CV(cv=jnp.array([c0, c1, c2, a01, a02, a12]))
 
 
-LatticeInvariants2 = CvFlow.from_function(_lattice_invariants_2)
+LatticeInvariants2 = CvTrans.from_cv_function(_lattice_invariants_2)
 
 
 def _distance(x: SystemParams, *_):
@@ -124,20 +114,20 @@ def _distance(x: SystemParams, *_):
 
 
 def distance_descriptor():
-    return CvFlow.from_function(_distance)
+    return CvTrans.from_cv_function(_distance)
 
 
-def _position_index(sp: SystemParams, _nl, _c, shmap, shmap_kwargs, idx):
+def _position_index(sp: SystemParams, _nl, shmap, shmap_kwargs, idx):
     return CV(cv=sp.coordinates.reshape(-1)[idx])
 
 
 def position_index(indices, sp):
     idx = jnp.ravel_multi_index(indices.T, sp.coordinates.shape)
 
-    return CvFlow.from_function(_position_index, idx=idx)
+    return CvTrans.from_cv_function(_position_index, idx=idx)
 
 
-def _dihedral(sp: SystemParams, _nl, _c, shmap, shmap_kwargs, numbers):
+def _dihedral(sp: SystemParams, _nl, shmap, shmap_kwargs, numbers):
     coor = sp.coordinates
     p0 = coor[numbers[0]]
     p1 = coor[numbers[1]]
@@ -171,13 +161,12 @@ def dihedral(numbers: tuple[int] | Array):
         numbers: list with index of 4 atoms that form dihedral
     """
 
-    return CvFlow.from_function(_dihedral, static_argnames=["numbers"], numbers=numbers)
+    return CvTrans.from_cv_function(_dihedral, static_argnames=["numbers"], numbers=numbers)
 
 
 def _sb_descriptor(
     sp: SystemParams,
     nl: NeighbourList,
-    _,
     shmap,
     shmap_kwargs,
     r_cut,
@@ -257,8 +246,8 @@ def sb_descriptor(
     chunk_size_atoms=None,
     chunk_size_neigbourgs=None,
     bessel_fun="jax",
-) -> CvFlow:
-    return CvFlow.from_function(
+) -> CvTrans:
+    return CvTrans.from_cv_function(
         _sb_descriptor,
         static_argnames=[
             "r_cut",
@@ -284,7 +273,6 @@ def sb_descriptor(
 def _soap_descriptor(
     sp: SystemParams,
     nl: NeighbourList,
-    _,
     shmap,
     shmap_kwargs,
     r_cut,
@@ -365,8 +353,8 @@ def soap_descriptor(
     reshape=True,
     num=50,
     basis="cos",
-) -> CvFlow:
-    return CvFlow.from_function(
+) -> CvTrans:
+    return CvTrans.from_cv_function(
         _soap_descriptor,
         static_argnames=["r_cut", "reduce", "reshape", "n_max", "l_max", "sigma_a", "r_delta", "num", "basis"],
         r_cut=r_cut,
@@ -394,7 +382,7 @@ def NoneCV() -> CollectiveVariable:
 ######################################
 #           CV trans                 #
 ######################################
-def _rotate_2d(cv: CV, _nl: NeighbourList, _, shmap, shmap_kwargs, alpha):
+def _rotate_2d(cv: CV, _nl: NeighbourList, shmap, shmap_kwargs, alpha):
     return (
         jnp.array(
             [[jnp.cos(alpha), jnp.sin(alpha)], [-jnp.sin(alpha), jnp.cos(alpha)]],
@@ -407,7 +395,7 @@ def rotate_2d(alpha):
     return CvTrans.from_cv_function(_rotate_2d, alpha=alpha)
 
 
-def _project_distances(cvs: CV, nl, _, shmap, shmap_kwargs, a):
+def _project_distances(cvs: CV, nl, shmap, shmap_kwargs, a):
     "projects the distances to a reaction coordinate"
     import jax.numpy as jnp
 
@@ -431,7 +419,7 @@ def project_distances(a):
     return CvTrans.from_cv_function(_project_distances, a=a)
 
 
-def _scale_cv_trans(x, nl, _, shmap, shmap_kwargs, upper, lower, mini, diff):
+def _scale_cv_trans(x, nl, shmap, shmap_kwargs, upper, lower, mini, diff):
     return x.replace(cv=((x.cv - mini) / diff) * (upper - lower) + lower)
 
 
@@ -446,7 +434,7 @@ def scale_cv_trans(array: CV, lower=0, upper=1):
     return CvTrans.from_cv_function(_scale_cv_trans, upper=upper, lower=lower, mini=mini, diff=diff)
 
 
-def _trunc_svd(x: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, m_atomic, v, cvi_shape):
+def _trunc_svd(x: CV, nl: NeighbourList | None, shmap, shmap_kwargs, m_atomic, v, cvi_shape):
     if m_atomic:
         out = jnp.einsum("ni,jni->j", x.cv, v)
 
@@ -499,7 +487,7 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
         cvi_shape=cvi_shape,
     )
 
-    return out.compute_cv_trans(m)[0], out
+    return out.compute_cv(m)[0], out
 
 
 # @partial(jit, static_argnames=["matching", "alpha", "normalize", "chunk_size"])
@@ -691,7 +679,6 @@ def sinkhorn_divergence(
 def _sinkhorn_divergence_trans(
     cv: CV,
     nl: NeighbourList | None,
-    _,
     shmap,
     hmap_kwargs,
     nli,
@@ -997,7 +984,6 @@ def sinkhorn_divergence_2(
 
     # print("a")
 
-    @partial(jax.value_and_grad, argnums=1)
     def get_d_p12(p1_i, p2_i):
         def p_norm(x):
             # p = x.cv
@@ -1022,24 +1008,38 @@ def sinkhorn_divergence_2(
         return -0.5 * d_11 + d_12 - 0.5 * d_22
 
     out_dist = jnp.zeros((x2.shape[0], 1))
-    out_vec = jnp.zeros(x2.shape)
+
+    if push_div:
+        get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)
+
+        out_vec = jnp.zeros(x2.shape)
 
     for p1_i, p2_i, out_i in zip(p1, p2, tgt_split):
-        d, dd_dpi2 = get_d_p12(p1_i, p2_i)
+        if push_div:
+            d, dd_dpi2 = get_d_p12(p1_i, p2_i)
+
+            out_vec = out_vec.at[out_i].set(dd_dpi2)
+
+        else:
+            d = get_d_p12(p1_i, p2_i)
+
+            # print(f"{d=}")
 
         out_dist = out_dist.at[out_i].set(d / out_i.shape[0])
-        out_vec = out_vec.at[out_i].set(dd_dpi2)
 
     out_dist = jnp.array(out_dist)
-    out_vec = jnp.array(out_vec)
 
-    return x2.replace(cv=out_vec, _stack_dims=x1._stack_dims), x2.replace(cv=out_dist, _stack_dims=x1._stack_dims)
+    if push_div:
+        out_vec = jnp.array(out_vec)
+
+        return x2.replace(cv=out_vec, _stack_dims=x1._stack_dims), x2.replace(cv=out_dist, _stack_dims=x1._stack_dims)
+
+    return x2.replace(cv=out_dist, _stack_dims=x1._stack_dims)
 
 
 def _sinkhorn_divergence_trans_2(
     cv: CV,
     nl: NeighbourList | None,
-    _,
     shmap,
     shmap_kwargs,
     nli: NeighbourList | NeighbourListInfo,
@@ -1091,24 +1091,31 @@ def _sinkhorn_divergence_trans_2(
     if pi.batched:
         f = vmap(f, in_axes=(0, None))
 
-    out, out_dist = f(pi, cv)
+    if push_div:
+        out, out_dist = f(pi, cv)
 
-    # print(f"{out_dist} {out=}")
-    # jax.debug.print("{}", out_dist)
+    else:
+        out_dist = f(pi, cv)
 
     if pi.batched:
-        out.stack_dims = (1,) * out.cv.shape[0]
-        out = CV.combine(*out.unstack()).unbatch()
+        if push_div:
+            out.stack_dims = (1,) * out.cv.shape[0]
+            out = CV.combine(*out.unstack()).unbatch()
 
         out_dist.stack_dims = (1,) * out_dist.cv.shape[0]
         out_dist = CV.combine(*out_dist.unstack()).unbatch()
 
-    out._stack_dims = cv._stack_dims
+    if push_div:
+        out._stack_dims = cv._stack_dims
+
     out_dist._stack_dims = cv._stack_dims
 
-    # print(f"{out_dist} {out=}")
+    if push_div:
+        ret = CV.combine(out_dist, out)
+    else:
+        ret = out_dist
 
-    return CV.combine(out_dist, out)
+    return ret
 
 
 def get_sinkhorn_divergence_2(
@@ -1144,7 +1151,7 @@ def get_sinkhorn_divergence_2(
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
-        jacfun=jax.jacrev,
+        # jacfun=jax.jacrev,
         static_argnames=[
             "alpha_rematch",
             "output",
@@ -1179,9 +1186,7 @@ def get_sinkhorn_divergence_2(
     )
 
 
-def _divergence_from_aligned_cv(
-    cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, diag_dist, off_diag_dist, alpha
-):
+def _divergence_from_aligned_cv(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, diag_dist, off_diag_dist, alpha):
     div, vec = cv.split()
 
     # print(f"{div=} {vec=}")
@@ -1214,7 +1219,6 @@ def _divergence_from_aligned_cv(
 def _un_atomize(
     x: CV,
     nl,
-    _,
     shmap,
     shmap_kwargs,
 ):
@@ -1233,7 +1237,6 @@ un_atomize = CvTrans.from_cv_function(_un_atomize)
 def _append_trans(
     x: CV,
     nl,
-    _,
     shmap,
     shmap_kwargs,
     v: Array,
@@ -1247,7 +1250,7 @@ def append_trans(v: Array):
     return CvTrans.from_cv_function(_append_trans, v=v)
 
 
-def _stack_reduce(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, op):
+def _stack_reduce(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, op):
     cvs = cv.split(cv.stack_dims)
 
     return CV(
@@ -1263,7 +1266,7 @@ def stack_reduce(op=jnp.mean):
     return CvTrans.from_cv_function(_stack_reduce, op=op)
 
 
-def _affine_trans(x: CV, nl, _, shmap, shmap_kwargs, C):
+def _affine_trans(x: CV, nl, shmap, shmap_kwargs, C):
     assert x.dim == 2
 
     u = (C[0] * x.cv[0] + C[1] * x.cv[1] + C[2]) / (C[6] * x.cv[0] + C[7] * x.cv[1] + 1)
@@ -1321,7 +1324,7 @@ def affine_2d(old: Array, new: Array):
     return CvTrans.from_cv_function(_affine_trans, C=C)
 
 
-def _remove_mean(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, mean):
+def _remove_mean(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, mean):
     return cv - mean
 
 
@@ -1331,10 +1334,10 @@ def get_remove_mean_trans(c: CV, range=Ellipsis):
 
     trans = CvTrans.from_cv_function(_remove_mean, mean=mean)
 
-    return trans.compute_cv_trans(c)[0], trans
+    return trans.compute_cv(c)[0], trans
 
 
-def _normalize(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, std):
+def _normalize(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, std):
     return cv * (1 / std)
 
 
@@ -1344,14 +1347,14 @@ def get_normalize_trans(c: CV, range=Ellipsis):
 
     trans = CvTrans.from_cv_function(_normalize, std=std)
 
-    return trans.compute_cv_trans(c)[0], trans
+    return trans.compute_cv(c)[0], trans
 
 
-def _cv_slice(cv: CV, nl: NeighbourList, _, shmap, shmap_kwargs, indices):
+def _cv_slice(cv: CV, nl: NeighbourList, shmap, shmap_kwargs, indices):
     return cv.replace(cv=jnp.take(cv.cv, indices, axis=-1), _combine_dims=None)
 
 
-def _cv_index(cv: CV, nl: NeighbourList, _, shmap, shmap_kwargs, indices):
+def _cv_index(cv: CV, nl: NeighbourList, shmap, shmap_kwargs, indices):
     return cv.replace(
         cv=jnp.take(
             cv.cv,
@@ -1460,61 +1463,61 @@ def get_feature_cov(
 ######################################
 
 
-class RealNVP(CvFunNn):
-    _: dataclasses.KW_ONLY
-    features: int
-    cv_input: CvFunInput
+# class RealNVP(CvFunNn):
+#     _: dataclasses.KW_ONLY
+#     features: int
+#     cv_input: CvFunInput
 
-    def setup(self) -> None:
-        self.s = Dense(features=self.features)
-        self.t = Dense(features=self.features)
+#     def setup(self) -> None:
+#         self.s = Dense(features=self.features)
+#         self.t = Dense(features=self.features)
 
-    def forward(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-    ):
-        y = CV.combine(*conditioners).cv
-        return CV(cv=x.cv * self.s(y) + self.t(y))
+#     def forward(
+#         self,
+#         x: CV,
+#         nl: NeighbourList | None,
+#         conditioners: list[CV] | None = None,
+#         shmap=False,
+#     ):
+#         y = CV.combine(*conditioners).cv
+#         return CV(cv=x.cv * self.s(y) + self.t(y))
 
-    def backward(
-        self,
-        z: CV,
-        nl: NeighbourList | None,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-    ):
-        y = CV.combine(*conditioners).cv
-        return CV(cv=(z.cv - self.t(y)) / self.s(y))
+#     def backward(
+#         self,
+#         z: CV,
+#         nl: NeighbourList | None,
+#         conditioners: list[CV] | None = None,
+#         shmap=False,
+#     ):
+#         y = CV.combine(*conditioners).cv
+#         return CV(cv=(z.cv - self.t(y)) / self.s(y))
 
 
-class DistraxRealNVP(CvFunDistrax):
-    _: dataclasses.KW_ONLY
-    latent_dim: int
+# class DistraxRealNVP(CvFunDistrax):
+#     _: dataclasses.KW_ONLY
+#     latent_dim: int
 
-    def setup(self):
-        """Creates the flow model."""
+#     def setup(self):
+#         """Creates the flow model."""
 
-        try:
-            from tensorflow_probability.substrates import jax as tfp
-        except ImportError:
-            raise ImportError("isntall tensorflow-probability")
+#         try:
+#             from tensorflow_probability.substrates import jax as tfp
+#         except ImportError:
+#             raise ImportError("isntall tensorflow-probability")
 
-        self.s = Dense(features=self.latent_dim)
-        self.t = Dense(features=self.latent_dim)
+#         self.s = Dense(features=self.latent_dim)
+#         self.t = Dense(features=self.latent_dim)
 
-        # Alternating binary mask.
-        self.bijector = distrax.as_bijector(
-            tfp.bijectors.RealNVP(
-                fraction_masked=0.5,
-                shift_and_log_scale_fn=self.shift_and_scale,
-            ),
-        )
+#         # Alternating binary mask.
+#         self.bijector = distrax.as_bijector(
+#             tfp.bijectors.RealNVP(
+#                 fraction_masked=0.5,
+#                 shift_and_log_scale_fn=self.shift_and_scale,
+#             ),
+#         )
 
-    def shift_and_scale(self, x0, input_depth, **condition_kwargs):
-        return self.s(x0), self.t(x0)
+#     def shift_and_scale(self, x0, input_depth, **condition_kwargs):
+#         return self.s(x0), self.t(x0)
 
 
 ######################################

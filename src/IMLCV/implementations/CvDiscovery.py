@@ -134,7 +134,7 @@ class TranformerAutoEncoder(Transformer):
         # )
 
         cv = CV.stack(*cv)
-        cv = un_atomize.compute_cv_trans(cv, None)[0]
+        cv = un_atomize.compute_cv(cv, None)[0]
 
         rng = random.PRNGKey(0)
 
@@ -270,14 +270,14 @@ class TranformerAutoEncoder(Transformer):
 
         f_enc = CvTrans(trans=(CvFun(forward=forward),))
 
-        cv = f_enc.compute_cv_trans(cv)[0].unstack()
+        cv = f_enc.compute_cv(cv)[0].unstack()
         if cv_t is not None:
-            cv_t = f_enc.compute_cv_trans(cv_t)[0].unstack()
+            cv_t = f_enc.compute_cv(cv_t)[0].unstack()
 
         return cv, cv_t, un_atomize * f_enc, w
 
 
-def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, outdim, solver):
+def _LDA_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha, outdim, solver):
     if solver == "eigen":
 
         def f(cv, scalings):
@@ -308,7 +308,7 @@ def _LDA_trans(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, 
     )
 
 
-def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, mean):
+def _LDA_rescale(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, mean):
     return CV(
         cv=(cv.cv - mean[0]) / (mean[1] - mean[0]),
         _stack_dims=cv._stack_dims,
@@ -318,7 +318,7 @@ def _LDA_rescale(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, mean)
     )
 
 
-def _scale_trans(cv: CV, nl: NeighbourList | None, _, shmap, shmap_kwargs, alpha, scale_factor):
+def _scale_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha, scale_factor):
     return CV(
         (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
         _stack_dims=cv._stack_dims,
@@ -381,7 +381,7 @@ class TransoformerLDA(Transformer):
 
         cv = CV.stack(*cv_list)
         # nl = NeighbourList.stack(*nl_list)
-        cv, _, _ = un_atomize.compute_cv_trans(cv)
+        cv, _, _ = un_atomize.compute_cv(cv)
 
         if method == "sklearn":
             from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
@@ -398,7 +398,7 @@ class TransoformerLDA(Transformer):
             )
 
             lda_cv = CvTrans.from_cv_function(_LDA_trans, alpha=alpha, outdim=self.outdim, solver=solver)
-            cv, _, _ = lda_cv.compute_cv_trans(cv)
+            cv, _, _ = lda_cv.compute_cv(cv)
 
             cvs = CV.unstack(cv)
 
@@ -410,7 +410,7 @@ class TransoformerLDA(Transformer):
             assert self.outdim == 1
 
             lda_rescale = CvTrans.from_cv_function(_LDA_rescale, mean=mean)
-            cv, _, _ = lda_rescale.compute_cv_trans(cv)
+            cv, _, _ = lda_rescale.compute_cv(cv)
 
             full_trans = un_atomize * lda_cv * lda_rescale
 
@@ -467,9 +467,9 @@ class TransoformerLDA(Transformer):
 
             _g = CvTrans.from_cv_function(_scale_trans, alpha=alpha, scale_factor=scale_factor)
 
-            cv = _g.compute_cv_trans(cv)[0]
+            cv = _g.compute_cv(cv)[0]
             if cv_t is not None:
-                cv_t = _g.compute_cv_trans(cv_t)[0]
+                cv_t = _g.compute_cv(cv_t)[0]
 
             full_trans = un_atomize * _f * _g
 

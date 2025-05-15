@@ -178,7 +178,7 @@ def _get_equival_sp(sp, rng) -> tuple[jax.Array, SystemParams]:
 #         l_max=3,
 #     )
 
-#     cv0, _ = cv.compute_cv_flow(sp0, nl0)  # should be close to 0
+#     cv0, _ = cv.compute_cv(sp0, nl0)  # should be close to 0
 
 #     prng, sp1, nl1 = _permute_sp_rand(prng, sp0, nl0, eps=0.5)
 
@@ -205,8 +205,8 @@ def _get_equival_sp(sp, rng) -> tuple[jax.Array, SystemParams]:
 #     assert (
 #         1
 #         - Kernel(
-#             cv.compute_cv_flow(sp0, nl0)[0].cv,
-#             cv.compute_cv_flow(sp01, nl01)[0].cv,
+#             cv.compute_cv(sp0, nl0)[0].cv,
+#             cv.compute_cv(sp01, nl01)[0].cv,
 #             nl0,
 #             nl01,
 #         )
@@ -231,10 +231,10 @@ def test_neigh():
     neigh_exp = n / jnp.abs(jnp.linalg.det(sp.cell)) * (4 / 3 * jnp.pi * r_cut**3)
     r_exp = 0.75 * r_cut
     print(
-        f"err neigh density {jnp.abs(  (jnp.mean(neigh_calc) - neigh_exp) /neigh_exp)}",
+        f"err neigh density {jnp.abs((jnp.mean(neigh_calc) - neigh_exp) / neigh_exp)}",
     )
     print(
-        f"err neigh density {jnp.abs(  (jnp.mean(r_calc/neigh_calc) - r_exp) /r_exp)}",
+        f"err neigh density {jnp.abs((jnp.mean(r_calc / neigh_calc) - r_exp) / r_exp)}",
     )
 
     def _comp(s1, s2):
@@ -351,7 +351,7 @@ def test_neigh_pair():
     )  # https://math.stackexchange.com/questions/167932/mean-distance-between-2-points-in-a-ball
 
     print(
-        f"err neigh density {jnp.abs( ( jnp.mean(pair_dist_avg) -pair_dist_exact)/pair_dist_exact  )}",
+        f"err neigh density {jnp.abs((jnp.mean(pair_dist_avg) - pair_dist_exact) / pair_dist_exact)}",
     )
 
     #####

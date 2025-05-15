@@ -270,7 +270,7 @@ class RBFInterpolator:
             smoothing = jnp.asarray(smoothing, dtype=float)
             if smoothing.shape != (ny,):
                 raise ValueError(
-                    "Expected `smoothing` to be a scalar or have shape " f"({ny},).",
+                    f"Expected `smoothing` to be a scalar or have shape ({ny},).",
                 )
 
         kernel = kernel.lower()
@@ -292,7 +292,7 @@ class RBFInterpolator:
                 epsilon = 1.0
             else:
                 raise ValueError(
-                    "`epsilon` must be specified if `kernel` is not one of " f"{_SCALE_INVARIANT}.",
+                    f"`epsilon` must be specified if `kernel` is not one of {_SCALE_INVARIANT}.",
                 )
         else:
             epsilon = jnp.array(epsilon)
@@ -372,7 +372,7 @@ class RBFInterpolator:
 
         if ndim != self.y.shape[1]:
             raise ValueError(
-                "Expected the second axis of `x` to have length " f"{self.y.shape[1]}.",
+                f"Expected the second axis of `x` to have length {self.y.shape[1]}.",
             )
 
         out = evaluate_system(

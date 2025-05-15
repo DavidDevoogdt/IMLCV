@@ -22,7 +22,7 @@ def bash_app_python(
     remove_stdout=True,
     remove_stderr=True,
 ):
-    from IMLCV.configs.config_general import PARSL_DICT, REFERENCE_COMMANDS, Executors, RESOURCES_DICT
+    from IMLCV.configs.config_general import PARSL_DICT, REFERENCE_COMMANDS, RESOURCES_DICT, Executors
 
     if executors is None:
         executors = Executors.default

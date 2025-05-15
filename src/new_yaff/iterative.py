@@ -23,11 +23,11 @@
 # --
 """Base class for iterative algorithms"""
 
+from dataclasses import KW_ONLY
 from functools import partial
 
 import jax.numpy as jnp
 from flax.struct import dataclass, field
-from dataclasses import KW_ONLY
 
 
 @partial(dataclass, frozen=False)

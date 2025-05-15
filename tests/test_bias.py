@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from IMLCV.base.bias import Bias, BiasF, CompositeBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvFlow, CvMetric, CvTrans, NeighbourListInfo, SystemParams
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourListInfo, SystemParams
 from IMLCV.base.rounds import Rounds
 from IMLCV.base.UnitsConstants import femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
@@ -75,7 +75,7 @@ def test_RBF_bias(kernel):
         return CV(cv=sp.coordinates)
 
     collective_variable = CollectiveVariable(
-        f=CvFlow.from_function(f=a),
+        f=CvTrans.from_function(f=a),
         metric=CvMetric.create(
             periodicities=[False, False],
             bounding_box=jnp.array([[-2, 2], [1, 5]]),
@@ -92,7 +92,7 @@ def test_RBF_bias(kernel):
     ):
         return cv.replace(cv=cv.cv[0] ** 3 + cv.cv[1])
 
-    val, _, _ = CvTrans.from_cv_function(f).compute_cv_trans(center_cvs)
+    val, _, _ = CvTrans.from_cv_function(f).compute_cv(center_cvs)
 
     bias = RbfBias.create(cvs=collective_variable, cv=center_cvs, vals=val.cv, kernel=kernel)
 

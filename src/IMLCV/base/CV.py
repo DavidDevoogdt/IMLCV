@@ -2407,8 +2407,8 @@ class NeighbourList:
     def nl_split_z(self, p):
         f = self.info.nl_split_z
 
-        if self.batched:
-            return vmap(f)
+        # if self.batched:
+        #     return vmap(f)
 
         return f(p)
 
@@ -3288,7 +3288,7 @@ class CvMetric:
             print(f"{bounds=}")
 
         @partial(CvTrans.from_cv_function, bounds=bounds)
-        def get_mask(x: CV, nl, _, shmap, shmap_kwargs, bounds):
+        def get_mask(x: CV, nl, shmap, shmap_kwargs, bounds):
             b = jnp.logical_and(jnp.all(x.cv > bounds[:, 0]), jnp.all(x.cv < bounds[:, 1]))
 
             return x.replace(cv=jnp.reshape(b, (1,)), _combine_dims=None)
@@ -3322,180 +3322,83 @@ class CvMetric:
 ######################################
 
 
-@jax.jit
-def jac_compose_sp(jac1: SystemParams, jac2: CV) -> CV:
-    if jac2.atomic:
-        s0 = "kl"
-    else:
-        s0 = "k"
-
-    s = f"...{s0},{s0}ij->...ij"
-
-    jac1 = jac1.replace(coordinates=jnp.einsum(s, jac2.cv, jac1.coordinates))
-    if jac1.cell is not None:
-        jac1 = jac1.replace(cell=jnp.einsum(s, jac2.cv, jac1.cell))
-
-    return jac1
-
-
-@jax.jit
-def jac_compose_cv(jac1: CV, jac2: CV) -> CV:
-    if jac1.atomic:
-        s0 = "ij"
-    else:
-        s0 = "i"
-
-    if jac2.atomic:
-        s1 = "kl"
-    else:
-        s1 = "k"
-
-    s = f"...{s1},{s1}{s0}->...{s0}"
-
-    jac1 = jac1.replace(cv=jnp.einsum(s, jac2.cv, jac1.cv), _combine_dims=None)
-
-    return jac1
-
-
 @partial(dataclass, frozen=False, eq=False)
-class CvFunInput:
+class CvFunBase:
     __: KW_ONLY
-    input: int = field(pytree_node=False)
-    conditioners: tuple[int] | None = field(pytree_node=False, default=None)
+    kwargs: dict = field(pytree_node=True, default_factory=dict)
+    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
+    # jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
 
-    def split(self, x: CV):
-        cvs = x.split()
-        if self.conditioners is not None:
-            cond = [cvs[i] for i in self.conditioners]
-        else:
-            cond = []
-
-        return cvs[self.input], cond
-
-    def combine(self, x: CV, res: CV):
-        cvs = [*x.split()]
-        cvs[self.input] = res
-        return CV.combine(*cvs)
-
-
-class _CvFunBase:
     @partial(
         jit,
         static_argnames=(
             "reverse",
-            "log_det",
+            "shmap",
+            "shmap_kwargs",
+            "chunk_size",
             "jacobian",
+        ),
+    )
+    def compute_cv(
+        self,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
+        chunk_size=None,
+        jacobian=False,
+        reverse=False,
+        shmap=False,
+        shmap_kwargs=ShmapKwargs.create(),
+    ) -> CV:
+        if x.batched:
+            # if nl is not None:
+            #     assert nl.batched
+
+            f = padded_vmap(
+                Partial(
+                    self.compute_cv,
+                    jacobian=jacobian,
+                    chunk_size=None,
+                    shmap=False,
+                    reverse=reverse,
+                ),
+                chunk_size=chunk_size,
+            )
+
+            if shmap:
+                f = padded_shard_map(f, shmap_kwargs)
+
+            return f(x, nl)
+
+        def f(x):
+            return self._compute_cv(x, nl, shmap=shmap, shmap_kwargs=shmap_kwargs)[0]
+
+        y = f(x)
+        if jacobian:
+            dy = self.jac(f)(x)
+
+            dy = dy.cv
+        else:
+            dy = None
+
+        return y, dy
+
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
             "shmap",
             "shmap_kwargs",
         ),
     )
-    def calc(
+    def _compute_cv(
         self,
-        x: CV,
-        nl: NeighbourList | None,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
         reverse=False,
-        log_det=False,
-        jacobian=False,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, Array | None]:
-        if self.cv_input is not None:
-            y, cond = self.cv_input.split(x)
-        else:
-            y, cond = x, None
-
-        if jacobian:
-            out, jac, log_det = self._jac(
-                y,
-                nl,
-                reverse=reverse,
-                conditioners=cond,
-                shmap=shmap,
-                shmap_kwargs=shmap_kwargs,
-            )
-
-        elif log_det:
-            out, log_det = self._log_Jf(
-                y,
-                nl,
-                reverse=reverse,
-                conditioners=cond,
-                shmap=shmap,
-                shmap_kwargs=shmap_kwargs,
-            )
-            jac = None
-        else:
-            out = self._calc(
-                y,
-                nl,
-                reverse=reverse,
-                conditioners=cond,
-                shmap=shmap,
-                shmap_kwargs=shmap_kwargs,
-            )
-            jac = None
-            log_det = None
-
-        if self.cv_input:
-            out = self.cv_input.combine(x, out)
-
-        return out, jac, log_det
-
-    @abstractmethod
-    def _calc(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        reverse=False,
-        conditioners: list[CV] | None = None,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
     ) -> CV:
         pass
-
-    @partial(jit, static_argnames=("reverse", "conditioners", "shmap"))
-    def _log_Jf(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        reverse=False,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, Array | None]:
-        """naive automated implementation, overrride this"""
-
-        def f(x):
-            return self._calc(x, nl, reverse, conditioners, shmap)
-
-        a = f(x)
-        b = jacfwd(f)(x)
-        log_det = jnp.log(jnp.abs(jnp.linalg.det(b.cv.cv)))
-
-        return a, log_det
-
-    @partial(jit, static_argnames=("reverse", "conditioners", "shmap", "shmap_kwargs"))
-    def _jac(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        reverse=False,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, Array | None]:
-        def f(x):
-            return self._calc(x, nl, reverse, conditioners, shmap, shmap_kwargs=shmap_kwargs)
-
-        a = f(x)
-
-        # print(jax.make_jaxpr(f)(x))
-        # print(jax.make_jaxpr(self.jacfun(f))(x))
-
-        b = self.jacfun(f)(x).cv
-        # print(b)
-
-        return a, b, None
 
     def __getstate__(self):
         return self.__dict__
@@ -3510,44 +3413,27 @@ class _CvFunBase:
 
 
 @partial(dataclass, frozen=False, eq=False)
-class CvFunBase(_CvFunBase):
-    __: KW_ONLY
-    cv_input: CvFunInput | None = None
-    kwargs: dict = field(pytree_node=True, default_factory=dict)
-    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
-    jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
-
-
-@partial(dataclass, frozen=False, eq=False)
 class CvFun(CvFunBase):
     __: KW_ONLY
     forward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = field(pytree_node=False, default=None)
     backward: Callable[[CV, NeighbourList | None, CV | None], CV] | None = field(pytree_node=False, default=None)
-    conditioners = False
 
     @partial(
         jit,
         static_argnames=(
             "reverse",
-            "conditioners",
             "shmap",
             "shmap_kwargs",
         ),
     )
-    def _calc(
+    def _compute_cv(
         self,
-        x: CV,
-        nl: NeighbourList | None,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
         reverse=False,
-        conditioners: list[CV] | None = None,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
     ) -> CV:
-        if conditioners is None:
-            c = None
-        else:
-            c = CV.combine(*conditioners)
-
         if reverse:
             assert self.backward is not None
             return Partial(
@@ -3555,7 +3441,7 @@ class CvFun(CvFunBase):
                 shmap=shmap,
                 shmap_kwargs=shmap_kwargs,
                 **self.static_kwargs,
-            )(x, nl, c, **self.kwargs)
+            )(x, nl, **self.kwargs)
         else:
             assert self.forward is not None
             return Partial(
@@ -3563,276 +3449,24 @@ class CvFun(CvFunBase):
                 shmap=shmap,
                 shmap_kwargs=shmap_kwargs,
                 **self.static_kwargs,
-            )(x, nl, c, **self.kwargs)
+            )(x, nl, **self.kwargs)
 
 
-class CvFunNn(nn.Module, _CvFunBase):
-    """used to instantiate flax linen CvTrans"""
-
-    cv_input: CvFunInput | None = None
-    kwargs: dict = field(pytree_node=False, default_factory=dict)
-    static_kwargs: dict = field(pytree_node=False, default_factory=dict)
-    jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
-
-    @abstractmethod
-    def setup(self):
-        pass
-
-    def _calc(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        reverse=False,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV | None, Array | None]:
-        if reverse:
-            return self.backward(x, nl, conditioners, shmap, shmap_kwargs, **self.kwargs)
-        else:
-            return self.forward(x, nl, conditioners, shmap, shmap_kwargs, **self.kwargs)
-
-    @abstractmethod
-    def forward(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> CV:
-        pass
-
-    @abstractmethod
-    def backward(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> CV:
-        pass
-
-
-class CvFunDistrax(nn.Module, _CvFunBase):
-    """
-    creates bijective CV function based on a distrax flow. The seup function should initialize the bijector
-
-    class RealNVP(CvFunDistrax):
-        _: dataclasses.KW_ONLY
-        latent_dim: int
-
-        def setup(self):
-            self.s = Dense(features=self.latent_dim)
-            self.t = Dense(features=self.latent_dim)
-
-            # Alternating binary mask.
-            self.bijector = distrax.as_bijector(
-                tfp.bijectors.RealNVP(
-                    fraction_masked=0.5,
-                    shift_and_log_scale_fn=self.shift_and_scale,
-                )
-            )
-
-        def shift_and_scale(self, x0, input_depth, **condition_kwargs):
-            return self.s(x0), self.t(x0)
-    """
-
-    bijector: distrax.Bijector = dataclasses.field(init=False)
-    jacfun: Callable = dataclasses.field(default=jax.jacfwd)
-    cv_input: CvFunInput | None = None
-
-    @abstractmethod
-    def setup(self):
-        """setups self.bijector"""
-
-    def _calc(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        reverse=False,
-        log_det=False,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV, Array | None]:
-        if conditioners is not None:
-            z = CV.combine(*conditioners, x).cv
-        else:
-            z = x.cv
-
-        assert nl is None, "not implemented"
-
-        if reverse:
-            assert self.bijector is not None
-            return CV(self.bijector.inverse(z), atomic=x.atomic)
-        else:
-            assert self.bijector is not None
-            return CV(self.bijector.forward(z), atomic=x.atomic)
-
-    def _log_Jf(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        reverse=False,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, Array | None]:
-        """naive implementation, overrride this"""
-        assert nl is None, "not implemented"
-        assert self.bijector is not None
-        if conditioners is not None:
-            z = CV.combine(*conditioners, x).cv
-        else:
-            z = x.cv
-
-        f = self.bijector.inverse_and_log_det if reverse else self.bijector.forward_and_log_det
-        z, jac = f(z)
-        return CV(cv=z, atomic=x.atomic), jac
-
-
-class _CombinedCvFun(_CvFunBase):
-    __: KW_ONLY
-    classes: tuple[tuple[_CvFunBase]]
-
-    @partial(
-        jit,
-        static_argnames=(
-            "reverse",
-            "log_det",
-            "jacobian",
-            "shmap",
-            "shmap_kwargs",
-        ),
-    )
-    def calc(
-        self,
-        x: CV | list[SystemParams],
-        nl: NeighbourList | None,
-        reverse=False,
-        log_det=False,
-        jacobian=False,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV | None, Array | None]:
-        if isinstance(x, CV):
-            assert x._combine_dims is not None, "combine dims not set. Use CV.combine(*cvs)"
-            splitted = x.split()
-        else:
-            splitted = x
-
-        out_x = []
-        out_log_det = []
-        out_jac = []
-
-        for cl, xi in zip(self.classes, splitted):
-            ordered = reversed(cl) if reverse else cl
-
-            if log_det:
-                log_det = jnp.array(0.0)
-            else:
-                log_det = None
-
-            jac = None
-
-            for tr in ordered:
-                xi, jac_i, log_det_i = tr.calc(
-                    x=xi,
-                    nl=nl,
-                    reverse=reverse,
-                    log_det=log_det,
-                    jacobian=jacobian,
-                    shmap=shmap,
-                    shmap_kwargs=shmap_kwargs,
-                )
-
-                if jacobian:
-                    if jac is None:
-                        jac = jac_i
-                    else:
-                        jac = jac_compose_cv(jac, jac_i)
-
-                if log_det:
-                    assert log_det_i is not None
-                    log_det += log_det_i
-
-            out_jac.append(jac)
-            out_x.append(xi)
-            out_log_det.append(log_det)
-
-        return (
-            CV.combine(*out_x),
-            CV.combine(*out_jac) if jacobian else None,
-            jnp.sum(jnp.array(out_log_det), axis=0) if log_det else None,
-        )
-
-    def _log_Jf(
-        self,
-        x: CV,
-        nl: NeighbourList | None,
-        reverse=False,
-        conditioners: list[CV] | None = None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, Array | None]:
-        """naive automated implementation, overrride this"""
-
-        raise NotImplementedError("untested")
+##################
+##  all CvFunBase are chained
+##################
 
 
 @partial(dataclass, frozen=False, eq=False)
-class CombinedCvFun(_CombinedCvFun):
-    __: KW_ONLY
-    classes: tuple[tuple[CvFunBase]]
-
-    # def __eq__(self, other):
-    #     return pytreenode_equal(self, other)
-
-
-class CombinedCvFunNN(nn.Module, _CombinedCvFun):
-    __: KW_ONLY
-    classes: tuple[tuple[CvFunNn]]
-
-    # def __eq__(self, other):
-    #     return pytreenode_equal(self, other)
-
-
-def _duplicate_trans(x: CV | SystemParams, nl: NeighbourList | None, _, shmap, shmap_kwargs, n):
-    if isinstance(x, SystemParams):
-        return [x] * n
-
-    return CV.combine(*[x] * n)
-
-
-class _CvTrans:
-    """f can either be a single CV tranformation or a list of transformations"""
-
-    trans: tuple[CvFunBase]
-
-    @property
-    def _comb(self) -> type[_CombinedCvFun]:
-        if isinstance(self, CvTrans):
-            return CombinedCvFun
-
-        if isinstance(self, CvTransNN):
-            return CombinedCvFunNN
-
-        raise
-
-    @property
-    def _cv_trans(self) -> type[_CvTrans]:
-        return self.__class__
-
+class CvTrans:
     @staticmethod
     def from_cv_function(
         f: Callable[[CV, NeighbourList | None, CV | None], CV],
-        jacfun: Callable = None,
+        # jacfun: Callable = None,
         static_argnames=None,
         check_input: bool = True,
         **kwargs,
-    ) -> CvTrans:
+    ) -> SerialCvTrans:
         static_kwargs = {}
 
         if static_argnames is not None:
@@ -3868,70 +3502,39 @@ class _CvTrans:
                     )
                     raise
 
-        if jacfun is not None:
-            kw["jacfun"] = jacfun
-
-        return CvTrans.from_cv_fun(proto=CvFun(**kw))
-
-    @staticmethod
-    def from_cv_fun(proto: _CvFunBase):
-        if isinstance(proto, nn.Module):
-            return CvTransNN(trans=(proto,))
-        return CvTrans(trans=(proto,))
-
-    def compute(
-        self,
-        x: CV | SystemParams,
-        nl: NeighbourList | None = None,
-        chunk_size=None,
-        jacobian=False,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV | None, Array | None]:
-        return self.compute_cv_trans(
-            x=x,
-            nl=nl,
-            jacobian=jacobian,
-            chunk_size=chunk_size,
-            shmap=shmap,
-            shmap_kwargs=shmap_kwargs,
-        )
+        return SerialCvTrans(trans=(CvFun(**kw),))
 
     @partial(
         jit,
         static_argnames=(
             "reverse",
-            "log_Jf",
-            "chunk_size",
-            "jacobian",
             "shmap",
             "shmap_kwargs",
+            "chunk_size",
+            "jacobian",
         ),
     )
-    def compute_cv_trans(
+    def compute_cv(
         self,
         x: CV | SystemParams,
         nl: NeighbourList | None = None,
-        reverse=False,
-        log_Jf=False,
         chunk_size=None,
         jacobian=False,
+        reverse=False,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV | None, Array | None]:
-        """
-        result is always batched
-        arg: CV
-        """
+    ) -> CV:
         if x.batched:
+            # if nl is not None:
+            #     assert nl.batched
+
             f = padded_vmap(
                 Partial(
-                    self.compute_cv_trans,
-                    reverse=reverse,
-                    log_Jf=log_Jf,
-                    chunk_size=None,
+                    self.compute_cv,
                     jacobian=jacobian,
+                    chunk_size=None,
                     shmap=False,
+                    reverse=reverse,
                 ),
                 chunk_size=chunk_size,
             )
@@ -3941,382 +3544,155 @@ class _CvTrans:
 
             return f(x, nl)
 
-        ordered = reversed(self.trans) if reverse else self.trans
+        def f(x):
+            return self._compute_cv(x, nl, shmap=shmap, shmap_kwargs=shmap_kwargs)
 
-        if log_Jf:
-            log_det = jnp.array(0.0)
+        y = f(x)
+        if jacobian:
+            dy = jax.jacrev(f)(x)
+
+            dy = dy.cv
         else:
-            log_det = None
+            dy = None
 
-        jac = None
+        return y, dy
+
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
+            "shmap",
+            "shmap_kwargs",
+        ),
+    )
+    def _compute_cv(
+        self,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
+        reverse=False,
+        shmap=False,
+        shmap_kwargs=ShmapKwargs.create(),
+    ) -> CV:
+        pass
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, statedict: dict):
+        self.__init__(**statedict)
+
+
+@partial(dataclass, frozen=False, eq=False)
+class SerialCvTrans(CvTrans):
+    """f can either be a single CV tranformation or a list of transformations"""
+
+    trans: tuple[SerialCvTrans | ParralelCvTrans | CvFun]
+
+    @partial(
+        jit,
+        static_argnames=(
+            "reverse",
+            "shmap",
+            "shmap_kwargs",
+        ),
+    )
+    def _compute_cv(
+        self,
+        x: CV | SystemParams,
+        nl: NeighbourList | None = None,
+        reverse=False,
+        shmap=False,
+        shmap_kwargs=ShmapKwargs.create(),
+    ) -> CV:
+        ordered = reversed(self.trans) if reverse else self.trans
 
         for tr in ordered:
             # print(f"{tr=} {x=}")
 
-            x, jac_i, log_det_i = tr.calc(
+            x = tr._compute_cv(
                 x=x,
                 nl=nl,
                 reverse=reverse,
-                log_det=log_Jf,
-                jacobian=jacobian,
                 shmap=shmap,
                 shmap_kwargs=shmap_kwargs,
             )
 
-            if jacobian:
-                if jac is None:
-                    jac = jac_i
-                else:
-                    jac = jac_compose_cv(jac, jac_i)
-
-            if log_Jf:
-                assert log_det_i is not None
-                log_det += log_det_i
-
-        return x, jac, log_det
-
-    def compute_cv(
-        self,
-        x: CV | SystemParams,
-        nl: NeighbourList | None = None,
-        jacobian=False,
-        chunk_size=None,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> CV:
-        return self.compute_cv_trans(
-            x=x,
-            nl=nl,
-            jacobian=jacobian,
-            chunk_size=chunk_size,
-            shmap=shmap,
-            shmap_kwargs=shmap_kwargs,
-        )
+        return x
 
     def __mul__(self, other):
-        assert isinstance(other, self._cv_trans), (
-            f"can only multiply by {self._cv_trans} object, instead got {type(other)}"
-        )
-        return self._cv_trans(
-            trans=(
-                *self.trans,
-                *other.trans,
-            ),
-        )
+        if isinstance(other, SerialCvTrans | ParralelCvTrans):
+            if isinstance(other, SerialCvTrans):
+                return SerialCvTrans(trans=(*self.trans, *other.trans))
 
-    def __add__(self, other: _CvTrans) -> _CvTrans:
-        assert isinstance(other, self._cv_trans), f"can only add by {self._cv_trans} object"
+            return SerialCvTrans(trans=(*self.trans, other))
 
-        dt = CvTrans.from_cv_function(_duplicate_trans, static_argnames=["n"], n=2)
+        raise ValueError(f"can only multiply by SerialCvTrans or ParralelCvTrans, instead got {type(other)}")
 
-        return dt * self._cv_trans(
-            trans=(self._comb(classes=(self.trans, other.trans)),),
-        )
+    def __add__(self, other):
+        if isinstance(other, SerialCvTrans | ParralelCvTrans):
+            if isinstance(other, SerialCvTrans):
+                return ParralelCvTrans(trans=(self, other))
 
-    @staticmethod
-    def stack(*cv_trans: _CvTrans):
-        n = len(cv_trans)
+            return SerialCvTrans(trans=(self, *other.trans))
 
-        _cv_trans = cv_trans[0]._cv_trans
-        _cv_comb = cv_trans[0]._comb
-
-        for i in cv_trans:
-            assert isinstance(i, _cv_trans)
-
-        dt = CvTrans.from_cv_function(_duplicate_trans, static_argnames=["n"], n=n)
-
-        return dt * _cv_trans(
-            trans=tuple([_cv_comb(classes=tuple([cvt.trans for cvt in cv_trans]))]),
-        )
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, statedict: dict):
-        self.__init__(**statedict)
+        raise ValueError(f"can only multiply by {SerialCvTrans} object, instead got {type(other)}")
 
 
 @partial(dataclass, frozen=False, eq=False)
-class CvTrans(_CvTrans):
-    __: KW_ONLY
-    trans: tuple[CvFunBase]
+class ParralelCvTrans(CvTrans):
+    trans: tuple[SerialCvTrans | ParralelCvTrans]
 
     @partial(
         jit,
         static_argnames=(
             "reverse",
-            "log_Jf",
-            "chunk_size",
-            "jacobian",
             "shmap",
             "shmap_kwargs",
         ),
     )
-    def compute_cv_trans(
+    def _compute_cv(
         self,
         x: CV | SystemParams,
         nl: NeighbourList | None = None,
         reverse=False,
-        log_Jf=False,
-        jacobian=False,
-        chunk_size=None,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV, Array | None]:
-        return _CvTrans.compute_cv_trans(
-            self=self,
-            x=x,
-            nl=nl,
-            reverse=reverse,
-            log_Jf=log_Jf,
-            chunk_size=chunk_size,
-            jacobian=jacobian,
-            shmap=shmap,
-            shmap_kwargs=shmap_kwargs,
-        )
+    ) -> list[CV]:
+        def order(a):
+            return reversed(a) if reverse else a
 
+        o_trans = order(self.trans)
 
-class CvTransNN(nn.Module, _CvTrans):
-    trans: tuple[CvFunNn]
+        out = []
 
-    def setup(self) -> None:
-        for i, a in enumerate(self.trans):
-            if not isinstance(a, nn.Module):
-                self.trans[i] = CvFunNn(cv_input=a.cv_input)
-
-    @nn.compact
-    def compute_cv_trans(
-        self,
-        x: CV | SystemParams,
-        nl: NeighbourList | None,
-        reverse=False,
-        log_Jf=False,
-        shmap=False,
-    ) -> tuple[CV, CV, Array | None]:
-        return _CvTrans.compute_cv_trans(
-            self=self,
-            x=x,
-            nl=nl,
-            reverse=reverse,
-            log_Jf=log_Jf,
-            shmap=shmap,
-        )
-
-    @nn.nowrap
-    def __mul__(self, other):
-        return _CvTrans.__mul__(self, other)
-
-    @nn.nowrap
-    def __add__(self, other):
-        return _CvTrans.__add__(self, other)
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, statedict: dict):
-        self.__init__(**statedict)
-
-
-class NormalizingFlow(nn.Module):
-    """normalizing flow. _ProtoCvTransNN are stored separately because they need to be initialized by this module in setup"""
-
-    flow: CvTransNN
-
-    def setup(self) -> None:
-        if isinstance(self.flow, CvTrans):
-            self.flow = CvTransNN(trans=self.flow.trans)
-
-    def calc(self, x: CV, nl: NeighbourList | None, reverse: bool):
-        a, _, b = self.flow.compute_cv_trans(x, nl, reverse=reverse, log_Jf=True)
-
-        return a, b
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, statedict: dict):
-        self.__init__(**statedict)
-
-
-@partial(dataclass, frozen=False, eq=False)
-class CvFlow:
-    func: CvTrans
-    trans: CvTrans | None = None
-
-    @staticmethod
-    def from_function(
-        f: Callable[[SystemParams, NeighbourList | None, CV | None], CV],
-        static_argnames=None,
-        **kwargs,
-    ) -> CvFlow:
-        return CvFlow(func=_CvTrans.from_cv_function(f=f, static_argnames=static_argnames, **kwargs))
-
-    def compute_cv(
-        self,
-        x: CV | SystemParams,
-        nl: NeighbourList | None = None,
-        chunk_size=None,
-        jacobian=False,
-        shmap=False,
-    ) -> tuple[CV, CV | None, Array | None]:
-        return self.compute_cv_flow(
-            x=x,
-            nl=nl,
-            jacobian=jacobian,
-            chunk_size=chunk_size,
-            shmap=shmap,
-        )
-
-    @partial(
-        jax.jit,
-        static_argnames=[
-            "chunk_size",
-            "jacobian",
-            "shmap",
-            "shmap_kwargs",
-        ],
-    )
-    def compute_cv_flow(
-        self,
-        x: SystemParams,
-        nl: NeighbourList | None = None,
-        chunk_size: int | None = None,
-        jacobian=False,
-        shmap=False,
-        shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV | None]:
-        if x.batched:
-            f = padded_vmap(
-                Partial(
-                    self.compute_cv_flow,
-                    jacobian=jacobian,
-                    chunk_size=None,
-                    shmap=False,
-                ),
-                chunk_size=chunk_size,
-            )
-
-            if shmap:
-                f = padded_shard_map(f, shmap_kwargs)
-
-            return f(x, nl)
-
-        out, out_jac, _ = self.func.compute_cv_trans(
-            x,
-            nl,
-            jacobian=jacobian,
-            chunk_size=chunk_size,
-            shmap=shmap,
-            shmap_kwargs=shmap_kwargs,
-        )
-        if self.trans is not None:
-            out, out_jac_i, _ = self.trans.compute_cv_trans(
-                x=out,
+        for _tr in o_trans:
+            _x = _tr._compute_cv(
+                x=x,
                 nl=nl,
-                jacobian=jacobian,
+                reverse=reverse,
                 shmap=shmap,
                 shmap_kwargs=shmap_kwargs,
             )
 
-            if jacobian:
-                out_jac = jac_compose_sp(out_jac, out_jac_i)
+            out.append(_x)
 
-        return out, out_jac
+        return CV(cv=jnp.hstack([cvi.cv for cvi in out]))
 
-    def __add__(self, other) -> CvFlow:
-        assert isinstance(other, CvFlow)
+    def __mul__(self, other):
+        if isinstance(other, SerialCvTrans | ParralelCvTrans):
+            if isinstance(other, SerialCvTrans):
+                return SerialCvTrans(trans=(self, *other.trans))
 
-        assert self.trans is None
-        return CvFlow(func=self.func + other.func)
+            return SerialCvTrans(trans=(self, other))
 
-    def __mul__(self, other) -> CvFlow:
-        assert isinstance(other, CvTrans), f"can only multiply by {self._cv_trans} object, instead got {type(other)}"
+        raise ValueError(f"can only multiply by SerialCvTrans or ParralelCvTrans, instead got {type(other)}")
 
-        if self.trans is None:
-            trans = other
-        else:
-            trans = self.trans * other
+    def __add__(self, other):
+        if isinstance(other, SerialCvTrans | ParralelCvTrans):
+            if isinstance(other, SerialCvTrans):
+                return ParralelCvTrans(trans=(*self.trans, other))
 
-        return CvFlow(func=self.func, trans=trans)
-
-    def save(self, file):
-        filename = Path(file)
-
-        if filename.suffix == ".json":
-            with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
-        else:
-            import cloudpickle
-
-            with open(filename, "wb") as f:
-                cloudpickle.dump(self, f)
-
-    @staticmethod
-    def load(file, **kwargs) -> CvFlow:
-        filename = Path(file)
-
-        if filename.suffix == ".json":
-            with open(filename) as f:
-                self = jsonpickle.decode(f.read(), context=unpickler)
-        else:
-            import cloudpickle
-
-            with open(filename, "rb") as f:
-                self = cloudpickle.load(f)
-
-        for key in kwargs.keys():
-            self.__setattr__(key, kwargs[key])
-
-        return self
-
-    def find_sp(
-        self,
-        x0: SystemParams,
-        target: CV,
-        target_nl: NeighbourList,
-        nl0: NeighbourList | None = None,
-        maxiter=10000,
-        tol=1e-4,
-        norm=lambda cv1, cv2, nl1, nl2: jnp.linalg.norm(cv1 - cv2),
-        solver=jaxopt.GradientDescent,
-    ) -> SystemParams:
-        def loss(sp: SystemParams, nl: NeighbourList, norm):
-            b, nl = jit(nl.update)(sp)
-            cvi, _ = self.compute_cv_flow(sp, nl)
-            nn = norm(cvi.cv, target.cv, nl, target_nl)
-
-            return nn, (b, nl, nn)  # aux output
-
-        _l = jit(Partial(loss, norm=norm))
-
-        slvr = solver(
-            fun=_l,
-            tol=tol,
-            has_aux=True,
-            maxiter=10,
-        )
-        state = slvr.init_state(x0, nl=nl0)
-        r = jit(slvr.update)
-
-        for _ in range(maxiter):
-            x0, state = r(x0, state, nl=nl0)
-            b, nl0, nn = state.aux
-
-            print(
-                f"step:{state.iter_num} norm {nn:.14f} err {state.error:.4f} update nl={not b}",
-            )
-
-            if not b:
-                nl0 = x0.get_neighbour_list(r_cut=nl0.info)
-
-        sp0 = _l(x0, nl0)
-        return sp0
-
-    def __getstate__(self):
-        return self.__dict__
-
-    def __setstate__(self, statedict: dict):
-        self.__init__(**statedict)
+            return SerialCvTrans(trans=(*self.trans, *other.trans))
 
 
 ######################################
@@ -4326,7 +3702,7 @@ class CvFlow:
 
 @partial(dataclass, frozen=False, eq=False)
 class CollectiveVariable:
-    f: CvFlow
+    f: CvTrans
     metric: CvMetric
     jac: Callable = field(pytree_node=False, default=jax.jacrev)  # jacfwd is generally faster, but not always supported
 
@@ -4350,40 +3726,17 @@ class CollectiveVariable:
         push_jac=False,
         shmap_kwargs=ShmapKwargs.create(),
     ) -> tuple[CV, CV]:
-        if sp.batched:
-            if nl is not None:
-                assert nl.batched
-
-            f = padded_vmap(
-                Partial(
-                    self.compute_cv,
-                    jacobian=jacobian,
-                    chunk_size=None,
-                    shmap=False,
-                ),
-                chunk_size=chunk_size,
-            )
-
-            if shmap:
-                f = padded_shard_map(f, shmap_kwargs)
-
-            return f(sp, nl)
-
         if push_jac:
-            return self.f.compute_cv_flow(sp, nl, jacobian=jacobian, shmap=shmap, shmap_kwargs=shmap_kwargs)
+            raise ValueError("push_jax not supported")
 
-        def f(x):
-            return self.f.compute_cv_flow(x, nl, jacobian=False, shmap=shmap, shmap_kwargs=shmap_kwargs)[0]
-
-        y = f(sp)
-        if jacobian:
-            dy = self.jac(f)(sp)
-
-            dy = dy.cv
-        else:
-            dy = None
-
-        return y, dy
+        return self.f.compute_cv(
+            x=sp,
+            nl=nl,
+            jacobian=jacobian,
+            chunk_size=chunk_size,
+            shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
+        )
 
     @property
     def n(self):

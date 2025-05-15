@@ -11,7 +11,7 @@ from matplotlib import gridspec
 from matplotlib.figure import Figure
 
 from IMLCV.base.bias import Bias, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvFlow, CvMetric, CvTrans, ShmapKwargs
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
 from IMLCV.implementations.CV import _scale_cv_trans, identity_trans, scale_cv_trans
@@ -24,7 +24,7 @@ class Transformer:
     def __init__(
         self,
         outdim,
-        descriptor: CvFlow,
+        descriptor: CvTrans,
         pre_scale=True,
         post_scale=True,
         T_scale=10,
@@ -47,7 +47,7 @@ class Transformer:
         shmap_kwargs=ShmapKwargs.create(),
         verbose=False,
         macro_chunk=10000,
-    ) -> tuple[list[CV], list[CV] | None, CvFlow]:
+    ) -> tuple[list[CV], list[CV] | None, CvTrans]:
         f = self.descriptor
 
         x, x_t = dlo.apply_cv(
@@ -1554,7 +1554,7 @@ class Transformer:
 
         print(close)
 
-        def _f(color_data, nl, c, shmap, shmap_kwargs, close, dim, pp):
+        def _f(color_data, nl, shmap, shmap_kwargs, close, dim, pp):
             # print(f"{color_data=} {close=} {dim=}")
             if close:
                 data_col = color_data.cv
@@ -1640,7 +1640,7 @@ class Transformer:
         else:
             from jax.tree_util import Partial
 
-            _f = Partial(_f, nl=None, c=None, shmap=None, shmap_kwargs=None, close=close, dim=dim, pp=pp)
+            _f = Partial(_f, nl=None, shmap=None, shmap_kwargs=None, close=close, dim=dim, pp=pp)
             _f = jax.vmap(_f)
             # _f = jax.jit(_f)
 

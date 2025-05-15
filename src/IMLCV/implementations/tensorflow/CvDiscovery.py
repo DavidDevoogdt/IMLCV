@@ -118,10 +118,10 @@ class TranformerUMAP(Transformer):
         **kwargs,
     ):
         x = CV.stack(*x)
-        x = un_atomize.compute_cv_trans(x, None)[0]
+        x = un_atomize.compute_cv(x, None)[0]
         if x_t is not None:
             x_t = CV.stack(*x_t)
-            x_t = un_atomize.compute_cv_trans(x_t, None)[0]
+            x_t = un_atomize.compute_cv(x_t, None)[0]
 
         x_train = x
 
@@ -196,7 +196,7 @@ class TranformerUMAP(Transformer):
         assert parametric
         f = CvTrans.from_cv_fun(hkFunBase(fwd_params=params, fwd_kwargs=fwd_kwargs))
 
-        cv_0 = f.compute_cv_trans(x, chunk_size=chunk_size)[0].unstack()
-        cv_tau = f.compute_cv_trans(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
+        cv_0 = f.compute_cv(x, chunk_size=chunk_size)[0].unstack()
+        cv_tau = f.compute_cv(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
 
         return cv_0, cv_tau, un_atomize * f, w

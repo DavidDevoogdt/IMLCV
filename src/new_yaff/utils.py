@@ -23,12 +23,10 @@
 # --
 """Auxiliary routines for initial velocities"""
 
+import jax
 import jax.numpy as jnp
 
-
 from IMLCV.base.UnitsConstants import boltzmann
-
-import jax
 
 
 def get_random_vel(
