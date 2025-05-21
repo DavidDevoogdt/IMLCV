@@ -102,8 +102,8 @@ def test_RBF_bias(kernel):
 
 def test_combine_bias():
     from IMLCV.base.MdEngine import StaticMdInfo
-    from IMLCV.implementations.MdEngine import YaffEngine
-    from yaff.test.common import get_alaninedipeptide_amber99ff
+    from IMLCV.implementations.MdEngine import NewYaffEngine
+    # from yaff.test.common import get_alaninedipeptide_amber99ff
 
     T = 300 * kelvin
 
@@ -143,7 +143,7 @@ def test_combine_bias():
         ),
     )
 
-    mde = YaffEngine.create(
+    mde = NewYaffEngine.create(
         energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
         bias=bias,
         static_trajectory_info=stic,

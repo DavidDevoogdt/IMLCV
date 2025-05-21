@@ -8,303 +8,16 @@ from typing import TYPE_CHECKING, Any
 import ase
 import ase.units
 import jax.numpy as jnp
-import new_yaff
-import new_yaff.npt
-import new_yaff.system
-import new_yaff.verlet
-import numpy as np
+
+# import numpy as np
 from ase import Atoms, units
 
+import IMLCV.new_yaff
+import IMLCV.new_yaff.verlet
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
-
-# from IMLCV.base.MdEngine import StaticMdInfo
-
-if TYPE_CHECKING:
-    import yaff
-    import yaff.analysis.biased_sampling
-    import yaff.external
-    import yaff.log
-    import yaff.pes.bias
-    import yaff.pes.ext
-    import yaff.sampling.iterative
-    from yaff.sampling.verlet import VerletIntegrator
-
-
-@dataclass
-class YaffEngine(MDEngine):
-    """MD engine with YAFF as backend.
-
-    Args:
-        ff (yaff.pes.ForceField)
-    """
-
-    _verlet_initialized: bool = False
-    _verlet: yaff.sampling.VerletIntegrator | None = None
-    _yaff_ener: Any | None = None
-    # additional_parts: list[Any] = field(default_factory=list)
-
-    @classmethod
-    def create(  # type: ignore[override]
-        self,
-        bias: Bias,
-        energy: Energy,
-        static_trajectory_info: StaticMdInfo,
-        sp: SystemParams,
-        trajectory_info: TrajectoryInfo | None = None,
-        trajectory_file=None,
-        additional_parts=[],
-        **kwargs,
-    ) -> YaffEngine:
-        cont = False
-
-        create_kwargs = {}
-
-        if trajectory_file is not None:
-            trajectory_file = Path(trajectory_file)
-            # continue with existing file if it exists
-            if Path(trajectory_file).exists():
-                trajectory_info = TrajectoryInfo.load(trajectory_file)
-                cont = True
-
-            if trajectory_info._size is None:
-                cont = False
-
-        if not cont:
-            create_kwargs["step"] = 1
-
-        else:
-            create_kwargs["step"] = trajectory_info._size
-            sp = trajectory_info.sp[-1]
-            if trajectory_info.t is not None:
-                create_kwargs["time0"] = time()
-
-        kwargs.update(create_kwargs)
-
-        return YaffEngine(
-            bias=bias,
-            energy=energy,
-            sp=sp,
-            static_trajectory_info=static_trajectory_info,
-            trajectory_info=trajectory_info,
-            trajectory_file=trajectory_file,
-            additional_parts=additional_parts,
-            **kwargs,
-        )
-
-    def _setup_verlet(self):
-        hooks = []
-
-        import yaff
-
-        yaff.log.set_level(0)
-
-        # myhook calls save_step
-        class myHook(yaff.sampling.iterative.Hook):
-            def __init__(self, md_engine: YaffEngine):
-                self.md_engine = md_engine
-
-                super().__init__()
-
-            def __call__(self, iterative: VerletIntegrator):
-                kwargs = dict(t=iterative.time, T=iterative.temp, err=iterative.cons_err)
-
-                if hasattr(iterative, "press"):
-                    kwargs["P"] = iterative.press
-
-                self.md_engine.save_step(**kwargs)
-
-            def expects_call(self, counter):
-                return True
-
-        class YaffFF(yaff.pes.ForceField):
-            def __init__(
-                self,
-                md_engine: YaffEngine,
-                name="IMLCV_YAFF_forcepart",
-                additional_parts=[],
-            ):
-                self.md_engine = md_engine
-
-                super().__init__(system=self.system, parts=additional_parts)
-
-            @property
-            def system(self):
-                return self.md_engine.yaff_system
-
-            @system.setter
-            def system(self, sys):
-                assert sys == self.system
-
-            @property
-            def sp(self):
-                return self.md_engine.energy.sp
-
-            def update_rvecs(self, rvecs):
-                self.clear()
-                self.system.cell.rvecs = rvecs
-
-            def update_pos(self, pos):
-                self.clear()
-                self.system.pos = pos
-
-            def _internal_compute(self, gpos, vtens):
-                energy = self.md_engine.get_energy(
-                    gpos is not None,
-                    vtens is not None,
-                )
-
-                cv, bias = self.md_engine.get_bias(
-                    gpos is not None,
-                    vtens is not None,
-                )
-
-                res = energy + bias
-
-                self.md_engine.last_ener = energy
-                self.md_engine.last_bias = bias
-                self.md_engine.last_cv = cv
-
-                if res.gpos is not None:
-                    gpos[:] += np.array(res.gpos, dtype=np.float64)
-                if res.vtens is not None:
-                    vtens[:] += np.array(res.vtens, dtype=np.float64)
-
-                return res.energy
-
-        self._yaff_ener = YaffFF(
-            md_engine=self,
-            additional_parts=self.additional_parts,
-        )
-
-        if self.static_trajectory_info.thermostat:
-            hooks.append(
-                yaff.sampling.LangevinThermostat(
-                    self.static_trajectory_info.T,
-                    timecon=self.static_trajectory_info.timecon_thermo,
-                ),
-            )
-        if self.static_trajectory_info.barostat:
-            hooks.append(
-                yaff.sampling.LangevinBarostat(
-                    self._yaff_ener,
-                    self.static_trajectory_info.T,
-                    self.static_trajectory_info.P,
-                    timecon=self.static_trajectory_info.timecon_baro,
-                    anisotropic=True,
-                ),
-            )
-
-        # # plumed hook
-        # for i in self.additional_parts:
-        #     if isinstance(i, yaff.sampling.iterative.Hook):
-        #         hooks.append(i)
-
-        hooks.append(myHook(self))
-
-        self._verlet = yaff.sampling.VerletIntegrator(
-            self._yaff_ener,
-            self.static_trajectory_info.timestep,
-            temp0=self.static_trajectory_info.T,
-            hooks=hooks,
-        )
-
-        i_screenlog = None
-
-        for i, h in enumerate(self._verlet.hooks):
-            if isinstance(h, yaff.sampling.VerletScreenLog):
-                i_screenlog = i
-
-                break
-
-        if i_screenlog is not None:
-            self._verlet.hooks.pop(i_screenlog)
-
-        self._verlet_initialized = True
-
-    @staticmethod
-    def load(file, **kwargs) -> MDEngine:
-        return MDEngine.load(file, **kwargs)
-
-    def _run(self, steps):
-        if not self._verlet_initialized:
-            self._setup_verlet()
-        self._verlet.run(int(steps))
-
-    @property
-    def yaff_system(self) -> YaffSys:
-        return YaffSys(self.energy, self.static_trajectory_info)
-
-
-@dataclass
-class YaffSys:
-    _md: MDEngine
-    _tic: StaticMdInfo
-
-    @dataclass
-    class YaffCell:
-        _md: MDEngine
-
-        @property
-        def rvecs(self):
-            if self._md.sp.cell is None:
-                return np.zeros((0, 3))
-            return np.array(self._md.sp.cell)
-
-        @rvecs.setter
-        def rvecs(self, rvecs):
-            self._md.sp.cell = jnp.array(rvecs)
-
-        def update_rvecs(self, rvecs):
-            self.rvecs = rvecs
-
-        @property
-        def nvec(self):
-            return self.rvecs.shape[0]
-
-        @property
-        def volume(self):
-            if self.nvec == 0:
-                return np.nan
-
-            vol_unsigned = np.linalg.det(self.rvecs)
-            if vol_unsigned < 0:
-                print("cell volume was negative")
-
-            return np.abs(vol_unsigned)
-
-    def __post_init__(self):
-        self._cell = self.YaffCell(_md=self._md)
-
-    @property
-    def numbers(self):
-        return self._tic.atomic_numbers
-
-    @property
-    def masses(self):
-        return np.array(self._tic.masses)
-
-    @property
-    def charges(self):
-        return None
-
-    @property
-    def cell(self):
-        return self._cell
-
-    @property
-    def pos(self):
-        return np.array(self._md.sp.coordinates)
-
-    @pos.setter
-    def pos(self, pos):
-        self._md.sp.coordinates = jnp.array(pos)
-
-    @property
-    def natom(self):
-        return self.pos.shape[0]
 
 
 @dataclass
@@ -537,17 +250,8 @@ class NewYaffEngine(MDEngine):
     """
 
     _verlet_initialized: bool = False
-    _verlet: new_yaff.verlet.VerletIntegrator | None = None
+    _verlet: IMLCV.new_yaff.verlet.VerletIntegrator | None = None
     _yaff_ener: Any | None = None
-    # additional_parts: list[Any] = field(default_factory=list)
-
-    # @property
-    # def sp(self) -> SystemParams:
-    #     raise NotImplementedError
-
-    # @sp.setter
-    # def sp(self, sp: SystemParams):
-    #     raise NotImplementedError
 
     @classmethod
     def create(  # type: ignore[override]
@@ -560,7 +264,7 @@ class NewYaffEngine(MDEngine):
         trajectory_file=None,
         # additional_parts=[],
         **kwargs,
-    ) -> YaffEngine:
+    ) -> NewYaffEngine:
         cont = False
 
         create_kwargs = {}
@@ -600,13 +304,13 @@ class NewYaffEngine(MDEngine):
     def _setup_verlet(self):
         hooks = []
 
-        class myHook(new_yaff.iterative.Hook):
-            def __init__(self, md_engine: YaffEngine):
+        class myHook(IMLCV.new_yaff.iterative.Hook):
+            def __init__(self, md_engine: NewYaffEngine):
                 self.md_engine = md_engine
 
                 super().__init__()
 
-            def __call__(self, iterative: new_yaff.verlet.VerletIntegrator):
+            def __call__(self, iterative: IMLCV.new_yaff.verlet.VerletIntegrator):
                 kwargs = dict(
                     t=iterative.time,
                     T=iterative.temp,
@@ -620,6 +324,8 @@ class NewYaffEngine(MDEngine):
                     kwargs["P"] = iterative.press
 
                 self.md_engine.save_step(**kwargs)
+
+                # print(f"{iterative.ff.system.sp=}")
 
                 self.md_engine.sp = iterative.ff.system.sp
                 self.md_engine.update_nl()

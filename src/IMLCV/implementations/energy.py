@@ -1,13 +1,121 @@
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import ase
 import jax.numpy as jnp
 import numpy as np
+from openmm import MonteCarloFlexibleBarostat
+from openmm.app import Simulation
 
 from IMLCV.base.bias import Energy, EnergyError, EnergyResult
-from IMLCV.base.UnitsConstants import angstrom, electronvolt
+from IMLCV.base.CV import NeighbourList, SystemParams
+from IMLCV.base.UnitsConstants import angstrom, electronvolt, kjmol, nanometer
 from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
+
+
+@dataclass
+class OpenMmEnergy(Energy):
+    pdb: Path
+    forcefield_name: str = "amber14-all.xml"
+
+    _simul: Simulation | None = None
+
+    @staticmethod
+    def to_jax_vec(thing):
+        return jnp.array([[a._value.x, a._value.y, a._value.z] for a in thing])
+
+    def get_info(self):
+        if self._simul is None:
+            self._get_simul()
+
+        atomic_numbers = jnp.array(
+            [a.element.atomic_number for a in self._simul.topology.atoms()],
+            dtype=int,
+        )
+
+        state = self._simul.context.getState(positions=True)
+
+        coor = OpenMmEnergy.to_jax_vec(state.getPositions()) * nanometer
+
+        sp = SystemParams(
+            coordinates=coor,
+            cell=None,
+        )
+
+        return sp, atomic_numbers
+
+    def _compute_coor(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
+        if self._simul is None:
+            self._get_simul()
+
+        # print(f"computing energy {sp/ nanometer=}")
+
+        self._simul.context
+
+        self._simul.context.setPositions(
+            sp.coordinates.__array__() / nanometer,
+        )
+
+        if sp.cell is not None:
+            self._simul.context.setPeriodicBoxVectors(
+                self.sp.cell[0, :] / nanometer,
+                self.sp.cell[1, :] / nanometer,
+                self.sp.cell[2, :] / nanometer,
+            )
+
+        state = self._simul.context.getState(
+            energy=True,
+            forces=gpos,
+        )
+
+        if vir:
+            vtens = (
+                OpenMmEnergy.to_jax_vec(MonteCarloFlexibleBarostat.computeCurrentPressure(self._simul.context)) * kjmol
+            )
+
+        res = EnergyResult(
+            state.getPotentialEnergy()._value * kjmol,
+            -OpenMmEnergy.to_jax_vec(state.getForces()) * kjmol / nanometer if gpos else None,
+            vtens if vir else None,
+        )
+
+        return res
+
+    def _get_simul(self):
+        import openmm.unit as openmm_unit
+        from openmm import LangevinIntegrator, System
+        from openmm.app import (
+            ForceField,
+            PDBFile,
+            Simulation,
+        )
+
+        pdb = PDBFile(str(self.pdb))
+        forcefield = ForceField("amber14-all.xml")
+        system: System = forcefield.createSystem(pdb.topology)
+
+        # values don't matter, a integrator is needed
+        integrator = LangevinIntegrator(
+            300 * openmm_unit.kelvin, 1 / openmm_unit.picosecond, 0.004 * openmm_unit.picoseconds
+        )
+        simulation = Simulation(pdb.topology, system, integrator)
+        simulation.context.setPositions(pdb.positions)
+
+        if (c := pdb.topology.getPeriodicBoxVectors()) is not None:
+            simulation.context.setPeriodicBoxVectors(c)
+
+            # add a barostat this is used to compute the virial
+
+        self._simul = simulation
+
+    def __getstate__(self):
+        return dict(pdb=self.pdb, forcefield_name=self.forcefield_name)
+
+    def __setstate__(self, state):
+        self.pdb = state["pdb"]
+        self.forcefield_name = state["forcefield_name"]
+        # return OpenMmEnergy(**state)
 
 
 class YaffEnergy(Energy):
@@ -78,7 +186,7 @@ class AseEnergy(Energy):
 
     def __init__(
         self,
-        atoms,  # , : ase.Atoms,
+        atoms: ase.Atoms,  # , : ase.Atoms,
         calculator=None,  #: ase.calculators.calculator.Calculator | None = None,
     ):
         self.atoms = atoms
@@ -329,7 +437,7 @@ class MACEASE(AseEnergy):
         return mace_mp(
             model="medium",
             dispersion=False,
-            default_dtype="float32",
+            default_dtype="float64",
             device="cpu",
             # compile_mode="default", #doens't compute stress
         )

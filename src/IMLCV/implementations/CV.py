@@ -490,285 +490,6 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     return out.compute_cv(m)[0], out
 
 
-# @partial(jit, static_argnames=["matching", "alpha", "normalize", "chunk_size"])
-def sinkhorn_divergence(
-    x1: CV,
-    x2: CV,
-    nl1: NeighbourList,
-    nl2: NeighbourList,
-    matching="REMatch",
-    alpha=1e-2,
-    normalize=True,
-    chunk_size=None,
-) -> tuple[CV, CV]:
-    """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
-
-    assert x1.atomic
-    assert x2.atomic
-
-    eps = 100 * jnp.finfo(x1.cv.dtype).eps
-
-    def p_norm(x: CV):
-        p = x.cv
-
-        p_sq = jnp.einsum("i...,i...->i", p, p)
-        p_sq_safe = jnp.where(p_sq <= eps, 1, p_sq)
-        p_norm_inv = jnp.where(p_sq == 0, 0.0, 1 / jnp.sqrt(p_sq_safe))
-
-        return CV(
-            cv=jnp.einsum("i...,i->i...", p, p_norm_inv),
-            _stack_dims=x._stack_dims,
-            _combine_dims=x._combine_dims,
-            atomic=x.atomic,
-        )
-
-    if normalize:
-        x1_norm = p_norm
-        x2_norm = p_norm
-
-        if x1.batched:
-            x1_norm = vmap(x1_norm)
-
-        if x2.batched:
-            x2_norm = vmap(x2_norm)
-
-        x1 = x1_norm(x1)
-        x2 = x2_norm(x2)
-
-    def get_b_p(x1: CV, nl1: NeighbourList):
-        return x1.cv, jnp.array(nl1.nl_split_z(())[0])
-
-    @jax.jit
-    def get_P(
-        x1: CV,
-        nl1: NeighbourList,
-        x2: CV | None = None,
-        nl2: NeighbourList | None = None,
-    ):
-        p1, b1 = get_b_p(x1, nl1)
-
-        if x2 is None:
-            p2, b2 = p1, b1
-        else:
-            p2, b2 = get_b_p(x2, nl2)
-
-        if matching == "average":
-            P12 = jnp.einsum("ni,nj->ij", b1, b2)
-
-        elif matching == "norm":
-            raise
-
-        else:
-
-            def __gs_mask(p1, p2, m1, m2):
-                n = p1.shape[0]
-
-                geom = PointCloud(
-                    x=jnp.reshape(p1, (n, -1)),
-                    y=jnp.reshape(p2, (n, -1)),
-                    # scale_cost=False,  # leads to problems if x==y
-                    epsilon=alpha,
-                )
-
-                geom = geom.mask(m1, m2)
-
-                prob = linear_problem.LinearProblem(geom)
-
-                # make svd class that accepts rtol and atol params
-                class _SVD(lx.SVD):
-                    def __init__(self, rtol, atol, rcond=None):
-                        super().__init__(rcond=rcond)
-
-                # precondition_fun=lambda x: x,
-                # symmetric=True,
-
-                solver = sinkhorn.Sinkhorn(
-                    implicit_diff=implicit_differentiation.ImplicitDiff(
-                        solver_kwargs={
-                            "nonsym_solver": _SVD,
-                        },
-                    ),
-                    use_danskin=True,
-                )
-                out = solver(prob)
-
-                P_ij = out.matrix
-
-                # Tr(  P.T * C )
-                return P_ij
-
-            P12 = jnp.einsum(
-                "nij,ni,nj->ij",
-                vmap(__gs_mask, in_axes=(None, None, 0, 0))(p1, p2, b1, b2),
-                b1,
-                b2,
-            )
-
-        return P12
-
-    get_P1 = get_P
-    get_P2 = get_P
-    get_P12 = get_P
-
-    if nl1.batched:
-        # raise
-        get_P1 = padded_vmap(get_P1, in_axes=(0, 0, None, None), chunk_size=chunk_size)
-        get_P12 = padded_vmap(get_P12, in_axes=(0, 0, None, None), chunk_size=chunk_size)
-
-    if nl2.batched:
-        get_P2 = padded_vmap(get_P2, in_axes=(0, 0, None, None), chunk_size=chunk_size)
-        get_P12 = padded_vmap(get_P12, in_axes=(None, None, 0, 0), chunk_size=chunk_size)
-
-    P11 = get_P1(x1, nl1, None, None)
-    P22 = get_P2(x2, nl2, None, None)
-    P12 = get_P12(x1, nl1, x2, nl2)
-
-    def combine(x1, x2, P11, P12, P22):
-        p1 = x1.cv
-        p2 = x2.cv
-
-        # todo: P_11 p1 p1 term not aligned -> nonseniscal?
-        cv = x1.replace(
-            cv=(
-                -2 * jnp.einsum("i...,j...,ij->j...", p1, p2, P12)
-                + jnp.einsum("i...,j...,ij->j...", p1, p1, P11)
-                + jnp.einsum("i...,j...,ij->j...", p2, p2, P22)
-            ),
-        )
-
-        # avoid non differentiable code
-        p2_sq = jnp.einsum("i...,i...->i...", p2, p2)
-        p2_safe = jnp.where(p2_sq <= eps, 1, p2)
-        p2_inv = jnp.where(p2_sq <= eps, 0.0, 1 / p2_safe)
-
-        cv_2 = x1.replace(
-            cv=(
-                -2 * jnp.einsum("i...,ij->j...", p1, P12)
-                + jnp.einsum("i...,j...,j...,ij", p1, p1, p2_inv, P11)
-                + jnp.einsum("i...,ij->j...", p2, P22)
-            ),
-        )
-
-        cv_3 = x1.replace(
-            cv=(-2 * jnp.einsum("i...,ij->j...", p1, P12) + 2 * jnp.einsum("i...,ij->j...", p2, P22)),
-        )
-
-        div = x1.replace(
-            cv=(
-                jnp.mean(
-                    -2 * jnp.einsum("i...,j...,ij->j", p1, p2, P12)
-                    + jnp.einsum("i...,j...,ij->j", p1, p1, P11)
-                    + jnp.einsum("i...,j...,ij->j", p2, p2, P22),
-                )
-            ),
-            atomic=False,
-        )
-
-        return div, cv, cv_2, cv_3
-
-    if nl1.batched:
-        combine = vmap(combine, in_axes=(0, None, 0, 0, None))
-
-    if nl2.batched:
-        combine = vmap(combine, in_axes=(None, 0, None, 0, 0))
-
-    return combine(x1, x2, P11, P12, P22)
-
-
-# @partial(jax.jit,static_argnames=["sort","alpha_rematch","output","normalize"])
-def _sinkhorn_divergence_trans(
-    cv: CV,
-    nl: NeighbourList | None,
-    shmap,
-    hmap_kwargs,
-    nli,
-    pi,
-    sort,
-    alpha_rematch,
-    output,
-    normalize,
-):
-    assert nl is not None, "Neigbourlist required for rematch"
-
-    divergence, out, matched, ddiv = sinkhorn_divergence(
-        x1=cv,
-        x2=pi,
-        nl1=nl,
-        nl2=nli,
-        matching=sort,
-        alpha=alpha_rematch,
-        normalize=normalize,
-    )
-
-    if output == "divergence":
-        return divergence
-
-    if output == "aligned_cv":
-        return CV.combine(
-            *[
-                CV(
-                    cv=cvi,
-                    _stack_dims=out._stack_dims,
-                    _combine_dims=out._combine_dims,
-                    atomic=out.atomic,
-                )
-                for cvi in out.cv
-            ],
-        )
-
-    if output == "matched":
-        return CV.combine(
-            *[
-                CV(
-                    cv=cvi,
-                    _stack_dims=out._stack_dims,
-                    _combine_dims=out._combine_dims,
-                    atomic=matched.atomic,
-                )
-                for cvi in matched.cv
-            ],
-        )
-
-    if output == "ddiv":
-        return CV.combine(
-            *[
-                CV(
-                    cv=cvi,
-                    _stack_dims=ddiv._stack_dims,
-                    _combine_dims=ddiv._combine_dims,
-                    atomic=ddiv.atomic,
-                )
-                for cvi in ddiv.cv
-            ],
-        )
-
-    raise ValueError(f"{output=}")
-
-
-def get_sinkhorn_divergence(
-    nli: NeighbourList | None,
-    pi: CV,
-    sort="rematch",
-    alpha_rematch=0.1,
-    output="divergence",
-    normalize=True,
-) -> CvTrans:
-    """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
-
-    assert pi.atomic, "pi must be atomic"
-
-    return CvTrans.from_cv_function(
-        _sinkhorn_divergence_trans,
-        static_argnames=["sort", "alpha_rematch", "output", "normalize"],
-        nli=nli,
-        pi=pi,
-        sort=sort,
-        alpha_rematch=alpha_rematch,
-        output=output,
-        normalize=normalize,
-    )
-
-
 # @partial(jit, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
 def sinkhorn_divergence_2(
     x1: CV,
@@ -776,21 +497,9 @@ def sinkhorn_divergence_2(
     nl1: NeighbourListInfo,
     nl2: NeighbourListInfo,
     alpha=1e-2,
-    normalize=True,
-    sum_divergence=False,
-    ridge=0,
-    sinkhorn_iterations=100,
-    use_dankskin=False,
-    r_cond_svd=1e-10,
-    method=None,
-    op=None,
-    scale=None,
-    push_div=False,
-    nan_zero=True,
+    xi: int = 2,
+    jacobian=False,
     lse=True,
-    in_prod=True,
-    scale_cost: None | str = None,
-    scale_eps: None | str = None,
 ) -> CV:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -800,40 +509,21 @@ def sinkhorn_divergence_2(
     assert not x1.batched
     assert not x2.batched
 
-    # @vmap
-
-    # return x.replace(cv=p * p_inv_safe)
-
-    # print("norming")
-    # if normalize:
-    # x1 = p_norm(x1)
-    # x2 = p_norm(x2)
-
-    if not normalize and scale_eps is None:
-        scale_eps = "std"
-
     src_mask, _, p1_cv = nl1.nl_split_z(x1)
     tgt_mask, tgt_split, p2_cv = nl2.nl_split_z(x2)
 
-    p1 = [a.cv.reshape(a.shape[0], -1) for a in p1_cv]
-    p2 = [a.cv.reshape(a.shape[0], -1) for a in p2_cv]
-
-    # def n(p):
-    #     p_sq = jnp.sum(p**2)
-    #     m = p_sq <= eps
-    #     p_sq_safe = jnp.where(m, 1, p_sq)
-    #     # p_safe = jnp.where(m, 0.0, jnp.sqrt(p_sq_safe))
-    #     p_inv_safe = jnp.where(m, 0.0, 1 / jnp.sqrt(p_sq_safe))
-
-    #     return p_inv_safe
+    # print(f" {[a.cv.shape for a in p2_cv]=}")
 
     @partial(vmap, in_axes=(None, 0), out_axes=1)
     @partial(vmap, in_axes=(0, None), out_axes=0)
     def cost(p1, p2):
-        # p1 = n(p1)
-        # p2 = n(p2)
+        p1 /= jnp.linalg.norm(p1)
+        p2 /= jnp.linalg.norm(p2)
 
-        return jnp.sum((p1 - p2) ** 2)  # need square root here?
+        return 1 - (jnp.dot(p1, p2)) ** xi  # dist between 0 and 1
+
+    p1 = [a.cv.reshape(a.shape[0], -1) for a in p1_cv]
+    p2 = [a.cv.reshape(a.shape[0], -1) for a in p2_cv]
 
     def solve_svd(matvec, b: Array) -> Array:
         from jax.numpy.linalg import lstsq
@@ -872,20 +562,8 @@ def sinkhorn_divergence_2(
     ):
         c = cost(p1, p2)
 
-        # if scale_eps is not None:
-        #     if scale_eps == "std":
-        #         s = jnp.std(c)
-        #     elif scale_eps == "mean":
-        #         s = jnp.mean(c)
-        #     else:
-        #         raise ValueError(f"{scale_eps=}")
-
-        #     s = jnp.where(s <= 1e-12, 1, s)
-
-        #     # jax.debug.print("s {}", s)
-        #     epsilon *= s
-
-        # epsilon = jax.lax.stop_gradient(epsilon)
+        if epsilon is None:
+            return jnp.sum(jnp.diag(c))
 
         n = c.shape[0]
         m = c.shape[1]
@@ -898,11 +576,6 @@ def sinkhorn_divergence_2(
         from jaxopt import FixedPointIteration
 
         if lse:  # log space
-            # initialization
-
-            # log_a = jnp.log(a)
-            # log_b = jnp.log(b)
-
             g_over_eps = jnp.log(b)
             c_over_eps = c / epsilon
 
@@ -933,12 +606,8 @@ def sinkhorn_divergence_2(
 
             out = fpi.run(g_over_eps, c_over_eps)
 
-            # jax.debug.print("steps {} {}", out.state.iter_num, out.params)
-
             g_over_eps = out.params
             f_over_eps = out.state.aux
-
-            # jax.debug.print("f_over_eps {} err {}", f_over_eps, out.state)
 
             @partial(vmap, in_axes=(None, 0, 1), out_axes=1)
             @partial(vmap, in_axes=(0, None, 0), out_axes=0)
@@ -962,7 +631,7 @@ def sinkhorn_divergence_2(
             fpi = FixedPointIteration(
                 fixed_point_fun=_T,
                 maxiter=500,
-                tol=1e-10,
+                tol=1e-12,
                 implicit_diff_solve=partial(solve_normal_cg, ridge=1e-8),
                 has_aux=True,
             )
@@ -974,48 +643,27 @@ def sinkhorn_divergence_2(
 
             P = jnp.einsum("i,j,ij->ij", u, v, K)
 
-        # jax.debug.print("{}", P)
-
         d0 = jnp.einsum("ij,ij->", P, c)
 
-        return P, d0
-
-    # @partial(jax.jacrev, argnums=1)
-
-    # print("a")
+        return d0
 
     def get_d_p12(p1_i, p2_i):
-        def p_norm(x):
-            # p = x.cv
-            eps = 100 * jnp.finfo(x.dtype).eps
-            p = x
-
-            p_sq = jnp.sum(p**2)
-            m = p_sq <= eps
-            p_sq_safe = jnp.where(m, 1, p_sq)
-            # p_safe = jnp.where(m, 0.0, jnp.sqrt(p_sq_safe))
-            p_inv_safe = jnp.where(m, 0.0, 1 / jnp.sqrt(p_sq_safe))
-
-            return p * p_inv_safe
-
-        p1_i = p_norm(p1_i)
-        p2_i = p_norm(p2_i)
-
-        _, d_12 = _core_sinkhorn(p1_i, p2_i, epsilon=alpha)
-        _, d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
-        _, d_11 = _core_sinkhorn(p1_i, p1_i, epsilon=alpha)
+        d_12 = _core_sinkhorn(p1_i, p2_i, epsilon=alpha)
+        d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
+        d_11 = _core_sinkhorn(p1_i, p1_i, epsilon=alpha)
 
         return -0.5 * d_11 + d_12 - 0.5 * d_22
 
     out_dist = jnp.zeros((x2.shape[0], 1))
 
-    if push_div:
+    if jacobian:
         get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)
 
         out_vec = jnp.zeros(x2.shape)
 
+    # solve problem per atom kind
     for p1_i, p2_i, out_i in zip(p1, p2, tgt_split):
-        if push_div:
+        if jacobian:
             d, dd_dpi2 = get_d_p12(p1_i, p2_i)
 
             out_vec = out_vec.at[out_i].set(dd_dpi2)
@@ -1023,13 +671,11 @@ def sinkhorn_divergence_2(
         else:
             d = get_d_p12(p1_i, p2_i)
 
-            # print(f"{d=}")
-
         out_dist = out_dist.at[out_i].set(d / out_i.shape[0])
 
     out_dist = jnp.array(out_dist)
 
-    if push_div:
+    if jacobian:
         out_vec = jnp.array(out_vec)
 
         return x2.replace(cv=out_vec, _stack_dims=x1._stack_dims), x2.replace(cv=out_dist, _stack_dims=x1._stack_dims)
@@ -1045,19 +691,8 @@ def _sinkhorn_divergence_trans_2(
     nli: NeighbourList | NeighbourListInfo,
     pi: CV,
     alpha_rematch,
-    output,
-    normalize,
-    sum_divergence,
-    ddiv_arg=0,
-    ridge=0,
-    sinkhorn_iterations=100,
-    r_cond_svd=1e-10,
-    method=None,
-    op=None,
-    scale=None,
-    push_div=False,
-    scale_cost: None | str = "mean",
-    scale_eps: None | str = "std",
+    # normalize,
+    jacobian=False,
 ):
     assert nl is not None, "Neigbourlist required for rematch"
 
@@ -1072,45 +707,33 @@ def _sinkhorn_divergence_trans_2(
             nl1=nl.info,
             nl2=nli,
             alpha=alpha_rematch,
-            normalize=normalize,
-            sum_divergence=sum_divergence,
-            ridge=ridge,
-            sinkhorn_iterations=sinkhorn_iterations,
-            use_dankskin=False,
-            r_cond_svd=r_cond_svd,
-            method=method,
-            op=op,
-            scale=scale,
-            push_div=push_div,
-            scale_cost=scale_cost,
-            scale_eps=scale_eps,
+            # normalize=normalize,
+            jacobian=jacobian,
         )
-
-    # print(f"{pi=}")
 
     if pi.batched:
         f = vmap(f, in_axes=(0, None))
 
-    if push_div:
+    if jacobian:
         out, out_dist = f(pi, cv)
 
     else:
         out_dist = f(pi, cv)
 
     if pi.batched:
-        if push_div:
+        if jacobian:
             out.stack_dims = (1,) * out.cv.shape[0]
             out = CV.combine(*out.unstack()).unbatch()
 
         out_dist.stack_dims = (1,) * out_dist.cv.shape[0]
         out_dist = CV.combine(*out_dist.unstack()).unbatch()
 
-    if push_div:
+    if jacobian:
         out._stack_dims = cv._stack_dims
 
     out_dist._stack_dims = cv._stack_dims
 
-    if push_div:
+    if jacobian:
         ret = CV.combine(out_dist, out)
     else:
         ret = out_dist
@@ -1122,20 +745,7 @@ def get_sinkhorn_divergence_2(
     nli: NeighbourListInfo,
     pi: CV,
     alpha_rematch=0.1,
-    output="divergence",
-    normalize=False,
-    sum_divergence=False,
-    ddiv_arg=0,
-    ridge=0,
-    sinkhorn_iterations=100,
-    merge=False,
-    r_cond_svd=1e-10,
-    method=None,
-    op=None,
-    scale=None,
-    push_div=False,
-    scale_cost: None | str = "mean",
-    scale_eps: None | str = "std",
+    jacobian=False,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -1145,75 +755,18 @@ def get_sinkhorn_divergence_2(
         print("converting nli to info")
         nli = nli.info
 
-    if push_div:
-        assert output == "jacrev"
-        output = "divergence"
-
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
         # jacfun=jax.jacrev,
         static_argnames=[
             "alpha_rematch",
-            "output",
-            "normalize",
-            "sum_divergence",
-            "ddiv_arg",
-            "ridge",
-            "sinkhorn_iterations",
-            "r_cond_svd",
-            "method",
-            "op",
-            "push_div",
-            "scale_cost",
-            "scale_eps",
+            "jacobian",
         ],
         nli=nli,
         pi=pi,
         alpha_rematch=alpha_rematch,
-        output=output,
-        normalize=normalize,
-        sum_divergence=sum_divergence,
-        ddiv_arg=ddiv_arg,
-        ridge=ridge,
-        sinkhorn_iterations=sinkhorn_iterations,
-        r_cond_svd=r_cond_svd,
-        method=method,
-        op=op,
-        scale=scale,
-        push_div=push_div,
-        scale_cost=scale_cost,
-        scale_eps=scale_eps,
+        jacobian=jacobian,
     )
-
-
-def _divergence_from_aligned_cv(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, diag_dist, off_diag_dist, alpha):
-    div, vec = cv.split()
-
-    # print(f"{div=} {vec=}")
-
-    divs = div.split()
-    vecs = vec.split()
-
-    # print(f"{divs=}")
-
-    ds = [
-        d.replace(
-            cv=jax.vmap(
-                lambda x: (x - diag_dist[:, i]) / (off_diag_dist[:, i] - diag_dist[:, i]), in_axes=1, out_axes=1
-            )(d.cv)
-        )
-        for i, d in enumerate(divs)
-    ]
-
-    # print(f"{ds=}")
-
-    vecs = [v.replace(cv=jax.vmap(lambda x, y: x * jnp.exp(-alpha * y))(v.cv, d.cv)) for d, v in zip(ds, vecs)]
-
-    out = CV.combine(CV.combine(*ds), CV.combine(*vecs))
-
-    # print(f"{out=} {cv=}")
-
-    return cv.replace(cv=out.cv)
 
 
 def _un_atomize(

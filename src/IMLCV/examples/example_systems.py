@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Callable
 
 import ase.io
@@ -6,105 +7,49 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from IMLCV.base.bias import Bias, BiasF, EnergyFn, NoneBias
+from IMLCV.base.bias import Bias, BiasF, Energy, EnergyFn, EnergyResult, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
-from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
+from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol, nanometer
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import LatticeInvariants, NoneCV, Volume, dihedral
-from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, YaffEnergy
-from IMLCV.implementations.MdEngine import AseEngine, NewYaffEngine, YaffEngine
+from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, OpenMmEnergy, YaffEnergy
+from IMLCV.implementations.MdEngine import AseEngine, NewYaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"
 
 
-def alanine_dipeptide_yaff(
-    cv="backbone_dihedrals",
-    bias: Callable[[CollectiveVariable], Bias] | None = None,
-    r_cut=None,
-):
-    T = 300 * kelvin
+# def _get_alanine_dipeptide_openmm_system():
+#     fold = DATA_ROOT / "ala" / "alanine-dipeptide.pdb"
 
-    tic = StaticMdInfo(
-        T=T,
-        timestep=2.0 * femtosecond,
-        timecon_thermo=100.0 * femtosecond,
-        write_step=100,
-        atomic_numbers=jnp.array(
-            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
-            dtype=int,
-        ),
-        screen_log=100,
-        equilibration=0 * femtosecond,
-        r_cut=r_cut,
+#     assert fold.exists()
+
+#     pdb = PDBFile(str(fold))
+#     forcefield = ForceField("amber14-all.xml")
+#     system: System = forcefield.createSystem(pdb.topology)
+
+#     integrator = LangevinMiddleIntegrator(
+#         300 * openmm_unit.kelvin, 1 / openmm_unit.picosecond, 0.004 * openmm_unit.picoseconds
+#     )
+#     simulation = Simulation(pdb.topology, system, integrator)
+#     simulation.context.setPositions(pdb.positions)
+
+#     sp = SystemParams(
+#         coordinates=jnp.array([[a._value.x, a._value.y, a._value.z] for a in pdb.positions]) * nanometer,
+#         cell=None,
+#     )
+
+#     return simulation, sp
+
+
+def alanine_dipeptide_openmm(cv="backbone_dihedrals"):
+    energy = OpenMmEnergy(
+        pdb=DATA_ROOT / "ala" / "alanine-dipeptide.pdb",
+        forcefield_name="amber14-all.xml",
     )
 
-    if cv == "backbone_dihedrals":
-        cv0 = CollectiveVariable(
-            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
-            metric=CvMetric.create(
-                periodicities=[True, True],
-                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
-            ),
-        )
-    elif cv == "backbone_dihedrals_theta":
-        cv0 = CollectiveVariable(
-            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16)) + dihedral(numbers=(1, 4, 6, 8))),
-            metric=CvMetric.create(
-                periodicities=[True, True, True],
-                bounding_box=[
-                    [-np.pi, np.pi],
-                    [-np.pi, np.pi],
-                    [-np.pi, np.pi],
-                ],
-            ),
-        )
-    elif cv is None:
-        cv0 = NoneCV()
-    else:
-        raise ValueError(
-            f"unknown value {cv} for cv 'backbone_dihedrals'",
-        )
-
-    if bias is None:
-        bias_cv0 = NoneBias.create(collective_variable=cv0)
-    else:
-        bias_cv0 = bias(cv0)
-
-    print(bias_cv0)
-
-    from yaff.test.common import get_alaninedipeptide_amber99ff
-
-    mde = YaffEngine.create(
-        energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
-        static_trajectory_info=tic,
-        bias=bias_cv0,
-    )
-
-    return mde
-
-
-def alanine_dipeptide_ase(
-    cv="backbone_dihedrals",
-    bias: Callable[[CollectiveVariable], Bias] | None = None,
-    r_cut=None,
-):
-    T = 300 * kelvin
-
-    tic = StaticMdInfo(
-        T=T,
-        timestep=2.0 * femtosecond,
-        timecon_thermo=100.0 * femtosecond,
-        write_step=100,
-        atomic_numbers=jnp.array(
-            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
-            dtype=int,
-        ),
-        screen_log=100,
-        equilibration=0 * femtosecond,
-        r_cut=r_cut,
-    )
+    sp, atomic_numbers = energy.get_info()
 
     if cv == "backbone_dihedrals":
         cv0 = CollectiveVariable(
@@ -129,22 +74,27 @@ def alanine_dipeptide_ase(
             f"unknown value {cv} for cv 'backbone_dihedrals'",
         )
 
-    if bias is None:
-        bias_cv0 = NoneBias.create(collective_variable=cv0)
-    else:
-        bias_cv0 = bias(cv0)
+    bias = NoneBias.create(collective_variable=cv0)
 
-    print(bias_cv0)
-
-    from yaff.test.common import get_alaninedipeptide_amber99ff
-
-    mde = AseEngine.create(
-        energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
-        static_trajectory_info=tic,
-        bias=bias_cv0,
+    tic = StaticMdInfo(
+        T=300 * kelvin,
+        timestep=2.0 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        write_step=50,
+        atomic_numbers=atomic_numbers,
+        screen_log=50,
+        equilibration=0 * femtosecond,
+        r_cut=None,
     )
 
-    return mde
+    engine = NewYaffEngine(
+        bias=bias,
+        energy=energy,
+        sp=sp,
+        static_trajectory_info=tic,
+    )
+
+    return engine
 
 
 def alanine_dipeptide_refs():
@@ -255,7 +205,7 @@ def mil53_yaff():
         atomic_numbers=energy.ff.system.numbers,
     )
 
-    yaffmd = YaffEngine.create(
+    yaffmd = NewYaffEngine.create(
         energy=energy,
         bias=bias,
         static_trajectory_info=st,
@@ -361,7 +311,7 @@ def CsPbI3(cv=None, unit_cells=[2]):
 
     bias = NoneBias.create(collective_variable=cv)
 
-    yaffmd = YaffEngine.create(
+    yaffmd = NewYaffEngine.create(
         energy=energy,
         bias=bias,
         static_trajectory_info=tic,
@@ -409,7 +359,7 @@ def CsPbI3_MACE(unit_cells=[2]):
     cv = NoneCV()
     bias = NoneBias.create(collective_variable=cv)
 
-    yaffmd = YaffEngine.create(
+    yaffmd = NewYaffEngine.create(
         energy=energy,
         bias=bias,
         static_trajectory_info=tic,

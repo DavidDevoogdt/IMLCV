@@ -21,9 +21,6 @@ class YaffCell:
 
         return YaffCell(rvecs=c)
 
-    def update_rvecs(self, rvecs):
-        self.rvecs = rvecs
-
     @property
     def nvec(self):
         return self.rvecs.shape[0]
@@ -60,7 +57,9 @@ class YaffSys:
 
     @property
     def sp(self):
+        # print(f"getting sp {self.cell.rvecs}")
+
         return SystemParams(
             coordinates=self.pos,
-            cell=self.cell.rvecs,
+            cell=self.cell.rvecs if self.cell.rvecs.shape[0] != 0 else None,
         )

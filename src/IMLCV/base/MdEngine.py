@@ -18,7 +18,7 @@ from ase.data import atomic_masses
 from flax.struct import dataclass as flax_dataclass
 from flax.struct import field
 from jax import Array, jit
-from jax.lax import dynamic_update_slice_in_dim
+from jax.lax import dynamic_slice_in_dim, dynamic_update_slice_in_dim
 from typing_extensions import Self
 
 from IMLCV import unpickler
@@ -275,71 +275,44 @@ class TrajectoryInfo:
             _size=int(jnp.size(slz)),
         )
 
-    @jit
+    # @jit
     def _stack(ti_out, *ti: TrajectoryInfo):
-        index = ti_out._size
+        tot_size = ti_out._size + sum([t._size for t in ti])
 
-        d = {
-            "_positions": ti_out._positions,
-            "_cell": ti_out._cell,
-            "_charges": ti_out._charges,
-            "_e_pot": ti_out._e_pot,
-            "_e_bias": ti_out._e_bias,
-            "_w": ti_out._w,
-            "_rho": ti_out._rho,
-            "_cv": ti_out._cv,
-            "_T": ti_out._T,
-            "_P": ti_out._P,
-            "_err": ti_out._err,
-            "_t": ti_out._t,
-        }
-
-        @jit
-        def upd(arr_in, arr, index):
-            if arr_in is not None and arr is not None:
-                return dynamic_update_slice_in_dim(arr_in, arr, index, 0)
-            return None
-
-        for t in ti:
-            # d = update_dict(d, index, t)
-
-            d["_positions"] = upd(d["_positions"], t._positions, index)
-            d["_cell"] = upd(d["_cell"], t._cell, index)
-            d["_charges"] = upd(d["_charges"], t._charges, index)
-            d["_e_pot"] = upd(d["_e_pot"], t._e_pot, index)
-            d["_e_bias"] = upd(d["_e_bias"], t._e_bias, index)
-            d["_w"] = upd(d["_w"], t._w, index)
-            d["_rho"] = upd(d["_rho"], t._rho, index)
-            d["_cv"] = upd(d["_cv"], t._cv, index)
-            d["_T"] = upd(d["_T"], t._T, index)
-            d["_P"] = upd(d["_P"], t._P, index)
-            d["_err"] = upd(d["_err"], t._err, index)
-            d["_t"] = upd(d["_t"], t._t, index)
-
-            index += t._size
-
-        return TrajectoryInfo(**d, _capacity=ti_out._capacity, _size=int(index))
-
-    @staticmethod
-    def stack(*ti: TrajectoryInfo) -> TrajectoryInfo:
-        if len(ti) == 1:
-            return ti[0]
-
-        tot_size = sum([t._size for t in ti])
-
-        ti_out = ti[0]
+        # ti_out = ti[0]
 
         if ti_out._capacity <= tot_size:
-            ti_out = ti_out._expand_capacity(nc=tot_size + 10)
+            ti_out = ti_out._expand_capacity(nc=tot_size * 1.4)
 
-        return ti_out._stack(*ti[1:])
+        index = ti_out._size
+
+        keys = ["_positions", "_cell", "_charges", "_e_pot", "_e_bias", "_w", "_rho", "_cv", "_T", "_P", "_err", "_t"]
+
+        for tii in ti:
+            _s = tii._size
+
+            for key in keys:
+                if ti_out.__dict__[key] is not None:
+                    ti_out.__dict__[key] = dynamic_update_slice_in_dim(
+                        ti_out.__dict__[key], dynamic_slice_in_dim(tii.__dict__[key], 0, _s), index, 0
+                    )
+
+            index += _s
+
+        ti_out._size = index
+
+        return ti_out
 
     def __add__(self, ti: TrajectoryInfo) -> TrajectoryInfo:
-        return TrajectoryInfo.stack(self, ti)
+        return self._stack(ti)
 
     def _expand_capacity(self, nc=None) -> TrajectoryInfo:
         if nc is None:
             nc = min(self._capacity * 2, self._capacity + 1000)
+
+        nc = int(nc)
+
+        print(f"expanding capacity from {self._capacity} to {nc}")
 
         delta = nc - self._capacity
 
@@ -364,6 +337,8 @@ class TrajectoryInfo:
     def _shrink_capacity(self) -> TrajectoryInfo:
         dict = {}
 
+        print(f"shrinking capacity from {self._capacity} to {self._size} ")
+
         for name in self._items_vec:
             prop = self.__getattribute__(name)
             if prop is not None:
@@ -376,6 +351,7 @@ class TrajectoryInfo:
 
         dict["_capacity"] = int(self._size)
         dict["_size"] = int(self._size)
+        dict["_finished"] = int(self._finished)
 
         return TrajectoryInfo(**dict)
 
@@ -737,8 +713,8 @@ class MDEngine(ABC):
 
             raise err
 
-        # self.trajectory_info =  self.trajectory_info._shrink_capacity()
         if self.trajectory_file is not None:
+            self.trajectory_info = self.trajectory_info._shrink_capacity()
             self.trajectory_info.save(self.trajectory_file)
 
     @abstractmethod
@@ -813,13 +789,20 @@ class MDEngine(ABC):
 
         self.step += 1
 
-    def get_energy(self, sp: SystemParams, gpos: bool = False, vtens: bool = False) -> EnergyResult:
+    def get_energy(
+        self,
+        sp: SystemParams,
+        gpos: bool = False,
+        vtens: bool = False,
+        manual_vir=None,
+    ) -> EnergyResult:
         def f(sp, nl):
             return self.energy.compute_from_system_params(
                 gpos=gpos,
                 vir=vtens,
                 sp=sp,
                 nl=nl,
+                manual_vir=manual_vir,
             )
 
         if self.energy.external_callback:

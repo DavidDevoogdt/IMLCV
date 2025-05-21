@@ -50,35 +50,41 @@ class Transformer:
     ) -> tuple[list[CV], list[CV] | None, CvTrans]:
         f = self.descriptor
 
-        x, x_t = dlo.apply_cv(
-            f,
-            dlo.sp,
-            dlo.sp_t,
-            dlo.nl,
-            dlo.nl_t,
-            chunk_size=chunk_size,
-            shmap=shmap,
-            macro_chunk=macro_chunk,
-            verbose=verbose,
-            print_every=1,
-        )
-
-        if self.pre_scale:
-            # todo: change
-            g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
+        if f is not None:
             x, x_t = dlo.apply_cv(
-                g,
-                x,
-                x_t,
+                f,
+                dlo.sp,
+                dlo.sp_t,
                 dlo.nl,
                 dlo.nl_t,
                 chunk_size=chunk_size,
                 shmap=shmap,
-                verbose=verbose,
                 macro_chunk=macro_chunk,
-                shmap_kwargs=shmap_kwargs,
+                verbose=verbose,
+                print_every=1,
             )
-            f = f * g
+
+            if self.pre_scale:
+                # todo: change
+                g = scale_cv_trans(CV.stack(*x), lower=0, upper=1)
+                x, x_t = dlo.apply_cv(
+                    g,
+                    x,
+                    x_t,
+                    dlo.nl,
+                    dlo.nl_t,
+                    chunk_size=chunk_size,
+                    shmap=shmap,
+                    verbose=verbose,
+                    macro_chunk=macro_chunk,
+                    shmap_kwargs=shmap_kwargs,
+                )
+                f = f * g
+
+        else:
+            print(f"skipping pre fit")
+
+            x, x_t, f = dlo.sp, dlo.sp_t, None
 
         return x, x_t, f
 
@@ -120,8 +126,8 @@ class Transformer:
         from IMLCV.base.rounds import DataLoaderOutput
 
         bias: Bias = dlo.get_fes_bias_from_weights(
-            samples_per_bin=5,
-            min_samples_per_bin=1,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
             n_max=n_max,
             max_bias=max_fes_bias,
             macro_chunk=macro_chunk,
@@ -167,8 +173,8 @@ class Transformer:
 
         bias_km: Bias = dlo.get_fes_bias_from_weights(
             weights=w,
-            samples_per_bin=5,
-            min_samples_per_bin=1,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
             n_max=n_max,
             max_bias=max_fes_bias,
             macro_chunk=macro_chunk,
@@ -199,6 +205,8 @@ class Transformer:
             shmap_kwargs=shmap_kwargs,
         )
 
+        trans = f
+
         print("starting fit")
         x, x_t, g, _ = self._fit(
             x,
@@ -210,6 +218,11 @@ class Transformer:
             T_scale=self.T_scale,
             **self.fit_kwargs,
         )
+
+        if f is None:
+            trans = g
+        else:
+            trans *= g
 
         print("getting bounds")
 
@@ -226,8 +239,8 @@ class Transformer:
             x,
             percentile=percentile,
             # margin=None,
-            weights=w,
-            rho=rho,
+            # weights=w,
+            # rho=rho,
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
         )
@@ -236,7 +249,7 @@ class Transformer:
 
         if self.post_scale:
             print("post scaling")
-            trans = CvTrans.from_cv_function(
+            s_trans = CvTrans.from_cv_function(
                 _scale_cv_trans,
                 upper=1,
                 lower=0,
@@ -248,7 +261,7 @@ class Transformer:
             bounds = bounds.at[:, 1].set(1)
 
             x, x_t = dlo.apply_cv(
-                trans,
+                s_trans,
                 x,
                 x_t,
                 dlo.nl,
@@ -259,10 +272,10 @@ class Transformer:
                 verbose=verbose,
             )
 
-            g *= trans
+            trans *= s_trans
 
         new_collective_variable = CollectiveVariable(
-            f=f * g,
+            f=trans,
             jac=jac,
             metric=CvMetric.create(
                 periodicities=None,
@@ -280,8 +293,8 @@ class Transformer:
                 rho=rho,
                 collective_variable=new_collective_variable,
                 cv=x,
-                samples_per_bin=10,
-                min_samples_per_bin=3,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
                 n_max=n_max,
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,

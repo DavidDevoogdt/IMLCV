@@ -68,6 +68,7 @@ class EnergyError(Exception):
 
 class Energy:
     external_callback = True
+    manual_vtens = False
 
     @property
     def nl(self):
@@ -113,17 +114,72 @@ class Energy:
     def _handle_exception(self, e=None):
         return f"{e=}"
 
+    def get_vtens_finite_difference(
+        self,
+        sp: SystemParams,
+        nl: NeighbourList,
+        eps=1e-5,
+        gpos=False,
+    ):
+        assert sp.cell is not None
+
+        print(f"{eps=}")
+
+        # rotate cell such that it only has 6 components
+        Q, R = jnp.linalg.qr(sp.cell)
+
+        reduced, _ = sp.to_relative()
+
+        print(f"{R=}")
+
+        ener = self.compute_from_system_params(sp=sp, nl=nl, gpos=True, vir=False)
+
+        e0 = ener.energy
+
+        dEdR = jnp.zeros((3, 3))
+
+        for i, j in [[0, 0], [1, 1], [2, 2], [1, 0], [2, 0], [2, 1]]:
+            # basis = jnp.zeros((3, 3))
+            # basis = basis.at[j, i].set(1)
+
+            # print(f"{basis=}")
+
+            full = reduced.replace(cell=Q @ R.at[j, i].add(eps)).to_absolute()
+            dener = self.compute_from_system_params(sp=full, nl=nl, gpos=False, vir=False).energy
+            dEdR = dEdR.at[j, i].set((dener - e0) / eps)
+
+        virial = R.T @ dEdR
+
+        print(f"{virial=}")
+        # print(f"{(virial+ jnp.einsum('ni,nj->ij', sp.coordinates, ener.gpos))=} ")
+
+        virial = 0.5 * (virial + virial.T)
+
+        return EnergyResult(
+            ener.energy,
+            ener.gpos if gpos else None,
+            virial,
+        )
+
     def compute_from_system_params(
         self,
         sp: SystemParams,
         gpos=False,
         vir=False,
         nl: NeighbourList | None = None,
+        manual_vir=None,
         shmap=False,
         shmap_kwarg=ShmapKwargs.create(),
     ) -> EnergyResult:
-        # self.sp = sp
-        # self.nl = nl
+        if manual_vir is None:
+            manual_vir = self.manual_vtens
+
+        if vir and manual_vir:
+            return self.get_vtens_finite_difference(
+                sp,
+                nl,
+                gpos=gpos,
+            )
 
         return self._compute_coor(sp, nl, gpos=gpos, vir=vir)
 

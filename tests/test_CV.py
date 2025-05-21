@@ -1,11 +1,8 @@
-import jax.flatten_util
-import jax.lax
+import jax
 import jax.numpy as jnp
-import jax.scipy.optimize
 from jax import vmap
 
-from IMLCV.base.CV import CV, CvFunInput, CvTrans, NeighbourList, NeighbourListInfo, NormalizingFlow, SystemParams
-from IMLCV.implementations.CV import DistraxRealNVP, RealNVP
+from IMLCV.base.CV import CV, CvTrans, NeighbourList, NeighbourListInfo, SystemParams
 
 ######################################
 #           Test                     #
@@ -33,72 +30,6 @@ def test_cv_split_combine():
     for x, y, z in zip([a, b, c], [a2, b2, c2], [a3, b3, c3]):
         assert ((x.cv - y.cv) == 0).all()
         assert ((x.cv - z.cv) == 0).all()
-
-
-def test_nf():
-    def test(mf, x, k2):
-        var_a = mf.init(k2, x=x, nl=None, reverse=False, method=NormalizingFlow.calc)
-
-        y, Jy = mf.apply(
-            variables=var_a,
-            method=NormalizingFlow.calc,
-            x=x,
-            nl=None,
-            reverse=False,
-        )
-        x2, Jx = mf.apply(
-            variables=var_a,
-            method=NormalizingFlow.calc,
-            x=y,
-            nl=None,
-            reverse=True,
-        )
-
-        assert (jnp.abs(x.cv - x2.cv) < 1e-5).all()
-        assert (jnp.abs(Jx + Jy) < 1e-5).all()
-
-    def get_chain(input, cond):
-        chain = CvTrans.from_cv_fun(
-            RealNVP(
-                features=features,
-                cv_input=CvFunInput(input=input, conditioners=cond),
-            ),
-        )
-        return chain
-
-    features = 5
-
-    prng = jax.random.PRNGKey(seed=42)
-    # test 0
-
-    key_1, key_2, prng = jax.random.split(prng, 3)
-    x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
-
-    test(NormalizingFlow(flow=get_chain(input=0, cond=(1,))), x, key_2)
-
-    # test 1
-
-    key_1, key_2, prng = jax.random.split(prng, 3)
-    x = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
-    test(
-        NormalizingFlow(
-            flow=get_chain(input=0, cond=(1,)) * get_chain(input=1, cond=(0,)),
-        ),
-        x,
-        key_2,
-    )
-
-    # test with distrax
-    key_1, key_2, key3, prng = jax.random.split(prng, 4)
-    x2 = CV(cv=jax.random.uniform(key=key_1, shape=(10,)), _combine_dims=[5, 5])
-
-    chain = CvTrans.from_cv_fun(
-        DistraxRealNVP(
-            latent_dim=5,
-        ),
-    )
-
-    test(NormalizingFlow(chain), x2, key_2)
 
 
 def _get_sp_rand(
@@ -162,55 +93,6 @@ def _get_equival_sp(sp, rng) -> tuple[jax.Array, SystemParams]:
     cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.cell)
     sp2 = SystemParams(coordinates=pos2, cell=cell_r)
     return rng, sp2
-
-
-# @pytest.mark.skip(reason="not implemented")
-# def test_reconstruction():
-#     prng = jax.random.PRNGKey(seed=42)
-
-#     r_cut = 6
-#     prng, sp0, nl0 = _get_sp_rand(prng=prng, n=40, r_cut=r_cut)
-#     k1, k2, k3, prng = jax.random.split(prng, 4)
-
-#     cv = sb_descriptor(
-#         r_cut=r_cut,
-#         n_max=3,
-#         l_max=3,
-#     )
-
-#     cv0, _ = cv.compute_cv(sp0, nl0)  # should be close to 0
-
-#     prng, sp1, nl1 = _permute_sp_rand(prng, sp0, nl0, eps=0.5)
-
-#     tol = 1e-6
-
-
-#     sp01 = cv.find_sp(
-#         x0=sp1,
-#         nl0=nl1,
-#         target=cv0,
-#         target_nl=nl0,
-#         tol=tol,
-#         norm=lambda cv1, cv2, nl1, nl2: jnp.sqrt(
-#             1 - Kernel(cv1, cv2, nl1, nl2, matching="average"),
-#         ),
-#         # solver=jaxopt.GradientDescent
-#         solver=jaxopt.GradientDescent,
-#         # solver=jaxopt.LBFGS,
-#         # solver=partial(jaxopt.ScipyMinimize, method="l-bfgs-b"),
-#     )
-
-#     nl01 = sp01.get_neighbour_list(r_cut=r_cut, z_array=nl1.z_array)
-
-#     assert (
-#         1
-#         - Kernel(
-#             cv.compute_cv(sp0, nl0)[0].cv,
-#             cv.compute_cv(sp01, nl01)[0].cv,
-#             nl0,
-#             nl01,
-#         )
-#     ) < tol
 
 
 def test_neigh():

@@ -1,6 +1,5 @@
 [build-system]
-# AVOID CHANGING REQUIRES: IT WILL BE UPDATED BY PYSCAFFOLD!
-requires = ["setuptools>=46.1.0", "setuptools_scm[toml]>=5"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
@@ -9,9 +8,6 @@ build-backend = "setuptools.build_meta"
 version_scheme = "no-guess-dev"
 
 
-[tool.black]
-line-length = 120
-target-version = ['py310']
 
 [tool.ruff]
 
@@ -33,3 +29,88 @@ typeCheckingMode = "off"
 #    ".pip_cache/**",
 #    "micromamba/**",
 #]
+
+[tool.pdm]
+distribution = true
+package-dir = "src"
+
+[project]
+name = "IMLCV"
+version = "0.1.0"
+description = "Add a short description here!"
+authors = [
+    {name = "David Devoogdt", email = "david.devoogdt@ugent.be"},
+    {name = "David Devoogdt", email = "david.devoogdt@gmail.com"},
+]
+dependencies = [
+    "ase>=3.22.1",
+    "cloudpickle>=2.2.1",
+    "distrax>=0.1.3",
+    "dm-haiku",
+    "filelock>=3.12.0",
+    "flax",
+    "h5py>=3.8.0",
+    "hsluv",
+    "importlib-metadata>=6.6.0",
+    "jax>=0.4.26",
+    "jaxlib>=0.4.26",
+    "jaxopt",
+    "jsonpickle",
+    "mace-torch",
+    "matplotlib>=3.8",
+    "optax",
+    "ott-jax",
+    "parsl>=2024.1.22",
+    "umap-learn>=0.5.3",
+    "work-queue",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Homepage = "https://github.com/DavidDevoogdt/IMLCV"
+Documentation = "https://imlcv.readthedocs.io/en/main/?badge=main"
+Source = "https://github.com/DavidDevoogdt/IMLCV"
+Changelog = "https://github.com/DavidDevoogdt/IMLCV/latest/changelog.html"
+
+[project.optional-dependencies]
+docs = [
+    "myst-parser",
+    "nbsphinx",
+    "nbsphinx-link",
+    "pandoc",
+    "sphinx",
+    "sphinx-autoapi",
+    "sphinx-autodoc-typehints",
+    "sphinx-book-theme",
+    "sphinx-design",
+]
+jupyter = [
+    "jupyterlab",
+]
+lint = [
+    "ruff",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "setuptools",
+]
+
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+
+testpaths = [
+    "tests",
+]

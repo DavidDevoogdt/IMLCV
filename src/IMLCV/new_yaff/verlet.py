@@ -417,6 +417,13 @@ class VerletIntegrator:
     def call_hooks(self):
         state_updated = False
 
+        if jnp.any(jnp.isnan(self.ff.system.sp.coordinates)):
+            raise ValueError(f"sp containes nans: {self.ff.system.sp=}")
+
+        if self.ff.system.sp.cell is not None:
+            if jnp.any(jnp.isnan(self.ff.system.sp.cell)):
+                raise ValueError(f"sp containes nans: {self.ff.system.sp=}")
+
         for hook in [self.verlet_hook, *self.other_hooks]:
             if hook.expects_call(self.counter):
                 if not state_updated:

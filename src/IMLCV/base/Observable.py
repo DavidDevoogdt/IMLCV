@@ -391,8 +391,8 @@ class Observable:
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 max_bias=max_bias,
-                samples_per_bin=10,
-                min_samples_per_bin=1,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
             )
 
             if plot_selected_points:
@@ -408,7 +408,8 @@ class Observable:
         if koopman:
             weights, w_corr = dlo.koopman_weight(
                 max_bins=n_max,
-                samples_per_bin=10,
+                samples_per_bin=samples_per_bin,
+                # min_samples_per_bin=min_samples_per_bin,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 verbose=verbose,
@@ -424,8 +425,8 @@ class Observable:
                 n_max=n_max,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-                samples_per_bin=10,
-                min_samples_per_bin=1,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
             )
 
             if plot_selected_points:
@@ -443,8 +444,8 @@ class Observable:
                     n_max=n_max,
                     chunk_size=chunk_size,
                     macro_chunk=macro_chunk,
-                    samples_per_bin=10,
-                    min_samples_per_bin=1,
+                    samples_per_bin=samples_per_bin,
+                    min_samples_per_bin=min_samples_per_bin,
                 )
 
                 fes_bias_tot_corr.plot(

@@ -41,34 +41,20 @@ class YaffFF:
 
         return yaff_ff
 
-    @property
-    def sp(self):
-        return self.md_engine.sp
-
-    # def update_rvecs(self, rvecs):
-    #     self.clear()
-    #     self.system.cell.rvecs = rvecs
-
-    # def update_pos(self, pos):
-    #     self.clear()
-    #     self.system.pos = pos
-
     def clear(self):
         self.energy = jnp.nan
         self.gpos = self.gpos.at[:].set(jnp.nan)
         self.vtens = self.vtens.at[:].set(jnp.nan)
 
     def compute(self, gpos=None, vtens=None):
+        sp = self.system.sp
+
         get_gpos = gpos is not None
-        get_vtens = vtens is not None and self.md_engine.sp.cell is not None
+        get_vtens = vtens is not None and sp.cell is not None
 
-        # update the position
-        # self.md_engine.sp = self.system.sp
-
-        # print(f"{self.system.sp=}")
+        # print(f"{gpos=} {vtens=} {self.system.sp=}")
 
         energy = self.md_engine.get_energy(self.system.sp, get_gpos, get_vtens)
-
         cv, bias = self.md_engine.get_bias(self.system.sp, get_gpos, get_vtens)
 
         res = energy + bias

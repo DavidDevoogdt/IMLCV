@@ -1,6 +1,7 @@
 """Module for RBF interpolation."""
 
 import warnings
+from datetime import datetime
 from functools import partial
 from itertools import combinations_with_replacement
 
@@ -212,7 +213,16 @@ def _build_and_solve_system(
     # print(f"{b.shape=} {coeffs.shape=} {coeffs=}")
 
     # if check:
-    coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
+
+    dt0 = datetime.now()
+
+    print(f"start time: {dt0:%H:%M:%S}.{dt0.microsecond // 1000:03d}", flush=True)
+
+    coeffs = jax.block_until_ready(jax.scipy.linalg.solve(A, b, assume_a="sym"))
+
+    dt1 = datetime.now()
+
+    print(f"end time: {dt1:%H:%M:%S}.{dt1.microsecond // 1000:03d}", flush=True)
 
     # print(f"{coeffs-coeffs2=} {jnp.linalg.norm(coeffs-coeffs2)=}")
 

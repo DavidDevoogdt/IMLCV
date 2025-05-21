@@ -33,8 +33,8 @@ class ShmapKwargs:
     out_axes: int = 0
     axis_name: str | None = field(pytree_node=False, default="i")
     n_devices: int | None = None
-    pmap: bool = True
-    explicit_shmap: bool = True
+    pmap: bool = False
+    explicit_shmap: bool = False
     verbose: bool = False
     device_get: bool = True
     devices: tuple[Any] = field(pytree_node=False, default=None)
@@ -46,7 +46,7 @@ class ShmapKwargs:
         out_axes: int = 0,
         axis_name: str | None = "i",
         n_devices: int | None = None,
-        pmap: bool = True,
+        pmap: bool = False,
         explicit_shmap: bool = True,
         verbose: bool = False,
         device_get: bool = True,
@@ -284,6 +284,8 @@ def padded_shard_map(
         in_tree_flat_padded = flatten(in_tree_flat)
 
         if pmap:
+            print("WARNING: do not use pmap")
+
             shard_fun = jax.pmap(
                 f_flat,
                 in_axes=0 if move_axis else axis,

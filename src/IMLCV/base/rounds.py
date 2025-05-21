@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import os
 import shutil
 import time
@@ -325,7 +326,17 @@ class Rounds(ABC):
                 format=ext,
             )
 
-    def plot_round(self, c=None, r=None, name_bias=None, name_points=None, dlo_kwargs={}, plot_kwargs={}):
+    def plot_round(
+        self,
+        c=None,
+        r=None,
+        name_bias=None,
+        name_points=None,
+        dlo_kwargs={},
+        plot_kwargs={},
+        plot_points=True,
+        plot_fes=True,
+    ):
         if c is None:
             c = self.cv
 
@@ -340,38 +351,43 @@ class Rounds(ABC):
 
         print(f"{c=} {r=}")
 
-        dlo = self.data_loader(
-            num=1,
-            out=-1,
-            cv_round=c,
-            stop=r,
-            new_r_cut=None,
-            weight=False,
-            **dlo_kwargs,
-        )
+        colvar = self.get_collective_variable(c)
+        sti = self.get_static_trajectory_info(c, r)
 
-        b = self.get_bias(c=c, r=r)
+        if plot_fes:
+            b = self.get_bias(c=c, r=r)
 
-        Transformer.plot_app(
-            collective_variables=[dlo.collective_variable],
-            biases=[[b]],
-            duplicate_cv_data=False,
-            T=dlo.sti.T,
-            name=name_bias,
-            plot_FES=True,
-            **plot_kwargs,
-        )
+            Transformer.plot_app(
+                collective_variables=[colvar],
+                biases=[[b]],
+                duplicate_cv_data=False,
+                T=sti.T,
+                name=name_bias,
+                plot_FES=True,
+                **plot_kwargs,
+            )
 
-        Transformer.plot_app(
-            collective_variables=[dlo.collective_variable],
-            biases=[[b]],
-            cv_data=[[dlo.cv]],
-            name=name_points,
-            T=dlo.sti.T,
-            plot_FES=True,
-            duplicate_cv_data=False,
-            **plot_kwargs,
-        )
+        if plot_points:
+            dlo = self.data_loader(
+                num=1,
+                out=-1,
+                cv_round=c,
+                stop=r,
+                new_r_cut=None,
+                weight=False,
+                **dlo_kwargs,
+            )
+
+            Transformer.plot_app(
+                collective_variables=[dlo.collective_variable],
+                biases=[[b]],
+                cv_data=[[dlo.cv]],
+                name=name_points,
+                T=dlo.sti.T,
+                plot_FES=True,
+                duplicate_cv_data=False,
+                **plot_kwargs,
+            )
 
     ######################################
     #             storage                #
@@ -772,12 +788,12 @@ class Rounds(ABC):
                             f"weights are not stored for {cvi=} {round_info.round=} {traj_info.num=}. (pass load_weight=False)   "
                         )
 
-                    assert _w_i.shape[0] == sp0.shape[0], (
-                        f"weights and sp shape are different: {_w_i.shape=} {sp0.shape=}"
-                    )
-                    assert _rho_i.shape[0] == sp0.shape[0], (
-                        f"weights and sp shape are different: {_rho_i.shape=} {sp0.shape=}"
-                    )
+                    assert (
+                        _w_i.shape[0] == sp0.shape[0]
+                    ), f"weights and sp shape are different: {_w_i.shape=} {sp0.shape=}"
+                    assert (
+                        _rho_i.shape[0] == sp0.shape[0]
+                    ), f"weights and sp shape are different: {_rho_i.shape=} {sp0.shape=}"
 
                     loaded_rho.append(_rho_i)
                     loaded_w.append(_w_i)
@@ -1973,6 +1989,19 @@ class Rounds(ABC):
 
         return CollectiveVariable.load(self.path(c=c) / "cv.json")
 
+    def get_static_trajectory_info(
+        self,
+        c=None,
+        r=None,
+    ):
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+        return StaticMdInfo.load(self.path(c=c, r=r) / "static_trajectory_info.h5")
+
     def get_bias(self, c=None, r=None, i=None) -> Bias:
         if c is None:
             c = self.cv
@@ -2097,16 +2126,82 @@ class Rounds(ABC):
         assert tasks is not None
 
         # wait for tasks to finish
-        for i, future in tasks:
-            try:
-                future.result()
 
-            except Exception as _:
-                print(f"got exception  while collecting md {i}, round {r}, cv {cv_round}, marking as invalid")
+        finished = jnp.full((len(tasks),), False)
+        exception = jnp.full((len(tasks),), False)
 
-                self.invalidate_data(c=cv_round, r=r, i=i)
-                # raise e
-                continue
+        t0 = None
+        time_left = 1
+
+        last_report = time.time()
+
+        res_time = 60 * 10  # 10 minutes
+        report_time = 60 * 5
+
+        while True:
+            if time.time() - last_report > report_time:
+                last_report = time.time()
+                print(
+                    f"{datetime.datetime.now():%H:%M:%S}  finished:{int(jnp.sum(finished))}/{len(tasks)} exceptions: {int(jnp.sum(exception))}"
+                )
+
+            if t0 is not None:
+                time_left = res_time - (time.time() - t0)
+
+                if time_left < 0:
+                    print("time is up")
+                    print(f"{datetime.datetime.now():%H:%M:%S}  {jnp.sum(finished)=} {jnp.sum(exception)=}")
+                    break
+
+            if jnp.all(jnp.logical_or(finished, exception)):
+                print("all tasks finished ")
+                print(f"{datetime.datetime.now():%H:%M:%S}  {jnp.sum(finished)=} {jnp.sum(exception)=}")
+                break
+
+            if jnp.sum(jnp.logical_or(finished, exception)) > 0.9 * finished.shape[0]:
+                print(f"{datetime.datetime.now():%H:%M:%S} most tasks have finished, waiting for max 10 min")
+                t0 = time.time()
+
+            for j, (i, future) in enumerate(tasks):
+                if t0 is not None:
+                    time_left = res_time - (time.time() - t0)
+
+                    if time_left < 0:
+                        time_left = 0
+
+                if finished[j] or exception[j]:
+                    continue
+
+                try:
+                    future.result(time_left)  # wait 1 second for each task
+
+                    finished = finished.at[j].set(True)
+
+                except TimeoutError as _:
+                    continue
+
+                except Exception as e:
+                    print(f"got exception  while collecting md {i}, round {r}, cv {cv_round}, marking as invalid. {e=}")
+
+                    self.invalidate_data(c=cv_round, r=r, i=i)
+
+                    exception = exception.at[j].set(True)
+                    # raise e
+                    continue
+
+        unfinished = jnp.argwhere(jnp.logical_not(jnp.logical_or(finished, exception))).reshape((-1))
+
+        if unfinished.shape[0] > 0:
+            print(f"canceling {unfinished=} trajectories")
+
+            for j in unfinished:
+                i, future = tasks[j]
+
+                future: AppFuture
+                try:
+                    future.set_exception(TimeoutError)
+                except Exception as e:
+                    print(f"failed to set exception for {i=},: {e=} ")
 
         # wait for plots to finish
         if plot and wait_for_plots:
@@ -2294,9 +2389,9 @@ class Rounds(ABC):
             # print(f"initial weights {w_init=}")
 
         else:
-            assert sp0.shape[0] == len(biases), (
-                f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
-            )
+            assert (
+                sp0.shape[0] == len(biases)
+            ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
 
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
@@ -3964,9 +4059,9 @@ class DataLoaderOutput:
             log_a_k = jnp.log(a_k)
             log_N_i = jnp.log(N_i)
 
-            assert int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0, (
-                f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
-            )
+            assert (
+                int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0
+            ), f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
 
             if log_sum_exp:
                 # m_log_b_ik = jnp.log(b_ik)
@@ -4856,9 +4951,9 @@ class DataLoaderOutput:
             z_t = None
 
         for i in range(len(z)):
-            assert z[i].shape[0] == x[i].shape[0], (
-                f" shapes do not match {[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
-            )
+            assert (
+                z[i].shape[0] == x[i].shape[0]
+            ), f" shapes do not match {[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
 
             if x_t is not None:
                 assert z[i].shape[0] == z_t[i].shape[0]
@@ -4947,10 +5042,10 @@ class DataLoaderOutput:
         cv: list[CV] | None = None,
         weights: list[Array] | None = None,
         rho: list[Array] | None = None,
-        samples_per_bin=5,
-        min_samples_per_bin: int | None = 1,
+        samples_per_bin=100,
+        min_samples_per_bin: int | None = 5,
         n_grid=None,
-        n_max=1e5,
+        n_max=1e3,
         max_bias=None,
         chunk_size=None,
         macro_chunk=1000,
@@ -4996,9 +5091,9 @@ class DataLoaderOutput:
         rho: list[jax.Array],
         collective_variable: CollectiveVariable,
         cv: list[CV],
-        samples_per_bin=5,
-        min_samples_per_bin: int | None = 1,
-        n_max=1e5,
+        samples_per_bin=100,
+        min_samples_per_bin: int | None = 5,
+        n_max=1e3,
         n_grid=None,
         max_bias=None,
         chunk_size=None,
@@ -5446,6 +5541,8 @@ class KoopmanModel:
 
     trans: CvTrans | CvTrans | None = None
 
+    constant_threshold: float = 1e-7
+
     @staticmethod
     def create(
         w: list[jax.Array] | None,
@@ -5478,6 +5575,7 @@ class KoopmanModel:
         only_return_weights=False,
         correlation_whiten=False,
         out_eps=None,
+        constant_threshold: float = 1e-7,
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
@@ -5636,6 +5734,12 @@ class KoopmanModel:
         if out_dim == -1:
             out_dim = T_tilde.shape[0]
 
+        if add_1:
+            out_dim += 1
+
+        if out_dim < 20:
+            out_dim = 20
+
         n_modes = out_dim
 
         k = min(n_modes, T_tilde.shape[0] - 1)
@@ -5678,14 +5782,14 @@ class KoopmanModel:
                 U = T_tilde.T @ VT.T @ jnp.diag(s_inv)
 
         else:
-            print(f"using svd with {n_modes} modes")
-
             if symmetric and W0.shape[0] == W1.shape[0]:
+                print("using eigh")
                 s, U = jax.numpy.linalg.eigh(
                     T_tilde.T,
                 )
                 VT = U.T
             else:
+                print("using svd")
                 U, s, VT = jax.numpy.linalg.svd(T_tilde.T)
 
         idx = jnp.argsort(s, descending=True)
@@ -5744,6 +5848,7 @@ class KoopmanModel:
             shape=cov.C01.shape[0],
             scaled_tau=scaled_tau,
             correlation_whiten=correlation_whiten,
+            constant_threshold=constant_threshold,
             # U=U,
             # VT=VT,
         )
@@ -5793,8 +5898,8 @@ class KoopmanModel:
     def f(
         self,
         out_dim=None,
-        remove_constant=False,
-        constant_threshold=1e-6,
+        remove_constant=True,
+        # constant_threshold=1e-10,
         skip_first=None,
     ):
         o = self.W0.T
@@ -5809,7 +5914,7 @@ class KoopmanModel:
             print("skipping first mode")
 
         if remove_constant:
-            nc = jnp.abs(1 - s) < constant_threshold
+            nc = jnp.abs(1 - s) < self.constant_threshold
 
             if jnp.sum(nc) > 0:
                 print(f"found {jnp.sum(nc)} constant eigenvalues,removing")
@@ -5836,8 +5941,7 @@ class KoopmanModel:
     def g(
         self,
         out_dim=None,
-        remove_constant=False,
-        constant_threshold=1e-6,
+        remove_constant=True,
         skip_first=None,
     ):
         o = self.W1.T
@@ -5854,7 +5958,7 @@ class KoopmanModel:
         # this performs y =  (trans*g_trans)(x) @ Vh[:out_dim,:], but stores smaller matrices
 
         if remove_constant:
-            nc = jnp.abs(1 - s) < constant_threshold
+            nc = jnp.abs(1 - s) < self.constant_threshold
 
             if jnp.sum(nc) > 0:
                 print(f"found {jnp.sum(nc)} constant eigenvalues,removing")
@@ -6054,6 +6158,7 @@ class KoopmanModel:
             max_features_pre=self.max_features_pre,
             only_diag=self.only_diag,
             correlation_whiten=self.correlation_whiten,
+            constant_threshold=self.constant_threshold,
         )
 
         kw.update(**kwargs)
@@ -6063,7 +6168,6 @@ class KoopmanModel:
     def timescales(
         self,
         remove_constant=True,
-        constant_threshold=1e-6,
         skip_first=None,
     ):
         s = self.s
@@ -6077,7 +6181,7 @@ class KoopmanModel:
 
         if remove_constant:
             # s = s[1:]
-            nc = jnp.abs(1 - s) < constant_threshold
+            nc = jnp.abs(1 - s) < self.constant_threshold
 
             if jnp.sum(nc) > 0:
                 print(f"found {jnp.sum(nc)} constant eigenvalues,removing from timescales")
