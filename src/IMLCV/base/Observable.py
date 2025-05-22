@@ -441,6 +441,7 @@ class Observable:
             if plot_selected_points:
                 fes_bias_tot_corr = dlo.get_fes_bias_from_weights(
                     weights=w_corr,
+                    rho=[jnp.ones_like(x) for x in w_corr],
                     n_max=n_max,
                     chunk_size=chunk_size,
                     macro_chunk=macro_chunk,

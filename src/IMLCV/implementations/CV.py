@@ -500,6 +500,7 @@ def sinkhorn_divergence_2(
     xi: int = 2,
     jacobian=False,
     lse=True,
+    exp_factor: float | None = 10.0,
 ) -> CV:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -652,7 +653,15 @@ def sinkhorn_divergence_2(
         d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
         d_11 = _core_sinkhorn(p1_i, p1_i, epsilon=alpha)
 
-        return -0.5 * d_11 + d_12 - 0.5 * d_22
+        out = (-0.5 * d_11 + d_12 - 0.5 * d_22) / p1_i.shape[0]  # distance squared
+
+        # jax.debug.print("{} {}", out, d_11)
+
+        if exp_factor is not None:
+            # print(f"applying exp")
+            out = jnp.exp(-exp_factor * out)
+
+        return out
 
     out_dist = jnp.zeros((x2.shape[0], 1))
 
@@ -671,7 +680,7 @@ def sinkhorn_divergence_2(
         else:
             d = get_d_p12(p1_i, p2_i)
 
-        out_dist = out_dist.at[out_i].set(d / out_i.shape[0])
+        out_dist = out_dist.at[out_i].set(d)
 
     out_dist = jnp.array(out_dist)
 
@@ -691,6 +700,7 @@ def _sinkhorn_divergence_trans_2(
     nli: NeighbourList | NeighbourListInfo,
     pi: CV,
     alpha_rematch,
+    exp_factor: float | None = 10.0,
     # normalize,
     jacobian=False,
 ):
@@ -707,6 +717,7 @@ def _sinkhorn_divergence_trans_2(
             nl1=nl.info,
             nl2=nli,
             alpha=alpha_rematch,
+            exp_factor=exp_factor,
             # normalize=normalize,
             jacobian=jacobian,
         )
@@ -746,6 +757,7 @@ def get_sinkhorn_divergence_2(
     pi: CV,
     alpha_rematch=0.1,
     jacobian=False,
+    exp_factor: float | None = 10.0,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -766,6 +778,7 @@ def get_sinkhorn_divergence_2(
         pi=pi,
         alpha_rematch=alpha_rematch,
         jacobian=jacobian,
+        exp_factor=exp_factor,
     )
 
 

@@ -586,11 +586,15 @@ class Bias(ABC):
             margin=margin,
         )
 
-    def save(self, filename: str | Path):
+    def save(self, filename: str | Path, cv_file: Path | None = None):
         if isinstance(filename, str):
             filename = Path(filename)
         if not filename.parent.exists():
             filename.parent.mkdir(parents=True, exist_ok=True)
+
+        if cv_file is not None:
+            colvar_backup = self.collective_variable
+            self.collective_variable = cv_file
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
@@ -601,17 +605,24 @@ class Bias(ABC):
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
+        if cv_file is not None:
+            self.collective_variable = colvar_backup
+
     @staticmethod
     def load(filename) -> Bias:
         filename = Path(filename)
         if filename.suffix == ".json":
             with open(filename) as f:
-                self = jsonpickle.decode(f.read(), context=unpickler)
+                self: Bias = jsonpickle.decode(f.read(), context=unpickler)
         else:
             import cloudpickle
 
             with open(filename, "rb") as f:
-                self = cloudpickle.load(f)
+                self: Bias = cloudpickle.load(f)
+
+        # substitute real CV
+        if isinstance(self.collective_variable, Path):
+            self.collective_variable = CollectiveVariable.load(self.collective_variable)
 
         return self
 
@@ -674,7 +685,7 @@ class Bias(ABC):
         symmetric=True,
         margin=0.2,
         sign=1.0,
-        n=200,
+        n=100,
     ):
         _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=margin)
 

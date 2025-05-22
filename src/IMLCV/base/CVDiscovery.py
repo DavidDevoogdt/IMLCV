@@ -163,7 +163,7 @@ class Transformer:
         (w,) = dlo.koopman_weight(
             verbose=verbose,
             max_bins=n_max,
-            samples_per_bin=10,
+            samples_per_bin=samples_per_bin,
             chunk_size=chunk_size,
             # correlation=False,
             koopman_eps=0,

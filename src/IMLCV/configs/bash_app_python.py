@@ -10,6 +10,90 @@ from parsl import AUTO_LOGNAME, File, bash_app, python_app
 from parsl.dataflow.futures import AppFuture
 
 
+def fun(
+    # *args,
+    stdout,
+    stderr,
+    # _func,
+    # REFERENCE_COMMANDS,
+    # pass_files,
+    precommand,
+    pass_files,
+    inputs,
+    outputs,
+    uses_mpi=False,
+    profile=False,
+    # **kwargs,
+):
+    from pathlib import Path
+
+    execution_folder = Path(inputs[-1].filepath)
+
+    op = [str(os.path.relpath(i.filepath, execution_folder)) for i in outputs]
+    ip = [str(os.path.relpath(o.filepath, execution_folder)) for o in inputs[:-1]]
+
+    file_in = ip[-1]
+    file_out = op[-1]
+
+    out = f"{precommand} python  -u {os.path.realpath(__file__)} --folder {str(execution_folder)} --file_in {file_in}  --file_out  {file_out} "
+
+    # print(f"{pass_files=}")
+
+    if pass_files:
+        if len(ip[:-1]) > 0:
+            out += "--inputs "
+
+            for f in ip[:-1]:
+                out += f"{f} "
+
+        if len(op[:-1]) > 0:
+            out += "--outputs "
+
+            for f in op[:-1]:
+                out += f"{f} "
+
+    if uses_mpi:
+        out += "--uses_mpi "
+
+    if profile:
+        out += "--profile "
+
+    print(f"{out=}")
+
+    return out
+
+
+def load(inputs=[], outputs=[], auto_log=False, remove_stderr=True, remove_stdout=True):
+    if not auto_log:
+        stdout, stderr, lockfile = inputs[-3].filepath, inputs[-2].filepath, inputs[-1].filepath
+        inputs = inputs[:-3]
+
+    filename = Path(inputs[-1].filepath)
+    if filename.suffix == ".json":
+        from IMLCV import unpickler
+
+        with open(filename) as f:
+            result = jsonpickle.decode(f.read(), context=unpickler)
+    else:
+        import cloudpickle
+
+        with open(filename, "rb") as f:
+            result = cloudpickle.load(f)
+    import os
+
+    os.remove(inputs[-1].filepath)
+
+    if remove_stderr and not auto_log:
+        os.remove(stderr)
+    if remove_stdout and not auto_log:
+        os.remove(stdout)
+
+    if remove_stdout and remove_stderr and not auto_log:
+        os.remove(lockfile)
+
+    return result
+
+
 # @typeguard.typechecked
 def bash_app_python(
     function=None,
@@ -41,7 +125,7 @@ def bash_app_python(
             outputs=[],
             **kwargs,
         ):
-            from IMLCV import unpickler
+            # from IMLCV import unpickler
 
             # merge in and outputsdirector
             inp = [*inputs, *kwargs.pop("inputs", [])]
@@ -60,7 +144,7 @@ def bash_app_python(
             if isinstance(execution_folder, str):
                 execution_folder = Path(execution_folder)
 
-            execution_folder.mkdir(exist_ok=True)
+            execution_folder.mkdir(exist_ok=True, parents=True)
 
             def rename_num(name, i):
                 stem = name.name.split(".")
@@ -99,83 +183,40 @@ def bash_app_python(
             if not execution_folder.exists():
                 execution_folder.mkdir(exist_ok=True, parents=True)
 
-            def fun(*args, stdout, stderr, inputs, outputs, **kwargs):
-                from pathlib import Path
+            if file_in.suffix == ".json":
+                with open(file_in, "r+") as f:
+                    f.writelines(jsonpickle.encode((func, args, kwargs, REFERENCE_COMMANDS), indent=1, use_base85=True))
+            else:
+                import cloudpickle
 
-                from parsl import File
+                with open(file_in, "rb+") as f:
+                    cloudpickle.dump((func, args, kwargs, REFERENCE_COMMANDS), f)
 
-                execution_folder = Path(inputs[-1].filepath)
+            def get_file(x: str | Path | File):
+                if isinstance(x, Path):
+                    x = str(x)
 
-                op = [str(os.path.relpath(i.filepath, execution_folder)) for i in outputs]
-                ip = [str(os.path.relpath(o.filepath, execution_folder)) for o in inputs[:-1]]
+                if isinstance(x, str):
+                    x = File(x)
 
-                file_in = ip[-1]
-                file_out = op[-1]
-                if pass_files:
-                    if len(ip) > 1:
-                        kwargs["inputs"] = [File(i) for i in ip[:-1]]
-                    if len(op) > 1:
-                        kwargs["outputs"] = [File(o) for o in op[:-1]]
+                return x
 
-                filename = execution_folder / file_in
-
-                if filename.suffix == ".json":
-                    with open(filename, "r+") as f:
-                        f.writelines(
-                            jsonpickle.encode((func, args, kwargs, REFERENCE_COMMANDS), indent=1, use_base85=True)
-                        )
-                else:
-                    import cloudpickle
-
-                    with open(filename, "rb+") as f:
-                        cloudpickle.dump((func, args, kwargs, REFERENCE_COMMANDS), f)
-
-                return f"{precommand} python  -u {os.path.realpath(__file__)} --folder {str(execution_folder)} --file_in {file_in}  --file_out  {file_out}  {'--uses_mpi' if uses_mpi else ''}   {'--profile' if profile else ''} "
-
-            fun.__name__ = func.__name__
+            inp = [get_file(x) for x in inp]
+            outp = [get_file(x) for x in outp]
 
             future: AppFuture = bash_app(
                 function=fun,
                 executors=labels,
-                # parsl_resource_specification=resources,
             )(
+                precommand=precommand,
+                profile=profile,
+                uses_mpi=uses_mpi,
+                pass_files=pass_files,
                 inputs=[*inp, File(str(file_in)), File(str(execution_folder))],
                 outputs=[*outp, File(str(file_out))],
                 stdout=stdout,
                 stderr=stderr,
-                *args,
-                **kwargs,
             )
-
-            def load(inputs=[], outputs=[]):
-                if not auto_log:
-                    stdout, stderr, lockfile = inputs[-3].filepath, inputs[-2].filepath, inputs[-1].filepath
-                    inputs = inputs[:-3]
-
-                filename = Path(inputs[-1].filepath)
-                if filename.suffix == ".json":
-                    with open(filename) as f:
-                        result = jsonpickle.decode(f.read(), context=unpickler)
-                else:
-                    import cloudpickle
-
-                    with open(filename, "rb") as f:
-                        result = cloudpickle.load(f)
-                import os
-
-                os.remove(inputs[-1].filepath)
-
-                if remove_stderr and not auto_log:
-                    os.remove(stderr)
-                if remove_stdout and not auto_log:
-                    os.remove(stdout)
-
-                if remove_stdout and remove_stderr and not auto_log:
-                    os.remove(lockfile)
-
-                return result
-
-            load.__name__ = f"{func.__name__}_load"
 
             load_inp = [*future.outputs]
 
@@ -185,6 +226,9 @@ def bash_app_python(
             return python_app(load, executors=PARSL_DICT["threadpool"][0])(
                 inputs=load_inp,
                 outputs=outp,
+                remove_stderr=remove_stderr,
+                remove_stdout=remove_stdout,
+                auto_log=auto_log,
             )
 
         return wrapper
@@ -222,6 +266,22 @@ if __name__ == "__main__":
         "--profile",
         action="store_true",
         help="Wether or not tho profile program",
+    )
+
+    parser.add_argument(
+        "--inputs",
+        action="extend",
+        nargs="+",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--outputs",
+        action="extend",
+        nargs="+",
+        type=str,
+        default=None,
     )
 
     parser.add_argument("--folder", type=str, help="working directory")
@@ -286,7 +346,17 @@ if __name__ == "__main__":
             with open(file_in, "rb") as f2:
                 func, fargs, fkwargs, ref_com = cloudpickle.load(f2)
 
-        print(f"loaded  {ref_com=}")
+        if args.inputs is not None:
+            inputs = [Path(a) for a in args.inputs]
+
+            fkwargs["inputs"] = inputs
+
+        if args.outputs is not None:
+            outputs = [Path(a) for a in args.outputs]
+
+            fkwargs["outputs"] = outputs
+
+        print(f"loaded  {ref_com=}  ")
 
         print("#" * 20)
     else:

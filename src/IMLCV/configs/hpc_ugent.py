@@ -225,7 +225,8 @@ which python
 def config(
     env=None,
     singlepoint_nodes=16,
-    walltime="48:00:00",
+    walltime_training="6:00:00",
+    walltime_ref="1:00:00",
     bootstrap=False,
     memory_per_core=None,
     min_memery_per_node=None,
@@ -388,7 +389,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=training_cores,
                         parsl_cores=False,
-                        wall_time="04:00:00",
+                        wall_time=walltime_training,
                         **kw,
                     )
                     execs.append(gpu_part)
@@ -409,7 +410,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=training_cores,
                         parsl_cores=False,
-                        wall_time="04:00:00",
+                        wall_time=walltime_training,
                         **kw,
                     )
                     execs.append(cpu_part)
@@ -433,7 +434,7 @@ def config(
                     parsl_tasks_per_block=1,
                     threads_per_core=singlepoint_nodes,
                     parsl_cores=False,
-                    wall_time=walltime,
+                    wall_time=walltime_ref,
                     load_cp2k=load_cp2k,
                     **kw,
                 )
@@ -458,7 +459,7 @@ def config(
                         parsl_tasks_per_block=1,
                         threads_per_core=default_threads,
                         parsl_cores=False,
-                        wall_time="04:00:00",
+                        wall_time=walltime_ref,
                         **kw,
                     )
 

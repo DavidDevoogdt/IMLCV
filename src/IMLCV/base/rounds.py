@@ -788,12 +788,12 @@ class Rounds(ABC):
                             f"weights are not stored for {cvi=} {round_info.round=} {traj_info.num=}. (pass load_weight=False)   "
                         )
 
-                    assert (
-                        _w_i.shape[0] == sp0.shape[0]
-                    ), f"weights and sp shape are different: {_w_i.shape=} {sp0.shape=}"
-                    assert (
-                        _rho_i.shape[0] == sp0.shape[0]
-                    ), f"weights and sp shape are different: {_rho_i.shape=} {sp0.shape=}"
+                    assert _w_i.shape[0] == sp0.shape[0], (
+                        f"weights and sp shape are different: {_w_i.shape=} {sp0.shape=}"
+                    )
+                    assert _rho_i.shape[0] == sp0.shape[0], (
+                        f"weights and sp shape are different: {_rho_i.shape=} {sp0.shape=}"
+                    )
 
                     loaded_rho.append(_rho_i)
                     loaded_w.append(_w_i)
@@ -1896,7 +1896,7 @@ class Rounds(ABC):
             p = self.path(c=c, r=r, i=i) / "trajectory_info.h5"
 
         if not p.exists():
-            print(f"cannot invalidate data for {c=} {r=} {i=} because traj file does not exist")
+            print(f"cannot validate data for {c=} {r=} {i=} because traj file does not exist")
             return
 
         n = "invalid" if i is None else "_invalid"
@@ -1909,6 +1909,30 @@ class Rounds(ABC):
 
             with open(self.path(c=c, r=r, i=i) / "invalid", "w"):
                 pass
+
+    def validate_data(self, c=None, r=None, i=None):
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+        if i is None:
+            p = self.path(c=c, r=r, i=i) / "static_trajectory_info.h5"
+        else:
+            p = self.path(c=c, r=r, i=i) / "trajectory_info.h5"
+
+        if not p.exists():
+            print(f"cannot invalidate data for {c=} {r=} {i=} because traj file does not exist")
+            return
+
+        n = "invalid" if i is None else "_invalid"
+
+        try:
+            with h5py.File(p, "r+") as hf:
+                hf.attrs[n] = False
+        except Exception:
+            print(f"could not invalidate {c=} {r=} {i=}, writing file")
 
     def finish_data(self, c=None, r=None, i=None):
         if c is None:
@@ -2059,6 +2083,8 @@ class Rounds(ABC):
         common_bias_name = self.full_path(self._name_bias(c=cv_round, r=r))
         common_md_name = self.full_path(self._name_md(c=cv_round, r=r))
 
+        cv_path = self.path(cv_round) / "cv.json"
+
         pn = self.path(c=cv_round, r=r)
 
         out = bash_app_python(
@@ -2112,7 +2138,7 @@ class Rounds(ABC):
                     c=cv_round,
                     r=r,
                     i=i,
-                    outputs=[File(str(plot_file))],
+                    outputs=[plot_file],
                     execution_folder=path_name,
                 )
 
@@ -2258,8 +2284,8 @@ class Rounds(ABC):
 
             future = bash_app_python(Rounds.run_md, pass_files=True, executors=Executors.reference)(
                 sp=None,  # type: ignore
-                inputs=[File(common_md_name), File(str(b_name))],
-                outputs=[File(str(b_name_new)), File(str(traj_name))],
+                inputs=[common_md_name, b_name],
+                outputs=[b_name_new, traj_name],
                 steps=int(steps),
                 execution_folder=path_name,
             )
@@ -2271,7 +2297,7 @@ class Rounds(ABC):
                     traj=future,
                     st=md_engine.static_trajectory_info,
                     inputs=[future.outputs[0]],
-                    outputs=[File(str(plot_file))],
+                    outputs=[plot_file],
                     execution_folder=path_name,
                 )
 
@@ -2356,21 +2382,6 @@ class Rounds(ABC):
                 # lag_n=lag_n,
             )
 
-            # use_energies = True
-            # energies = []
-
-            # for ti in dlo_data.ti:
-            #     # e = ti.ti.e_pot
-            #     if e is None:
-            #         print("not using energies because not available")
-            #         use_energies = False
-            #         break
-
-            #     energies.append(e)
-
-            # if use_energies:
-            #     energies = jnp.hstack(energies)
-
             beta = 1 / (dlo_data.sti.T * boltzmann)
 
             # get the weights of the points
@@ -2381,17 +2392,10 @@ class Rounds(ABC):
             # get  weights, and correct for ground state bias.
             # this corrects for the fact that the samples are not uniformly distributed
 
-            # w = jnp.hstack(dlo_data._weights)
-
-            # w_init = w
-            # w_init = w_init / jnp.mean(w_init)
-
-            # print(f"initial weights {w_init=}")
-
         else:
-            assert (
-                sp0.shape[0] == len(biases)
-            ), f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
+            assert sp0.shape[0] == len(biases), (
+                f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
+            )
 
         if isinstance(KEY, int):
             KEY = jax.random.PRNGKey(KEY)
@@ -2448,25 +2452,25 @@ class Rounds(ABC):
     def run_md(
         steps: int,
         sp: SystemParams | None,
-        inputs=[],
-        outputs=[],
+        inputs: list[Path] = [],
+        outputs: list[Path] = [],
     ) -> TrajectoryInfo:
-        bias = Bias.load(inputs[1].filepath)
+        bias = Bias.load(inputs[1])
 
         kwargs = dict(
             bias=bias,
-            trajectory_file=outputs[1].filepath,
+            trajectory_file=outputs[1],
         )
         if sp is not None:
             kwargs["sp"] = sp
-        md = MDEngine.load(inputs[0].filepath, **kwargs)
+        md = MDEngine.load(inputs[0], **kwargs)
 
         if sp is not None:
             # assert md.sp == sp
             print(f"will start with {sp=}")
 
         md.run(steps)
-        bias.save(outputs[0].filepath)
+        bias.save(outputs[0])
 
     @staticmethod
     def plot_md_run(
@@ -2493,12 +2497,12 @@ class Rounds(ABC):
             )
             cvs, _ = bias.collective_variable.compute_cv(sp=sp, nl=nl)
 
-        # bias.plot(
-        #     name=outputs[0].filepath,
-        #     traj=[cvs],
-        #     offset=True,
-        #     margin=0.1,
-        # )
+        bias.plot(
+            name=outputs[0],
+            traj=[cvs],
+            offset=True,
+            margin=0.1,
+        )
 
     ######################################
     #          CV transformations        #
@@ -4059,9 +4063,9 @@ class DataLoaderOutput:
             log_a_k = jnp.log(a_k)
             log_N_i = jnp.log(N_i)
 
-            assert (
-                int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0
-            ), f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
+            assert int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0, (
+                f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
+            )
 
             if log_sum_exp:
                 # m_log_b_ik = jnp.log(b_ik)
@@ -4951,9 +4955,9 @@ class DataLoaderOutput:
             z_t = None
 
         for i in range(len(z)):
-            assert (
-                z[i].shape[0] == x[i].shape[0]
-            ), f" shapes do not match {[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
+            assert z[i].shape[0] == x[i].shape[0], (
+                f" shapes do not match {[zi.shape[0] for zi in z]} != {[xi.shape[0] for xi in x]}"
+            )
 
             if x_t is not None:
                 assert z[i].shape[0] == z_t[i].shape[0]
