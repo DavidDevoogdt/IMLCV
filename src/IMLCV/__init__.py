@@ -29,7 +29,7 @@ import jax.numpy as jnp
 import jsonpickle
 import numpy as np
 
-# from flax.struct import PyTreeNode as MyPyTreeNode
+# from flax.struct import MyPyTreeNode as MyMyPyTreeNode
 from jax import random
 from jsonpickle import tags
 from jsonpickle.ext.numpy import register, register_handlers
@@ -69,8 +69,8 @@ def pytreenode_equal(self, other):
 
     print(f"{self=}, {other=}")
 
-    self_val, self_tree = jax.tree_flatten(self)
-    other_val, other_tree = jax.tree_flatten(other)
+    self_val, self_tree = jax.tree_util.tree_flatten(self)
+    other_val, other_tree = jax.tree_util.tree_flatten(other)
 
     if not self_tree == other_tree:
         return False
@@ -91,25 +91,17 @@ def pytreenode_equal(self, other):
     return True
 
 
-# @partial(dataclass, frozen=False, field_specifiers=(field,), eq=False)
-
-
-# class MyPyTreeNode:
-#     def __eq__(self, other):
-#         return pytreenode_equal(self, other)
-
-
 class JaxHandler(BaseHandler):
     "flattens the jax array to numpy array, which is already handled by jsonpickle"
 
     def flatten(self, obj, data):
-        self.context: jsonpickle.Unpickler
+        self.context: jsonpickle.Unpickler  # type:ignore
         data["array"] = self.context.flatten(np.array(obj).copy(), reset=False)
         return data
 
     def restore(self, data):
         self.context: jsonpickle.Pickler
-        return jnp.array(self.context.restore(data["array"], reset=False))
+        return jnp.array(self.context.restore(data["array"], reset=False))  # type:ignore
 
 
 register(jax.Array, JaxHandler, base=True)

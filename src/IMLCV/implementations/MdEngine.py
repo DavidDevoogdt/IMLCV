@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import weakref
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import ase
 import ase.units
@@ -96,7 +96,6 @@ class AseEngine(MDEngine):
         from ase.md.langevin import Langevin
         from ase.md.nose_hoover_chain import NoseHooverChainNVT
         from ase.md.npt import NPT
-        from ase.md.nptberendsen import NPTBerendsen
         from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 
         self.atoms = Atoms(
@@ -113,7 +112,7 @@ class AseEngine(MDEngine):
 
         if self.static_trajectory_info.barostat:
             if self.langevin:
-                print(f"langevin cannot be combined with npt")
+                print("langevin cannot be combined with npt")
 
             dyn = NPT(
                 atoms=self.atoms,

@@ -26,19 +26,17 @@
 from __future__ import division
 
 from dataclasses import KW_ONLY
-from functools import partial
 
 import jax
 import jax.numpy as jnp
-from flax.struct import dataclass, field
 
+from IMLCV.base.datastructures import field
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
 from IMLCV.new_yaff.iterative import StateItem
 from IMLCV.new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
 from IMLCV.new_yaff.verlet import VerletHook, VerletIntegrator
 
 
-@partial(dataclass, frozen=False)
 class AndersenThermostat(VerletHook):
     name = "Andersen"
     kind = "stochastic"
@@ -118,7 +116,7 @@ class AndersenThermostat(VerletHook):
         return self, iterative
 
 
-@partial(dataclass, frozen=False)
+# @partial(dataclass, frozen=False)
 class BerendsenThermostat(VerletHook):
     name = "Berendsen"
     kind = "deterministic"
@@ -176,7 +174,7 @@ class BerendsenThermostat(VerletHook):
         return self, iterative
 
 
-@partial(dataclass, frozen=False)
+# @partial(dataclass, frozen=False)
 class LangevinThermostat(VerletHook):
     name = "Langevin"
     kind = "stochastic"
@@ -225,7 +223,7 @@ class LangevinThermostat(VerletHook):
         return self, iterative
 
 
-@partial(dataclass, frozen=False)
+# @partial(dataclass, frozen=False)
 class CSVRThermostat(VerletHook):
     name = "CSVR"
     kind = "stochastic"
@@ -295,7 +293,7 @@ class CSVRThermostat(VerletHook):
         return self, iterative
 
 
-@partial(dataclass, frozen=False)
+# @partial(dataclass, frozen=False)
 class GLEThermostat(VerletHook):
     name = "GLE"
     kind = "stochastic"
@@ -399,7 +397,7 @@ class GLEThermostat(VerletHook):
         return self, iterative
 
 
-@partial(dataclass, frozen=False)
+# @partial(dataclass, frozen=False)
 class NHChain(object):
     _: KW_ONLY
 
@@ -508,7 +506,7 @@ class NHChain(object):
         return 0.5 * jnp.sum(self.vel**2 * self.masses) + kt * (self.ndof * self.pos[0] + jnp.sum(self.pos[1:]))
 
 
-@partial(dataclass, frozen=False)
+# @partial(dataclass, frozen=False)
 class NHCThermostat(VerletHook):
     name = "NHC"
     kind = "deterministic"

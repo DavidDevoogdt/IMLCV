@@ -1,15 +1,14 @@
-from collections.abc import Iterable
-from functools import partial
+from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from flax.struct import dataclass, field
 from jax import Array
 from typing_extensions import Self
 
 from IMLCV.base.bias import Bias, CompositeBias
 from IMLCV.base.CV import CV, CollectiveVariable
+from IMLCV.base.datastructures import field
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.tools._rbf_interp import RBFInterpolator
 
@@ -25,15 +24,15 @@ def _clip(x, a_min, a_max):
 ######################################
 
 
-@partial(dataclass, frozen=False, eq=False)
 class MinBias(CompositeBias):
     @classmethod
-    def create(clz, biases: Iterable[Bias]) -> Self:
-        b: clz = CompositeBias.create(biases=biases, fun=jnp.min)
+    def create(cls, biases: list[Bias]) -> CompositeBias:
+        b = CompositeBias.create(biases=biases, fun=jnp.min)
         return b
 
 
-# @partial(dataclass, frozen=False, eq=False)
+# #@partial(dataclass, frozen=False, eq=False)
+# @dataclass
 # class DiffBias(Bias):
 #     biases: Iterable[Bias]
 #     beta: float
@@ -45,7 +44,7 @@ class MinBias(CompositeBias):
 #         # )
 
 #     @classmethod
-#     def create(clz, biases: Iterable[Bias], T=300 * kelvin) -> Self:
+#     def create(cls, biases: Iterable[Bias], T=300 * kelvin) -> Self:
 #         assert len(biases) == 2
 
 #         return DiffBias(
@@ -55,9 +54,10 @@ class MinBias(CompositeBias):
 #         )
 
 
-@partial(dataclass, frozen=False, eq=False)
 class HarmonicBias(Bias):
     """Harmonic bias potential centered arround q0 with force constant k."""
+
+    # __: KW_ONLY
 
     q0: CV
     k: Array
@@ -67,7 +67,7 @@ class HarmonicBias(Bias):
 
     @classmethod
     def create(
-        clz,
+        cls,
         cvs: CollectiveVariable,
         q0: CV,
         k,
@@ -90,10 +90,9 @@ class HarmonicBias(Bias):
             assert k.shape == q0.cv.shape
 
         if k_max is not None:
-            if isinstance(k_max, float):
-                k_max = jnp.zeros_like(q0.cv) + k_max
-            else:
-                assert k_max.shape == q0.cv.shape
+            k_max = jnp.array(k_max)
+
+            assert k_max.shape == q0.cv.shape  # type:ignore
 
         # assert np.all(k > 0)
         k = jnp.array(k)
@@ -106,7 +105,7 @@ class HarmonicBias(Bias):
             r0 = None
             y0 = None
 
-        return clz(
+        return cls(
             collective_variable=cvs,
             q0=q0,
             k=k,
@@ -144,7 +143,6 @@ class HarmonicBias(Bias):
         )
 
 
-@partial(dataclass, frozen=False, eq=False)
 class BiasMTD(Bias):
     r"""A sum of Gaussian hills, for instance used in metadynamics:
     Adapted from Yaff.
@@ -156,15 +154,17 @@ class BiasMTD(Bias):
     variables.
     """
 
+    # __: KW_ONLY
+
     q0s: jax.Array
     sigmas: jax.Array
     K: jax.Array
     Ks: jax.Array
-    tempering: bool = field(pytree_node=False)
+    tempering: float = field(pytree_node=False, default=0.0)
 
     @classmethod
     def create(
-        self,
+        cls,
         cvs: CollectiveVariable,
         K,
         sigmas,
@@ -198,10 +198,10 @@ class BiasMTD(Bias):
 
         Ks = jnp.zeros((0,))
         q0s = jnp.zeros((0, ncv))
-        tempering = tempering
+        # tempering = tempering
         K = K
 
-        return self(
+        return cls(
             collective_variable=cvs,
             start=start,
             step=step,
@@ -217,6 +217,8 @@ class BiasMTD(Bias):
         self,
         md: MDEngine,
     ):
+        raise
+
         b, self = self._update_bias()
 
         if not b:
@@ -250,24 +252,26 @@ class BiasMTD(Bias):
         return energy
 
 
-@partial(dataclass, frozen=False, eq=False)
 class RbfBias(Bias):
     """Bias interpolated from lookup table on uniform grid.
 
     values are caluclated in bin centers
     """
 
+    # __: KW_ONLY
+
     rbf: RBFInterpolator
+    offset: float | jax.Array = 0.0
 
     @classmethod
     def create(
-        clz,
+        cls,
         cvs: CollectiveVariable,
         vals: Array,
         cv: CV,
         start=None,
         step=None,
-        kernel="multiquadric",
+        kernel="gaussian",
         epsilon=None,
         smoothing=0.0,
         degree=None,
@@ -275,23 +279,26 @@ class RbfBias(Bias):
         slice_exponent=1,
         log_exp_slice=True,
         slice_mean=False,
-    ) -> Self:
+    ) -> RbfBias:
         assert cv.batched
         assert cv.shape[1] == cvs.n, f"{cv.shape}[1] != {cvs.n}"
         assert len(vals.shape) == 1
         assert cv.shape[0] == vals.shape[0]
 
+        # lift
+        offset = jnp.min(vals)
+
         rbf = RBFInterpolator.create(
             y=cv,
             kernel=kernel,
-            d=vals,
+            d=vals - offset,
             metric=cvs.metric,
             smoothing=smoothing,
             epsilon=epsilon,
             degree=degree,
         )
 
-        return clz(
+        return RbfBias(
             collective_variable=cvs,
             start=start,
             step=step,
@@ -300,37 +307,37 @@ class RbfBias(Bias):
             slice_exponent=slice_exponent,
             log_exp_slice=log_exp_slice,
             slice_mean=slice_mean,
+            offset=offset,
         )
 
     def _compute(self, cvs: CV):
-        out = self.rbf(cvs)
+        out = self.rbf(cvs) + self.offset
         if cvs.batched:
             return out
         return out[0]
 
 
-@partial(dataclass, frozen=False, eq=False)
 class GridBias(Bias):
     """Bias interpolated from lookup table on uniform grid.
 
     values are caluclated in bin centers
     """
 
-    n: jax.Array
+    n: int
     bounds: jax.Array
     vals: jax.Array
     order: int = field(pytree_node=False, default=1)
 
     @classmethod
     def create(
-        self,
+        cls,
         cvs: CollectiveVariable,
         bias: Bias,
         n=30,
         bounds: Array | None = None,
         margin=0.1,
         order=1,
-    ) -> RbfBias:
+    ) -> GridBias:
         grid, cv, _, bounds = cvs.metric.grid(
             n=n,
             bounds=bounds,
@@ -358,7 +365,7 @@ class GridBias(Bias):
 
         return jsp.ndimage.map_coordinates(
             self.vals,
-            coords * (self.n - 1),
+            coords * (self.n - 1),  # type:ignore
             mode="nearest",
             order=1,
         )

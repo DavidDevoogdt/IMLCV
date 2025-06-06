@@ -3,16 +3,23 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
-from jax import closure_convert, custom_jvp, vmap
-from jax.tree_util import Partial, tree_map
+from jax import closure_convert, custom_jvp
+from jax.tree_util import tree_map
 from scipy.special import roots_laguerre, roots_legendre
+
+from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
 
 
 def _quad_nd(f, w, x, use_custom_jvp=True):
     x_mg = jnp.array([*jnp.meshgrid(*x, indexing="ij")]).reshape(len(x), -1)
     w_mg = jnp.array([*jnp.meshgrid(*w, indexing="ij")]).reshape(len(w), -1)
 
-    def fun(*args, x_mg=None, w_mg=None, f=None):
+    def fun(
+        *args,
+        f: Callable,
+        x_mg=None,
+        w_mg=None,
+    ):
         if use_custom_jvp:
             # print("using custom jvp")
 
@@ -27,7 +34,7 @@ def _quad_nd(f, w, x, use_custom_jvp=True):
 
             @partial(custom_jvp, nondiff_argnums=(0,))
             def _int(_f2_closed, args, x_mg, w_mg, closure_args):
-                @partial(vmap, in_axes=(1, 1))
+                @partial(vmap_decorator, in_axes=(1, 1))
                 def f_int(w, x):
                     y = _f2_closed(x, args, closure_args)
                     w_tot = jnp.prod(w)
@@ -61,7 +68,7 @@ def _quad_nd(f, w, x, use_custom_jvp=True):
 
         else:
 
-            @partial(vmap, in_axes=(1, 1))
+            @partial(vmap_decorator, in_axes=(1, 1))
             def f_int(w, x):
                 y = f(*x, *args)
                 w_tot = jnp.prod(w)
@@ -72,7 +79,12 @@ def _quad_nd(f, w, x, use_custom_jvp=True):
 
             return tree_map(partial(jnp.sum, axis=0), out)
 
-    return Partial(fun, x_mg=x_mg, w_mg=w_mg, f=f)
+    return Partial_decorator(
+        fun,
+        f=f,  # type: ignore
+        x_mg=x_mg,
+        w_mg=w_mg,
+    )
 
 
 def quad_bounds(a, b, scale=1, n=21):

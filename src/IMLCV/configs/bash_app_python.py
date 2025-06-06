@@ -1,29 +1,31 @@
-# this is a helper function to perform md simulations. Executed by parsl on HPC infrastructure, but
+from __future__ import annotations
 
 import os
 import sys
+from asyncio import Future
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import jsonpickle
 from parsl import AUTO_LOGNAME, File, bash_app, python_app
 from parsl.dataflow.futures import AppFuture
+from typing_extensions import ParamSpec
+
+T = TypeVar("T")
+P = ParamSpec("P")
 
 
 def fun(
-    # *args,
     stdout,
     stderr,
-    # _func,
-    # REFERENCE_COMMANDS,
-    # pass_files,
     precommand,
-    pass_files,
     inputs,
     outputs,
+    pass_files_in=0,
+    pass_files_out=0,
     uses_mpi=False,
     profile=False,
-    # **kwargs,
 ):
     from pathlib import Path
 
@@ -39,18 +41,19 @@ def fun(
 
     # print(f"{pass_files=}")
 
-    if pass_files:
-        if len(ip[:-1]) > 0:
-            out += "--inputs "
+    if pass_files_in > 0:
+        # if len(ip[:-1]) > 0:
+        out += "--inputs "
 
-            for f in ip[:-1]:
-                out += f"{f} "
+        for f in ip[:pass_files_in]:
+            out += f"{f} "
 
-        if len(op[:-1]) > 0:
-            out += "--outputs "
+    if pass_files_out > 0:
+        # if len(op[:-1]) > 0:
+        out += "--outputs "
 
-            for f in op[:-1]:
-                out += f"{f} "
+        for f in op[:pass_files_out]:
+            out += f"{f} "
 
     if uses_mpi:
         out += "--uses_mpi "
@@ -94,18 +97,21 @@ def load(inputs=[], outputs=[], auto_log=False, remove_stderr=True, remove_stdou
     return result
 
 
-# @typeguard.typechecked
 def bash_app_python(
-    function=None,
+    function: Callable[P, T],
     executors=None,
     uses_mpi=False,  # used in jax.distributed.initialize()
     pickle_extension="json",
-    pass_files=False,
     auto_log=False,
     profile=False,
     remove_stdout=True,
     remove_stderr=True,
-):
+    execution_folder: Path | None = None,
+    stdout: str | Path | None = None,
+    stderr: str | Path | None = None,
+    inputs: list[str | Path] = [],  # inputs that need te be present but not passed as arguments
+    outputs: list[str | Path] = [],  # outputs that need te be present but not passed as arguments
+) -> Callable[P, Future[T]]:
     from IMLCV.configs.config_general import PARSL_DICT, REFERENCE_COMMANDS, RESOURCES_DICT, Executors
 
     if executors is None:
@@ -115,127 +121,132 @@ def bash_app_python(
 
     resources = RESOURCES_DICT[executors.value]
 
-    def decorator(func):
-        def wrapper(
-            *args,
-            execution_folder=None,
-            stdout=None,
-            stderr=None,
-            inputs=[],
-            outputs=[],
-            **kwargs,
-        ):
-            # from IMLCV import unpickler
+    # def decorator(func):
+    def wrapper(
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ):
+        # from IMLCV import unpickler
 
-            # merge in and outputsdirector
-            inp = [*inputs, *kwargs.pop("inputs", [])]
-            outp = [*outputs, *kwargs.pop("outputs", [])]
+        _files_in_pass: list[str | Path] = kwargs.pop("inputs", [])  # type:ignore
+        _files_out_pass: list[str | Path] = kwargs.pop("outputs", [])  # type:ignore
 
-            if execution_folder is None:
-                p = Path.cwd() / func.__name__
+        # merge in and outputs
+        inp = [*_files_in_pass, *inputs]  # type:ignore
+        outp = [*_files_out_pass, *outputs]  # type: ignore
 
-                i = 0
-                while p.exists():
-                    p = Path.cwd() / (f"{func.__name__}_{i:0>3}")
-                    i += 1
+        if execution_folder is None:
+            p = Path.cwd() / function.__name__
 
-                execution_folder = p
+            i = 0
+            while p.exists():
+                p = Path.cwd() / (f"{function.__name__}_{i:0>3}")
+                i += 1
 
-            if isinstance(execution_folder, str):
-                execution_folder = Path(execution_folder)
+            _execution_folder = p
+        else:
+            _execution_folder = execution_folder
 
-            execution_folder.mkdir(exist_ok=True, parents=True)
+        if isinstance(_execution_folder, str):
+            _execution_folder = Path(_execution_folder)
 
-            def rename_num(name, i):
-                stem = name.name.split(".")
-                stem[0] = f"{stem[0]}_{i:0>3}"
-                return name.parent / ".".join(stem)
+        _execution_folder.mkdir(exist_ok=True, parents=True)
 
-            def find_num(name):
-                i = 0
-                while rename_num(name, i).exists():
-                    i += 1
-                return i, rename_num(name, i)
+        def rename_num(name, i):
+            stem = name.name.split(".")
+            stem[0] = f"{stem[0]}_{i:0>3}"
+            return name.parent / ".".join(stem)
 
-            i, lockfile = find_num(execution_folder / f"{func.__name__}.lock")
+        def find_num(name) -> tuple[int, Path]:
+            i = 0
+            while rename_num(name, i).exists():
+                i += 1
+            return i, rename_num(name, i)
 
-            with open(lockfile, "w+"):
-                pass
+        i, lockfile = find_num(_execution_folder / f"{function.__name__}.lock")
 
-            file_in = rename_num(execution_folder / f"{func.__name__}.inp.{pickle_extension}", i)
-            with open(file_in, "w+"):
-                pass
+        with open(lockfile, "w+"):
+            pass
 
-            file_out = rename_num(execution_folder / f"{func.__name__}.outp.{pickle_extension}", i)
+        file_in = rename_num(_execution_folder / f"{function.__name__}.inp.{pickle_extension}", i)
+        with open(file_in, "w+"):
+            pass
 
-            if not auto_log:
-                stdout = str(
-                    rename_num(execution_folder / (f"{func.__name__}.stdout" if stdout is None else Path(stdout)), i)
-                )
+        file_out = rename_num(_execution_folder / f"{function.__name__}.outp.{pickle_extension}", i)
 
-                stderr = str(
-                    rename_num(execution_folder / (f"{func.__name__}.stderr" if stderr is None else Path(stderr)), i)
-                )
-            else:
-                stdout = AUTO_LOGNAME
-                stderr = AUTO_LOGNAME
-
-            if not execution_folder.exists():
-                execution_folder.mkdir(exist_ok=True, parents=True)
-
-            if file_in.suffix == ".json":
-                with open(file_in, "r+") as f:
-                    f.writelines(jsonpickle.encode((func, args, kwargs, REFERENCE_COMMANDS), indent=1, use_base85=True))
-            else:
-                import cloudpickle
-
-                with open(file_in, "rb+") as f:
-                    cloudpickle.dump((func, args, kwargs, REFERENCE_COMMANDS), f)
-
-            def get_file(x: str | Path | File):
-                if isinstance(x, Path):
-                    x = str(x)
-
-                if isinstance(x, str):
-                    x = File(x)
-
-                return x
-
-            inp = [get_file(x) for x in inp]
-            outp = [get_file(x) for x in outp]
-
-            future: AppFuture = bash_app(
-                function=fun,
-                executors=labels,
-            )(
-                precommand=precommand,
-                profile=profile,
-                uses_mpi=uses_mpi,
-                pass_files=pass_files,
-                inputs=[*inp, File(str(file_in)), File(str(execution_folder))],
-                outputs=[*outp, File(str(file_out))],
-                stdout=stdout,
-                stderr=stderr,
+        if not auto_log:
+            _stdout = str(
+                rename_num(_execution_folder / (f"{function.__name__}.stdout" if stdout is None else Path(stdout)), i)
             )
 
-            load_inp = [*future.outputs]
-
-            if not auto_log:
-                load_inp = [*load_inp, File(stdout), File(stderr), File(lockfile)]
-
-            return python_app(load, executors=PARSL_DICT["threadpool"][0])(
-                inputs=load_inp,
-                outputs=outp,
-                remove_stderr=remove_stderr,
-                remove_stdout=remove_stdout,
-                auto_log=auto_log,
+            _stderr = str(
+                rename_num(_execution_folder / (f"{function.__name__}.stderr" if stderr is None else Path(stderr)), i)
             )
+        else:
+            _stdout = AUTO_LOGNAME
+            _stderr = AUTO_LOGNAME
 
-        return wrapper
+        if not _execution_folder.exists():
+            _execution_folder.mkdir(exist_ok=True, parents=True)
 
-    if function is not None:
-        return decorator(function)
-    return decorator
+        if file_in.suffix == ".json":
+            with open(file_in, "r+") as f:
+                f.writelines(jsonpickle.encode((function, args, kwargs, REFERENCE_COMMANDS), indent=1, use_base85=True))  # type: ignore
+        else:
+            import cloudpickle
+
+            with open(file_in, "rb+") as f:
+                cloudpickle.dump((function, args, kwargs, REFERENCE_COMMANDS), f)
+
+        def get_file(x: str | Path | File):
+            if isinstance(x, Path):
+                x = str(x)
+
+            if isinstance(x, str):
+                x = File(x)
+
+            return x
+
+        inp = [get_file(x) for x in inp]
+        outp = [get_file(x) for x in outp]
+
+        future: AppFuture = bash_app(
+            function=fun,
+            executors=labels,
+        )(
+            precommand=precommand,
+            profile=profile,
+            uses_mpi=uses_mpi,
+            # pass_files=pass_files,
+            pass_files_in=len(_files_in_pass),
+            pass_files_out=len(_files_out_pass),
+            inputs=[*inp, File(str(file_in)), File(str(execution_folder))],
+            outputs=[*outp, File(str(file_out))],
+            stdout=_stdout,
+            stderr=_stderr,
+        )
+
+        load_inp = [*future.outputs]
+
+        if not auto_log:
+            load_inp = [
+                *load_inp,
+                File(_stdout),  # type: ignore
+                File(_stderr),  # type: ignore
+                File(lockfile),
+            ]
+
+        fut: Future[T] = python_app(load, executors=PARSL_DICT["threadpool"][0])(
+            inputs=load_inp,
+            outputs=outp,
+            remove_stderr=remove_stderr,
+            remove_stdout=remove_stdout,
+            auto_log=auto_log,
+        )
+
+        return fut
+
+    return wrapper
 
 
 if __name__ == "__main__":
@@ -296,7 +307,7 @@ if __name__ == "__main__":
 
     # only run program once
     if args.uses_mpi:
-        from mpi4py import MPI
+        from mpi4py import MPI  # type: ignore
 
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
@@ -339,7 +350,7 @@ if __name__ == "__main__":
 
         if file_in.suffix == ".json":
             with open(file_in) as f1:
-                func, fargs, fkwargs, ref_com = jsonpickle.decode(f1.read(), context=unpickler)
+                func, fargs, fkwargs, ref_com = jsonpickle.decode(f1.read(), context=unpickler)  # type: ignore
         else:
             import cloudpickle
 
@@ -349,12 +360,12 @@ if __name__ == "__main__":
         if args.inputs is not None:
             inputs = [Path(a) for a in args.inputs]
 
-            fkwargs["inputs"] = inputs
+            fkwargs["inputs"] = inputs  # type: ignore
 
         if args.outputs is not None:
             outputs = [Path(a) for a in args.outputs]
 
-            fkwargs["outputs"] = outputs
+            fkwargs["outputs"] = outputs  # type: ignore
 
         print(f"loaded  {ref_com=}  ")
 
@@ -373,20 +384,20 @@ if __name__ == "__main__":
 
     from IMLCV.configs.config_general import REFERENCE_COMMANDS
 
-    REFERENCE_COMMANDS.update(ref_com)
+    REFERENCE_COMMANDS.update(ref_com)  # type: ignore
 
     if args.profile:
         import cProfile
         import pstats
 
         with cProfile.Profile() as pr:
-            a = func(*fargs, **fkwargs)
+            a = func(*fargs, **fkwargs)  # type: ignore
 
         ps = pstats.Stats(pr)
         ps.sort_stats(pstats.SortKey.CUMULATIVE).print_stats()
 
     else:
-        a = func(*fargs, **fkwargs)
+        a = func(*fargs, **fkwargs)  # type: ignore
 
     if args.uses_mpi:
         a = comm.gather(a, root=0)
@@ -396,7 +407,7 @@ if __name__ == "__main__":
 
         if file_out.suffix == ".json":
             with open(file_out, "w+") as f3:
-                f3.writelines(jsonpickle.encode(a, use_base85=True))
+                f3.writelines(jsonpickle.encode(a, use_base85=True))  # type: ignore
         else:
             import cloudpickle
 

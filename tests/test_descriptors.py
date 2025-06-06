@@ -10,7 +10,7 @@ import jax.scipy
 import numpy as onp
 import pytest
 import scipy.special
-from jax import grad, vmap
+from jax import grad, vmap_decorator
 
 from IMLCV.base.CV import CollectiveVariable, NeighbourListInfo, SystemParams
 from IMLCV.implementations.CV import get_sinkhorn_divergence_2, sb_descriptor, soap_descriptor
@@ -43,9 +43,11 @@ def get_sps(
     rot_mat = jnp.array(
         R.random(random_state=int(jax.random.randint(key1, (), 0, 100))).as_matrix(),
     )
-    pos2 = vmap(lambda a: rot_mat @ a, in_axes=0)(sp1.coordinates) + jax.random.normal(key2, (3,)) * eps * r_side
+    pos2 = (
+        vmap_decorator(lambda a: rot_mat @ a, in_axes=0)(sp1.coordinates) + jax.random.normal(key2, (3,)) * eps * r_side
+    )
     if with_cell:
-        cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp1.cell)
+        cell_r = vmap_decorator(lambda a: rot_mat @ a, in_axes=0)(sp1.cell)
     else:
         cell_r = None
     perm = jax.random.permutation(key3, n)
@@ -152,20 +154,20 @@ def test_SB_basis():
     r = r.at[:, 0].set(jnp.linspace(1e-3, 1.0, n))
 
     a, _ = p_inl_sb(n_max, l_max, r_cut)
-    # f = jax.vmap(Partial(a, atom_index_j=_))
+    # f = vmap_decorator(Partial(a, atom_index_j=_))
 
-    o_g = jax.vmap(lambda r: a(r, _))(r)
+    o_g = vmap_decorator(lambda r: a(r, _))(r)
 
-    @partial(jax.vmap, in_axes=(None, 2, 2))
-    @partial(jax.vmap, in_axes=(None, None, 1))
-    @partial(jax.vmap, in_axes=(None, 1, None))
+    @partial(vmap_decorator, in_axes=(None, 2, 2))
+    @partial(vmap_decorator, in_axes=(None, None, 1))
+    @partial(vmap_decorator, in_axes=(None, 1, None))
     def integrate(r, g, h):
         r = jnp.linalg.norm(r, axis=1)
         n = r.shape[0]
         return jnp.sum(r**2 * g * h) / n
 
     o_i = integrate(r, o_g, o_g)
-    o_i_2 = jax.vmap(lambda _: jnp.eye(o_g.shape[1]), in_axes=(2))(o_g)
+    o_i_2 = vmap_decorator(lambda _: jnp.eye(o_g.shape[1]), in_axes=(2))(o_g)
 
     print(o_i)
     print(o_i_2)
@@ -199,16 +201,16 @@ def test_bessel():
         ],
         [1, 0, 1, 0, 0, 0, None, None],
     ):
-        # try to vmap and jit
-        _ = vmap(func, in_axes=(0, None))(jnp.array([2, 5]), 2)
-        _ = vmap(func, in_axes=(None, 0))(2, jnp.array([2, 5]))
-        _ = vmap(vmap(func, in_axes=(0, None)), in_axes=(None, 0))(
+        # try to vmap_decorator and jit
+        _ = vmap_decorator(func, in_axes=(0, None))(jnp.array([2, 5]), 2)
+        _ = vmap_decorator(func, in_axes=(None, 0))(2, jnp.array([2, 5]))
+        _ = vmap_decorator(vmap_decorator(func, in_axes=(0, None)), in_axes=(None, 0))(
             jnp.array([2, 5]),
             jnp.array([2, 5]),
         )
 
-        _ = vmap(
-            vmap(vmap(func, in_axes=(0, None)), in_axes=(0, None)),
+        _ = vmap_decorator(
+            vmap_decorator(vmap_decorator(func, in_axes=(0, None)), in_axes=(0, None)),
             in_axes=(None, 0),
         )(jnp.array([[2, 5], [2, 5]]), jnp.array([2, 5]))
 
@@ -217,14 +219,14 @@ def test_bessel():
         else:
             x = jnp.linspace(1e-5, 20, 1000)
         v = jnp.arange(0, 5)
-        y = vmap(vmap(func, in_axes=(0, None)), in_axes=(None, 0))(v, x)
+        y = vmap_decorator(vmap_decorator(func, in_axes=(0, None)), in_axes=(None, 0))(v, x)
         y2 = jnp.array([sp(vi, onp.array(x)) for vi in v]).T
         assert jnp.allclose(y, y2, atol=1e-5)
 
         if dsp is not None:
             # with jax.disable_jit():
-            dy = vmap(
-                vmap(grad(func, argnums=1), in_axes=(0, None)),
+            dy = vmap_decorator(
+                vmap_decorator(grad(func, argnums=1), in_axes=(0, None)),
                 in_axes=(None, 0),
             )(v, x)
 
@@ -243,8 +245,8 @@ def test_bessel():
         return kv(1, x) * jnp.exp(x)
 
     x = jnp.linspace(1, 5, 1000)
-    assert jnp.linalg.norm(vmap(k1e)(x) - vmap(k1e2)(x)) < 1e-5
-    assert jnp.linalg.norm(vmap(grad(k1e))(x) - vmap(grad(k1e2))(x)) < 1e-5
+    assert jnp.linalg.norm(vmap_decorator(k1e)(x) - vmap_decorator(k1e2)(x)) < 1e-5
+    assert jnp.linalg.norm(vmap_decorator(grad(k1e))(x) - vmap_decorator(grad(k1e2))(x)) < 1e-5
 
     def i1e(x):
         return ive(1, x)
@@ -255,9 +257,9 @@ def test_bessel():
     def i1e2(x):
         return iv(1, x) * jnp.exp(-jnp.abs(x))
 
-    assert jnp.linalg.norm(vmap(i1e)(x) - vmap(i1e2)(x)) < 1e-5
-    assert jnp.linalg.norm(vmap(i1eb)(x) - vmap(i1e2)(x)) < 1e-5
-    assert jnp.linalg.norm(vmap(grad(i1e))(x) - vmap(grad(i1e2))(x)) < 1e-5
+    assert jnp.linalg.norm(vmap_decorator(i1e)(x) - vmap_decorator(i1e2)(x)) < 1e-5
+    assert jnp.linalg.norm(vmap_decorator(i1eb)(x) - vmap_decorator(i1e2)(x)) < 1e-5
+    assert jnp.linalg.norm(vmap_decorator(grad(i1e))(x) - vmap_decorator(grad(i1e2))(x)) < 1e-5
 
 
 def test_bessel_2():
@@ -282,11 +284,11 @@ def test_bessel_2():
         plt.figure()
 
         for v in range(0, 5):
-            y = jax.vmap(func, in_axes=(None, 0))(v, x)
+            y = vmap_decorator(func, in_axes=(None, 0))(v, x)
             y2 = sp(v, onp.array(x))
             assert jnp.allclose(y, y2, atol=1e-5)
 
-            dy = vmap(grad(func, argnums=1), in_axes=(None, 0))(v, x)
+            dy = vmap_decorator(grad(func, argnums=1), in_axes=(None, 0))(v, x)
             dy2 = dsp(v, onp.array(x))
 
             mask = jnp.logical_or(jnp.isnan(dy2), jnp.isinf(dy2))
@@ -308,4 +310,4 @@ if __name__ == "__main__":
 
     test_bessel()
 
-    # print(jax.vmap(spherical_jn, in_axes=(None, 0))(5, jnp.ones(5)))
+    # print(vmap_decorator(spherical_jn, in_axes=(None, 0))(5, jnp.ones(5)))

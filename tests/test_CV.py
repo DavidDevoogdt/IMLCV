@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jax import vmap
+from jax import vmap_decorator
 
-from IMLCV.base.CV import CV, CvTrans, NeighbourList, NeighbourListInfo, SystemParams
+from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, SystemParams
 
 ######################################
 #           Test                     #
@@ -89,8 +89,8 @@ def _get_equival_sp(sp, rng) -> tuple[jax.Array, SystemParams]:
     rot_mat = jnp.array(
         R.random(random_state=int(jax.random.randint(key, (), 0, 100))).as_matrix(),
     )
-    pos2 = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.coordinates) + jax.random.normal(key, (3,)) * 5
-    cell_r = vmap(lambda a: rot_mat @ a, in_axes=0)(sp.cell)
+    pos2 = vmap_decorator(lambda a: rot_mat @ a, in_axes=0)(sp.coordinates) + jax.random.normal(key, (3,)) * 5
+    cell_r = vmap_decorator(lambda a: rot_mat @ a, in_axes=0)(sp.cell)
     sp2 = SystemParams(coordinates=pos2, cell=cell_r)
     return rng, sp2
 
@@ -364,22 +364,22 @@ def test_sp_apply():
     sp = SystemParams(cell=cell, coordinates=coordinates)
 
     sp_wrapped, op = sp.wrap_positions(min=True)
-    sp_wrapped_2 = vmap(SystemParams.apply_wrap)(sp, op)
+    sp_wrapped_2 = vmap_decorator(SystemParams.apply_wrap)(sp, op)
     assert jnp.linalg.norm(sp_wrapped.coordinates - sp_wrapped_2.coordinates) < 1e-10
 
     sp_rot, op = sp.rotate_cell()
-    sp_rot_2 = vmap(SystemParams.apply_rotation)(sp, op)
+    sp_rot_2 = vmap_decorator(SystemParams.apply_rotation)(sp, op)
 
     assert jnp.linalg.norm(sp_rot.cell - sp_rot_2.cell) < 1e-10
     assert jnp.linalg.norm(sp_rot.coordinates - sp_rot_2.coordinates) < 1e-10
 
     sp_min, op = sp.minkowski_reduce()
-    sp_min_2 = vmap(SystemParams.apply_minkowski_reduction)(sp, op)
+    sp_min_2 = vmap_decorator(SystemParams.apply_minkowski_reduction)(sp, op)
 
     assert jnp.linalg.norm(sp_min.cell - sp_min_2.cell) < 1e-10
 
     sp_can, op = sp.canonicalize(min=False, qr=True)
-    sp_can_2 = vmap(SystemParams.apply_canonicalize)(sp, op)
+    sp_can_2 = vmap_decorator(SystemParams.apply_canonicalize)(sp, op)
 
     assert jnp.linalg.norm(sp_can.cell - sp_can_2.cell) < 1e-10
     assert jnp.linalg.norm(sp_can.coordinates - sp_can_2.coordinates) < 1e-10

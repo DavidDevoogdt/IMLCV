@@ -405,7 +405,7 @@ def config(
                         label=label,
                         init_blocks=0,
                         min_blocks=0,
-                        max_blocks=4,
+                        max_blocks=16,
                         parallelism=1,
                         parsl_tasks_per_block=1,
                         threads_per_core=training_cores,

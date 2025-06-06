@@ -2,15 +2,14 @@
 
 import warnings
 from datetime import datetime
-from functools import partial
 from itertools import combinations_with_replacement
 
 import jax
 import jax.numpy as jnp
-from flax.struct import dataclass, field
 from scipy.special import comb
 
 from IMLCV.base.CV import CV, CvMetric
+from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.tools._rbfinterp_pythran import (
     NAME_TO_FUNC,
     cv_vals,
@@ -53,7 +52,7 @@ _NAME_TO_MIN_DEGREE = {
 }
 
 
-def _monomial_powers(ndim, degree):
+def _monomial_powers(ndim, degree, periodicities):
     """Return the powers for each monomial in a polynomial.
 
     Parameters
@@ -82,6 +81,29 @@ def _monomial_powers(ndim, degree):
                 out = out.at[count, var].set(out[count, var] + 1)
 
             count += 1
+
+    # out = jnp.array(out)
+
+    # print(f"{out=}")
+
+    # for peridic dimensions, add negative exp
+    # positive are used for cos(nx)
+    # negative for sin(nx)
+    for i, p in enumerate(periodicities):
+        if not p:
+            continue
+
+        out = out
+
+        m = out[:, i] != 0
+
+        print(f"newinv {m=}")
+
+        out_neg = (out.at[:, i].mul(-1))[m, :]
+
+        out = jnp.vstack([out, out_neg])
+
+    # print(f"{out=}")
 
     return jnp.array(out)
 
@@ -132,6 +154,8 @@ def _build_and_solve_system(
     K = eval_kernel_matrix(y, y, metric, epsilon, kernel_func) + jnp.diag(smoothing)
     P = eval_polynomial_matrix(y, metric=metric, powers=powers)
 
+    print(f"{P=}")
+
     A = jnp.block(
         [
             [K, P],
@@ -140,79 +164,6 @@ def _build_and_solve_system(
     )
 
     b = jnp.vstack([d, jnp.zeros((r, s))])
-
-    # A can be decomposed wiht shur complement
-    # K is not psd and can be (pivoted) chol decomposed
-
-    # L_K = jnp.linalg.cholesky(K)
-    # L_K_inv = jax.scipy.linalg.solve_triangular(L_K, jnp.eye(L_K.shape[0]))
-    # mS = P.T @ L_K_inv.T @ L_K_inv @ P  # minus shur complement
-    # L_S = jnp.linalg.cholesky(mS)
-
-    # print(f"{L_K=} {K=} {L_S=}")
-
-    # print(f"{jnp.linalg.eigh(K)=}")
-
-    # y1 = jax.scipy.linalg.solve_triangular(
-    #     jnp.block(
-    #         [
-    #             [L_K, jnp.zeros((p, r))],
-    #             [P.T @ L_K_inv, -L_S],
-    #         ]
-    #     ),
-    #     d,
-    #     lower=True,
-    # )
-
-    # coeffs = jax.scipy.linalg.solve_triangular(
-    #     jnp.block(
-    #         [
-    #             [L_K.T, L_K_inv.T @ P],
-    #             [jnp.zeros((r, p)), L_S.T],
-    #         ]
-    #     ),
-    #     y1,
-    # )
-
-    # K = W W.T  #chol, W triu
-    # S = 0- P K^(-1) P.T
-
-    # import scipy
-
-    # # this is pivoted cholesky
-    # cho = scipy.linalg.lapack.dpstrf
-
-    # X, P, r, info = cho(A, tol=1e-12, lower=True)
-    # X = jnp.array(X)
-    # pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
-    # X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)
-    # X = X[:, :r][:r, :]
-
-    # print(f"rbf {r=} {A.shape=} {A=}")
-
-    # y1 = jax.scipy.linalg.solve_triangular(X, pi.T @ b)
-    # y2 = jax.scipy.linalg.solve_triangular(X.T, y1)
-
-    # coeffs = pi @ y2
-
-    # # print(f"{P=}")
-
-    # # might be unstable
-
-    # l, U = jnp.linalg.eigh(A)
-
-    # # print(f"{l}  {U[:,0]} ")
-
-    # l_max = jnp.max(jnp.abs(l))
-    # l_min = jnp.min(jnp.abs(l))
-
-    # print(f"Condition number of A: {l_max/l_min} {l_max=} {l_min=}")
-
-    # coeffs = U @ jnp.diag(jnp.where(jnp.abs(l) / jnp.abs(l_max) > 1e-10, 1 / l, 0)) @ U.T @ b
-
-    # print(f"{b.shape=} {coeffs.shape=} {coeffs=}")
-
-    # if check:
 
     dt0 = datetime.now()
 
@@ -224,13 +175,12 @@ def _build_and_solve_system(
 
     print(f"end time: {dt1:%H:%M:%S}.{dt1.microsecond // 1000:03d}", flush=True)
 
-    # print(f"{coeffs-coeffs2=} {jnp.linalg.norm(coeffs-coeffs2)=}")
+    # print(f"{coeffs=}")
 
     return coeffs
 
 
-@partial(dataclass, frozen=False, eq=False)
-class RBFInterpolator:
+class RBFInterpolator(MyPyTreeNode):
     """Radial basis function (RBF) interpolation in N dimensions. adapted from scipy"""
 
     _coeffs: jax.Array
@@ -240,18 +190,18 @@ class RBFInterpolator:
     epsilon: jax.Array
     powers: jax.Array
     metric: CvMetric
-    d_shape: tuple[int] = field(pytree_node=False)
+    d_shape: tuple[int, ...] = field(pytree_node=False)
     kernel: str = field(pytree_node=False)
     d_dtype: jnp.dtype | None = field(pytree_node=False, default=None)
 
     @classmethod
     def create(
-        self,
+        cls,
         y: CV,
         metric: CvMetric,
         d: jax.Array,
         smoothing=0.0,
-        kernel="multiquadric",
+        kernel="gaussian",
         epsilon=None,
         degree=None,
     ):
@@ -260,19 +210,11 @@ class RBFInterpolator:
         if jnp.iscomplexobj(d):
             raise NotImplementedError("Complex-valued data is not supported. ")
 
-        # d_dtype = jnp.complex64 if jnp.iscomplexobj(d) else jnp.float32
-        # d_dtype = d.dtype
-
-        # d = jnp.asarray(d, dtype=d_dtype)
         if d.shape[0] != ny:
             raise ValueError(f"Expected the first axis of `d` to have length {ny}.")
 
         d_shape = d.shape[1:]
         d = d.reshape((ny, -1))
-        # If `d` is complex, convert it to a float array with twice as many
-        # columns. Otherwise, the LHS matrix would need to be converted to
-        # complex and take up 2x more memory than necessary.
-        # d = d.view(jnp.float32)
 
         if jnp.isscalar(smoothing):
             smoothing = jnp.full(ny, smoothing, dtype=float)
@@ -288,14 +230,9 @@ class RBFInterpolator:
             raise ValueError(f"`kernel` must be one of {_AVAILABLE}.")
 
         if metric.periodicities.any():
-            min_degree = _NAME_TO_MIN_DEGREE.get(kernel, -1)
-
-            if min_degree > 0:
-                print(
-                    f" The chosen kernel {kernel} is not suitable for periodic data because it requires degree {min_degree=}>0.  Switching to linear kernel"
-                )
-
-                kernel = "linear"
+            assert kernel not in ["linear", "thin_plate_spline", "cubic", "quintic", "multiquadric"], (
+                "for periodic CV, choose decaying kernel"
+            )
 
         if epsilon is None:
             if kernel in _SCALE_INVARIANT:
@@ -304,12 +241,12 @@ class RBFInterpolator:
                 raise ValueError(
                     f"`epsilon` must be specified if `kernel` is not one of {_SCALE_INVARIANT}.",
                 )
-        else:
-            epsilon = jnp.array(epsilon)
+
+        epsilon = jnp.array(epsilon)
 
         min_degree = _NAME_TO_MIN_DEGREE.get(kernel, -1)
         if degree is None:
-            degree = max(min_degree, 0)
+            degree = min_degree
         else:
             degree = int(degree)
             if degree < -1:
@@ -325,7 +262,7 @@ class RBFInterpolator:
 
         nobs = ny
 
-        powers = _monomial_powers(ndim, degree)
+        powers = _monomial_powers(ndim, degree, periodicities=metric.periodicities)
 
         # The polynomial matrix must have full column rank in order for the
         # interpolant to be well-posed, which is not possible if there are

@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-from typing import Callable
 
 import ase.io
 import ase.units
@@ -7,15 +5,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from IMLCV.base.bias import Bias, BiasF, Energy, EnergyFn, EnergyResult, NoneBias
+from IMLCV.base.bias import BiasF, EnergyFn, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
-from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol, nanometer
+from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import LatticeInvariants, NoneCV, Volume, dihedral
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, OpenMmEnergy, YaffEnergy
-from IMLCV.implementations.MdEngine import AseEngine, NewYaffEngine
+from IMLCV.implementations.MdEngine import NewYaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"
 
@@ -616,7 +614,6 @@ def toy_periodic_phase_trans():
     )
 
     # from jax import Array
-    from jax.numpy import float64
 
     Array = jax.numpy.array
 

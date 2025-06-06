@@ -1,15 +1,13 @@
 from dataclasses import KW_ONLY
-from functools import partial
 
 import haiku as hk
 import jax.numpy as jnp
 import numpy
-from flax.struct import dataclass, field
 from jax import Array
-from jax.tree_util import Partial
 
 from IMLCV.base.CV import CV, CvFunBase, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.base.datastructures import Partial_decorator, field
 from IMLCV.base.rounds import DataLoaderOutput
 from IMLCV.implementations.CV import un_atomize
 
@@ -33,7 +31,6 @@ def umap_encoder(x, nlayers, nunits, outdim):
     return hk.Linear(outdim)(x)
 
 
-@partial(dataclass, frozen=False, eq=False)
 class hkFunBase(CvFunBase):
     _: KW_ONLY
     fwd_params: dict
@@ -64,7 +61,7 @@ class hkFunBase(CvFunBase):
             raise NotImplementedError
 
         else:
-            fwd = hk.transform(Partial(umap_encoder, **self.fwd_kwargs))
+            fwd = hk.transform(Partial_decorator(umap_encoder, **self.fwd_kwargs))
             out = fwd.apply(self.fwd_params, None, y)
 
         if not batched:
@@ -117,13 +114,13 @@ class TranformerUMAP(Transformer):
         macro_chunk=1000,
         **kwargs,
     ):
-        x = CV.stack(*x)
-        x = un_atomize.compute_cv(x, None)[0]
+        _x = CV.stack(*x)
+        _x = un_atomize.compute_cv(_x, None)[0]
         if x_t is not None:
-            x_t = CV.stack(*x_t)
-            x_t = un_atomize.compute_cv(x_t, None)[0]
+            _x_t = CV.stack(*x_t)
+            _x_t = un_atomize.compute_cv(_x_t, None)[0]
 
-        x_train = x
+        x_train = _x
 
         print(f"{x_train.cv.shape=}")
 
@@ -180,7 +177,7 @@ class TranformerUMAP(Transformer):
             outdim=self.outdim,
         )
 
-        hk_encoder = hk.transform(Partial(umap_encoder, **fwd_kwargs))
+        hk_encoder = hk.transform(Partial_decorator(umap_encoder, **fwd_kwargs))
 
         params = {}
 
@@ -197,6 +194,6 @@ class TranformerUMAP(Transformer):
         f = CvTrans.from_cv_fun(hkFunBase(fwd_params=params, fwd_kwargs=fwd_kwargs))
 
         cv_0 = f.compute_cv(x, chunk_size=chunk_size)[0].unstack()
-        cv_tau = f.compute_cv(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
+        cv_t = f.compute_cv(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
 
-        return cv_0, cv_tau, un_atomize * f, w
+        return cv_0, cv_t, un_atomize * f, w

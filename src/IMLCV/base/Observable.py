@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
+from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
-from jax.tree_util import Partial
 from parsl import File
 
 from IMLCV.base.bias import Bias, BiasModify
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
+from IMLCV.base.datastructures import Partial_decorator
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
 from IMLCV.base.UnitsConstants import kelvin, kjmol, picosecond
 from IMLCV.configs.bash_app_python import bash_app_python
@@ -59,7 +60,7 @@ class Observable:
 
     @staticmethod
     def _fes_nd_thermolib(
-        dlo_kwargs,
+        dlo_kwargs: dict,
         dlo: DataLoaderOutput | None = None,
         update_bounding_box=True,
         bounds_percentile=1,
@@ -70,10 +71,13 @@ class Observable:
         temp=None,
         chunk_size=None,
         shmap=False,
-        rounds: Rounds = None,
+        rounds: Rounds | None = None,
     ):
         if dlo is None:
-            dlo = rounds.data_loader(**dlo_kwargs)
+            assert rounds is not None
+            dlo, _ = rounds.data_loader(**dlo_kwargs)  # type: ignore
+
+        assert dlo is not None
 
         if temp is None:
             temp = dlo.sti.T
@@ -81,8 +85,7 @@ class Observable:
         trajs = dlo.cv
         biases = dlo.bias
 
-        # c = CV.stack(*trajs)
-        # c = dlo.collective_variable.metric.periodic_wrap(c)
+        assert biases is not None
 
         if update_bounding_box:
             bounds, _, _ = CvMetric.bounds_from_cv(
@@ -123,9 +126,9 @@ class Observable:
 
         bins = [np.linspace(mini, maxi, n, endpoint=True, dtype=np.double) for mini, maxi in bounding_box]
 
-        from thermolib.thermodynamics.bias import BiasPotential2D
-        from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND
-        from thermolib.thermodynamics.histogram import HistogramND
+        from thermolib.thermodynamics.bias import BiasPotential2D  # type: ignore
+        from thermolib.thermodynamics.fep import FreeEnergyHypersurfaceND  # type: ignore
+        from thermolib.thermodynamics.histogram import HistogramND  # type: ignore
 
         from IMLCV.base.CV import padded_shard_map
 
@@ -141,7 +144,7 @@ class Observable:
                 print(".", end="")
 
                 cvs = CV.combine(*[CV(cv=jnp.asarray(cvi).reshape((-1, 1))) for cvi in cv])
-                f = Partial(
+                f = Partial_decorator(
                     self.bias.compute_from_cv,
                     diff=False,
                     chunk_size=chunk_size,
@@ -208,7 +211,7 @@ class Observable:
         only_finished=True,
         bounds_percentile=1,
         max_bias=None,
-        rbf_kernel="multiquadric",
+        rbf_kernel="gaussian",
         rbf_degree=None,
     ):
         if temp is None:
@@ -232,6 +235,7 @@ class Observable:
         fes, grid, bounds = bash_app_python(
             Observable._fes_nd_thermolib,
             executors=Executors.training,
+            execution_folder=directory,
         )(
             dlo_kwargs=dlo_kwargs,
             dlo=dlo,
@@ -242,7 +246,6 @@ class Observable:
             n=n,
             n_max=n_max,
             temp=temp,
-            execution_folder=directory,
             chunk_size=chunk_size,
             shmap=shmap,
             rounds=self.rounds,
@@ -274,20 +277,21 @@ class Observable:
                 cv += [cvi]
 
                 # smoothing_list.append(sigma[idx])
-        cv = CV.stack(*cv)
+
+        cv_stack = CV.stack(*cv)
 
         fslist = jnp.array(fslist)
         bounds = jnp.array(bounds)
 
         eps = fs.shape[0] / (
             (bounds[:, 1] - bounds[:, 0])
-            / (self.collective_variable.metric.bounds[:, 1] - self.collective_variable.metric.bounds[:, 0])
+            / (self.collective_variable.metric.bounding_box[:, 1] - self.collective_variable.metric.bounding_box[:, 0])
         )
 
         fes_bias_tot = RbfBias.create(
             cvs=self.collective_variable,
             vals=fslist,
-            cv=cv,
+            cv=cv_stack,
             kernel=rbf_kernel,
             epsilon=eps,
             degree=rbf_degree,
@@ -320,7 +324,7 @@ class Observable:
         plot_selected_points=True,
         # divide_by_histogram=True,
         verbose=True,
-        max_bias=None,
+        max_bias: float = 100 * kjmol,
         kooopman_wham=None,
         samples_per_bin=10,
         min_samples_per_bin=5,
@@ -357,6 +361,8 @@ class Observable:
             min_samples_per_bin=min_samples_per_bin,
         )
 
+        assert fb is not None
+        assert fb[0] is not None
         fes_bias_wham_p = fb[0]
 
         # get weights based on koopman theory. the CVs are binned with indicators
@@ -406,7 +412,7 @@ class Observable:
                 )
 
         if koopman:
-            weights, w_corr = dlo.koopman_weight(
+            weights, _weights_t, w_corr, _ = dlo.koopman_weight(
                 max_bins=n_max,
                 samples_per_bin=samples_per_bin,
                 # min_samples_per_bin=min_samples_per_bin,
@@ -419,6 +425,8 @@ class Observable:
                 correlation=True,
                 # add_1=True,
             )
+
+            assert weights is not None
 
             fes_bias_tot = dlo.get_fes_bias_from_weights(
                 weights=weights,
@@ -437,6 +445,8 @@ class Observable:
                     vmax=max_bias,
                     inverted=False,
                 )
+
+            assert w_corr is not None
 
             if plot_selected_points:
                 fes_bias_tot_corr = dlo.get_fes_bias_from_weights(
@@ -477,22 +487,22 @@ class Observable:
 
     def fes_nd_weights(
         self,
-        num_rnds=4,
-        out=int(1e5),
-        lag_n=10,
-        start_r=1,
-        min_traj_length=None,
-        only_finished=True,
-        chunk_size=None,
-        macro_chunk=1000,
+        num_rnds: int = 4,
+        out: int = int(1e5),
+        lag_n: int = 10,
+        start_r: int = 1,
+        min_traj_length: int | None = None,
+        only_finished: bool = True,
+        chunk_size: int | None = None,
+        macro_chunk: int = 1000,
         T_scale=10,
-        n_max=1e5,
-        cv_round=None,
-        directory=None,
-        koopman=True,
+        n_max: int | float = 1e5,
+        cv_round: int | None = None,
+        directory: str | Path | None = None,
+        koopman: bool = True,
         # divide_by_histogram=True,
         verbose=True,
-        max_bias=None,
+        max_bias: float | None = 100 * kjmol,
         kooopman_wham=None,
         samples_per_bin=5,
         min_samples_per_bin=1,
@@ -504,6 +514,8 @@ class Observable:
 
         if directory is None:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
+
+        directory = Path(directory)
 
         kwargs = dict(
             rounds=self.rounds,
@@ -529,15 +541,15 @@ class Observable:
         )
 
         if executors is None:
-            return Observable._fes_nd_weights(**kwargs)
+            return Observable._fes_nd_weights(**kwargs)  # type:ignore
 
         return bash_app_python(
             Observable._fes_nd_weights,
             executors=Executors.training,
             remove_stdout=False,
-        )(
-            **kwargs,
             execution_folder=directory,
+        )(
+            **kwargs,  # type:ignore
         ).result()
 
     def fes_bias(
@@ -548,7 +560,7 @@ class Observable:
         choice="rbf",
         num_rnds=8,
         start_r=1,
-        rbf_kernel="multiquadric",
+        rbf_kernel="gaussian",
         rbf_degree=None,
         samples_per_bin=5,
         min_samples_per_bin=1,
@@ -575,13 +587,15 @@ class Observable:
         if plot:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
-            bash_app_python(function=Bias.static_plot)(
-                bias=self.common_bias,
-                outputs=[File(f"{directory}/combined.png")],  # png because heavy file
-                name="combined.png",
+            bash_app_python(
+                function=Bias.static_plot,
                 execution_folder=directory,
                 stdout="combined.stdout",
                 stderr="combined.stderr",
+            )(
+                bias=self.common_bias,
+                outputs=[File(f"{directory}/combined.png")],  # png because heavy file
+                name="combined.png",
                 map=False,
                 dlo=self.rounds,
                 dlo_kwargs=dict(
@@ -611,7 +625,7 @@ class Observable:
                 update_bounding_box=update_bounding_box,
                 n_max=n_max,
                 min_traj_length=min_traj_length,
-                margin=margin,
+                # margin=margin,
                 only_finished=only_finished,
                 shmap=shmap,
                 max_bias=max_bias,

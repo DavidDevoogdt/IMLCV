@@ -26,6 +26,7 @@
 import jax
 import jax.numpy as jnp
 
+from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.base.UnitsConstants import boltzmann
 
 
@@ -33,7 +34,7 @@ def get_random_vel(
     temp0,
     scalevel0,
     masses,
-    key: jax.random.PRNGKey,
+    key: jax.Array,
     select=None,
 ):
     """Generate random atomic velocities using a Maxwell-Boltzmann distribution
@@ -196,7 +197,7 @@ def angular_moment(pos, vel, masses):
     """
     lin_moms = masses.reshape(-1, 1) * vel
 
-    ang_mom = jnp.sum(jax.vmap(jnp.linalg.cross)(pos, lin_moms), axis=0)
+    ang_mom = jnp.sum(vmap_decorator(jnp.linalg.cross)(pos, lin_moms), axis=0)
 
     # ang_mom = jnp.zeros(3, float)
     # ang_mom[0] = (pos[:, 1] * lin_moms[:, 2] - pos[:, 2] * lin_moms[:, 1]).sum()
@@ -257,7 +258,7 @@ def rigid_body_angular_velocities(pos, ang_vel):
     Note that the linear momentum is zero.
     """
 
-    return jax.vmap(jnp.linalg.cross, in_axes=(None, 0))(ang_vel, pos)
+    return vmap_decorator(jnp.linalg.cross, in_axes=(None, 0))(ang_vel, pos)
 
 
 def get_ndof_internal_md(natom, nper):

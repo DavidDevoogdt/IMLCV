@@ -7,7 +7,7 @@ def test_call_tf_batcher():
 
     import jax.numpy as jnp
     import numpy as np
-    from jax import jacrev, jit, vmap
+    from jax import jacrev, jit, vmap_decorator
     from jax.experimental import jax2tf
     from jax.experimental.jax2tf.call_tf import call_tf_p
     from jax.interpreters import batching
@@ -28,9 +28,9 @@ def test_call_tf_batcher():
 
     print(f"||f(x) - f_t(x)||_2 = {jnp.linalg.norm(f(x) - f_t(x))}")
 
-    # test vmap
-    f_v = jit(vmap(f))
-    f_v_t = jit(vmap(f_t))
+    # test vmap_decorator
+    f_v = jit(vmap_decorator(f))
+    f_v_t = jit(vmap_decorator(f_t))
 
     print(f"||f(y) - f_t(y)||_2 = {jnp.linalg.norm(f_v(y) - f_v_t(y))}")
 

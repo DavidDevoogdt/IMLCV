@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-from functools import partial
-
 import jax
 import jax.numpy as jnp
-from flax.struct import dataclass
 
+from IMLCV.base.datastructures import MyPyTreeNode
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, SystemParams
 
 
-@partial(dataclass, frozen=False)
-class YaffCell:
+# @partial(dataclass, frozen=False)
+class YaffCell(MyPyTreeNode):
     rvecs: jax.Array
 
+    @staticmethod
     def create(sp: SystemParams):
         c = sp.cell
 
-        if sp.cell is None:
+        if c is None:
             c = jnp.zeros((0, 3))
 
         return YaffCell(rvecs=c)
@@ -35,14 +34,15 @@ class YaffCell:
         return jnp.abs(vol_unsigned)
 
 
-@partial(dataclass, frozen=False)
-class YaffSys:
+# @partial(dataclass, frozen=False)
+class YaffSys(MyPyTreeNode):
     numbers: jax.Array
     masses: jax.Array
     pos: jax.Array
     cell: YaffCell
     charges: jax.Array | None = None
 
+    @staticmethod
     def create(md: MDEngine, tic: StaticMdInfo):
         return YaffSys(
             numbers=tic.atomic_numbers,

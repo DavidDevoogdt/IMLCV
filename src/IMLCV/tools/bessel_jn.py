@@ -10,6 +10,8 @@ from jax import numpy as jnp
 from jax._src import dtypes
 from jax._src.numpy.util import promote_dtypes_inexact
 
+from IMLCV.base.datastructures import jit_decorator
+
 # polynomial coefficients for J0
 PP0 = np.array(
     [
@@ -232,7 +234,7 @@ def j1_large(x):
     return p * SQ2OPI / jnp.sqrt(x)
 
 
-@jax.jit
+@jit_decorator
 def j1(z):
     """
     Bessel function of the first kind of order one and a real argument
@@ -283,7 +285,7 @@ def j0_large(x):
     return p * SQ2OPI / jnp.sqrt(x)
 
 
-@jax.jit
+@jit_decorator
 def j0(z):
     """
     Bessel function of the first kind of order zero and a real argument
@@ -389,7 +391,7 @@ def _besseljn_forward_recurrence(z, v: int):
 # Add custom jvp
 @functools.partial(jax.custom_jvp, nondiff_argnums=(0,))
 @jnp.vectorize
-@jax.jit
+@jit_decorator
 def bessel_jn(v, z):
     """
     Bessel function uses a range of computational techniques to achieve accuracy in three

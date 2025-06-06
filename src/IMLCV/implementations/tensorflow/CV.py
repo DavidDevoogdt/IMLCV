@@ -1,20 +1,20 @@
+# type: ignore
+
 import tempfile
-from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
-from flax.struct import dataclass, field
 from jax.custom_batching import custom_vmap
 from jax.experimental.jax2tf import call_tf
 
 from IMLCV.base.CV import CV, CvFunBase, NeighbourList
+from IMLCV.base.datastructures import MyPyTreeNode, field
 
 if TYPE_CHECKING:
     import tensorflow as tfl
 
 
-@partial(dataclass, frozen=False, eq=False)
-class tfl_module:
+class tfl_module(MyPyTreeNode):
     mod: tfl.Module = field(pytree_node=False, default=None)
 
     def get_config(self):
@@ -77,6 +77,7 @@ class KerasFunBase(CvFunBase):
     fwd: tfl_module = field(pytree_node=False)
     bwd: tfl_module | None = field(pytree_node=False, default=None)
 
+    @staticmethod
     def create(fwd: tfl.Module, bwd: tfl.Module = None):
         return KerasFunBase(fwd=tfl_module(fwd), bwd=tfl_module(bwd) if bwd is not None else None)
 

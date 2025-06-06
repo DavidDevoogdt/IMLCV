@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from functools import partial
 from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
-from flax.struct import dataclass, field
 
+from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.new_yaff.system import YaffSys
 
 if TYPE_CHECKING:
     from IMLCV.implementations.MdEngine import NewYaffEngine
 
 
-@partial(dataclass, frozen=False)
-class YaffFF:
+# @partial(dataclass, frozen=False)
+class YaffFF(MyPyTreeNode):
     energy: float
     gpos: jax.Array
     vtens: jax.Array
@@ -23,6 +22,7 @@ class YaffFF:
 
     md_engine: NewYaffEngine = field(pytree_node=False)
 
+    @staticmethod
     def create(
         md_engine: NewYaffEngine,
     ):
@@ -46,23 +46,12 @@ class YaffFF:
         self.gpos = self.gpos.at[:].set(jnp.nan)
         self.vtens = self.vtens.at[:].set(jnp.nan)
 
-    def compute(self, gpos=None, vtens=None):
+    def compute(self, gpos=False, vtens=False):
         sp = self.system.sp
 
-        get_gpos = gpos is not None
-        get_vtens = vtens is not None and sp.cell is not None
-
-        # print(f"{gpos=} {vtens=} {self.system.sp=}")
-
-        energy = self.md_engine.get_energy(self.system.sp, get_gpos, get_vtens)
-        cv, bias = self.md_engine.get_bias(self.system.sp, get_gpos, get_vtens)
+        energy = self.md_engine.get_energy(self.system.sp, gpos, vtens and sp.cell is not None)
+        cv, bias = self.md_engine.get_bias(self.system.sp, gpos, vtens and sp.cell is not None)
 
         res = energy + bias
 
-        if get_gpos:
-            gpos += jnp.array(res.gpos, dtype=jnp.float64)
-
-        if get_vtens:
-            vtens += jnp.array(res.vtens, dtype=jnp.float64)
-
-        return res.energy, gpos, vtens, (bias.energy, cv.cv)
+        return res.energy, energy.gpos, energy.vtens, (bias.energy, cv.cv)

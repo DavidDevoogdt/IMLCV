@@ -5,7 +5,8 @@ from pathlib import Path
 import ase
 import jax.numpy as jnp
 import numpy as np
-from openmm import MonteCarloFlexibleBarostat
+from ase import geometry as ase_geometry
+from openmm import State
 from openmm.app import Simulation
 
 from IMLCV.base.bias import Energy, EnergyError, EnergyResult
@@ -29,6 +30,8 @@ class OpenMmEnergy(Energy):
         if self._simul is None:
             self._get_simul()
 
+        assert self._simul is not None
+
         atomic_numbers = jnp.array(
             [a.element.atomic_number for a in self._simul.topology.atoms()],
             dtype=int,
@@ -51,6 +54,8 @@ class OpenMmEnergy(Energy):
 
         # print(f"computing energy {sp/ nanometer=}")
 
+        assert self._simul is not None
+
         self._simul.context
 
         self._simul.context.setPositions(
@@ -59,25 +64,26 @@ class OpenMmEnergy(Energy):
 
         if sp.cell is not None:
             self._simul.context.setPeriodicBoxVectors(
-                self.sp.cell[0, :] / nanometer,
-                self.sp.cell[1, :] / nanometer,
-                self.sp.cell[2, :] / nanometer,
+                sp.cell[0, :] / nanometer,
+                sp.cell[1, :] / nanometer,
+                sp.cell[2, :] / nanometer,
             )
 
-        state = self._simul.context.getState(
+        state: State = self._simul.context.getState(
             energy=True,
             forces=gpos,
         )
 
-        if vir:
-            vtens = (
-                OpenMmEnergy.to_jax_vec(MonteCarloFlexibleBarostat.computeCurrentPressure(self._simul.context)) * kjmol
-            )
+        assert not vir
+
+        # if vir:
+        #     vtens = (
+        #         OpenMmEnergy.to_jax_vec(MonteCarloFlexibleBarostat.computeCurrentPressure(self._simul.context)) * kjmol
+        #     )
 
         res = EnergyResult(
-            state.getPotentialEnergy()._value * kjmol,
-            -OpenMmEnergy.to_jax_vec(state.getForces()) * kjmol / nanometer if gpos else None,
-            vtens if vir else None,
+            energy=state.getPotentialEnergy()._value * kjmol,  # type:ignore
+            gpos=-OpenMmEnergy.to_jax_vec(state.getForces()) * kjmol / nanometer if gpos else None,
         )
 
         return res
@@ -97,15 +103,15 @@ class OpenMmEnergy(Energy):
 
         # values don't matter, a integrator is needed
         integrator = LangevinIntegrator(
-            300 * openmm_unit.kelvin, 1 / openmm_unit.picosecond, 0.004 * openmm_unit.picoseconds
+            300 * openmm_unit.kelvin,  # type:ignore
+            1 / openmm_unit.picosecond,  # type:ignore
+            0.004 * openmm_unit.picoseconds,  # type:ignore
         )
         simulation = Simulation(pdb.topology, system, integrator)
         simulation.context.setPositions(pdb.positions)
 
         if (c := pdb.topology.getPeriodicBoxVectors()) is not None:
-            simulation.context.setPeriodicBoxVectors(c)
-
-            # add a barostat this is used to compute the virial
+            simulation.context.setPeriodicBoxVectors(c)  # type:ignore
 
         self._simul = simulation
 
@@ -165,9 +171,9 @@ class YaffEnergy(Energy):
             raise EnergyError(f"calculating yaff  energy raised execption:\n{be}\n")
 
         return EnergyResult(
-            ener,
-            jnp.array(gpos_out) if gpos_out is not None else None,
-            jnp.array(vtens_out) if vtens_out is not None else None,
+            energy=ener,
+            gpos=jnp.array(gpos_out) if gpos_out is not None else None,
+            vtens=jnp.array(vtens_out) if vtens_out is not None else None,
         )
 
     def __getstate__(self):
@@ -210,7 +216,7 @@ class AseEnergy(Energy):
         if cell is None:
             return
 
-        self.atoms.set_cell(ase.geometry.Cell(np.array(cell) / angstrom))
+        self.atoms.set_cell(ase_geometry.Cell(np.array(cell) / angstrom))
 
     @property
     def coordinates(self):
@@ -252,9 +258,9 @@ class AseEnergy(Energy):
             vtens_out = volume * stress * electronvolt
 
         return EnergyResult(
-            jnp.asarray(energy, dtype=jnp.float64),
-            jnp.asarray(gpos_out, dtype=jnp.float64) if gpos else None,
-            jnp.asarray(vtens_out, dtype=jnp.float64) if vir else None,
+            energy=jnp.asarray(energy, dtype=jnp.float64),
+            gpos=jnp.asarray(gpos_out, dtype=jnp.float64) if gpos else None,
+            vtens=jnp.asarray(vtens_out, dtype=jnp.float64) if vir else None,
         )
 
     def _calculator(self):  # -> ase.calculators.calculator.Calculator:
@@ -378,7 +384,7 @@ class Cp2kEnergy(AseEnergy):
 
         from ase.calculators.cp2k import CP2K
 
-        calc = CP2K(**params)
+        calc = CP2K(**params)  # type: ignore
 
         return calc
 

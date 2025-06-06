@@ -4,10 +4,11 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 from flax.training import train_state
-from jax import Array, jit, random, vmap
+from jax import Array, jit, random, vmap_decorator
 
 from IMLCV.base.CV import CV, CvFun, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.base.datastructures import jit_decorator
 from IMLCV.base.rounds import DataLoaderOutput
 from IMLCV.base.UnitsConstants import nanosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize
@@ -147,11 +148,11 @@ class TranformerAutoEncoder(Transformer):
             "dim": dim,
         }
 
-        @jax.vmap
+        @vmap_decorator
         def kl_divergence(mean, logvar):
             return -0.5 * jnp.sum(1 + logvar - jnp.square(mean) - jnp.exp(logvar))
 
-        @jax.vmap
+        @vmap_decorator
         def mean_Squared_error(x1, x2):
             return 0.5 * jnp.linalg.norm(x1 - x2) ** 2
 
@@ -160,7 +161,7 @@ class TranformerAutoEncoder(Transformer):
             kld_loss = 0.01 * kl_divergence(mean, logvar).mean()
             return {"bce": bce_loss, "kld": kld_loss, "loss": bce_loss + kld_loss}
 
-        # @jax.vmap
+        # @vmap_decorator
         # def binary_cross_entropy_with_logits(logits, labels):
         #     logits = nn.log_sigmoid(logits)
         #     return -jnp.sum(
@@ -169,7 +170,7 @@ class TranformerAutoEncoder(Transformer):
 
         import optax
 
-        @jax.jit
+        @jit_decorator
         def train_step(state: optax.TraceState, batch, z_rng):
             def loss_fn(params):
                 recon_x, mean, logvar = VAE(**vae_args).apply(
@@ -188,7 +189,7 @@ class TranformerAutoEncoder(Transformer):
 
             return state.apply_gradients(grads=grads)
 
-        @jax.jit
+        @jit_decorator
         def eval(params, x, z_rng):
             def eval_model(vae):
                 recon_x, mean, logvar = vae(x, z_rng)
@@ -257,7 +258,7 @@ class TranformerAutoEncoder(Transformer):
                         ),
                     )
 
-            # @partial(jit, static_argnums=(0,))
+            # @partial( jit_decorator, static_argnums=(0,))
 
         def forward(x: CV, nl, y: list[CV] | None = None, _=None, smap=False):
             assert y is None
@@ -463,7 +464,7 @@ class TransoformerLDA(Transformer):
 
             alpha = result.point
 
-            scale_factor = vmap(lambda x: alpha.T @ x)(jnp.array(mu_i))
+            scale_factor = vmap_decorator(lambda x: alpha.T @ x)(jnp.array(mu_i))
 
             _g = CvTrans.from_cv_function(_scale_trans, alpha=alpha, scale_factor=scale_factor)
 
@@ -484,6 +485,7 @@ class TransformerMAF(Transformer):
         x: list[CV],
         x_t: list[CV] | None,
         w: list[jax.Array],
+        w_t: list[jax.Array],
         dlo: DataLoaderOutput,
         max_features=500,
         max_features_pre=500,
@@ -494,6 +496,7 @@ class TransformerMAF(Transformer):
         eps_pre=1e-6,
         outdim=None,
         correlation=False,
+        use_w=False,
         min_s=0.1,
         max_s=1 - 1e-8,
         **fit_kwargs,
@@ -509,13 +512,14 @@ class TransformerMAF(Transformer):
 
         km = dlo.koopman_model(
             cv_0=x,
-            cv_tau=x_t,
+            cv_t=x_t,
             nl=dlo.nl,
             nl_t=dlo.nl_t,
             method="tcca",
             max_features=max_features,
             max_features_pre=max_features_pre,
-            w=w,
+            w=w if use_w else [jnp.ones_like(x) for x in w],
+            w_t=w_t if use_w else [jnp.ones_like(x) for x in w],
             calc_pi=False,
             add_1=True,
             trans=trans,
@@ -525,7 +529,7 @@ class TransformerMAF(Transformer):
             out_dim=outdim,
             eps=eps,
             eps_pre=eps_pre,
-            symmetric=True,
+            symmetric=False,
             correlation=correlation,
         )
 
@@ -535,7 +539,7 @@ class TransformerMAF(Transformer):
 
         ##########
 
-        skipfirst = True
+        skipfirst = False
 
         ts = (
             km.timescales(
@@ -548,7 +552,7 @@ class TransformerMAF(Transformer):
         print(f"timescales {ts} ns")
 
         for i in range(self.outdim):
-            if ts[i] / ts[0] < 1 / 25:
+            if ts[i] / ts[0] < 1 / 100:
                 (print(f"cv {i} is too small compared to ref (fraction= {ts[i] / ts[0]}), cutting off "),)
                 outdim = i
                 break

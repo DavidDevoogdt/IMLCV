@@ -13,6 +13,7 @@ from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
 from IMLCV.base.UnitsConstants import boltzmann, kjmol
+from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import HarmonicBias
 
 
@@ -186,6 +187,7 @@ class Scheme:
         direct_bias=False,
         init=False,
         first_round_without_bias=False,
+        executors=Executors.training,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -218,11 +220,14 @@ class Scheme:
 
             kl_div = bias.kl_divergence(prev_bias, T=self.rounds.T, symmetric=True)
 
-            if kl_div < convergence_kl:
-                print(f"already converged {kl_div=}")
-                return
+            if kl_div == 0:
+                print("kl div exactly zero, assuming it's not a real bias")
             else:
-                print(f"not converged {kl_div=}")
+                if kl_div < convergence_kl:
+                    print(f"already converged {kl_div=}")
+                    return
+                else:
+                    print(f"not converged {kl_div=}")
 
         print(f"{i_0=}")
 
@@ -234,7 +239,7 @@ class Scheme:
             # print(f"{without_bias=} {i=} {first_round_without_bias=}")
 
             if without_bias:
-                print(f"running first round wihtout biases")
+                print("running first round wihtout biases")
 
             self.grid_umbrella(
                 steps=steps,
@@ -277,6 +282,7 @@ class Scheme:
                 koopman_wham=koopman_wham,
                 out=out,
                 direct_bias=direct_bias,
+                executors=executors,
             )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)

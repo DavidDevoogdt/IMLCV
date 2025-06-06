@@ -24,14 +24,13 @@
 """Base class for iterative algorithms"""
 
 from dataclasses import KW_ONLY
-from functools import partial
 
 import jax.numpy as jnp
-from flax.struct import dataclass, field
+
+from IMLCV.base.datastructures import MyPyTreeNode, field
 
 
-@partial(dataclass, frozen=False)
-class StateItem:
+class StateItem(MyPyTreeNode):
     _: KW_ONLY
 
     key: str = field(pytree_node=False)
@@ -42,11 +41,11 @@ class StateItem:
         self.value = self.get_value(iterative)
         if self.shape is None:
             if isinstance(self.value, jnp.ndarray):
-                self.shape = self.value.shape
+                self.shape = self.value.shape  # type: ignore
                 self.dtype = self.value.dtype
             else:
                 self.shape = tuple([])
-                self.dtype = type(self.value)
+                self.dtype = type(self.value)  # type: ignore
 
     def get_value(self, iterative):
         raise NotImplementedError
@@ -54,29 +53,26 @@ class StateItem:
     def iter_attrs(self, iterative):
         return []
 
-    def copy(self):
-        return self.__class__()
+    # def copy(self):
+    #     return self.__class__()
 
 
-@partial(dataclass, frozen=False)
 class AttributeStateItem(StateItem):
     def get_value(self, iterative):
         return getattr(iterative, self.key, None)
 
-    def copy(self):
-        return self.__class__(self.key)
+    # def copy(self):
+    #     return self.__class__(self.key)
 
 
-@partial(dataclass, frozen=False)
 class ConsErrStateItem(StateItem):
     def get_value(self, iterative):
         return getattr(iterative._cons_err_tracker, self.key, None)
 
-    def copy(self):
-        return self.__class__(self.key)
+    # def copy(self):
+    #     return self.__class__(self.key)
 
 
-@partial(dataclass, frozen=False)
 class PosStateItem(StateItem):
     _: KW_ONLY
     key: str = field(pytree_node=False, default="pos")
@@ -85,7 +81,6 @@ class PosStateItem(StateItem):
         return iterative.ff.system.pos
 
 
-@partial(dataclass, frozen=False)
 class CellStateItem(StateItem):
     _: KW_ONLY
     key: str = "cell"
@@ -94,8 +89,7 @@ class CellStateItem(StateItem):
         return iterative.ff.system.cell.rvecs
 
 
-@partial(dataclass, frozen=False)
-class Hook:
+class Hook(MyPyTreeNode):
     name = None
     kind = None
     method = None

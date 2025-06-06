@@ -2,7 +2,7 @@ import math
 from pathlib import Path
 
 from parsl.executors import ThreadPoolExecutor, WorkQueueExecutor
-from parsl.launchers import SimpleLauncher, SingleNodeLauncher
+from parsl.launchers import SingleNodeLauncher
 from parsl.providers import LocalProvider
 
 

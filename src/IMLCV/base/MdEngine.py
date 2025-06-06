@@ -5,7 +5,6 @@ from __future__ import annotations
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
-from functools import partial
 from pathlib import Path
 from time import time
 
@@ -15,15 +14,14 @@ import jax
 import jax.numpy as jnp
 import jsonpickle
 from ase.data import atomic_masses
-from flax.struct import dataclass as flax_dataclass
-from flax.struct import field
-from jax import Array, jit
+from jax import Array
 from jax.lax import dynamic_slice_in_dim, dynamic_update_slice_in_dim
 from typing_extensions import Self
 
 from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, ShmapKwargs, SystemParams
+from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
 
 ######################################
@@ -142,8 +140,8 @@ class StaticMdInfo:
             return StaticMdInfo._load(hf=hf)
 
 
-@partial(flax_dataclass, frozen=False, eq=False)
-class TrajectoryInfo:
+# @partial(flax_dataclass, frozen=False, eq=False)
+class TrajectoryInfo(MyPyTreeNode):
     _positions: Array
     _cell: Array | None = None
     _charges: Array | None = None
@@ -188,6 +186,7 @@ class TrajectoryInfo:
         "_cv_orig",
     ]
 
+    @staticmethod
     def create(
         positions: Array,
         cell: Array | None = None,
@@ -325,14 +324,14 @@ class TrajectoryInfo:
             prop = self.__dict__[name]
 
             if prop is not None:
-                dict[name] = jnp.vstack((prop, jnp.zeros((delta, *prop.shape[1:]))))
+                dict[name] = jnp.vstack((prop, jnp.zeros((delta, *prop.shape[1:]))))  # type:ignore
 
         for name in self._items_scal:
             prop = self.__dict__[name]
             if prop is not None:
-                dict[name] = jnp.hstack([prop, jnp.zeros(delta)])
+                dict[name] = jnp.hstack([prop, jnp.zeros(delta)])  # type:ignore
 
-        return TrajectoryInfo(**dict)
+        return TrajectoryInfo(**dict)  # type:ignore
 
     def _shrink_capacity(self) -> TrajectoryInfo:
         dict = {}
@@ -469,6 +468,9 @@ class TrajectoryInfo:
 
         val = jnp.array(val)
 
+        if self._e_bias is None:
+            self._e_bias = jnp.zeros((self._capacity,))
+
         self._e_bias = self._e_bias.at[: self._size].set(val)
 
     @property
@@ -510,6 +512,9 @@ class TrajectoryInfo:
     @t.setter
     def t(self, val):
         assert val.shape[0] == self._size
+
+        if self._t is None:
+            self._t = jnp.zeros((self._capacity,))
 
         self._t = self._t.at[: self._size].set(val)
 
@@ -554,7 +559,7 @@ class MDEngine(ABC):
 
     @classmethod
     def create(
-        self,
+        cls,
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
@@ -574,7 +579,7 @@ class MDEngine(ABC):
                 trajectory_info = TrajectoryInfo.load(trajectory_file)
                 cont = True
 
-        if not cont:
+        if not cont or trajectory_info is None:
             create_kwargs["step"] = 1
             if sp is not None:
                 energy.sp = sp
@@ -583,11 +588,11 @@ class MDEngine(ABC):
             create_kwargs["step"] = trajectory_info._size
             energy.sp = trajectory_info.sp[-1]
 
-        self.update_nl()
+        # self.update_nl()
 
         kwargs.update(create_kwargs)
 
-        return self(
+        out = cls(
             bias=bias,
             energy=energy,
             static_trajectory_info=static_trajectory_info,
@@ -595,6 +600,10 @@ class MDEngine(ABC):
             trajectory_file=trajectory_file,
             **kwargs,
         )
+
+        out.update_nl()
+
+        return out
 
     def update_nl(self):
         if self.static_trajectory_info.r_cut is None:
@@ -608,10 +617,14 @@ class MDEngine(ABC):
             )
 
             nl = self.sp.get_neighbour_list(info)  # jitted update
+
+            assert nl is not None
             b = True
         else:
             nl = self.nl
             b = not self.nl.needs_update(self.sp)
+
+        info = nl.info
 
         if not b:
             print("nl - update")
@@ -619,7 +632,9 @@ class MDEngine(ABC):
 
         if not b:
             print("nl - slow update")
-            nl = self.sp.get_neighbour_list(nl.info)
+            nl = self.sp.get_neighbour_list(info)
+
+        assert nl is not None
 
         nneigh = nl.nneighs()
 
@@ -637,7 +652,7 @@ class MDEngine(ABC):
         filename = Path(file)
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))  # type:ignore
         else:
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
@@ -658,6 +673,8 @@ class MDEngine(ABC):
 
             if key == "trajectory_file":
                 continue
+
+        assert isinstance(self, MDEngine)
 
         if (key := "trajectory_file") in kwargs.keys():
             print(f"loading ti  {self.trajectory_file} ")
@@ -702,20 +719,22 @@ class MDEngine(ABC):
         try:
             self._run(int(steps))
 
-            if self.trajectory_file is not None:
+            if self.trajectory_info is not None:
                 self.trajectory_info._finished = True
 
         except Exception as err:
             if self.step == 1:
                 raise err
             print("The calculator finished early with error , marking as invalid")
-            self.trajectory_info._invalid = True
+            if self.trajectory_info is not None:
+                self.trajectory_info._invalid = True
 
             raise err
 
-        if self.trajectory_file is not None:
+        if self.trajectory_info is not None:
             self.trajectory_info = self.trajectory_info._shrink_capacity()
-            self.trajectory_info.save(self.trajectory_file)
+            if self.trajectory_file is not None:
+                self.trajectory_info.save(self.trajectory_file)
 
     @abstractmethod
     def _run(self, steps):
@@ -727,7 +746,7 @@ class MDEngine(ABC):
         return self.trajectory_info._shrink_capacity()
 
     def save_step(self, T=None, P=None, t=None, err=None, cv=None, e_bias=None, e_pot=None, canonicalize=False):
-        if canonicalize:
+        if canonicalize and self.nl is not None:
             sp = self.nl.canonicalized_sp(self.sp)
         else:
             sp = self.sp
@@ -772,7 +791,8 @@ class MDEngine(ABC):
                 str += f" {ti._P[0] / bar: >10.2f}"
             str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
             # str += f"|{jnp.max(jnp.linalg.norm(self.last_bias.gpos, axis=1) / kjmol * angstrom): >13.2f}"
-            str += f"| {ti._cv[0, :]}"
+            if ti._cv is not None:
+                str += f"| {ti._cv[0, :]}"
             print(str)
 
         # write step to trajectory
@@ -809,7 +829,7 @@ class MDEngine(ABC):
 
             def _mock_f(sp):
                 return EnergyResult(
-                    energy=1.0,
+                    energy=jnp.array(1.0),
                     gpos=None if not gpos else sp.coordinates,
                     vtens=None if not vtens else sp.cell,
                 )
@@ -873,6 +893,8 @@ class MDEngine(ABC):
 
             if self.trajectory_file is not None:
                 if Path(self.trajectory_file).exists():
+                    assert self.trajectory_info is not None
+
                     self.step = self.trajectory_info._size
                     self.sp = self.trajectory_info.sp[-1]
 

@@ -2,13 +2,8 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import lineax as lx
-import numpy as np
-from jax import Array, vmap
+from jax import Array
 from jaxopt.linear_solve import solve_normal_cg
-from ott.geometry.pointcloud import PointCloud
-from ott.problems.linear import linear_problem
-from ott.solvers.linear import implicit_differentiation, sinkhorn
 
 from IMLCV.base.CV import (
     CV,
@@ -18,8 +13,8 @@ from IMLCV.base.CV import (
     NeighbourList,
     NeighbourListInfo,
     SystemParams,
-    padded_vmap,
 )
+from IMLCV.base.datastructures import vmap_decorator
 
 ######################################
 #       CV transformations           #
@@ -66,7 +61,9 @@ def _lattice_invariants(
 ):
     sp_red, _ = sp.minkowski_reduce()
 
-    M = jax.vmap(jax.vmap(jnp.dot, in_axes=(0, None)), in_axes=(None, 0))(sp_red.cell, sp_red.cell)
+    assert sp_red.cell is not None
+
+    M = vmap_decorator(vmap_decorator(jnp.dot, in_axes=(0, None)), in_axes=(None, 0))(sp_red.cell, sp_red.cell)
 
     l = jnp.linalg.eigvalsh(M)
 
@@ -83,6 +80,8 @@ def _lattice_invariants_2(
     shmap_kwargs,
 ):
     sp_red, _ = sp.minkowski_reduce()
+
+    assert sp_red.cell is not None
 
     c = sp_red.cell @ sp_red.cell.T
 
@@ -105,12 +104,12 @@ def _distance(x: SystemParams, *_):
 
     n = x.shape[-2]
 
-    out = vmap(vmap(x.min_distance, in_axes=(0, None)), in_axes=(None, 0))(
+    out = vmap_decorator(vmap_decorator(x.min_distance, in_axes=(0, None)), in_axes=(None, 0))(
         jnp.arange(n),
         jnp.arange(n),
     )
 
-    return x(cv=out[jnp.triu_indices_from(out, k=1)], _combine_dims=None)
+    return x.replace(cv=out[jnp.triu_indices_from(out, k=1)], _combine_dims=None)
 
 
 def distance_descriptor():
@@ -177,6 +176,7 @@ def _sb_descriptor(
     n_max,
     l_max,
     bessel_fun="jax",
+    mul_Z=False,
 ):
     assert nl is not None, "provide neighbourlist for sb describport"
 
@@ -189,9 +189,9 @@ def _sb_descriptor(
         def _triu(a):
             return a[jnp.triu_indices_from(a)]
 
-        a = vmap(
-            vmap(
-                vmap(_tril, in_axes=(0), out_axes=(0)),
+        a = vmap_decorator(
+            vmap_decorator(
+                vmap_decorator(_tril, in_axes=(0), out_axes=(0)),
                 in_axes=(1),
                 out_axes=(1),
             ),
@@ -201,8 +201,16 @@ def _sb_descriptor(
             a,
         )  # eliminate l>n
 
-        a = vmap(
-            vmap(_triu, in_axes=(0), out_axes=(0)),
+        def eliminate_Z(x):
+            if mul_Z:
+                x *= vmap_decorator(vmap_decorator(jax.lax.mul, in_axes=(0, None)), in_axes=(None, 0))(
+                    jnp.array(nl.info.z_unique), jnp.array(nl.info.z_unique)
+                )
+
+            return _triu(x)
+
+        a = vmap_decorator(
+            vmap_decorator(eliminate_Z, in_axes=(0), out_axes=(0)),
             in_axes=(3),
             out_axes=(2),
         )(
@@ -231,6 +239,9 @@ def _sb_descriptor(
     if reduce:
         a = _reduce_sb(a)
 
+    if mul_Z:
+        a = jnp.einsum("a...,a->a...", a, jnp.array(nl.info.z_array))
+
     if reshape:
         a = jnp.reshape(a, (a.shape[0], -1))
 
@@ -246,6 +257,7 @@ def sb_descriptor(
     chunk_size_atoms=None,
     chunk_size_neigbourgs=None,
     bessel_fun="jax",
+    mul_Z=True,
 ) -> CvTrans:
     return CvTrans.from_cv_function(
         _sb_descriptor,
@@ -258,6 +270,7 @@ def sb_descriptor(
             "n_max",
             "l_max",
             "bessel_fun",
+            "mul_Z",
         ],
         r_cut=r_cut,
         chunk_size_atoms=chunk_size_atoms,
@@ -267,6 +280,7 @@ def sb_descriptor(
         n_max=n_max,
         l_max=l_max,
         bessel_fun=bessel_fun,
+        mul_Z=mul_Z,
     )
 
 
@@ -297,15 +311,17 @@ def _soap_descriptor(
             return a[jnp.triu_indices_from(a)]
 
         # eliminate Z2>Z1
-        a = jax.vmap(
-            jax.vmap(jax.vmap(_triu, in_axes=(2), out_axes=1), in_axes=(3), out_axes=2), in_axes=(4), out_axes=3
+        a = vmap_decorator(
+            vmap_decorator(vmap_decorator(_triu, in_axes=(2), out_axes=1), in_axes=(3), out_axes=2),
+            in_axes=(4),
+            out_axes=3,
         )(a)
 
         # a_Z_n_n'_l
 
         # eliminate nn' Z2>Z1
 
-        a = jax.vmap(jax.vmap(_triu, in_axes=(2), out_axes=1), in_axes=(3), out_axes=2)(a)
+        a = vmap_decorator(vmap_decorator(_triu, in_axes=(2), out_axes=1), in_axes=(3), out_axes=2)(a)
 
         # a_Z_N_l
 
@@ -335,7 +351,7 @@ def _soap_descriptor(
     # print(f"{a.shape=}")
 
     if reduce:
-        a = jax.vmap(_reduce_sb)(a)
+        a = vmap_decorator(_reduce_sb)(a)
 
     if reshape:
         a = jnp.reshape(a, (a.shape[0], -1))
@@ -395,7 +411,7 @@ def rotate_2d(alpha):
     return CvTrans.from_cv_function(_rotate_2d, alpha=alpha)
 
 
-def _project_distances(cvs: CV, nl, shmap, shmap_kwargs, a):
+def _project_distances(cvs: CV, nl, shmap, shmap_kwargs, a: float):
     "projects the distances to a reaction coordinate"
     import jax.numpy as jnp
 
@@ -410,7 +426,7 @@ def _project_distances(cvs: CV, nl, shmap, shmap_kwargs, a):
     y2 = r2**2 - (a / 2 + x) ** 2
 
     y2_safe = jnp.where(y2 <= 0, jnp.ones_like(y2), y2)
-    y = jnp.where(y2 <= 0, 0.0, y2_safe ** (1 / 2))
+    y = jnp.where(y2 <= 0, 0.0, jnp.sqrt(y2_safe))
 
     return CV(cv=jnp.array([x / a + 0.5, y / a]))
 
@@ -490,17 +506,30 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     return out.compute_cv(m)[0], out
 
 
-# @partial(jit, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
+def kernel_dist(p1: jax.Array, p2: jax.Array, xi=2.0):
+    def log_safe(x: jax.Array):
+        x = jnp.where(x < 1e-10, 1e-10, x)
+
+        return jnp.log(x)
+
+    n1 = jnp.dot(p1, p1)
+    n2 = jnp.dot(p2, p2)
+
+    return xi * (0.5 * log_safe(n1) - log_safe(jnp.dot(p1, p2)) + 0.5 * log_safe(n2))
+
+
+# @partial( jit_decorator, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
 def sinkhorn_divergence_2(
     x1: CV,
     x2: CV,
     nl1: NeighbourListInfo,
     nl2: NeighbourListInfo,
     alpha=1e-2,
-    xi: int = 2,
     jacobian=False,
     lse=True,
-    exp_factor: float | None = 10.0,
+    exp_factor: jax.Array | None = None,
+    mass_weight=True,
+    dist_fun=kernel_dist,
 ) -> CV:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -509,22 +538,6 @@ def sinkhorn_divergence_2(
 
     assert not x1.batched
     assert not x2.batched
-
-    src_mask, _, p1_cv = nl1.nl_split_z(x1)
-    tgt_mask, tgt_split, p2_cv = nl2.nl_split_z(x2)
-
-    # print(f" {[a.cv.shape for a in p2_cv]=}")
-
-    @partial(vmap, in_axes=(None, 0), out_axes=1)
-    @partial(vmap, in_axes=(0, None), out_axes=0)
-    def cost(p1, p2):
-        p1 /= jnp.linalg.norm(p1)
-        p2 /= jnp.linalg.norm(p2)
-
-        return 1 - (jnp.dot(p1, p2)) ** xi  # dist between 0 and 1
-
-    p1 = [a.cv.reshape(a.shape[0], -1) for a in p1_cv]
-    p2 = [a.cv.reshape(a.shape[0], -1) for a in p2_cv]
 
     def solve_svd(matvec, b: Array) -> Array:
         from jax.numpy.linalg import lstsq
@@ -552,7 +565,7 @@ def sinkhorn_divergence_2(
         # jax.debug.print("s {} {} {}", s, A, b)
 
         if len(b_shape) == 2:
-            x = x.reshape(*b_shape[1])
+            x = x.reshape(*b_shape[1])  # type: ignore
 
         return x
 
@@ -561,10 +574,22 @@ def sinkhorn_divergence_2(
         p2,
         epsilon,
     ):
-        c = cost(p1, p2)
+        c = vmap_decorator(
+            vmap_decorator(
+                dist_fun,
+                in_axes=(None, 0),
+            ),
+            in_axes=(0, None),
+        )(p1, p2)
+
+        # jax.debug.print("c {} {}", c, c.shape)
 
         if epsilon is None:
+            P = jnp.eye(c.shape[0], c.shape[1])
+
             return jnp.sum(jnp.diag(c))
+
+        # epsilon *= jnp.mean(c)
 
         n = c.shape[0]
         m = c.shape[1]
@@ -572,7 +597,7 @@ def sinkhorn_divergence_2(
         a = jnp.ones((c.shape[0],)) / n
         b = jnp.ones((c.shape[1],)) / m
 
-        # print(f"{a=}")
+        # scale_fac = jax.lax.stop_gradient(jnp.mean(c))
 
         from jaxopt import FixedPointIteration
 
@@ -587,8 +612,8 @@ def sinkhorn_divergence_2(
                 return jnp.log(jnp.sum(jnp.exp(u - u_max))) + u_max
 
             def _T_lse(g_over_eps, c_over_eps):
-                f_over_eps = -jnp.log(n) - vmap(_f0, in_axes=(0, None))(c_over_eps, g_over_eps)
-                g_over_eps = -jnp.log(m) - vmap(_f0, in_axes=(1, None))(c_over_eps, f_over_eps)
+                f_over_eps = -jnp.log(n) - vmap_decorator(_f0, in_axes=(0, None))(c_over_eps, g_over_eps)
+                g_over_eps = -jnp.log(m) - vmap_decorator(_f0, in_axes=(1, None))(c_over_eps, f_over_eps)
 
                 return g_over_eps, f_over_eps
 
@@ -610,8 +635,8 @@ def sinkhorn_divergence_2(
             g_over_eps = out.params
             f_over_eps = out.state.aux
 
-            @partial(vmap, in_axes=(None, 0, 1), out_axes=1)
-            @partial(vmap, in_axes=(0, None, 0), out_axes=0)
+            @partial(vmap_decorator, in_axes=(None, 0, 1), out_axes=1)
+            @partial(vmap_decorator, in_axes=(0, None, 0), out_axes=0)
             def _P(f_over_eps, g_over_eps, c_over_eps):
                 return jnp.exp(f_over_eps - c_over_eps + g_over_eps)
 
@@ -648,48 +673,52 @@ def sinkhorn_divergence_2(
 
         return d0
 
-    def get_d_p12(p1_i, p2_i):
+    def get_d_p12(p1_i: jax.Array, p2_i: jax.Array):
         d_12 = _core_sinkhorn(p1_i, p2_i, epsilon=alpha)
         d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
         d_11 = _core_sinkhorn(p1_i, p1_i, epsilon=alpha)
 
-        out = (-0.5 * d_11 + d_12 - 0.5 * d_22) / p1_i.shape[0]  # distance squared
+        d = (-0.5 * d_11 + d_12 - 0.5 * d_22) / p1_i.shape[0]
 
-        # jax.debug.print("{} {}", out, d_11)
-
-        if exp_factor is not None:
-            # print(f"applying exp")
-            out = jnp.exp(-exp_factor * out)
-
-        return out
-
-    out_dist = jnp.zeros((x2.shape[0], 1))
+        return jnp.exp(-d)
 
     if jacobian:
-        get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)
+        get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)  # type:ignore
 
-        out_vec = jnp.zeros(x2.shape)
+    # def get_aligined_x1(x1: CV, nl1: NeighbourListInfo, nl2: NeighbourListInfo):
+    src_mask, _, p1_cv = nl1.nl_split_z(x1)
+    tgt_mask, tgt_split, p2_cv = nl2.nl_split_z(x2)
+
+    p1 = [a.cv.reshape(a.shape[0], -1) for a in p1_cv]
+    p2 = [a.cv.reshape(a.shape[0], -1) for a in p2_cv]
+
+    out = []
+
+    dims = []
 
     # solve problem per atom kind
-    for p1_i, p2_i, out_i in zip(p1, p2, tgt_split):
+    for i, (p1_i, p2_i, out_i) in enumerate(zip(p1, p2, tgt_split)):
+        # ef = exp_factor[i] if exp_factor is not None else None
+
         if jacobian:
             d, dd_dpi2 = get_d_p12(p1_i, p2_i)
 
-            out_vec = out_vec.at[out_i].set(dd_dpi2)
+            dd_dpi2 = dd_dpi2.reshape(-1)
+
+            v = jnp.hstack([d, dd_dpi2.reshape(-1)])
+
+            dims.append((1, dd_dpi2.shape[0]))
 
         else:
             d = get_d_p12(p1_i, p2_i)
 
-        out_dist = out_dist.at[out_i].set(d)
+            dims.append(1)
 
-    out_dist = jnp.array(out_dist)
+            v = jnp.array([d])
 
-    if jacobian:
-        out_vec = jnp.array(out_vec)
+        out.append(v)
 
-        return x2.replace(cv=out_vec, _stack_dims=x1._stack_dims), x2.replace(cv=out_dist, _stack_dims=x1._stack_dims)
-
-    return x2.replace(cv=out_dist, _stack_dims=x1._stack_dims)
+    return x2.replace(cv=jnp.hstack(out), _combine_dims=tuple(dims), atomic=False, _stack_dims=x1._stack_dims)
 
 
 def _sinkhorn_divergence_trans_2(
@@ -700,7 +729,7 @@ def _sinkhorn_divergence_trans_2(
     nli: NeighbourList | NeighbourListInfo,
     pi: CV,
     alpha_rematch,
-    exp_factor: float | None = 10.0,
+    exp_factor: jax.Array | None = None,
     # normalize,
     jacobian=False,
 ):
@@ -717,39 +746,27 @@ def _sinkhorn_divergence_trans_2(
             nl1=nl.info,
             nl2=nli,
             alpha=alpha_rematch,
-            exp_factor=exp_factor,
+            # exp_factor=exp_factor,
             # normalize=normalize,
             jacobian=jacobian,
         )
 
     if pi.batched:
-        f = vmap(f, in_axes=(0, None))
+        f = vmap_decorator(f, in_axes=(0, None))
 
-    if jacobian:
-        out, out_dist = f(pi, cv)
+    out = f(pi, cv)
 
-    else:
-        out_dist = f(pi, cv)
+    # print(f"{out=}")
 
     if pi.batched:
-        if jacobian:
-            out.stack_dims = (1,) * out.cv.shape[0]
-            out = CV.combine(*out.unstack()).unbatch()
+        unstacked = [a.unbatch() for a in out]
 
-        out_dist.stack_dims = (1,) * out_dist.cv.shape[0]
-        out_dist = CV.combine(*out_dist.unstack()).unbatch()
+        # print(f"{unstacked=}")
 
-    if jacobian:
-        out._stack_dims = cv._stack_dims
+        out = CV.combine(*unstacked)
+        # print(f"post {out=}")
 
-    out_dist._stack_dims = cv._stack_dims
-
-    if jacobian:
-        ret = CV.combine(out_dist, out)
-    else:
-        ret = out_dist
-
-    return ret
+    return out
 
 
 def get_sinkhorn_divergence_2(
@@ -757,7 +774,7 @@ def get_sinkhorn_divergence_2(
     pi: CV,
     alpha_rematch=0.1,
     jacobian=False,
-    exp_factor: float | None = 10.0,
+    # exp_factor: float | None = 10.0,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -767,18 +784,27 @@ def get_sinkhorn_divergence_2(
         print("converting nli to info")
         nli = nli.info
 
+    # if pi.batched:
+    #     if exp_factor is not None:
+    #         exp_factor = jnp.array(exp_factor)
+    #         if len(exp_factor.shape) == 0:
+    #             exp_factor = jnp.reshape(exp_factor, (1,))
+
+    #         if exp_factor.shape[0] == 1:
+    #             exp_factor = jnp.full((pi.cv.shape[0],), exp_factor[0])
+
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
         # jacfun=jax.jacrev,
         static_argnames=[
-            "alpha_rematch",
+            # "alpha_rematch",
             "jacobian",
         ],
         nli=nli,
         pi=pi,
         alpha_rematch=alpha_rematch,
         jacobian=jacobian,
-        exp_factor=exp_factor,
+        # exp_factor=exp_factor,
     )
 
 
@@ -817,10 +843,10 @@ def append_trans(v: Array):
 
 
 def _stack_reduce(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, op):
-    cvs = cv.split(cv.stack_dims)
+    cvs = cv.split()
 
     return CV(
-        op(jnp.stack([cvi.cv for cvi in cvs]), axis=0),
+        op(jnp.stack([cvi.cv for cvi in cvs]), axis=0),  # type:ignore
         _stack_dims=cvs[0]._stack_dims,
         _combine_dims=cvs[0]._combine_dims,
         atomic=cvs[0].atomic,
@@ -829,7 +855,7 @@ def _stack_reduce(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, op):
 
 
 def stack_reduce(op=jnp.mean):
-    return CvTrans.from_cv_function(_stack_reduce, op=op)
+    return CvTrans.from_cv_function(_stack_reduce, static_argnames=["op"], op=op)
 
 
 def _affine_trans(x: CV, nl, shmap, shmap_kwargs, C):
@@ -903,15 +929,30 @@ def get_remove_mean_trans(c: CV, range=Ellipsis):
     return trans.compute_cv(c)[0], trans
 
 
-def _normalize(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, std):
-    return cv * (1 / std)
+def _normalize(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, mu, std_inv):
+    x = cv.cv
+
+    if mu is not None:
+        x = mu + (x - mu) * std_inv
+    else:
+        x *= std_inv
+
+    return cv.replace(cv=x)
 
 
-def get_normalize_trans(c: CV, range=Ellipsis):
+def get_normalize_trans(c: CV, remove_mu=True, range=Ellipsis):
     assert c.batched
+
+    if remove_mu:
+        mu = jnp.mean(c.cv[range, :], axis=0)
+    else:
+        mu = None
+
     std = jnp.std(c.cv[range, :], axis=0)
 
-    trans = CvTrans.from_cv_function(_normalize, std=std)
+    std_inv = jnp.where(std == 0, 0, 1 / std)
+
+    trans = CvTrans.from_cv_function(_normalize, mu=mu, std_inv=std_inv)
 
     return trans.compute_cv(c)[0], trans
 
@@ -947,6 +988,8 @@ def get_non_constant_trans(
         only_diag=True,
     )
 
+    assert cov.C00 is not None
+
     cov = jnp.sqrt(cov.C00)
 
     idx = jnp.argsort(cov, descending=True)
@@ -974,13 +1017,13 @@ def get_feature_cov(
     c_tau: list[CV],
     nl: list[NeighbourList] | NeighbourList | None = None,
     nl_tau: list[NeighbourList] | NeighbourList | None = None,
-    w: list[jnp.array] | None = None,
+    w: list[jax.Array] | None = None,
     trans: CvTrans | None = None,
     epsilon=0.1,
     smallest_correlation=1e-12,
     max_functions=None,
     T_scale=1,
-) -> tuple[CV, CV, CvTrans]:
+) -> CvTrans:
     from IMLCV.base.rounds import Covariances
 
     print("computing feature covariances")
@@ -1000,6 +1043,8 @@ def get_feature_cov(
     )
 
     print("computing feature covariances done")
+    assert cov.C00 is not None
+    assert cov.C11 is not None
 
     cov_n = jnp.sqrt(cov.C00 * cov.C11)
     cov_01 = jnp.where(cov_n > smallest_correlation, cov.C01 / cov_n, 0)  # avoid division by zero
@@ -1091,52 +1136,52 @@ def get_feature_cov(
 ######################################
 
 
-class MetricUMAP(CvMetric):
-    def __init__(self, periodicities, bounding_box=None) -> None:
-        super().__init__(periodicities=periodicities, bounding_box=bounding_box)
+# class MetricUMAP(CvMetric):
+#     def __init__(self, periodicities, bounding_box=None) -> None:
+#         m = CvMetric.create(periodicities=periodicities, bounding_box=bounding_box)
 
-        # bb = np.array(self.bounding_box)
-        per = np.array(self.periodicities)
+#         # bb = np.array(self.bounding_box)
+#         per = np.array(self.periodicities)
 
-        import numba
+#         import numba
 
-        # @numba.njit
-        # def map(y):
+#         # @numba.njit
+#         # def map(y):
 
-        #     return (y - bb[:, 0]) / (
-        #         bb[:, 1] - bb[:, 0])
+#         #     return (y - bb[:, 0]) / (
+#         #         bb[:, 1] - bb[:, 0])
 
-        @numba.njit
-        def _periodic_wrap(xs, min=False):
-            coor = np.mod(xs, 1)  # between 0 and 1
-            if min:
-                # between [-0.5,0.5]
-                coor = np.where(coor > 0.5, coor - 1, coor)
+#         @numba.njit
+#         def _periodic_wrap(xs, min=False):
+#             coor = np.mod(xs, 1)  # between 0 and 1
+#             if min:
+#                 # between [-0.5,0.5]
+#                 coor = np.where(coor > 0.5, coor - 1, coor)
 
-            return np.where(per, coor, xs)
+#             return np.where(per, coor, xs)
 
-        @numba.njit
-        def g(x, y):
-            # r1 = map(x)
-            # r2 = map(y)
+#         @numba.njit
+#         def g(x, y):
+#             # r1 = map(x)
+#             # r2 = map(y)
 
-            return _periodic_wrap(x - y, min=True)
+#             return _periodic_wrap(x - y, min=True)
 
-        @numba.njit
-        def val_and_grad(x, y):
-            r = g(x, y)
-            d = np.sqrt(np.sum(r**2))
+#         @numba.njit
+#         def val_and_grad(x, y):
+#             r = g(x, y)
+#             d = np.sqrt(np.sum(r**2))
 
-            return d, r / (d + 1e-6)
+#             return d, r / (d + 1e-6)
 
-        self.umap_f = val_and_grad
+#         self.umap_f = val_and_grad
 
 
-class hyperTorus(CvMetric):
-    def __init__(self, n) -> None:
-        periodicities = [True for _ in range(n)]
-        boundaries = jnp.zeros((n, 2))
-        boundaries = boundaries.at[:, 0].set(-jnp.pi)
-        boundaries = boundaries.at[:, 1].set(jnp.pi)
+# class hyperTorus(CvMetric):
+#     def __init__(self, n) -> None:
+#         periodicities = [True for _ in range(n)]
+#         boundaries = jnp.zeros((n, 2))
+#         boundaries = boundaries.at[:, 0].set(-jnp.pi)
+#         boundaries = boundaries.at[:, 1].set(jnp.pi)
 
-        super().__init__(periodicities, boundaries)
+#         super().__init__(periodicities, boundaries)

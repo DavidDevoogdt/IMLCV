@@ -25,7 +25,7 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
 
         return jnp.array(out, dtype=x.dtype)
 
-    def cv_inner(v: int, z: float):
+    def cv_inner(v: jax.Array, z: jax.Array):
         # print(z.sharding)
 
         res_dtype_shape = jax.ShapeDtypeStruct(
@@ -42,19 +42,19 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             v,
             z,
             sharding=jax.sharding.SingleDeviceSharding(jax.devices()[0]),
-            vmap_method="expand_dims",
+            vmap_decorator_method="expand_dims",
         )
 
     @custom_jvp
-    def cv(v, z):
-        v, z = jnp.asarray(v), jnp.asarray(z)
+    def cv(v: int, z: jax.Array):
+        _v, _z = jnp.asarray(v), jnp.asarray(z)
 
         # Promote the input to inexact (float/complex).
         # Note that jnp.result_type() accounts for the enable_x64 flag.
-        z = z.astype(jnp.result_type(float, z.dtype))
+        _z = _z.astype(jnp.result_type(float, _z.dtype))
 
-        assert v.ndim == 0 and z.ndim == 0, "batch with vmap"
-        return cv_inner(v, z)
+        assert _v.ndim == 0 and _z.ndim == 0, "batch with vmap_decorator"
+        return cv_inner(_v, _z)
 
     @cv.defjvp
     def cv_jvp(primals, tangents):
@@ -188,7 +188,7 @@ def spherical_jn_recurrence_pattern(n, z):
 
 @partial(jax.jit, static_argnums=0)
 def spherical_jn_recurrence_pattern_unstable(n, z):
-    z_safe = jnp.where(z < 1e-10, 1, z)
+    z_safe: jax.Array = jnp.where(z < 1e-10, 1, z)  # type:ignore
 
     f0 = jnp.sinc(z_safe / jnp.pi)
 
@@ -286,7 +286,7 @@ def ie_n_recurrence_pattern(n, z, half=False):
 
     il = 1.0
 
-    z_safe = jnp.where(z < 1e-12, 1, z)
+    z_safe: jax.Array = jnp.where(z < 1e-12, 1, z)  # type:ignore
 
     # https://dlmf.nist.gov/10.29
     def iter(n, il, ilp1, norm=True):
@@ -342,8 +342,8 @@ def ie_n_recurrence_pattern(n, z, half=False):
 
 
 @partial(jax.jit, static_argnums=(0, 2))
-def ie_n_recurrence_pattern_unstalbe(n, z, half=False):
-    z_safe = jnp.where(z < 1e-12, 1, z)
+def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
+    z_safe: jax.Array = jnp.where(z < 1e-12, 1, z)  # mypy: ignore
 
     if half:
         # jax.debug.print("{}, {}", z_safe, jnp.sinh(z_safe))
@@ -457,7 +457,7 @@ def ie_n_jvp(n, half, forward, primals, tangents):
     # https://dlmf.nist.gov/10.29
     dy = jnp.zeros(ni + 1)
 
-    x_safe = jnp.where(x < 1e-12, 1e-12, x)
+    x_safe: jax.array = jnp.where(x < 1e-12, 1e-12, x)  # type:ignore
 
     if half:
         dy = dy.at[0].set(y[1] + 0.5 / x_safe * y[0])

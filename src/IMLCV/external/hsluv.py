@@ -1,8 +1,8 @@
 from functools import partial
 
-import jax
 import jax.numpy as jnp
-from jax.tree_util import Partial
+
+from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
 
 # XYZ-to-sRGB matrix
 _m = jnp.array(
@@ -29,7 +29,7 @@ _epsilon = 0.0088564516  # 216/24389 == (6/29)**3
 
 def _normalize_output(conversion):
     # as in snapshot rev 4, the tolerance should be 1e-11
-    normalize = jax.vmap(Partial(jnp.round, decimals=11 - 1))
+    normalize = vmap_decorator(Partial_decorator(jnp.round, decimals=11 - 1))
 
     def normalized(*args, **kwargs):
         color = conversion(*args, **kwargs)
@@ -38,13 +38,13 @@ def _normalize_output(conversion):
     return normalized
 
 
-@jax.vmap
+@vmap_decorator
 def _distance_line_from_origin(slope, intercept):
     v = slope**2 + 1.0
     return jnp.abs(intercept) / jnp.sqrt(v)
 
 
-@partial(jax.vmap, in_axes=(None, 0, 0))
+@partial(vmap_decorator, in_axes=(None, 0, 0))
 def _length_of_ray_until_intersect(theta, slope, intercept):
     return intercept / (jnp.sin(theta) - slope * jnp.cos(theta))
 
@@ -53,13 +53,13 @@ def _get_bounds(l):
     sub1 = ((l + 16) ** 3) / 1560896
     sub2 = jnp.where(sub1 > _epsilon, sub1, l / _kappa)
 
-    @jax.vmap
+    @vmap_decorator
     def _c(c):
         m1 = _m[c][0]
         m2 = _m[c][1]
         m3 = _m[c][2]
 
-        @jax.vmap
+        @vmap_decorator
         def _t(t):
             top1 = (284517.0 * m1 - 94839.0 * m3) * sub2
             top2 = (838422 * m3 + 769860.0 * m2 + 731718.0 * m1) * l * sub2 - (769860.0 * t) * l
@@ -85,15 +85,15 @@ def _max_chroma_for_lh(l, h):
 
     lengths = _length_of_ray_until_intersect(hrad, slopes, intercepts)
 
-    return jnp.min(jnp.where(lengths > 0, lengths, jnp.inf))
+    return jnp.min(jnp.where(lengths > 0, lengths, jnp.inf))  # type: ignore
 
 
-@jax.vmap
+@vmap_decorator
 def _from_linear(c):
     return jnp.where(c <= 0.0031308, 12.92 * c, 1.055 * jnp.pow(c, 5 / 12) - 0.055)
 
 
-@jax.vmap
+@vmap_decorator
 def _to_linear(c):
     return jnp.where(c > 0.04045, jnp.power((c + 0.055) / 1.055, 2.4), c / 12.92)
 
@@ -122,8 +122,8 @@ def xyz_to_luv(xyz):
 
     var_u = 4.0 * x / divider
     var_v = 9.0 * y / divider
-    u = 13.0 * l * (var_u - _ref_u)
-    v = 13.0 * l * (var_v - _ref_v)
+    u = 13.0 * l * (var_u - _ref_u)  # type: ignore
+    v = 13.0 * l * (var_v - _ref_v)  # type: ignore
 
     return jnp.array([l, u, v])
 

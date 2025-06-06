@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
-from dataclasses import KW_ONLY, fields
+from dataclasses import fields
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -10,9 +9,7 @@ from typing import TYPE_CHECKING, Callable
 import jax
 import jax.numpy as jnp
 import jsonpickle
-from flax.struct import dataclass, field
-from jax import Array, value_and_grad, vmap
-from jax.tree_util import Partial
+from jax import Array, value_and_grad
 from typing_extensions import Self
 
 from IMLCV import unpickler
@@ -25,6 +22,7 @@ from IMLCV.base.CV import (
     padded_shard_map,
     padded_vmap,
 )
+from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, field, jit_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import boltzmann, kelvin, kjmol
 
 if TYPE_CHECKING:
@@ -36,8 +34,7 @@ if TYPE_CHECKING:
 ######################################
 
 
-@partial(dataclass, frozen=False, eq=False)
-class EnergyResult:
+class EnergyResult(MyPyTreeNode):
     energy: Array
     gpos: Array | None = field(default=None)
     vtens: Array | None = field(default=None)
@@ -80,7 +77,7 @@ class Energy:
 
     @property
     @abstractmethod
-    def cell(self):
+    def cell(self) -> jax.Array | None:
         pass
 
     @cell.setter
@@ -90,7 +87,7 @@ class Energy:
 
     @property
     @abstractmethod
-    def coordinates(self):
+    def coordinates(self) -> jax.Array:
         pass
 
     @coordinates.setter
@@ -108,7 +105,7 @@ class Energy:
         self.coordinates = sp.coordinates
 
     @abstractmethod
-    def _compute_coor(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
+    def _compute_coor(self, sp: SystemParams, nl: NeighbourList | None, gpos=False, vir=False) -> EnergyResult:
         pass
 
     def _handle_exception(self, e=None):
@@ -117,7 +114,7 @@ class Energy:
     def get_vtens_finite_difference(
         self,
         sp: SystemParams,
-        nl: NeighbourList,
+        nl: NeighbourList | None,
         eps=1e-5,
         gpos=False,
     ):
@@ -156,9 +153,9 @@ class Energy:
         virial = 0.5 * (virial + virial.T)
 
         return EnergyResult(
-            ener.energy,
-            ener.gpos if gpos else None,
-            virial,
+            energy=ener.energy,
+            gpos=ener.gpos if gpos else None,
+            vtens=virial,
         )
 
     def compute_from_system_params(
@@ -191,7 +188,7 @@ class Energy:
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))  # type: ignore
         else:
             import cloudpickle
 
@@ -211,10 +208,9 @@ class Energy:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
 
-        return self
+        return self  # type: ignore
 
 
-@partial(dataclass, frozen=False, eq=False)
 class EnergyFn(Energy):
     external_callback = False
 
@@ -233,30 +229,39 @@ class EnergyFn(Energy):
         self._nl = nl
 
     @property
-    def cell(self):
+    def cell(self) -> jax.Array | None:
+        if self._sp is None:
+            return None
+
         return self._sp.cell
 
-    @cell.setter
-    def cell(self, cell):
-        self._sp.cell = cell
+    # @cell.setter
+    # def cell(self, cell):
+    #     if self._sp is None:
+    #         return
+
+    #     self._sp.cell = cell
 
     @property
     def coordinates(self):
+        if self._sp is None:
+            return None
+
         return self._sp.coordinates
 
-    @coordinates.setter
-    def coordinates(self, coordinates):
-        self._sp.coordinates = coordinates
+    # @coordinates.setter
+    # def coordinates(self, coordinates):
+    #     self._sp.coordinates = coordinates
 
     @property
-    def sp(self) -> SystemParams:
+    def sp(self) -> SystemParams | None:
         return self._sp
 
     @sp.setter
     def sp(self, sp: SystemParams):
         self._sp = sp
 
-    @partial(jax.jit, static_argnames=["gpos", "vir"])
+    @partial(jit_decorator, static_argnames=["gpos", "vir"])
     def _compute_coor(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
         def _energy(sp, nl):
             return self.f(sp, nl, **self.static_kwargs, **self.kwargs)
@@ -301,11 +306,10 @@ class BiasError(Exception):
     pass
 
 
-@partial(dataclass, frozen=False, eq=False)
-class Bias(ABC):
+class Bias(ABC, MyPyTreeNode):
     """base class for biased MD runs."""
 
-    __: KW_ONLY
+    # __: KW_ONLY
 
     collective_variable: CollectiveVariable = field(pytree_node=True)
     start: int | None = field(pytree_node=False, default=0)
@@ -316,8 +320,8 @@ class Bias(ABC):
     slice_mean: bool = field(pytree_node=False, default=False)
 
     @classmethod
-    def create(clz, *args, **kwargs) -> Self:
-        return clz(*args, **kwargs)
+    def create(cls, *args, **kwargs) -> Self:
+        return cls(*args, **kwargs)
 
     def update_bias(
         self,
@@ -346,7 +350,7 @@ class Bias(ABC):
         return False, self.replace(start=self.start - 1)
 
     @partial(
-        jax.jit,
+        jit_decorator,
         static_argnames=[
             "gpos",
             "vir",
@@ -381,7 +385,7 @@ class Bias(ABC):
                 assert nl.batched
 
             f = padded_vmap(
-                Partial(
+                Partial_decorator(
                     self.compute_from_system_params,
                     gpos=gpos,
                     vir=vir,
@@ -403,8 +407,8 @@ class Bias(ABC):
             # for the virial computation, we need to work in relative coordinates
             # as such, all the positions are scaled when the unit cell is scaled
 
-            @jax.jit
-            def _compute(sp_rel: SystemParams, nl: NeighbourList):
+            @jit_decorator
+            def _compute(sp_rel: SystemParams, nl: NeighbourList | None):
                 if rel:
                     sp = sp_rel.to_absolute()
                 else:
@@ -466,25 +470,31 @@ class Bias(ABC):
             )
 
             if gpos:
+                assert de is not None
+                assert jac is not None
                 e_gpos = jnp.einsum("j,jkl->kl", de.cv, jac.coordinates)
 
             e_vir = None
             if vir and sp.cell is not None:
                 # transpose, see https://pubs.acs.org/doi/suppl/10.1021/acs.jctc.5b00748/suppl_file/ct5b00748_si_001.pdf s1.4 and S1.22
 
-                # e_vir = jnp.einsum("ji,jl->il", sp.cell, de.cell) + jnp.einsum(
-                #     "ni,nl->il", sp.coordinates, de.coordinates
-                # )
+                assert de is not None
+                assert jac is not None
+
                 e_vir = jnp.einsum("ij,k,klj->il", sp.cell, de.cv, jac.cell) + jnp.einsum(
                     "ni,j,jnl->il", sp.coordinates, de.cv, jac.coordinates
                 )
 
-        if return_cv:
-            return cvs, EnergyResult(ener, e_gpos, e_vir)
+        ener_out = EnergyResult(
+            energy=ener,
+            gpos=e_gpos,
+            vtens=e_vir,
+        )
 
-        return EnergyResult(ener, e_gpos, e_vir)
+        # if return_cv:
+        return cvs, ener_out
 
-    @partial(jax.jit, static_argnames=["diff", "chunk_size", "shmap", "shmap_kwargs"])
+    @partial(jit_decorator, static_argnames=["diff", "chunk_size", "shmap", "shmap_kwargs"])
     def compute_from_cv(
         self,
         cvs: CV,
@@ -492,7 +502,7 @@ class Bias(ABC):
         chunk_size=None,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
-    ) -> tuple[CV, CV | None]:
+    ) -> tuple[Array, CV | None]:
         """compute the energy and derivative.
 
         If map==False, the cvs are assumed to be already mapped
@@ -500,7 +510,7 @@ class Bias(ABC):
 
         if cvs.batched:
             f = padded_vmap(
-                Partial(
+                Partial_decorator(
                     self.compute_from_cv,
                     chunk_size=chunk_size,
                     diff=diff,
@@ -515,12 +525,15 @@ class Bias(ABC):
             return f(cvs)
 
         if diff:
-            return value_and_grad(self._compute)(cvs)
+            e, de = value_and_grad(self._compute)(cvs)
 
-        return self._compute(cvs), None
+        else:
+            e, de = self._compute(cvs), None
+
+        return e, de
 
     @abstractmethod
-    def _compute(self, cvs):
+    def _compute(self, cvs) -> jax.Array:
         """function that calculates the bias potential."""
         raise NotImplementedError
 
@@ -549,7 +562,7 @@ class Bias(ABC):
 
         if traj is None and dlo is not None:
             assert dlo_kwargs is not None
-            traj = dlo.data_loader(**dlo_kwargs).cv
+            traj = dlo.data_loader(**dlo_kwargs)[0].cv
 
         bias = self
 
@@ -570,7 +583,7 @@ class Bias(ABC):
             dpi=dpi,
             T=T,
             indicate_plots=None,
-            cv_titles=None,
+            cv_titles=True,
             **kwargs,
         )
 
@@ -592,33 +605,35 @@ class Bias(ABC):
         if not filename.parent.exists():
             filename.parent.mkdir(parents=True, exist_ok=True)
 
-        if cv_file is not None:
-            colvar_backup = self.collective_variable
-            self.collective_variable = cv_file
+        # if cv_file is not None:
+        #     colvar_backup = self.collective_variable
+        #     self.collective_variable = cv_file
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
-                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))
+                f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))  # type: ignore
         else:
             import cloudpickle
 
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
-        if cv_file is not None:
-            self.collective_variable = colvar_backup
+        # if cv_file is not None:
+        #     self.collective_variable = colvar_backup
 
     @staticmethod
     def load(filename) -> Bias:
         filename = Path(filename)
         if filename.suffix == ".json":
             with open(filename) as f:
-                self: Bias = jsonpickle.decode(f.read(), context=unpickler)
+                self = jsonpickle.decode(f.read(), context=unpickler)
         else:
             import cloudpickle
 
             with open(filename, "rb") as f:
-                self: Bias = cloudpickle.load(f)
+                self = cloudpickle.load(f)
+
+        assert isinstance(self, Bias)
 
         # substitute real CV
         if isinstance(self.collective_variable, Path):
@@ -665,7 +680,7 @@ class Bias(ABC):
         limits = []
 
         for i in range(colvar.n):
-            p_i = jax.vmap(jnp.sum, in_axes=i)(probs)
+            p_i = vmap_decorator(jnp.sum, in_axes=i)(probs)
 
             cum_p_i = jnp.cumsum(p_i)
 
@@ -701,14 +716,14 @@ class Bias(ABC):
         p_other = jnp.exp(u1)
         p_other /= jnp.sum(p_other)
 
-        @vmap
+        @vmap_decorator
         def f(x, y):
             return jnp.where(x == 0, 0, x * jnp.log(x / y))
 
-        kl = jnp.sum(f(p_self, p_other))
+        kl = jnp.sum(f(p_self, p_other))  # type: ignore
 
         if symmetric:
-            kl += jnp.sum(f(p_other, p_self))
+            kl += jnp.sum(f(p_other, p_self))  # type: ignore
             kl *= 0.5
 
         return kl
@@ -781,13 +796,13 @@ class Bias(ABC):
                     # print(f"{tup=}")
 
                     for i, d in enumerate(jnp.flip(jnp.array(tup))):
-                        # print(f"vmapping over {i=} {d=} {d-i=}")
+                        # print(f"vmap_decoratorping over {i=} {d=} {d-i=}")
 
                         n_before = len(tup) - i - 1
 
                         # print(f"{n_before=} {d=} {i=} {d-n_before}")
 
-                        _f = jax.vmap(_f, in_axes=int(d - n_before))
+                        _f = vmap_decorator(_f, in_axes=int(d - n_before))
 
                     x_sum = _f(x)
                     # result is in reverse order
@@ -848,7 +863,6 @@ class Bias(ABC):
         )
 
 
-@partial(dataclass, frozen=False, eq=False)
 class CompositeBias(Bias):
     """Class that combines several biases in one single bias."""
 
@@ -856,7 +870,7 @@ class CompositeBias(Bias):
     fun: Callable = field(pytree_node=False)
 
     @classmethod
-    def create(clz, biases: Iterable[Bias], fun=jnp.sum) -> Self:
+    def create(cls, biases: list[Bias], fun=jnp.sum) -> CompositeBias:
         collective_variable: CollectiveVariable = None  # type: ignore
 
         biases_new = []
@@ -907,7 +921,6 @@ def _constant(cvs: CV, val: float = 0.0):
     return jnp.array(val)
 
 
-@partial(dataclass, frozen=False, eq=False)
 class BiasModify(Bias):
     """Bias according to CV."""
 
@@ -917,7 +930,7 @@ class BiasModify(Bias):
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
 
     @classmethod
-    def create(clz, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}) -> Self:  # type: ignore[override]
+    def create(cls, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}) -> BiasModify:  # type: ignore[override]
         return BiasModify(
             collective_variable=bias.collective_variable,
             fun=fun,
@@ -949,7 +962,6 @@ class BiasModify(Bias):
         super().__setstate__(statedict)
 
 
-@partial(dataclass, frozen=False, eq=False)
 class BiasF(Bias):
     """Bias according to CV."""
 
@@ -959,12 +971,12 @@ class BiasF(Bias):
 
     @classmethod
     def create(
-        clz,
+        cls,
         cvs: CollectiveVariable,
         g: Callable = _constant,
         kwargs: dict = {},
         static_kwargs: dict = {},
-    ) -> Self:  # type: ignore[override]
+    ) -> BiasF:
         return BiasF(
             collective_variable=cvs,
             g=g,
@@ -979,11 +991,10 @@ class BiasF(Bias):
         return self.g(cvs, **self.kwargs, **self.static_kwargs)
 
 
-@partial(dataclass, frozen=False, eq=False)
 class NoneBias(BiasF):
     @classmethod
-    def create(clz, collective_variable: CollectiveVariable) -> Self:  # type: ignore[override]
-        return super().create(
-            cvs=collective_variable,
+    def create(cls, collective_variable: CollectiveVariable) -> NoneBias:
+        return NoneBias(
+            collective_variable=collective_variable,
             g=_zero_fun,
         )

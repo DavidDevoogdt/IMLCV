@@ -104,3 +104,8 @@ plot_data.png
 plot.png
 notebooks/*/*
 muller_brown_ref.png
+
+# pixi environments
+.pixi
+*.egg-info
+.pixi_cache/*
