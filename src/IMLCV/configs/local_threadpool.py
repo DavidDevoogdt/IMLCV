@@ -2,6 +2,7 @@ import math
 from pathlib import Path
 
 from parsl.executors import ThreadPoolExecutor, WorkQueueExecutor
+from parsl.executors.base import ParslExecutor
 from parsl.launchers import SingleNodeLauncher
 from parsl.providers import LocalProvider
 
@@ -31,7 +32,7 @@ which python """
     micromamba activate py312
     export XLA_FLAGS='--xla_force_host_platform_device_count={threads}'
     """,
-                cmd_timeout=1.0,
+                cmd_timeout=1,
                 launcher=SingleNodeLauncher(),
                 max_blocks=num,
             )
@@ -50,22 +51,24 @@ which python """
 
         return f"export JAX_NUM_CPU_DEVICES={threads}; ", exec
 
-    com_executors = [
+    com_executors: list[tuple[str, ParslExecutor]] = [
         _get_exec("training", num=1, threads=max_threads),
         _get_exec("default", num=1, threads=default_threads),
         # _get_exec("default", num=math.floor(max_threads / 2), threads=2),
         _get_exec("reference", num=math.floor(max_threads / ref_threads), threads=ref_threads),
-        [
+        (
             "",
             ThreadPoolExecutor(
                 label="threadpool",
                 max_threads=ref_threads,
                 working_dir=str(path_internal),
             ),
-        ],
+        ),
     ]
 
-    pre_commands, executors = list(zip(*com_executors))
+    pre_commands, executors = list(zip(*com_executors))  # type:ignore
+    pre_commands: list[str]
+    executors: list[ParslExecutor]
 
     resources = {
         "default": {"cores": default_threads},
@@ -74,6 +77,7 @@ which python """
         "threadpool": {"cores": default_threads},
     }
 
+    ref_comm: dict[str, str] = {}
     # resources
     # default on reference
-    return executors, [["training"], ["default"], ["reference"], ["threadpool"]], pre_commands, {}, resources
+    return executors, [["training"], ["default"], ["reference"], ["threadpool"]], pre_commands, ref_comm, resources

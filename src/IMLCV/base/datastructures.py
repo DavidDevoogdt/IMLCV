@@ -40,6 +40,7 @@ field = _field
 from typing import ParamSpec
 
 P = ParamSpec("P")
+P2 = ParamSpec("P2")
 T = TypeVar("T")
 
 
@@ -70,14 +71,15 @@ def vmap_decorator(
 #     return func2(1, **kwargs)  # E: Argument 1 has incompatible type "int"; expected "P.args"
 
 
+from jax.tree_util import Partial
+
+
 def Partial_decorator(
-    f: Callable[..., T],
+    f: Callable[P, T],
     *partial_args,
     **partial_kwargs,
 ):
-    # _f = Partial(f, *partial_args, **partial_kwargs)
+    def _f(*args, **kwargs) -> T:
+        return Partial(f, *partial_args, **partial_kwargs)(*args, **kwargs)
 
-    def __f(*args, **kwargs) -> T:
-        return f(*args, *partial_args, **kwargs, **partial_kwargs)
-
-    return __f
+    return _f

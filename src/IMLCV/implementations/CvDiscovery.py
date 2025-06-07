@@ -4,11 +4,11 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 from flax.training import train_state
-from jax import Array, jit, random, vmap_decorator
+from jax import Array, jit, random
 
-from IMLCV.base.CV import CV, CvFun, CvTrans, NeighbourList
+from IMLCV.base.CV import CV, CvTrans, NeighbourList
 from IMLCV.base.CVDiscovery import Transformer
-from IMLCV.base.datastructures import jit_decorator
+from IMLCV.base.datastructures import jit_decorator, vmap_decorator
 from IMLCV.base.rounds import DataLoaderOutput
 from IMLCV.base.UnitsConstants import nanosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize
@@ -104,7 +104,7 @@ class TranformerAutoEncoder(Transformer):
     def _fit(
         self,
         cv: list[CV],
-        cv_t: list[CV] | None,
+        cv_t: list[CV],
         w: list[jax.Array],
         dlo: DataLoaderOutput,
         nunits=250,
@@ -134,12 +134,15 @@ class TranformerAutoEncoder(Transformer):
         #     },
         # )
 
-        cv = CV.stack(*cv)
-        cv = un_atomize.compute_cv(cv, None)[0]
+        _cv = CV.stack(*cv)
+        _cv = un_atomize.compute_cv(_cv, None)[0]
+
+        _cv_t = CV.stack(*cv_t)
+        _cv_t = un_atomize.compute_cv(_cv_t, None)[0]
 
         rng = random.PRNGKey(0)
 
-        dim = cv.shape[1]
+        dim = _cv.shape[1]
 
         vae_args = {
             "latents": self.outdim,
@@ -173,7 +176,7 @@ class TranformerAutoEncoder(Transformer):
         @jit_decorator
         def train_step(state: optax.TraceState, batch, z_rng):
             def loss_fn(params):
-                recon_x, mean, logvar = VAE(**vae_args).apply(
+                recon_x, mean, logvar = VAE(**vae_args).apply(  # type:ignore
                     {"params": params},
                     batch,
                     z_rng,
@@ -185,9 +188,9 @@ class TranformerAutoEncoder(Transformer):
                 loss = bce_loss + kld_loss
                 return loss
 
-            grads = jax.grad(loss_fn)(state.params)
+            grads = jax.grad(loss_fn)(state.params)  # type:ignore
 
-            return state.apply_gradients(grads=grads)
+            return state.apply_gradients(grads=grads)  # type:ignore
 
         @jit_decorator
         def eval(params, x, z_rng):
@@ -216,7 +219,7 @@ class TranformerAutoEncoder(Transformer):
 
         rng, key, eval_rng = random.split(rng, 3)
 
-        x = cv.cv
+        x = _cv.cv
         x = random.permutation(key, x)
 
         split = x.shape[0] // 10
@@ -266,14 +269,14 @@ class TranformerAutoEncoder(Transformer):
                 {"params": state.params},
                 x.cv,
                 method=VAE.encode,
-            )
+            )  # type:ignore
             return x.replace(cv=encoded)
 
-        f_enc = CvTrans(trans=(CvFun(forward=forward),))
+        f_enc = CvTrans.from_cv_function(f=forward)
 
-        cv = f_enc.compute_cv(cv)[0].unstack()
+        cv = f_enc.compute_cv(_cv)[0].unstack()
         if cv_t is not None:
-            cv_t = f_enc.compute_cv(cv_t)[0].unstack()
+            cv_t = f_enc.compute_cv(_cv_t)[0].unstack()
 
         return cv, cv_t, un_atomize * f_enc, w
 
@@ -281,18 +284,18 @@ class TranformerAutoEncoder(Transformer):
 def _LDA_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha, outdim, solver):
     if solver == "eigen":
 
-        def f(cv, scalings):
+        def f1(cv, scalings):
             return cv @ scalings
 
-        f = partial(f, scalings=jnp.array(alpha.scalings_)[:, :outdim])
+        _f = partial(f1, scalings=jnp.array(alpha.scalings_)[:, :outdim])
 
     elif solver == "svd":
 
-        def f(cv, scalings, xbar):
+        def f2(cv, scalings, xbar):
             return (cv - xbar) @ scalings
 
-        f = partial(
-            f,
+        _f = partial(
+            f2,
             scalings=jnp.array(alpha.scalings_),
             xbar=jnp.array(alpha.xbar_),
         )
@@ -301,7 +304,7 @@ def _LDA_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha, out
         raise NotImplementedError
 
     return CV(
-        cv=f(cv.cv),
+        cv=_f(cv.cv),
         _stack_dims=cv._stack_dims,
         _combine_dims=cv._combine_dims,
         atomic=cv.atomic,
@@ -319,9 +322,9 @@ def _LDA_rescale(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, mean):
     )
 
 
-def _scale_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha, scale_factor):
+def _scale_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha: jax.Array, scale_factor: jax.Array):
     return CV(
-        (alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
+        cv=(alpha.T @ cv.cv - scale_factor[0, :]) / (scale_factor[1, :] - scale_factor[0, :]),
         _stack_dims=cv._stack_dims,
         _combine_dims=cv._combine_dims,
         atomic=cv.atomic,
@@ -359,7 +362,7 @@ class TransoformerLDA(Transformer):
     def _fit(
         self,
         cv_list: list[CV],
-        cv_t: list[CV] | None,
+        cv_t_list: list[CV],
         w: list[jax.Array],
         dlo: DataLoaderOutput,
         kernel=False,
@@ -381,8 +384,10 @@ class TransoformerLDA(Transformer):
             raise NotImplementedError("kernel not implemented for lda")
 
         cv = CV.stack(*cv_list)
-        # nl = NeighbourList.stack(*nl_list)
-        cv, _, _ = un_atomize.compute_cv(cv)
+        cv, _ = un_atomize.compute_cv(cv)
+
+        cv_t = CV.stack(*cv_t_list)
+        cv_t, _ = un_atomize.compute_cv(cv_t)
 
         if method == "sklearn":
             from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
@@ -393,13 +398,13 @@ class TransoformerLDA(Transformer):
 
             labels = jnp.hstack(labels)
 
-            alpha = LDA(n_components=self.outdim, solver=solver, shrinkage="auto").fit(
-                cv.cv,
+            alpha = LDA(n_components=self.outdim, solver=solver, shrinkage="auto").fit(  # type:ignore
+                cv.cv.__array__(),
                 labels,
             )
 
             lda_cv = CvTrans.from_cv_function(_LDA_trans, alpha=alpha, outdim=self.outdim, solver=solver)
-            cv, _, _ = lda_cv.compute_cv(cv)
+            cv, _ = lda_cv.compute_cv(cv)
 
             cvs = CV.unstack(cv)
 
@@ -411,12 +416,12 @@ class TransoformerLDA(Transformer):
             assert self.outdim == 1
 
             lda_rescale = CvTrans.from_cv_function(_LDA_rescale, mean=mean)
-            cv, _, _ = lda_rescale.compute_cv(cv)
+            cv, __ = lda_rescale.compute_cv(cv)
 
             full_trans = un_atomize * lda_cv * lda_rescale
 
         elif method == "pymanopt":
-            import pymanopt
+            import pymanopt  # type:ignore
 
             assert isinstance(cv_list, list)
             if optimizer is None:
@@ -441,8 +446,8 @@ class TransoformerLDA(Transformer):
 
             from sklearn.covariance import LedoitWolf
 
-            cov_w = LedoitWolf(assume_centered=True).fit(obersevations_within.cv).covariance_
-            cov_b = LedoitWolf(assume_centered=True).fit(observations_between.cv).covariance_
+            cov_w = LedoitWolf(assume_centered=True).fit(obersevations_within.cv.__array__()).covariance_
+            cov_b = LedoitWolf(assume_centered=True).fit(observations_between.cv.__array__()).covariance_
 
             manifold = pymanopt.manifolds.stiefel.Stiefel(n=mu.shape[0], p=self.outdim)
 
@@ -468,9 +473,8 @@ class TransoformerLDA(Transformer):
 
             _g = CvTrans.from_cv_function(_scale_trans, alpha=alpha, scale_factor=scale_factor)
 
-            cv = _g.compute_cv(cv)[0]
-            if cv_t is not None:
-                cv_t = _g.compute_cv(cv_t)[0]
+            cv, _ = _g.compute_cv(cv)
+            cv_t, _ = _g.compute_cv(cv_t)
 
             full_trans = un_atomize * _f * _g
 
@@ -500,7 +504,7 @@ class TransformerMAF(Transformer):
         min_s=0.1,
         max_s=1 - 1e-8,
         **fit_kwargs,
-    ) -> tuple[CV, CvTrans]:
+    ):
         print("getting koopman")
 
         if outdim is None:

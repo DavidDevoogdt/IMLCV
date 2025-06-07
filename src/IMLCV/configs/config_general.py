@@ -17,11 +17,11 @@ print(f"{ROOT_DIR=}")
 py_env = " which python"
 
 
-PARSL_DICT = {}
+PARSL_DICT: dict[str, tuple[list[str], str]] = {}
 
 RESOURCES_DICT = {}
 
-REFERENCE_COMMANDS = {
+REFERENCE_COMMANDS: dict[str, str] = {
     "cp2k": "mpirun cp2k_shell.psmp",
 }
 
@@ -77,7 +77,7 @@ def config(
     work_queue_local=True,
     max_threads_local=10,
 ):
-    if parsl.DataFlowKernelLoader._dfk is not None:
+    if parsl.DataFlowKernelLoader._dfk is not None:  # type: ignore
         print("parsl already configured, using previous setup")
         return
 
@@ -124,11 +124,12 @@ def config(
     global PARSL_DICT
 
     for k, l, p in zip(["default", "training", "reference", "threadpool"], labels, precommands):
-        PARSL_DICT[k] = [l, p]
+        PARSL_DICT[k] = (l, p)
 
     global REFERENCE_COMMANDS
 
-    REFERENCE_COMMANDS.update(ref_comm)
+    if ref_comm is not None:
+        REFERENCE_COMMANDS.update(ref_comm)
 
     global RESOURCES_DICT
 

@@ -27,7 +27,7 @@ class YaffCell(MyPyTreeNode):
     @property
     def volume(self):
         if self.nvec == 0:
-            return jnp.nan
+            return jnp.array(jnp.nan)
 
         vol_unsigned = jnp.linalg.det(self.rvecs)
 

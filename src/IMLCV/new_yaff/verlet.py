@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 from dataclasses import KW_ONLY
+from typing import Self
 
 import jax
 import jax.numpy as jnp
@@ -92,6 +93,8 @@ class ConsErrTracker(MyPyTreeNode):
 class VerletHook(Hook):
     _: KW_ONLY
 
+    temp: float
+
     """Specialized Verlet hook.
 
     This is mainly used for the implementation of thermostats and barostats.
@@ -99,22 +102,37 @@ class VerletHook(Hook):
 
     econs_correction: jax.Array = jnp.array([0.0])
 
-    def __call__(self: VerletHook, iterative: VerletIntegrator):
+    def __call__(self: Self, iterative: VerletIntegrator):
         pass
 
-    def init(self: VerletHook, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
+    def init(self: Self, iterative: VerletIntegrator) -> tuple[Self, VerletIntegrator]:
         raise NotImplementedError
 
-    def pre(self: VerletHook, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
+    def pre(
+        self: Self, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    ) -> tuple[Self, VerletIntegrator]:
         raise NotImplementedError
 
-    def post(self: VerletHook, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
+    def post(
+        self: Self, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    ) -> tuple[Self, VerletIntegrator]:
         raise NotImplementedError
+
+
+class BarostatHook(VerletHook):
+    name = "TBCombination"
+
+    _: KW_ONLY
+
+    press: jax.Array
+    baro_ndof: int | None = None
+    dim: int | None = None
 
 
 # @partial(dataclass, frozen=False)
 class NVE(VerletHook):
     _: KW_ONLY
+    temp: float = 0.0
 
     """Specialized Verlet hook.
 
@@ -129,10 +147,14 @@ class NVE(VerletHook):
     def init(self: VerletHook, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
         return self, iterative
 
-    def pre(self: VerletHook, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
+    def pre(
+        self: VerletHook, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    ) -> tuple[VerletHook, VerletIntegrator]:
         return self, iterative
 
-    def post(self: VerletHook, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
+    def post(
+        self: VerletHook, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    ) -> tuple[VerletHook, VerletIntegrator]:
         return self, iterative
 
 
@@ -208,7 +230,7 @@ class VerletIntegrator(MyPyTreeNode):
         other_hooks: list[Hook],
         timestep,
         thermostat: VerletHook | None = None,
-        barostat: VerletHook | None = None,
+        barostat: BarostatHook | None = None,
         vel0=None,
         temp0=300,
         scalevel0=True,

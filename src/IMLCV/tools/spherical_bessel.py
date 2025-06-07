@@ -11,9 +11,6 @@ from jax._src.numpy.util import _where, check_arraylike, promote_dtypes_inexact
 from jax._src.typing import Array, ArrayLike
 from jax.scipy.special import gamma
 
-# config.update("jax_enable_x64", True)
-
-
 _lax_const = lax._const
 
 

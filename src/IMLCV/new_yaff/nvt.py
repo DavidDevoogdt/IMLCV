@@ -44,7 +44,6 @@ class AndersenThermostat(VerletHook):
 
     _: KW_ONLY
 
-    temp: float
     select: jax.Array | None = None
     annealing: float = 1.0
 
@@ -124,7 +123,6 @@ class BerendsenThermostat(VerletHook):
 
     _: KW_ONLY
 
-    temp: float
     timecon: float = 100 * femtosecond
 
     """
@@ -150,17 +148,18 @@ class BerendsenThermostat(VerletHook):
     """
 
     def init(self, iterative: VerletIntegrator):
-        if not self.restart:
-            # It is mandatory to zero the external momenta.
-            iterative.pos, iterative.vel = clean_momenta(
-                iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
-            )
+        # It is mandatory to zero the external momenta.
+        iterative.pos, iterative.vel = clean_momenta(
+            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+        )
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
 
         return self, iterative
 
     def pre(self, iterative: VerletIntegrator, G1_add=None):
+        assert iterative.ndof is not None
+
         ekin = iterative.ekin
         temp_inst = 2.0 * iterative.ekin / (boltzmann * iterative.ndof)
         c = jnp.sqrt(1 + iterative.timestep / self.timecon * (self.temp / temp_inst - 1))
@@ -182,7 +181,6 @@ class LangevinThermostat(VerletHook):
 
     _: KW_ONLY
 
-    temp: float
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
     timecon: float = 100 * femtosecond
 
@@ -231,7 +229,6 @@ class CSVRThermostat(VerletHook):
 
     _: KW_ONLY
 
-    temp: float
     timecon: float = 100 * femtosecond
     kin: float | None = None
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
@@ -277,8 +274,10 @@ class CSVRThermostat(VerletHook):
 
         self.key, key0, key1 = jax.random.split(self.key, 3)
 
+        assert iterative.ndof is not None
+
         R = jax.random.normal(key0, ())
-        S = (jax.random.normal(key1, iterative.ndof - 1) ** 2).sum()
+        S = (jax.random.normal(key1, (iterative.ndof - 1,)) ** 2).sum()
         iterative.ekin = iterative._compute_ekin()
         fact = (1 - c) * self.kin / iterative.ndof / iterative.ekin
         alpha = jnp.sign(R + jnp.sqrt(c / fact)) * jnp.sqrt(c + (S + R**2) * fact + 2 * R * jnp.sqrt(c * fact))
@@ -301,7 +300,6 @@ class GLEThermostat(VerletHook):
 
     _: KW_ONLY
 
-    temp: float
     timecon: float = 100 * femtosecond
     kin: float | None = None
     a_p: jax.Array
@@ -309,8 +307,8 @@ class GLEThermostat(VerletHook):
     ns: int | None = None
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-    t: float | None = None
-    S: float | None = None
+    t: jax.Array | None = None
+    S: jax.Array | None = None
     n_atoms: int | None = None
 
     """
@@ -350,7 +348,8 @@ class GLEThermostat(VerletHook):
             iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
         )
         # Initialize the additional momenta
-        self.s = 0.5 * boltzmann * self.temp * jnp.random.normal(size=(self.ns, iterative.pos.size))
+        self.key, key0 = jax.random.split(self.key, 2)
+        self.s = 0.5 * boltzmann * self.temp * jax.random.normal(key0, (self.ns, iterative.pos.size))
         # Determine the update matrices
         eigval, eigvec = jnp.linalg.eig(-self.a_p * iterative.timestep / 2)
         self.t = jnp.dot(eigvec * jnp.exp(eigval), jnp.linalg.inv(eigvec)).real
@@ -380,6 +379,11 @@ class GLEThermostat(VerletHook):
 
         self.key, key0 = jax.random.split(self.key, 2)
 
+        assert self.t is not None
+        assert self.S is not None
+        assert self.ns is not None
+        assert self.n_atoms is not None
+
         s_extended_new = jnp.dot(self.t, s_extended_old) + jnp.dot(
             self.S, jax.random.normal(key0, shape=(self.ns + 1, 3 * self.n_atoms))
         )
@@ -402,9 +406,9 @@ class NHChain(object):
     _: KW_ONLY
 
     length: int = 3
-    timestep: float
-    temp: float
-    timecon: float = 100 * femtosecond
+    timestep: jax.Array
+    temp: jax.Array
+    timecon: jax.Array = jnp.array([100 * femtosecond])
 
     restart_pos: bool = False
     restart_vel: bool = False
@@ -429,11 +433,11 @@ class NHChain(object):
 
         # allocate degrees of freedom
         if self.restart_pos:
-            self.pos = self.pos0.copy()
+            self.pos = self.pos0
         else:
             self.pos = jnp.zeros(self.length)
         if self.restart_vel:
-            self.vel = self.vel0.copy()
+            self.vel = self.vel0
         else:
             self.vel = jnp.zeros(self.length)
 
@@ -453,10 +457,15 @@ class NHChain(object):
         key, key0 = jax.random.split(self.key)
         self.key = key
 
-        return jax.random.normal(key0, shape=shape) * jnp.sqrt(self.masses * boltzmann * self.temp) / self.masses
+        assert self.masses is not None
+
+        return jax.random.normal(key0, shape=(shape,)) * jnp.sqrt(self.masses * boltzmann * self.temp) / self.masses
 
     def __call__(self, ekin, vel, G1_add):
         def do_bead(k, ekin, self: NHChain):
+            assert self.masses is not None
+            assert self.vel is not None
+
             # Compute g
             if k == 0:
                 # coupling with atoms (and barostat)
@@ -488,6 +497,8 @@ class NHChain(object):
         for k in range(self.length - 1, -1, -1):
             self = do_bead(k, ekin, self)
 
+        assert self.vel is not None
+
         # iL xi (all) h/2
         self.pos += self.vel * self.timestep / 2
         # iL Cv (all) h/2
@@ -498,11 +509,15 @@ class NHChain(object):
         # Loop over chain in forward order
         for k in range(0, self.length):
             self = do_bead(k, ekin, self)
-        return vel, ekin
+        return vel, ekin, self
 
     def get_econs_correction(self):
         kt = boltzmann * self.temp
         # correction due to the thermostat
+
+        assert self.vel is not None
+        assert self.pos is not None
+
         return 0.5 * jnp.sum(self.vel**2 * self.masses) + kt * (self.ndof * self.pos[0] + jnp.sum(self.pos[1:]))
 
 
@@ -514,7 +529,6 @@ class NHCThermostat(VerletHook):
 
     _: KW_ONLY
 
-    temp: float
     chain: NHChain
 
     """
@@ -571,14 +585,14 @@ class NHCThermostat(VerletHook):
         return self, iterative
 
     def pre(self, iterative: VerletIntegrator, G1_add=None):
-        vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
+        vel_new, iterative.ekin, self.chain = self.chain(iterative.ekin, iterative.vel, G1_add)
         # iterative.vel[:] = vel_new
         iterative.vel = vel_new
 
         return self, iterative
 
     def post(self, iterative: VerletIntegrator, G1_add=None):
-        vel_new, iterative.ekin = self.chain(iterative.ekin, iterative.vel, G1_add)
+        vel_new, iterative.ekin, self.chain = self.chain(iterative.ekin, iterative.vel, G1_add)
         # iterative.vel[:] = vel_new
         iterative.vel = vel_new
         self.econs_correction = self.chain.get_econs_correction()
@@ -587,9 +601,7 @@ class NHCThermostat(VerletHook):
 
 
 class NHCAttributeStateItem(StateItem):
-    def __init__(self, attr):
-        StateItem.__init__(self, "thermo_" + attr)
-        self.attr = attr
+    attr: str
 
     def get_value(self, iterative: VerletIntegrator):
         chain = None
@@ -609,6 +621,3 @@ class NHCAttributeStateItem(StateItem):
             raise TypeError("Iterative does not contain a NHCThermostat hook.")
 
         return getattr(chain, self.attr)
-
-    def copy(self):
-        return self.__class__(self.attr)

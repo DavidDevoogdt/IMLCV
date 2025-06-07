@@ -84,7 +84,7 @@ class ShmapKwargs(MyPyTreeNode):
 
 
 @partial(
-    jit,
+    jit_decorator,
     static_argnames=(
         "p",
         "axis",
@@ -128,7 +128,7 @@ def _n_pad(
 
 
 @partial(
-    jit,
+    jit_decorator,
     static_argnames=(
         "axis",
         "reshape",
@@ -488,7 +488,6 @@ def padded_vmap(
     )
 
     return f
-
 
 
 T = TypeVar("T")

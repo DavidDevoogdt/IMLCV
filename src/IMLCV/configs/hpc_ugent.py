@@ -13,7 +13,6 @@ from parsl.providers import LocalProvider, SlurmProvider
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -22,11 +21,11 @@ def get_slurm_provider(
     label,
     path_internal: Path | str,
     cpu_cluster,
+    parsl_tasks_per_block: int,
     gpu_cluster=None,
     account=None,
     # channel=LocalChannel(),
     gpu=False,
-    parsl_tasks_per_block=None,
     threads_per_core: int | None = None,
     use_open_mp=False,
     parsl_cores=False,
@@ -143,25 +142,27 @@ which python
             )
 
         vsc_kwargs["scheduler_options"] = sheduler_options
-        provider = SlurmProvider(**common_kwargs, **vsc_kwargs)
+        _provider = SlurmProvider(**common_kwargs, **vsc_kwargs)
     elif provider == "local":
-        provider = LocalProvider(
+        _provider = LocalProvider(
             **common_kwargs,
             cmd_timeout=1,
         )
+    else:
+        raise ValueError
 
     # let slurm use the cores as threads
     # pre_command = f"srun  -N 1 -n 1 -c {threads_per_core} --cpu-bind=no --export=ALL"
     pre_command = f"export JAX_NUM_CPU_DEVICES={threads_per_core}; "
 
-    ref_comm = {
+    ref_comm: dict[str, str] = {
         "cp2k": "export OMP_NUM_THREADS=1; mpirun -report-bindings  -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi cp2k_shell.psmp ",
     }
 
     print(f"{executor=}")
 
-    if hasattr(provider, "walltime"):
-        walltime_hhmmss = provider.walltime.split(":")
+    if hasattr(_provider, "walltime"):
+        walltime_hhmmss = _provider.walltime.split(":")  # type:ignore
         assert len(walltime_hhmmss) == 3
         wall_time_s = 0.0
         wall_time_s += 3600 * float(walltime_hhmmss[0])
@@ -183,10 +184,10 @@ which python
         worker_options.append(f"--timeout={wq_timeout}")
         worker_options.append("--parent-death")
 
-        executor: ParslExecutor = WorkQueueExecutor(
+        _executor: ParslExecutor = WorkQueueExecutor(
             label=label,
             working_dir=str(Path(path_internal) / label),
-            provider=provider,
+            provider=_provider,
             shared_fs=True,
             autolabel=False,
             autocategory=False,
@@ -199,27 +200,27 @@ which python
         )
 
     elif executor == "task_vine":
-        executor: ParslExecutor = TaskVineExecutor(
+        _executor: ParslExecutor = TaskVineExecutor(
             label=label,
             factory_config=TaskVineFactoryConfig(
                 cores=parsl_tasks_per_block,
                 gpus=0 if not gpu else 1,
                 scratch_dir=str(Path(path_internal) / label),
             ),
-            provider=provider,
+            provider=_provider,
         )
 
     elif executor == "htex":
-        executor: ParslExecutor = HighThroughputExecutor(
+        _executor: ParslExecutor = HighThroughputExecutor(
             label=label,
             working_dir=str(Path(path_internal) / label),
             cores_per_worker=1,
-            provider=provider,
+            provider=provider,  # type:ignore
             drain_period=int(wall_time_s),
         )
     else:
         raise ValueError(f"unknown executor {executor=}")
-    return executor, pre_command, ref_comm
+    return _executor, pre_command, ref_comm
 
 
 def config(
@@ -307,181 +308,168 @@ def config(
         gpu_cluster = [gpu_cluster]
 
     if bootstrap:
-        assert not isinstance(cpu_cluster, list), "bootstrap does not support multiple clusters"
+        raise NotImplementedError
 
-        executor, pre_command, _ = get_slurm_provider(
-            **get_kwargs(cpu_cluster),
-            label="default",
-            init_blocks=1,
-            parsl_cores=True,
-            mem=10,
-            wall_time="72:00:00",
+    default_labels: list[str] = []
+    training_labels: list[str] = []
+    reference_labels: list[str] = []
+    threadpool_labels: list[str] = []
+
+    default_pre_commands: list[str] = []
+    training_pre_commands: list[str] = []
+    reference_pre_commands: list[str] = []
+    threadpool_pre_commands: list[str] = []
+
+    resources = {
+        "default": {"cores": default_threads},
+        "training": {"cores": training_cores},
+        "reference": {"cores": singlepoint_nodes},
+        "threadpool": {"cores": default_threads},
+    }
+
+    reference_command = None
+
+    execs: list[ParslExecutor] = []
+
+    if default_on_threads:
+        label = "default"
+
+        default = ThreadPoolExecutor(
+            label=label,
+            max_threads=default_threads,
+            working_dir=str(Path(path_internal) / label),  # type:ignore
         )
 
-        execs = [executor]
-        pre_commands = [pre_command]
+        execs.append(default)
+        default_labels.append(label)
+        default_pre_commands.append("")
+
+    if not isinstance(cpu_cluster, list):
+        cpu_cluster = [cpu_cluster]  # type:ignore
+
+    if training_on_threads:
+        label = "training"
+
+        training = ThreadPoolExecutor(
+            label=label,
+            max_threads=training_cores,
+            working_dir=str(Path(path_internal) / label),  # type:ignore
+        )
+
+        execs.append(training)
+        training_labels.append(label)
+        training_pre_commands.append("")
 
     else:
-        default_labels = []
-        training_labels = []
-        reference_labels = []
-        threadpool_labels = []
+        if gpu_cluster is not None:
+            for gpu in gpu_cluster:
+                kw = get_kwargs(gpu_cluster=gpu)
 
-        default_pre_commands = []
-        training_pre_commands = []
-        reference_pre_commands = []
-        threadpool_pre_commands = []
+                label = f"training_{gpu}"
 
-        resources = {
-            "default": {"cores": default_threads},
-            "training": {"cores": training_cores},
-            "reference": {"cores": singlepoint_nodes},
-            "threadpool": {"cores": default_threads},
-        }
-
-        reference_command = None
-
-        execs = []
-
-        if default_on_threads:
-            label = "default"
-
-            default = ThreadPoolExecutor(
-                label=label,
-                max_threads=default_threads,
-                working_dir=str(Path(path_internal) / label),
-            )
-
-            execs.append(default)
-            default_labels.append(label)
-            default_pre_commands.append("")
-
-        if not isinstance(cpu_cluster, list):
-            cpu_cluster = [cpu_cluster]
-
-        if training_on_threads:
-            label = "training"
-
-            training = ThreadPoolExecutor(
-                label=label,
-                max_threads=training_cores,
-                working_dir=str(Path(path_internal) / label),
-            )
-
-            execs.append(training)
-            training_labels.append(label)
-            training_pre_commands.append("")
-
+                gpu_part, pre_command, _ = get_slurm_provider(
+                    gpu=True,
+                    label=label,
+                    init_blocks=0,
+                    min_blocks=0,
+                    max_blocks=4,
+                    parallelism=1,
+                    parsl_tasks_per_block=1,
+                    threads_per_core=training_cores,
+                    parsl_cores=False,
+                    wall_time=walltime_training,
+                    **kw,
+                )
+                execs.append(gpu_part)
+                training_pre_commands.append(pre_command)
+                training_labels.append(label)
         else:
-            if gpu_cluster is not None:
-                for gpu in gpu_cluster:
-                    kw = get_kwargs(gpu_cluster=gpu)
-
-                    label = f"training_{gpu}"
-
-                    gpu_part, pre_command, _ = get_slurm_provider(
-                        gpu=True,
-                        label=label,
-                        init_blocks=0,
-                        min_blocks=0,
-                        max_blocks=4,
-                        parallelism=1,
-                        parsl_tasks_per_block=1,
-                        threads_per_core=training_cores,
-                        parsl_cores=False,
-                        wall_time=walltime_training,
-                        **kw,
-                    )
-                    execs.append(gpu_part)
-                    training_pre_commands.append(pre_command)
-                    training_labels.append(label)
-            else:
-                for cpu in cpu_cluster:
-                    kw = get_kwargs(cpu_cluster=cpu)
-
-                    label = f"training_{cpu}"
-
-                    cpu_part, pre_command, _ = get_slurm_provider(
-                        label=label,
-                        init_blocks=0,
-                        min_blocks=0,
-                        max_blocks=16,
-                        parallelism=1,
-                        parsl_tasks_per_block=1,
-                        threads_per_core=training_cores,
-                        parsl_cores=False,
-                        wall_time=walltime_training,
-                        **kw,
-                    )
-                    execs.append(cpu_part)
-                    training_labels.append(label)
-                    training_pre_commands.append(pre_command)
-
-        if cpu_cluster is not None:
-            for cpu in cpu_cluster:
+            for cpu in cpu_cluster:  # type:ignore
                 kw = get_kwargs(cpu_cluster=cpu)
 
-                label = f"reference_{cpu}"
+                label = f"training_{cpu}"
 
-                reference, pre_command, ref_com = get_slurm_provider(
+                cpu_part, pre_command, _ = get_slurm_provider(
                     label=label,
-                    memory_per_core=memory_per_core,
-                    mem=min_memery_per_node,
                     init_blocks=0,
+                    min_blocks=0,
+                    max_blocks=16,
+                    parallelism=1,
+                    parsl_tasks_per_block=1,
+                    threads_per_core=training_cores,
+                    parsl_cores=False,
+                    wall_time=walltime_training,
+                    **kw,
+                )
+                execs.append(cpu_part)
+                training_labels.append(label)
+                training_pre_commands.append(pre_command)
+
+    if cpu_cluster is not None:
+        for cpu in cpu_cluster:
+            kw = get_kwargs(cpu_cluster=cpu)
+
+            label = f"reference_{cpu}"
+
+            reference, pre_command, ref_com = get_slurm_provider(
+                label=label,
+                memory_per_core=memory_per_core,
+                mem=min_memery_per_node,
+                init_blocks=0,
+                min_blocks=0,
+                max_blocks=2048,
+                parallelism=1,
+                parsl_tasks_per_block=1,
+                threads_per_core=singlepoint_nodes,
+                parsl_cores=False,
+                wall_time=walltime_ref,
+                load_cp2k=load_cp2k,
+                **kw,
+            )
+
+            execs.append(reference)
+            reference_labels.append(label)
+            reference_pre_commands.append(pre_command)
+
+            if reference_command is None:
+                reference_command = ref_com
+
+            if not default_on_threads:
+                # general tasks
+                label = f"default_{cpu}"
+
+                default, pre_command, _ = get_slurm_provider(
+                    label=label,
+                    init_blocks=1,
                     min_blocks=0,
                     max_blocks=2048,
                     parallelism=1,
                     parsl_tasks_per_block=1,
-                    threads_per_core=singlepoint_nodes,
+                    threads_per_core=default_threads,
                     parsl_cores=False,
                     wall_time=walltime_ref,
-                    load_cp2k=load_cp2k,
                     **kw,
                 )
 
-                execs.append(reference)
-                reference_labels.append(label)
-                reference_pre_commands.append(pre_command)
+                execs.append(default)
+                default_labels.append(label)
+                default_pre_commands.append(pre_command)
 
-                if reference_command is None:
-                    reference_command = ref_com
+    label = "threadpool"
 
-                if not default_on_threads:
-                    # general tasks
-                    label = f"default_{cpu}"
+    tp = ThreadPoolExecutor(
+        label=label,
+        max_threads=default_threads,
+        working_dir=str(Path(path_internal) / label),  # type:ignore
+    )
 
-                    default, pre_command, _ = get_slurm_provider(
-                        label=label,
-                        init_blocks=1,
-                        min_blocks=0,
-                        max_blocks=2048,
-                        parallelism=1,
-                        parsl_tasks_per_block=1,
-                        threads_per_core=default_threads,
-                        parsl_cores=False,
-                        wall_time=walltime_ref,
-                        **kw,
-                    )
+    execs.append(tp)
+    threadpool_labels.append(label)
+    threadpool_pre_commands.append("")
 
-                    execs.append(default)
-                    default_labels.append(label)
-                    default_pre_commands.append(pre_command)
+    pre_commands = [default_pre_commands, training_pre_commands, reference_pre_commands, threadpool_pre_commands]
 
-        label = "threadpool"
-
-        tp = ThreadPoolExecutor(
-            label=label,
-            max_threads=default_threads,
-            working_dir=str(Path(path_internal) / label),
-        )
-
-        execs.append(tp)
-        threadpool_labels.append(label)
-        threadpool_pre_commands.append("")
-
-        pre_commands = [default_pre_commands, training_pre_commands, reference_pre_commands, threadpool_pre_commands]
-
-    pre_commands_filtered = []
+    pre_commands_filtered: list[str] = []
 
     for pc in pre_commands:
         pre_commands_filtered.append(pc[0])
