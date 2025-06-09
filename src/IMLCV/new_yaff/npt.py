@@ -55,8 +55,8 @@ class TBCombination(BarostatHook):
 
     _: KW_ONLY
 
-    temp: jax.Array = jnp.array(jnp.nan)  # not important
-    press: jax.Array = jnp.array(jnp.nan)
+    temp: jax.Array | float = jnp.nan  # not important
+    press: jax.Array | float = jnp.nan
 
     thermostat: VerletHook
     barostat: BarostatHook
@@ -238,7 +238,7 @@ class McDonaldBarostat(BarostatHook):
 
     _: KW_ONLY
 
-    amp: jax.Array = jnp.array(1e-3)
+    amp: jax.Array | float = 1e-3
     dim: int = 3
 
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
@@ -324,12 +324,12 @@ class BerendsenBarostat(BarostatHook):
 
     _: KW_ONLY
 
-    timecon_press: jax.Array = jnp.array(1000 * femtosecond)
-    beta: jax.Array = jnp.array(4.57e-5 / bar)
+    timecon_press: jax.Array | float = 1000 * femtosecond
+    beta: jax.Array | float = 4.57e-5 / bar
 
     anisotropic: bool = True
     vol_constraint = False
-    mass_press: jax.Array | None = None
+    mass_press: jax.Array | float | None = None
 
     cell: jax.Array | None = None
 
@@ -371,7 +371,7 @@ class BerendsenBarostat(BarostatHook):
     def init(self, iterative: VerletIntegrator):
         assert self.timecon_press is not None
         assert self.beta is not None
-        self.mass_press = jnp.array(3.0 * self.timecon_press / self.beta)
+        self.mass_press = 3.0 * self.timecon_press / self.beta
         self.dim = iterative.ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
 
@@ -445,7 +445,7 @@ class LangevinBarostat(BarostatHook):
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
     cell: jax.Array | None = None
-    timecon: jax.Array = jnp.array([1000 * femtosecond])
+    timecon: jax.Array | float = 1000 * femtosecond
     anisotropic: bool = field(pytree_node=False, default=True)
     vol_constraint: bool = field(pytree_node=False, default=False)
 
@@ -570,6 +570,7 @@ class LangevinBarostat(BarostatHook):
             # definition of P_intV and G
             ptens_vol = jnp.dot(iterative.vel.T * iterative.masses, iterative.vel) - iterative.vtens
             ptens_vol = 0.5 * (ptens_vol.T + ptens_vol)
+            assert iterative.ndof is not None
             G = (
                 ptens_vol
                 + (2.0 * iterative.ekin / iterative.ndof - self.press * iterative.ff.system.cell.volume) * jnp.eye(3)
@@ -657,6 +658,7 @@ class LangevinBarostat(BarostatHook):
         self.key = key
 
         assert self.mass_press is not None
+        assert self.timestep_press is not None
 
         rand = jax.random.normal(key0, shape=shape) * jnp.sqrt(
             2 * self.mass_press * boltzmann * self.temp / (self.timestep_press * self.timecon)
@@ -683,7 +685,7 @@ class MTKBarostat(BarostatHook):
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
     cell: jax.Array | None = None
-    timecon: jax.Array = jnp.array(1000 * femtosecond)
+    timecon: jax.Array | float = 1000 * femtosecond
     anisotropic: bool = True
     vol_constraint: bool = False
 
@@ -691,7 +693,7 @@ class MTKBarostat(BarostatHook):
 
     baro_thermo: NHCThermostat | None = None
 
-    timecon_press: jax.Array = jnp.array(1000 * femtosecond)
+    timecon_press: jax.Array | float = 1000 * femtosecond
 
     """
     This hook implements the Martyna-Tobias-Klein barostat. The equations
@@ -842,6 +844,7 @@ class MTKBarostat(BarostatHook):
             # definition of P_intV and G
             ptens_vol = jnp.dot(iterative.vel.T * iterative.masses, iterative.vel) - iterative.vtens
             ptens_vol = 0.5 * (ptens_vol.T + ptens_vol)
+            assert iterative.ndof is not None
             G = (
                 ptens_vol
                 + (2.0 * iterative.ekin / iterative.ndof - self.press * iterative.ff.system.cell.volume) * jnp.eye(3)
@@ -937,7 +940,7 @@ class PRBarostat(BarostatHook):
 
     _: KW_ONLY
 
-    timecon_press: jax.Array = jnp.array(1000 * femtosecond)
+    timecon_press: jax.Array | float = 1000 * femtosecond
 
     anisotropic: bool = True
     vol_constraint = False
@@ -1204,11 +1207,11 @@ class TadmorBarostat(BarostatHook):
 
     _: KW_ONLY
 
-    timecon_press: jax.Array = jnp.array(1000 * femtosecond)
+    timecon_press: jax.Array | float = 1000 * femtosecond
 
     anisotropic: bool = True
     vol_constraint = False
-    mass_press: jax.Array | None = None
+    mass_press: jax.Array | float | None = None
 
     baro_thermo: NHCThermostat | None = None
 
@@ -1382,6 +1385,7 @@ class TadmorBarostat(BarostatHook):
             # definition of \tilde{sigma} V
             sigmaS_vol = self.vol0 * jnp.dot(jnp.dot(iterative.rvecs, self.Strans), iterative.rvecs.T)
             # definition of G
+            assert iterative.ndof is not None
             G = (
                 ptens_vol - sigmaS_vol + dptens_vol + 2.0 * iterative.ekin / iterative.ndof * jnp.eye(3)
             ) / self.mass_press

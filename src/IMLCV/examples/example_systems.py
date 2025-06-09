@@ -1,4 +1,3 @@
-
 import ase.io
 import ase.units
 import jax
@@ -41,7 +40,7 @@ DATA_ROOT = ROOT_DIR / "data"
 #     return simulation, sp
 
 
-def alanine_dipeptide_openmm(cv="backbone_dihedrals"):
+def alanine_dipeptide_openmm(cv: str | None = "backbone_dihedrals"):
     energy = OpenMmEnergy(
         pdb=DATA_ROOT / "ala" / "alanine-dipeptide.pdb",
         forcefield_name="amber14-all.xml",

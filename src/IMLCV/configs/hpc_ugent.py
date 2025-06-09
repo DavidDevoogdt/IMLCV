@@ -49,10 +49,11 @@ def get_slurm_provider(
         if env == "hortense":
             print("setting python env for hortense")
             py_env = """
-export MAMBA_EXE=/dodrio/scratch/projects/2024_026/IMLCV/bin/micromamba
-export MAMBA_ROOT_PREFIX=/dodrio/scratch/projects/2024_026/IMLCV/micromamba
-eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312
+echo "init pixi"
+cd /dodrio/scratch/projects/2024_026/IMLCV
+pwd
+eval "$(pixi shell-hook)"
+echo "post init pixi"
 which python
             """
         elif env == "stevin":

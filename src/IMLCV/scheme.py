@@ -33,7 +33,7 @@ class Scheme:
     def from_refs(
         mde: MDEngine,
         folder: Path,
-        refs: list[SystemParams] | None = None,
+        refs: SystemParams,
         steps=2e3,
     ) -> Scheme:
         bias = mde.bias

@@ -22,7 +22,14 @@ from IMLCV.base.CV import (
     padded_shard_map,
     padded_vmap,
 )
-from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, field, jit_decorator, vmap_decorator
+from IMLCV.base.datastructures import (
+    MyPyTreeNode,
+    Partial_decorator,
+    field,
+    jit_decorator,
+    vmap_decorator,
+    # my_dataclass,
+)
 from IMLCV.base.UnitsConstants import boltzmann, kelvin, kjmol
 
 if TYPE_CHECKING:
@@ -359,7 +366,7 @@ class Bias(ABC, MyPyTreeNode):
             "use_jac",
             "push_jac",
             "rel",
-            "shmap_kwargs",
+            # "shmap_kwargs",
             "return_cv",
         ],
     )
@@ -537,9 +544,9 @@ class Bias(ABC, MyPyTreeNode):
         """function that calculates the bias potential."""
         raise NotImplementedError
 
-    @staticmethod
-    def static_plot(bias, **kwargs):
-        bias.plot(**kwargs)
+    # @staticmethod
+    # def static_plot(bias, **kwargs):
+    #     bias.plot(**kwargs)
 
     def plot(
         self,
@@ -863,6 +870,7 @@ class Bias(ABC, MyPyTreeNode):
         )
 
 
+# @my_dataclass
 class CompositeBias(Bias):
     """Class that combines several biases in one single bias."""
 

@@ -66,10 +66,10 @@ class ConsErrTracker(MyPyTreeNode):
     """
 
     counter: int = 0
-    ekin_m: jax.Array = jnp.array([0.0])
-    ekin_s: jax.Array = jnp.array([0.0])
-    econs_m: jax.Array = jnp.array([0.0])
-    econs_s: jax.Array = jnp.array([0.0])
+    ekin_m: jax.Array | float = 0.0
+    ekin_s: jax.Array | float = 0.0
+    econs_m: jax.Array | float = 0.0
+    econs_s: jax.Array | float = 0.0
 
     def update(self, ekin, econs):
         # if self.counter == 0:
@@ -100,7 +100,7 @@ class VerletHook(Hook):
     This is mainly used for the implementation of thermostats and barostats.
     """
 
-    econs_correction: jax.Array = jnp.array([0.0])
+    econs_correction: jax.Array | float = 0.0
 
     def __call__(self: Self, iterative: VerletIntegrator):
         pass
@@ -139,7 +139,7 @@ class NVE(VerletHook):
     This is mainly used for the implementation of thermostats and barostats.
     """
 
-    econs_correction: jax.Array = jnp.array([0.0])
+    econs_correction: jax.Array | float = 0.0
 
     def __call__(self, iterative):
         return
@@ -171,19 +171,19 @@ class VerletIntegrator(MyPyTreeNode):
 
     gpos: jax.Array | None
 
-    temp: jax.Array | None = jnp.array([0.0])
-    ekin: jax.Array = jnp.array([0.0])
-    ekin_new: jax.Array = jnp.array([0.0])
-    epot: jax.Array = jnp.array([0.0])
-    etot: jax.Array = jnp.array([0.0])
-    econs: jax.Array = jnp.array([0.0])
-    cons_err: jax.Array = jnp.array([0.0])
+    temp: jax.Array | float | None = 0.0
+    ekin: jax.Array | float = 0.0
+    ekin_new: jax.Array | float = 0.0
+    epot: jax.Array | float = 0.0
+    etot: jax.Array | float = 0.0
+    econs: jax.Array | float = 0.0
+    cons_err: jax.Array | float = 0.0
     ptens: jax.Array = field(default_factory=lambda: jnp.zeros((3, 3)))
-    press: jax.Array = jnp.array([0.0])
-    rmsd_delta: jax.Array = jnp.array([0.0])
-    rmsd_gpos: jax.Array = jnp.array([0.0])
+    press: jax.Array | float = 0.0
+    rmsd_delta: jax.Array | float = 0.0
+    rmsd_gpos: jax.Array | float = 0.0
     counter: int = 0
-    time: jax.Array = jnp.array([0.0])
+    time: jax.Array | float = 0.0
 
     delta: jax.Array | None
     acc: jax.Array | None = None

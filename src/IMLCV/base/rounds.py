@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Callable, TypeVar, cast
+from typing import Callable, Sequence, TypeVar, cast
 
 import h5py
 import jax
@@ -795,8 +795,8 @@ class Rounds(ABC):
                     loaded_w.append(_w_i)
 
                 if cv0 is not None:
-                    assert sp0.shape[0] != cv0.shape[0], (
-                        f"shapes do not match {sp0.shape=} {cv0.shape=} {traj_info.ti._size=} {traj_info.ti._positions.shape=} {traj_info.ti._cell.shape=}  {traj_info.ti._cv.shape=} "  # type: ignore
+                    assert sp0.shape[0] == cv0.shape[0], (
+                        f"shapes do not match {sp0.shape=} {cv0.shape=} "  # type: ignore
                     )
 
                 if new_r_cut is not None:
@@ -828,17 +828,17 @@ class Rounds(ABC):
 
                     else:
                         # TODO
-                        b, nn, new_nxyz, _ = jax.jit(
+                        b, nn, new_nxyz, _ = jit_decorator(
                             SystemParams._get_neighbour_list,
                             static_argnames=[
-                                "info",
+                                # "info",
                                 "chunk_size",
                                 "chunk_size_inner",
                                 "shmap",
                                 "only_update",
-                                "update",
+                                # "update",
                                 "verbose",
-                                "shmap_kwargs",
+                                # "shmap_kwargs",
                             ],
                         )(
                             self=sp0,
@@ -849,6 +849,8 @@ class Rounds(ABC):
                             only_update=True,
                             update=update_info,
                         )
+
+                        print(f"{new_nxyz}")
 
                         if new_nxyz is not None:
                             assert update_info is not None
@@ -866,7 +868,7 @@ class Rounds(ABC):
                                 print(f"updating nl with {nn=} {new_nxyz=}")
 
                                 update_info = NeighbourListUpdate.create(
-                                    num_neighs=nn,
+                                    num_neighs=int(nn),  # type:ignore
                                     nxyz=new_nxyz,
                                 )
 
@@ -1042,6 +1044,8 @@ class Rounds(ABC):
         assert len(sp) != 0, "no data found"
 
         key = PRNGKey(0)
+
+        print(f"{update_info=}")
 
         if T_max_over_T is not None:
             sp_new: list[SystemParams] = []
@@ -1580,9 +1584,17 @@ class Rounds(ABC):
         if verbose:
             print("Checking data")
 
-        assert update_info is not None
+        # assert update_info is not None
 
-        out_nl = nl_info if nl_info is not None else None
+        if nl_info is not None:
+            assert update_info is not None
+            out_nl = NeighbourList(
+                info=nl_info,
+                update=update_info,
+                sp_orig=None,
+            )
+        else:
+            out_nl = None
 
         if time_series:
             out_nl_t = out_nl
@@ -2021,7 +2033,7 @@ class Rounds(ABC):
 
     def run_par(
         self,
-        biases: list[Bias],
+        biases: Sequence[Bias],
         steps,
         plot=True,
         KEY=42,
@@ -2310,7 +2322,7 @@ class Rounds(ABC):
         rounds: Rounds,
         KEY: jax.Array | int,
         common_bias_name: str,
-        biases: list[Bias],
+        biases: Sequence[Bias],
         ignore_invalid: bool = False,
         only_finished: bool = True,
         min_traj_length: int | None = None,
@@ -3039,9 +3051,8 @@ class DataLoaderOutput(MyPyTreeNode):
             jit_f=True,
         )
 
-        assert alpha_factors is not None
-
         if log_w:
+            assert alpha_factors is not None
             h += alpha_factors
 
         if shape_mask is not None:
@@ -4969,9 +4980,9 @@ class DataLoaderOutput(MyPyTreeNode):
                 shmap=False,
             )[0]
 
-        if shmap:
-            # f = jax.jit(f)/
-            __f = padded_shard_map(__f, kwargs=shmap_kwargs)  # (pmap=True))
+        # if shmap:
+        # f = jax.jit(f)/
+        # __f = padded_shard_map(__f, kwargs=shmap_kwargs)  # (pmap=True))
 
         return DataLoaderOutput._apply(
             x=x,

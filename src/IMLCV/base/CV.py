@@ -4,7 +4,7 @@ import itertools
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Concatenate
 
 import jax.lax
 import jax.numpy as jnp
@@ -33,6 +33,7 @@ S = TypeVar("S")
 P = ParamSpec("P")
 P2 = ParamSpec("P2")
 
+
 ######################################
 #        Data types                  #
 ######################################s
@@ -48,7 +49,7 @@ class ShmapKwargs(MyPyTreeNode):
     verbose: bool = False
     device_get: bool = True
     devices: tuple[Any] = field(pytree_node=False, default=None)
-    mesh: Any = field(pytree_node=False, default=None)
+    mesh: Mesh | None = field(pytree_node=False, default=None)
 
     @staticmethod
     def create(
@@ -203,7 +204,7 @@ def padded_shard_map(
     # strategy: unmap pytree to arrays, pad the arrays, reshape sush that the axis in front equals number of threads, apply pmap/shmap, unpad the arrays, remap to output pytree
 
     def apply_pmap_fn(
-        kwargs,
+        # kwargs,
         *args: P.args,
         **f_kwargs: P.kwargs,
     ):
@@ -376,7 +377,7 @@ def padded_shard_map(
 
         return out
 
-    return Partial_decorator(apply_pmap_fn, kwargs=kwargs)
+    return apply_pmap_fn
 
 
 P = ParamSpec("P")
@@ -391,12 +392,18 @@ def padded_vmap(
     vmap=True,
     verbose=False,
 ):
+    axis = axis
+    chunk_size = chunk_size
+    out_axes = out_axes
+    vmap = vmap
+    function = f
+
     def apply_vmap_fn(
-        function: Callable[P, T],
-        axis: int = 0,
-        out_axes: int = 0,
-        chunk_size: int | None = None,
-        vmap: bool = True,
+        # function: Callable[P, T] = f,
+        # axis: int = 0,
+        # out_axes: int = 0,
+        # chunk_size: int | None = None,
+        # vmap: bool = True,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> T:
@@ -404,9 +411,9 @@ def padded_vmap(
 
         if chunk_size is None:
             if vmap:
-                function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
+                _function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
 
-            return function(*args, **kwargs)
+            return _function(*args, **kwargs)
 
         in_tree_flat, tree_def = tree_flatten(args)
         shape = int(in_tree_flat[0].shape[axis])
@@ -415,9 +422,9 @@ def padded_vmap(
             # print("shape shortcut")
 
             if vmap:
-                function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
+                _function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
 
-            return function(*args, **kwargs)
+            return _function(*args, **kwargs)
 
         rem = shape % chunk_size
 
@@ -478,16 +485,7 @@ def padded_vmap(
         print("padded_vmap done")
         return out_reshaped
 
-    f = Partial_decorator(
-        apply_vmap_fn,
-        axis=axis,
-        chunk_size=chunk_size,
-        out_axes=out_axes,
-        vmap=vmap,
-        function=f,
-    )
-
-    return f
+    return apply_vmap_fn
 
 
 T = TypeVar("T")
@@ -613,7 +611,7 @@ def _macro_chunk_map(
             assert y_t is not None
             zt = ft(
                 op(*y_t),
-                NeighbourList.stack(*nl_t) if nl_t is not None else None,
+                NeighbourList.stack(*nl_t) if isinstance(nl_t, list) else nl_t,
             )
 
         if chunk_func is None:
@@ -797,7 +795,7 @@ def _macro_chunk_map(
 
             _z_chunk = f(
                 y_stack,
-                nl_stack,
+                nl_stack if isinstance(nl, list) else nl,
             )
 
             zt_chunk = None
@@ -816,7 +814,7 @@ def _macro_chunk_map(
 
                 _zt_chunk = ft(
                     yt_stack,
-                    nlt_stack,
+                    nlt_stack if isinstance(nl_t, list) else nl_t,
                 )
 
             if verbose:
@@ -941,7 +939,7 @@ def _macro_chunk_map(
 
                 # print("exiting")
             else:
-                assert w_stack is not None
+                # assert w_stack is not None
 
                 chunk_func_init_args = chunk_func(
                     chunk_func_init_args,
@@ -2133,7 +2131,7 @@ class NeighbourList(MyPyTreeNode):
         return app_can(sp, (self.op_cell, self.op_coor, None))
 
     @jit_decorator
-    def neighbour_pos(self, sp_orig: SystemParams):
+    def neighbour_pos(self, sp_orig: SystemParams) -> jax.Array:
         @partial(vmap_decorator, in_axes=(0, 0, None, None))
         def neighbour_translate(
             ijk: jax.Array | None, a: jax.Array, sp_centered_on_atom: jax.Array, cell: jax.Array | None
@@ -2142,12 +2140,12 @@ class NeighbourList(MyPyTreeNode):
             out = sp_centered_on_atom[a]
             if ijk is not None:
                 assert cell is not None
-                (i, j, k) = ijk
+                (i, j, k) = cast(tuple[int, int, int], ijk)
                 out = out + i * cell[0, :] + j * cell[1, :] + k * cell[2, :]
             return out
 
         @partial(vmap_decorator, in_axes=(0, 0, 0, None, 0))
-        def vmap_decorator_atoms(
+        def vmap_atoms(
             atom_center_coordinates: Array,
             ijk_indices: Array | None,
             atom_indices: Array,
@@ -2171,14 +2169,14 @@ class NeighbourList(MyPyTreeNode):
 
         if sp_orig.batched:
             assert self.batched
-            vmap_decorator_atoms = vmap_decorator(vmap_decorator_atoms)
+            vmap_atoms = vmap_decorator(vmap_atoms)
 
         can_sp = self.canonicalized_sp(sp_orig)
 
         assert self.atom_indices is not None
         assert self.op_center is not None
 
-        return vmap_decorator_atoms(
+        return vmap_atoms(
             can_sp.coordinates,
             self.ijk_indices,
             self.atom_indices,
@@ -2306,10 +2304,8 @@ class NeighbourList(MyPyTreeNode):
     def apply_fun_neighbour_pair(
         self,
         sp: SystemParams,
-        func_double: Callable[[jax.Array, jax.Array, T | None, jax.Array, jax.Array, T | None], S],
-        func_single: Callable[[jax.Array, jax.Array], T] | None = None,
-        args_single=(),
-        args_double=(),
+        func_double: Callable[[jax.Array, jax.Array, T, jax.Array, jax.Array, T], S],
+        func_single: Callable[[jax.Array, jax.Array], T] | None = lambda x, y: None,
         r_cut=None,
         fill_value=0.0,
         reduce="full",  # or 'z' or 'none'
@@ -2321,7 +2317,7 @@ class NeighbourList(MyPyTreeNode):
         chunk_size_batch=None,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
-    ):
+    ) -> tuple[Array, S]:
         """
         Args:
         ______
@@ -2330,14 +2326,15 @@ class NeighbourList(MyPyTreeNode):
         """
 
         if sp.batched:
-            f = padded_vmap(
-                lambda nl, sp: NeighbourList.apply_fun_neighbour_pair(
-                    self=nl,
-                    sp=sp,
+            _f: Callable[[NeighbourList, SystemParams], tuple[Array, S]] = padded_vmap(
+                Partial_decorator(
+                    NeighbourList.apply_fun_neighbour_pair,
+                    # self=nl,
+                    # sp=sp,
                     func_single=func_single,
                     func_double=func_double,
-                    args_single=args_single,
-                    args_double=args_double,
+                    # args_single=args_single,
+                    # args_double=args_double,
                     r_cut=r_cut,
                     fill_value=fill_value,
                     reduce=reduce,
@@ -2352,9 +2349,9 @@ class NeighbourList(MyPyTreeNode):
                 chunk_size=chunk_size_batch,
             )
             if shmap:
-                f = padded_shard_map(f, shmap_kwargs)
+                _f = padded_shard_map(_f, shmap_kwargs)
 
-            return f(self, sp)
+            return _f(self, sp)
 
         # calculate nl on the fly
         if self.needs_calculation:
@@ -2385,11 +2382,11 @@ class NeighbourList(MyPyTreeNode):
                     b = jnp.logical_and(b, r_j > 1e-16)
 
                 if func_single is not None:
-                    out = func_single(pos_j, ind_j, *args_single)
+                    out = func_single(pos_j, ind_j)
                 else:
                     out = None
 
-                out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
+                out: T | None = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
 
                 return (b, out)
 
@@ -2407,16 +2404,16 @@ class NeighbourList(MyPyTreeNode):
 
             @partial(padded_vmap, chunk_size=chunk_size_neigbourgs)
             def _f2(
-                j,
-                k,
-                bools_j,
-                bools_k,
-                pos_j,
-                pos_k,
-                ind_j,
-                ind_k,
-                data_single_j,
-                data_single_k,
+                j: jax.Array,
+                k: jax.Array,
+                bools_j: jax.Array,
+                bools_k: jax.Array,
+                pos_j: jax.Array,
+                pos_k: jax.Array,
+                ind_j: jax.Array,
+                ind_k: jax.Array,
+                data_single_j: T | None,
+                data_single_k: T | None,
             ):
                 b = jnp.logical_and(
                     bools_j,
@@ -2426,9 +2423,9 @@ class NeighbourList(MyPyTreeNode):
                 if unique:
                     b = jnp.logical_and(b, j != k)
 
-                out = func_double(pos_j, ind_j, data_single_j, pos_k, ind_k, data_single_k, *args_double)
+                out = func_double(pos_j, ind_j, data_single_j, pos_k, ind_k, data_single_k)
 
-                out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
+                out: S = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
 
                 return (b, out)
 
@@ -2447,7 +2444,7 @@ class NeighbourList(MyPyTreeNode):
 
             # replace vals with fill_value if bools is False
             if reduce == "full":
-                out = jax.tree.map(lambda x: jnp.sum(x, axis=0), out_tree_n)
+                out: tuple[Array, S] = jax.tree.map(lambda x: jnp.sum(x, axis=0), out_tree_n)
 
             elif reduce == "z":
                 zj_n, zk_n = (
@@ -2483,7 +2480,7 @@ class NeighbourList(MyPyTreeNode):
             b_split, _, _ = self.info.nl_split_z(out)
 
             @vmap_decorator
-            def _split(b_split):
+            def _split(b_split) -> tuple[Array, S]:
                 return jax.tree.map(lambda x: jnp.einsum("i,i...->...", b_split, x), out)
 
             out = _split(b_split)
@@ -2544,7 +2541,7 @@ class NeighbourList(MyPyTreeNode):
             "shmap",
             "verbose",
             "chunk_size_inner",
-            "shmap_kwargs",
+            # "shmap_kwargs",
         ),
     )
     def update_nl(
@@ -3518,7 +3515,7 @@ class CvFunBase(ABC, MyPyTreeNode):
         static_argnames=(
             "reverse",
             "shmap",
-            "shmap_kwargs",
+            # "shmap_kwargs",
             "chunk_size",
             "jacobian",
         ),
@@ -3571,7 +3568,7 @@ class CvFunBase(ABC, MyPyTreeNode):
         static_argnames=(
             "reverse",
             "shmap",
-            "shmap_kwargs",
+            # "shmap_kwargs",
         ),
     )
     @abstractmethod
@@ -3607,7 +3604,7 @@ class CvFun(CvFunBase):
         static_argnames=(
             "reverse",
             "shmap",
-            "shmap_kwargs",
+            # "shmap_kwargs",
         ),
     )
     def _compute_cv(
@@ -3651,7 +3648,7 @@ class _SerialCvTrans(MyPyTreeNode):
         static_argnames=(
             "reverse",
             "shmap",
-            "shmap_kwargs",
+            # "shmap_kwargs",
         ),
     )
     def _compute_cv(
@@ -3686,7 +3683,7 @@ class _ParralelCvTrans(MyPyTreeNode):
         static_argnames=(
             "reverse",
             "shmap",
-            "shmap_kwargs",
+            # "shmap_kwargs",
         ),
     )
     def _compute_cv(
@@ -3771,7 +3768,7 @@ class CvTrans(MyPyTreeNode):
         static_argnames=(
             "reverse",
             "shmap",
-            "shmap_kwargs",
+            # "shmap_kwargs",
             "chunk_size",
             "jacobian",
         ),
@@ -3846,7 +3843,7 @@ class CollectiveVariable(MyPyTreeNode):
             "jacobian",
             "shmap",
             "push_jac",
-            "shmap_kwargs",
+            # "shmap_kwargs",
         ],
     )
     def compute_cv(

@@ -5,8 +5,9 @@ import jax.lax
 import jax.numpy as jnp
 import numpy as onp
 import scipy.special
-from jax import custom_jvp, pure_callback
+from jax import pure_callback
 
+from IMLCV.base.datastructures import custom_jvp_decorator, jit_decorator
 from IMLCV.tools.bessel_jn import bessel_jn
 
 # from jax.scipy.special import bessel_jn
@@ -45,8 +46,8 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             vmap_decorator_method="expand_dims",
         )
 
-    @custom_jvp
-    def cv(v: int, z: jax.Array):
+    @custom_jvp_decorator
+    def cv(v: int | jax.Array, z: jax.Array) -> jax.Array:
         _v, _z = jnp.asarray(v), jnp.asarray(z)
 
         # Promote the input to inexact (float/complex).
@@ -224,15 +225,15 @@ def spherical_jn_recurrence_pattern_unstable(n, z):
     return jnp.array([f0, f1, *out])
 
 
-@partial(custom_jvp, nondiff_argnums=(0, 2))
-@partial(jax.jit, static_argnums=(0, 2))
-def spherical_jn(n, z, forward=True):
+@partial(custom_jvp_decorator, nondiff_argnums=(0, 2))
+@partial(jit_decorator, static_argnums=(0, 2))
+def spherical_jn(n: int | jax.Array, z: float | jax.Array, forward=True) -> jax.Array:
     if forward:
         return jnp.where(
             z < 0.5,
             jnp.array([spherical_jn_recurrence(ni, z) for ni in range(n + 1)]),
             spherical_jn_recurrence_pattern_unstable(n, z),
-        )
+        )  # type:ignore
 
     return spherical_jn_recurrence_pattern(n + 1, z)
 
@@ -280,7 +281,7 @@ def spherical_jn_jvp(n, forward, primals, tangents):
     return y[: n + 1], dy[: n + 1] * x_dot
 
 
-@partial(jax.jit, static_argnums=(0, 2))
+@partial(jit_decorator, static_argnums=(0, 2))
 def ie_n_recurrence_pattern(n, z, half=False):
     ilp1 = 0.0
 
@@ -341,7 +342,7 @@ def ie_n_recurrence_pattern(n, z, half=False):
     return out / n_safe * u
 
 
-@partial(jax.jit, static_argnums=(0, 2))
+@partial(jit_decorator, static_argnums=(0, 2))
 def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
     z_safe: jax.Array = jnp.where(z < 1e-12, 1, z)  # mypy: ignore
 
@@ -401,8 +402,8 @@ def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
     return jnp.array([f0, f1, *out])
 
 
-@partial(custom_jvp, nondiff_argnums=(0, 2, 3))
-@partial(jax.jit, static_argnums=(0, 2, 3))
+@partial(custom_jvp_decorator, nondiff_argnums=(0, 2, 3))
+@partial(jit_decorator, static_argnums=(0, 2, 3))
 def ie_n(n, z, half=False, forward=True):
     if forward:
         return jnp.where(
@@ -414,7 +415,7 @@ def ie_n(n, z, half=False, forward=True):
     return ie_n_recurrence_pattern(n + 1, z, half=half)
 
 
-@partial(jax.jit, static_argnums=(0, 2))
+@partial(jit_decorator, static_argnums=(0, 2))
 def spherical_ie_n_recurrence(n, z, half=True):
     assert half
 

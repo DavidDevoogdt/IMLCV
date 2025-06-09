@@ -10,7 +10,7 @@ from jax import numpy as jnp
 from jax._src import dtypes
 from jax._src.numpy.util import promote_dtypes_inexact
 
-from IMLCV.base.datastructures import jit_decorator
+from IMLCV.base.datastructures import custom_jvp_decorator, jit_decorator
 
 # polynomial coefficients for J0
 PP0 = np.array(
@@ -389,7 +389,7 @@ def _besseljn_forward_recurrence(z, v: int):
 
 
 # Add custom jvp
-@functools.partial(jax.custom_jvp, nondiff_argnums=(0,))
+@functools.partial(custom_jvp_decorator, nondiff_argnums=(0,))
 @jnp.vectorize
 @jit_decorator
 def bessel_jn(v, z):

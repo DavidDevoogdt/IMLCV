@@ -4,7 +4,7 @@ from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 from flax.struct import dataclass as flax_dataclass
 from flax.struct import field as _field
-from jax import jit, vmap
+from jax import custom_jvp, jit, vmap
 from typing_extensions import (
     dataclass_transform,  # pytype: disable=not-supported-yet
 )
@@ -13,6 +13,14 @@ from typing_extensions import (
 ######################################s
 
 TNode = TypeVar("TNode", bound="MyPyTreeNode")
+from functools import partial
+
+# def my_dataclass(cls):
+#     return flax_dataclass(
+#         cls,
+#         field_specifiers=(_field,),
+#         kw_only_default=True,
+#     )
 
 
 @dataclass_transform(
@@ -23,6 +31,15 @@ class MyPyTreeNode:
     """Base class for dataclasses that should act like a JAX pytree node."""
 
     def __init_subclass__(cls, **kwargs):
+        # print(f"init subclass {cls=}  {kwargs=}")
+
+        kwargs.update(
+            {
+                "kw_only": True,
+                "frozen": False,
+            }
+        )
+
         flax_dataclass(cls, **kwargs)  # pytype: disable=wrong-arg-types
 
     def __init__(self, *args, **kwargs):
@@ -66,9 +83,16 @@ def vmap_decorator(
     return _f
 
 
-# def run_bad3(func: Callable[Concatenate[int, P], T], *args: P.args, **kwargs: P.kwargs) -> T:
-#     func2 = partial(func, 1, *args)
-#     return func2(1, **kwargs)  # E: Argument 1 has incompatible type "int"; expected "P.args"
+def custom_jvp_decorator(
+    f: Callable[P, T],
+    # f_jvp: Callable,
+    nondiff_argnums: Sequence[int] = (),
+) -> Callable[P, T]:
+    @partial(custom_jvp, nondiff_argnums=nondiff_argnums)
+    def _f(*args: P.args, **kwargs: P.kwargs) -> T:
+        return f(*args, **kwargs)
+
+    return _f
 
 
 from jax.tree_util import Partial
@@ -79,7 +103,9 @@ def Partial_decorator(
     *partial_args,
     **partial_kwargs,
 ):
+    _g = Partial(f, *partial_args, **partial_kwargs)
+
     def _f(*args, **kwargs) -> T:
-        return Partial(f, *partial_args, **partial_kwargs)(*args, **kwargs)
+        return _g(*args, **kwargs)
 
     return _f

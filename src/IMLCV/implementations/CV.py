@@ -152,7 +152,7 @@ def _dihedral(sp: SystemParams, _nl, shmap, shmap_kwargs, numbers):
     return CV(cv=jnp.array([jnp.arctan2(y, x)]))
 
 
-def dihedral(numbers: tuple[int] | Array):
+def dihedral(numbers: tuple[int, int, int, int] | Array):
     """from https://stackoverflow.com/questions/20305272/dihedral-torsion-
     angle-from-four-points-in-cartesian- coordinates-in-python.
 
@@ -182,7 +182,7 @@ def _sb_descriptor(
 
     from IMLCV.tools.soap_kernel import p_i, p_inl_sb
 
-    def _reduce_sb(a):
+    def _reduce_sb(a: Array) -> Array:
         def _tril(a):
             return a[jnp.tril_indices_from(a)]
 
@@ -218,7 +218,7 @@ def _sb_descriptor(
         )  # eliminate Z2>Z1
         return a
 
-    p = p_inl_sb(
+    f_single, f_double = p_inl_sb(
         r_cut=r_cut,
         n_max=n_max,
         l_max=l_max,
@@ -228,7 +228,9 @@ def _sb_descriptor(
     a = p_i(
         sp=sp,
         nl=nl,
-        p=p,
+        f_single=f_single,
+        f_double=f_double,
+        # p=p,
         r_cut=r_cut,
         chunk_size_atoms=chunk_size_atoms,
         chunk_size_neigbourgs=chunk_size_neigbourgs,
@@ -303,7 +305,7 @@ def _soap_descriptor(
 
     from IMLCV.tools.soap_kernel import p_i, p_innl_soap
 
-    def _reduce_sb(a):
+    def _reduce_sb(a: Array) -> Array:
         # a_z1_z2_n_n'_l
 
         def _triu(a):
@@ -327,7 +329,7 @@ def _soap_descriptor(
 
         return a
 
-    p = p_innl_soap(
+    f_single, f_double = p_innl_soap(
         r_cut=r_cut,
         n_max=n_max,
         l_max=l_max,
@@ -340,15 +342,12 @@ def _soap_descriptor(
     a = p_i(
         sp=sp,
         nl=nl,
-        p=p,
+        f_single=f_single,
+        f_double=f_double,
         r_cut=r_cut,
         shmap=shmap,
         shmap_kwargs=shmap_kwargs,
     )
-
-    # print(f"{shmap_kwargs(pmap=False)}")
-
-    # print(f"{a.shape=}")
 
     if reduce:
         a = vmap_decorator(_reduce_sb)(a)
@@ -770,7 +769,7 @@ def _sinkhorn_divergence_trans_2(
 
 
 def get_sinkhorn_divergence_2(
-    nli: NeighbourListInfo,
+    nli: NeighbourList | NeighbourListInfo,
     pi: CV,
     alpha_rematch=0.1,
     jacobian=False,

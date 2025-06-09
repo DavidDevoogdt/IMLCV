@@ -588,13 +588,13 @@ class Observable:
             directory = self.rounds.path(c=self.cv_round, r=self.rnd)
 
             bash_app_python(
-                function=Bias.static_plot,
+                function=Bias.plot,
                 execution_folder=directory,
                 stdout="combined.stdout",
                 stderr="combined.stderr",
+                outputs=[directory / "combined.png"],
             )(
-                bias=self.common_bias,
-                outputs=[File(f"{directory}/combined.png")],  # png because heavy file
+                self=self.common_bias,
                 name="combined.png",
                 map=False,
                 dlo=self.rounds,

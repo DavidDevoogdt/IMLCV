@@ -1,30 +1,33 @@
 from functools import partial
-from typing import Callable
+from typing import Any, Callable, Concatenate, ParamSpec, TypeVar
 
 import jax
 import jax.numpy as jnp
-from jax import closure_convert, custom_jvp
+from jax import closure_convert
 from jax.tree_util import tree_map
 from scipy.special import roots_laguerre, roots_legendre
 
-from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
+from IMLCV.base.datastructures import Partial_decorator, custom_jvp_decorator, vmap_decorator
+
+T = TypeVar("T")
+P = ParamSpec("P")
 
 
-def _quad_nd(f, w, x, use_custom_jvp=True):
+def _quad_nd(f, w: list[jax.Array], x: list[jax.Array], use_custom_jvp=True):
     x_mg = jnp.array([*jnp.meshgrid(*x, indexing="ij")]).reshape(len(x), -1)
     w_mg = jnp.array([*jnp.meshgrid(*w, indexing="ij")]).reshape(len(w), -1)
 
     def fun(
         *args,
-        f: Callable,
-        x_mg=None,
-        w_mg=None,
+        g,
+        x_mg: jax.Array,
+        w_mg: jax.Array,
     ):
         if use_custom_jvp:
             # print("using custom jvp")
 
             _f_closed, closure_args = closure_convert(
-                f,
+                g,
                 *jnp.array([xi[0] for xi in x]),
                 *args,
             )
@@ -32,10 +35,10 @@ def _quad_nd(f, w, x, use_custom_jvp=True):
             def f_closed(x, args, closure_args):
                 return _f_closed(*x, *args, *closure_args)
 
-            @partial(custom_jvp, nondiff_argnums=(0,))
+            @partial(custom_jvp_decorator, nondiff_argnums=(0,))
             def _int(_f2_closed, args, x_mg, w_mg, closure_args):
                 @partial(vmap_decorator, in_axes=(1, 1))
-                def f_int(w, x):
+                def f_int(w: jax.Array, x: jax.Array):
                     y = _f2_closed(x, args, closure_args)
                     w_tot = jnp.prod(w)
 
@@ -69,8 +72,8 @@ def _quad_nd(f, w, x, use_custom_jvp=True):
         else:
 
             @partial(vmap_decorator, in_axes=(1, 1))
-            def f_int(w, x):
-                y = f(*x, *args)
+            def f_int(w: jax.Array, x: jax.Array):
+                y = g(*x, *args)
                 w_tot = jnp.prod(w)
 
                 return tree_map(lambda x: x * w_tot, y)
@@ -81,13 +84,18 @@ def _quad_nd(f, w, x, use_custom_jvp=True):
 
     return Partial_decorator(
         fun,
-        f=f,  # type: ignore
+        g=f,  # type: ignore
         x_mg=x_mg,
         w_mg=w_mg,
     )
 
 
-def quad_bounds(a, b, scale=1, n=21):
+def quad_bounds(
+    a: float | jax.Array,
+    b: float | jax.Array,
+    scale=1,
+    n=21,
+):
     x_lag, w_lag = roots_laguerre(n)
     x_leg, w_leg = roots_legendre(n)
     x_lag, w_lag = jnp.array(x_lag), jnp.array(w_lag)
@@ -105,24 +113,39 @@ def quad_bounds(a, b, scale=1, n=21):
         w_leg,
     )
 
-    def W(x, w, a, b):
+    def W(
+        x: jax.Array,
+        w: jax.Array,
+        a: float | jax.Array,
+        b: float | jax.Array,
+    ) -> jax.Array:
         return jnp.where(
             b == jnp.inf,
             jnp.exp(x + jnp.log(w)) / scale,
             0.5 * (b - a) * w,
-        )
+        )  # type:ignore
 
-    def T(x, a, b):
+    def T(
+        x: jax.Array,
+        a: float | jax.Array,
+        b: float | jax.Array,
+    ) -> jax.Array:
         return jnp.where(
             b == jnp.inf,
             x / scale + a,
             0.5 * (b - a) * x + 0.5 * (b + a),
-        )
+        )  # type:ignore
 
     return x, w, W, T
 
 
-def quad(f, a, b, scale=1, n=21):
+def quad(
+    f: Callable[Concatenate[jax.Array, P], T],
+    a: float,
+    b: float,
+    scale=1,
+    n=21,
+) -> Callable[P, T]:
     x, w, W, T = quad_bounds(a, b, scale, n)
 
     x = T(x, a, b)
@@ -132,20 +155,28 @@ def quad(f, a, b, scale=1, n=21):
 
 
 # integrates f from 0 to infinity
-def dquad(f, a0, b0, a1, b1, scale=1, n=21):
+def dquad(
+    f: Callable[Concatenate[jax.Array, jax.Array, P], T],
+    a0: float | jax.Array,
+    b0: float | jax.Array,
+    a1: float | jax.Array | Callable[[float | jax.Array], jax.Array],
+    b1: float | jax.Array | Callable[[float | jax.Array], jax.Array],
+    scale=1,
+    n=21,
+) -> T:
     x0, w0, W0, T0 = quad_bounds(a0, b0, scale, n)
 
     w0 = W0(x0, w0, a0, b0)
     x0 = T0(x0, a0, b0)
 
     if isinstance(a1, Callable) or isinstance(b1, Callable):
-        a1 = a1(x0) if isinstance(a1, Callable) else jnp.full_like(x0, a1)
-        b1 = b1(x0) if isinstance(b1, Callable) else jnp.full_like(x0, b1)
+        _a1: jax.Array = a1(x0) if isinstance(a1, Callable) else jnp.full_like(x0, a1)
+        _b1: float | jax.Array = b1(x0) if isinstance(b1, Callable) else jnp.full_like(x0, b1)
 
-        x1, w1, W1, T1 = quad_bounds(a1[0], b1[0], scale, n)
+        x1, w1, W1, T1 = quad_bounds(_a1[0], _b1[0], scale, n)
 
-        w1 = W1(x1, w1, a1, b1)
-        x1 = T1(x1, a1, b1)
+        w1 = W1(x1, w1, _a1, _b1)
+        x1 = T1(x1, _a1, _b1)
 
     else:
         x1, w1, W1, T1 = quad_bounds(a1, b1, scale)
@@ -153,4 +184,4 @@ def dquad(f, a0, b0, a1, b1, scale=1, n=21):
         w1 = W1(x1, w1, a1, b1)
         x1 = T1(x1, a1, b1)
 
-    return _quad_nd(f, [w0, w1], [x0, x1])
+    return _quad_nd(f, [w0, w1], [x0, x1])  # type:ignore

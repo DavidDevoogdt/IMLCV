@@ -4,12 +4,12 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jax import jit
-from jax._src.custom_derivatives import custom_jvp
 from jax._src.lax import lax
 from jax._src.numpy.util import _where, check_arraylike, promote_dtypes_inexact
 from jax._src.typing import Array, ArrayLike
 from jax.scipy.special import gamma
+
+from IMLCV.base.datastructures import custom_jvp_decorator, jit_decorator
 
 _lax_const = lax._const
 
@@ -43,7 +43,7 @@ def spb1(x: ArrayLike, /) -> Array:
     )
 
 
-@partial(custom_jvp, nondiff_argnums=(0,))
+@partial(custom_jvp_decorator, nondiff_argnums=(0,))
 def _spb1_maclaurin(k, x):
     # compute the kth derivative of x -> sin(x)/x evaluated at zero (since we
     # compute the monomial term in the jvp rule)
@@ -150,8 +150,8 @@ def msta2(x, n, mp):
     return nn + 10
 
 
-@partial(custom_jvp, nondiff_argnums=(0,))
-@partial(jit, static_argnums=0)
+@partial(custom_jvp_decorator, nondiff_argnums=(0,))
+@partial(jit_decorator, static_argnums=0)
 def csphjy(n, z):
     """
     Spherical Bessel functions of the first and second kind, and their derivatives.

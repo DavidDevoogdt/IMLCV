@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Callable, Concatenate, ParamSpec, TypeVar
 
 import jax.debug
 import jax.dtypes
@@ -13,12 +14,16 @@ from jax import Array, lax
 from scipy.special import legendre as sp_legendre
 
 from IMLCV.base.CV import NeighbourList, ShmapKwargs, SystemParams, padded_shard_map
-from IMLCV.base.datastructures import Partial_decorator, jit_decorator, vmap_decorator
+from IMLCV.base.datastructures import Partial_decorator, custom_jvp_decorator, jit_decorator, vmap_decorator
 from IMLCV.external.quadrature import quad
 from IMLCV.tools.bessel_callback import ie_n, spherical_jn
 
+P = ParamSpec("P")
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
 
-@partial(jax.jit, static_argnums=(1,))
+
+@partial(jit_decorator, static_argnums=(1,))
 def legendre(x, n):
     c = jnp.array(sp_legendre(n).c, dtype=x.dtype)
     return jnp.sum(c * x ** (n - jnp.arange(n + 1)))
@@ -28,8 +33,9 @@ def legendre(x, n):
 def p_i(
     sp: SystemParams,
     nl: NeighbourList,
-    p,
-    r_cut,
+    f_single: Callable[[Array, Array], T1],
+    f_double: Callable[[Array, Array, T1, Array, Array, T1], T2],
+    r_cut: float,
     chunk_size_neigbourgs=None,
     chunk_size_atoms=None,
     chunk_size_batch=None,
@@ -37,9 +43,10 @@ def p_i(
     shmap_kwargs=ShmapKwargs.create(),
 ):
     if sp.batched:
-        f = Partial_decorator(
+        _f: Callable[[SystemParams, NeighbourList], T2] = Partial_decorator(
             p_i,
-            p=p,
+            func_single=f_single,
+            func_double=f_double,
             chunk_size_neigbourgs=chunk_size_neigbourgs,
             chunk_size_atoms=chunk_size_atoms,
             chunk_size_batch=chunk_size_batch,
@@ -47,16 +54,16 @@ def p_i(
         )
 
         if shmap:
-            f = padded_shard_map(f, shmap_kwargs)
+            _f = padded_shard_map(_f, shmap_kwargs)
 
-        return f(sp, nl)
+        return _f(sp, nl)
 
-    ps, pd = p
+    # ps, pd = p
 
     _, val0 = nl.apply_fun_neighbour_pair(
         sp=sp,
-        func_single=ps,
-        func_double=pd,
+        func_single=f_single,
+        func_double=f_double,
         r_cut=r_cut,
         fill_value=0.0,
         reduce="z",
@@ -73,8 +80,8 @@ def p_i(
 
 
 # @partial(vmap_decorator, in_axes=(0, None, None), out_axes=0)
-@partial(jax.jit, static_argnums=(0,))
-def legendre_l(l, pj, pk):
+@partial(jit_decorator, static_argnums=(0,))
+def legendre_l(l: int, pj: jax.Array, pk: jax.Array):
     # https://jax.readthedocs.io/en/latest/faq.html#gradients-contain-nan-where-using-where
 
     n2 = jnp.dot(pj, pj) * jnp.dot(pk, pk)
@@ -94,13 +101,21 @@ def legendre_l(l, pj, pk):
     return legendre(cos_ang, l)
 
 
-def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
+def p_innl_soap(
+    l_max: int,
+    n_max: int,
+    r_cut: float,
+    sigma_a: float,
+    r_delta: float,
+    num=30,
+    basis="gto",
+):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
     # n_max = float(n_max)
 
-    def f_cut(r):
+    def f_cut(r: Array) -> Array:
         return lax.cond(
             r > r_cut,
             lambda: 0.0,
@@ -119,7 +134,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
 
         # sigma_a = sigma_b
 
-        def _phi(n, n_max, r, r_cut, sigma_a, l, l_max):  # type: ignore
+        def _phi(n: int | Array, n_max: int, r: Array, r_cut: float, sigma_a: float, l: Array, l_max: int) -> Array:  # type: ignore
             # compress in the x direction
             r_scale = r_cut * (n + 1) / (n_max + 1)
 
@@ -131,16 +146,16 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
 
     elif basis == "loc_gaussians":
 
-        def _phi(n, n_max, r, r_cut, sigma_a, l, l_max):
-            return jnp.exp(-((r - r_cut * n / n_max) ** 2) / (2 * sigma_a**2)) * f_cut(r)
+        def _phi(n: int | Array, n_max: int, r: Array, r_cut: float, sigma_a: float, l: Array, l_max: int) -> Array:
+            return jnp.exp(-(n_max * (r / r_cut - n / n_max) ** 2)) * f_cut(r)
     elif basis == "cos":
 
-        def _phi_0(n, n_max, r, r_cut, sigma_a, l, l_max):
+        def _phi_0(n: int | Array, n_max: int, r: Array, r_cut: float, sigma_a: float, l: Array, l_max: int) -> Array:
             return (r / r_cut) ** l * (jnp.cos(r / r_cut * (n + 0.5) * jnp.pi)) * jnp.where(r > r_cut, 0, 1)
 
         # make derivatives zero at r_cut
 
-        def _phi_1(n, n_max, r, r_cut, sigma_a, l, l_max):
+        def _phi_1(n: int | Array, n_max: int, r: Array, r_cut: float, sigma_a: float, l: Array, l_max: int) -> Array:
             return _phi_0(n, n_max, r, r_cut, sigma_a, l, l_max) / (n + 1 / 2) + _phi_0(
                 n + 1, n_max, r, r_cut, sigma_a, l, l_max
             ) / (n + 3 / 2)
@@ -154,24 +169,24 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
 
         @partial(jit_decorator, static_argnums=(0, 1))
         def I_prime_ml(  # type: ignore
-            n_max,
-            l_max,
-            r_ij,
-            sigma_a,
-            r_cut,
+            n_max: int,
+            l_max: int,
+            r_ij: Array,
+            sigma_a: float,
+            r_cut: float,
         ):
             def _f(
-                r,
-                r_ij,
+                r: Array,
+                r_ij: Array,
                 # sigma_a,
                 # r_cut,
-            ):
+            ) -> Array:
                 # https://mathworld.wolfram.com/ModifiedSphericalBesselFunctionoftheFirstKind.html
 
                 r_safe = jnp.where(r > 0, r, 1)
 
                 # this is exp version
-                ive_l = ie_n(l_max, r_safe * r_ij / sigma_a**2, half=True)  # exponential scaled, corrected in c
+                ive_l: Array = ie_n(l_max, r_safe * r_ij / sigma_a**2, half=True)  # exponential scaled, corrected in c
 
                 phi_nl = vmap_decorator(
                     vmap_decorator(
@@ -199,14 +214,14 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
 
                 @partial(vmap_decorator, in_axes=(0, 1), out_axes=1)
                 @partial(vmap_decorator, in_axes=(None, 0), out_axes=0)
-                def _mul(_l, _n):
+                def _mul(_l, _n) -> Array:
                     out = _l * _n * c
 
                     return jnp.where(
                         r > 0,
                         out,
                         0.0,
-                    )
+                    )  # type: ignore
 
                 out = _mul(ive_l, phi_nl)
 
@@ -214,8 +229,6 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
 
             I_prime = quad(_f, 1e-10, r_cut, n=num)(
                 r_ij,
-                # sigma_a,
-                # r_cut,
             )
 
             return I_prime
@@ -251,8 +264,8 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
 
             return phi_nl  # * r_ij**2 this term is also not used in SB
 
-    def S_nm(n, m):
-        def g(r, sigma_a, r_cut, n_max):
+    def S_nm(n: int, m: int):
+        def g(r: jax.Array, sigma_a: float, r_cut: float, n_max: int):
             _phi_nl = vmap_decorator(_phi, in_axes=(None, None, None, None, None, 0, None))(
                 n,
                 n_max,
@@ -293,8 +306,10 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
 
     U_inv_nml = _u_inv(S_nml)
 
+    # assert jnp.sum(jnp.isnan(U_inv_nml)) == 0, f"{U_inv_nml=} {S_nml=}"
+
     # print("U_inv {}", U_inv_nml)
-    # jax.debug.print("U inv {}", U_inv_nml)
+    # jax.debug.print("U inv {} S {}", U_inv_nml, S_nml)
 
     def _l(p_ij, p_ik):
         return jnp.array([legendre_l(l, p_ij, p_ik) for l in range(l_max + 1)])
@@ -320,22 +335,22 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
             I_nl,
         )
 
-    def _p_i_soap_2_s(p_ij, atom_index_j):
+    def _p_i_soap_2_s(p_ij: Array, atom_index_j: Array):
         r_ij2 = jnp.dot(p_ij, p_ij)
         r_ij_safe = jnp.where(r_ij2 <= 1e-15, jnp.ones_like(r_ij2), r_ij2)
 
         a_jnl_safe = a_nlj(jnp.sqrt(r_ij_safe), sigma_a, r_cut, U_inv_nml)
 
-        a_jnl = jnp.where(
+        a_jnl: Array = jnp.where(
             r_ij2 <= 1e-15,
             jnp.full_like(a_jnl_safe, fill_value=0.0),
             a_jnl_safe,
-        )
+        )  # type:ignore
 
         return a_jnl
 
     # @jit
-    def _p_i_soap_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
+    def _p_i_soap_2_d(p_ij: Array, atom_index_j: Array, data_j: Array, p_ik: Array, atom_index_k: Array, data_k: Array):
         a_nl_j = data_j
         a_nl_k = data_k
         b_l_jk = _l(p_ij, p_ik)
@@ -346,12 +361,12 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
         # this ensures that l<=n
         @partial(vmap_decorator, in_axes=(None, 0, None), out_axes=1)
         @partial(vmap_decorator, in_axes=(0, None, None), out_axes=0)
-        def a_nml_l(n, l, a):
+        def a_nml_l(n: Array, l: Array, a: Array) -> Array:
             return lax.cond(
                 l <= n,
                 lambda: a[n - l, l],
                 lambda: jnp.zeros_like(a[0, 0]),
-            )
+            )  # type:ignore
 
         g_nml_l_j = a_nml_l(n_vec, l_vec, a_nl_j)
         g_nml_l_k = a_nml_l(n_vec, l_vec, a_nl_k)
@@ -367,7 +382,7 @@ def p_innl_soap(l_max, n_max, r_cut, sigma_a, r_delta, num=30, basis="gto"):
     return _p_i_soap_2_s, _p_i_soap_2_d
 
 
-def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
+def p_inl_sb(l_max: int, n_max: int, r_cut: float, bessel_fun="jax"):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
@@ -380,12 +395,12 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
             out_axes=2,
         )
     elif bessel_fun == "scipy":
-        from jax import custom_jvp
+        # from jax import custom_jvp
 
         from IMLCV.tools.bessel_callback import spherical_jn_b
 
         # these avoid recalculation of the same values
-        @partial(custom_jvp, nondiff_argnums=(0,))
+        @partial(custom_jvp_decorator, nondiff_argnums=(0,))
         @partial(jit_decorator, static_argnums=0)
         def vec_spherical_jn_2(n, z):
             @partial(vmap_decorator, in_axes=(0, None), out_axes=0)
@@ -419,18 +434,22 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
     else:
         raise ValueError(f"{bessel_fun=} not supported")
 
-    def spherical_jn_zeros(n, m):
+    def spherical_jn_zeros(n: int, m: int):
         x0 = jnp.array((scipy.special.jn_zeros(n + 1, m) + scipy.special.jn_zeros(n, m)) / 2)
 
-        return vmap_decorator(
-            lambda x: jaxopt.GradientDescent(
-                lambda x: spherical_jn(n, x)[n] ** 2,
-                maxiter=1000,
-                tol=1e-20,
+        @vmap_decorator
+        def _grad_desc(x: Array) -> Array:
+            return (
+                jaxopt.GradientDescent(
+                    lambda x: spherical_jn(n, x)[n] ** 2,
+                    maxiter=1000,
+                    tol=1e-20,
+                )
+                .run(x)
+                .params
             )
-            .run(x)
-            .params,
-        )(x0)
+
+        return _grad_desc(x0)
 
     def show_spherical_jn_zeros(n, m, ngrid=100):
         """Graphical test for the above function"""
@@ -465,7 +484,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
     @partial(vmap_decorator, in_axes=(0, None, None))
     @partial(vmap_decorator, in_axes=(None, 0, None))
-    def f_nl(n, l, sj):
+    def f_nl(n: Array, l: Array, sj: Array) -> Array:
         return (
             u_ln[l, n + 1] / s_lln[l + 1, l, n] * sj[l, l, n] - u_ln[l, n] / s_lln[l + 1, l, n + 1] * sj[l, l, n + 1]
         ) * (2 / (u_ln[l, n] ** 2 + u_ln[l, n + 1] ** 2) / r_cut**3) ** (0.5)
@@ -478,7 +497,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
     # perform gramm shmidt
 
-    def g(r):
+    def g(r: Array) -> Array:
         sj = spherical_jn_2(l_max, r * u_ln / r_cut)
 
         n_range = jnp.arange(n_max + 1)
@@ -491,7 +510,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
     S_nml = quad(g, 1e-10, r_cut, n=50)()
 
     @partial(vmap_decorator, in_axes=(2), out_axes=(2))
-    def _u_inv(S):
+    def _u_inv(S: Array):
         U = jnp.linalg.cholesky(S)
         U_inv_nml = jnp.linalg.pinv(U)
         return U_inv_nml
@@ -501,7 +520,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
     # jax.debug.print("S={}, U_inv={}", S_nml, U_inv_nml)
 
     @jit_decorator
-    def _l(p_ij, p_ik):
+    def _l(p_ij: Array, p_ik: Array):
         return jnp.array([legendre_l(l, p_ij, p_ik) for l in l_list])
 
     def g_nl(r: Array):
@@ -510,8 +529,8 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
         @partial(vmap_decorator, in_axes=(2, 1), out_axes=1)
         def _g_nl(
-            U_inv_l,
-            fnl,
+            U_inv_l: Array,
+            fnl: Array,
         ):
             return U_inv_l @ fnl
 
@@ -550,7 +569,7 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
         # return out
 
-    def _p_i_sb_2_s(p_ij, atom_index_j):
+    def _p_i_sb_2_s(p_ij: Array, atom_index_j: Array) -> Array:
         r_ij_sq = jnp.dot(p_ij, p_ij)
 
         r_ij_sq_safe = jax.lax.cond(
@@ -571,7 +590,14 @@ def p_inl_sb(l_max, n_max, r_cut, bessel_fun="jax"):
 
         return a_jnl
 
-    def _p_i_sb_2_d(p_ij, atom_index_j, data_j, p_ik, atom_index_k, data_k):
+    def _p_i_sb_2_d(
+        p_ij: Array,
+        atom_index_j: Array,
+        data_j: Array,
+        p_ik: Array,
+        atom_index_k: Array,
+        data_k: Array,
+    ):
         a_jnl = data_j
         a_knl = data_k
 
