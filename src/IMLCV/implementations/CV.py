@@ -182,42 +182,6 @@ def _sb_descriptor(
 
     from IMLCV.tools.soap_kernel import p_i, p_inl_sb
 
-    def _reduce_sb(a: Array) -> Array:
-        def _tril(a):
-            return a[jnp.tril_indices_from(a)]
-
-        def _triu(a):
-            return a[jnp.triu_indices_from(a)]
-
-        a = vmap_decorator(
-            vmap_decorator(
-                vmap_decorator(_tril, in_axes=(0), out_axes=(0)),
-                in_axes=(1),
-                out_axes=(1),
-            ),
-            in_axes=(2),
-            out_axes=(2),
-        )(
-            a,
-        )  # eliminate l>n
-
-        def eliminate_Z(x):
-            if mul_Z:
-                x *= vmap_decorator(vmap_decorator(jax.lax.mul, in_axes=(0, None)), in_axes=(None, 0))(
-                    jnp.array(nl.info.z_unique), jnp.array(nl.info.z_unique)
-                )
-
-            return _triu(x)
-
-        a = vmap_decorator(
-            vmap_decorator(eliminate_Z, in_axes=(0), out_axes=(0)),
-            in_axes=(3),
-            out_axes=(2),
-        )(
-            a,
-        )  # eliminate Z2>Z1
-        return a
-
     f_single, f_double = p_inl_sb(
         r_cut=r_cut,
         n_max=n_max,
@@ -230,22 +194,15 @@ def _sb_descriptor(
         nl=nl,
         f_single=f_single,
         f_double=f_double,
-        # p=p,
         r_cut=r_cut,
         chunk_size_atoms=chunk_size_atoms,
         chunk_size_neigbourgs=chunk_size_neigbourgs,
         shmap=shmap,
         shmap_kwargs=shmap_kwargs,
+        mul_Z=mul_Z,
+        merge_ZZ=True,
+        reshape=True,
     )
-
-    if reduce:
-        a = _reduce_sb(a)
-
-    if mul_Z:
-        a = jnp.einsum("a...,a->a...", a, jnp.array(nl.info.z_array))
-
-    if reshape:
-        a = jnp.reshape(a, (a.shape[0], -1))
 
     return CV(cv=a, atomic=True)
 
@@ -300,34 +257,11 @@ def _soap_descriptor(
     r_delta,
     num,
     basis,
+    mul_Z=True,
 ):
     assert nl is not None, "provide neighbourlist for soap describport"
 
     from IMLCV.tools.soap_kernel import p_i, p_innl_soap
-
-    def _reduce_sb(a: Array) -> Array:
-        # a_z1_z2_n_n'_l
-
-        def _triu(a):
-            # print(f"{a.shape=}")
-            return a[jnp.triu_indices_from(a)]
-
-        # eliminate Z2>Z1
-        a = vmap_decorator(
-            vmap_decorator(vmap_decorator(_triu, in_axes=(2), out_axes=1), in_axes=(3), out_axes=2),
-            in_axes=(4),
-            out_axes=3,
-        )(a)
-
-        # a_Z_n_n'_l
-
-        # eliminate nn' Z2>Z1
-
-        a = vmap_decorator(vmap_decorator(_triu, in_axes=(2), out_axes=1), in_axes=(3), out_axes=2)(a)
-
-        # a_Z_N_l
-
-        return a
 
     f_single, f_double = p_innl_soap(
         r_cut=r_cut,
@@ -337,6 +271,7 @@ def _soap_descriptor(
         r_delta=r_delta,
         num=num,
         basis=basis,
+        reduce=reduce,
     )
 
     a = p_i(
@@ -347,13 +282,10 @@ def _soap_descriptor(
         r_cut=r_cut,
         shmap=shmap,
         shmap_kwargs=shmap_kwargs,
+        mul_Z=mul_Z,
+        merge_ZZ=True,
+        reshape=True,
     )
-
-    if reduce:
-        a = vmap_decorator(_reduce_sb)(a)
-
-    if reshape:
-        a = jnp.reshape(a, (a.shape[0], -1))
 
     return CV(cv=a, atomic=True)
 
@@ -368,10 +300,22 @@ def soap_descriptor(
     reshape=True,
     num=50,
     basis="cos",
+    mul_Z=True,
 ) -> CvTrans:
     return CvTrans.from_cv_function(
         _soap_descriptor,
-        static_argnames=["r_cut", "reduce", "reshape", "n_max", "l_max", "sigma_a", "r_delta", "num", "basis"],
+        static_argnames=[
+            "r_cut",
+            "reduce",
+            "reshape",
+            "n_max",
+            "l_max",
+            "sigma_a",
+            "r_delta",
+            "num",
+            "basis",
+            "mul_Z",
+        ],
         r_cut=r_cut,
         reduce=reduce,
         reshape=reshape,
@@ -381,6 +325,7 @@ def soap_descriptor(
         r_delta=r_delta,
         num=num,
         basis=basis,
+        mul_Z=mul_Z,
     )
 
 
@@ -438,7 +383,7 @@ def _scale_cv_trans(x, nl, shmap, shmap_kwargs, upper, lower, mini, diff):
     return x.replace(cv=((x.cv - mini) / diff) * (upper - lower) + lower)
 
 
-def scale_cv_trans(array: CV, lower=0, upper=1):
+def scale_cv_trans(array: CV, lower: float = 0.0, upper: float = 1.0):
     "axis 0 is batch axis"
     maxi = jnp.nanmax(array.cv, axis=0)
     mini = jnp.nanmin(array.cv, axis=0)
@@ -505,16 +450,17 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     return out.compute_cv(m)[0], out
 
 
-def kernel_dist(p1: jax.Array, p2: jax.Array, xi=2.0):
+def kernel_dist(p1: jax.Array, p2: jax.Array, xi=1.0):
+    print(f"new dist sum")
+
     def log_safe(x: jax.Array):
         x = jnp.where(x < 1e-10, 1e-10, x)
 
         return jnp.log(x)
 
-    n1 = jnp.dot(p1, p1)
-    n2 = jnp.dot(p2, p2)
+    k = jnp.sum(p1 * p2) / (jnp.sqrt(jnp.sum(p1 * p1) * jnp.sum(p2 * p2)))
 
-    return xi * (0.5 * log_safe(n1) - log_safe(jnp.dot(p1, p2)) + 0.5 * log_safe(n2))
+    return -log_safe(k**xi)
 
 
 # @partial( jit_decorator, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
@@ -679,7 +625,9 @@ def sinkhorn_divergence_2(
 
         d = (-0.5 * d_11 + d_12 - 0.5 * d_22) / p1_i.shape[0]
 
-        return jnp.exp(-d)
+        d = jnp.exp(-d)
+
+        return d
 
     if jacobian:
         get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)  # type:ignore
@@ -974,17 +922,28 @@ def _cv_index(cv: CV, nl: NeighbourList, shmap, shmap_kwargs, indices):
 
 
 def get_non_constant_trans(
-    c: list[CV], c_t: list[CV] | None = None, w: list[Array] | None = None, epsilon=1e-14, max_functions=None
+    c: list[CV],
+    c_t: list[CV] | None = None,
+    nl: NeighbourList | None = None,
+    nl_t: NeighbourList | None = None,
+    w: list[Array] | None = None,
+    epsilon=1e-14,
+    max_functions=None,
+    tr: CvTrans | None = None,
 ):
     from IMLCV.base.rounds import Covariances
 
     cov = Covariances.create(
         cv_0=c,
         cv_1=c_t,
+        nl=nl,
+        nl_t=nl_t,
         w=w,
         symmetric=True,
         calc_pi=True,
         only_diag=True,
+        trans_f=tr,
+        trans_g=tr,
     )
 
     assert cov.C00 is not None

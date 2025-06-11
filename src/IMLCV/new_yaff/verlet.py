@@ -228,11 +228,11 @@ class VerletIntegrator(MyPyTreeNode):
     def create(
         ff: YaffFF,
         other_hooks: list[Hook],
-        timestep,
+        timestep: float,
         thermostat: VerletHook | None = None,
         barostat: BarostatHook | None = None,
         vel0=None,
-        temp0=300,
+        temp0: float = 300.0,
         scalevel0=True,
         time0=None,
         ndof=None,

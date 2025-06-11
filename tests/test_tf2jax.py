@@ -7,16 +7,17 @@ def test_call_tf_batcher():
 
     import jax.numpy as jnp
     import numpy as np
-    from jax import jacrev, jit, vmap_decorator
+    from jax import jacrev, jit
     from jax.experimental import jax2tf
     from jax.experimental.jax2tf.call_tf import call_tf_p
     from jax.interpreters import batching
 
+    from IMLCV.base.datastructures import vmap_decorator
     from IMLCV.external.tf2jax import loop_batcher
 
     @jit
     def f(x):
-        return jnp.array([jnp.sum(x * x), jnp.product(x)])
+        return jnp.array([jnp.sum(x * x), jnp.prod(x)])
 
     x = np.random.random(7)
     y = np.random.random((5, 7))

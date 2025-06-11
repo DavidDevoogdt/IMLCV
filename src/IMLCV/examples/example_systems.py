@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from IMLCV.base.bias import BiasF, EnergyFn, NoneBias
+from IMLCV.base.bias import Bias, BiasF, EnergyFn, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
@@ -17,30 +17,7 @@ from IMLCV.implementations.MdEngine import NewYaffEngine
 DATA_ROOT = ROOT_DIR / "data"
 
 
-# def _get_alanine_dipeptide_openmm_system():
-#     fold = DATA_ROOT / "ala" / "alanine-dipeptide.pdb"
-
-#     assert fold.exists()
-
-#     pdb = PDBFile(str(fold))
-#     forcefield = ForceField("amber14-all.xml")
-#     system: System = forcefield.createSystem(pdb.topology)
-
-#     integrator = LangevinMiddleIntegrator(
-#         300 * openmm_unit.kelvin, 1 / openmm_unit.picosecond, 0.004 * openmm_unit.picoseconds
-#     )
-#     simulation = Simulation(pdb.topology, system, integrator)
-#     simulation.context.setPositions(pdb.positions)
-
-#     sp = SystemParams(
-#         coordinates=jnp.array([[a._value.x, a._value.y, a._value.z] for a in pdb.positions]) * nanometer,
-#         cell=None,
-#     )
-
-#     return simulation, sp
-
-
-def alanine_dipeptide_openmm(cv: str | None = "backbone_dihedrals"):
+def alanine_dipeptide_openmm(cv: str | None = "backbone_dihedrals", bias: Bias | None = None):
     energy = OpenMmEnergy(
         pdb=DATA_ROOT / "ala" / "alanine-dipeptide.pdb",
         forcefield_name="amber14-all.xml",
@@ -48,30 +25,31 @@ def alanine_dipeptide_openmm(cv: str | None = "backbone_dihedrals"):
 
     sp, atomic_numbers = energy.get_info()
 
-    if cv == "backbone_dihedrals":
-        cv0 = CollectiveVariable(
-            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
-            metric=CvMetric.create(
-                periodicities=[True, True],
-                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
-            ),
-        )
-    elif cv == "backbone_dihedrals_theta":
-        cv0 = CollectiveVariable(
-            f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16)) + dihedral(numbers=(1, 4, 6, 8))),
-            metric=CvMetric.create(
-                periodicities=[True, True, True],
-                bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi], [-np.pi, np.pi]],
-            ),
-        )
-    elif cv is None:
-        cv0 = NoneCV()
-    else:
-        raise ValueError(
-            f"unknown value {cv} for cv 'backbone_dihedrals'",
-        )
+    if bias is None:
+        if cv == "backbone_dihedrals":
+            cv0 = CollectiveVariable(
+                f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
+                metric=CvMetric.create(
+                    periodicities=[True, True],
+                    bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
+                ),
+            )
+        elif cv == "backbone_dihedrals_theta":
+            cv0 = CollectiveVariable(
+                f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16)) + dihedral(numbers=(1, 4, 6, 8))),
+                metric=CvMetric.create(
+                    periodicities=[True, True, True],
+                    bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi], [-np.pi, np.pi]],
+                ),
+            )
+        elif cv is None:
+            cv0 = NoneCV()
+        else:
+            raise ValueError(
+                f"unknown value {cv} for cv 'backbone_dihedrals'",
+            )
 
-    bias = NoneBias.create(collective_variable=cv0)
+        bias = NoneBias.create(collective_variable=cv0)
 
     tic = StaticMdInfo(
         T=300 * kelvin,
@@ -158,163 +136,163 @@ def alanine_dipeptide_refs():
     return sp0 + sp1
 
 
-def mil53_yaff():
-    T = 300 * kelvin
-    P = 1 * atm
+# def mil53_yaff():
+#     T = 300 * kelvin
+#     P = 1 * atm
 
-    import yaff
+#     import yaff
 
-    def f():
-        rd = ROOT_DIR / "data" / "MIL53"
-        system = yaff.System.from_file(str(rd / "MIL53.chk"))
-        ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
-        return ff
+#     def f():
+#         rd = ROOT_DIR / "data" / "MIL53"
+#         system = yaff.System.from_file(str(rd / "MIL53.chk"))
+#         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
+#         return ff
 
-    cvs = CollectiveVariable(
-        f=Volume,
-        metric=CvMetric.create(
-            periodicities=[False],
-            bounding_box=jnp.array(
-                [850, 1500],
-            )
-            * angstrom**3,
-        ),
-    )
+#     cvs = CollectiveVariable(
+#         f=Volume,
+#         metric=CvMetric.create(
+#             periodicities=[False],
+#             bounding_box=jnp.array(
+#                 [850, 1500],
+#             )
+#             * angstrom**3,
+#         ),
+#     )
 
-    bias = HarmonicBias.create(
-        cvs=cvs,
-        q0=CV(cv=jnp.array([3000 * angstrom**3])),
-        k=jnp.array([0.1 * kjmol]),
-    )
+#     bias = HarmonicBias.create(
+#         cvs=cvs,
+#         q0=CV(cv=jnp.array([3000 * angstrom**3])),
+#         k=jnp.array([0.1 * kjmol]),
+#     )
 
-    bias = NoneBias.create(collective_variable=cvs)
+#     bias = NoneBias.create(collective_variable=cvs)
 
-    energy = YaffEnergy(f=f)
+#     energy = YaffEnergy(f=f)
 
-    st = StaticMdInfo(
-        T=T,
-        P=P,
-        timestep=1.0 * femtosecond,
-        timecon_thermo=100.0 * femtosecond,
-        timecon_baro=200.0 * femtosecond,
-        write_step=1,
-        screen_log=1,
-        atomic_numbers=energy.ff.system.numbers,
-    )
+#     st = StaticMdInfo(
+#         T=T,
+#         P=P,
+#         timestep=1.0 * femtosecond,
+#         timecon_thermo=100.0 * femtosecond,
+#         timecon_baro=200.0 * femtosecond,
+#         write_step=1,
+#         screen_log=1,
+#         atomic_numbers=energy.ff.system.numbers,
+#     )
 
-    yaffmd = NewYaffEngine.create(
-        energy=energy,
-        bias=bias,
-        static_trajectory_info=st,
-    )
+#     yaffmd = NewYaffEngine.create(
+#         energy=energy,
+#         bias=bias,
+#         static_trajectory_info=st,
+#     )
 
-    return yaffmd
+#     return yaffmd
 
 
-def CsPbI3(cv=None, unit_cells=[2]):
-    assert isinstance(unit_cells, list)
+# def CsPbI3(cv=None, unit_cells=[2]):
+#     assert isinstance(unit_cells, list)
 
-    if len(unit_cells) == 3:
-        [x, y, z] = unit_cells
-    elif len(unit_cells) == 1:
-        [n] = unit_cells
-        x = n
-        y = n
-        z = n
-    else:
-        raise ValueError(
-            f"provided unit cell {unit_cells}, please provide 1 or 3 arguments ",
-        )
+#     if len(unit_cells) == 3:
+#         [x, y, z] = unit_cells
+#     elif len(unit_cells) == 1:
+#         [n] = unit_cells
+#         x = n
+#         y = n
+#         z = n
+#     else:
+#         raise ValueError(
+#             f"provided unit cell {unit_cells}, please provide 1 or 3 arguments ",
+#         )
 
-    fb = DATA_ROOT / "CsPbI_3" / f"{x}x{y}x{z}"
+#     fb = DATA_ROOT / "CsPbI_3" / f"{x}x{y}x{z}"
 
-    path_source = DATA_ROOT / "CsPbI_3" / "Libraries"
+#     path_source = DATA_ROOT / "CsPbI_3" / "Libraries"
 
-    assert (p := path_source).exists(), f"cannot find {p}"
+#     assert (p := path_source).exists(), f"cannot find {p}"
 
-    path_potentials = path_source / "GTH_POTENTIALS"
-    path_basis = path_source / "BASIS_SETS"
-    path_dispersion = path_source / "dftd3.dat"
+#     path_potentials = path_source / "GTH_POTENTIALS"
+#     path_basis = path_source / "BASIS_SETS"
+#     path_dispersion = path_source / "dftd3.dat"
 
-    assert (p := fb / "cp2k.inp").exists(), f"cannot find {p}"
+#     assert (p := fb / "cp2k.inp").exists(), f"cannot find {p}"
 
-    for p in [path_potentials, path_basis, path_dispersion]:
-        assert p.exists(), f"cannot find {p}"
+#     for p in [path_potentials, path_basis, path_dispersion]:
+#         assert p.exists(), f"cannot find {p}"
 
-    input_params = {
-        "PATH_DISPERSION": path_dispersion,
-        "BASIS_SET_FILE_NAME": path_basis,
-        "POTENTIAL_FILE_NAME": path_potentials,
-    }
+#     input_params = {
+#         "PATH_DISPERSION": path_dispersion,
+#         "BASIS_SET_FILE_NAME": path_basis,
+#         "POTENTIAL_FILE_NAME": path_potentials,
+#     }
 
-    refs, z_array, atoms = CsPbI3_refs(x, y, z)
+#     refs, z_array, atoms = CsPbI3_refs(x, y, z)
 
-    energy = Cp2kEnergy(
-        atoms=atoms[0],
-        input_file=fb / "cp2k.inp",
-        input_kwargs=input_params,
-        stress_tensor=True,
-        debug=False,
-    )
+#     energy = Cp2kEnergy(
+#         atoms=atoms[0],
+#         input_file=fb / "cp2k.inp",
+#         input_kwargs=input_params,
+#         stress_tensor=True,
+#         debug=False,
+#     )
 
-    from IMLCV.base.CV import CvTrans
+#     from IMLCV.base.CV import CvTrans
 
-    r_cut = 5 * angstrom
+#     r_cut = 5 * angstrom
 
-    tic = StaticMdInfo(
-        write_step=1,
-        T=300 * kelvin,
-        P=1.0 * bar,
-        timestep=2.0 * femtosecond,
-        timecon_thermo=100.0 * femtosecond,
-        timecon_baro=100.0 * femtosecond,
-        atomic_numbers=z_array,
-        equilibration=0 * femtosecond,
-        screen_log=1,
-        r_cut=r_cut,
-    )
+#     tic = StaticMdInfo(
+#         write_step=1,
+#         T=300 * kelvin,
+#         P=1.0 * bar,
+#         timestep=2.0 * femtosecond,
+#         timecon_thermo=100.0 * femtosecond,
+#         timecon_baro=100.0 * femtosecond,
+#         atomic_numbers=z_array,
+#         equilibration=0 * femtosecond,
+#         screen_log=1,
+#         r_cut=r_cut,
+#     )
 
-    if cv == "cell_vec":
+#     if cv == "cell_vec":
 
-        @CvTrans.from_function
-        def f(sp: SystemParams, _: NeighbourList | None):
-            import jax.numpy as jnp
+#         @CvTrans.from_function
+#         def f(sp: SystemParams, _: NeighbourList | None):
+#             import jax.numpy as jnp
 
-            assert sp.cell is not None
+#             assert sp.cell is not None
 
-            sp = sp.minkowski_reduce()[0]
+#             sp = sp.minkowski_reduce()[0]
 
-            l = jnp.linalg.norm(sp.cell, axis=1)
-            l0 = jnp.max(l)
-            l1 = jnp.min(l)
+#             l = jnp.linalg.norm(sp.cell, axis=1)
+#             l0 = jnp.max(l)
+#             l1 = jnp.min(l)
 
-            return CV(cv=jnp.array([(l0 - l1) / 2, (l0 + l1) / 2]))
+#             return CV(cv=jnp.array([(l0 - l1) / 2, (l0 + l1) / 2]))
 
-        assert x == y
-        assert x == z
+#         assert x == y
+#         assert x == z
 
-        cv = CollectiveVariable(
-            f=f,
-            metric=CvMetric.create(
-                periodicities=[False, False],
-                bounding_box=jnp.array([[0.0, 3.0 * x], [5.5 * x, 8.0 * x]]) * angstrom,
-            ),
-        )
+#         cv = CollectiveVariable(
+#             f=f,
+#             metric=CvMetric.create(
+#                 periodicities=[False, False],
+#                 bounding_box=jnp.array([[0.0, 3.0 * x], [5.5 * x, 8.0 * x]]) * angstrom,
+#             ),
+#         )
 
-    elif cv is None:
-        cv = NoneCV()
-    else:
-        raise ValueError(f"unknown value {cv} for cv choose 'cell_vec'")
+#     elif cv is None:
+#         cv = NoneCV()
+#     else:
+#         raise ValueError(f"unknown value {cv} for cv choose 'cell_vec'")
 
-    bias = NoneBias.create(collective_variable=cv)
+#     bias = NoneBias.create(collective_variable=cv)
 
-    yaffmd = NewYaffEngine.create(
-        energy=energy,
-        bias=bias,
-        static_trajectory_info=tic,
-    )
+#     yaffmd = NewYaffEngine.create(
+#         energy=energy,
+#         bias=bias,
+#         static_trajectory_info=tic,
+#     )
 
-    return yaffmd
+#     return yaffmd
 
 
 def CsPbI3_MACE(unit_cells=[2]):
@@ -422,7 +400,12 @@ def CsPbI3_MACE_lattice(unit_cells=[2]):
 
     bias = NoneBias.create(collective_variable=colvar)
 
-    yaffmd = NewYaffEngine.create(energy=energy, bias=bias, static_trajectory_info=tic, sp=refs[0])
+    yaffmd = NewYaffEngine.create(
+        energy=energy,
+        bias=bias,
+        static_trajectory_info=tic,
+        sp=refs[0],
+    )
 
     return yaffmd, refs
 
@@ -445,7 +428,7 @@ def CsPbI3_refs(x, y, z, input_atoms=None):
         input_atoms = o
 
     for a in input_atoms:
-        atoms.append(ase.io.read(str(a)))
+        atoms.append(ase.io.read(str(a)))  # type: ignore
 
     assert len(atoms) != 0, "no xyz file found"
     z_arr = None
@@ -453,18 +436,23 @@ def CsPbI3_refs(x, y, z, input_atoms=None):
 
     for a in atoms:
         sp_a, _ = SystemParams(
-            coordinates=a.positions * angstrom,
-            cell=a.cell * angstrom,
+            coordinates=jnp.array(a.positions) * angstrom,
+            cell=jnp.array(a.cell) * angstrom,
         ).canonicalize()
 
         if z_arr is None:
-            z_arr = a.get_atomic_numbers()
+            z_arr = jnp.array(a.get_atomic_numbers())
 
             refs = sp_a
         else:
-            assert (z_arr == a.get_atomic_numbers()).all()
+            assert refs is not None
+
+            assert (z_arr == jnp.array(a.get_atomic_numbers())).all()
 
             refs += sp_a
+
+    assert z_arr is not None, "z_array must be defined"
+    assert refs is not None, "refs must be defined"
 
     return refs, z_arr, atoms
 
@@ -531,7 +519,7 @@ def toy_1d():
     )
 
     cv0 = CollectiveVariable(
-        f=CvTrans.from_function(_3d_muller_brown_cvs),
+        f=CvTrans.from_cv_function(_3d_muller_brown_cvs),
         metric=CvMetric.create(
             periodicities=[False, False],
             bounding_box=jnp.array([[-1.5, 1.0], [-0.5, 2.0]]),
@@ -589,10 +577,10 @@ def f_toy_periodic(sp: SystemParams, nl: NeighbourList, _nl0: NeighbourList):
     def gauss_3d(v, r0, a=1.0, offset=0.0):
         return jnp.exp(-a * ((v - r0**3) / (r0**3)) ** 2 + jnp.log(jnp.sqrt(a) / (r0**3)) - offset)
 
-    def f(V):
+    def f_V(V):
         return (-5.0 * jnp.log(gauss_3d(V, 2 * r0, 2) + gauss_3d(V, 4 * r0, 16, -5.0)) - 24) * kjmol
 
-    return jnp.sum(ener_bond) + f(V)
+    return jnp.sum(ener_bond) + f_V(V)
 
 
 def toy_periodic_phase_trans():
@@ -652,13 +640,15 @@ def toy_periodic_phase_trans():
         )
     )
 
+    assert sp0.cell is not None, "cell must be defined for periodic systems"
+
     sp1 = SystemParams(
         coordinates=sp0.coordinates * 2,
         cell=sp0.cell * 2,
     )
 
     cv0 = CollectiveVariable(
-        f=CvTrans.from_function(_toy_periodic_cvs),
+        f=CvTrans.from_cv_function(_toy_periodic_cvs),
         metric=CvMetric.create(
             periodicities=[False],
             bounding_box=jnp.array(

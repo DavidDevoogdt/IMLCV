@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourLi
 from IMLCV.base.rounds import Rounds
 from IMLCV.base.UnitsConstants import femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
+from IMLCV.examples.example_systems import alanine_dipeptide_openmm
 from IMLCV.implementations.bias import BiasMTD, HarmonicBias, RbfBias
 from IMLCV.implementations.CV import Volume, dihedral
 from IMLCV.implementations.energy import YaffEnergy
@@ -27,15 +29,15 @@ def test_harmonic():
         ),
     )
 
-    bias = HarmonicBias.create(cvs, q0=CV(jnp.array([np.pi, -np.pi])), k=1.0)
+    bias = HarmonicBias.create(cvs, q0=CV(cv=jnp.array([np.pi, -np.pi])), k=1.0)
 
     x = np.random.rand(2)
 
-    a1, _ = bias.compute_from_cv(CV(jnp.array([np.pi, np.pi]) + x))
-    a2, _ = bias.compute_from_cv(CV(jnp.array([-np.pi, -np.pi] + x)))
-    a3, _ = bias.compute_from_cv(CV(jnp.array([np.pi, -np.pi]) + x))
-    a4, _ = bias.compute_from_cv(CV(jnp.array([-np.pi, np.pi] + x)))
-    a5, _ = bias.compute_from_cv(CV(jnp.array([np.pi, np.pi]) + x.T))
+    a1, _ = bias.compute_from_cv(CV(cv=jnp.array([np.pi, np.pi]) + x))
+    a2, _ = bias.compute_from_cv(CV(cv=jnp.array([-np.pi, -np.pi] + x)))
+    a3, _ = bias.compute_from_cv(CV(cv=jnp.array([np.pi, -np.pi]) + x))
+    a4, _ = bias.compute_from_cv(CV(cv=jnp.array([-np.pi, np.pi] + x)))
+    a5, _ = bias.compute_from_cv(CV(cv=jnp.array([np.pi, np.pi]) + x.T))
 
     assert pytest.approx(a1, abs=1e-5) == a2
     assert pytest.approx(a1, abs=1e-5) == a3
@@ -48,9 +50,14 @@ def test_virial():
 
     metric = CvMetric.create(periodicities=[False])
     cv0 = CollectiveVariable(f=Volume, metric=metric)
-    coordinates = np.random.random((10, 3))
-    cell = np.random.random((3, 3))
-    vir = np.zeros((3, 3))
+    key = jax.random.PRNGKey(0)
+
+    key, key0 = jax.random.split(key)
+    coordinates = jax.random.normal(key0, (10, 3))
+
+    key, key0 = jax.random.split(key)
+    cell = jax.random.normal(key0, (3, 3))
+    # vir = jnp.zeros((3, 3))
 
     def fun(x):
         return x.cv[0]
@@ -75,7 +82,7 @@ def test_RBF_bias(kernel):
         return CV(cv=sp.coordinates)
 
     collective_variable = CollectiveVariable(
-        f=CvTrans.from_function(f=a),
+        f=CvTrans.from_cv_function(f=a),
         metric=CvMetric.create(
             periodicities=[False, False],
             bounding_box=jnp.array([[-2, 2], [1, 5]]),
@@ -92,7 +99,7 @@ def test_RBF_bias(kernel):
     ):
         return cv.replace(cv=cv.cv[0] ** 3 + cv.cv[1])
 
-    val, _, _ = CvTrans.from_cv_function(f).compute_cv(center_cvs)
+    val, _ = CvTrans.from_cv_function(f).compute_cv(center_cvs)
 
     bias = RbfBias.create(cvs=collective_variable, cv=center_cvs, vals=val.cv, kernel=kernel)
 
@@ -132,39 +139,26 @@ def test_combine_bias():
 
     bias = CompositeBias.create(biases=[bias1, bias2])
 
-    stic = StaticMdInfo(
-        T=T,
-        timestep=2.0 * femtosecond,
-        timecon_thermo=100.0 * femtosecond,
-        write_step=1,
-        atomic_numbers=jnp.array(
-            [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
-            dtype=int,
-        ),
-    )
+    # stic = StaticMdInfo(
+    #     T=T,
+    #     timestep=2.0 * femtosecond,
+    #     timecon_thermo=100.0 * femtosecond,
+    #     write_step=1,
+    #     atomic_numbers=jnp.array(
+    #         [1, 6, 1, 1, 6, 8, 7, 1, 6, 1, 6, 1, 1, 1, 6, 8, 7, 1, 6, 1, 1, 1],
+    #         dtype=int,
+    #     ),
+    # )
 
-    mde = NewYaffEngine.create(
-        energy=YaffEnergy(f=get_alaninedipeptide_amber99ff),
-        bias=bias,
-        static_trajectory_info=stic,
-    )
+    mde = alanine_dipeptide_openmm(bias=bias)
 
     mde.run(int(1e2))
 
 
 def test_bias_save(tmpdir):
     """save and load bias to disk."""
-    from IMLCV.examples.example_systems import alanine_dipeptide_yaff
 
-    yaffmd = alanine_dipeptide_yaff(
-        bias=lambda cv0: BiasMTD.create(
-            cvs=cv0,
-            K=2.0 * kjmol,
-            sigmas=jnp.array([0.35, 0.35]),
-            start=25,
-            step=500,
-        ),
-    )
+    yaffmd = alanine_dipeptide_openmm()
 
     yaffmd.run(int(1e2))
 
@@ -186,6 +180,8 @@ def test_bias_save(tmpdir):
     print(f"{db=}\n{db2=}")
 
     assert pytest.approx(b) == b2
+    assert db is not None
+    assert db2 is not None
     assert jnp.allclose(db.cv, db2.cv)
 
 
@@ -208,7 +204,7 @@ def test_FES_bias(tmpdir, config_test, choice):
 
     rnds = Rounds.create(folder=folder, new_folder=False)
 
-    scheme0 = Scheme.from_rounds(rnds)
+    scheme0 = Scheme(rounds=rnds)
 
     sp = scheme0.md.sp
 
@@ -239,8 +235,8 @@ def test_reparametrize():
 
     bias = CompositeBias.create(
         biases=[
-            HarmonicBias.create(cvs, q0=CV(jnp.array([np.pi, -np.pi])), k=1.0 / 6**2),
-            HarmonicBias.create(cvs, q0=CV(jnp.array([0.0, 0.5])), k=1.0 / 6**2),
+            HarmonicBias.create(cvs, q0=CV(cv=jnp.array([np.pi, -np.pi])), k=1.0 / 6**2),
+            HarmonicBias.create(cvs, q0=CV(cv=jnp.array([0.0, 0.5])), k=1.0 / 6**2),
         ],
     )
 

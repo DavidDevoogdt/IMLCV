@@ -439,8 +439,8 @@ class LangevinBarostat(BarostatHook):
 
     _: KW_ONLY
 
-    temp: jax.Array
-    press: jax.Array
+    temp: jax.Array | float
+    press: jax.Array | float
 
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
@@ -502,6 +502,7 @@ class LangevinBarostat(BarostatHook):
         )
         # set the number of internal degrees of freedom (no restriction on p_cm)
         if iterative.ndof is None:
+            assert iterative.pos is not None
             iterative.ndof = iterative.pos.size
         # define the barostat 'mass'
         self.mass_press = (iterative.ndof + 3) / 3 * boltzmann * self.temp * (self.timecon / (2 * jnp.pi)) ** 2

@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from ase import Atoms, units
 
 import IMLCV.new_yaff
+import IMLCV.new_yaff.iterative
 import IMLCV.new_yaff.verlet
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
@@ -258,34 +259,35 @@ class NewYaffEngine(MDEngine):
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
-        sp: SystemParams,
+        sp: SystemParams | None = None,
         trajectory_info: TrajectoryInfo | None = None,
         trajectory_file=None,
         # additional_parts=[],
         **kwargs,
     ) -> NewYaffEngine:
-        cont = False
+        cont = trajectory_info is not None
 
         create_kwargs = {}
 
         if trajectory_file is not None:
             trajectory_file = Path(trajectory_file)
             # continue with existing file if it exists
-            if Path(trajectory_file).exists():
-                trajectory_info = TrajectoryInfo.load(trajectory_file)
-                cont = True
-
-            if trajectory_info._size is None:
-                cont = False
+            assert Path(trajectory_file).exists()
+            trajectory_info = TrajectoryInfo.load(trajectory_file)
+            cont = True
 
         if not cont:
             create_kwargs["step"] = 1
 
         else:
+            assert trajectory_info is not None
+
             create_kwargs["step"] = trajectory_info._size
             sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
                 create_kwargs["time0"] = time()
+
+        assert sp is not None, "SystemParams must be provided"
 
         kwargs.update(create_kwargs)
 
@@ -310,6 +312,10 @@ class NewYaffEngine(MDEngine):
                 super().__init__()
 
             def __call__(self, iterative: IMLCV.new_yaff.verlet.VerletIntegrator):
+                assert iterative.epot is not None, "Potential energy must be computed"
+                assert iterative.e_bias is not None, "e bias must be set"
+                assert iterative.temp is not None, "Temperature must be set"
+
                 kwargs = dict(
                     t=iterative.time,
                     T=iterative.temp,
@@ -322,7 +328,7 @@ class NewYaffEngine(MDEngine):
                 if hasattr(iterative, "press"):
                     kwargs["P"] = iterative.press
 
-                self.md_engine.save_step(**kwargs)
+                self.md_engine.save_step(**kwargs)  # type:ignore
 
                 # print(f"{iterative.ff.system.sp=}")
 

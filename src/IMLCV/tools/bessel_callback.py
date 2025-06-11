@@ -42,8 +42,8 @@ def generate_bessel(function, type, sign=1, exp_scaled=False):
             res_dtype_shape,
             v,
             z,
-            sharding=jax.sharding.SingleDeviceSharding(jax.devices()[0]),
-            vmap_decorator_method="expand_dims",
+            # sharding=jax.sharding.SingleDeviceSharding(jax.devices()[0]),
+            vmap_method="expand_dims",
         )
 
     @custom_jvp_decorator
@@ -135,7 +135,6 @@ iv = generate_bessel(scipy.special.iv, sign=+1, type=1)
 ORDER = 100  # Following Jablonski (1994)
 
 
-@partial(jax.jit, static_argnums=0)
 def spherical_jn_recurrence_pattern(n, z):
     jlp1 = 0
 
@@ -187,7 +186,6 @@ def spherical_jn_recurrence_pattern(n, z):
     return out / n_safe * f0
 
 
-@partial(jax.jit, static_argnums=0)
 def spherical_jn_recurrence_pattern_unstable(n, z):
     z_safe: jax.Array = jnp.where(z < 1e-10, 1, z)  # type:ignore
 
@@ -226,7 +224,6 @@ def spherical_jn_recurrence_pattern_unstable(n, z):
 
 
 @partial(custom_jvp_decorator, nondiff_argnums=(0, 2))
-@partial(jit_decorator, static_argnums=(0, 2))
 def spherical_jn(n: int | jax.Array, z: float | jax.Array, forward=True) -> jax.Array:
     if forward:
         return jnp.where(
@@ -238,7 +235,6 @@ def spherical_jn(n: int | jax.Array, z: float | jax.Array, forward=True) -> jax.
     return spherical_jn_recurrence_pattern(n + 1, z)
 
 
-@partial(jax.jit, static_argnums=0)
 def spherical_jn_recurrence(n, z):
     y = 0
 
@@ -255,7 +251,7 @@ def spherical_jn_recurrence(n, z):
 
 
 @spherical_jn.defjvp
-def spherical_jn_jvp(n, forward, primals, tangents):
+def spherical_jn_jvp(n, forward, primals, tangents) -> tuple[jax.Array, jax.Array]:
     (x,) = primals
     (x_dot,) = tangents
 
@@ -264,11 +260,7 @@ def spherical_jn_jvp(n, forward, primals, tangents):
     if ni == 0:
         ni = 1
 
-    y = spherical_jn(ni + 1, x, forward=forward)
-
-    # print(f"{y.shape=}")
-
-    # x_safe = jnp.where(x < 1e-10, 1, x)
+    y = spherical_jn(ni + 1, x, forward)
 
     n_vec = jnp.arange(0, len(y))
 
@@ -276,40 +268,40 @@ def spherical_jn_jvp(n, forward, primals, tangents):
     dy = dy.at[0].set(-y[1])
     dy = dy.at[1:].set((y[:-2] * n_vec[1:-1] - n_vec[2:] * y[2:]) / (2 * n_vec[1:-1] + 1))
 
-    # dy = dy.at[1:].set(y[:-1] - (jnp.arange(1, len(y)) + 1.0) * y[1:] / x_safe)
-
     return y[: n + 1], dy[: n + 1] * x_dot
 
 
-@partial(jit_decorator, static_argnums=(0, 2))
-def ie_n_recurrence_pattern(n, z, half=False):
+# milner: start high and go down
+def ie_n_recurrence_pattern(n: int, z, half=False) -> jax.Array:
     ilp1 = 0.0
 
     il = 1.0
 
     z_safe: jax.Array = jnp.where(z < 1e-12, 1, z)  # type:ignore
 
+    if half:
+        nl = n + 0.5
+    else:
+        nl = n
+
     # https://dlmf.nist.gov/10.29
-    def iter(n, il, ilp1, norm=True):
-        if half:
-            ilm1 = (2 * (n + 0.5)) * il / z_safe + ilp1
-        else:
-            ilm1 = (2 * n) * il / z_safe + ilp1
+    def iter(nl, il, ilp1, norm=True):
+        ilm1 = (2 * nl) * il / z_safe + ilp1
 
         if norm:
             s = jnp.max(jnp.abs(jnp.array([il, ilm1, 1.0])))
             ilm1 /= s
             il /= s
 
-        return n - 1, ilm1, il
+        return nl - 1, ilm1, il
 
-    l = n + ORDER
+    nl = nl + ORDER
 
-    l, il, ilp1 = jax.lax.fori_loop(
+    nl, il, ilp1 = jax.lax.fori_loop(
         0,
         ORDER,
         lambda i, args: iter(*args, norm=True),
-        (l, il, ilp1),
+        (nl, il, ilp1),
         # unroll=True,
     )
 
@@ -321,7 +313,7 @@ def ie_n_recurrence_pattern(n, z, half=False):
 
     _, out = jax.lax.scan(
         body,
-        init=(l, il, ilp1),
+        init=(nl, il, ilp1),
         xs=None,
         length=n,
         # unroll=True,
@@ -329,11 +321,9 @@ def ie_n_recurrence_pattern(n, z, half=False):
 
     out = out[::-1]
 
-    n_safe = jnp.where(out[0] != 0, out[0], 1)
+    n_safe = jnp.where(out[0] != 0, out[0], 1)  # norm to value of I_nl
 
     if half:
-        # jax.debug.print("{}, {}", z_safe, jnp.sinh(z_safe))
-
         u = (2.0 / (jnp.pi * z_safe)) ** (1 / 2) * (jnp.exp(z - jnp.abs(z)) - jnp.exp(-z - jnp.abs(z))) / 2
 
     else:
@@ -342,13 +332,10 @@ def ie_n_recurrence_pattern(n, z, half=False):
     return out / n_safe * u
 
 
-@partial(jit_decorator, static_argnums=(0, 2))
-def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
+def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False) -> jax.Array:
     z_safe: jax.Array = jnp.where(z < 1e-12, 1, z)  # mypy: ignore
 
     if half:
-        # jax.debug.print("{}, {}", z_safe, jnp.sinh(z_safe))
-
         f0 = (
             (2.0 / (jnp.pi * z_safe)) ** (1 / 2)
             * (jnp.exp(z_safe - jnp.abs(z_safe)) - jnp.exp(-z_safe - jnp.abs(z_safe)))
@@ -361,14 +348,17 @@ def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
     if n == 0:
         return jnp.array([f0])
 
-    # https://dlmf.nist.gov/10.29
-    def iter(n, il, ilm1):
-        # print(f"{n=} {il=} {ilm1=}")
+    if half:
+        v = n + 0.5
+        v0 = 1.5
+    else:
+        v = n
+        v0 = 1.0
 
-        if half:
-            ilp1 = ilm1 - (2 * (n + 0.5)) * il / z_safe
-        else:
-            ilp1 = ilm1 - (2 * n) * il / z_safe
+    # https://dlmf.nist.gov/10.29
+    # returns f_{n+1}
+    def iter(n, il, ilm1):
+        ilp1 = ilm1 - (2 * n) * il / z_safe
 
         return n + 1, ilp1, il
 
@@ -381,7 +371,7 @@ def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
             / 2
         )
 
-        f1 = iter(0, f0, fm1)[1]
+        f1 = iter(0.5, f0, fm1)[1]
 
     else:
         f1 = jax.scipy.special.i1e(z)
@@ -394,7 +384,7 @@ def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
 
     _, out = jax.lax.scan(
         body,
-        init=(1, f1, f0),
+        init=(v0, f1, f0),
         xs=None,
         length=n - 1,
     )
@@ -403,39 +393,37 @@ def ie_n_recurrence_pattern_unstalbe(n: int, z: jax.Array, half=False):
 
 
 @partial(custom_jvp_decorator, nondiff_argnums=(0, 2, 3))
-@partial(jit_decorator, static_argnums=(0, 2, 3))
-def ie_n(n, z, half=False, forward=True):
+def ie_n(n: int, z: jax.Array, half: bool = False, forward: bool = True) -> jax.Array:
     if forward:
         return jnp.where(
             z < 0.5,
-            jnp.array([spherical_ie_n_recurrence(ni, z, half=half) for ni in range(n + 1)]) * jnp.exp(-jnp.abs(z)),
+            jnp.array([i_recurrence(ni, z, half=half) for ni in range(n + 1)]) * jnp.exp(-jnp.abs(z)),
             ie_n_recurrence_pattern_unstalbe(n, z, half=half),
         )
 
-    return ie_n_recurrence_pattern(n + 1, z, half=half)
+    return jnp.where(
+        z < 0.5,
+        jnp.array([i_recurrence(ni, z, half=half) for ni in range(n + 1)]) * jnp.exp(-jnp.abs(z)),
+        ie_n_recurrence_pattern(n + 1, z, half=half),
+    )
 
 
-@partial(jit_decorator, static_argnums=(0, 2))
-def spherical_ie_n_recurrence(n, z, half=True):
-    assert half
-
+def i_recurrence(n, z, half=True):
     if half:
         v = n + 0.5
     else:
         v = n
 
-    y = 0
+    c = (z / 2) ** (v) / scipy.special.gamma(v + 1)
 
-    p0 = 1 / scipy.special.gamma(v + 1)
+    y = c
 
-    y = p0
+    for k in range(1, 5):
+        c *= (0.25 * z**2) / (k * (k + v))
 
-    for k in range(1, 3):
-        p0 *= (0.25 * z**2) / (k * (k + v))
+        y += c
 
-        y += p0
-
-    return (0.5 * z) ** v * y
+    return y
 
 
 @ie_n.defjvp
@@ -448,29 +436,53 @@ def ie_n_jvp(n, half, forward, primals, tangents):
     if ni == 0:
         ni = 1
 
-    y = ie_n(ni, x, half=half, forward=forward)
+    y = ie_n(ni, x, half, forward)
 
-    nu = jnp.arange(1, len(y))
+    def _dy_rec():
+        nu = jnp.arange(1, len(y))
 
-    if half:
-        nu = nu + 0.5
+        if half:
+            nu = nu + 0.5
 
-    # https://dlmf.nist.gov/10.29
-    dy = jnp.zeros(ni + 1)
+        # https://dlmf.nist.gov/10.29
+        dy = jnp.zeros(ni + 1)
 
-    x_safe: jax.array = jnp.where(x < 1e-12, 1e-12, x)  # type:ignore
+        x_safe: jax.array = jnp.where(x < 1e-12, 1e-12, x)  # type:ignore
 
-    if half:
-        dy = dy.at[0].set(y[1] + 0.5 / x_safe * y[0])
+        if half:
+            dy = dy.at[0].set(y[1] + 0.5 / x_safe * y[0])
 
-    else:
-        dy = dy.at[0].set(y[1])
+        else:
+            dy = dy.at[0].set(y[1])
 
-    dy = dy.at[1:].set(y[:-1] - nu * y[1:] / x_safe)
+        dy = dy.at[1:].set(y[:-1] - nu * y[1:] / x_safe)
 
-    dy -= jnp.abs(x_safe) * y  # correction for exp
+        dy = dy[: n + 1]
 
-    return y[: n + 1], dy[: n + 1] * x_dot
+        # print(f"big {dy.shape}, {dy.shape},{dy.shape}")
+
+        return dy
+
+    def _dy_small():
+        dy = jnp.array([jax.grad(lambda z: i_recurrence(ni, z, half=half))(x) for ni in range(n + 1)]) * jnp.exp(
+            -jnp.abs(x)
+        )
+
+        # print(f"small {dy.shape}, {dy.shape},{dy.shape}")
+
+        return dy
+
+    dy = jax.lax.cond(
+        jnp.abs(x) < 0.5,
+        _dy_small,
+        _dy_rec,
+    )
+
+    y = y[: n + 1]
+
+    dy -= jnp.sign(x) * y  # correction for exp
+
+    return y, dy * x_dot
 
 
 spherical_jn_b = generate_bessel(scipy.special.spherical_jn, type=2)

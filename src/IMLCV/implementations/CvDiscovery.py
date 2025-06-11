@@ -6,7 +6,7 @@ from flax import linen as nn
 from flax.training import train_state
 from jax import Array, jit, random
 
-from IMLCV.base.CV import CV, CvTrans, NeighbourList
+from IMLCV.base.CV import CV, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
 from IMLCV.base.rounds import DataLoaderOutput
@@ -174,7 +174,7 @@ class TranformerAutoEncoder(Transformer):
         import optax
 
         @jit_decorator
-        def train_step(state: optax.TraceState, batch, z_rng):
+        def train_step(state: train_state.TrainState, batch, z_rng) -> train_state.TrainState:
             def loss_fn(params):
                 recon_x, mean, logvar = VAE(**vae_args).apply(  # type:ignore
                     {"params": params},
@@ -486,13 +486,13 @@ class TransformerMAF(Transformer):
 
     def _fit(
         self,
-        x: list[CV],
-        x_t: list[CV] | None,
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
         w_t: list[jax.Array],
         dlo: DataLoaderOutput,
         max_features=500,
-        max_features_pre=500,
+        max_features_pre=5000,
         macro_chunk=1000,
         chunk_size=None,
         trans=None,
@@ -501,8 +501,6 @@ class TransformerMAF(Transformer):
         outdim=None,
         correlation=False,
         use_w=False,
-        min_s=0.1,
-        max_s=1 - 1e-8,
         **fit_kwargs,
     ):
         print("getting koopman")
@@ -514,6 +512,8 @@ class TransformerMAF(Transformer):
 
         # print(f"looking for constant mode with {num_regions=}")
 
+        print(f"{dlo.nl=}, {dlo.nl_t=}")
+
         km = dlo.koopman_model(
             cv_0=x,
             cv_t=x_t,
@@ -524,13 +524,13 @@ class TransformerMAF(Transformer):
             max_features_pre=max_features_pre,
             w=w if use_w else [jnp.ones_like(x) for x in w],
             w_t=w_t if use_w else [jnp.ones_like(x) for x in w],
-            calc_pi=False,
-            add_1=True,
+            calc_pi=True,
+            add_1=False,
             trans=trans,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             verbose=True,
-            out_dim=outdim,
+            out_dim=-1,
             eps=eps,
             eps_pre=eps_pre,
             symmetric=False,
@@ -539,6 +539,7 @@ class TransformerMAF(Transformer):
 
         # km = km.weighted_model(
         #     symmetric=True,
+        #     verbose=True,
         # )
 
         ##########
@@ -556,7 +557,7 @@ class TransformerMAF(Transformer):
         print(f"timescales {ts} ns")
 
         for i in range(self.outdim):
-            if ts[i] / ts[0] < 1 / 100:
+            if ts[i] / ts[0] < 1 / 10:
                 (print(f"cv {i} is too small compared to ref (fraction= {ts[i] / ts[0]}), cutting off "),)
                 outdim = i
                 break

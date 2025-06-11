@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import jax
 import jax.numpy as jnp
@@ -11,7 +11,7 @@ from matplotlib import gridspec
 from matplotlib.figure import Figure
 
 from IMLCV.base.bias import Bias, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
@@ -25,7 +25,7 @@ class Transformer:
     def __init__(
         self,
         outdim,
-        descriptor: CvTrans,
+        descriptor: CvTrans | None,
         pre_scale=True,
         post_scale=True,
         T_scale=10,
@@ -218,8 +218,8 @@ class Transformer:
             shmap_kwargs=shmap_kwargs,
         )  # type: ignore
 
-        x: list[CV]
-        x_t: list[CV]
+        # x: list[CV]
+        # x_t: list[CV]
 
         trans = f
 
@@ -368,8 +368,8 @@ class Transformer:
 
     def _fit(
         self,
-        x: list[CV],
-        x_t: list[CV],
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
         w_t: list[jax.Array],
         dlo: DataLoaderOutput,
@@ -1248,7 +1248,9 @@ class Transformer:
             color_bias = jnp.array(cmap(normed_val))
 
             # add alpha channel
-            color_bias[:, 3] = jnp.exp(-3 * normed_val) / n_grid  # if all points in row are the same, the alpha is 1
+            color_bias = color_bias.at[:, 3].set(
+                jnp.exp(-3 * normed_val) / n_grid
+            )  # if all points in row are the same, the alpha is 1
 
             shm = (len(bins[0]) - 1, len(bins[1]) - 1, len(bins[2]) - 1)
             sh = (len(bins[0]), len(bins[1]), len(bins[2]))
@@ -1272,17 +1274,19 @@ class Transformer:
                     z = xyz[0]
 
                     for z_i in range(shm[z]):
-                        args: list[None | jax.Array] = [None, None, None]
+                        import numpy as onp
 
-                        args[x] = XYZ[:, :, :, x].take(z_i, axis=z)
-                        args[y] = XYZ[:, :, :, y].take(z_i, axis=z)
-                        args[z] = XYZ[:, :, :, z].take(z_i, axis=z)
+                        args: list[np.ndarray | None] = [None, None, None]
+
+                        args[x] = XYZ[:, :, :, x].take(z_i, axis=z).__array__()
+                        args[y] = XYZ[:, :, :, y].take(z_i, axis=z).__array__()
+                        args[z] = XYZ[:, :, :, z].take(z_i, axis=z).__array__()
 
                         ax0.plot_surface(  # type: ignore
                             *args,
                             rstride=1,
                             cstride=1,
-                            facecolors=color_bias.take(z_i, axis=z),
+                            facecolors=color_bias.take(z_i, axis=z).__array__(),
                             edgecolor=None,
                             shade=False,
                         )
@@ -1731,8 +1735,8 @@ class CombineTransformer(Transformer):
 
     def _fit(
         self,
-        x: list[CV],
-        x_t: list[CV],
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
         w_t: list[jax.Array],
         dlo: DataLoaderOutput,
@@ -1742,6 +1746,8 @@ class CombineTransformer(Transformer):
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None]:
         trans = None
+
+        assert len(self.transformers) > 0, "No transformers to fit"
 
         for i, t in enumerate(self.transformers):
             print(f"fitting transformer {i + 1}/{len(self.transformers)}")
@@ -1766,14 +1772,17 @@ class CombineTransformer(Transformer):
 
         assert trans is not None
 
+        x = cast(list[CV], x)
+        x_t = cast(list[CV], x_t)
+
         return x, x_t, trans, w
 
 
 class IdentityTransformer(Transformer):
     def _fit(
         self,
-        x: list[CV],
-        x_t: list[CV] | None,
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
         w_t: list[jax.Array],
         dlo: DataLoaderOutput,
@@ -1782,4 +1791,12 @@ class IdentityTransformer(Transformer):
         macro_chunk=1000,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
+        assert isinstance(x, list) and isinstance(x_t, list), "x and x_t must be lists"
+
+        assert isinstance(x[0], CV), "x must be a list of CV objects"
+        assert isinstance(x_t[0], CV), "x_t must be a list of CV objects"
+
+        x = cast(list[CV], x)
+        x_t = cast(list[CV], x_t)
+
         return x, x_t, identity_trans, w

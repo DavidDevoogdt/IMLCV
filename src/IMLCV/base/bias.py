@@ -218,7 +218,7 @@ class Energy:
         return self  # type: ignore
 
 
-class EnergyFn(Energy):
+class EnergyFn(Energy, MyPyTreeNode):
     external_callback = False
 
     f: Callable = field(pytree_node=False)

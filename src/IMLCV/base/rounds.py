@@ -4811,8 +4811,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
     def koopman_model(
         self,
-        cv_0: list[CV] | None = None,
-        cv_t: list[CV] | None = None,
+        cv_0: list[CV] | list[SystemParams] | None = None,
+        cv_t: list[CV] | list[SystemParams] | None = None,
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
         method="tcca",
@@ -4838,7 +4838,7 @@ class DataLoaderOutput(MyPyTreeNode):
         scaled_tau=None,
         sparse=True,
         correlation=True,
-    ) -> KoopmanModel:
+    ) -> "KoopmanModel":
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
 
         assert method in ["tica", "tcca"]
@@ -4851,6 +4851,12 @@ class DataLoaderOutput(MyPyTreeNode):
 
         if cv_t is None:
             cv_t = self.cv_t
+
+        if nl is None:
+            nl = self.nl
+
+        if nl_t is None:
+            nl_t = self.nl_t
 
         assert cv_t is not None
 
@@ -4896,6 +4902,7 @@ class DataLoaderOutput(MyPyTreeNode):
             cv_0=cv_0,
             cv_t=cv_t,
             nl=nl,
+            nl_t=nl_t,
             add_1=add_1,
             eps=eps,
             eps_pre=eps_pre,
@@ -4958,8 +4965,8 @@ class DataLoaderOutput(MyPyTreeNode):
     @staticmethod
     def apply_cv(
         f: CvTrans,
-        x: list[X],
-        x_t: list[X] | None = None,
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None = None,
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
         chunk_size: int | None = None,
@@ -4972,6 +4979,9 @@ class DataLoaderOutput(MyPyTreeNode):
     ) -> tuple[list[CV], list[CV] | None]:
         _f = f.compute_cv
 
+        if x_t is not None:
+            assert isinstance(x_t[0], x[0].__class__), "x_t must be of the same type as x"
+
         def __f(x: X, nl: NeighbourList | None) -> CV:
             return _f(
                 x,
@@ -4979,10 +4989,6 @@ class DataLoaderOutput(MyPyTreeNode):
                 chunk_size=chunk_size,
                 shmap=False,
             )[0]
-
-        # if shmap:
-        # f = jax.jit(f)/
-        # __f = padded_shard_map(__f, kwargs=shmap_kwargs)  # (pmap=True))
 
         return DataLoaderOutput._apply(
             x=x,
@@ -5677,8 +5683,8 @@ class KoopmanModel(MyPyTreeNode):
 
     shape: int
 
-    cv_0: list[CV]
-    cv_t: list[CV]
+    cv_0: list[CV] | list[SystemParams]
+    cv_t: list[CV] | list[SystemParams]
     nl: list[NeighbourList] | NeighbourList | None
     nl_t: list[NeighbourList] | NeighbourList | None
 
@@ -5716,8 +5722,8 @@ class KoopmanModel(MyPyTreeNode):
         rho: list[jax.Array] | None,
         w_t: list[jax.Array] | None,
         rho_t: list[jax.Array] | None,
-        cv_0: list[CV],
-        cv_t: list[CV],
+        cv_0: list[CV] | list[SystemParams],
+        cv_t: list[CV] | list[SystemParams],
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
         add_1=True,
@@ -5731,7 +5737,7 @@ class KoopmanModel(MyPyTreeNode):
         tau=None,
         macro_chunk=1000,
         chunk_size=None,
-        verbose=False,
+        verbose=True,
         trans: CvTrans | None = None,
         T_scale=1,
         only_diag=False,
@@ -5787,8 +5793,8 @@ class KoopmanModel(MyPyTreeNode):
         w_tot_t = tot_w(w_t, rho_t)
 
         cov = Covariances.create(
-            cv_0=cv_0,
-            cv_1=cv_t,
+            cv_0=cv_0,  # type: ignore
+            cv_1=cv_t,  # type: ignore
             nl=nl,
             nl_t=nl_t,
             w=w_tot,
@@ -5801,6 +5807,7 @@ class KoopmanModel(MyPyTreeNode):
             macro_chunk=macro_chunk,
             trans_f=trans,
             trans_g=trans,
+            verbose=verbose,
         )
 
         assert cov.C00 is not None
@@ -6236,10 +6243,13 @@ class KoopmanModel(MyPyTreeNode):
 
         tr = f_trans_2 * _get_w
 
+        if self.trans is not None:
+            tr = self.trans * tr
+
         w_out_cv, w_out_cv_t = DataLoaderOutput.apply_cv(
             f=tr,
-            x=self.cv_0,
-            x_t=self.cv_t,
+            x=self.cv_0,  # type:ignore
+            x_t=self.cv_t,  # type:ignore
             nl=self.nl,
             nl_t=self.nl_t,
             macro_chunk=macro_chunk,
@@ -6429,6 +6439,7 @@ class Covariances(MyPyTreeNode):
         calc_C10=True,
         calc_C11=True,
         shmap_kwargs=ShmapKwargs.create(),
+        verbose=True,
     ) -> Covariances:
         time_series = cv_1 is not None
 
@@ -6559,7 +6570,7 @@ class Covariances(MyPyTreeNode):
             nl=nl,
             nl_t=nl,
             macro_chunk=macro_chunk,
-            verbose=True,
+            verbose=verbose,
             chunk_func=cov_pi,
             chunk_func_init_args=chunk_func_init_args,
             w=w,

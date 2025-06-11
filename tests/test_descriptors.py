@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Callable, cast
 
 import jax.debug
 import jax.dtypes
@@ -10,9 +11,10 @@ import jax.scipy
 import numpy as onp
 import pytest
 import scipy.special
-from jax import grad, vmap_decorator
+from jax import grad
 
 from IMLCV.base.CV import CollectiveVariable, NeighbourListInfo, SystemParams
+from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.implementations.CV import get_sinkhorn_divergence_2, sb_descriptor, soap_descriptor
 from IMLCV.tools.bessel_callback import iv, ive, ive_b, jv, kv, kve, spherical_jn, spherical_yn, yv
 from IMLCV.tools.soap_kernel import p_inl_sb
@@ -108,9 +110,12 @@ def test_SOAP_SB_sinkhorn(cell, pp):
             r_delta=1.0,
             num=50,
         )
+    else:
+        raise ValueError(f"Unknown pp {pp}")
 
     p_ref, _ = desc.compute_cv(sp1, nl1)
     nl_ref = nl1
+    assert nl_ref is not None, "nl_ref should not be None"
 
     cv = CollectiveVariable(
         f=desc
@@ -118,9 +123,8 @@ def test_SOAP_SB_sinkhorn(cell, pp):
             nli=nl_ref,
             pi=p_ref,
             alpha_rematch=alpha,
-            output="both",
         ),
-        metric=None,
+        metric=None,  # type:ignore
         jac=jax.jacrev,
     )
 
@@ -130,16 +134,23 @@ def test_SOAP_SB_sinkhorn(cell, pp):
     x3, dx3 = cv.compute_cv(sp3, nl3, jacobian=True)
     x2, dx2 = cv.compute_cv(sp2, nl2, jacobian=True)
 
+    assert dx1 is not None
+    assert dx2 is not None
+    assert dx3 is not None
+
     assert jnp.allclose(x1.cv, x2.cv)
 
-    print(f"{dx1.cv.coordinates=}")
-    print(f"{dx2.cv.coordinates=}")
-    print(f"{dx1.cv.coordinates-dx2.cv.coordinates=}")
+    print(f"{dx1.coordinates=}")
+    print(f"{dx2.coordinates=}")
+    print(f"{dx1.coordinates-dx2.coordinates=}")
 
-    assert jnp.allclose(dx1.cv.coordinates, dx2.cv.coordinates, atol=1e-5)
+    assert jnp.allclose(dx1.coordinates, dx2.coordinates, atol=1e-5)
 
     if cell:
-        assert jnp.allclose(dx1.cv.cell, dx2.cv.cell, atol=1e-5)
+        assert dx1.cell is not None
+        assert dx2.cell is not None
+
+        assert jnp.allclose(dx1.cell, dx2.cell, atol=1e-5)
 
     assert not jnp.allclose(x1.cv, x3.cv)
 
@@ -153,10 +164,10 @@ def test_SB_basis():
     r = jnp.zeros((n, 3))
     r = r.at[:, 0].set(jnp.linspace(1e-3, 1.0, n))
 
-    a, _ = p_inl_sb(n_max, l_max, r_cut)
+    f_single, _ = p_inl_sb(n_max, l_max, r_cut)
     # f = vmap_decorator(Partial(a, atom_index_j=_))
 
-    o_g = vmap_decorator(lambda r: a(r, _))(r)
+    o_g = vmap_decorator(lambda r: f_single(r, None))(r)  # type:ignore
 
     @partial(vmap_decorator, in_axes=(None, 2, 2))
     @partial(vmap_decorator, in_axes=(None, None, 1))
@@ -201,6 +212,8 @@ def test_bessel():
         ],
         [1, 0, 1, 0, 0, 0, None, None],
     ):
+        func = cast(Callable[[jax.Array, jax.Array], jax.Array], func)
+
         # try to vmap_decorator and jit
         _ = vmap_decorator(func, in_axes=(0, None))(jnp.array([2, 5]), 2)
         _ = vmap_decorator(func, in_axes=(None, 0))(2, jnp.array([2, 5]))

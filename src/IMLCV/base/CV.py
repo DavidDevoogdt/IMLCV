@@ -517,7 +517,7 @@ def macro_chunk_map_fun(
         y_t=y_t,
         nl_t=nl_t,
         macro_chunk=macro_chunk,
-        verbose=False,
+        verbose=verbose,
         chunk_func=chunk_func,
         chunk_func_init_args=chunk_func_init_args,
         w=w,
@@ -547,7 +547,7 @@ def macro_chunk_map(
         y_t=y_t,
         nl_t=nl_t,
         macro_chunk=macro_chunk,
-        verbose=False,
+        verbose=verbose,
         print_every=print_every,
         jit_f=jit_f,
     )  # type: ignore
@@ -2188,7 +2188,6 @@ class NeighbourList(MyPyTreeNode):
         self,
         sp: SystemParams,
         func: Callable[[jax.Array, jax.Array], T],
-        args=(),
         r_cut: float | None = None,
         fill_value=0,
         reduce="full",  # or 'z' or 'none'
@@ -2201,12 +2200,10 @@ class NeighbourList(MyPyTreeNode):
         shmap_kwargs=ShmapKwargs.create(),
     ):
         if sp.batched:
-            f = padded_vmap(
-                lambda nl, sp: NeighbourList.apply_fun_neighbour(
-                    self=nl,
-                    sp=sp,
+            _g: Callable[[NeighbourList, SystemParams], tuple[jax.Array, T]] = padded_vmap(
+                Partial_decorator(
+                    NeighbourList.apply_fun_neighbour,
                     func=func,
-                    args=args,
                     r_cut=r_cut,
                     fill_value=fill_value,
                     reduce=reduce,
@@ -2221,9 +2218,9 @@ class NeighbourList(MyPyTreeNode):
             )
 
             if shmap:
-                f = padded_shard_map(f, shmap_kwargs)
+                _g = padded_shard_map(_g, shmap_kwargs)
 
-            return f(self, sp)
+            return _g(self, sp)
         # calculate nl on the fly
         if self.needs_calculation:
             _, self = self.update_nl(sp, shmap=shmap, chunk_size_inner=chunk_size_batch, verbose=True)
@@ -2238,7 +2235,7 @@ class NeighbourList(MyPyTreeNode):
         i_vec = jnp.arange(pos.shape[0])
 
         @partial(padded_vmap, chunk_size=chunk_size_neigbourgs)
-        def _f(j, pos_ij, ind_ij, pb_ij):
+        def _f(j: jax.Array, pos_ij: jax.Array, ind_ij: jax.Array, pb_ij: jax.Array):
             r_ij = jnp.linalg.norm(pos_ij, axis=-1)
 
             b = jnp.logical_and(pb_ij, r_ij < r_cut)
@@ -2246,33 +2243,36 @@ class NeighbourList(MyPyTreeNode):
             if exclude_self:
                 b = jnp.logical_and(b, r_ij > 1e-16)
 
-            if func is not None:
-                out = func(pos_ij, ind_ij, *args)
+            out = func(
+                pos_ij,
+                ind_ij,
+            )
 
-                out = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
-            else:
-                out = None
+            out: T = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
 
             return (b, out), jnp.array(self.info.z_array)[ind_ij]
 
         @partial(padded_vmap, chunk_size=chunk_size_atoms)
-        def _apply_fun(i, pos_i, ind_i, pb_i):
+        def _apply_fun(i: jax.Array, pos_i: jax.Array, ind_i: jax.Array, pb_i: jax.Array):
             j = jnp.arange(pos_i.shape[0])
 
             out_tree_n, zj_n = _f(j, pos_i, ind_i, pb_i)
 
             if reduce == "full":
-                return jax.tree.map(lambda x: jnp.sum(x, axis=0), out_tree_n)
+                out_tree_n: tuple[Array, T] = jax.tree.map(lambda x: jnp.sum(x, axis=0), out_tree_n)
+                return out_tree_n
 
             if reduce == "z":
 
                 @vmap_decorator
-                def _red(zj_ref):
+                def _red(zj_ref: Array) -> tuple[Array, T]:
                     a = jnp.array(zj_n == zj_ref, dtype=jnp.int64)
 
                     return jax.tree.map(lambda x: jnp.einsum("n,n...->...", a, x), out_tree_n)
 
-                return _red(jnp.array(self.info.z_unique))
+                out_tree_n: tuple[Array, T] = _red(jnp.array(self.info.z_unique))
+
+                return out_tree_n
 
             if reduce == "none":
                 return out_tree_n
@@ -2284,6 +2284,8 @@ class NeighbourList(MyPyTreeNode):
         if shmap:
             _apply_fun = padded_shard_map(_apply_fun, shmap_kwargs)
 
+        assert ind is not None
+
         out = _apply_fun(i_vec, pos, ind, self.padding_bools)
 
         if split_z:
@@ -2291,7 +2293,7 @@ class NeighbourList(MyPyTreeNode):
             b_split, _, _ = self.info.nl_split_z(out)
 
             @vmap_decorator
-            def _split(b_split):
+            def _split(b_split) -> tuple[Array, T]:
                 return jax.tree.map(
                     lambda x: jnp.sum(jnp.where(b_split, x, jnp.zeros_like(x) + fill_value)),  # type:ignore
                     out,
@@ -2305,7 +2307,7 @@ class NeighbourList(MyPyTreeNode):
         self,
         sp: SystemParams,
         func_double: Callable[[jax.Array, jax.Array, T, jax.Array, jax.Array, T], S],
-        func_single: Callable[[jax.Array, jax.Array], T] | None = lambda x, y: None,
+        func_single: Callable[[jax.Array, jax.Array], T] = lambda x, y: None,
         r_cut=None,
         fill_value=0.0,
         reduce="full",  # or 'z' or 'none'
@@ -2412,8 +2414,8 @@ class NeighbourList(MyPyTreeNode):
                 pos_k: jax.Array,
                 ind_j: jax.Array,
                 ind_k: jax.Array,
-                data_single_j: T | None,
-                data_single_k: T | None,
+                data_single_j: T,
+                data_single_k: T,
             ):
                 b = jnp.logical_and(
                     bools_j,

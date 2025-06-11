@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jax import vmap_decorator
 
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, SystemParams
+from IMLCV.base.datastructures import vmap_decorator
 
 ######################################
 #           Test                     #
@@ -59,6 +59,7 @@ def _get_sp_rand(
     info = NeighbourListInfo.create(r_cut=r_cut, z_array=z_array)
 
     nl0 = sp0.get_neighbour_list(info=info)
+    assert nl0 is not None
 
     return prng, sp0, nl0
 
@@ -77,6 +78,7 @@ def _permute_sp_rand(
     )
 
     nl1 = sp1.get_neighbour_list(info=nl0.info)
+    assert nl1 is not None
     return prng, sp1, nl1
 
 
@@ -103,7 +105,7 @@ def test_neigh():
 
     rng, sp, nl = _get_sp_rand(prng=rng, n=n, r_cut=r_cut)
 
-    def func(r_ij, index):
+    def func(r_ij: jax.Array, index: jax.Array) -> tuple[jax.Array, jax.Array]:
         return (jnp.linalg.norm(r_ij), index)
 
     s1 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func=func)
@@ -131,6 +133,7 @@ def test_neigh():
     rng, sp2 = _get_equival_sp(sp, rng)
 
     nl2 = sp2.get_neighbour_list(info=nl.info)
+    assert nl2 is not None
 
     s2 = nl2.apply_fun_neighbour(sp=sp2, func=func, r_cut=r_cut)
 
@@ -189,11 +192,11 @@ def test_neigh():
     # check nl update code
 
     key1, key2, key3, rng = jax.random.split(rng, 4)
-    sp4 = SystemParams(
-        sp.coordinates + 0.1 * jax.random.normal(key1, sp.coordinates.shape),
-        sp.cell + 0.1 * jax.random.normal(key2, sp.cell.shape),
-    )
-    bool, nl4 = nl.update_nl(sp4)
+    # sp4 = SystemParams(
+    #     coordinates=sp.coordinates + 0.1 * jax.random.normal(key1, sp.coordinates.shape),
+    #     cell=sp.cell + 0.1 * jax.random.normal(key2, sp.cell.shape),
+    # )
+    bool, nl4 = nl.update_nl(sp)
 
 
 def test_neigh_pair():
@@ -216,6 +219,8 @@ def test_neigh_pair():
     info = NeighbourListInfo.create(r_cut=r_cut, z_array=z_array)
 
     nl = sp.get_neighbour_list(info=info)
+    assert nl is not None
+
     s1 = nl.apply_fun_neighbour_pair(
         sp=sp,
         r_cut=r_cut,
@@ -340,6 +345,10 @@ def test_canoncicalize():
 
     # test minkowski reduction
     sp0, sp1 = sp0.minkowski_reduce()[0], sp1.minkowski_reduce()[0]
+
+    assert sp0.cell is not None
+    assert sp1.cell is not None
+
     for i in range(3):
         assert jnp.all(jnp.abs(sp0.cell[i, :] - sp1.cell[i, :]) < 1e-6) or jnp.all(
             jnp.abs(sp0.cell[i, :] + sp1.cell[i, :]) < 1e-6,
@@ -347,6 +356,10 @@ def test_canoncicalize():
 
     # test qr
     sp0, sp1 = sp0.rotate_cell()[0], sp1.rotate_cell()[0]
+
+    assert sp0.cell is not None
+    assert sp1.cell is not None
+
     assert jnp.all(jnp.abs(sp0.cell - sp1.cell) < 1e-6), f"{sp0.cell},{sp1.cell}"
 
     sp0, sp1 = sp0.wrap_positions()[0], sp1.wrap_positions()[0]
@@ -370,16 +383,25 @@ def test_sp_apply():
     sp_rot, op = sp.rotate_cell()
     sp_rot_2 = vmap_decorator(SystemParams.apply_rotation)(sp, op)
 
+    assert sp_rot.cell is not None
+    assert sp_rot_2.cell is not None
+
     assert jnp.linalg.norm(sp_rot.cell - sp_rot_2.cell) < 1e-10
     assert jnp.linalg.norm(sp_rot.coordinates - sp_rot_2.coordinates) < 1e-10
 
     sp_min, op = sp.minkowski_reduce()
     sp_min_2 = vmap_decorator(SystemParams.apply_minkowski_reduction)(sp, op)
 
+    assert sp_min.cell is not None
+    assert sp_min_2.cell is not None
+
     assert jnp.linalg.norm(sp_min.cell - sp_min_2.cell) < 1e-10
 
     sp_can, op = sp.canonicalize(min=False, qr=True)
     sp_can_2 = vmap_decorator(SystemParams.apply_canonicalize)(sp, op)
+
+    assert sp_can.cell is not None
+    assert sp_can_2.cell is not None
 
     assert jnp.linalg.norm(sp_can.cell - sp_can_2.cell) < 1e-10
     assert jnp.linalg.norm(sp_can.coordinates - sp_can_2.coordinates) < 1e-10

@@ -3,7 +3,7 @@ from typing import Any, Callable, Concatenate, ParamSpec, TypeVar
 
 import jax
 import jax.numpy as jnp
-from jax import closure_convert
+from jax import closure_convert, custom_jvp
 from jax.tree_util import tree_map
 from scipy.special import roots_laguerre, roots_legendre
 
@@ -35,7 +35,7 @@ def _quad_nd(f, w: list[jax.Array], x: list[jax.Array], use_custom_jvp=True):
             def f_closed(x, args, closure_args):
                 return _f_closed(*x, *args, *closure_args)
 
-            @partial(custom_jvp_decorator, nondiff_argnums=(0,))
+            @partial(custom_jvp, nondiff_argnums=(0,))
             def _int(_f2_closed, args, x_mg, w_mg, closure_args):
                 @partial(vmap_decorator, in_axes=(1, 1))
                 def f_int(w: jax.Array, x: jax.Array):
