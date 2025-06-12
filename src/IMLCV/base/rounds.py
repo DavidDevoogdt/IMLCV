@@ -4564,6 +4564,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
             fes_grid -= jnp.min(fes_grid)
 
+            print(f"{fes_grid/kjmol=}")
+
             # mask = fes_grid > bias_cutoff
 
             # if jnp.sum(mask) > 0:
@@ -5077,7 +5079,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
         if shmap:
             # # TODO 0909 09:41:06.108200 3141823 collective_ops_utils.h:306] This thread has been waiting for 5000ms for and may be stuck: participant AllReduceParticipantData{rank=27, element_count=1, type=PRED, rendezvous_key=RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}} waiting for all participants to arrive at rendezvous RendezvousKey{run_id=RunId: 5299332, global_devices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31], num_local_participants=32, collective_op_kind=cross_module, op_id=3}
-            # f = jax.jit(f)
+            # f = jit_decorator(f)
             f = padded_shard_map(f, kwargs=shmap_kwargs)  # (pmap=True))
 
         out, _ = DataLoaderOutput._apply(
@@ -5157,6 +5159,7 @@ class DataLoaderOutput(MyPyTreeNode):
         kernel="gaussian",
         collective_variable: CollectiveVariable | None = None,
         set_outer_border=True,
+        rbf_degree: int | None = None,
     ):
         if cv is None:
             cv = self.cv
@@ -5191,6 +5194,7 @@ class DataLoaderOutput(MyPyTreeNode):
             rbf_bias=rbf_bias,
             kernel=kernel,
             set_outer_border=set_outer_border,
+            rbf_degree=rbf_degree,
         )
 
     @staticmethod
@@ -5211,6 +5215,7 @@ class DataLoaderOutput(MyPyTreeNode):
         rbf_bias=True,
         kernel="gaussian",
         set_outer_border=True,
+        rbf_degree: int | None = None,
     ) -> RbfBias:
         beta = 1 / (T * boltzmann)
 
@@ -5270,6 +5275,8 @@ class DataLoaderOutput(MyPyTreeNode):
         # look for all points that are on the edge
 
         w_log = [jnp.log(wi) + jnp.log(rhoi) for wi, rhoi in zip(weights, rho)]
+
+        # print(f"{w_log=}")
 
         log_w_rho_grid = get_histo(
             grid_nums,
@@ -5344,6 +5351,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 kernel=kernel,
                 vals=-fes_grid_selection,
                 epsilon=epsilon,
+                degree=rbf_degree,
             )
         else:
             vals = jnp.full((n_grid,) * collective_variable.n, jnp.nan)

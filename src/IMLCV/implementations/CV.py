@@ -451,7 +451,7 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
 
 
 def kernel_dist(p1: jax.Array, p2: jax.Array, xi=1.0):
-    print(f"new dist sum")
+    # print(f"new dist sum")
 
     def log_safe(x: jax.Array):
         x = jnp.where(x < 1e-10, 1e-10, x)

@@ -1694,7 +1694,7 @@ class Transformer:
                 )
             )
 
-            # _f = jax.jit(_f)
+            # _f = jit_decorator(_f)
 
             out = []
 

@@ -46,14 +46,8 @@ from IMLCV.new_yaff.utils import get_random_vel
 
 # @partial(dataclass, frozen=False)
 class TemperatureStateItem(StateItem):
-    _: KW_ONLY
-    key: str = field(pytree_node=False, default="temp")
-
     def get_value(self, iterative):
         return getattr(iterative, "temp", None)
-
-    def iter_attrs(self, iterative):
-        yield "ndof", iterative.ndof
 
 
 # @partial(dataclass, frozen=False)
@@ -65,11 +59,11 @@ class ConsErrTracker(MyPyTreeNode):
     in Donald Knuth's Art of Computer Programming, vol. 2, p. 232, 3rd edition.
     """
 
-    counter: int = 0
-    ekin_m: jax.Array | float = 0.0
-    ekin_s: jax.Array | float = 0.0
-    econs_m: jax.Array | float = 0.0
-    econs_s: jax.Array | float = 0.0
+    counter: jax.Array = field(default_factory=lambda: jnp.array(0))
+    ekin_m: jax.Array = field(default_factory=lambda: jnp.array(0.0))
+    ekin_s: jax.Array = field(default_factory=lambda: jnp.array(0.0))
+    econs_m: jax.Array = field(default_factory=lambda: jnp.array(0.0))
+    econs_s: jax.Array = field(default_factory=lambda: jnp.array(0.0))
 
     def update(self, ekin, econs):
         # if self.counter == 0:
@@ -91,16 +85,12 @@ class ConsErrTracker(MyPyTreeNode):
 
 # @partial(dataclass, frozen=False)
 class VerletHook(Hook):
-    _: KW_ONLY
-
-    temp: float
-
     """Specialized Verlet hook.
 
     This is mainly used for the implementation of thermostats and barostats.
     """
 
-    econs_correction: jax.Array | float = 0.0
+    econs_correction: jax.Array = field(default_factory=lambda: jnp.array(0.0))
 
     def __call__(self: Self, iterative: VerletIntegrator):
         pass
@@ -108,25 +98,50 @@ class VerletHook(Hook):
     def init(self: Self, iterative: VerletIntegrator) -> tuple[Self, VerletIntegrator]:
         raise NotImplementedError
 
-    def pre(
-        self: Self, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    def pre(self: Self, iterative: VerletIntegrator, **kwargs) -> tuple[Self, VerletIntegrator]:
+        raise NotImplementedError
+
+    def post(self: Self, iterative: VerletIntegrator, **kwargs) -> tuple[Self, VerletIntegrator]:
+        raise NotImplementedError
+
+
+class ThermostatHook(VerletHook):
+    temp: jax.Array
+
+    def pre(  # type:ignore
+        self: Self,
+        iterative: VerletIntegrator,
+        G1_add: jax.Array | None = None,
     ) -> tuple[Self, VerletIntegrator]:
         raise NotImplementedError
 
-    def post(
-        self: Self, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    def post(  # type:ignore
+        self: Self,
+        iterative: VerletIntegrator,
+        G1_add: jax.Array | None = None,
     ) -> tuple[Self, VerletIntegrator]:
         raise NotImplementedError
 
 
 class BarostatHook(VerletHook):
-    name = "TBCombination"
-
-    _: KW_ONLY
-
+    temp: jax.Array
     press: jax.Array
     baro_ndof: int | None = None
     dim: int | None = None
+
+    def pre(  # type:ignore
+        self: Self,
+        iterative: VerletIntegrator,
+        chainvel0: jax.Array | None = None,
+    ) -> tuple[Self, VerletIntegrator]:
+        raise NotImplementedError
+
+    def post(  # type:ignore
+        self: Self,
+        iterative: VerletIntegrator,
+        chainvel0: jax.Array | None = None,
+    ) -> tuple[Self, VerletIntegrator]:
+        raise NotImplementedError
 
 
 # @partial(dataclass, frozen=False)
@@ -139,7 +154,7 @@ class NVE(VerletHook):
     This is mainly used for the implementation of thermostats and barostats.
     """
 
-    econs_correction: jax.Array | float = 0.0
+    econs_correction: jax.Array = field(default_factory=lambda: jnp.array(0))
 
     def __call__(self, iterative):
         return
@@ -147,13 +162,15 @@ class NVE(VerletHook):
     def init(self: VerletHook, iterative: VerletIntegrator) -> tuple[VerletHook, VerletIntegrator]:
         return self, iterative
 
-    def pre(
-        self: VerletHook, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    def pre(  # type:ignore
+        self: VerletHook,
+        iterative: VerletIntegrator,
     ) -> tuple[VerletHook, VerletIntegrator]:
         return self, iterative
 
-    def post(
-        self: VerletHook, iterative: VerletIntegrator, chainvel: jax.Array | None = None
+    def post(  # type:ignore
+        self: VerletHook,
+        iterative: VerletIntegrator,
     ) -> tuple[VerletHook, VerletIntegrator]:
         return self, iterative
 
@@ -162,81 +179,65 @@ class NVE(VerletHook):
 class VerletIntegrator(MyPyTreeNode):
     ff: YaffFF
 
+    counter: jax.Array
+    time: jax.Array
+    ndof: int
     pos: jax.Array
     vel: jax.Array
+    acc: jax.Array
     masses: jax.Array
     timestep: jax.Array
 
+    # barostat quantities
+    ptens: jax.Array
+    rvecs: jax.Array
+    vtens: jax.Array
+
     verlet_hook: VerletHook
 
-    gpos: jax.Array | None
+    # instantaenous properties
+    delta: jax.Array
+    pos_old: jax.Array
 
-    temp: jax.Array | float | None = 0.0
-    ekin: jax.Array | float = 0.0
-    ekin_new: jax.Array | float = 0.0
-    epot: jax.Array | float = 0.0
-    etot: jax.Array | float = 0.0
-    econs: jax.Array | float = 0.0
-    cons_err: jax.Array | float = 0.0
-    ptens: jax.Array = field(default_factory=lambda: jnp.zeros((3, 3)))
-    press: jax.Array | float = 0.0
-    rmsd_delta: jax.Array | float = 0.0
-    rmsd_gpos: jax.Array | float = 0.0
-    counter: int = 0
-    time: jax.Array | float = 0.0
+    gpos: jax.Array
+    gpos_bias: jax.Array
 
-    delta: jax.Array | None
-    acc: jax.Array | None = None
+    temp: jax.Array
+    press: jax.Array
 
-    rvecs: jax.Array | None = None
-    ndof: int | None = None
-    cv: jax.Array | None = None
-    e_bias: jax.Array | None = None
+    ekin: jax.Array
+    ekin_new: jax.Array
+    epot: jax.Array
+    etot: jax.Array
+    e_bias: jax.Array
 
-    pos_old: jax.Array | None = field(default=None)
-    vtens: jax.Array | None
-
-    other_hooks: list[Hook] = field(pytree_node=False, default_factory=list)
-
+    # conserved quantity
     _cons_err_tracker: ConsErrTracker = field(default_factory=ConsErrTracker)
+    econs: jax.Array
+    cons_err: jax.Array
 
-    state_list: list[StateItem] = field(
-        pytree_node=False,
-        default_factory=lambda: [
-            AttributeStateItem(key="counter"),
-            AttributeStateItem(key="time"),
-            AttributeStateItem(key="epot"),
-            PosStateItem(),
-            CellStateItem(),
-            AttributeStateItem(key="vel"),
-            AttributeStateItem(key="rmsd_delta"),
-            AttributeStateItem(key="rmsd_gpos"),
-            AttributeStateItem(key="ekin"),
-            TemperatureStateItem(),
-            AttributeStateItem(key="etot"),
-            AttributeStateItem(key="econs"),
-            AttributeStateItem(key="cons_err"),
-            AttributeStateItem(key="ptens"),
-            AttributeStateItem(key="vtens"),
-            AttributeStateItem(key="press"),
-            AttributeStateItem(key="e_bias"),
-            AttributeStateItem(key="cv"),
-        ],
-    )
+    # deviation
+    rmsd_delta: jax.Array
+    rmsd_gpos: jax.Array
+    rmsd_gpos_bias: jax.Array
+
+    cv: jax.Array
+
+    other_hooks: list[Hook] = field(default_factory=list)
 
     @staticmethod
     def create(
         ff: YaffFF,
         other_hooks: list[Hook],
         timestep: float,
-        thermostat: VerletHook | None = None,
+        thermostat: ThermostatHook | None = None,
         barostat: BarostatHook | None = None,
-        vel0=None,
+        vel0: jax.Array | None = None,
         temp0: float = 300.0,
-        scalevel0=True,
-        time0=None,
-        ndof=None,
-        counter0=None,
+        scalevel0: bool = True,
+        time0: float | None = None,
+        ndof: int | None = None,
+        counter0: int | None = None,
         key=42,
     ):
         """
@@ -287,12 +288,6 @@ class VerletIntegrator(MyPyTreeNode):
             The counter value associated with the initial state.
 
         """
-        # Assign init arguments
-
-        # if ff.system.masses is None:
-        #     ff.system.set_standard_masses()
-
-        # # Look for the presence of a thermostat and/or barostat
 
         if thermostat is not None:
             assert thermostat.method == "thermostat"
@@ -315,58 +310,79 @@ class VerletIntegrator(MyPyTreeNode):
             print(f"sampling NPE ensemble  {barostat.name=}")  # type:ignore
             vh = barostat
 
+        assert isinstance(vh, VerletHook)
+
+        pos = ff.system.pos
+
+        delta = jnp.zeros(pos.shape, float)
+
+        res, (bias, cv) = ff.compute(gpos=True)
+        epot, gpos = res.energy, res.gpos
+        vtens = jnp.zeros((3, 3), float)
+        ptens = jnp.zeros((3, 3), float)
+
+        assert bias.gpos is not None
+
+        cv, e_bias, gpos_bias = cv, bias.energy, bias.gpos
+
+        masses = ff.system.masses
+
+        assert gpos is not None
+        acc = -gpos / masses.reshape(-1, 1)
+        pos_old = pos
+
+        vel = vel0 if vel0 is not None else get_random_vel(temp0, scalevel0, masses, key=jax.random.PRNGKey(key))
+
+        # Configure the number of degrees of freedom if needed
+        if ndof is None:
+            ndof = pos.size
+
         self = VerletIntegrator(
-            ndof=ndof,
-            time=jnp.array(time0 if time0 is not None else 0.0),
-            counter=counter0 if counter0 is not None else 0,
-            pos=ff.system.pos,
-            rvecs=ff.system.cell.rvecs,
-            timestep=timestep,
-            masses=ff.system.masses,
-            vel=vel0
-            if vel0 is not None
-            else get_random_vel(temp0, scalevel0, ff.system.masses, key=jax.random.PRNGKey(key)),
-            gpos=None,
-            delta=None,
-            vtens=None,  # jnp.zeros((3, 3), float),
             ff=ff,
+            pos=pos,
+            vel=vel,
+            masses=masses,
+            timestep=jnp.array(timestep),
+            verlet_hook=vh,
+            gpos=gpos,
+            gpos_bias=gpos_bias,
+            temp=jnp.array(temp0),
+            ekin=jnp.array(0.0),
+            ekin_new=jnp.array(0.0),
+            epot=epot,
+            etot=jnp.array(0.0),
+            econs=jnp.array(0.0),
+            cons_err=jnp.array(0.0),
+            ptens=ptens,
+            press=jnp.array(0.0),
+            rmsd_delta=jnp.array(0.0),
+            rmsd_gpos=jnp.array(0.0),
+            rmsd_gpos_bias=jnp.array(0.0),
+            counter=jnp.array(counter0 if counter0 is not None else 0),
+            time=jnp.array(time0 if time0 is not None else 0.0),
+            delta=delta,
+            acc=acc,
+            rvecs=ff.system.cell.rvecs,
+            ndof=ndof,
+            cv=cv,
+            e_bias=e_bias,
+            pos_old=pos_old,
+            vtens=vtens,
             other_hooks=other_hooks,
-            verlet_hook=vh,  # type:ignore
+            _cons_err_tracker=ConsErrTracker(),
         )
-
-        self.initialize()
-
-        return self
-
-    def initialize(self: VerletIntegrator):
-        # Standard initialization of Verlet algorithm
-
-        self.gpos = jnp.zeros(self.pos.shape, float)
-        self.delta = jnp.zeros(self.pos.shape, float)
-        self.vtens = jnp.zeros((3, 3), float)
-
-        self.ff.system.pos = self.pos
-        self.epot, self.gpos, _, (bias, cv) = self.ff.compute(gpos=True)
-
-        self.cv, self.e_bias = cv, bias
-
-        assert self.gpos is not None
-        self.acc = -self.gpos / self.masses.reshape(-1, 1)
-        self.pos_old = self.pos.copy()
 
         # Allow for specialized initializations by the Verlet hooks.
         self.verlet_hook, self = self.verlet_hook.init(self)
-
-        # Configure the number of degrees of freedom if needed
-        if self.ndof is None:
-            self.ndof = self.pos.size
 
         # Common post-processing of the initialization
         self = self.compute_properties()
 
         self.call_hooks()
 
-    # @jit_decorator
+        return self
+
+    @jit_decorator
     def propagate(self: VerletIntegrator):
         # Allow specialized hooks to modify the state before the regular verlet
         # step.
@@ -379,13 +395,14 @@ class VerletIntegrator(MyPyTreeNode):
         self.pos += self.timestep * self.vel
         self.ff.system.pos = self.pos
 
-        self.epot, self.gpos, self.vtens, (bias, cv) = self.ff.compute(gpos=True, vtens=True)
+        res, (bias, cv) = self.ff.compute(gpos=True)
+        assert res.gpos is not None
+        self.epot, self.gpos = res.energy, res.gpos
+        assert bias.gpos is not None
+        self.cv, self.e_bias, self.gpos_bias = cv, bias.energy, bias.gpos
 
-        self.cv, self.e_bias = cv, bias
-
-        assert self.gpos is not None
         self.acc = -self.gpos / self.masses.reshape(-1, 1)
-        assert self.acc is not None
+
         self.vel += 0.5 * self.acc * self.timestep
         self.ekin = self._compute_ekin()
 
@@ -418,7 +435,9 @@ class VerletIntegrator(MyPyTreeNode):
     @jit_decorator
     def compute_properties(self):
         # self.rmsd_gpos = jnp.sqrt((self.gpos**2).mean())
-        self.rmsd_gpos = jnp.linalg.norm(self.gpos)
+        self.rmsd_gpos = jnp.linalg.norm(self.gpos) / jnp.sqrt(self.gpos.shape[0])
+        self.rmsd_gpos_bias = jnp.linalg.norm(self.gpos_bias) / jnp.sqrt(self.gpos.shape[0])
+
         assert self.delta is not None
         self.rmsd_delta = jnp.sqrt((self.delta**2).mean())
         self.ekin = self._compute_ekin()
@@ -440,7 +459,7 @@ class VerletIntegrator(MyPyTreeNode):
         pass
 
     def call_hooks(self):
-        state_updated = False
+        # state_updated = False
 
         if jnp.any(jnp.isnan(self.ff.system.sp.coordinates)):
             raise ValueError(f"sp containes nans: {self.ff.system.sp=}")
@@ -451,24 +470,15 @@ class VerletIntegrator(MyPyTreeNode):
 
         for hook in [self.verlet_hook, *self.other_hooks]:
             if hook.expects_call(self.counter):
-                if not state_updated:
-                    for item in self.state_list:
-                        item.update(self)
-                    state_updated = True
-
                 hook(self)
 
     def run(self: VerletIntegrator, nstep=None):
-        @jit_decorator
-        def prop(self):
-            return self.propagate()
-
         if nstep is None:
             while True:
-                self = prop(self)
+                self = self.propagate()
                 self.call_hooks()
         else:
             for i in range(nstep):
-                self = prop(self)
+                self = self.propagate()
                 self.call_hooks()
         self.finalize()

@@ -23,29 +23,27 @@
 # --
 """Thermostats"""
 
-from __future__ import division
+from __future__ import annotations, division
 
 from dataclasses import KW_ONLY
 
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.datastructures import field
+from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
 from IMLCV.new_yaff.iterative import StateItem
 from IMLCV.new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
-from IMLCV.new_yaff.verlet import VerletHook, VerletIntegrator
+from IMLCV.new_yaff.verlet import ThermostatHook, VerletIntegrator
 
 
-class AndersenThermostat(VerletHook):
-    name = "Andersen"
-    kind = "stochastic"
-    method = "thermostat"
-
-    _: KW_ONLY
+class AndersenThermostat(ThermostatHook):
+    name: str = field(pytree_node=False, default="Andersen")
+    kind: str = field(pytree_node=False, default="stochastic")
+    method: str = field(pytree_node=False, default="thermostat")
 
     select: jax.Array | None = None
-    annealing: float = 1.0
+    annealing: jax.Array = field(default_factory=lambda: jnp.array(1.0))
 
     """
     This is an implementation of the Andersen thermostat. The method
@@ -116,14 +114,12 @@ class AndersenThermostat(VerletHook):
 
 
 # @partial(dataclass, frozen=False)
-class BerendsenThermostat(VerletHook):
-    name = "Berendsen"
-    kind = "deterministic"
-    method = "thermostat"
+class BerendsenThermostat(ThermostatHook):
+    name: str = field(pytree_node=False, default="Berendsen")
+    kind: str = field(pytree_node=False, default="deterministic")
+    method: str = field(pytree_node=False, default="thermostat")
 
-    _: KW_ONLY
-
-    timecon: float = 100 * femtosecond
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
 
     """
     This is an implementation of the Berendsen thermostat. The algorithm
@@ -174,17 +170,17 @@ class BerendsenThermostat(VerletHook):
 
 
 # @partial(dataclass, frozen=False)
-class LangevinThermostat(VerletHook):
-    name = "Langevin"
-    kind = "stochastic"
-    method = "thermostat"
-
-    _: KW_ONLY
+class LangevinThermostat(ThermostatHook):
+    name: str = field(pytree_node=False, default="Langevin")
+    kind: str = field(pytree_node=False, default="stochastic")
+    method: str = field(pytree_node=False, default="thermostat")
 
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
-    timecon: float = 100 * femtosecond
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
 
     def init(self, iterative: VerletIntegrator):
+        print(f"running init")
+
         # It is mandatory to zero the external momenta.
         iterative.pos, iterative.vel = clean_momenta(
             iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
@@ -222,15 +218,13 @@ class LangevinThermostat(VerletHook):
 
 
 # @partial(dataclass, frozen=False)
-class CSVRThermostat(VerletHook):
-    name = "CSVR"
-    kind = "stochastic"
-    method = "thermostat"
+class CSVRThermostat(ThermostatHook):
+    name: str = field(pytree_node=False, default="CSVR")
+    kind: str = field(pytree_node=False, default="stochastic")
+    method: str = field(pytree_node=False, default="thermostat")
 
-    _: KW_ONLY
-
-    timecon: float = 100 * femtosecond
-    kin: float | None = None
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
+    kin: jax.Array | None = None
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
     """
@@ -293,15 +287,13 @@ class CSVRThermostat(VerletHook):
 
 
 # @partial(dataclass, frozen=False)
-class GLEThermostat(VerletHook):
-    name = "GLE"
-    kind = "stochastic"
-    method = "thermostat"
+class GLEThermostat(ThermostatHook):
+    name: str = field(pytree_node=False, default="GLE")
+    kind: str = field(pytree_node=False, default="stochastic")
+    method: str = field(pytree_node=False, default="thermostat")
 
-    _: KW_ONLY
-
-    timecon: float = 100 * femtosecond
-    kin: float | None = None
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
+    kin: jax.Array | None = None
     a_p: jax.Array
     c_p: jax.Array | None = None
     ns: int | None = None
@@ -401,14 +393,11 @@ class GLEThermostat(VerletHook):
         return self, iterative
 
 
-# @partial(dataclass, frozen=False)
-class NHChain(object):
-    _: KW_ONLY
-
+class NHChain(MyPyTreeNode):
     length: int = 3
     timestep: jax.Array
     temp: jax.Array
-    timecon: jax.Array = jnp.array([100 * femtosecond])
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
 
     restart_pos: bool = False
     restart_vel: bool = False
@@ -416,10 +405,12 @@ class NHChain(object):
     pos0: jax.Array | None = None
     vel0: jax.Array | None = None
 
+    pos: jax.Array | None = None
+    vel: jax.Array | None = None
+
     masses: jax.Array | None = None
 
     ndof: int = 0
-
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
     def __post_init__(self):
@@ -441,27 +432,30 @@ class NHChain(object):
         else:
             self.vel = jnp.zeros(self.length)
 
-    def set_ndof(self, ndof):
+    def set_ndof(self, ndof: int) -> NHChain:
         # set the masses according to the time constant
         self.ndof = ndof
         angfreq = 2 * jnp.pi / self.timecon
         self.masses = jnp.ones(self.length) * (boltzmann * self.temp / angfreq**2)
         self.masses[0] *= ndof
         if not self.restart_vel:
-            self.vel = self.get_random_vel_therm()
+            self.vel, self = self.get_random_vel_therm()
 
-    def get_random_vel_therm(self):
+        return self
+
+    def get_random_vel_therm(self) -> tuple[jax.Array, NHChain]:
         # generate random velocities for the thermostat velocities using a Gaussian distribution
         shape = self.length
 
-        key, key0 = jax.random.split(self.key)
-        self.key = key
+        self.key, key0 = jax.random.split(self.key)
 
         assert self.masses is not None
 
-        return jax.random.normal(key0, shape=(shape,)) * jnp.sqrt(self.masses * boltzmann * self.temp) / self.masses
+        return jax.random.normal(key0, shape=(shape,)) * jnp.sqrt(
+            self.masses * boltzmann * self.temp
+        ) / self.masses, self
 
-    def __call__(self, ekin, vel, G1_add):
+    def update(self, ekin, vel, G1_add) -> tuple[jax.Array, jax.Array, NHChain]:
         def do_bead(k, ekin, self: NHChain):
             assert self.masses is not None
             assert self.vel is not None
@@ -522,12 +516,10 @@ class NHChain(object):
 
 
 # @partial(dataclass, frozen=False)
-class NHCThermostat(VerletHook):
-    name = "NHC"
-    kind = "deterministic"
-    method = "thermostat"
-
-    _: KW_ONLY
+class NHCThermostat(ThermostatHook):
+    name: str = field(pytree_node=False, default="NHC")
+    kind: str = field(pytree_node=False, default="deterministic")
+    method: str = field(pytree_node=False, default="thermostat")
 
     chain: NHChain
 
@@ -585,15 +577,13 @@ class NHCThermostat(VerletHook):
         return self, iterative
 
     def pre(self, iterative: VerletIntegrator, G1_add=None):
-        vel_new, iterative.ekin, self.chain = self.chain(iterative.ekin, iterative.vel, G1_add)
-        # iterative.vel[:] = vel_new
+        vel_new, iterative.ekin, self.chain = self.chain.update(iterative.ekin, iterative.vel, G1_add)
         iterative.vel = vel_new
 
         return self, iterative
 
     def post(self, iterative: VerletIntegrator, G1_add=None):
-        vel_new, iterative.ekin, self.chain = self.chain(iterative.ekin, iterative.vel, G1_add)
-        # iterative.vel[:] = vel_new
+        vel_new, iterative.ekin, self.chain = self.chain.update(iterative.ekin, iterative.vel, G1_add)
         iterative.vel = vel_new
         self.econs_correction = self.chain.get_econs_correction()
 

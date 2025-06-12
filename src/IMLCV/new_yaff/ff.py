@@ -11,15 +11,12 @@ from IMLCV.new_yaff.system import YaffSys
 if TYPE_CHECKING:
     from IMLCV.implementations.MdEngine import NewYaffEngine
 
+from IMLCV.base.bias import EnergyResult
+
 
 # @partial(dataclass, frozen=False)
 class YaffFF(MyPyTreeNode):
-    energy: float
-    gpos: jax.Array
-    vtens: jax.Array
-
     system: YaffSys
-
     md_engine: NewYaffEngine = field(pytree_node=False)
 
     @staticmethod
@@ -32,21 +29,11 @@ class YaffFF(MyPyTreeNode):
                 md=md_engine,
                 tic=md_engine.static_trajectory_info,
             ),
-            energy=0.0,
-            gpos=jnp.zeros((md_engine.sp.shape[0], 3), float),
-            vtens=jnp.zeros((3, 3), float),
         )
-
-        yaff_ff.clear()
 
         return yaff_ff
 
-    def clear(self):
-        self.energy = jnp.nan
-        self.gpos = self.gpos.at[:].set(jnp.nan)
-        self.vtens = self.vtens.at[:].set(jnp.nan)
-
-    def compute(self, gpos=False, vtens=False):
+    def compute(self, gpos=False, vtens=False) -> tuple[EnergyResult, tuple[EnergyResult, jax.Array]]:
         sp = self.system.sp
 
         energy = self.md_engine.get_energy(self.system.sp, gpos, vtens and sp.cell is not None)
@@ -54,4 +41,4 @@ class YaffFF(MyPyTreeNode):
 
         res = energy + bias
 
-        return res.energy, energy.gpos, energy.vtens, (bias.energy, cv.cv)
+        return res, (bias, cv.cv)

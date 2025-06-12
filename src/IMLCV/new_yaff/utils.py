@@ -25,18 +25,21 @@
 
 import jax
 import jax.numpy as jnp
+from jax import Array
 
 from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.new_yaff.ff import YaffFF
+from IMLCV.new_yaff.system import YaffCell
 
 
 def get_random_vel(
-    temp0,
-    scalevel0,
-    masses,
+    temp0: float | Array,
+    scalevel0: bool,
+    masses: Array,
     key: jax.Array,
-    select=None,
-):
+    select: Array | None = None,
+) -> Array:
     """Generate random atomic velocities using a Maxwell-Boltzmann distribution
 
     **Arguments:**
@@ -73,7 +76,7 @@ def get_random_vel(
     return result
 
 
-def remove_com_moment(vel, masses):
+def remove_com_moment(vel: Array, masses: Array) -> Array:
     """Zero the linear center-of-mass momentum.
 
     **Arguments:**
@@ -96,7 +99,7 @@ def remove_com_moment(vel, masses):
     return vel
 
 
-def remove_angular_moment(pos, vel, masses):
+def remove_angular_moment(pos: Array, vel: Array, masses: Array) -> tuple[Array, Array]:
     """Zero the global angular momentum.
 
     **Arguments:**
@@ -133,7 +136,7 @@ def remove_angular_moment(pos, vel, masses):
     return pos, vel
 
 
-def clean_momenta(pos, vel, masses, cell):
+def clean_momenta(pos: Array, vel: Array, masses: Array, cell: YaffCell) -> tuple[Array, Array]:
     """Remove any relevant external momenta
 
     **Arguments:**
@@ -163,7 +166,7 @@ def clean_momenta(pos, vel, masses, cell):
     return pos, vel
 
 
-def inertia_tensor(pos, masses):
+def inertia_tensor(pos: Array, masses: Array) -> Array:
     """Compute the inertia tensor for a given set of point particles
 
     **Arguments:**
@@ -179,7 +182,7 @@ def inertia_tensor(pos, masses):
     return jnp.identity(3) * (masses.reshape(-1, 1) * pos**2).sum() - jnp.dot(pos.T, masses.reshape(-1, 1) * pos)
 
 
-def angular_moment(pos, vel, masses):
+def angular_moment(pos: Array, vel: Array, masses: Array) -> Array:
     """Compute the angular moment of a set of point particles
 
     **Arguments:**
@@ -206,7 +209,7 @@ def angular_moment(pos, vel, masses):
     return ang_mom
 
 
-def angular_velocity(ang_mom, iner_tens, epsilon=1e-10):
+def angular_velocity(ang_mom: Array, iner_tens: Array, epsilon: float = 1e-10) -> Array:
     """Derive the angular velocity from the angular moment and the inertia tensor
 
     **Arguments:**
@@ -243,7 +246,7 @@ def angular_velocity(ang_mom, iner_tens, epsilon=1e-10):
     return jnp.dot(evecs, jnp.dot(evecs.T, ang_mom) / evals)
 
 
-def rigid_body_angular_velocities(pos, ang_vel):
+def rigid_body_angular_velocities(pos: Array, ang_vel: Array) -> Array:
     """Generate the velocities of a set of atoms that move as a rigid body.
 
     **Arguments:**
@@ -261,7 +264,7 @@ def rigid_body_angular_velocities(pos, ang_vel):
     return vmap_decorator(jnp.linalg.cross, in_axes=(None, 0))(ang_vel, pos)
 
 
-def get_ndof_internal_md(natom, nper):
+def get_ndof_internal_md(natom: int, nper: int) -> int:
     """Return the effective number of internal degrees of freedom for MD simulations
 
     **Arguments:**
@@ -292,7 +295,7 @@ def get_ndof_internal_md(natom, nper):
         return 3 * natom - 3
 
 
-def cell_symmetrize(ff, vector_list=None, tensor_list=None):
+def cell_symmetrize(ff: YaffFF, vector_list=None, tensor_list=None) -> tuple[Array, Array, list[Array], list[Array]]:
     """Symmetrizes the unit cell tensor, and updates the position vectors
 
     **Arguments:**
@@ -337,7 +340,7 @@ def cell_symmetrize(ff, vector_list=None, tensor_list=None):
     return cell, pos_new, new_vector_list, new_tensor_list
 
 
-def cell_lower(rvecs):
+def cell_lower(rvecs: Array) -> tuple[Array, Array]:
     """Transform the cell tensor to its lower diagonal form. The transformation
     is described here https://lammps.sandia.gov/doc/Howto_triclinic.html,
     bearing in mind that YAFF stores cell vectors as rows, not columns.
@@ -383,7 +386,7 @@ def cell_lower(rvecs):
     return newrvecs, rot
 
 
-def get_random_vel_press(mass, temp, key):
+def get_random_vel_press(mass: Array, temp: Array, key: Array) -> Array:
     """Generates symmetric tensor of barostat velocities
 
     **Arguments:**
@@ -411,7 +414,7 @@ def get_random_vel_press(mass, temp, key):
     return vel_press
 
 
-def get_ndof_baro(dim, anisotropic, vol_constraint):
+def get_ndof_baro(dim: int, anisotropic: bool, vol_constraint: bool) -> int:
     """Calculates the number of degrees of freedom associated with the cell fluctuation
 
     **Arguments:**
@@ -438,7 +441,7 @@ def get_ndof_baro(dim, anisotropic, vol_constraint):
     return baro_ndof
 
 
-def stabilized_cholesky_decomp(mat):
+def stabilized_cholesky_decomp(mat: Array) -> Array:
     """
     Do LDL^T and transform to MM^T with negative diagonal entries of D put equal to zero
     Assume mat is square and symmetric (but not necessarily positive definite).

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import ase
+import ase.md.md
 import ase.units
 import jax.numpy as jnp
 
@@ -17,6 +18,7 @@ import IMLCV.new_yaff.iterative
 import IMLCV.new_yaff.verlet
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
+from IMLCV.base.datastructures import field
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
 
@@ -42,26 +44,29 @@ class AseEngine(MDEngine):
     ) -> AseEngine:
         cont = False
 
+        create_kwargs = {}
+
         if trajectory_file is not None:
             trajectory_file = Path(trajectory_file)
             # continue with existing file if it exists
-            if Path(trajectory_file).exists():
-                trajectory_info = TrajectoryInfo.load(trajectory_file)
-                cont = True
-
-            if trajectory_info._size is None:
-                cont = False
+            assert Path(trajectory_file).exists()
+            trajectory_info = TrajectoryInfo.load(trajectory_file)
+            cont = True
 
         if not cont:
-            kwargs["step"] = 1
-            # if sp is not None:
-            # energy.sp = sp
+            create_kwargs["step"] = 1
 
         else:
-            kwargs["step"] = trajectory_info._size
+            assert trajectory_info is not None
+
+            create_kwargs["step"] = trajectory_info._size
             sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
-                kwargs["time0"] = time()
+                create_kwargs["time0"] = time()
+
+        assert sp is not None, "SystemParams must be provided"
+
+        kwargs.update(create_kwargs)
 
         self = AseEngine(
             bias=bias,
@@ -70,7 +75,6 @@ class AseEngine(MDEngine):
             trajectory_info=trajectory_info,
             trajectory_file=trajectory_file,
             sp=sp,
-            # langevin=langevin,
             **kwargs,
         )
 
@@ -85,7 +89,7 @@ class AseEngine(MDEngine):
 
         self.sp = SystemParams(
             coordinates=jnp.array(atoms.get_positions() / ase.units.Ang * angstrom),
-            cell=jnp.array(atoms.get_cell() / ase.units.Ang * angstrom) if atoms.pbc.all() else None,
+            cell=jnp.array(atoms.get_cell().array / ase.units.Ang * angstrom) if atoms.pbc.all() else None,
         )
 
         # print(f"after {self.sp=}")
@@ -114,6 +118,9 @@ class AseEngine(MDEngine):
         if self.static_trajectory_info.barostat:
             if self.langevin:
                 print("langevin cannot be combined with npt")
+
+            assert self.static_trajectory_info.timecon_baro is not None
+            assert self.static_trajectory_info.P is not None
 
             dyn = NPT(
                 atoms=self.atoms,
@@ -237,6 +244,7 @@ class AseEngine(MDEngine):
     def _run(self, steps):
         if not self._verlet_initialized:
             self._setup_verlet()
+        assert self._verlet is not None
 
         self._verlet.run(int(steps))
 
@@ -253,9 +261,8 @@ class NewYaffEngine(MDEngine):
     _verlet: IMLCV.new_yaff.verlet.VerletIntegrator | None = None
     _yaff_ener: Any | None = None
 
-    @classmethod
+    @staticmethod
     def create(  # type: ignore[override]
-        self,
         bias: Bias,
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
@@ -306,10 +313,7 @@ class NewYaffEngine(MDEngine):
         hooks = []
 
         class myHook(IMLCV.new_yaff.iterative.Hook):
-            def __init__(self, md_engine: NewYaffEngine):
-                self.md_engine = md_engine
-
-                super().__init__()
+            md_engine: MDEngine = field(pytree_node=False)
 
             def __call__(self, iterative: IMLCV.new_yaff.verlet.VerletIntegrator):
                 assert iterative.epot is not None, "Potential energy must be computed"
@@ -323,6 +327,8 @@ class NewYaffEngine(MDEngine):
                     cv=iterative.cv,
                     e_bias=iterative.e_bias,
                     e_pot=iterative.epot - iterative.e_bias,
+                    gpos_rmsd=iterative.rmsd_gpos,
+                    gpos_bias_rmsd=iterative.rmsd_gpos_bias,
                 )
 
                 if hasattr(iterative, "press"):
@@ -351,22 +357,25 @@ class NewYaffEngine(MDEngine):
             from IMLCV.new_yaff.nvt import LangevinThermostat
 
             thermo = LangevinThermostat(
-                temp=self.static_trajectory_info.T,
-                timecon=self.static_trajectory_info.timecon_thermo,
+                temp=jnp.array(self.static_trajectory_info.T),
+                timecon=jnp.array(self.static_trajectory_info.timecon_thermo),
             )
 
         baro = None
         if self.static_trajectory_info.barostat:
             from IMLCV.new_yaff.npt import LangevinBarostat
 
+            assert self.static_trajectory_info.P is not None
+            assert self.static_trajectory_info.timecon_baro is not None
+
             baro = LangevinBarostat(
-                temp=self.static_trajectory_info.T,
-                press=self.static_trajectory_info.P,
-                timecon=self.static_trajectory_info.timecon_baro,
+                temp=jnp.array(self.static_trajectory_info.T),
+                press=jnp.array(self.static_trajectory_info.P),
+                timecon=jnp.array(self.static_trajectory_info.timecon_baro),
                 anisotropic=True,
             )
 
-        hooks.append(myHook(self))
+        hooks.append(myHook(md_engine=self))
 
         from IMLCV.new_yaff.verlet import VerletIntegrator
 
@@ -388,6 +397,8 @@ class NewYaffEngine(MDEngine):
     def _run(self, steps):
         if not self._verlet_initialized:
             self._setup_verlet()
+
+        assert self._verlet is not None
         self._verlet.run(int(steps))
 
     # @property

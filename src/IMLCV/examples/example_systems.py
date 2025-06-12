@@ -11,7 +11,7 @@ from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, k
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import LatticeInvariants, NoneCV, Volume, dihedral
-from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, OpenMmEnergy, YaffEnergy
+from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, OpenMmEnergy
 from IMLCV.implementations.MdEngine import NewYaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"

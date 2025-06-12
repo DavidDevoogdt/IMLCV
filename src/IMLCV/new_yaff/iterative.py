@@ -24,80 +24,58 @@
 """Base class for iterative algorithms"""
 
 from dataclasses import KW_ONLY
+from typing import TYPE_CHECKING, Any, TypeVar
 
+import jax
 import jax.numpy as jnp
 
 from IMLCV.base.datastructures import MyPyTreeNode, field
 
 
 class StateItem(MyPyTreeNode):
-    _: KW_ONLY
-
     key: str = field(pytree_node=False)
-    shape: tuple[int] | None = field(pytree_node=False, default=None)
-    dtype: jnp.dtype | None = field(pytree_node=False, default=None)
+    value: Any
 
     def update(self, iterative):
         self.value = self.get_value(iterative)
-        if self.shape is None:
-            if isinstance(self.value, jnp.ndarray):
-                self.shape = self.value.shape  # type: ignore
-                self.dtype = self.value.dtype
-            else:
-                self.shape = tuple([])
-                self.dtype = type(self.value)  # type: ignore
 
-    def get_value(self, iterative):
+    def get_value(self, iterative) -> Any:
         raise NotImplementedError
-
-    def iter_attrs(self, iterative):
-        return []
-
-    # def copy(self):
-    #     return self.__class__()
 
 
 class AttributeStateItem(StateItem):
     def get_value(self, iterative):
         return getattr(iterative, self.key, None)
 
-    # def copy(self):
-    #     return self.__class__(self.key)
-
 
 class ConsErrStateItem(StateItem):
     def get_value(self, iterative):
         return getattr(iterative._cons_err_tracker, self.key, None)
 
-    # def copy(self):
-    #     return self.__class__(self.key)
-
 
 class PosStateItem(StateItem):
-    _: KW_ONLY
-    key: str = field(pytree_node=False, default="pos")
+    key = "pos"
 
     def get_value(self, iterative):
         return iterative.ff.system.pos
 
 
 class CellStateItem(StateItem):
-    _: KW_ONLY
-    key: str = "cell"
+    key = "cell"
 
     def get_value(self, iterative):
         return iterative.ff.system.cell.rvecs
 
 
 class Hook(MyPyTreeNode):
-    name = None
-    kind = None
-    method = None
-    start: int = 0
-    step: int = 1
+    name: str = field(pytree_node=False, default="hook")
+    kind: str = field(pytree_node=False, default="base")
+    method: str = field(pytree_node=False, default="none")
+    start: jax.Array = field(default_factory=lambda: jnp.array(0))
+    step: jax.Array = field(default_factory=lambda: jnp.array(1))
 
     def expects_call(self, counter):
-        return counter >= self.start and (counter - self.start) % self.step == 0
+        return bool(counter >= self.start and (counter - self.start) % self.step == 0)
 
     def __call__(self, iterative):
         raise NotImplementedError

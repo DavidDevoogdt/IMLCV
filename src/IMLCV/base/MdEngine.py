@@ -745,7 +745,19 @@ class MDEngine(ABC):
 
         return self.trajectory_info._shrink_capacity()
 
-    def save_step(self, T=None, P=None, t=None, err=None, cv=None, e_bias=None, e_pot=None, canonicalize=False):
+    def save_step(
+        self,
+        T=None,
+        P=None,
+        t=None,
+        err=None,
+        cv=None,
+        e_bias=None,
+        e_pot=None,
+        gpos_rmsd=None,
+        gpos_bias_rmsd=None,
+        canonicalize=False,
+    ):
         if canonicalize and self.nl is not None:
             sp = self.nl.canonicalized_sp(self.sp)
         else:
@@ -771,8 +783,13 @@ class MDEngine(ABC):
             if ti._P is not None:
                 str += f"|{'P[bar]': ^10s}"
             str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
-            ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-            str += f"|{ss: ^13s}"
+            if gpos_rmsd is not None:
+                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                str += f"|{ss: ^13s}"
+            if gpos_bias_rmsd is not None:
+                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                str += f"|{ss: ^13s}"
+
             str += f"|{' CV': ^10s}"
             print(str, sep="")
             print(f"{'=' * len(str)}")
@@ -790,7 +807,10 @@ class MDEngine(ABC):
             if ti._P is not None:
                 str += f" {ti._P[0] / bar: >10.2f}"
             str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
-            # str += f"|{jnp.max(jnp.linalg.norm(self.last_bias.gpos, axis=1) / kjmol * angstrom): >13.2f}"
+            if gpos_rmsd is not None:
+                str += f"|{(gpos_rmsd / kjmol * angstrom): >13.2f}"
+            if gpos_bias_rmsd is not None:
+                str += f"|{(gpos_bias_rmsd / kjmol * angstrom): >13.2f}"
             if ti._cv is not None:
                 str += f"| {ti._cv[0, :]}"
             print(str)
@@ -868,7 +888,6 @@ class MDEngine(ABC):
             push_jac=push_jac,
             rel=rel,
             shmap_kwargs=shmap_kwargs,
-            return_cv=True,
         )
 
         return cv, ener
@@ -877,10 +896,9 @@ class MDEngine(ABC):
         return self.__dict__
 
     def __setstate__(self, statedict: dict):
+        removed = []
         try:
             f_names = [f.name for f in fields(self.__class__)]
-
-            removed = []
 
             for k in statedict.keys():
                 if k not in f_names:

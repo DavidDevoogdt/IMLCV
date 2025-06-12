@@ -46,7 +46,7 @@ class EnergyResult(MyPyTreeNode):
     gpos: Array | None = field(default=None)
     vtens: Array | None = field(default=None)
 
-    def __add__(self, other) -> EnergyResult:
+    def __add__(self: EnergyResult, other: EnergyResult) -> EnergyResult:
         assert isinstance(other, EnergyResult)
 
         gpos = self.gpos
@@ -63,7 +63,11 @@ class EnergyResult(MyPyTreeNode):
             assert other.vtens is not None
             vtens += other.vtens
 
-        return EnergyResult(energy=self.energy + other.energy, gpos=gpos, vtens=vtens)
+        return EnergyResult(
+            energy=self.energy + other.energy,
+            gpos=gpos,
+            vtens=vtens,
+        )
 
 
 class EnergyError(Exception):
@@ -89,22 +93,25 @@ class Energy:
 
     @cell.setter
     @abstractmethod
-    def cell(self, cell):
+    def cell(self, cell: jax.Array | None):
         pass
 
     @property
     @abstractmethod
-    def coordinates(self) -> jax.Array:
+    def coordinates(self) -> jax.Array | None:
         pass
 
     @coordinates.setter
     @abstractmethod
-    def coordinates(self, coordinates):
+    def coordinates(self, coordinates: jax.Array):
         pass
 
     @property
-    def sp(self) -> SystemParams:
-        return SystemParams(coordinates=self.coordinates, cell=self.cell)
+    def sp(self) -> SystemParams | None:
+        c = self.coordinates
+        if c is None:
+            return None
+        return SystemParams(coordinates=c, cell=self.cell)
 
     @sp.setter
     def sp(self, sp: SystemParams):
@@ -250,7 +257,7 @@ class EnergyFn(Energy, MyPyTreeNode):
     #     self._sp.cell = cell
 
     @property
-    def coordinates(self):
+    def coordinates(self) -> Array | None:
         if self._sp is None:
             return None
 
@@ -367,7 +374,7 @@ class Bias(ABC, MyPyTreeNode):
             "push_jac",
             "rel",
             # "shmap_kwargs",
-            "return_cv",
+            # "return_cv",
         ],
     )
     def compute_from_system_params(
@@ -382,7 +389,6 @@ class Bias(ABC, MyPyTreeNode):
         push_jac=False,
         rel=False,
         shmap_kwargs=ShmapKwargs.create(),
-        return_cv=False,
     ) -> tuple[CV, EnergyResult]:
         """Computes the bias, the gradient of the bias wrt the coordinates and
         the virial."""
@@ -398,6 +404,9 @@ class Bias(ABC, MyPyTreeNode):
                     vir=vir,
                     shmap=False,
                     shmap_kwargs=None,
+                    use_jac=use_jac,
+                    push_jac=push_jac,
+                    rel=rel,
                 ),
                 chunk_size=chunk_size,
             )

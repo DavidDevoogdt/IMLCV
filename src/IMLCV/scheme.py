@@ -117,7 +117,7 @@ class Scheme:
             mu = jnp.array([a[1] - a[0] for a in grid])
             k = (2 / mu * jax.scipy.special.erfinv(1 - eps)) ** 2 * self.sti.T * boltzmann
 
-            print(f"{k*kjmol=}")
+            print(f"{k/kjmol=}")
 
         biases = [
             HarmonicBias.create(

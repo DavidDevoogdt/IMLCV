@@ -61,21 +61,20 @@ class HarmonicBias(Bias):
 
     q0: CV
     k: Array
-    k_max: Array | None = field(default=None)
-    y0: Array | None = field(default=None)
-    r0: Array | None = field(default=None)
+    k_max: Array | None = None
+    y0: Array | None = None
+    r0: Array | None = None
 
-    @classmethod
+    @staticmethod
     def create(
-        cls,
         cvs: CollectiveVariable,
         q0: CV,
-        k,
+        k: float | Array,
         k_max: Array | float | None = None,
         start=None,
         step=None,
         finalized=True,
-    ) -> Self:
+    ) -> HarmonicBias:
         """generate harmonic potentia;
 
         Args:
@@ -85,30 +84,29 @@ class HarmonicBias(Bias):
         """
 
         if isinstance(k, float):
-            k = jnp.zeros_like(q0.cv) + k
+            _k = jnp.zeros_like(q0.cv) + k
         else:
-            assert k.shape == q0.cv.shape
+            _k = k
+
+        assert _k.shape == q0.cv.shape
 
         if k_max is not None:
             k_max = jnp.array(k_max)
 
             assert k_max.shape == q0.cv.shape  # type:ignore
 
-        # assert np.all(k > 0)
-        k = jnp.array(k)
-
         if k_max is not None:
             assert np.all(k_max > 0)
-            r0 = k_max / k
-            y0 = jnp.einsum("i,i,i->", k, r0, r0) / 2
+            r0 = k_max / _k
+            y0 = jnp.einsum("i,i,i->", _k, r0, r0) / 2
         else:
             r0 = None
             y0 = None
 
-        return cls(
+        return HarmonicBias(
             collective_variable=cvs,
             q0=q0,
-            k=k,
+            k=_k,
             k_max=k_max,
             r0=r0,
             y0=y0,

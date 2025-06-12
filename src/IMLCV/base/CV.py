@@ -336,7 +336,7 @@ def padded_shard_map(
             if explicit_shmap:
                 # print(f"explicit shmap")
 
-                shard_fun = jax.jit(
+                shard_fun = jit_decorator(
                     shard_map(
                         f_flat,
                         mesh=mesh,
@@ -348,7 +348,7 @@ def padded_shard_map(
 
             else:
                 # WARNING: might result in random crashes, probably related to https://github.com/jax-ml/jax/issues/19691
-                shard_fun = jax.jit(
+                shard_fun = jit_decorator(
                     f_flat,
                     in_shardings=sharding,
                     out_shardings=sharding_out,
@@ -412,6 +412,8 @@ def padded_vmap(
         if chunk_size is None:
             if vmap:
                 _function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
+            else:
+                _function = function
 
             return _function(*args, **kwargs)
 
@@ -419,10 +421,10 @@ def padded_vmap(
         shape = int(in_tree_flat[0].shape[axis])
 
         if shape < chunk_size:
-            # print("shape shortcut")
-
             if vmap:
                 _function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
+            else:
+                _function = function
 
             return _function(*args, **kwargs)
 
@@ -607,6 +609,8 @@ def _macro_chunk_map(
             NeighbourList.stack(*nl) if isinstance(nl, list) else nl,
         )
 
+        zt = None
+
         if compute_t:
             assert y_t is not None
             zt = ft(
@@ -621,6 +625,7 @@ def _macro_chunk_map(
 
             if compute_t:
                 assert not isinstance(zt, SystemParams)
+                assert zt is not None
                 zt = zt.replace(_stack_dims=stack_dims).unstack()
 
             if not compute_t:
@@ -630,16 +635,20 @@ def _macro_chunk_map(
 
         if w is not None:
             w_stack = jnp.hstack(w)
+        else:
+            w_stack = None
 
         if compute_t and w_t is not None:
             wt_stack = jnp.hstack(w_t)
+        else:
+            wt_stack = None
 
         return chunk_func(
             chunk_func_init_args,
             z,
             zt if compute_t else None,
-            w_stack if w is not None else None,
-            wt_stack if compute_t else None,
+            w_stack,
+            wt_stack,
         )
 
     if macro_chunk is None:
@@ -679,11 +688,18 @@ def _macro_chunk_map(
     yt_chunk: list[X] = []
     nlt_chunk: list[NeighbourList] | None = [] if isinstance(nl_t, list) else None
     zt = []
+    zt_chunk: X2 | None = None
     last_zt: X2 | None = None
     last_chunk_yt: X | None = None
     wt_chunk: list[Array] | None
     wt_chunk = [] if w_t is not None else None
     last_chunk_nlt: NeighbourList | None = None
+    yt_stack: X | None = None
+    nlt_stack: NeighbourList | None = None
+
+    dt0: datetime | None = None
+    n_chunks: int | None = None
+    rem: int | None = None
 
     if verbose:
         n_chunks = tot // macro_chunk
@@ -798,7 +814,7 @@ def _macro_chunk_map(
                 nl_stack if isinstance(nl, list) else nl,
             )
 
-            zt_chunk = None
+            _zt_chunk = None
 
             if compute_t:
                 #
@@ -823,6 +839,10 @@ def _macro_chunk_map(
                 n_iter += 1
                 if n_iter % print_every == 0:
                     dt = datetime.now()
+
+                    assert dt0 is not None
+                    assert rem is not None
+                    assert n_chunks is not None
 
                     dte = dt0 + (dt - dt0) / (n_iter) * (n_chunks + (rem != 0))
 
@@ -3201,7 +3221,7 @@ class CvMetric(MyPyTreeNode):
 
         return CV(cv=out, mapped=True)
 
-    @jit
+    @jit_decorator
     def difference(self, x1: CV, x2: CV) -> Array:
         assert not x1.mapped
         assert not x2.mapped
@@ -3420,7 +3440,7 @@ class CvMetric(MyPyTreeNode):
                     shmap=False,
                 )[0]
 
-            f = jax.jit(f)
+            f = jit_decorator(f)
 
             hist = get_histo(
                 cv_0,

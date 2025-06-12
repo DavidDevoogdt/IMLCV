@@ -13,7 +13,6 @@ from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import alanine_dipeptide_openmm
 from IMLCV.implementations.bias import BiasMTD, HarmonicBias, RbfBias
 from IMLCV.implementations.CV import Volume, dihedral
-from IMLCV.implementations.energy import YaffEnergy
 
 ######################################
 #              test                  #

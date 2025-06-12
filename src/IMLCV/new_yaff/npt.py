@@ -46,23 +46,21 @@ from IMLCV.new_yaff.utils import (
     get_ndof_internal_md,
     get_random_vel_press,
 )
-from IMLCV.new_yaff.verlet import BarostatHook, VerletHook, VerletIntegrator
+from IMLCV.new_yaff.verlet import BarostatHook, ThermostatHook, VerletHook, VerletIntegrator
 
 
 # #@partial(dataclass, frozen=False)
 class TBCombination(BarostatHook):
-    name = "TBCombination"
+    name: str = field(pytree_node=False, default="TBCombination")
 
-    _: KW_ONLY
+    temp: jax.Array = field(default_factory=lambda: jnp.array(jnp.nan))  # not important
+    press: jax.Array = field(default_factory=lambda: jnp.array(jnp.nan))  # not important
 
-    temp: jax.Array | float = jnp.nan  # not important
-    press: jax.Array | float = jnp.nan
-
-    thermostat: VerletHook
+    thermostat: ThermostatHook
     barostat: BarostatHook
 
-    step_thermo: int | None = None
-    step_baro: int | None = None
+    step_thermo: jax.Array = field(default_factory=lambda: jnp.array(1))
+    step_baro: jax.Array = field(default_factory=lambda: jnp.array(1))
 
     baro_expects_call: bool = field(pytree_node=False, default=True)
     thermo_expects_call: bool = field(pytree_node=False, default=True)
@@ -94,7 +92,7 @@ class TBCombination(BarostatHook):
         assert self.step_baro == self.step_thermo, "different steps is curently disabled for jax"
         assert self.step_baro == 1, "different steps is curently disabled for jax"
 
-        self.step = min(self.thermostat.step, self.barostat.step)
+        self.step = jnp.min(jnp.array([self.thermostat.step, self.barostat.step]))
 
         if not self.verify():
             raise TypeError("The Thermostat or Barostat instance is not supported (yet)")
@@ -120,7 +118,7 @@ class TBCombination(BarostatHook):
 
         return self, iterative
 
-    def pre(self, iterative: VerletIntegrator):
+    def pre(self, iterative: VerletIntegrator, chainvel0=None):
         # determine whether the barostat should be called
         if self.baro_expects_call:
             from IMLCV.new_yaff.nvt import NHCThermostat
@@ -146,7 +144,7 @@ class TBCombination(BarostatHook):
 
         return self, iterative
 
-    def post(self, iterative: VerletIntegrator):
+    def post(self, iterative: VerletIntegrator, chainvel0=None):
         # determine whether the thermostat should be called
         if self.thermo_expects_call:
             if isinstance(self.barostat, MTKBarostat):
@@ -157,8 +155,6 @@ class TBCombination(BarostatHook):
             self.thermostat, iterative = self.thermostat.post(iterative, self.G1_add)
         # determine whether the barostat should be called
         if self.baro_expects_call:
-            from IMLCV.new_yaff.nvt import NHCThermostat
-
             if isinstance(self.thermostat, NHCThermostat):
                 # in case the barostat is coupled with a NHC thermostat:
                 # v_{xi,1} is needed to update v_g
@@ -193,11 +189,11 @@ class TBCombination(BarostatHook):
     def __call__(self, iterative: VerletIntegrator):
         assert self.step_thermo is not None
 
-        self.thermo_expects_call = (
+        self.thermo_expects_call = bool(
             iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
         )
 
-        self.baro_expects_call = (
+        self.baro_expects_call = bool(
             iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
         )
 
@@ -232,14 +228,12 @@ class TBCombination(BarostatHook):
 
 # #@partial(dataclass, frozen=False)
 class McDonaldBarostat(BarostatHook):
-    name = "McDonald"
-    kind = "stochastic"
-    method = "barostat"
+    name: str = field(pytree_node=False, default="McDonald")
+    kind: str = field(pytree_node=False, default="stochastic")
+    method: str = field(pytree_node=False, default="barostat")
 
-    _: KW_ONLY
-
-    amp: jax.Array | float = 1e-3
-    dim: int = 3
+    amp: jax.Array = field(default_factory=lambda: jnp.array(1e-3))
+    dim: int | None = 3
 
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
@@ -280,7 +274,11 @@ class McDonaldBarostat(BarostatHook):
             iterative.ff.system.cell.rvecs = rvecs
             iterative.ff.system.pos = pos
 
-            iterative.epot, iterative.gpos, _, _ = iterative.ff.compute(gpos=True, vtens=False)
+            res, _ = iterative.ff.compute(gpos=True, vtens=False)
+            assert res.gpos is not None
+            assert res.vtens is not None
+            iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
+
             assert iterative.gpos is not None
             iterative.acc = -iterative.gpos / iterative.masses.reshape(-1, 1)
 
@@ -318,18 +316,16 @@ class McDonaldBarostat(BarostatHook):
 
 # @partial(dataclass, frozen=False)
 class BerendsenBarostat(BarostatHook):
-    name = "Berendsen"
-    kind = "deterministic"
-    method = "barostat"
+    name: str = field(pytree_node=False, default="Berendsen")
+    kind: str = field(pytree_node=False, default="deterministic")
+    method: str = field(pytree_node=False, default="barostat")
 
-    _: KW_ONLY
+    timecon_press: jax.Array = field(default_factory=lambda: jnp.array(1000 * femtosecond))
+    beta: jax.Array = field(default_factory=lambda: jnp.array(4.57e-5 / bar))
 
-    timecon_press: jax.Array | float = 1000 * femtosecond
-    beta: jax.Array | float = 4.57e-5 / bar
-
-    anisotropic: bool = True
-    vol_constraint = False
-    mass_press: jax.Array | float | None = None
+    anisotropic: bool = field(pytree_node=False, default=True)
+    vol_constraint: bool = field(pytree_node=False, default=False)
+    mass_press: jax.Array | None = None
 
     cell: jax.Array | None = None
 
@@ -385,11 +381,12 @@ class BerendsenBarostat(BarostatHook):
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
-        if iterative.ndof is None:
-            iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
+
         # rescaling of the barostat mass, to be in accordance with Langevin and MTTK
-        assert self.mass_press is not None
         self.mass_press *= jnp.sqrt(iterative.ndof)
 
         return self, iterative
@@ -405,6 +402,7 @@ class BerendsenBarostat(BarostatHook):
             jnp.dot(iterative.vel.T * iterative.masses, iterative.vel) - iterative.vtens
         ) / iterative.ff.system.cell.volume
         # determination of mu
+        assert self.mass_press is not None
         dmu = self.timestep_press / self.mass_press * (self.press * jnp.eye(3) - ptens)
         if self.vol_constraint:
             dmu -= jnp.trace(dmu) / self.dim * jnp.eye(self.dim)
@@ -414,7 +412,7 @@ class BerendsenBarostat(BarostatHook):
             mu = ((jnp.trace(mu) / 3.0) ** (1.0 / 3.0)) * jnp.eye(3)
         # updating the positions and cell vectors
         pos_new = jnp.dot(iterative.pos, mu)
-        assert iterative.rvecs is not None
+
         rvecs_new = jnp.dot(iterative.rvecs, mu)
         iterative.ff.system.pos = pos_new
         # iterative.pos[:] = pos_new
@@ -424,34 +422,31 @@ class BerendsenBarostat(BarostatHook):
         iterative.rvecs = rvecs_new
         # calculation of the virial tensor
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
         epot1 = iterative.epot
         self.econs_correction += epot0 - epot1
 
         return self, iterative
 
 
-# @partial(dataclass, frozen=False)
 class LangevinBarostat(BarostatHook):
-    name = "Langevin"
-    kind = "stochastic"
-    method = "barostat"
-
-    _: KW_ONLY
-
-    temp: jax.Array | float
-    press: jax.Array | float
+    name: str = field(pytree_node=False, default="Langevin")
+    kind: str = field(pytree_node=False, default="stochastic")
+    method: str = field(pytree_node=False, default="barostat")
 
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-    cell: jax.Array | None = None
-    timecon: jax.Array | float = 1000 * femtosecond
+    # cell: jax.Array | None = None
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(1000 * femtosecond))
     anisotropic: bool = field(pytree_node=False, default=True)
     vol_constraint: bool = field(pytree_node=False, default=False)
 
-    vel_press: jax.Array | None = None
+    vel_press: jax.Array = field(default_factory=lambda: jnp.zeros((3, 3)))
     timestep_press: jax.Array | None = None
-    mass_press: jax.Array | None = None
+    mass_press: jax.Array = field(default_factory=lambda: jnp.array(0.0))
 
     """
     This hook implements the Langevin barostat. The equations are derived in:
@@ -494,17 +489,14 @@ class LangevinBarostat(BarostatHook):
             # symmetrize the cell tensor
             iterative.ff.system.cell.rvecs, iterative.ff.system.pos, _, _ = cell_symmetrize(iterative.ff)
 
-        self.cell = iterative.ff.system.cell.rvecs.copy()
+        # self.cell = iterative.ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
         iterative.pos, iterative.vel = clean_momenta(
             iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
         )
         # set the number of internal degrees of freedom (no restriction on p_cm)
-        if iterative.ndof is None:
-            assert iterative.pos is not None
-            iterative.ndof = iterative.pos.size
-        # define the barostat 'mass'
+
         self.mass_press = (iterative.ndof + 3) / 3 * boltzmann * self.temp * (self.timecon / (2 * jnp.pi)) ** 2
         # define initial barostat velocity
 
@@ -520,8 +512,10 @@ class LangevinBarostat(BarostatHook):
 
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
-
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
         # self.prng = jax.random.PRNGKey(rand_int)
 
         return self, iterative
@@ -555,8 +549,9 @@ class LangevinBarostat(BarostatHook):
     def baro(self, iterative: VerletIntegrator, chainvel0):
         assert self.vel_press is not None
         assert self.timestep_press is not None
-        assert iterative.rvecs is not None
+
         assert iterative.ndof is not None
+        assert iterative.vtens is not None
 
         def update_baro_vel(self: LangevinBarostat):
             assert self.vel_press is not None
@@ -622,7 +617,10 @@ class LangevinBarostat(BarostatHook):
 
         # update the potential energy
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
 
         assert self.vel_press is not None
         assert iterative.ndof is not None
@@ -664,37 +662,37 @@ class LangevinBarostat(BarostatHook):
         rand = jax.random.normal(key0, shape=shape) * jnp.sqrt(
             2 * self.mass_press * boltzmann * self.temp / (self.timestep_press * self.timecon)
         )
-        R = jnp.zeros(shape)
-        # create initial symmetric pressure velocity tensor
-        for i in range(3):
-            for j in range(3):
-                if i >= j:
-                    R = R.at[i, j].set(rand[i, j])
-                else:
-                    R = R.at[i, j].set(rand[j, i])
+
+        R = (rand + rand.T) / 2
+        # R = jnp.zeros(shape)
+        # # create initial symmetric pressure velocity tensor
+        # for i in range(3):
+        #     for j in range(3):
+        #         if i >= j:
+        #             R = R.at[i, j].set(rand[i, j])
+        #         else:
+        #             R = R.at[i, j].set(rand[j, i])
         return R, self
 
 
 # @partial(dataclass, frozen=False)
 class MTKBarostat(BarostatHook):
-    name = "MTTK"
-    kind = "deterministic"
-    method = "barostat"
-
-    _: KW_ONLY
+    name: str = field(pytree_node=False, default="MTTK")
+    kind: str = field(pytree_node=False, default="deterministic")
+    method: str = field(pytree_node=False, default="barostat")
 
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
     cell: jax.Array | None = None
-    timecon: jax.Array | float = 1000 * femtosecond
-    anisotropic: bool = True
-    vol_constraint: bool = False
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(1000 * femtosecond))
+    anisotropic: bool = field(pytree_node=False, default=True)
+    vol_constraint: bool = field(pytree_node=False, default=False)
 
     vel_press: jax.Array
 
     baro_thermo: NHCThermostat | None = None
 
-    timecon_press: jax.Array | float = 1000 * femtosecond
+    timecon_press: jax.Array = field(default_factory=lambda: jnp.array(1000 * femtosecond))
 
     """
     This hook implements the Martyna-Tobias-Klein barostat. The equations
@@ -784,7 +782,10 @@ class MTKBarostat(BarostatHook):
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
 
         return self, iterative
 
@@ -804,7 +805,7 @@ class MTKBarostat(BarostatHook):
             # update the barostat thermostat, without updating v_g (done in self.baro)
             vel_press_copy = jnp.zeros(self.vel_press.shape)
             vel_press_copy[:] = self.vel_press
-            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain.update(ekin_baro, vel_press_copy, 0)
 
         return self, iterative
 
@@ -816,7 +817,7 @@ class MTKBarostat(BarostatHook):
             # update the barostat thermostat, without updating v_g (done in self.baro)
             # vel_press_copy = jnp.zeros(self.vel_press.shape)
             vel_press_copy = self.vel_press
-            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain.update(ekin_baro, vel_press_copy, 0)
             # overrule the chainvel0 argument in the TBC instance
 
             assert self.baro_thermo is not None
@@ -865,8 +866,6 @@ class MTKBarostat(BarostatHook):
 
         # iL v_g h/2
         if self.anisotropic:
-            assert iterative.rvecs is not None
-
             Dr, Qg = jnp.linalg.eigh(self.vel_press)
             Daccr = jnp.diagflat(jnp.exp(Dr * self.timestep_press / 2))
             rot_mat = jnp.dot(jnp.dot(Qg, Daccr), Qg.T)
@@ -887,7 +886,10 @@ class MTKBarostat(BarostatHook):
 
         # update the potential energy
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
 
         # -iL (v_g + Tr(v_g)/ndof) h/2
         if self.anisotropic:
@@ -935,16 +937,14 @@ class MTKBarostat(BarostatHook):
 
 # @partial(dataclass, frozen=False)
 class PRBarostat(BarostatHook):
-    name = "PR"
-    kind = "deterministic"
-    method = "barostat"
+    name: str = field(pytree_node=False, default="PR")
+    kind: str = field(pytree_node=False, default="deterministic")
+    method: str = field(pytree_node=False, default="barostat")
 
-    _: KW_ONLY
+    timecon_press: jax.Array = field(default_factory=lambda: jnp.array(1000 * femtosecond))
 
-    timecon_press: jax.Array | float = 1000 * femtosecond
-
-    anisotropic: bool = True
-    vol_constraint = False
+    anisotropic: bool = field(pytree_node=False, default=True)
+    vol_constraint: bool = field(pytree_node=False, default=False)
     mass_press: jax.Array | None = None
     cell: jax.Array | None = None
     baro_thermo: NHCThermostat | None = None
@@ -1053,7 +1053,10 @@ class PRBarostat(BarostatHook):
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
 
         return self, iterative
 
@@ -1071,7 +1074,7 @@ class PRBarostat(BarostatHook):
             ekin_baro = self._compute_ekin_baro()
             # update the barostat thermostat, without updating v_g (done in self.baro)
             vel_press_copy = self.vel_press
-            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain.update(ekin_baro, vel_press_copy, 0)
 
         return self, iterative
 
@@ -1084,7 +1087,7 @@ class PRBarostat(BarostatHook):
             assert self.vel_press is not None
 
             vel_press_copy = self.vel_press
-            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain.update(ekin_baro, vel_press_copy, 0)
             # overrule the chainvel0 argument in the TBC instance
             assert self.baro_thermo.chain.vel is not None
             chainvel0 = self.baro_thermo.chain.vel[0]
@@ -1144,9 +1147,9 @@ class PRBarostat(BarostatHook):
         update_baro_vel()
 
         # update of the positions and cell vectors
+        assert self.vel_press is not None
         rvecs_new = iterative.rvecs + self.vel_press * self.timestep_press / 2
 
-        assert iterative.rvecs is not None
         if self.anisotropic:
             assert self.vel_press is not None
             Dr, Qg = jnp.linalg.eigh(jnp.dot(self.vel_press, jnp.linalg.inv(iterative.rvecs.T)))
@@ -1170,7 +1173,10 @@ class PRBarostat(BarostatHook):
 
         # update the potential and kinetic energy
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
         iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update
@@ -1202,15 +1208,13 @@ class PRBarostat(BarostatHook):
 
 # @partial(dataclass, frozen=False)
 class TadmorBarostat(BarostatHook):
-    name = "Tadmor"
-    kind = "deterministic"
-    method = "barostat"
-
-    _: KW_ONLY
+    name: str = field(pytree_node=False, default="Tadmor")
+    kind: str = field(pytree_node=False, default="deterministic")
+    method: str = field(pytree_node=False, default="barostat")
 
     timecon_press: jax.Array | float = 1000 * femtosecond
 
-    anisotropic: bool = True
+    anisotropic: bool = field(pytree_node=False, default=True)
     vol_constraint = False
     mass_press: jax.Array | float | None = None
 
@@ -1308,7 +1312,10 @@ class TadmorBarostat(BarostatHook):
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
 
         return self, iterative
 
@@ -1327,7 +1334,7 @@ class TadmorBarostat(BarostatHook):
             assert self.vel_press is not None
             vel_press_copy = jnp.zeros(self.vel_press.shape)
             vel_press_copy[:] = self.vel_press
-            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain.update(ekin_baro, vel_press_copy, 0)
 
         return self, iterative
 
@@ -1340,14 +1347,14 @@ class TadmorBarostat(BarostatHook):
             assert self.vel_press is not None
             vel_press_copy = jnp.zeros(self.vel_press.shape)
             vel_press_copy[:] = self.vel_press
-            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain(ekin_baro, vel_press_copy, 0)
+            dummy_vel, dummy_ekin, self.baro_thermo.chain = self.baro_thermo.chain.update(ekin_baro, vel_press_copy, 0)
             # overrule the chainvel0 argument in the TBC instance
             assert self.baro_thermo.chain.vel is not None
             chainvel0 = self.baro_thermo.chain.vel[0]
         # propagate the barostat
         self.baro(iterative, chainvel0)
         # calculate the Lagrangian strain
-        assert iterative.rvecs is not None
+
         eta = 0.5 * (
             jnp.dot(self.cellinv0.T, jnp.dot(iterative.rvecs.T, jnp.dot(iterative.rvecs, self.cellinv0))) - jnp.eye(3)
         )
@@ -1355,6 +1362,7 @@ class TadmorBarostat(BarostatHook):
         ang_ten = self._compute_angular_tensor(iterative.pos, iterative.vel, iterative.masses)
 
         assert self.vel_press is not None
+        assert isinstance(self.press, jax.Array)
         self.econs_correction = (
             self.vol0 * jnp.trace(jnp.dot(self.press.T, eta))
             + self._compute_ekin_baro()
@@ -1379,7 +1387,7 @@ class TadmorBarostat(BarostatHook):
             ang_ten = self._compute_angular_tensor(iterative.pos, iterative.vel, iterative.masses)
 
             assert self.vel_press is not None
-            assert iterative.rvecs is not None
+
             assert self.Strans is not None
 
             dptens_vol = jnp.dot(self.vel_press.T, ang_ten.T) - jnp.dot(ang_ten.T, self.vel_press.T)
@@ -1403,8 +1411,6 @@ class TadmorBarostat(BarostatHook):
         # first part of the barostat velocity tensor update
         update_baro_vel()
 
-        assert iterative.rvecs is not None
-
         # iL v_g h/2
         if self.anisotropic:
             Dr, Qg = jnp.linalg.eigh(self.vel_press)
@@ -1412,6 +1418,7 @@ class TadmorBarostat(BarostatHook):
             rot_mat = jnp.dot(jnp.dot(Qg, Daccr), Qg.T)
             rvecs_new = jnp.dot(iterative.rvecs, rot_mat)
         else:
+            assert self.vel_press is not None
             c = jnp.exp(self.vel_press * self.timestep_press / 2)
             rvecs_new = c * iterative.rvecs
 
@@ -1421,7 +1428,10 @@ class TadmorBarostat(BarostatHook):
 
         # update the potential energy
 
-        iterative.epot, iterative.gpos, iterative.vtens, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        assert res.gpos is not None
+        assert res.vtens is not None
+        iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
 
         assert self.vel_press is not None
         assert iterative.ndof is not None
@@ -1430,6 +1440,8 @@ class TadmorBarostat(BarostatHook):
         if self.anisotropic:
             if not self.vol_constraint:
                 vel_new = jnp.exp(-jnp.trace(self.vel_press) / iterative.ndof * self.timestep_press / 2)
+            else:
+                raise NotImplementedError()
         else:
             vel_new = jnp.exp(-3.0 / iterative.ndof * self.vel_press * self.timestep_press / 2) * iterative.vel
 
@@ -1466,9 +1478,8 @@ class TadmorBarostat(BarostatHook):
 
 
 class MTKAttributeStateItem(StateItem):
-    def __init__(self, attr: str):
-        StateItem.__init__(self, key="baro_" + attr)
-        self.attr = attr
+    key: str = "MTKattr"
+    attr: str
 
     def get_value(self, iterative: VerletIntegrator):
         baro = None
@@ -1491,6 +1502,3 @@ class MTKAttributeStateItem(StateItem):
                 return 0
         else:
             return getattr(baro, self.attr)
-
-    def copy(self):
-        return self.__class__(self.attr)

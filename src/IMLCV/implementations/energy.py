@@ -6,7 +6,7 @@ import ase
 import jax.numpy as jnp
 import numpy as np
 from ase import geometry as ase_geometry
-from openmm import State
+from openmm import State, Vec3
 from openmm.app import Simulation
 
 from IMLCV.base.bias import Energy, EnergyError, EnergyResult
@@ -37,9 +37,9 @@ class OpenMmEnergy(Energy):
             dtype=int,
         )
 
-        state = self._simul.context.getState(positions=True)
+        state: State = self._simul.context.getState(positions=True)
 
-        coor = OpenMmEnergy.to_jax_vec(state.getPositions()) * nanometer
+        coor = jnp.array(state.getPositions(asNumpy=True)) * nanometer
 
         sp = SystemParams(
             coordinates=coor,
@@ -64,9 +64,9 @@ class OpenMmEnergy(Energy):
 
         if sp.cell is not None:
             self._simul.context.setPeriodicBoxVectors(
-                sp.cell[0, :] / nanometer,
-                sp.cell[1, :] / nanometer,
-                sp.cell[2, :] / nanometer,
+                Vec3(*(sp.cell[0, :] / nanometer)),
+                Vec3(*(sp.cell[1, :] / nanometer)),
+                Vec3(*(sp.cell[2, :] / nanometer)),
             )
 
         state: State = self._simul.context.getState(
@@ -83,7 +83,7 @@ class OpenMmEnergy(Energy):
 
         res = EnergyResult(
             energy=state.getPotentialEnergy()._value * kjmol,  # type:ignore
-            gpos=-OpenMmEnergy.to_jax_vec(state.getForces()) * kjmol / nanometer if gpos else None,
+            gpos=-jnp.array(state.getForces(asNumpy=True)) * kjmol / nanometer if gpos else None,
         )
 
         return res
@@ -111,7 +111,7 @@ class OpenMmEnergy(Energy):
         simulation.context.setPositions(pdb.positions)
 
         if (c := pdb.topology.getPeriodicBoxVectors()) is not None:
-            simulation.context.setPeriodicBoxVectors(c)  # type:ignore
+            simulation.context.setPeriodicBoxVectors(*c)
 
         self._simul = simulation
 
@@ -122,69 +122,6 @@ class OpenMmEnergy(Energy):
         self.pdb = state["pdb"]
         self.forcefield_name = state["forcefield_name"]
         # return OpenMmEnergy(**state)
-
-
-class YaffEnergy(Energy):
-    def __init__(
-        self,
-        f,  #: Callable[[], yaff.ForceField],
-    ) -> None:
-        # import yaff.ForceField
-
-        super().__init__()
-        self.f = f
-        self.ff = f()
-
-    @property
-    def cell(self):
-        out = self.ff.system.cell.rvecs[:]  # empty cell represented as array with shape (0,3)
-        if out.size == 0:
-            return None
-        return jnp.asarray(out)
-
-    @cell.setter
-    def cell(self, cell):
-        if cell is None:
-            return
-
-        cell = np.asarray(cell, dtype=np.double)
-
-        self.ff.update_rvecs(cell)
-
-    @property
-    def coordinates(self):
-        return jnp.asarray(self.ff.system.pos[:])
-
-    @coordinates.setter
-    def coordinates(self, coordinates):
-        self.ff.update_pos(np.array(coordinates))
-
-    def _compute_coor(self, sp, nl, gpos=False, vir=False) -> EnergyResult:
-        self.sp = sp
-
-        gpos_out = np.zeros_like(self.ff.gpos) if gpos else None
-        vtens_out = np.zeros_like(self.ff.vtens) if (vir and self.cell is not None) else None
-
-        try:
-            ener = self.ff.compute(gpos=gpos_out, vtens=vtens_out)
-        except BaseException as be:
-            raise EnergyError(f"calculating yaff  energy raised execption:\n{be}\n")
-
-        return EnergyResult(
-            energy=ener,
-            gpos=jnp.array(gpos_out) if gpos_out is not None else None,
-            vtens=jnp.array(vtens_out) if vtens_out is not None else None,
-        )
-
-    def __getstate__(self):
-        return {"f": self.f, "sp": self.sp}
-
-    def __setstate__(self, state):
-        # print(f"unpickling {self.__class__}")
-        self.f = state["f"]
-        self.ff = self.f()
-        self.sp = state["sp"]
-        return self
 
 
 class AseEnergy(Energy):
