@@ -79,11 +79,11 @@ class Energy:
     manual_vtens = False
 
     @property
-    def nl(self):
+    def nl(self) -> NeighbourList | None:
         return None
 
     @nl.setter
-    def nl(self, nl):
+    def nl(self, nl: NeighbourList):
         return
 
     @property
@@ -249,12 +249,10 @@ class EnergyFn(Energy, MyPyTreeNode):
 
         return self._sp.cell
 
-    # @cell.setter
-    # def cell(self, cell):
-    #     if self._sp is None:
-    #         return
-
-    #     self._sp.cell = cell
+    @cell.setter
+    def cell(self, cell):
+        assert self._sp is not None, "first set coordinates"
+        self._sp.cell = cell
 
     @property
     def coordinates(self) -> Array | None:
@@ -263,9 +261,12 @@ class EnergyFn(Energy, MyPyTreeNode):
 
         return self._sp.coordinates
 
-    # @coordinates.setter
-    # def coordinates(self, coordinates):
-    #     self._sp.coordinates = coordinates
+    @coordinates.setter
+    def coordinates(self, coordinates: Array):
+        if self._sp is None:
+            self._sp = SystemParams(coordinates=coordinates)
+            return
+        self._sp.coordinates = coordinates
 
     @property
     def sp(self) -> SystemParams | None:
@@ -276,7 +277,13 @@ class EnergyFn(Energy, MyPyTreeNode):
         self._sp = sp
 
     @partial(jit_decorator, static_argnames=["gpos", "vir"])
-    def _compute_coor(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
+    def _compute_coor(
+        self,
+        sp: SystemParams,
+        nl: NeighbourList | None,
+        gpos=False,
+        vir=False,
+    ) -> EnergyResult:
         def _energy(sp, nl):
             return self.f(sp, nl, **self.static_kwargs, **self.kwargs)
 
@@ -323,8 +330,6 @@ class BiasError(Exception):
 class Bias(ABC, MyPyTreeNode):
     """base class for biased MD runs."""
 
-    # __: KW_ONLY
-
     collective_variable: CollectiveVariable = field(pytree_node=True)
     start: int | None = field(pytree_node=False, default=0)
     step: int | None = field(pytree_node=False, default=1)
@@ -333,9 +338,9 @@ class Bias(ABC, MyPyTreeNode):
     log_exp_slice: bool = field(pytree_node=False, default=True)
     slice_mean: bool = field(pytree_node=False, default=False)
 
-    @classmethod
-    def create(cls, *args, **kwargs) -> Self:
-        return cls(*args, **kwargs)
+    @staticmethod
+    def create(*args, **kwargs):
+        raise NotImplementedError
 
     def update_bias(
         self,
@@ -442,6 +447,7 @@ class Bias(ABC, MyPyTreeNode):
                 return ener, cvs
 
             if gpos or vir:
+                c_inv: Array | None = None
                 if rel:
                     sp_rel, c_inv = sp.to_relative()
                 else:
@@ -451,6 +457,7 @@ class Bias(ABC, MyPyTreeNode):
 
                 if gpos:
                     if rel:
+                        assert c_inv is not None
                         e_gpos = jnp.einsum("jk, nk->nj ", c_inv, de.coordinates)
                     else:
                         e_gpos = de.coordinates
@@ -661,10 +668,9 @@ class Bias(ABC, MyPyTreeNode):
         return self.__dict__
 
     def __setstate__(self, statedict: dict):
+        removed = []
         try:
             f_names = [f.name for f in fields(self.__class__)]
-
-            removed = []
 
             for k in statedict.keys():
                 if k not in f_names:
@@ -986,9 +992,8 @@ class BiasF(Bias):
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
     kwargs: dict = field(default_factory=dict)
 
-    @classmethod
+    @staticmethod
     def create(
-        cls,
         cvs: CollectiveVariable,
         g: Callable = _constant,
         kwargs: dict = {},
@@ -1009,8 +1014,8 @@ class BiasF(Bias):
 
 
 class NoneBias(BiasF):
-    @classmethod
-    def create(cls, collective_variable: CollectiveVariable) -> NoneBias:
+    @staticmethod
+    def create(collective_variable: CollectiveVariable) -> NoneBias:  # type:ignore
         return NoneBias(
             collective_variable=collective_variable,
             g=_zero_fun,

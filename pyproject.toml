@@ -15,7 +15,7 @@ include = [
     "src",
     "tests"
 ]
-typeCheckingMode = "standard"
+typeCheckingMode = "basic"
 
 
 [tool.pdm]

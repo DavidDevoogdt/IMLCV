@@ -420,8 +420,8 @@ class Observable:
                 macro_chunk=macro_chunk,
                 verbose=verbose,
                 output_w_corr=True,
-                koopman_eps=1e-10,
-                koopman_eps_pre=0,
+                koopman_eps=1e-6,
+                koopman_eps_pre=1e-6,
                 correlation=True,
                 # add_1=True,
             )

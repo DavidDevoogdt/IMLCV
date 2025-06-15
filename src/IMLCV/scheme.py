@@ -102,6 +102,7 @@ class Scheme:
         only_finished=True,
         chunk_size=None,
         T_scale=10,
+        use_common_bias=True,
     ):
         m = self.bias.collective_variable.metric
         grid, _, cv_grid, _ = m.grid(
@@ -148,7 +149,7 @@ class Scheme:
             sp0=sp0,
             chunk_size=chunk_size,
             T_scale=T_scale,
-            # use_fes_bias=True,
+            use_common_bias=use_common_bias,
         )
 
     def inner_loop(
@@ -188,6 +189,8 @@ class Scheme:
         init=False,
         first_round_without_bias=False,
         executors=Executors.training,
+        use_common_bias=True,
+        first_round_without_ground_bias=True,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -235,8 +238,9 @@ class Scheme:
             print(f"running round {i=} with {steps} steps")
 
             without_bias = first_round_without_bias and i == 1
+            without_ground_bias = (first_round_without_ground_bias and i == 1) or not use_common_bias
 
-            # print(f"{without_bias=} {i=} {first_round_without_bias=}")
+            print(f"{without_bias=}  {without_ground_bias=}")
 
             if without_bias:
                 print("running first round wihtout biases")
@@ -255,7 +259,7 @@ class Scheme:
                 only_finished=i > 1 and only_finished,
                 chunk_size=chunk_size,
                 T_scale=T_scale,
-                # use_fes_bias=True,
+                use_common_bias=not without_ground_bias,
             )
 
             prev_bias = self.rounds.get_bias(c=cv_round, r=i)

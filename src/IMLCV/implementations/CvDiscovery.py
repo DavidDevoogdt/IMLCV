@@ -499,8 +499,8 @@ class TransformerMAF(Transformer):
         eps=1e-6,
         eps_pre=1e-6,
         outdim=None,
-        correlation=False,
-        use_w=False,
+        correlation=True,
+        use_w=True,
         **fit_kwargs,
     ):
         print("getting koopman")
@@ -513,6 +513,11 @@ class TransformerMAF(Transformer):
         # print(f"looking for constant mode with {num_regions=}")
 
         print(f"{dlo.nl=}, {dlo.nl_t=}")
+
+        # if dlo.labels is not None:
+        #     n_skip = int(jnp.sum(jnp.unique(jnp.hstack(dlo.labels))))
+        # else:
+        #     n_skip = 1
 
         km = dlo.koopman_model(
             cv_0=x,
@@ -533,7 +538,7 @@ class TransformerMAF(Transformer):
             out_dim=-1,
             eps=eps,
             eps_pre=eps_pre,
-            symmetric=False,
+            symmetric=True,
             correlation=correlation,
         )
 
@@ -544,11 +549,9 @@ class TransformerMAF(Transformer):
 
         ##########
 
-        skipfirst = False
-
         ts = (
             km.timescales(
-                skip_first=skipfirst,
+                n_skip=None,
                 remove_constant=True,
             )
             / nanosecond
@@ -564,7 +567,7 @@ class TransformerMAF(Transformer):
 
         trans_km = km.f(
             out_dim=outdim,
-            skip_first=skipfirst,
+            n_skip=None,
             remove_constant=True,
         )
 

@@ -876,6 +876,7 @@ def _macro_chunk_map(
 
                 if compute_t:
                     assert not isinstance(_zt_chunk, SystemParams)
+                    assert _zt_chunk is not None
                     _zt_chunk.stack_dims = tuple(stack_dims_chunk)
                     zt_chunk = cast(list[X2], _zt_chunk.unstack())
 

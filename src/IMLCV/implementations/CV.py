@@ -450,7 +450,7 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     return out.compute_cv(m)[0], out
 
 
-def kernel_dist(p1: jax.Array, p2: jax.Array, xi=1.0):
+def kernel_dist(p1: jax.Array, p2: jax.Array, xi=2.0):
     # print(f"new dist sum")
 
     def log_safe(x: jax.Array):
@@ -460,7 +460,7 @@ def kernel_dist(p1: jax.Array, p2: jax.Array, xi=1.0):
 
     k = jnp.sum(p1 * p2) / (jnp.sqrt(jnp.sum(p1 * p1) * jnp.sum(p2 * p2)))
 
-    return -log_safe(k**xi)
+    return 1 - k**xi
 
 
 # @partial( jit_decorator, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
@@ -475,6 +475,7 @@ def sinkhorn_divergence_2(
     exp_factor: jax.Array | None = None,
     mass_weight=True,
     dist_fun=kernel_dist,
+    scale_std=True,
 ) -> CV:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -527,14 +528,18 @@ def sinkhorn_divergence_2(
             in_axes=(0, None),
         )(p1, p2)
 
-        # jax.debug.print("c {} {}", c, c.shape)
-
         if epsilon is None:
-            P = jnp.eye(c.shape[0], c.shape[1])
+            # P = jnp.eye(c.shape[0], c.shape[1])
 
-            return jnp.sum(jnp.diag(c))
+            # return jnp.sum(jnp.diag(c))
 
-        # epsilon *= jnp.mean(c)
+            return p1
+
+        # scale_fac = jax.lax.stop_gradient(jnp.std(c))
+
+        # epsilon *= scale_fac
+
+        # jax.debug.print("c {} {}", c, c.shape)
 
         n = c.shape[0]
         m = c.shape[1]
@@ -542,7 +547,7 @@ def sinkhorn_divergence_2(
         a = jnp.ones((c.shape[0],)) / n
         b = jnp.ones((c.shape[1],)) / m
 
-        # scale_fac = jax.lax.stop_gradient(jnp.mean(c))
+        #
 
         from jaxopt import FixedPointIteration
 
@@ -614,23 +619,18 @@ def sinkhorn_divergence_2(
 
             P = jnp.einsum("i,j,ij->ij", u, v, K)
 
-        d0 = jnp.einsum("ij,ij->", P, c)
+        p1_j = jnp.einsum("ij,i...->j...", P, p1_i)
 
-        return d0
+        return p1_j
 
     def get_d_p12(p1_i: jax.Array, p2_i: jax.Array):
-        d_12 = _core_sinkhorn(p1_i, p2_i, epsilon=alpha)
-        d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
-        d_11 = _core_sinkhorn(p1_i, p1_i, epsilon=alpha)
+        p_1j = _core_sinkhorn(p1_i, p2_i, epsilon=alpha)
+        # d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
 
-        d = (-0.5 * d_11 + d_12 - 0.5 * d_22) / p1_i.shape[0]
+        return p_1j
 
-        d = jnp.exp(-d)
-
-        return d
-
-    if jacobian:
-        get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)  # type:ignore
+    # if jacobian:
+    #     get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)  # type:ignore
 
     # def get_aligined_x1(x1: CV, nl1: NeighbourListInfo, nl2: NeighbourListInfo):
     src_mask, _, p1_cv = nl1.nl_split_z(x1)
@@ -639,33 +639,41 @@ def sinkhorn_divergence_2(
     p1 = [a.cv.reshape(a.shape[0], -1) for a in p1_cv]
     p2 = [a.cv.reshape(a.shape[0], -1) for a in p2_cv]
 
-    out = []
+    # out = []
 
-    dims = []
+    # dims = []
+
+    out = jnp.zeros_like(x2.cv)
 
     # solve problem per atom kind
     for i, (p1_i, p2_i, out_i) in enumerate(zip(p1, p2, tgt_split)):
         # ef = exp_factor[i] if exp_factor is not None else None
 
-        if jacobian:
-            d, dd_dpi2 = get_d_p12(p1_i, p2_i)
+        p1_j = get_d_p12(p1_i, p2_i)
 
-            dd_dpi2 = dd_dpi2.reshape(-1)
+        out = out.at[out_i, :].set(p1_j)
 
-            v = jnp.hstack([d, dd_dpi2.reshape(-1)])
+        # if jacobian:
+        #     d, dd_dpi2 = get_d_p12(p1_i, p2_i)
 
-            dims.append((1, dd_dpi2.shape[0]))
+        #     dd_dpi2 = dd_dpi2.reshape(-1)
 
-        else:
-            d = get_d_p12(p1_i, p2_i)
+        #     v = jnp.hstack([d, dd_dpi2.reshape(-1)])
 
-            dims.append(1)
+        #     dims.append((1, dd_dpi2.shape[0]))
 
-            v = jnp.array([d])
+        # else:
+        #     d = get_d_p12(p1_i, p2_i)
 
-        out.append(v)
+        #     dims.append(1)
 
-    return x2.replace(cv=jnp.hstack(out), _combine_dims=tuple(dims), atomic=False, _stack_dims=x1._stack_dims)
+        #     v = jnp.array([d])
+
+        # out.append(v)
+
+    print(f"{out.shape=}")
+
+    return x2.replace(cv=out, atomic=True, _stack_dims=x1._stack_dims)
 
 
 def _sinkhorn_divergence_trans_2(

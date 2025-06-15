@@ -86,7 +86,7 @@ class RoundInformation:
 
 
 @dataclass
-class Rounds(ABC):
+class Rounds:
     """
     Class that bundle all the information in a folder structure. The structure is shown below. Files within parentheses are not always present optional.
 
@@ -171,7 +171,7 @@ class Rounds(ABC):
     def rel_path(self, name: str | Path):
         return str(Path(name).relative_to(self.folder))
 
-    def path(self, c=None, r=None, i=None) -> Path:
+    def path(self, c: int | None = None, r: int | None = None, i: int | None = None) -> Path:
         p = Path(self.folder)
         if c is not None:
             p /= f"cv_{c}"
@@ -324,8 +324,8 @@ class Rounds(ABC):
 
     def plot_round(
         self,
-        c=None,
-        r=None,
+        c: int | None = None,
+        r: int | None = None,
         name_bias=None,
         name_points=None,
         dlo_kwargs={},
@@ -404,7 +404,7 @@ class Rounds(ABC):
 
         return cvs
 
-    def _r_vals(self, c=None):
+    def _r_vals(self, c: int | None = None):
         if c is None:
             c = self.cv
 
@@ -414,7 +414,7 @@ class Rounds(ABC):
             if round_r.suffix == ".zip":
                 continue
 
-            r = round_r.parts[-1][6:]
+            r = int(round_r.parts[-1][6:])
 
             if not (p := self.path(c=c, r=r) / "static_trajectory_info.h5").exists():
                 print(f"could not find {p}")
@@ -429,7 +429,7 @@ class Rounds(ABC):
 
         return rounds
 
-    def _i_vals(self, c=None, r=None):
+    def _i_vals(self, c: int | None = None, r: int | None = None):
         if c is None:
             c = self.cv
 
@@ -458,7 +458,7 @@ class Rounds(ABC):
 
         return None
 
-    def _name_bias(self, c, r, i=None):
+    def _name_bias(self, c, r, i: int | None = None):
         if (p := (self.path(c=c, r=r, i=i) / "bias_new.json")).exists():
             return self.rel_path(p)
         elif (p := (self.path(c=c, r=r, i=i) / "bias_new")).exists():
@@ -470,13 +470,13 @@ class Rounds(ABC):
 
         return None
 
-    def _num_vals(self, c, r=None):
+    def _num_vals(self, c, r: int | None = None):
         if r is not None:
             return len(self._i_vals(c, r=r))
 
         return len(self._r_vals(c))
 
-    def add_cv(self, collective_variable: CollectiveVariable, c=None):
+    def add_cv(self, collective_variable: CollectiveVariable, c: int | None = None):
         if c is None:
             c = self.cv + 1
 
@@ -486,7 +486,9 @@ class Rounds(ABC):
 
         collective_variable.save(self.path(c=c) / "cv.json")
 
-    def add_round(self, bias: Bias, stic: StaticMdInfo | None = None, mde=None, c=None, r=None):
+    def add_round(
+        self, bias: Bias, stic: StaticMdInfo | None = None, mde=None, c: int | None = None, r: int | None = None
+    ):
         if c is None:
             c = self.cv
 
@@ -520,7 +522,7 @@ class Rounds(ABC):
         num=3,
         ignore_invalid=False,
         only_finished=True,
-        c=None,
+        c: int | None = None,
         md_trajs: list[int] | None = None,
         print_timings=False,
     ) -> Iterable[tuple[RoundInformation, TrajectoryInformation]]:
@@ -827,7 +829,6 @@ class Rounds(ABC):
                         print(f"initializing neighbour list with {nn=} {new_nxyz=}")
 
                     else:
-                        # TODO
                         b, nn, new_nxyz, _ = jit_decorator(
                             SystemParams._get_neighbour_list,
                             static_argnames=[
@@ -849,8 +850,6 @@ class Rounds(ABC):
                             only_update=True,
                             update=update_info,
                         )
-
-                        print(f"{new_nxyz}")
 
                         if new_nxyz is not None:
                             assert update_info is not None
@@ -1776,7 +1775,7 @@ class Rounds(ABC):
             folder=self.folder,
         )
 
-    def static_trajectory_information(self, c=None, r=None) -> StaticMdInfo:
+    def static_trajectory_information(self, c: int | None = None, r: int | None = None) -> StaticMdInfo:
         if c is None:
             c = self.cv
 
@@ -1829,7 +1828,7 @@ class Rounds(ABC):
     def round(self):
         return self.get_round()
 
-    def get_round(self, c=None):
+    def get_round(self, c: int | None = None):
         if c is None:
             c = self.cv
 
@@ -1845,7 +1844,7 @@ class Rounds(ABC):
         except Exception:
             return -1
 
-    def n(self, c=None, r=None):
+    def n(self, c: int | None = None, r: int | None = None):
         if c is None:
             c = self.cv
 
@@ -1853,7 +1852,7 @@ class Rounds(ABC):
             r = self.get_round(c=c)
         return self._round_information(r=r).num
 
-    def invalidate_data(self, c=None, r=None, i=None):
+    def invalidate_data(self, c: int | None = None, r: int | None = None, i: int | None = None):
         if c is None:
             c = self.cv
 
@@ -1880,7 +1879,7 @@ class Rounds(ABC):
             with open(self.path(c=c, r=r, i=i) / "invalid", "w"):
                 pass
 
-    def validate_data(self, c=None, r=None, i=None):
+    def validate_data(self, c: int | None = None, r: int | None = None, i: int | None = None):
         if c is None:
             c = self.cv
 
@@ -1904,7 +1903,7 @@ class Rounds(ABC):
         except Exception:
             print(f"could not invalidate {c=} {r=} {i=}, writing file")
 
-    def finish_data(self, c=None, r=None, i=None):
+    def finish_data(self, c: int | None = None, r: int | None = None, i: int | None = None):
         if c is None:
             c = self.cv
 
@@ -1919,7 +1918,7 @@ class Rounds(ABC):
         with h5py.File(p, "r+") as hf:
             hf.attrs["_finished"] = True
 
-    def is_valid(self, c=None, r=None, i=None):
+    def is_valid(self, c: int | None = None, r: int | None = None, i: int | None = None):
         if c is None:
             c = self.cv
 
@@ -1950,7 +1949,7 @@ class Rounds(ABC):
                 hf.attrs[n] = False
         return True
 
-    def is_finished(self, c=None, r=None, i=None):
+    def is_finished(self, c: int | None = None, r: int | None = None, i: int | None = None):
         if c is None:
             c = self.cv
 
@@ -1971,6 +1970,8 @@ class Rounds(ABC):
         with h5py.File(p, "r") as hf:
             if "_finished" in hf.attrs:
                 out = hf.attrs["_finished"]
+            else:
+                return False
 
         if out:
             return True
@@ -1979,7 +1980,7 @@ class Rounds(ABC):
 
     def get_collective_variable(
         self,
-        c=None,
+        c: int | None = None,
     ) -> CollectiveVariable:
         if c is None:
             c = self.cv
@@ -1988,8 +1989,8 @@ class Rounds(ABC):
 
     def get_static_trajectory_info(
         self,
-        c=None,
-        r=None,
+        c: int | None = None,
+        r: int | None = None,
     ):
         if c is None:
             c = self.cv
@@ -1999,7 +2000,12 @@ class Rounds(ABC):
 
         return StaticMdInfo.load(self.path(c=c, r=r) / "static_trajectory_info.h5")
 
-    def get_bias(self, c=None, r=None, i=None) -> Bias:
+    def get_bias(
+        self,
+        c: int | None = None,
+        r: int | None = None,
+        i: int | None = None,
+    ) -> Bias:
         if c is None:
             c = self.cv
 
@@ -2011,7 +2017,7 @@ class Rounds(ABC):
 
         return Bias.load(self.full_path(bn))
 
-    def get_engine(self, c=None, r=None) -> MDEngine:
+    def get_engine(self, c: int | None = None, r: int | None = None) -> MDEngine:
         if c is None:
             c = self.cv
 
@@ -2050,16 +2056,19 @@ class Rounds(ABC):
         T_scale=10,
         macro_chunk=2000,
         lag_n=20,
-        use_fes_bias=True,
+        use_common_bias=True,
     ):
         if cv_round is None:
             cv_round = self.cv
 
         r = self.get_round(c=cv_round)
 
-        common_bias_name = self._name_bias(c=cv_round, r=r)
-        assert common_bias_name is not None
-        common_bias_name = self.full_path(common_bias_name)
+        if use_common_bias:
+            common_bias_name = self._name_bias(c=cv_round, r=r)
+            assert common_bias_name is not None
+            common_bias_name = self.full_path(common_bias_name)
+        else:
+            common_bias_name = None
 
         common_md_name = self._name_md(c=cv_round, r=r)
         assert common_md_name is not None
@@ -2321,7 +2330,7 @@ class Rounds(ABC):
     def _get_init(
         rounds: Rounds,
         KEY: jax.Array | int,
-        common_bias_name: str,
+        common_bias_name: str | None,
         biases: Sequence[Bias],
         ignore_invalid: bool = False,
         only_finished: bool = True,
@@ -2332,7 +2341,7 @@ class Rounds(ABC):
         md_trajs: list[int] | None = None,
         cv_round: int | None = None,
         sp0: SystemParams | None = None,
-        r: float | None = None,
+        r: int | None = None,
         macro_chunk: int | None = 1000,
         lag_n: int = 20,
         out: int = 20000,
@@ -2348,7 +2357,10 @@ class Rounds(ABC):
 
         sp0_provided = sp0 is not None
 
-        common_bias = Bias.load(common_bias_name)
+        if common_bias_name is not None:
+            common_bias = Bias.load(common_bias_name)
+        else:
+            common_bias = None
 
         if not sp0_provided:
             dlo_data, _ = rounds.data_loader(
@@ -2394,7 +2406,11 @@ class Rounds(ABC):
             if not os.path.exists(path_name):
                 os.mkdir(path_name)
 
-            b = CompositeBias.create([common_bias, bias])
+            if common_bias_name is not None:
+                assert common_bias is not None
+                b = CompositeBias.create([common_bias, bias])
+            else:
+                b = bias
 
             b_name = path_name / "bias.json"
             b_name_new = path_name / "bias_new.json"
@@ -2425,6 +2441,7 @@ class Rounds(ABC):
                 spi = sp_stack[index]
 
             else:
+                assert sp0 is not None
                 spi = sp0[i]
                 spi = spi.unbatch()
 
@@ -3138,8 +3155,8 @@ class DataLoaderOutput(MyPyTreeNode):
         out_dim: int = 10,
         chunk_size: int | None = None,
         indicator_CV: bool = True,
-        koopman_eps: float = 0.0,
-        koopman_eps_pre: float = 0.0,
+        koopman_eps: float = 1e-6,
+        koopman_eps_pre: float = 1e-6,
         cv_0: list[CV] | None = None,
         cv_t: list[CV] | None = None,
         macro_chunk: int = 1000,
@@ -4788,7 +4805,7 @@ class DataLoaderOutput(MyPyTreeNode):
         add_1_pre: bool = False,
         q: jax.Array | None = None,
         l: jax.Array | None = None,
-    ):
+    ) -> jax.Array:
         x = cv.cv
 
         if argmask is not None:
@@ -5764,7 +5781,7 @@ class KoopmanModel(MyPyTreeNode):
         if verbose:
             print("getting covariances")
 
-        print(f"{out_dim=}")
+        print(f"{out_dim=} {eps=} {eps_pre=}")
 
         print(f"{calc_pi=} {add_1=}   ")
 
@@ -5798,7 +5815,7 @@ class KoopmanModel(MyPyTreeNode):
             return w_tot
 
         w_tot = tot_w(w, rho)
-        w_tot_t = tot_w(w_t, rho_t)
+        # w_tot_t = tot_w(w_t, rho_t)
 
         cov = Covariances.create(
             cv_0=cv_0,  # type: ignore
@@ -5806,7 +5823,7 @@ class KoopmanModel(MyPyTreeNode):
             nl=nl,
             nl_t=nl_t,
             w=w_tot,
-            w_t=w_tot_t,
+            w_t=w_tot,
             calc_pi=calc_pi,
             only_diag=only_diag,
             symmetric=symmetric,
@@ -5818,6 +5835,8 @@ class KoopmanModel(MyPyTreeNode):
             verbose=verbose,
         )
 
+        print(f"{cov=}")
+
         assert cov.C00 is not None
         assert cov.C01 is not None
         assert cov.C11 is not None
@@ -5826,64 +5845,32 @@ class KoopmanModel(MyPyTreeNode):
         argmask = jnp.arange(cov.C00.shape[0])
 
         if eps_pre is not None:
-            argmask_pre = jnp.logical_and(
-                jnp.diag(cov.C00) / jnp.max(jnp.diag(cov.C00)) > eps_pre**2,
-                jnp.diag(cov.C11) / jnp.max(jnp.diag(cov.C11)) > eps_pre**2,
-            )
+            b = jnp.logical_and(cov.sigma_0 > eps_pre**2, cov.sigma_1 > eps_pre**2)
+            argmask = argmask[b]
 
-            if verbose:
-                print(f"{jnp.sum(argmask_pre)=} {jnp.sum(~argmask_pre)=}  {eps_pre=}")
+        argsort = jnp.argsort(jnp.diag(cov.rho_01)[argmask], descending=True)
+        argmask = argmask[argsort]
 
-            if jnp.sum(argmask_pre) == 0:
-                print(
-                    f"WARNING: no modes selectected through argmask pre {jnp.diag(cov.C00)/ jnp.max(jnp.diag(cov.C00))=} {jnp.diag(cov.C11)/ jnp.max(jnp.diag(cov.C11))=}"
-                )
+        if auto_cov_threshold is not None:
+            b = jnp.diag(cov.rho_01)[argmask] > auto_cov_threshold
+            argmask = argmask[b]
 
-            cov.C00 = cov.C00[argmask_pre, :][:, argmask_pre]
-            cov.C11 = cov.C11[argmask_pre, :][:, argmask_pre]
-            cov.C01 = cov.C01[argmask_pre, :][:, argmask_pre]
-            cov.C10 = cov.C10[argmask_pre, :][:, argmask_pre]
+        if max_features is not None:
+            if argmask.shape[0] > max_features:
+                argmask = argmask[:max_features]
 
-            if calc_pi:
-                assert cov.pi_0 is not None
-                assert cov.pi_1 is not None
+        cov.rho_00 = cov.rho_00[argmask, :][:, argmask]
+        cov.rho_11 = cov.rho_11[argmask, :][:, argmask]
+        cov.rho_01 = cov.rho_01[argmask, :][:, argmask]
+        cov.rho_10 = cov.rho_10[argmask, :][:, argmask]
 
-                cov.pi_0 = cov.pi_0[argmask_pre]
+        cov.pi_s_0 = cov.pi_s_0[argmask]
+        cov.pi_s_1 = cov.pi_s_1[argmask]
 
-                cov.pi_1 = cov.pi_1[argmask_pre]
+        cov.sigma_0 = cov.sigma_0[argmask]
+        cov.sigma_1 = cov.sigma_1[argmask]
 
-            argmask = argmask[argmask_pre]
-
-        # start with argmask for auto covariance. Remove all features with variances that are too small, or auto covariance that are too small
-        if (auto_cov_threshold is not None) or (max_features_pre is not None):
-            auto_cov = jnp.einsum(
-                "i,i,i->i",
-                jnp.diag(cov.C00) ** (-0.5),
-                jnp.diag(cov.C01),
-                jnp.diag(cov.C11) ** (-0.5),
-            )
-            argmask_cov = jnp.argsort(auto_cov, descending=True).reshape(-1)
-
-            if auto_cov_threshold is not None:
-                argmask_cov = argmask_cov[auto_cov[argmask_cov] > auto_cov_threshold]
-
-            if max_features_pre is not None:
-                if argmask_cov.shape[0] > max_features_pre:
-                    argmask_cov = argmask_cov[:max_features_pre]
-                    print(f"reducing argmask_cov to {max_features_pre}")
-
-            cov.C00 = cov.C00[argmask_cov, :][:, argmask_cov]
-            cov.C11 = cov.C11[argmask_cov, :][:, argmask_cov]
-            cov.C01 = cov.C01[argmask_cov, :][:, argmask_cov]
-            cov.C10 = cov.C10[argmask_cov, :][:, argmask_cov]
-
-            if calc_pi:
-                assert cov.pi_0 is not None
-                assert cov.pi_1 is not None
-                cov.pi_0 = cov.pi_0[argmask_cov]
-                cov.pi_1 = cov.pi_1[argmask_cov]
-
-            argmask = argmask[argmask_cov]
+        print(f"{jnp.diag(cov.rho_01)=}")
 
         if verbose:
             print("diagonalizing C00")
@@ -6090,30 +6077,20 @@ class KoopmanModel(MyPyTreeNode):
         self,
         out_dim=None,
         remove_constant=True,
-        # constant_threshold=1e-10,
-        skip_first=None,
+        n_skip: int | None = None,
     ):
         o = self.W0.T
         s = self.s
 
-        if skip_first is None:
-            skip_first = self.add_1 or not self.calc_pi
+        n_skip = self.get_n_skip(
+            n_skip=n_skip,
+            remove_constant=remove_constant,
+        )
 
-        if skip_first:
-            s = s[1:]
-            o = o[:, 1:]
-            print("skipping first mode")
-
-        if remove_constant:
-            nc = jnp.abs(1 - s) < self.constant_threshold
-
-            if jnp.sum(nc) > 0:
-                print(f"found {jnp.sum(nc)} constant eigenvalues,removing")
-
-            o = o[:, jnp.logical_not(nc)]
+        s = s[n_skip:]
+        o = o[:, n_skip:]
 
         o = o[:, :out_dim]
-
         tr = CvTrans.from_cv_function(
             DataLoaderOutput._transform,
             static_argnames=["add_1", "add_1_pre"],
@@ -6132,31 +6109,22 @@ class KoopmanModel(MyPyTreeNode):
     def g(
         self,
         out_dim=None,
+        n_skip=None,
         remove_constant=True,
-        skip_first=None,
+        # skip_first=None,
     ):
         o = self.W1.T
         s = self.s
 
-        if skip_first is None:
-            skip_first = self.add_1 or not self.calc_pi
+        n_skip = self.get_n_skip(
+            n_skip=n_skip,
+            remove_constant=remove_constant,
+        )
 
-        if skip_first:
-            s = s[1:]
-            o = o[:, 1:]
-            print("skipping first mode")
+        s = s[n_skip:]
+        o = o[:, n_skip:]
 
-        # this performs y =  (trans*g_trans)(x) @ Vh[:out_dim,:], but stores smaller matrices
-
-        if remove_constant:
-            nc = jnp.abs(1 - s) < self.constant_threshold
-
-            if jnp.sum(nc) > 0:
-                print(f"found {jnp.sum(nc)} constant eigenvalues,removing")
-
-            o = o[:, jnp.logical_not(nc)]
-
-        o = o[:out_dim, :]
+        o = o[:, :out_dim]
 
         tr = CvTrans.from_cv_function(
             DataLoaderOutput._transform,
@@ -6286,9 +6254,6 @@ class KoopmanModel(MyPyTreeNode):
         w_pos, wf_neg, f_neg = vmap_decorator(_norm, in_axes=1)(w_corr)
         w_pos_t, wf_neg_t, f_neg_t = vmap_decorator(_norm, in_axes=1)(w_corr_t)
 
-        print(f"{jnp.mean(w_pos)=} {jnp.std(w_pos)=}")
-        print(f"{jnp.mean(w_pos_t)=} {jnp.std(w_pos_t)=}")
-
         x = jnp.logical_and(wf_neg == 0, f_neg == 0)
 
         nm = jnp.sum(x)
@@ -6377,28 +6342,49 @@ class KoopmanModel(MyPyTreeNode):
 
         return KoopmanModel.create(**kw)  # type:ignore
 
-    def timescales(
+    def get_n_skip(
         self,
+        n_skip: int | None = None,
         remove_constant=True,
-        skip_first=None,
     ):
         s = self.s
 
-        if skip_first is None:
-            skip_first = self.add_1 or not self.calc_pi
+        if n_skip is None:
+            if self.add_1 or not self.calc_pi:
+                n_skip = 1
+            else:
+                n_skip = 0
 
-        if skip_first:
-            s = s[1:]
-            print("skipping first mode")
+        s = s[n_skip:]
 
         if remove_constant:
-            # s = s[1:]
             nc = jnp.abs(1 - s) < self.constant_threshold
 
-            if jnp.sum(nc) > 0:
-                print(f"found {jnp.sum(nc)} constant eigenvalues,removing from timescales")
+            # if jnp.sum(nc) > 0:
+            #     print(f"found {jnp.sum(nc)} constant eigenvalues,removing from timescales")
 
             s = s[jnp.logical_not(nc)]
+
+            n_skip += int(jnp.sum(nc))
+
+        print(f"got {n_skip=}")
+
+        return n_skip
+
+    def timescales(
+        self,
+        remove_constant=True,
+        # skip_first=None,
+        n_skip=None,
+    ):
+        s = self.s
+
+        n_skip = self.get_n_skip(
+            n_skip=n_skip,
+            remove_constant=remove_constant,
+        )
+
+        s = s[n_skip:]
 
         tau = self.tau
         if tau is None:
@@ -6413,12 +6399,14 @@ X2 = TypeVar("X2", "CV", "SystemParams", "NeighbourList")
 
 
 class Covariances(MyPyTreeNode):
-    C00: jax.Array
-    C01: jax.Array | None
-    C10: jax.Array | None
-    C11: jax.Array | None
-    pi_0: jax.Array | None
-    pi_1: jax.Array | None
+    rho_00: jax.Array
+    rho_01: jax.Array | None
+    rho_10: jax.Array | None
+    rho_11: jax.Array | None
+    pi_s_0: jax.Array | None
+    pi_s_1: jax.Array | None
+    sigma_0: jax.Array | None
+    sigma_1: jax.Array | None
 
     only_diag: bool = False
     trans_f: CvTrans | CvTrans | None = None
@@ -6448,8 +6436,11 @@ class Covariances(MyPyTreeNode):
         calc_C11=True,
         shmap_kwargs=ShmapKwargs.create(),
         verbose=True,
+        calc_sigma=True,
     ) -> Covariances:
         time_series = cv_1 is not None
+
+        assert not only_diag
 
         if w is None:
             w = [jnp.ones((cvi.shape[0],)) for cvi in cv_0]
@@ -6478,60 +6469,154 @@ class Covariances(MyPyTreeNode):
                 jax.Array | None,
                 jax.Array | None,
                 jax.Array | None,
+                jax.Array | None,
+                jax.Array | None,
+                jax.Array | None,
+                jax.Array | None,
             ],
             cv_0: CV,
-            cv1: CV | None,
-            w: jax.Array | None,
-            w_t: jax.Array | None = None,
+            cv_1: CV | None,
+            w_0: jax.Array | None,
+            w_1: jax.Array | None = None,
         ):
-            assert w is not None
+            print(f"{w_0=}")
 
-            x0 = cv_0.cv
-            if cv1 is not None:
-                x1 = cv1.cv
+            assert w_0 is not None
+            assert not cv_0.atomic
+
+            x_0 = cv_0.cv
+            if cv_1 is not None:
+                x_1 = cv_1.cv
             else:
-                x1 = None
+                x_1 = None
 
-            (C00, C01, C10, C11, pi0, pi1) = carry
+            (
+                rho_00_prev,
+                rho_01_prev,
+                rho_10_prev,
+                rho_11_prev,
+                pi_0_prev,
+                pi_1_prev,
+                sigma_0_prev,
+                sigma_1_prev,
+                w_0_prev,
+                w_1_prev,
+            ) = carry
 
-            def c(x, y, w, c_pre):
-                if only_diag:
-                    einstr = "ni,ni,n->i"
+            if sigma_0_prev is not None:
+                sigma_0_inv = jnp.where(sigma_0_prev == 0, 1, 1 / sigma_0_prev)
+                x_0 = jnp.einsum("ni,i->ni", x_0, sigma_0_inv)
+            if sigma_1_prev is not None:
+                assert x_1 is not None
+                sigma_1_inv = jnp.where(sigma_1_prev == 0, 1, 1 / sigma_1_prev)
+                x_1 = jnp.einsum("ni,i->ni", x_1, sigma_1_inv)
+
+            def get_pi(_x, _w, _pi_prev, _w_prev):
+                _dw = jnp.sum(_w)
+
+                if _w_prev is None:
+                    _w_tot = _dw
                 else:
-                    einstr = "ni,nj,n->ij"
+                    _w_tot = _w_prev + _dw
 
-                out = jnp.einsum(einstr, x, y, w)
-                if c_pre is not None:
-                    out += c_pre
+                _pi_new = jnp.einsum("ni,n->i", _x, _w) / _dw
 
-                return out
+                if _pi_prev is None:
+                    _pi_tot = _pi_new
 
-            def p(x, w, p_pre):
-                out = jnp.einsum("ni,n->i", x, w)
-                if p_pre is not None:
-                    out += p_pre
-                return out
+                    _dpi = None
+                else:
+                    _pi_tot = (_pi_prev * _w_prev + _pi_new * _dw) / (_w_tot)
 
-            if calc_C00:
-                C00 = c(x0, x0, w, C00)
+                    _dpi = _pi_tot - _pi_prev
 
-            if calc_pi:
-                pi0 = p(x0, w, pi0)
+                return _pi_tot, _dpi, _w_tot, _dw
+
+            pi_0_new, dpi_0, w_tot_0, dw_0 = get_pi(x_0, w_0, pi_0_prev, w_0_prev)
 
             if time_series:
+                pi_1_new, dpi_1, w_tot_1, dw_1 = get_pi(x_1, w_1, pi_1_prev, w_1_prev)
+
+            def c(_x, _y, _w, _c_prev, _pi_x, _pi_y, _d_pi_x, _d_pi_y, _w_prev, _dw):
+                if _d_pi_x is not None:
+                    assert _d_pi_y is not None
+
+                    _c_prev += jnp.outer(_d_pi_x, _d_pi_y)
+
+                _c_new = jnp.einsum("ni,nj,n->ij", _x - _pi_x, _y - _pi_y, _w) / _dw
+
+                if _c_prev is None:
+                    return _c_new
+
+                return (_w_prev * _c_prev + _c_new * _dw) / (_w_prev + _dw)
+
+            if calc_C00:
+                rho_00 = c(x_0, x_0, w_0, rho_00_prev, pi_0_new, pi_0_new, dpi_0, dpi_0, w_0_prev, dw_0)
+
+            rho_01, rho_10, rho_11 = None, None, None
+
+            if time_series:
+                assert w_1 is not None
+
                 if calc_C01:
-                    C01 = c(x0, x1, w, C01)
+                    rho_01 = c(x_0, x_1, w_0, rho_01_prev, pi_0_new, pi_1_new, dpi_0, dpi_1, w_0_prev, dw_0)
 
                 if calc_C10:
-                    C10 = c(x1, x0, w_t, C10)
+                    rho_10 = c(x_1, x_0, w_1, rho_10_prev, pi_1_new, pi_0_new, dpi_1, dpi_0, w_1_prev, dw_1)
 
                 if calc_C11:
-                    C11 = c(x1, x1, w_t, C11)
+                    rho_11 = c(x_1, x_1, w_1, rho_11_prev, pi_1_new, pi_1_new, dpi_1, dpi_1, w_1_prev, dw_1)
 
-                if calc_pi:
-                    pi1 = p(x1, w_t, pi1)
+            # convert everything to new sigma
 
-            return (C00, C01, C10, C11, pi0, pi1)
+            d_sigma_0 = jnp.sqrt(jnp.where(jnp.diag(rho_00) <= 0, 0, jnp.diag(rho_00)))
+            f0 = jnp.where(d_sigma_0 == 0, 1.0, 1 / d_sigma_0)
+
+            pi_0_new = jnp.einsum("i,i->i", pi_0_new, f0)
+
+            rho_00 = jnp.einsum("ij,i,j->ij", rho_00, f0, f0)
+
+            if sigma_0_prev is None:
+                sigma_0 = d_sigma_0
+            else:
+                sigma_0 = sigma_0_prev * d_sigma_0
+
+            if time_series:
+                d_sigma_1 = jnp.sqrt(jnp.where(jnp.diag(rho_11) <= 0, 0, jnp.diag(rho_11)))
+                f1 = jnp.where(d_sigma_1 <= 0, 1.0, 1 / d_sigma_1)
+
+                pi_1_new = jnp.einsum("i,i->i", pi_1_new, f1)
+
+                if rho_01 is not None:
+                    rho_01 = jnp.einsum("ij,i,j->ij", rho_01, f0, f1)
+                if rho_10 is not None:
+                    rho_10 = jnp.einsum("ij,i,j->ij", rho_10, f1, f0)
+                if rho_11 is not None:
+                    rho_11 = jnp.einsum("ij,i,j->ij", rho_11, f1, f1)
+
+                if sigma_1_prev is None:
+                    sigma_1 = d_sigma_1
+                else:
+                    sigma_1 = sigma_1_prev * d_sigma_1
+
+            else:
+                sigma_1 = None
+                rho_01 = None
+                rho_10 = None
+                rho_11 = None
+
+            return (
+                rho_00,
+                rho_01,
+                rho_10,
+                rho_11,
+                pi_0_new,
+                pi_1_new,
+                sigma_0,
+                sigma_1,
+                w_tot_0,
+                w_tot_1,
+            )
 
         if trans_f is not None:
 
@@ -6566,8 +6651,12 @@ class Covariances(MyPyTreeNode):
                 jax.Array | None,
                 jax.Array | None,
                 jax.Array | None,
+                jax.Array | None,
+                jax.Array | None,
+                jax.Array | None,
+                jax.Array | None,
             ],
-            (None, None, None, None, None, None),
+            (None, None, None, None, None, None, None, None, None, None),
         )
 
         out = macro_chunk_map_fun(
@@ -6586,49 +6675,23 @@ class Covariances(MyPyTreeNode):
             jit_f=True,
         )
 
-        C00, C01, C10, C11, pi_0, pi_1 = out
+        rho_00, rho_01, rho_10, rho_11, pi_s_0, pi_s_1, sigma_0, sigma_1, _w_0, _w_1 = out
 
-        if calc_pi:
-            assert pi_0 is not None
-
-            if only_diag:
-                if calc_C00:
-                    C00 -= pi_0**2
-
-                if time_series:
-                    assert pi_1 is not None
-                    if calc_C11:
-                        C11 -= pi_1**2
-                    if calc_C01:
-                        C01 -= pi_0 * pi_1
-                    if calc_C10:
-                        C10 -= pi_1 * pi_0
-
-            else:
-                if calc_C00:
-                    C00 -= jnp.outer(pi_0, pi_0)
-                if time_series:
-                    assert pi_1 is not None
-                    if calc_C11:
-                        C11 -= jnp.outer(pi_1, pi_1)
-                    if calc_C01:
-                        C01 -= jnp.outer(pi_0, pi_1)
-                    if calc_C10:
-                        C10 -= jnp.outer(pi_1, pi_0)
-
-        assert C00 is not None
+        print(f"{_w_0}")
 
         cov = Covariances(
-            C00=C00,
-            C01=C01,
-            C10=C10,
-            C11=C11,
-            pi_0=pi_0,
-            pi_1=pi_1,
+            rho_00=rho_00,
+            rho_01=rho_01,
+            rho_10=rho_10,
+            rho_11=rho_11,
+            pi_s_0=pi_s_0,
+            pi_s_1=pi_s_1,
             only_diag=only_diag,
             trans_f=trans_f,
             trans_g=trans_g,
             T_scale=T_scale,
+            sigma_0=sigma_0,
+            sigma_1=sigma_1,
         )
 
         if symmetric:
@@ -6636,11 +6699,35 @@ class Covariances(MyPyTreeNode):
 
         return cov
 
+    @property
+    def pi_0(self):
+        return jnp.einsum("i,i->i", self.pi_s_0, self.sigma_0)
+
+    @property
+    def pi_1(self):
+        return jnp.einsum("i,i->i", self.pi_s_1, self.sigma_1)
+
+    @property
+    def C00(self):
+        return jnp.einsum("ij,i,j->ij", self.rho_00, self.sigma_0, self.sigma_0)
+
+    @property
+    def C01(self):
+        return jnp.einsum("ij,i,j->ij", self.rho_01, self.sigma_0, self.sigma_1)
+
+    @property
+    def C10(self):
+        return jnp.einsum("ij,i,j->ij", self.rho_10, self.sigma_1, self.sigma_0)
+
+    @property
+    def C11(self):
+        return jnp.einsum("ij,i,j->ij", self.rho_11, self.sigma_1, self.sigma_1)
+
     def whiten(
         self,
         choice,
-        epsilon: float = 1e-6,
-        epsilon_pre: float | None = 1e-12,
+        epsilon: float = 1e-4,
+        epsilon_pre: float | None = 1e-6,
         out_dim=None,
         max_features=None,
         verbose=False,
@@ -6655,123 +6742,92 @@ class Covariances(MyPyTreeNode):
         # https://arxiv.org/pdf/1512.00809
 
         if choice == "C00":
-            C = self.C00
+            rho = self.rho_00
+            V_0 = self.sigma_0
         elif choice == "C11":
-            C = self.C11
+            rho = self.rho_11
+            V_0 = self.sigma_1
         else:
             raise ValueError(f"choice {choice} not known")
 
         if self.only_diag:
             raise NotImplementedError("only_diag not implemented")
 
-        assert C is not None
+        assert rho is not None
 
-        V = jnp.diag(C)
+        rho = rho
 
-        print(f"{correlation=}")
+        mask = V_0 == 0
 
-        if correlation:
-            V_0 = jnp.max(V)
+        print(f"eps pre {jnp.sum(mask)=} {V_0 / jnp.max(V_0)=}")
+        rho = rho.at[mask, :].set(0.0)
+        rho = rho.at[:, mask].set(0.0)
 
-            if epsilon_pre is None:
-                epsilon_pre = 0
+        C = jnp.einsum("ij,i,j->ij", rho, V_0, V_0)
 
-            m_pre = V / V_0 < epsilon_pre**2
+        V_inv = jnp.where(mask, 0, 1 / V_0)
 
-            print(f"removing {jnp.sum(m_pre)} eig. {V_0=}")
+        # if cholesky:
+        #     import scipy
 
-            V_sqrt_inv = jnp.where(m_pre, 0, 1 / jnp.sqrt(V))
-            P = jnp.einsum("ij,i,j->ij", C, V_sqrt_inv, V_sqrt_inv)
+        #     # this is pivoted cholesky
+        #     cho = scipy.linalg.lapack.dpstrf
 
-        else:
-            P = C
+        #     X, P, r, info = cho(rho, tol=epsilon**2, lower=True)
+        #     X = jnp.array(X)
 
-        if cholesky:
-            import scipy
+        #     # print(f"{X=}")
 
-            # this is pivoted cholesky
-            cho = scipy.linalg.lapack.dpstrf
+        #     pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
+        #     X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)  # set upper half to zero
+        #     X = X[:r, :][:, :r]
 
-            X, P, r, info = cho(P, tol=epsilon**2, lower=True)
-            X = jnp.array(X)
+        #     err = jnp.linalg.norm(pi.T @ C @ pi - X @ X.T)
 
-            # print(f"{X=}")
+        #     print(f" rank reduced chol {err=} rank {r} ")
 
-            pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
-            X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)  # set upper half to zero
-            X = X[:r, :][:, :r]
+        #     P_out = P[:r]
 
-            err = jnp.linalg.norm(pi.T @ C @ pi - X @ X.T)
+        #     X_inv = jax.scipy.linalg.solve_triangular(
+        #         X,
+        #         jnp.eye(*X.shape),  # type: ignore
+        #         lower=True,
+        #     )
 
-            print(f" rank reduced chol {err=} rank {r} ")
+        #     W = X_inv @ pi.T
 
-            P_out = P[:r]
+        # else:
+        theta, G = jnp.linalg.eigh(rho)
 
-            # if max_features is not None:
-            #     if r > max_features:
-            #         print(f"whiten: reducing dim to {max_features=}")
-            #         X = X[:, :max_features][:max_features, :]
-            #         pi = pi[:, :max_features]
-            #         r = max_features
+        # print(f"{theta=} ")
+        idx = jnp.argmax(theta)
+        mask = theta / theta[idx] > epsilon**2
 
-            # X is lower triu, but the shape of x is nxr
-            # X=QR transform R in into a nxr upper triangular block
-            # R contains relevant vectors and a 0 block
+        print(f"{jnp.sum(mask)=} {theta[mask]=} {theta[~mask]=}")
 
-            # Q, R, _ = jax.scipy.linalg.qr(X, pivoting=True)
+        theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta), 0)
 
-            # Q = Q[:, :r]
-            # R = R[:r, :]
+        # print(f" {(rho - G @ jnp.diag(theta) @ G.T)  = }  ")
 
-            # R_inv = jax.scipy.linalg.solve_triangular(R, jnp.eye(*R.shape))
+        W = jnp.einsum(
+            "j,i,ji->ij",
+            V_inv,
+            theta_inv,
+            G,
+        )
 
-            # if (m := jnp.abs(jnp.diag(R)) < epsilon).any():
-            #     print(f"found small diagonal elements in diag R, removing  {jnp.sum(m)} elements")
+        W = W[mask, :]
 
-            #     R_inv = R_inv[m, :]
+        # print(f"{W.shape=}  {V_0.shape=} ")
 
-            # W = R_inv @ Q.T @ pi.T
-
-            X_inv = jax.scipy.linalg.solve_triangular(
-                X,
-                jnp.eye(*X.shape),  # type: ignore
-                lower=True,
-            )
-
-            W = X_inv @ pi.T
-
-        else:
-            theta, G = jnp.linalg.eigh(P)
-
-            # print(f"{theta=} ")
-            idx = jnp.argmax(theta)
-            mask = theta / theta[idx] > epsilon**2
-
-            print(f"{jnp.sum(mask)=} {theta[mask]=} {theta[~mask]=}")
-
-            theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta[mask]), 0)
-
-            W = jnp.einsum(
-                "i,ji->ij",
-                theta_inv,
-                G,
-            )
-
-            W = W[mask, :]
-
-            P_out = None
-
-        if correlation:
-            W = jnp.einsum(
-                "ij,j->ij",
-                W,
-                V_sqrt_inv,
-            )
+        P_out = None
 
         if max_features is not None:
             if W.shape[0] > max_features:
                 print(f"whiten: reducing dim to {max_features=}")
                 W = W[:max_features, :]
+
+        # print(f"{W @ C @ W.T}")
 
         print(f"{jnp.linalg.norm(W @ C @ W.T - jnp.eye(W.shape[0]))=}")
 
@@ -6850,59 +6906,59 @@ class Covariances(MyPyTreeNode):
     #     return f
 
     def symmetrize(self):
-        _C00 = self.C00
-        _C01 = self.C01
-        _C10 = self.C10
-        _C11 = self.C11
+        _rho_00 = self.rho_00
+        _rho_01 = self.rho_01
+        _rho_10 = self.rho_10
+        _rho_11 = self.rho_11
+        _pi_s_0 = self.pi_s_0
+        _pi_s_1 = self.pi_s_1
 
-        pi = None
+        # make sigma same
 
-        if self.pi_0 is not None:
-            assert self.pi_1 is not None
+        _sigma = jnp.sqrt(self.sigma_0 * self.sigma_1)
+        d_sigma_0 = self.sigma_0 / _sigma
+        d_sigma_1 = self.sigma_1 / _sigma
 
-            _C00 += jnp.outer(self.pi_0, self.pi_0)
-            if _C01 is not None:
-                _C01 += jnp.outer(self.pi_0, self.pi_1)
+        print(f"{d_sigma_0=}")
 
-            if _C10 is not None:
-                _C10 += jnp.outer(self.pi_1, self.pi_0)
+        _pi_s_0 = jnp.einsum("i,i->i", _pi_s_0, d_sigma_0)
+        _pi_s_1 = jnp.einsum("i,i->i", _pi_s_1, d_sigma_1)
 
-            if _C11 is not None:
-                _C11 += jnp.outer(self.pi_1, self.pi_1)
+        _rho_00 = jnp.einsum("ij,i,j->ij", _rho_00, d_sigma_0, d_sigma_0)
+        _rho_01 = jnp.einsum("ij,i,j->ij", _rho_01, d_sigma_0, d_sigma_1)
+        _rho_10 = jnp.einsum("ij,i,j->ij", _rho_10, d_sigma_1, d_sigma_0)
+        _rho_11 = jnp.einsum("ij,i,j->ij", _rho_11, d_sigma_1, d_sigma_1)
 
-            pi = 0.5 * (self.pi_0 + self.pi_1)
+        # make pi same
 
-            _C00 -= jnp.outer(pi, pi)
-            _C01 -= jnp.outer(pi, pi)
-            _C10 -= jnp.outer(pi, pi)
-            _C11 -= jnp.outer(pi, pi)
+        _pi_s = 0.5 * (_pi_s_0 + _pi_s_1)
 
-        C00 = (1 / 2) * (_C00 + _C11)
+        _rho_00 = _rho_00 + jnp.outer(_pi_s_0, _pi_s_0) - jnp.outer(_pi_s, _pi_s)
+        _rho_11 = _rho_11 + jnp.outer(_pi_s_1, _pi_s_1) - jnp.outer(_pi_s, _pi_s)
+        _rho_01 = _rho_01 + jnp.outer(_pi_s_0, _pi_s_1) - jnp.outer(_pi_s, _pi_s)
+        _rho_10 = _rho_10 + jnp.outer(_pi_s_1, _pi_s_0) - jnp.outer(_pi_s, _pi_s)
 
-        if self.C01 is not None:
-            assert _C01 is not None
-            assert _C10 is not None
-            C01 = (1 / 2) * (_C01 + _C10)
-        else:
-            C01 = None
+        sym_rho_00 = (1 / 2) * (_rho_00 + _rho_11)
+        sym_rho_01 = (1 / 2) * (_rho_01 + _rho_10)
 
-        if _C10 is not None:
-            C10 = (1 / 2) * (_C10 + _C01)
-        else:
-            C10 = None
+        d_sigma = jnp.sqrt(jnp.diag(sym_rho_00))
+        d_sigma_inv = 1 / d_sigma
 
-        if _C11 is not None:
-            C11 = _C00
-        else:
-            C11 = None
+        sym_rho_00 = jnp.einsum("ij,i,j->ij", sym_rho_00, d_sigma_inv, d_sigma_inv)
+        sym_rho_01 = jnp.einsum("ij,i,j->ij", sym_rho_01, d_sigma_inv, d_sigma_inv)
+        _pi_s = jnp.einsum("i,i->i", _pi_s, d_sigma)
+
+        _sigma *= d_sigma
 
         return Covariances(
-            C00=C00,
-            C01=C01,
-            C10=C10,
-            C11=C11,
-            pi_0=pi,
-            pi_1=pi,
+            rho_00=sym_rho_00,
+            rho_11=sym_rho_00,
+            rho_01=sym_rho_01,
+            rho_10=sym_rho_01,
+            pi_s_0=_pi_s,
+            pi_s_1=_pi_s,
+            sigma_0=_sigma,
+            sigma_1=_sigma,
             only_diag=self.only_diag,
             symmetric=True,
             trans_f=self.trans_f,
