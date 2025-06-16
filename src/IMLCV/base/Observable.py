@@ -418,10 +418,10 @@ class Observable:
                 # min_samples_per_bin=min_samples_per_bin,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-                verbose=verbose,
+                verbose=True,
                 output_w_corr=True,
-                koopman_eps=1e-6,
-                koopman_eps_pre=1e-6,
+                # koopman_eps=1e-6,
+                # koopman_eps_pre=1e,
                 correlation=True,
                 # add_1=True,
             )

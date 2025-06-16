@@ -190,7 +190,7 @@ class Scheme:
         first_round_without_bias=False,
         executors=Executors.training,
         use_common_bias=True,
-        first_round_without_ground_bias=True,
+        first_round_without_ground_bias=False,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:

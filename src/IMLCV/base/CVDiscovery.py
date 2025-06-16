@@ -105,6 +105,7 @@ class Transformer:
         percentile=5.0,
         jac=jax.jacrev,
         transform_FES=True,
+        koopman=True,
         max_fes_bias: float | None = None,
         n_max=1e5,
         samples_per_bin=20,
@@ -170,42 +171,43 @@ class Transformer:
 
         # koopman_weight
 
-        w, w_t, _, _ = dlo.koopman_weight(
-            verbose=verbose,
-            max_bins=n_max,
-            samples_per_bin=samples_per_bin,
-            chunk_size=chunk_size,
-            # correlation=False,
-            koopman_eps=0,
-            koopman_eps_pre=0,
-            add_1=True,
-        )  # type: ignore
+        if koopman:
+            w, w_t, _, _ = dlo.koopman_weight(
+                verbose=verbose,
+                max_bins=n_max,
+                samples_per_bin=samples_per_bin,
+                chunk_size=chunk_size,
+                # correlation=False,
+                koopman_eps=0,
+                koopman_eps_pre=0,
+                add_1=True,
+            )  # type: ignore
 
-        w: list[jax.Array]
-        w_t: list[jax.Array]
+            w: list[jax.Array]
+            w_t: list[jax.Array]
 
-        bias_km: Bias = dlo.get_fes_bias_from_weights(
-            weights=w,
-            samples_per_bin=samples_per_bin,
-            min_samples_per_bin=min_samples_per_bin,
-            n_max=n_max,
-            max_bias=max_fes_bias,
-            macro_chunk=macro_chunk,
-            chunk_size=chunk_size,
-        )
-
-        if plot:
-            Transformer.plot_app(
-                name=str(plot_folder / "cvdiscovery_pre_data_bias_km.png"),  # type: ignore
-                collective_variables=[dlo.collective_variable],
-                cv_data=None,
-                biases=[bias_km],
-                margin=0.1,
-                T=dlo.sti.T,
-                plot_FES=True,
-                cv_titles=cv_titles,
-                vmax=vmax,
+            bias_km: Bias = dlo.get_fes_bias_from_weights(
+                weights=w,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                n_max=n_max,
+                max_bias=max_fes_bias,
+                macro_chunk=macro_chunk,
+                chunk_size=chunk_size,
             )
+
+            if plot:
+                Transformer.plot_app(
+                    name=str(plot_folder / "cvdiscovery_pre_data_bias_km.png"),  # type: ignore
+                    collective_variables=[dlo.collective_variable],
+                    cv_data=None,
+                    biases=[bias_km],
+                    margin=0.1,
+                    T=dlo.sti.T,
+                    plot_FES=True,
+                    cv_titles=cv_titles,
+                    vmax=vmax,
+                )
 
         print("starting pre_fit")
 
@@ -256,8 +258,8 @@ class Transformer:
             x,
             percentile=percentile,
             # margin=None,
-            # weights=w,
-            # rho=rho,
+            weights=w,
+            rho=rho,
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
         )
@@ -385,7 +387,7 @@ class Transformer:
         collective_variables: list[CollectiveVariable],
         cv_data: list[list[CV]] | list[list[list[CV]]] | None = None,
         biases: list[Bias] | list[list[Bias]] | None = None,
-        indicate_plots: None | str | list[list[str]] = "lightblue",
+        indicate_plots: None | str | list[list[str | None]] = "lightblue",
         duplicate_cv_data=True,
         name: str | Path | None = None,
         labels=None,

@@ -519,33 +519,49 @@ class TransformerMAF(Transformer):
         # else:
         #     n_skip = 1
 
+        # km_assym = dlo.koopman_model(
+        #     cv_0=x,
+        #     cv_t=x_t,
+        #     nl=dlo.nl,
+        #     nl_t=dlo.nl_t,
+        #     max_features=max_features,
+        #     max_features_pre=max_features_pre,
+        #     w=w if use_w else [jnp.ones_like(x) for x in w],
+        #     w_t=w_t if use_w else [jnp.ones_like(x) for x in w],
+        #     calc_pi=False,
+        #     add_1=True,
+        #     trans=trans,
+        #     chunk_size=chunk_size,
+        #     macro_chunk=macro_chunk,
+        #     verbose=True,
+        #     out_dim=-1,
+        #     eps=eps,
+        #     eps_pre=eps_pre,
+        #     symmetric=True,
+        #     correlation=correlation,
+        # )
+
         km = dlo.koopman_model(
             cv_0=x,
             cv_t=x_t,
             nl=dlo.nl,
             nl_t=dlo.nl_t,
-            method="tcca",
-            max_features=max_features,
-            max_features_pre=max_features_pre,
             w=w if use_w else [jnp.ones_like(x) for x in w],
             w_t=w_t if use_w else [jnp.ones_like(x) for x in w],
-            calc_pi=True,
-            add_1=False,
-            trans=trans,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            verbose=True,
-            out_dim=-1,
-            eps=eps,
-            eps_pre=eps_pre,
-            symmetric=True,
-            correlation=correlation,
+            calc_pi=False,
+            add_1=True,
+            eps_pre=1e-5,
+            eps=1e-5,
+            symmetric=False,
+            trans=trans,
         )
 
-        # km = km.weighted_model(
-        #     symmetric=True,
-        #     verbose=True,
-        # )
+        km = km.weighted_model(
+            symmetric=True,
+            add_1=True,
+        )
 
         ##########
 

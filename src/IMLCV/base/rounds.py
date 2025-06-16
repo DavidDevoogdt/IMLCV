@@ -385,6 +385,252 @@ class Rounds:
                 **plot_kwargs,
             )
 
+    def plot_cv_discovery(
+        self,
+        start: int,
+        end: int,
+        additional_collective_variables: list[CollectiveVariable] | None = None,
+        additional_collective_variable_names: list[str] | None = None,
+        additional_collective_variable_titles: list[str] | None = None,
+        plot_biases=True,
+        # folder=".",
+        ignore_invalid=False,
+        only_finished=False,
+        get_fes_bias_kwargs={},
+        plot_kwargs={},
+    ):
+        import jax.numpy as jnp
+        import numpy as np
+
+        from IMLCV.base.CVDiscovery import Transformer
+        from IMLCV.base.rounds import DataLoaderOutput, Rounds
+        from IMLCV.base.UnitsConstants import kelvin, kjmol
+
+        # f = folder
+        # rnds = Rounds.create(folder=f)
+
+        cs = list(range(start, end + 1))
+
+        ncv = len(cs)
+
+        if additional_collective_variables is None:
+            ncv_add = 0
+            additional_collective_variables = []
+            additional_collective_variable_names = []
+            additional_collective_variable_titles = []
+
+        else:
+            assert additional_collective_variable_names is not None
+            assert additional_collective_variable_titles is not None
+
+            ncv_add = len(additional_collective_variables)
+            assert len(additional_collective_variable_names) == ncv_add
+            assert len(additional_collective_variable_titles) == ncv_add
+
+        bias_matrix = []
+        data_matrix = []
+
+        # i: data, j cv
+
+        for i in range(ncv):
+            bias_matrix_i = []
+            data_matrix_i = []
+
+            for j in range(ncv + ncv_add + 1):
+                bias_matrix_i.append(None)
+                data_matrix_i.append(None)
+
+            bias_matrix.append(bias_matrix_i)
+            data_matrix.append(data_matrix_i)
+
+        collective_variables = []
+
+        for j in range(ncv + ncv_add + 1):
+            collective_variables.append(None)
+
+        indicate_plots_arr = [
+            [
+                "lightgray" if (c < ncv_add) else ("lightblue" if c == (d + ncv_add) else None)
+                for c in range(ncv + ncv_add + 1)  # colums
+            ]
+            for d in range(ncv + ncv_add)  # rows
+        ]
+
+        row_colors = jnp.arange(ncv) + ncv_add
+
+        for _i in range(ncv_add):
+            collective_variables[_i] = additional_collective_variables[_i]
+
+        T: None | float = None
+
+        for ci, c in enumerate(cs):
+            print(f"===={ci=}__{c=}====")
+
+            cv_n = []
+            cv_n_p_1 = []
+            sp = []
+
+            w = []
+            rho = []
+
+            r0 = 0
+
+            is_zipped = self.is_zipped(c=c, r=0)
+            if is_zipped:
+                print("unzipping")
+                self.unzip_cv_round(c=c, r=0)
+
+            _r = self._round_information(c=c, r=r0)
+
+            if T is None:
+                T = _r.tic.T
+            else:
+                assert _r.tic.T == T
+
+            assert _r.valid or ignore_invalid
+
+            rn = _r.num_vals
+
+            rn.sort()
+
+            for i in rn:
+                try:
+                    _r_i = self._trajectory_information(c=c, r=r0, i=i)
+                except Exception as e:
+                    print(f"could not load {c=} {r0=} {i=} {e=}, skipping")
+                    continue
+
+                if not _r_i.valid and not ignore_invalid:
+                    continue
+
+                if (not _r_i.finished) and only_finished:
+                    continue
+                # no points in collection
+                if _r_i.ti._size <= 0:
+                    continue
+
+                # if T is None:
+                #     T
+
+                cv_n_p_1.append(_r_i.ti.CV)
+                cv_n.append(_r_i.ti.CV_orig)
+                w.append(_r_i.ti.w)
+                rho.append(_r_i.ti.rho)
+                sp.append(_r_i.ti.sp)
+
+            print(f"getting colvar {c-1=} {c=}")
+            colvar_n = self.get_collective_variable(c - 1)
+            colvar_n_p_1 = self.get_collective_variable(c)
+
+            add_cv = []
+
+            for ext_cv in additional_collective_variables:
+                cv_ext, _ = DataLoaderOutput.apply_cv(
+                    x=sp,
+                    f=ext_cv.f,
+                )
+
+                add_cv.append(cv_ext)
+
+            collective_variables[ci + ncv_add] = colvar_n
+            collective_variables[ci + ncv_add + 1] = colvar_n_p_1
+
+            colvars = [
+                *additional_collective_variables,
+                colvar_n,
+                colvar_n_p_1,
+            ]
+            cv_data = [
+                *add_cv,
+                cv_n,
+                cv_n_p_1,
+            ]
+
+            for _i in range(ncv_add):
+                data_matrix[ci][_i] = cv_data[_i]
+            for _i in range(2):
+                data_matrix[ci][ci + ncv_add + _i] = cv_data[ncv_add + _i]
+
+            if plot_biases:
+                biases = []
+
+                for i, (colvar_i, cv_i) in enumerate(zip(colvars, cv_data)):
+                    print(f"{i=} {colvar_i.n=} {cv_i[0].shape=}")
+
+                    b = DataLoaderOutput._get_fes_bias_from_weights(
+                        T=T * kelvin,
+                        weights=w,
+                        rho=rho,
+                        collective_variable=colvar_i,
+                        cv=cv_i,
+                        **get_fes_bias_kwargs,
+                    )
+
+                    biases.append(b)
+
+                for _i in range(ncv_add):
+                    bias_matrix[ci][_i] = biases[_i]
+                for _i in range(2):
+                    bias_matrix[ci][ci + ncv_add + _i] = biases[ncv_add + _i]
+
+        assert T is not None
+
+        print("plotting cv with data")
+
+        # plot with data
+        Transformer.plot_app(
+            collective_variables=collective_variables,
+            cv_data=data_matrix,
+            # biases=bias_matrix if plot_biases else None,
+            duplicate_cv_data=False,
+            name=self.path() / f"CV_discovery_{c}_{start}_{end}_data.png",
+            labels=[
+                *additional_collective_variable_names,
+                *["xyz"] * (ncv + 1),
+            ],
+            cv_titles=[
+                *additional_collective_variable_titles,
+                *[f"CV{c}" for c in range(start - 1, end + 1)],
+            ],
+            data_titles=[f"data_{c - 1}" for c in cs],
+            color_trajectories=False,
+            indicate_plots=indicate_plots_arr,
+            plot_FES=False,
+            T=T * kelvin,
+            row_color=row_colors,
+            **plot_kwargs,
+        )
+
+        if plot_biases:
+            print("plotting cv without data")
+
+            Transformer.plot_app(
+                collective_variables=collective_variables,
+                cv_data=None,
+                biases=bias_matrix,
+                duplicate_cv_data=False,
+                name=self.path() / f"CV_discovery_{c}_{start}_{end}.png",
+                labels=[
+                    *additional_collective_variable_names,
+                    *["xyz"] * (ncv + 1),
+                ],
+                cv_titles=[
+                    *additional_collective_variable_titles,
+                    *[f"CV{c}" for c in range(start - 1, end + 1)],
+                ],
+                data_titles=[f"data_{c - 1}" for c in cs],
+                color_trajectories=False,
+                indicate_plots=indicate_plots_arr,
+                T=T * kelvin,
+                plot_FES=True,
+                row_color=row_colors,
+                **plot_kwargs,
+            )
+
+        if is_zipped:
+            print("zipping")
+            self.zip_cv_round(c=c, r=0)
+
     ######################################
     #             storage                #
     ######################################
@@ -3155,8 +3401,8 @@ class DataLoaderOutput(MyPyTreeNode):
         out_dim: int = 10,
         chunk_size: int | None = None,
         indicator_CV: bool = True,
-        koopman_eps: float = 1e-6,
-        koopman_eps_pre: float = 1e-6,
+        koopman_eps: float = 1e-5,
+        koopman_eps_pre: float = 0,
         cv_0: list[CV] | None = None,
         cv_t: list[CV] | None = None,
         macro_chunk: int = 1000,
@@ -3285,6 +3531,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
             label_mask = [int(a) for a in jnp.argwhere(labels == label).reshape((-1,))]
 
+            # idx_inv = jnp.arange()
+
             sd = []
             cv_0 = []
             cv_t = []
@@ -3318,11 +3566,15 @@ class DataLoaderOutput(MyPyTreeNode):
 
                 mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
 
+                print(f"{label=} {mask=} {hist.shape=}")
+
                 @partial(CvTrans.from_cv_function, mask=mask)
                 def get_indicator(cv: CV, nl, shmap, shmap_kwargs, mask):
                     out = jnp.zeros((hist.shape[0],))  # type: ignore
                     out = out.at[cv.cv].set(1)
                     out = jnp.take(out, mask)
+
+                    print(f"{out=}")
 
                     return cv.replace(cv=out)
 
@@ -3349,7 +3601,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 rho=rho,
                 rho_t=rho_t,
                 add_1=add_1,
-                method="tcca",
+                # method="tcca",
                 symmetric=False,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
@@ -3360,7 +3612,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 max_features=max_features_koopman,
                 max_features_pre=max_features_koopman,
                 only_diag=only_diag,
-                calc_pi=calc_pi,
+                calc_pi=False,
                 scaled_tau=self.scaled_tau,
                 sparse=sparse,
                 out_dim=out_dim,
@@ -4834,7 +5086,7 @@ class DataLoaderOutput(MyPyTreeNode):
         cv_t: list[CV] | list[SystemParams] | None = None,
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
-        method="tcca",
+        # method="tcca",
         only_return_weights=False,
         symmetric=False,
         rho: list[jax.Array] | None = None,
@@ -4842,7 +5094,7 @@ class DataLoaderOutput(MyPyTreeNode):
         rho_t: list[jax.Array] | None = None,
         w_t: list[jax.Array] | None = None,
         eps=1e-12,
-        eps_pre=None,
+        eps_pre=1e-12,
         max_features=5000,
         max_features_pre=5000,
         out_dim=-1,
@@ -4853,14 +5105,14 @@ class DataLoaderOutput(MyPyTreeNode):
         trans=None,
         T_scale=1,
         only_diag=False,
-        calc_pi=True,
+        calc_pi=False,
         scaled_tau=None,
         sparse=True,
         correlation=True,
     ) -> "KoopmanModel":
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
 
-        assert method in ["tica", "tcca"]
+        # assert method in ["tica", "tcca"]
 
         if scaled_tau is None:
             scaled_tau = self.scaled_tau
@@ -4925,7 +5177,7 @@ class DataLoaderOutput(MyPyTreeNode):
             add_1=add_1,
             eps=eps,
             eps_pre=eps_pre,
-            method=method,
+            # method=method,
             symmetric=symmetric,
             out_dim=out_dim,
             # koopman_weight=koopman_weight,
@@ -5731,15 +5983,16 @@ class KoopmanModel(MyPyTreeNode):
     max_features: int = 5000
     max_features_pre: int = 5000
     out_dim: int | None = None
-    method: str = "tcca"
+    # method: str = "tcca"
     correlation_whiten: bool = True
+    verbose: bool = True
 
     tau: float | None = None
     T_scale: float = 1.0
 
     trans: CvTrans | CvTrans | None = None
 
-    constant_threshold: float = 1e-7
+    constant_threshold: float = 1e-10
 
     @staticmethod
     def create(
@@ -5752,9 +6005,9 @@ class KoopmanModel(MyPyTreeNode):
         nl: list[NeighbourList] | NeighbourList | None = None,
         nl_t: list[NeighbourList] | NeighbourList | None = None,
         add_1=True,
-        eps=1e-14,
-        eps_pre=None,
-        method="tcca",
+        eps: float = 1e-14,
+        eps_pre: float = 0,
+        # method="tcca",
         symmetric=False,
         out_dim=-1,  # maximum dimension for koopman model
         max_features=5000,
@@ -5766,7 +6019,7 @@ class KoopmanModel(MyPyTreeNode):
         trans: CvTrans | None = None,
         T_scale=1,
         only_diag=False,
-        calc_pi=True,
+        calc_pi=False,
         use_scipy=False,
         auto_cov_threshold=None,
         sparse=True,
@@ -5775,7 +6028,7 @@ class KoopmanModel(MyPyTreeNode):
         only_return_weights=False,
         correlation_whiten=False,
         out_eps=None,
-        constant_threshold: float = 1e-7,
+        constant_threshold: float = 1e-10,
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
@@ -5817,6 +6070,8 @@ class KoopmanModel(MyPyTreeNode):
         w_tot = tot_w(w, rho)
         # w_tot_t = tot_w(w_t, rho_t)
 
+        print(f"{trans=} {calc_pi=}")
+
         cov = Covariances.create(
             cv_0=cv_0,  # type: ignore
             cv_1=cv_t,  # type: ignore
@@ -5835,7 +6090,7 @@ class KoopmanModel(MyPyTreeNode):
             verbose=verbose,
         )
 
-        print(f"{cov=}")
+        # print(f"{cov=}")
 
         assert cov.C00 is not None
         assert cov.C01 is not None
@@ -5844,28 +6099,41 @@ class KoopmanModel(MyPyTreeNode):
 
         argmask = jnp.arange(cov.C00.shape[0])
 
+        print(f"{argmask.shape=}")
+
+        print(f"{cov.sigma_0=}{cov.sigma_1=} {jnp.diag(cov.rho_00)}")
+
         if eps_pre is not None:
-            b = jnp.logical_and(cov.sigma_0 > eps_pre**2, cov.sigma_1 > eps_pre**2)
+            b = jnp.logical_and(cov.sigma_0 > eps_pre, cov.sigma_1 > eps_pre)
             argmask = argmask[b]
+
+        print(f"{argmask.shape=}")
 
         argsort = jnp.argsort(jnp.diag(cov.rho_01)[argmask], descending=True)
         argmask = argmask[argsort]
+
+        print(f"{argmask.shape=}")
 
         if auto_cov_threshold is not None:
             b = jnp.diag(cov.rho_01)[argmask] > auto_cov_threshold
             argmask = argmask[b]
 
+        print(f"{argmask.shape=}")
+
         if max_features is not None:
             if argmask.shape[0] > max_features:
                 argmask = argmask[:max_features]
+
+        print(f"{argmask.shape=}")
 
         cov.rho_00 = cov.rho_00[argmask, :][:, argmask]
         cov.rho_11 = cov.rho_11[argmask, :][:, argmask]
         cov.rho_01 = cov.rho_01[argmask, :][:, argmask]
         cov.rho_10 = cov.rho_10[argmask, :][:, argmask]
 
-        cov.pi_s_0 = cov.pi_s_0[argmask]
-        cov.pi_s_1 = cov.pi_s_1[argmask]
+        if calc_pi:
+            cov.pi_s_0 = cov.pi_s_0[argmask]
+            cov.pi_s_1 = cov.pi_s_1[argmask]
 
         cov.sigma_0 = cov.sigma_0[argmask]
         cov.sigma_1 = cov.sigma_1[argmask]
@@ -6022,7 +6290,7 @@ class KoopmanModel(MyPyTreeNode):
             max_features=max_features,
             max_features_pre=max_features_pre,
             out_dim=out_dim,
-            method=method,
+            # method=method,
             calc_pi=calc_pi,
             tau=tau,
             trans=trans,
@@ -6035,6 +6303,7 @@ class KoopmanModel(MyPyTreeNode):
             scaled_tau=scaled_tau,
             correlation_whiten=correlation_whiten,
             constant_threshold=constant_threshold,
+            verbose=verbose,
         )
 
         return km
@@ -6153,15 +6422,13 @@ class KoopmanModel(MyPyTreeNode):
     ) -> tuple[list[Array], list[Array], list[Array] | None, bool]:
         # Optimal Data-Driven Estimation of Generalized Markov State Models, page 18-19
         # create T_k in the trans basis
-        # T_n = C00^{-1} C11 T_k
-        # T_K = C11^{-1/2} V S U.T C00^{1/2}
-        # T_n mu_corr =  (lambda=1) * mu_corr
-        #  C00^{-1/2} C11  C11^ {-1/2} V S UT  C00^{1/2} mu_corr )=  C00^(1/2) mu_corr
-        # w0 C11 W1.T V Sigma Ut v = lambda v
-        # v= C00^(1/2) v
-        # mu_corr = W0^T v
-
-        # out_dim = min(max(int(jnp.sum(jnp.abs(1 - self.s) < epsilon)), 5), self.s.shape[0])
+        # C00^{-1} C01 T_k
+        # W0 C00 W0.T = I
+        # W1 C11 W1.T = I
+        # W0 C01 W1.T = sigma
+        # _______________
+        # W1 C11 W0.T sigma x = x   <- eigensolver
+        # mu_ref = W1.T@x
 
         if out_dim is None:
             out_dim = int(jnp.sum(jnp.abs(1 - self.s) < epsilon))
@@ -6179,13 +6446,13 @@ class KoopmanModel(MyPyTreeNode):
 
         # A = self.W0 @ self.cov.C11 @ self.W1.T @ jnp.diag(self.s)
 
-        A = self.W0 @ self.cov.C11 @ self.W1.T @ jnp.diag(self.s)
+        A = self.W1 @ self.cov.C11 @ self.W0.T @ jnp.diag(self.s)
 
         # out_idx = jnp.arange(out_dim)
 
         lv, v = jnp.linalg.eig(A)
 
-        print(f"{lv=} ")
+        # print(f"{lv=} ")
 
         # remove complex eigenvalues, as they cannot be the ground state
         real = jnp.abs(jnp.imag(lv)) == 0.0
@@ -6193,7 +6460,10 @@ class KoopmanModel(MyPyTreeNode):
         out_idx = out_idx[jnp.argsort(jnp.abs(lv[out_idx] - 1))]
         # sort
 
-        print(f"{lv[out_idx]=} {out_idx=}")
+        # print(f"{lv[out_idx]=} {out_idx=}")
+
+        n = jnp.min(jnp.array([out_idx.shape[0], 10]))
+        print(f"{lv[out_idx[:n]]=} ")
 
         lv, v = lv[out_idx], v[:, out_idx]
 
@@ -6203,7 +6473,7 @@ class KoopmanModel(MyPyTreeNode):
 
         f_trans_2 = CvTrans.from_cv_function(
             DataLoaderOutput._transform,
-            q=self.W0.T,
+            q=self.W1.T,
             l=None,
             pi=self.cov.pi_0 if self.calc_pi else None,
             argmask=self.argmask,
@@ -6267,6 +6537,8 @@ class KoopmanModel(MyPyTreeNode):
 
         if nm > 1:
             print(f"found multiple modes with positive weights, merging {f_neg=} {w_pos}")
+        else:
+            print(f"succes")
 
         w_corr = jnp.sum(w_pos[x, :], axis=0)
         w_corr_t = jnp.sum(w_pos_t[x, :], axis=0)
@@ -6321,7 +6593,7 @@ class KoopmanModel(MyPyTreeNode):
             add_1=self.add_1,
             eps=self.eps,
             eps_pre=self.eps_pre,
-            method=self.method,
+            # method=self.method,
             symmetric=False,
             out_dim=self.out_dim,
             tau=self.tau,
@@ -6422,7 +6694,7 @@ class Covariances(MyPyTreeNode):
         nl_t: list[NeighbourList] | NeighbourList | None = None,
         w: list[Array] | None = None,
         w_t: list[Array] | None = None,
-        calc_pi=True,
+        calc_pi=False,
         macro_chunk=1000,
         chunk_size=None,
         only_diag=False,
@@ -6436,7 +6708,6 @@ class Covariances(MyPyTreeNode):
         calc_C11=True,
         shmap_kwargs=ShmapKwargs.create(),
         verbose=True,
-        calc_sigma=True,
     ) -> Covariances:
         time_series = cv_1 is not None
 
@@ -6479,7 +6750,7 @@ class Covariances(MyPyTreeNode):
             w_0: jax.Array | None,
             w_1: jax.Array | None = None,
         ):
-            print(f"{w_0=}")
+            # print(f"{w_0=}")
 
             assert w_0 is not None
             assert not cv_0.atomic
@@ -6519,6 +6790,9 @@ class Covariances(MyPyTreeNode):
                 else:
                     _w_tot = _w_prev + _dw
 
+                if not calc_pi:
+                    return None, None, _w_tot, _dw
+
                 _pi_new = jnp.einsum("ni,n->i", _x, _w) / _dw
 
                 if _pi_prev is None:
@@ -6543,7 +6817,17 @@ class Covariances(MyPyTreeNode):
 
                     _c_prev += jnp.outer(_d_pi_x, _d_pi_y)
 
-                _c_new = jnp.einsum("ni,nj,n->ij", _x - _pi_x, _y - _pi_y, _w) / _dw
+                if calc_pi:
+                    assert _pi_x is not None
+                    assert _pi_y is not None
+
+                    u = _x - _pi_x
+                    v = _y - _pi_y
+                else:
+                    u = _x
+                    v = _y
+
+                _c_new = jnp.einsum("ni,nj,n->ij", u, v, _w) / _dw
 
                 if _c_prev is None:
                     return _c_new
@@ -6569,23 +6853,23 @@ class Covariances(MyPyTreeNode):
 
             # convert everything to new sigma
 
-            d_sigma_0 = jnp.sqrt(jnp.where(jnp.diag(rho_00) <= 0, 0, jnp.diag(rho_00)))
+            d_sigma_0 = jnp.sqrt(jnp.where(jnp.diag(rho_00) <= 0, 0.0, jnp.diag(rho_00)))
             f0 = jnp.where(d_sigma_0 == 0, 1.0, 1 / d_sigma_0)
 
-            pi_0_new = jnp.einsum("i,i->i", pi_0_new, f0)
+            pi_0_new = jnp.einsum("i,i->i", pi_0_new, f0) if calc_pi else None
 
             rho_00 = jnp.einsum("ij,i,j->ij", rho_00, f0, f0)
 
             if sigma_0_prev is None:
                 sigma_0 = d_sigma_0
             else:
-                sigma_0 = sigma_0_prev * d_sigma_0
+                sigma_0 = jnp.where(sigma_0_prev == 0, d_sigma_0, sigma_0_prev * d_sigma_0)
 
             if time_series:
-                d_sigma_1 = jnp.sqrt(jnp.where(jnp.diag(rho_11) <= 0, 0, jnp.diag(rho_11)))
+                d_sigma_1 = jnp.sqrt(jnp.where(jnp.diag(rho_11) <= 0, 0.0, jnp.diag(rho_11)))
                 f1 = jnp.where(d_sigma_1 <= 0, 1.0, 1 / d_sigma_1)
 
-                pi_1_new = jnp.einsum("i,i->i", pi_1_new, f1)
+                pi_1_new = jnp.einsum("i,i->i", pi_1_new, f1) if calc_pi else None
 
                 if rho_01 is not None:
                     rho_01 = jnp.einsum("ij,i,j->ij", rho_01, f0, f1)
@@ -6597,7 +6881,7 @@ class Covariances(MyPyTreeNode):
                 if sigma_1_prev is None:
                     sigma_1 = d_sigma_1
                 else:
-                    sigma_1 = sigma_1_prev * d_sigma_1
+                    sigma_1 = jnp.where(sigma_1_prev == 0, d_sigma_1, sigma_1_prev * d_sigma_1)
 
             else:
                 sigma_1 = None
@@ -6701,10 +6985,14 @@ class Covariances(MyPyTreeNode):
 
     @property
     def pi_0(self):
+        if self.pi_s_0 is None:
+            return None
         return jnp.einsum("i,i->i", self.pi_s_0, self.sigma_0)
 
     @property
     def pi_1(self):
+        if self.pi_s_1 is None:
+            return None
         return jnp.einsum("i,i->i", self.pi_s_1, self.sigma_1)
 
     @property
@@ -6743,10 +7031,10 @@ class Covariances(MyPyTreeNode):
 
         if choice == "C00":
             rho = self.rho_00
-            V_0 = self.sigma_0
+            sigma = self.sigma_0
         elif choice == "C11":
             rho = self.rho_11
-            V_0 = self.sigma_1
+            sigma = self.sigma_1
         else:
             raise ValueError(f"choice {choice} not known")
 
@@ -6757,15 +7045,15 @@ class Covariances(MyPyTreeNode):
 
         rho = rho
 
-        mask = V_0 == 0
+        mask = sigma == 0
 
-        print(f"eps pre {jnp.sum(mask)=} {V_0 / jnp.max(V_0)=}")
+        print(f"eps pre {jnp.sum(mask)=} {sigma / jnp.max(sigma)=}")
         rho = rho.at[mask, :].set(0.0)
         rho = rho.at[:, mask].set(0.0)
 
-        C = jnp.einsum("ij,i,j->ij", rho, V_0, V_0)
+        C = jnp.einsum("ij,i,j->ij", rho, sigma, sigma)
 
-        V_inv = jnp.where(mask, 0, 1 / V_0)
+        V_inv = jnp.where(mask, 0, 1 / sigma)
 
         # if cholesky:
         #     import scipy
@@ -6803,7 +7091,7 @@ class Covariances(MyPyTreeNode):
         idx = jnp.argmax(theta)
         mask = theta / theta[idx] > epsilon**2
 
-        print(f"{jnp.sum(mask)=} {theta[mask]=} {theta[~mask]=}")
+        print(f"{jnp.sum(mask)=} ")
 
         theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta), 0)
 
@@ -6921,9 +7209,6 @@ class Covariances(MyPyTreeNode):
 
         print(f"{d_sigma_0=}")
 
-        _pi_s_0 = jnp.einsum("i,i->i", _pi_s_0, d_sigma_0)
-        _pi_s_1 = jnp.einsum("i,i->i", _pi_s_1, d_sigma_1)
-
         _rho_00 = jnp.einsum("ij,i,j->ij", _rho_00, d_sigma_0, d_sigma_0)
         _rho_01 = jnp.einsum("ij,i,j->ij", _rho_01, d_sigma_0, d_sigma_1)
         _rho_10 = jnp.einsum("ij,i,j->ij", _rho_10, d_sigma_1, d_sigma_0)
@@ -6931,12 +7216,19 @@ class Covariances(MyPyTreeNode):
 
         # make pi same
 
-        _pi_s = 0.5 * (_pi_s_0 + _pi_s_1)
+        calc_pi = self.pi_s_0 is not None
 
-        _rho_00 = _rho_00 + jnp.outer(_pi_s_0, _pi_s_0) - jnp.outer(_pi_s, _pi_s)
-        _rho_11 = _rho_11 + jnp.outer(_pi_s_1, _pi_s_1) - jnp.outer(_pi_s, _pi_s)
-        _rho_01 = _rho_01 + jnp.outer(_pi_s_0, _pi_s_1) - jnp.outer(_pi_s, _pi_s)
-        _rho_10 = _rho_10 + jnp.outer(_pi_s_1, _pi_s_0) - jnp.outer(_pi_s, _pi_s)
+        if calc_pi:
+            assert self.pi_s_1 is not None
+            _pi_s_0 = jnp.einsum("i,i->i", _pi_s_0, d_sigma_0)
+            _pi_s_1 = jnp.einsum("i,i->i", _pi_s_1, d_sigma_1)
+
+            _pi_s = 0.5 * (_pi_s_0 + _pi_s_1)
+
+            _rho_00 = _rho_00 + jnp.outer(_pi_s_0, _pi_s_0) - jnp.outer(_pi_s, _pi_s)
+            _rho_11 = _rho_11 + jnp.outer(_pi_s_1, _pi_s_1) - jnp.outer(_pi_s, _pi_s)
+            _rho_01 = _rho_01 + jnp.outer(_pi_s_0, _pi_s_1) - jnp.outer(_pi_s, _pi_s)
+            _rho_10 = _rho_10 + jnp.outer(_pi_s_1, _pi_s_0) - jnp.outer(_pi_s, _pi_s)
 
         sym_rho_00 = (1 / 2) * (_rho_00 + _rho_11)
         sym_rho_01 = (1 / 2) * (_rho_01 + _rho_10)
@@ -6946,7 +7238,11 @@ class Covariances(MyPyTreeNode):
 
         sym_rho_00 = jnp.einsum("ij,i,j->ij", sym_rho_00, d_sigma_inv, d_sigma_inv)
         sym_rho_01 = jnp.einsum("ij,i,j->ij", sym_rho_01, d_sigma_inv, d_sigma_inv)
-        _pi_s = jnp.einsum("i,i->i", _pi_s, d_sigma)
+
+        if calc_pi:
+            _pi_s = jnp.einsum("i,i->i", _pi_s, d_sigma)
+        else:
+            _pi_s = None
 
         _sigma *= d_sigma
 
