@@ -450,25 +450,98 @@ def trunc_svd(m: CV, range=Ellipsis) -> tuple[CV, CvTrans]:
     return out.compute_cv(m)[0], out
 
 
+def _inv_sigma_weighing(
+    x: CV,
+    nl: NeighbourList,
+    shmap,
+    shmap_kwargs,
+    mu: list[jax.Array] | None,
+    sigma: list[jax.Array],
+    norm: list[jax.Array],
+    info: NeighbourListInfo | None = None,
+):
+    if nl is not None:
+        _info = nl.info
+    else:
+        assert info is not None
+        _info = info
+
+    assert x.atomic
+
+    _, argmask, cv_z = _info.nl_split_z(x)
+
+    x_new = jnp.zeros_like(x.cv)
+
+    for i, (idx_i, cv_i, sigma_i, n_i) in enumerate(zip(argmask, cv_z, sigma, norm)):
+        sigma_safe = jnp.where(sigma_i == 0, 1.0, sigma_i)
+        sigma_inv = jnp.where(sigma_i == 0, 0.0, 1 / sigma_safe)
+        # var_inv = sigma_i**2
+
+        # n = jnp.sum(simga_inv)
+
+        # jax.debug.print("{}",n)
+
+        y = cv_i.cv
+        if mu is not None:
+            mu_i = mu[i]
+            y -= mu_i
+
+        y *= sigma_inv**2 / jnp.mean(sigma_inv)
+
+        x_new = x_new.at[idx_i, :].set(y)
+
+    return x.replace(cv=x_new)
+
+
+def get_inv_sigma_weighing(
+    cv_0: list[CV],
+    nli: NeighbourListInfo,
+    remove_mean=True,
+):
+    _, _, cvs = jax.vmap(nli.nl_split_z)(CV.stack(*cv_0))
+
+    if remove_mean:
+        per_feature_mu = [jax.vmap(lambda x: jnp.mean(x.cv), in_axes=2)(cv_i) for cv_i in cvs]
+    else:
+        per_feature_mu = None
+
+    per_feature_sigma = [jax.vmap(lambda x: jnp.std(x.cv), in_axes=2)(cv_i) for cv_i in cvs]
+
+    n_sigma = [jnp.nansum(1 / a) for a in per_feature_sigma]
+
+    print(f"{n_sigma=}")
+
+    return CvTrans.from_cv_function(_inv_sigma_weighing, mu=per_feature_mu, sigma=per_feature_sigma, norm=n_sigma)
+
+
 def kernel_dist(p1: jax.Array, p2: jax.Array, xi=2.0):
     # print(f"new dist sum")
 
-    def log_safe(x: jax.Array):
-        x = jnp.where(x < 1e-10, 1e-10, x)
+    # def log_safe(x: jax.Array):
+    #     x = jnp.abs(x)
+    #     x = jnp.where(x < 1e-10, 1e-10, x)
 
-        return jnp.log(x)
+    #     return jnp.log(x)
 
-    k = jnp.sum(p1 * p2) / (jnp.sqrt(jnp.sum(p1 * p1) * jnp.sum(p2 * p2)))
+    n_1 = jnp.sum(p1 * p1)
+    n_1_safe = jnp.where(n_1 == 0, 1.0, n_1)
+    p1 = jnp.where(n_1 == 0, 0.0, p1 / jnp.sqrt(n_1_safe))
 
-    return 1 - k**xi
+    n_2 = jnp.sum(p2 * p2)
+    n_2_safe = jnp.where(n_2 == 0, 1.0, n_2)
+    p2 = jnp.where(n_2 == 0, 0.0, p2 / jnp.sqrt(n_2_safe))
+
+    return jnp.sum(jnp.abs(p1 - p2) ** xi)
+
+    # return -xi * log_safe(jnp.sum(p1*p2))
 
 
-# @partial( jit_decorator, static_argnames=["alpha", "normalize", "sum_divergence", "ridge", "sinkhorn_iterations"])
 def sinkhorn_divergence_2(
     x1: CV,
     x2: CV,
     nl1: NeighbourListInfo,
     nl2: NeighbourListInfo,
+    z_scale: jax.Array,
     alpha=1e-2,
     jacobian=False,
     lse=True,
@@ -476,6 +549,7 @@ def sinkhorn_divergence_2(
     mass_weight=True,
     dist_fun=kernel_dist,
     scale_std=True,
+    xi=2.0,
 ) -> CV:
     """caluculates the sinkhorn divergence between two CVs. If x2 is batched, the resulting divergences are stacked"""
 
@@ -519,25 +593,24 @@ def sinkhorn_divergence_2(
         p1,
         p2,
         epsilon,
+        scale,
     ):
         c = vmap_decorator(
             vmap_decorator(
-                dist_fun,
+                partial(dist_fun, xi=xi),
                 in_axes=(None, 0),
             ),
             in_axes=(0, None),
         )(p1, p2)
+
+        c /= scale
 
         if epsilon is None:
             # P = jnp.eye(c.shape[0], c.shape[1])
 
             # return jnp.sum(jnp.diag(c))
 
-            return p1
-
-        # scale_fac = jax.lax.stop_gradient(jnp.std(c))
-
-        # epsilon *= scale_fac
+            return jnp.sum(jnp.diag(c)), p1
 
         # jax.debug.print("c {} {}", c, c.shape)
 
@@ -621,16 +694,18 @@ def sinkhorn_divergence_2(
 
         p1_j = jnp.einsum("ij,i...->j...", P, p1_i)
 
-        return p1_j
+        return jnp.einsum("ij,ij", P, c), p1_j
 
-    def get_d_p12(p1_i: jax.Array, p2_i: jax.Array):
-        p_1j = _core_sinkhorn(p1_i, p2_i, epsilon=alpha)
-        # d_22 = _core_sinkhorn(p2_i, p2_i, epsilon=alpha)
+    # @partial(jax.value_and_grad, argnums=1)
+    def get_d_p12(p1_i: jax.Array, p2_i: jax.Array, scale: jax.Array):
+        d11, _ = _core_sinkhorn(p1_i, p1_i, epsilon=alpha, scale=scale)
+        d12, _ = _core_sinkhorn(p1_i, p2_i, epsilon=alpha, scale=scale)
+        d22, _ = _core_sinkhorn(p2_i, p2_i, epsilon=alpha, scale=scale)
 
-        return p_1j
+        return -(0.5 * d11 - d12 + 0.5 * d22) / p1_i.shape[0]
 
-    # if jacobian:
-    #     get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)  # type:ignore
+    if jacobian:
+        get_d_p12 = jax.value_and_grad(get_d_p12, argnums=1)  # type:ignore
 
     # def get_aligined_x1(x1: CV, nl1: NeighbourListInfo, nl2: NeighbourListInfo):
     src_mask, _, p1_cv = nl1.nl_split_z(x1)
@@ -639,41 +714,32 @@ def sinkhorn_divergence_2(
     p1 = [a.cv.reshape(a.shape[0], -1) for a in p1_cv]
     p2 = [a.cv.reshape(a.shape[0], -1) for a in p2_cv]
 
-    # out = []
-
-    # dims = []
-
-    out = jnp.zeros_like(x2.cv)
+    if jacobian:
+        out = jnp.zeros((x2.shape[0], x2.shape[1] + 1))
+    else:
+        out = jnp.zeros((x2.shape[0], 1))
 
     # solve problem per atom kind
-    for i, (p1_i, p2_i, out_i) in enumerate(zip(p1, p2, tgt_split)):
+    for i, (p1_i, p2_i, out_i, zi) in enumerate(zip(p1, p2, tgt_split, z_scale)):
         # ef = exp_factor[i] if exp_factor is not None else None
 
-        p1_j = get_d_p12(p1_i, p2_i)
+        if jacobian:
+            d_j, p1_j = get_d_p12(p1_i, p2_i, scale=zi)
 
-        out = out.at[out_i, :].set(p1_j)
-
-        # if jacobian:
-        #     d, dd_dpi2 = get_d_p12(p1_i, p2_i)
-
-        #     dd_dpi2 = dd_dpi2.reshape(-1)
-
-        #     v = jnp.hstack([d, dd_dpi2.reshape(-1)])
-
-        #     dims.append((1, dd_dpi2.shape[0]))
-
-        # else:
-        #     d = get_d_p12(p1_i, p2_i)
-
-        #     dims.append(1)
-
-        #     v = jnp.array([d])
-
-        # out.append(v)
+            out = out.at[out_i, 0].set(d_j)
+            out = out.at[out_i, 1:].set(p1_j)
+        else:
+            d_j = get_d_p12(p1_i, p2_i, scale=zi)
+            out = out.at[out_i, 0].set(d_j)
 
     print(f"{out.shape=}")
 
-    return x2.replace(cv=out, atomic=True, _stack_dims=x1._stack_dims)
+    return x2.replace(
+        cv=out,
+        _combine_dims=(1, x2.shape[1]) if jacobian else None,
+        atomic=True,
+        _stack_dims=x1._stack_dims,
+    )
 
 
 def _sinkhorn_divergence_trans_2(
@@ -681,9 +747,10 @@ def _sinkhorn_divergence_trans_2(
     nl: NeighbourList | None,
     shmap,
     shmap_kwargs,
-    nli: NeighbourList | NeighbourListInfo,
+    nli: NeighbourListInfo,
     pi: CV,
     alpha_rematch,
+    z_scale: jax.Array,
     exp_factor: jax.Array | None = None,
     # normalize,
     jacobian=False,
@@ -701,6 +768,7 @@ def _sinkhorn_divergence_trans_2(
             nl1=nl.info,
             nl2=nli,
             alpha=alpha_rematch,
+            z_scale=z_scale,
             # exp_factor=exp_factor,
             # normalize=normalize,
             jacobian=jacobian,
@@ -711,55 +779,88 @@ def _sinkhorn_divergence_trans_2(
 
     out = f(pi, cv)
 
-    # print(f"{out=}")
+    print(f"pre {out=}")
 
     if pi.batched:
-        unstacked = [a.unbatch() for a in out]
+        # unstacked = [a.unbatch() for a in out]
 
-        # print(f"{unstacked=}")
+        # # vmap over z
+        # @partial(jax.vmap, in_axes=(1, 1), out_axes=(1))
+        # def softmax(d_cv: CV, p: CV):
+        #     d = d_cv.cv
 
-        out = CV.combine(*unstacked)
-        # print(f"post {out=}")
+        #     w = jnp.exp(-d) / jnp.sum(jnp.exp(-d))
+
+        #     return p.replace(cv=jnp.hstack([w * d, w * p.cv]), _combine_dims=(1, p.shape[1]))
+
+        # d, p = out.split()
+
+        # out = softmax(d, p)
+
+        # print(f"{out=}")
+
+        out = CV.combine(*[a.unbatch() for a in out])
+
+        print(f"post {out=}")
 
     return out
 
 
 def get_sinkhorn_divergence_2(
-    nli: NeighbourList | NeighbourListInfo,
+    nli: NeighbourListInfo | NeighbourList,
     pi: CV,
-    alpha_rematch=0.1,
-    jacobian=False,
-    # exp_factor: float | None = 10.0,
+    alpha_rematch:float|None=0.1,
+    jacobian=True,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
     assert pi.atomic, "pi must be atomic"
 
+    assert pi.batched, "not fully implemented"
+
     if isinstance(nli, NeighbourList):
         print("converting nli to info")
         nli = nli.info
 
-    # if pi.batched:
-    #     if exp_factor is not None:
-    #         exp_factor = jnp.array(exp_factor)
-    #         if len(exp_factor.shape) == 0:
-    #             exp_factor = jnp.reshape(exp_factor, (1,))
+    # computes the average distance to other atoms
 
-    #         if exp_factor.shape[0] == 1:
-    #             exp_factor = jnp.full((pi.cv.shape[0],), exp_factor[0])
+    @partial(jax.vmap, in_axes=(0, None, None))
+    @partial(jax.vmap, in_axes=(None, 0, None))
+    def get_d(cv_0: CV, cv_1: CV, nli: NeighbourListInfo):
+        _, _, cv_0_split = nli.nl_split_z(cv_0)
+        _, _, cv_1_split = nli.nl_split_z(cv_1)
+
+        d = []
+
+        for x, y in zip(cv_0_split, cv_1_split):
+            c = vmap_decorator(
+                vmap_decorator(
+                    partial(kernel_dist, xi=2.0),
+                    in_axes=(None, 0),
+                ),
+                in_axes=(0, None),
+            )(x.cv, y.cv)
+
+            jnp.tril(c)
+
+            d.append(jnp.mean(jnp.tril(c)))
+
+        return jnp.array(d)
+
+    dz = jax.vmap(jnp.mean, in_axes=(2))(get_d(pi, pi, nli))
+
+    print(f"{dz=} {dz.shape=}")
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,
-        # jacfun=jax.jacrev,
         static_argnames=[
-            # "alpha_rematch",
             "jacobian",
         ],
         nli=nli,
         pi=pi,
         alpha_rematch=alpha_rematch,
         jacobian=jacobian,
-        # exp_factor=exp_factor,
+        z_scale=dz,
     )
 
 
@@ -988,7 +1089,7 @@ def get_feature_cov(
     epsilon=0.1,
     smallest_correlation=1e-12,
     max_functions=None,
-    T_scale=1,
+    # T_scale=1,
 ) -> CvTrans:
     from IMLCV.base.rounds import Covariances
 
@@ -1003,7 +1104,7 @@ def get_feature_cov(
         symmetric=False,
         calc_pi=False,
         only_diag=True,
-        T_scale=T_scale,
+        # T_scale=T_scale,
         trans_f=trans,
         trans_g=trans,
     )

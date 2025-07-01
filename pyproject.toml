@@ -51,9 +51,9 @@ dependencies = [
     "parsl>=2024.1.22",
     "umap-learn>=0.5.3",
     "work-queue",
-    "openmm",
+    "openmm", "ty>=0.0.1a11,<0.0.1a12",
 ]
-requires-python = ">=3.10"
+
 readme = "README.md"
 license = {text = "MIT"}
 classifiers = [

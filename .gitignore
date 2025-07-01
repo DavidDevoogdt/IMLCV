@@ -108,4 +108,5 @@ muller_brown_ref.png
 # pixi environments
 .pixi
 *.egg-info
-.pixi_cache/*
+.pixi_cache
+pixi_shell_hook.sh

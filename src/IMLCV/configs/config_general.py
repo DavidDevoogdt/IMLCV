@@ -119,6 +119,8 @@ def config(
         usage_tracking=False,
         run_dir=str(path_internal),
         initialize_logging=initialize_logging,
+        app_cache=False,
+        retries=0,
     )
 
     global PARSL_DICT

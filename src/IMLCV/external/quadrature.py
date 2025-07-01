@@ -102,13 +102,13 @@ def quad_bounds(
     x_leg, w_leg = jnp.array(x_leg), jnp.array(w_leg)
 
     x = jnp.where(
-        b == jnp.inf,
+        jnp.isinf(b),
         x_lag,
         x_leg,
     )
 
     w = jnp.where(
-        b == jnp.inf,
+        jnp.isinf(b),
         w_lag,
         w_leg,
     )
@@ -120,7 +120,7 @@ def quad_bounds(
         b: float | jax.Array,
     ) -> jax.Array:
         return jnp.where(
-            b == jnp.inf,
+            jnp.isinf(b),
             jnp.exp(x + jnp.log(w)) / scale,
             0.5 * (b - a) * w,
         )  # type:ignore
@@ -131,7 +131,7 @@ def quad_bounds(
         b: float | jax.Array,
     ) -> jax.Array:
         return jnp.where(
-            b == jnp.inf,
+            jnp.isinf(b),
             x / scale + a,
             0.5 * (b - a) * x + 0.5 * (b + a),
         )  # type:ignore

@@ -101,7 +101,7 @@ class Scheme:
         recalc_cv=False,
         only_finished=True,
         chunk_size=None,
-        T_scale=10,
+        # T_scale=10,
         use_common_bias=True,
     ):
         m = self.bias.collective_variable.metric
@@ -148,7 +148,7 @@ class Scheme:
             only_finished=only_finished,
             sp0=sp0,
             chunk_size=chunk_size,
-            T_scale=T_scale,
+            # T_scale=T_scale,
             use_common_bias=use_common_bias,
         )
 
@@ -180,7 +180,7 @@ class Scheme:
         n_max_fes=1e5,
         thermolib=False,
         macro_chunk=10000,
-        T_scale=10,
+        # T_scale=10,
         koopman=True,
         lag_n=30,
         koopman_wham=None,
@@ -258,7 +258,7 @@ class Scheme:
                 recalc_cv=recalc_cv,
                 only_finished=i > 1 and only_finished,
                 chunk_size=chunk_size,
-                T_scale=T_scale,
+                # T_scale=T_scale,
                 use_common_bias=not without_ground_bias,
             )
 
@@ -280,7 +280,7 @@ class Scheme:
                 thermolib=thermolib,
                 macro_chunk=macro_chunk,
                 vmax=max_bias,
-                T_scale=T_scale,
+                # T_scale=T_scale,
                 koopman=koopman,
                 lag_n=lag_n,
                 koopman_wham=koopman_wham,

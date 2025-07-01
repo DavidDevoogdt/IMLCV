@@ -60,27 +60,31 @@ class ConsErrTracker(MyPyTreeNode):
     """
 
     counter: jax.Array = field(default_factory=lambda: jnp.array(0))
-    ekin_m: jax.Array = field(default_factory=lambda: jnp.array(0.0))
+
+    ekin_m: jax.Array
+    econs_m: jax.Array
+
     ekin_s: jax.Array = field(default_factory=lambda: jnp.array(0.0))
-    econs_m: jax.Array = field(default_factory=lambda: jnp.array(0.0))
     econs_s: jax.Array = field(default_factory=lambda: jnp.array(0.0))
 
     def update(self, ekin, econs):
-        # if self.counter == 0:
-        #     self.ekin_m = ekin
-        #     self.econs_m = econs
-        # else:
-        ekin_tmp = ekin - self.ekin_m
-        self.ekin_m += ekin_tmp / (self.counter + 1)
-        self.ekin_s += ekin_tmp * (ekin - self.ekin_m)
+        d_ekin = ekin - self.ekin_m
+        self.ekin_m += d_ekin / (self.counter + 1)
+        self.ekin_s += d_ekin * (ekin - self.ekin_m)
+
         econs_tmp = econs - self.econs_m
         self.econs_m += econs_tmp / (self.counter + 1)
         self.econs_s += econs_tmp * (econs - self.econs_m)
 
         self.counter += 1
 
+        return self
+
     def get(self):
-        return jnp.where(self.counter > 1, jnp.sqrt(self.econs_s / self.ekin_s), 0.0)
+        # Returns the square root of the ratio of the
+        # variance in Ekin to the variance in Econs
+
+        return jnp.where(self.counter >= 1, jnp.sqrt(self.econs_s / self.ekin_s), 0.0)
 
 
 # @partial(dataclass, frozen=False)
@@ -212,7 +216,7 @@ class VerletIntegrator(MyPyTreeNode):
     e_bias: jax.Array
 
     # conserved quantity
-    _cons_err_tracker: ConsErrTracker = field(default_factory=ConsErrTracker)
+    _cons_err_tracker: ConsErrTracker | None = None
     econs: jax.Array
     cons_err: jax.Array
 
@@ -369,7 +373,7 @@ class VerletIntegrator(MyPyTreeNode):
             pos_old=pos_old,
             vtens=vtens,
             other_hooks=other_hooks,
-            _cons_err_tracker=ConsErrTracker(),
+            _cons_err_tracker=None,
         )
 
         # Allow for specialized initializations by the Verlet hooks.
@@ -447,7 +451,11 @@ class VerletIntegrator(MyPyTreeNode):
 
         self.econs += self.verlet_hook.econs_correction
 
-        self._cons_err_tracker.update(self.ekin, self.econs)
+        if self._cons_err_tracker is None:
+            self._cons_err_tracker = ConsErrTracker(counter=self.counter, ekin_m=self.ekin, econs_m=self.econs)
+        else:
+            self._cons_err_tracker = self._cons_err_tracker.update(self.ekin, self.econs)
+
         self.cons_err = self._cons_err_tracker.get()
         if self.ff.system.cell.nvec > 0:
             self.ptens = (jnp.dot(self.vel.T * self.masses, self.vel) - self.vtens) / self.ff.system.cell.volume

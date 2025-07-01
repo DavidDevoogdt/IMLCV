@@ -101,21 +101,21 @@ class VAE(nn.Module):
 
 
 class TranformerAutoEncoder(Transformer):
+    nunits: int = 250
+    nlayers: int = 3
+    lr: float = 1e-4
+    num_epochs: int = 100
+    batch_size: int = 32
+
     def _fit(
         self,
         cv: list[CV],
         cv_t: list[CV],
         w: list[jax.Array],
         dlo: DataLoaderOutput,
-        nunits=250,
-        nlayers=3,
-        lr=1e-4,
-        num_epochs=100,
-        batch_size=32,
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,
-        **kwargs,
     ):
         # import wandb
 
@@ -146,8 +146,8 @@ class TranformerAutoEncoder(Transformer):
 
         vae_args = {
             "latents": self.outdim,
-            "layers": nlayers,
-            "nunits": nunits,
+            "layers": self.nlayers,
+            "nunits": self.nunits,
             "dim": dim,
         }
 
@@ -201,20 +201,20 @@ class TranformerAutoEncoder(Transformer):
                 metrics = compute_metrics(recon_x, x, mean, logvar)
                 return metrics, comparison
 
-            return nn.apply(eval_model, VAE(**vae_args))({"params": params})
+            return nn.apply(eval_model, VAE(**vae_args))({"params": params})  # type:ignore
 
         # Test encoder implementation
         # Random key for initialization
         key, rng = jax.random.split(rng, 2)
 
-        init_data = jax.random.normal(key, (batch_size, dim), jnp.float32)
+        init_data = jax.random.normal(key, (self.batch_size, dim), jnp.float32)
 
         key, rng = jax.random.split(rng, 2)
 
         state = train_state.TrainState.create(
-            apply_fn=VAE(**vae_args).apply,
-            params=VAE(**vae_args).init(key, init_data, rng)["params"],
-            tx=optax.adam(lr),
+            apply_fn=VAE(**vae_args).apply,  # type:ignore
+            params=VAE(**vae_args).init(key, init_data, rng)["params"],  # type:ignore
+            tx=optax.adam(self.lr),
         )
 
         rng, key, eval_rng = random.split(rng, 3)
@@ -227,14 +227,14 @@ class TranformerAutoEncoder(Transformer):
         x_train = x[0:-split, :]
         x_test = x[-split:, :]
 
-        steps_per_epoch = x_train.shape[0] // batch_size
+        steps_per_epoch = x_train.shape[0] // self.batch_size
 
-        for epoch in range(num_epochs):
+        for epoch in range(self.num_epochs):
             rng, key = random.split(rng)
             indices = jax.random.choice(
                 key=key,
                 a=int(x.shape[0]),
-                shape=(steps_per_epoch, batch_size),
+                shape=(steps_per_epoch, self.batch_size),
                 replace=False,
             )
 
@@ -265,11 +265,11 @@ class TranformerAutoEncoder(Transformer):
 
         def forward(x: CV, nl, y: list[CV] | None = None, _=None, smap=False):
             assert y is None
-            encoded: Array = VAE(**vae_args).apply(
+            encoded: Array = VAE(**vae_args).apply(  # type:ignore
                 {"params": state.params},
                 x.cv,
                 method=VAE.encode,
-            )  # type:ignore
+            )
             return x.replace(cv=encoded)
 
         f_enc = CvTrans.from_cv_function(f=forward)
@@ -333,31 +333,14 @@ def _scale_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha: j
 
 
 class TransoformerLDA(Transformer):
-    def __init__(
-        self,
-        outdim: int,
-        kernel=False,
-        optimizer=None,
-        solver="eigen",
-        method="pymanopt",
-        harmonic=True,
-        min_gradient_norm: float = 1e-3,
-        min_step_size: float = 1e-3,
-        max_iterations=25,
-        **kwargs,
-    ):
-        super().__init__(
-            outdim=outdim,
-            kernel=kernel,
-            optimizer=optimizer,
-            solver=solver,
-            method=method,
-            harmonic=harmonic,
-            min_gradient_norm=min_gradient_norm,
-            min_step_size=min_step_size,
-            max_iterations=max_iterations,
-            **kwargs,
-        )
+    kernel = False
+    optimizer = None
+    solver: str = "eigen"
+    method: str = "pymanopt"
+    harmonic = True
+    min_gradient_norm: float = 1e-3
+    min_step_size: float = 1e-3
+    max_iterations: int = 25
 
     def _fit(
         self,
@@ -365,22 +348,13 @@ class TransoformerLDA(Transformer):
         cv_t_list: list[CV],
         w: list[jax.Array],
         dlo: DataLoaderOutput,
-        kernel=False,
-        optimizer=None,
         chunk_size=None,
-        solver="eigen",
-        method="pymanopt",
-        harmonic=True,
-        min_gradient_norm: float = 1e-3,
-        min_step_size: float = 1e-3,
-        max_iterations=25,
         verbose=True,
         macro_chunk=1000,
-        **kwargs,
     ):
         # nl_list = dlo.nl
 
-        if kernel:
+        if self.kernel:
             raise NotImplementedError("kernel not implemented for lda")
 
         cv = CV.stack(*cv_list)
@@ -389,7 +363,7 @@ class TransoformerLDA(Transformer):
         cv_t = CV.stack(*cv_t_list)
         cv_t, _ = un_atomize.compute_cv(cv_t)
 
-        if method == "sklearn":
+        if self.method == "sklearn":
             from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 
             labels = []
@@ -398,12 +372,12 @@ class TransoformerLDA(Transformer):
 
             labels = jnp.hstack(labels)
 
-            alpha = LDA(n_components=self.outdim, solver=solver, shrinkage="auto").fit(  # type:ignore
+            alpha = LDA(n_components=self.outdim, solver=self.solver, shrinkage="auto").fit(  # type:ignore
                 cv.cv.__array__(),
                 labels,
             )
 
-            lda_cv = CvTrans.from_cv_function(_LDA_trans, alpha=alpha, outdim=self.outdim, solver=solver)
+            lda_cv = CvTrans.from_cv_function(_LDA_trans, alpha=alpha, outdim=self.outdim, solver=self.solver)
             cv, _ = lda_cv.compute_cv(cv)
 
             cvs = CV.unstack(cv)
@@ -420,15 +394,15 @@ class TransoformerLDA(Transformer):
 
             full_trans = un_atomize * lda_cv * lda_rescale
 
-        elif method == "pymanopt":
+        elif self.method == "pymanopt":
             import pymanopt  # type:ignore
 
             assert isinstance(cv_list, list)
-            if optimizer is None:
+            if self.optimizer is None:
                 optimizer = pymanopt.optimizers.TrustRegions(
-                    max_iterations=max_iterations,
-                    min_gradient_norm=min_gradient_norm,
-                    min_step_size=min_step_size,
+                    max_iterations=self.max_iterations,
+                    min_gradient_norm=self.min_gradient_norm,
+                    min_step_size=self.min_step_size,
                 )
 
             cv, _f = trunc_svd(cv)
@@ -457,7 +431,7 @@ class TransoformerLDA(Transformer):
                 a = jnp.trace(x.T @ cov_w @ x)
                 b = jnp.trace(x.T @ cov_b @ x)
 
-                if harmonic:
+                if self.harmonic:
                     out = a / b
                 else:
                     out = -(b / a)
@@ -484,6 +458,17 @@ class TransoformerLDA(Transformer):
 class TransformerMAF(Transformer):
     # Maximum Autocorrelation Factors
 
+    eps: float = 1e-5
+    eps_pre: float = 1e-5
+    max_features: int = 500
+    max_features_pre: int = 500
+
+    sym: bool = True
+    use_w: bool = True
+
+    trans: CvTrans | None = None
+    T_scale: float = 1.0
+
     def _fit(
         self,
         x: list[CV] | list[SystemParams],
@@ -491,63 +476,21 @@ class TransformerMAF(Transformer):
         w: list[jax.Array],
         w_t: list[jax.Array],
         dlo: DataLoaderOutput,
-        max_features=500,
-        max_features_pre=5000,
         macro_chunk=1000,
         chunk_size=None,
-        trans=None,
-        eps=1e-6,
-        eps_pre=1e-6,
-        outdim=None,
-        correlation=True,
-        use_w=True,
-        **fit_kwargs,
+        verbose=True,
     ):
         print("getting koopman")
 
-        if outdim is None:
-            outdim = self.outdim
-
-        print(f"{outdim=}")
-
-        # print(f"looking for constant mode with {num_regions=}")
-
-        print(f"{dlo.nl=}, {dlo.nl_t=}")
-
-        # if dlo.labels is not None:
-        #     n_skip = int(jnp.sum(jnp.unique(jnp.hstack(dlo.labels))))
-        # else:
-        #     n_skip = 1
-
-        # km_assym = dlo.koopman_model(
-        #     cv_0=x,
-        #     cv_t=x_t,
-        #     nl=dlo.nl,
-        #     nl_t=dlo.nl_t,
-        #     max_features=max_features,
-        #     max_features_pre=max_features_pre,
-        #     w=w if use_w else [jnp.ones_like(x) for x in w],
-        #     w_t=w_t if use_w else [jnp.ones_like(x) for x in w],
-        #     calc_pi=False,
-        #     add_1=True,
-        #     trans=trans,
-        #     chunk_size=chunk_size,
-        #     macro_chunk=macro_chunk,
-        #     verbose=True,
-        #     out_dim=-1,
-        #     eps=eps,
-        #     eps_pre=eps_pre,
-        #     symmetric=True,
-        #     correlation=correlation,
-        # )
+        outdim = self.outdim
 
         km = dlo.koopman_model(
             cv_0=x,
             cv_t=x_t,
             nl=dlo.nl,
             nl_t=dlo.nl_t,
-            w=w if use_w else [jnp.ones_like(x) for x in w],
-            w_t=w_t if use_w else [jnp.ones_like(x) for x in w],
+            w=w if self.use_w else [jnp.ones_like(x) for x in w],
+            w_t=w_t if self.use_w else [jnp.ones_like(x) for x in w],
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             calc_pi=False,
@@ -555,13 +498,19 @@ class TransformerMAF(Transformer):
             eps_pre=1e-5,
             eps=1e-5,
             symmetric=False,
-            trans=trans,
+            trans=self.trans,
+            verbose=True,
+            auto_cov_threshold=0.1,
+            max_features=self.max_features,
+            max_features_pre=self.max_features_pre,
+            T_scale=self.T_scale,
         )
 
-        km = km.weighted_model(
-            symmetric=True,
-            add_1=True,
-        )
+        if self.sym:
+            km = km.weighted_model(
+                symmetric=True,
+                add_1=True,
+            )
 
         ##########
 
@@ -573,10 +522,10 @@ class TransformerMAF(Transformer):
             / nanosecond
         )
 
-        print(f"timescales {ts} ns")
+        print(f"timescales: {ts[: jnp.min(jnp.array([10, ts.shape[0]]))]} ns")
 
         for i in range(self.outdim):
-            if ts[i] / ts[0] < 1 / 10:
+            if ts[i] / ts[0] < 1 / 100:
                 (print(f"cv {i} is too small compared to ref (fraction= {ts[i] / ts[0]}), cutting off "),)
                 outdim = i
                 break

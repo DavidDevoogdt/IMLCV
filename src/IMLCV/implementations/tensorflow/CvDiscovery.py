@@ -74,27 +74,36 @@ class hkFunBase(CvFunBase):
 
 
 class TranformerUMAP(Transformer):
-    def __init__(
-        self,
-        outdim=2,
-        decoder=False,
-        nunits=256,
-        nlayers=3,
-        parametric=True,
-        densmap=False,
-        n_neighbors=20,
-        **kwargs,
-    ):
-        super().__init__(
-            outdim=outdim,
-            decoder=decoder,
-            nunits=nunits,
-            nlayers=nlayers,
-            parametric=parametric,
-            n_neighbors=n_neighbors,
-            densmap=densmap,
-            **kwargs,
-        )
+
+    decoder:bool=False
+    nunits:int=256
+    nlayers:int=3
+    parametric:bool=True
+    densmap:bool=False
+    n_neighbors:int =20
+
+
+    # def __init__(
+    #     self,
+    #     outdim=2,
+    #     decoder=False,
+    #     nunits=256,
+    #     nlayers=3,
+    #     parametric=True,
+    #     densmap=False,
+    #     n_neighbors=20,
+    #     **kwargs,
+    # ):
+    #     super().__init__(
+    #         outdim=outdim,
+    #         decoder=decoder,
+    #         nunits=nunits,
+    #         nlayers=nlayers,
+    #         parametric=parametric,
+    #         n_neighbors=n_neighbors,
+    #         densmap=densmap,
+    #         **kwargs,
+    #     )
 
     def _fit(
         self,

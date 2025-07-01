@@ -6,10 +6,11 @@ from parsl import HighThroughputExecutor, WorkQueueExecutor
 
 # from parsl.channels import LocalChannel
 from parsl.executors.base import ParslExecutor
-from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig
+from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig, TaskVineManagerConfig
 from parsl.executors.threads import ThreadPoolExecutor
-from parsl.launchers import SingleNodeLauncher
+from parsl.launchers import SingleNodeLauncher, SimpleLauncher
 from parsl.providers import LocalProvider, SlurmProvider
+# from parsl.
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 
@@ -42,28 +43,33 @@ def get_slurm_provider(
     cpu_part="cpu_rome",
     py_env=None,
     provider="slurm",
-    launcher=SingleNodeLauncher(),
+    launcher=SimpleLauncher(),
     load_cp2k=False,
 ):
     if py_env is None:
         if env == "hortense":
             print("setting python env for hortense")
-            py_env = """
+            py_env = f"""
 echo "init pixi"
-cd /dodrio/scratch/projects/2024_026/IMLCV
+cd {ROOT_DIR}
 pwd
-eval "$(pixi shell-hook)"
+
+which pixi
+
+
+if ! test -f pixi_shell_hook.sh; then
+    echo "first time init pixi shell"
+    pixi shell-hook > "pixi_shell_hook.sh"
+fi
+
+source pixi_shell_hook.sh
+
+
 echo "post init pixi"
 which python
             """
-        elif env == "stevin":
-            py_env = """
-export MAMBA_EXE='/kyukon/scratch/gent/vo/000/gvo00003/vsc43693/IMLCV/IMLCV/bin/micromamba';
-export MAMBA_ROOT_PREFIX='/kyukon/scratch/gent/vo/000/gvo00003/vsc43693/IMLCV/IMLCV/micromamba';
-eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312
-which python
-"""
+        else:
+            raise ValueError
 
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
@@ -76,15 +82,18 @@ which python
         if load_cp2k:
             worker_init += "module load CP2K/2023.1-foss-2022b\n"
             worker_init += "module unload SciPy-bundle Python\n"
-        else:
-            worker_init += "module load OpenMPI\n"
+        # else:
+        # worker_init += "module load OpenMPI\n"
 
-    elif env == "stevin":
-        if load_cp2k:
-            worker_init += "module load CP2K/2023.1-foss-2022b\n"
-            worker_init += "module unload SciPy-bundle Python\n"
-        else:
-            worker_init += "module load OpenMPI\n"
+    else:
+        raise ValueError()
+
+    # elif env == "stevin":
+    #     if load_cp2k:
+    #         worker_init += "module load CP2K/2023.1-foss-2022b\n"
+    #         worker_init += "module unload SciPy-bundle Python\n"
+    #     else:
+    #         worker_init += "module load OpenMPI\n"
 
     if not parsl_cores:
         if threads_per_core is None:
@@ -92,7 +101,7 @@ which python
 
         total_cores = parsl_tasks_per_block * threads_per_core
 
-        worker_init += f"export OMP_NUM_THREADS={threads_per_core}\n"
+        # worker_init += f"export OMP_NUM_THREADS={threads_per_core}\n"
 
         # give all cores to xla
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
@@ -103,7 +112,7 @@ which python
 
         worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
 
-    worker_init += f"mpirun -report-bindings -np {total_cores} echo 'a' " if load_cp2k else ""
+    # worker_init += f"mpirun -report-bindings -np {total_cores} echo 'a' " if load_cp2k else ""
 
     common_kwargs = {
         # "channel": channel,
@@ -113,7 +122,7 @@ which python
         "parallelism": parallelism,
         "nodes_per_block": 1,
         "worker_init": worker_init,
-        "launcher": SingleNodeLauncher(),
+        "launcher": launcher,
     }
 
     if provider == "slurm":
@@ -135,7 +144,10 @@ which python
             "cmd_timeout": 60,
         }
 
-        sheduler_options = f"\n#SBATCH --ntasks-per-node={threads_per_core}"
+        sheduler_options = f"""
+#SBATCH --cpus-per-task={threads_per_core}
+#SBATCH -v
+#SBATCH --export=ALL"""
 
         if gpu:
             sheduler_options += (
@@ -153,8 +165,8 @@ which python
         raise ValueError
 
     # let slurm use the cores as threads
-    # pre_command = f"srun  -N 1 -n 1 -c {threads_per_core} --cpu-bind=no --export=ALL"
-    pre_command = f"export JAX_NUM_CPU_DEVICES={threads_per_core}; "
+    # pre_command = f"srun  --cpus-per-task {threads_per_core} "
+    pre_command = ""
 
     ref_comm: dict[str, str] = {
         "cp2k": "export OMP_NUM_THREADS=1; mpirun -report-bindings  -mca pml ucx -mca btl ^uct,ofi -mca mtl ^ofi cp2k_shell.psmp ",
@@ -193,7 +205,7 @@ which python
             autolabel=False,
             autocategory=False,
             port=0,
-            max_retries=1,  # do not retry task
+            max_retries=1,  # do not retry task max once
             worker_options=" ".join(worker_options),
             coprocess=False,
             worker_executable="work_queue_worker",
@@ -205,10 +217,19 @@ which python
             label=label,
             factory_config=TaskVineFactoryConfig(
                 cores=parsl_tasks_per_block,
+                batch_type="slurm",
                 gpus=0 if not gpu else 1,
                 scratch_dir=str(Path(path_internal) / label),
+                # batch_options={}
+            ),
+            manager_config=TaskVineManagerConfig(
+                # shared_fs=True,
+                # port=8887,
+                # init_command=worker_init,
             ),
             provider=_provider,
+            # function_exec_mode="serverless",
+            # worker_launch_method="provider",
         )
 
     elif executor == "htex":
@@ -216,8 +237,8 @@ which python
             label=label,
             working_dir=str(Path(path_internal) / label),
             cores_per_worker=1,
-            provider=provider,  # type:ignore
-            drain_period=int(wall_time_s),
+            provider=_provider,  # type:ignore
+            # drain_period=600,  # drain after 5 mins
         )
     else:
         raise ValueError(f"unknown executor {executor=}")

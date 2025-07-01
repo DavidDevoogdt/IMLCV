@@ -869,7 +869,7 @@ class Rounds:
         check_dtau=True,
         verbose: bool = False,
         weight: bool = True,
-        T_scale: float | int = 1,
+        # T_scale: float | int = 1,
         macro_chunk: int | None = 2000,
         macro_chunk_nl: int | None = 5000,
         only_update_nl: bool = False,
@@ -887,8 +887,8 @@ class Rounds:
         if cv_round is None:
             cv_round = self.cv
 
-        if uniform and T_scale != 1:
-            print(f"WARNING: uniform and {T_scale=} are not compatible")
+        # if uniform and T_scale != 1:
+        #     print(f"WARNING: uniform and {T_scale=} are not compatible")
 
         # if uniform and divide_by_histogram:
         #     print("WARNING: uniform and divide_by_histogram are not compatible")
@@ -2299,7 +2299,7 @@ class Rounds:
         only_finished=True,
         profile=False,
         chunk_size=None,
-        T_scale=10,
+        # T_scale=10,
         macro_chunk=2000,
         lag_n=20,
         use_common_bias=True,
@@ -2335,7 +2335,7 @@ class Rounds:
             only_finished=only_finished,
             min_traj_length=min_traj_length,
             recalc_cv=recalc_cv,
-            T_scale=T_scale,
+            # T_scale=T_scale,
             chunk_size=chunk_size,
             md_trajs=md_trajs,
             cv_round=cv_round,
@@ -2448,7 +2448,7 @@ class Rounds:
                 except Exception as e:
                     print(f"got exception  while collecting md {i}, round {r}, cv {cv_round}, marking as invalid. {e=}")
 
-                    self.invalidate_data(c=cv_round, r=r, i=i)
+                    # self.invalidate_data(c=cv_round, r=r, i=i)
 
                     exception = exception.at[j].set(True)
                     # raise e
@@ -2582,7 +2582,7 @@ class Rounds:
         only_finished: bool = True,
         min_traj_length: int | None = None,
         recalc_cv: bool = False,
-        T_scale: float = 10,
+        # T_scale: float = 10,
         chunk_size: int | None = None,
         md_trajs: list[int] | None = None,
         cv_round: int | None = None,
@@ -2621,7 +2621,7 @@ class Rounds:
                 recalc_cv=recalc_cv,
                 only_finished=only_finished,
                 weight=False,
-                T_scale=T_scale,
+                # T_scale=T_scale,
                 time_series=False,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
@@ -2902,20 +2902,19 @@ class Rounds:
                 output_FES_bias=True,
             )  # type: ignore
 
-            assert fb is not None
-            assert fb[0] is not None
-
-            Transformer.plot_app(
-                name=str(plot_folder / "cvdiscovery_pre_bias.png"),
-                collective_variables=[dlo.collective_variable],
-                cv_data=None,
-                biases=[fb[0]],
-                margin=0.1,
-                T=dlo.sti.T,
-                plot_FES=True,
-                cv_titles=cv_titles,
-                vmax=vmax,
-            )
+            if fb is not None:
+                if fb[0] is not None:
+                    Transformer.plot_app(
+                        name=str(plot_folder / "cvdiscovery_pre_bias.png"),
+                        collective_variables=[dlo.collective_variable],
+                        cv_data=None,
+                        biases=[fb[0]],
+                        margin=0.1,
+                        T=dlo.sti.T,
+                        plot_FES=True,
+                        cv_titles=cv_titles,
+                        vmax=vmax,
+                    )
 
         cvs_new, new_collective_variable, new_bias = transformer.fit(
             dlo=dlo,
@@ -3398,7 +3397,7 @@ class DataLoaderOutput(MyPyTreeNode):
         w_t: list[Array] | None = None,
         samples_per_bin: int = 50,
         max_bins: int | float = 1e5,
-        out_dim: int = 10,
+        out_dim: int = -1,
         chunk_size: int | None = None,
         indicator_CV: bool = True,
         koopman_eps: float = 1e-5,
@@ -3566,7 +3565,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
                 mask = jnp.argwhere(jnp.logical_and(hist > 0, hist_t > 0)).reshape(-1)
 
-                print(f"{label=} {mask=} {hist.shape=}")
+                # print(f"{label=} {mask=} {hist.shape=}")
 
                 @partial(CvTrans.from_cv_function, mask=mask)
                 def get_indicator(cv: CV, nl, shmap, shmap_kwargs, mask):
@@ -4245,16 +4244,65 @@ class DataLoaderOutput(MyPyTreeNode):
         )
 
         # print(f"{jnp.exp(hist)=}")
-        hist_mask = log_hist >= jnp.log(min_samples)
+        hist_mask = log_hist >= 0  # at least 1 sample
 
-        n_hist_mask = jnp.sum(hist_mask)
-        print(f"{n_hist_mask=} {jnp.sum( jnp.logical_and(hist_mask< min_samples, log_hist != -jnp.inf))=}")
+        print(f"{jnp.sum(hist_mask)=}")
+        # find subset of k with incoming and outgoing particles
 
+        # @partial(
+        #     CvTrans.from_cv_function,
+        #     mask=jnp.argwhere(hist_mask).reshape(-1),
+        # )
+        # def get_indicator(cv: CV, nl, shmap, shmap_kwargs, mask):
+        #     out = jnp.zeros((hist_mask.shape[0],))  # type: ignore
+        #     out = out.at[cv.cv].set(1)
+        #     out = jnp.take(out, mask)
+
+        #     print(f"{out=}")
+
+        #     return cv.replace(cv=out)
+
+        # cov_kl: jax.Array = Covariances.create(
+        #     cv_0=[a.replace(cv=a.cv[:-1, :]) for a in grid_nums],
+        #     cv_1=[a.replace(cv=a.cv[1:, :]) for a in grid_nums],
+        #     trans_f=get_indicator,
+        #     trans_g=get_indicator,
+        # ).C01  # type:ignore
+
+        # mask_k = jnp.full((cov_kl.shape[0],), True)
+
+        # while True:
+        #     stationary_k = jnp.diag(cov_kl)
+
+        #     incoming_k = jnp.sum(cov_kl - jnp.diag(stationary_k), axis=0)
+        #     outgoing_k = jnp.sum(cov_kl - jnp.diag(stationary_k), axis=1)
+
+        #     print(f"{stationary_k =} ")
+        #     print(f"{incoming_k =} ")
+        #     print(f"{outgoing_k =}")
+
+        #     m = jnp.logical_and(
+        #         jnp.logical_and(incoming_k > 0, outgoing_k > 0),
+        #         stationary_k > 0,
+        #     )
+        #     if jnp.all(m):
+        #         break
+
+        #     print(f"found {jnp.sum(~m)} bad grid bins")
+
+        #     mask_k = mask_k.at[mask_k].set(m)
+        #     cov_kl = cov_kl[m, :][:, m]
+
+        # hist_mask = hist_mask.at[hist_mask].set(mask_k)
+
+        # print(f"{jnp.sum(mask_k)=}")
         # lookup to convert grid num to new grid num wihtout empty bins
         idx_inv = jnp.full(hist_mask.shape[0], -1)
         idx_inv = idx_inv.at[hist_mask].set(jnp.arange(jnp.sum(hist_mask)))
-
         grid_nums_mask = [g.replace(cv=idx_inv[g.cv]) for g in grid_nums]
+
+        n_hist_mask = jnp.sum(hist_mask)
+        print(f"{n_hist_mask=} ")
 
         x = jnp.full((0, n_hist_mask), False)
 
@@ -4292,18 +4340,20 @@ class DataLoaderOutput(MyPyTreeNode):
         if num_labels > 1:
             print(f"found {num_labels} different regions {labels=}")
 
-        print(f"{labels=} {labels.shape=}")
+        print(f"{labels.shape=}")
 
         x_labels = jnp.hstack([x, jnp.full((x.shape[0], 1), False)])
 
         len_i = len(u_unstacked)
         len_k = jnp.sum(hist_mask)
-        m_log_b_ik = jnp.full((len_i, len_k), -jnp.inf)
-        H_k = jnp.zeros((len_k,))
+        log_b_ik = jnp.full((len_i, len_k), jnp.inf)
+
         H_ik = jnp.zeros((len_i, len_k))
-        N_i = []
 
         label_i = []
+
+        _mask_k = jnp.full((len_k,), True)
+        _mask_i = jnp.full((len_i,), True)
 
         for i in range(len_i):
             if verbose:
@@ -4329,33 +4379,35 @@ class DataLoaderOutput(MyPyTreeNode):
             )  # type:ignore
 
             # mean of e^(-beta U)
-            log_b_k: jax.Array = jnp.where(
-                log_hist_i_weights == -jnp.inf,
+            m_log_b_k: jax.Array = jnp.where(
+                jnp.isneginf(log_hist_i_weights),
                 -jnp.inf,
                 log_hist_i_num - log_hist_i_weights,
             )  # type:ignore
 
-            H_k += jnp.exp(log_hist_i_num)
+            # H_k += jnp.exp(log_hist_i_num)
             H_ik = H_ik.at[i, :].set(jnp.exp(log_hist_i_num))
-            N_i.append(jnp.sum(jnp.exp(log_hist_i_num)))
+            # N_i.append(jnp.sum(jnp.exp(log_hist_i_num)))
 
-            m_log_b_ik = m_log_b_ik.at[i, :].set(log_b_k)
+            log_b_ik = log_b_ik.at[i, :].set(-m_log_b_k)
 
             # assign label to trajectory
             labels_i = jnp.sum(x_labels[:, grid_nums_mask[i].cv.reshape(-1)], axis=1)
             label_i.append(jnp.argmax(labels_i))
 
-        _m_log_b_ik = m_log_b_ik
-        _H_k = H_k
-        _log_H_k = jnp.log(_H_k)
-        _N_i = jnp.array(N_i)
-        _a_k = jnp.ones((_m_log_b_ik.shape[1],))
-        _log_a_k = jnp.log(_a_k)
-        _log_f_i = jnp.log(jnp.ones((_m_log_b_ik.shape[0],)))
+        # check if every bin isd visited by at least
+
+        _log_b_ik = log_b_ik
+        _H_ik = H_ik
+
+        _F_k = jnp.full((_log_b_ik.shape[1],), 0.0)
+        _F_i = jnp.full((_log_b_ik.shape[0],), 0.0)
+        _w_ik = jnp.full((_log_b_ik.shape[0], _log_b_ik.shape[1]), 0.0)
+        _rho_ik = jnp.full((_log_b_ik.shape[0], _log_b_ik.shape[1]), 0.0)
 
         label_i = jnp.array(label_i).reshape((-1))
 
-        print(f"{jnp.max(m_log_b_ik)=}")
+        print(f"{jnp.max(log_b_ik)=}")
 
         for nl in range(0, num_labels):
             mk = labels == nl
@@ -4367,34 +4419,22 @@ class DataLoaderOutput(MyPyTreeNode):
 
             print(f"running wham with {nk} bins and {ni} trajectories")
 
-            log_H_k = _log_H_k[mk]
-            m_log_b_ik = _m_log_b_ik[mi, :][:, mk]
+            H_ik = _H_ik[mi, :][:, mk]
 
-            a_k = jnp.ones((m_log_b_ik.shape[1],))
+            # log_H_k = _log_H_k[mk]
+            log_b_ik = _log_b_ik[mi, :][:, mk]
+
+            a_k = jnp.ones((log_b_ik.shape[1],))
             a_k /= jnp.sum(a_k)
 
-            N_i = jnp.array(_N_i)[mi]
-
-            log_N_tot = jnp.log(jnp.sum(N_i))
-
-            log_a_k = jnp.log(a_k)
-            log_N_i = jnp.log(N_i)
-
-            assert int(jnp.sum(jnp.exp(log_H_k)) - jnp.sum(jnp.exp(log_N_i))) == 0, (
-                f"error {jnp.sum(jnp.exp(log_H_k))=} {jnp.sum(jnp.exp(log_N_i))=}, "
-            )
-
-            # if log_sum_exp:
-            # m_log_b_ik = jnp.log(b_ik)
-
-            print(f"{jnp.min(m_log_b_ik)=} {jnp.max(m_log_b_ik)=}")
+            print(f"{jnp.max(log_b_ik)=} {jnp.min(log_b_ik)=}")
 
             def log_sum_exp_safe(*x: Array, min_val=None):
                 _x: Array = jnp.sum(jnp.stack(x, axis=0), axis=0)  # type:ignore
 
                 x_max = jnp.max(_x)
 
-                x_max = jnp.where(x_max == -jnp.inf, 0.0, x_max)
+                x_max = jnp.where(jnp.isfinite(x_max), x_max, 0.0)
 
                 out = jnp.log(jnp.sum(jnp.exp(_x - x_max))) + x_max
 
@@ -4404,145 +4444,218 @@ class DataLoaderOutput(MyPyTreeNode):
 
                 return out
 
-            def get_log_f_i(log_a_k: jax.Array, log_x: tuple[Array, Array, Array]):
-                m_log_b_ik, log_N_i, log_H_k = log_x
-                log_f_i = -vmap_decorator(Partial_decorator(log_sum_exp_safe), in_axes=(None, 0))(log_a_k, m_log_b_ik)
+            def get_N_H(
+                mask_i: jax.Array, mask_k: jax.Array, H_ik: jax.Array
+            ) -> tuple[jax.Array, jax.Array, jax.Array]:
+                print(f"{mask_i.shape=}  {H_ik.shape=} ")
 
-                # log_f_i = jnp.where(log_f_i > 50, 50, log_f_i)
+                @partial(jax.vmap, in_axes=(0, None))
+                @partial(jax.vmap, in_axes=(None, 0))
+                def _mask_ik(mask_i, mask_k):
+                    return jnp.logical_and(mask_i, mask_k)
 
-                return log_f_i
+                m_ik = _mask_ik(mask_i, mask_k)
 
-            def get_log_a_k(log_f_i: Array, log_x: tuple[Array, Array, Array]):
-                m_log_b_ik, log_N_i, log_H_k = log_x
-                log_a_k = log_H_k - vmap_decorator(log_sum_exp_safe, in_axes=(None, None, 1))(
-                    log_N_i, log_f_i, m_log_b_ik
+                H_ik = jnp.where(m_ik, H_ik, 0)  # type:ignore
+
+                H_k = jnp.sum(H_ik, axis=(0))
+                N_i = jnp.sum(H_ik, axis=(1))
+
+                return N_i, H_k, H_ik
+
+            def get_F_i(F_k: jax.Array, log_x: tuple[Array, Array]):
+                log_b_ik, _ = log_x
+                F_i = -vmap_decorator(Partial_decorator(log_sum_exp_safe), in_axes=(None, 0))(-F_k, -log_b_ik)
+
+                mask_i = jnp.isfinite(F_i)
+
+                return F_i, mask_i
+
+            def get_F_k(
+                F_i: Array,
+                mask_i: Array,
+                mask_k: Array,
+                log_x: tuple[Array, Array],
+            ):
+                log_b_ik, H_ik = log_x
+
+                # mask_i = jnp.isfinite(F_i)
+
+                N_i, H_k, H_ik = get_N_H(mask_i, mask_k, H_ik)
+
+                def _s(*x: Array):
+                    return jnp.sum(jnp.array(x))
+
+                # odds of using sample k
+                log_rho_ik = vmap_decorator(
+                    vmap_decorator(_s, in_axes=(0, 0, 0, None, 0)),  # k
+                    in_axes=(0, None, 0, 0, None),  # i
+                )(
+                    jnp.log(H_ik),
+                    -jnp.log(H_k),
+                    -log_b_ik,
+                    +F_i,
+                    -vmap_decorator(log_sum_exp_safe, in_axes=(None, None, 1))(
+                        jnp.log(N_i),
+                        F_i,
+                        -log_b_ik,
+                    ),  # denom_k
                 )
-                log_a_k = jnp.where(log_a_k == jnp.inf, -jnp.inf, log_a_k)
 
-                log_a_k_norm = log_sum_exp_safe(log_a_k)
+                log_rho_ik = jnp.where(jnp.isfinite(log_rho_ik), log_rho_ik, -jnp.inf)
 
-                return log_a_k - log_a_k_norm
+                log_w_ik = vmap_decorator(
+                    vmap_decorator(_s, in_axes=(0, None)),  # k
+                    in_axes=(0, 0),  # i
+                )(log_b_ik, -F_i)
+
+                log_w_ik = jnp.where(jnp.isfinite(log_w_ik), log_w_ik, -jnp.inf)
+
+                # print(f"{log_w_ik.shape=} {log_rho_ik.shape=}")
+
+                F_k = -vmap_decorator(log_sum_exp_safe, in_axes=(1, 1, 1))(
+                    jnp.log(H_ik),
+                    log_w_ik,
+                    log_rho_ik,
+                )  # sum over i
+
+                mask_k = jnp.isfinite(F_k)
+
+                F_k = jnp.where(jnp.isneginf(F_k), jnp.inf, F_k)
+
+                F_k_norm = log_sum_exp_safe(-F_k)
+
+                F_k += F_k_norm
+
+                return F_k, (mask_k, log_w_ik, log_rho_ik)
 
             @jit_decorator
-            def T(log_a_k: Array, log_x: tuple[Array, Array, Array]):
-                log_f_i = get_log_f_i(log_a_k, log_x)
-                log_a_k = get_log_a_k(log_f_i, log_x)
+            def T(a_k: Array, log_x: tuple[Array, Array]):
+                F_k = -jnp.log(a_k)
 
-                return log_a_k
+                mask_k = jnp.isfinite(F_k)
 
-            @jit_decorator
-            def norm(log_a_k: Array, log_x: tuple[Array, Array, Array]):
-                log_a_k_p = T(log_a_k, log_x)
+                F_i, mask_i = get_F_i(F_k, log_x)
+                F_k, (mask_k, log_w_ik, log_rho_ik) = get_F_k(F_i, mask_i, mask_k, log_x)
 
-                return 0.5 * jnp.sum((jnp.exp(log_a_k) - jnp.exp(log_a_k_p)) ** 2)
+                return jnp.exp(-F_k), (jnp.exp(F_i), mask_i, mask_k, log_w_ik, log_rho_ik)
 
             @jit_decorator
-            def kl_div(log_a_k, log_x):
-                log_a_k_p = T(log_a_k, log_x)
+            def norm(a_k: Array, log_x: tuple[Array, Array]):
+                a_k_p, _ = T(a_k, log_x)
 
-                return jnp.sum(jnp.exp(log_a_k) * (log_a_k - log_a_k_p))
+                return 0.5 * jnp.sum((a_k - a_k_p) ** 2)
+
+            @jit_decorator
+            def kl_div(a_k, log_x):
+                a_k_p, _ = T(a_k, log_x)
+
+                kl_div_k = a_k * (jnp.log(a_k) - jnp.log(a_k_p))
+
+                return kl_div_k  # , jnp.sum(kl_div_k)
 
             import jaxopt
 
-            # print("solving wham")
-            log_x = (m_log_b_ik, log_N_i, log_H_k)
+            mask_k: Array = jnp.full((nk,), True)  # type:ignore
+            mask_i: Array = jnp.full((ni,), True)  # type:ignore
 
-            # # warmup
-            log_a_k = T(log_a_k, log_x)
+            while True:
+                # a_k_mask =
 
-            solver = jaxopt.FixedPointIteration(
-                fixed_point_fun=T,
-                # history_size=5,
-                tol=1e-5,
-                implicit_diff=True,
-                maxiter=10000,
-            )
+                a_k_mask = a_k[mask_k]
+                H_ik_mask = H_ik[:, mask_k][mask_i, :]
+                log_b_ik_mask = log_b_ik[:, mask_k][mask_i, :]
 
-            out = solver.run(log_a_k, log_x=log_x)
+                log_x_mask = (log_b_ik_mask, H_ik_mask)
 
-            log_a_k = out.params
-            log_f_i = get_log_f_i(log_a_k, log_x)
+                solver = jaxopt.FixedPointIteration(
+                    fixed_point_fun=T,
+                    # history_size=5,
+                    tol=1e-10,
+                    implicit_diff=True,
+                    has_aux=True,
+                    maxiter=10000,
+                )
 
-            print(f"wham done! {out.state.error=}")
+                out = solver.run(a_k_mask, log_x=log_x_mask)
+
+                a_k_new = out.params
+                # print(f"{out.state=}")
+                f_new, mask_i_new, mask_k_new, log_w_ik, log_rho_ik = out.state.aux
+
+                if jnp.isnan(out.state.error):
+                    print(f"error is nan {jnp.sum(mask_k_new)=} {jnp.sum(mask_i_new)=} {out.state.iter_num=}")
+
+                    mask_k: Array = mask_k.at[mask_k].set(mask_k_new)
+                    mask_i: Array = mask_i.at[mask_i].set(mask_i_new)
+
+                    continue
+
+                break
+
+            print(f"wham done! {out.state.error=} ")
 
             if verbose:
-                n, k = norm(log_a_k, log_x), kl_div(log_a_k, log_x)
-                print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
+                n, k = norm(a_k_new, log_x_mask), kl_div(a_k_new, log_x_mask)
+                print(f"wham err={n}, kl divergence={jnp.sum(k)} {out.state.iter_num=} {out.state.error=} ")
 
-            # else:
-            #     b_ik = jnp.exp(m_log_b_ik)
+            arg_mk = jnp.argwhere(mk).reshape((-1,))
+            arg_mi = jnp.argwhere(mi).reshape((-1,))
 
-            #     @jit_decorator
-            #     def T(a_k, x):
-            #         b_ik, N_i, H_k = x
+            _F_k = _F_k.at[arg_mk[mask_k]].set(-jnp.log(a_k_new))
+            _F_k = _F_k.at[arg_mk[~mask_k]].set(jnp.inf)
+            _F_i = _F_i.at[arg_mi[mask_i]].set(jnp.log(f_new))
+            _F_i = _F_i.at[arg_mi[~mask_i]].set(-jnp.inf)
 
-            #         f_inv_i = jnp.einsum("k,ik->i", a_k, b_ik)
-            #         f_i_inv_safe = jnp.where(f_inv_i < min_f_i, min_f_i, f_inv_i)
-            #         a_k_new_inv = jnp.einsum("i,ik->k", N_i / f_i_inv_safe, b_ik)
+            arg_ik = (
+                jnp.array(
+                    jax.vmap(
+                        jax.vmap(
+                            lambda i, j: (i, j),
+                            in_axes=(None, 0),
+                        ),
+                        in_axes=(0, None),
+                    )(arg_mi[mask_i], arg_mk[mask_k])
+                )
+                .reshape((2, -1))
+                .T
+            )
 
-            #         a_k_new_inv_safe = jnp.where(a_k_new_inv < min_f_i, min_f_i, a_k_new_inv)
-            #         a_k_new = H_k / a_k_new_inv_safe
-            #         a_k_new = a_k_new / jnp.sum(a_k_new)
+            # print(f"{arg_ik=} {arg_ik.shape=} {log_w_ik.shape}")
 
-            #         return a_k_new, 1 / f_i_inv_safe
+            _w_ik = _w_ik.at[arg_ik[:, 0], arg_ik[:, 1]].set(jnp.exp(log_w_ik).reshape((-1,)))
+            _rho_ik = _rho_ik.at[arg_ik[:, 0], arg_ik[:, 1]].set(jnp.exp(log_rho_ik.reshape((-1,))))
 
-            #     def norm(a_k, x):
-            #         a_k_p = T(a_k, x)[0]
+            # remove bad rows
+            _H_ik = _H_ik.at[arg_mi[~mask_i], :].set(0.0)
+            _H_ik = _H_ik.at[:, arg_mk[~mask_k]].set(0.0)
 
-            #         if log_sum_exp:
-            #             a_k = jnp.exp(a_k)
-            #             a_k_p = jnp.exp(a_k_p)
+            _mask_k = _mask_k.at[arg_mk].set(mask_k)
+            _mask_k = _mask_k.at[arg_mk].set(mask_k)
 
-            #         return 0.5 * jnp.sum((a_k - a_k_p) ** 2) / jnp.sum(a_k > 0)
+            _mask_i = _mask_i.at[arg_mi].set(mask_i)
+            _mask_i = _mask_i.at[arg_mi].set(mask_i)
 
-            #     def kl_div(a_k, x):
-            #         a_k_p, f = T(a_k, x)
+        F_k = _F_k
+        F_i = _F_i
+        log_b_ik = _log_b_ik
+        H_ik = _H_ik
+        mask_i = _mask_i
+        mask_k = _mask_k
+        w_ik = _w_ik
+        rho_ik = _rho_ik
 
-            #         a_k = jnp.where(a_k >= min_f_i, a_k, min_f_i)
-            #         a_k_p = jnp.where(a_k_p >= min_f_i, a_k_p, min_f_i)
-
-            #         return jnp.sum(a_k * (jnp.log(a_k) - jnp.log(a_k_p)))
-
-            #     import jaxopt
-
-            #     solver = jaxopt.ProjectedGradient(
-            #         fun=norm,
-            #         projection=jaxopt.projection.projection_simplex,  # prob space is simplex
-            #         maxiter=2000,
-            #         tol=wham_eps,
-            #     )
-
-            #     print("solving wham")
-
-            #     out = solver.run(a_k, x=(b_ik, N_i, H_k))
-
-            #     print("wham done")
-
-            #     a_k = out.params
-
-            #     if verbose:
-            #         n, k = norm(a_k, (b_ik, N_i)), kl_div(a_k, (b_ik, N_i))
-            #         print(f"wham err={n}, kl divergence={k} {out.state.iter_num=} {out.state.error=} ")
-
-            #     _, f = T(a_k, (b_ik, N_i))
-
-            #     log_f_i = jnp.log(f)
-            #     log_a_k = jnp.log(a_k)
-
-            _log_a_k = _log_a_k.at[mk].set(log_a_k)
-            _log_f_i = _log_f_i.at[mi].set(log_f_i)
-
-        log_a_k = _log_a_k
-        log_f_i = _log_f_i
-        m_log_b_ik = _m_log_b_ik
-        N_i = _N_i
-        log_N_i = jnp.log(N_i)
-        log_H_k = _log_H_k
-
-        good_md_i = jnp.full(True, len_i)
+        print(f"posr")
 
         if return_std_bias or inverse_sigma_weighting or smooth_bias:
-            nk = log_a_k.shape[0]
+            N_i, H_k, H_ik = get_N_H(mask_i, mask_k, H_ik)
+
+            # print(f"{F_k/beta/kjmol=} {F_i/beta/kjmol=} {N_i=} {H_k=}")
+
+            log_N_i = jnp.log(N_i)
+            log_N_tot = jnp.log(jnp.sum(H_ik))
+
+            nk = F_k.shape[0]
             ni = log_N_i.shape[0]
 
             # see thermolib derivation
@@ -4556,23 +4669,23 @@ class DataLoaderOutput(MyPyTreeNode):
                 [
                     jnp.diag(
                         vmap_decorator(
-                            lambda log_b_i, log_a: jnp.sum(jnp.exp(log_a + log_N_i + log_f_i + log_b_i)),
+                            lambda log_b_i, log_a: jnp.sum(jnp.exp(log_a + log_N_i + F_k + log_b_i)),
                             in_axes=(1, 0),
-                        )(m_log_b_ik, log_a_k)
+                        )(-log_b_ik, -F_k)
                     ),
                     -jnp.exp(
                         vmap_decorator(
                             vmap_decorator(_s, in_axes=(0, None, None, 0)),  # k
                             in_axes=(None, 0, 0, 0),  # i
-                        )(log_a_k, log_N_i, log_f_i, m_log_b_ik)
+                        )(-F_k, log_N_i, F_k, -log_b_ik)
                     ).T,
                     -jnp.exp(
                         vmap_decorator(
                             vmap_decorator(_s, in_axes=(0, None, None, 0)),  # k
                             in_axes=(None, 0, 0, 0),  # i
-                        )(log_a_k, log_N_i, log_f_i, m_log_b_ik)
+                        )(-F_k, log_N_i, F_k, -log_b_ik)
                     ).T,
-                    -jnp.exp(log_a_k + log_N_tot).reshape((nk, 1)),
+                    -jnp.exp(-F_k + log_N_tot).reshape((nk, 1)),
                 ],
                 [
                     -jnp.exp(
@@ -4582,7 +4695,7 @@ class DataLoaderOutput(MyPyTreeNode):
                                 in_axes=(None, 0, 0, 0),
                             ),  # i
                             in_axes=(0, None, None, 1),  # k
-                        )(log_a_k, log_N_i, log_f_i, m_log_b_ik)
+                        )(-F_k, log_N_i, F_k, -log_b_ik)
                     ).T,
                     jnp.diag(jnp.exp(log_N_i)),
                     jnp.diag(jnp.exp(log_N_i)),
@@ -4596,14 +4709,14 @@ class DataLoaderOutput(MyPyTreeNode):
                                 in_axes=(None, 0, 0, 0),
                             ),  # i
                             in_axes=(0, None, None, 1),  # k
-                        )(log_a_k, log_N_i, log_f_i, m_log_b_ik)
+                        )(-F_k, log_N_i, F_k, -log_b_ik)
                     ).T,
                     jnp.diag(jnp.exp(log_N_i)),
                     jnp.zeros((ni, ni)),
                     jnp.zeros((ni, 1)),
                 ],
                 [
-                    -jnp.exp(log_a_k + log_N_tot).reshape((1, nk)),
+                    -jnp.exp(-F_k + log_N_tot).reshape((1, nk)),
                     jnp.zeros((1, ni)),
                     jnp.zeros((1, ni)),
                     jnp.zeros((1, 1)),
@@ -4637,129 +4750,19 @@ class DataLoaderOutput(MyPyTreeNode):
 
                 l_inv: Array = jnp.where(jnp.abs(eigval) < 1e-12, 0, 1 / eigval)  # type:ignore
 
-                # print(f"{l=}")
-
                 cov_sigma = jnp.diag(V @ jnp.diag(l_inv) @ V.T)
-
-            # print(f"{cov_sigma=}")
 
             sigma_ak = cov_sigma[:nk]
             sigma_fi = cov_sigma[nk : nk + ni]
-
-            # print(f"{sigma_ak=}")
 
             sigma_ak: Array = jnp.where(sigma_ak < 0, 0, jnp.sqrt(sigma_ak))  # type:ignore
             sigma_fi = jnp.where(sigma_fi < 0, 0, jnp.sqrt(sigma_fi))
 
             print(f"{jnp.mean(sigma_ak/beta/kjmol)=} {jnp.max(sigma_ak/beta/kjmol)=}  ")
-            # print(f"{jnp.sort(sigma_ak/beta/kjmol)=}")
+
             print(f"{jnp.mean(sigma_fi/beta/kjmol)=}")
 
-            # print(f"{jnp.sort(sigma_fi/beta/kjmol)=}")
-
-            # good_md_i = sigma_fi / beta > 10 * kjmol
-
-            # if (n := jnp.sum(good_md_i)) < len_i:
-            #     print(f"{len_i-n} bins have sigma E bigger than 10 kjmol, removing")
-            #     # raise
-
-            # log_a_k = jnp.where(sigma_ak > 10 * kjmol * beta, jnp.nan, log_a_k)
-
-        s = 0
-        s2 = 0
-
-        log_N_ik = jnp.log(H_ik)
-
-        def _safe_inv(x):
-            return jnp.where(x == -jnp.inf, -jnp.inf, -x)
-
-        # @partial(vmap_decorator, in_axes=(0, 0, 0, None))
-        # @partial(vmap_decorator, in_axes=(None, None, 0, 1))
-        # def stats_ik(_log_N_i, _log_f_i, _m_log_b_ik, __m_log_b_ik):
-        #     # fraction that trajectory i should contribute to bin k
-        #     _log_rho_ik = (
-        #         _log_N_i
-        #         + _log_f_i
-        #         + _m_log_b_ik
-        #         - log_sum_exp_safe(
-        #             log_N_i,
-        #             log_f_i,
-        #             __m_log_b_ik,
-        #         )
-        #     )
-
-        #     # balance weight to obtain FES
-        #     _log_w_ik = _safe_inv(_log_N_i + _log_f_i + _m_log_b_ik)
-
-        #     return _log_rho_ik, _log_w_ik
-
-        # log_rho_ik, log_w_ik = stats_ik(log_N_i, log_f_i, m_log_b_ik, m_log_b_ik)
-
-        # filter_ik = log_rho_ik < 1e-4
-        # print(f"{jnp.sum(filter_ik)}")
-
-        # print(f"{jnp.mean(log_rho_ik)} {jnp.std(log_rho_ik)}")
-
-        # # remove unlikely points
-        # log_rho_ik = jnp.where(filter_ik, -jnp.inf, log_rho_ik)
-        # log_w_ik = jnp.where(filter_ik, -jnp.inf, log_w_ik)
-
-        # divide by number of samples in traj i bin k
-
-        # log_inv_n_ik = _safe_inv(log_N_ik)
-
-        # log_rho_over_n_norm_k = vmap_decorator(
-        #     log_sum_exp_safe,
-        #     in_axes=(1, 1),
-        # )(log_inv_n_ik, log_rho_ik)
-
-        # log_rho_over_n_norm_inv_k = _safe_inv(log_rho_over_n_norm_k)
-        # log_inv_H_k = _safe_inv(log_H_k)
-
-        # p_select_ik = jnp.exp(
-        #     vmap_decorator(
-        #         vmap_decorator(
-        #             log_sum_exp_safe,
-        #             in_axes=(0, 0, 0, 0),
-        #         ),
-        #         in_axes=(0, 0, None, None),
-        #     )(log_rho_ik, log_inv_n_ik, log_rho_over_n_norm_inv_k, log_inv_H_k)
-        # )
-
-        # w_out_ik = jnp.exp(log_w_ik + log_N_ik + log_rho_over_n_norm_k + log_H_k)
-
-        # def _print(x, n):
-        #     print(f"{n} nan  {jnp.sum(jnp.isnan(x))} inf{jnp.sum(jnp.isinf(x))} min {jnp.min(x)} max {jnp.max(x)}")
-
-        # _print(log_f_i, "log_f_i")
-        # _print(log_N_i, "log_N_i")
-        # _print(log_N_ik, "log_N_ik")
-        # _print(log_rho_ik, "log_rho_ik")
-        # _print(log_w_ik, "log_w_ik")
-        # _print(log_rho_over_n_norm_k, "log_rho_over_n_norm_k")
-        # _print(log_rho_over_n_norm_inv_k, "log_rho_over_n_norm_inv_k")
-        # _print(log_inv_H_k, "log_inv_H_k")
-        # _print(log_inv_n_ik, "log_inv_n_ik")
-
-        # print(f"{jnp.min(p_select_ik)} {jnp.max(p_select_ik)}")
-
-        @partial(vmap_decorator, in_axes=(0, 1))
-        def stats_ik(_log_H_k, __m_log_b_ik):  # type:ignore
-            # fraction that trajectory i should contribute to bin k
-            _p_select_ik = -_log_H_k
-
-            # balance weight to obtain FES
-            _log_w_ik = _log_H_k - log_sum_exp_safe(
-                log_N_i,
-                log_f_i,
-                __m_log_b_ik,
-            )
-
-            return _p_select_ik, _log_w_ik
-
-        log_p_select_k, log_w_k = stats_ik(log_H_k, m_log_b_ik)
-
-        p_select_k, w_out_k = jnp.exp(log_p_select_k), jnp.exp(log_w_k)
+        s = 0.0
 
         if output_time_scaling:
             time_scaling = []
@@ -4767,28 +4770,23 @@ class DataLoaderOutput(MyPyTreeNode):
         w_out = []
         p_select_out = []
 
-        for i, (_u_i, _log_f_i) in enumerate(zip(u_unstacked, log_f_i)):
+        for i, (_u_i, _F_i) in enumerate(zip(u_unstacked, F_i)):
             gi = grid_nums_mask[i].cv.reshape(-1)
 
-            if not good_md_i[i]:
-                print(f"skipping {i=}")
+            # if not good_md_i[i]:
+            #     print(f"skipping {i=}")
 
-                w = jnp.zeros_like(_u_i)
-                p_select = jnp.zeros_like(_u_i)
+            #     w = jnp.zeros_like(_u_i)
+            #     p_select = jnp.zeros_like(_u_i)
 
-            else:
-                w = jnp.where(gi == -1, 0, w_out_k[gi])
-                p_select = jnp.where(gi == -1, 0, p_select_k[gi])
-
-                # rho_ik_2 = jnp.where(gi == -1, 0, jnp.exp(log_rho_ik[i, gi]))
-                # w_ik_2 = jnp.where(gi == -1, 0, jnp.exp(log_w_ik[i, gi]))
+            # else:
+            w = w_ik[i, gi]
+            p_select = rho_ik[i, gi]
 
             w_out.append(w)
             p_select_out.append(p_select)
 
             s += jnp.sum(w * p_select)
-
-            # s2 += jnp.sum(rho_ik_2 * w_ik_2)
 
             if output_time_scaling:
                 raise
@@ -4806,9 +4804,9 @@ class DataLoaderOutput(MyPyTreeNode):
         print(f"{s=}")
 
         if return_bias or output_free_energy:
-            fes_grid = -log_a_k / beta
+            fes_grid = F_k[mask_k] / beta
 
-            cv_grid = cv_mid[hist_mask]
+            cv_grid = cv_mid[hist_mask][mask_k]
 
             if (nn := jnp.sum(jnp.isnan(fes_grid))) != 0:
                 print(f" found {nn=} nans in  ")
@@ -4833,7 +4831,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
             fes_grid -= jnp.min(fes_grid)
 
-            print(f"{fes_grid/kjmol=}")
+            # print(f"{fes_grid/kjmol=}")
 
             # mask = fes_grid > bias_cutoff
 
@@ -5060,6 +5058,8 @@ class DataLoaderOutput(MyPyTreeNode):
     ) -> jax.Array:
         x = cv.cv
 
+        # print(f"inside {x.shape=} {q=} {argmask=} ")
+
         if argmask is not None:
             x = x[argmask]
 
@@ -5103,12 +5103,13 @@ class DataLoaderOutput(MyPyTreeNode):
         macro_chunk=1000,
         verbose=False,
         trans=None,
-        T_scale=1,
+        T_scale: float = 1.0,
         only_diag=False,
         calc_pi=False,
         scaled_tau=None,
         sparse=True,
         correlation=True,
+        auto_cov_threshold: float | None = None,
     ) -> "KoopmanModel":
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
 
@@ -5195,6 +5196,7 @@ class DataLoaderOutput(MyPyTreeNode):
             sparse=sparse,
             only_return_weights=only_return_weights,
             correlation_whiten=correlation,
+            auto_cov_threshold=auto_cov_threshold,
         )
 
     def filter_nans(
@@ -5590,7 +5592,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 >= 1
             )(cv_mid.cv)
 
-            print(f"{jnp.sum(border_points)=}")
+            print(f"{jnp.sum(border_points)=} {max_bias=}")
 
             fes_grid = fes_grid.at[border_points].set(jnp.max(fes_grid[mask]))
 
@@ -5604,15 +5606,23 @@ class DataLoaderOutput(MyPyTreeNode):
 
         print(f"{cv_selection.shape=}")
 
+        mb = jnp.max(fes_grid_selection)
+        if max_bias is not None:
+            mb = jnp.min(jnp.array([mb, max_bias]))
+
+        print(f"capping fes at {mb / kjmol} kjmol")
+
+        fes_grid_selection: Array = jnp.where(fes_grid_selection > mb, mb, fes_grid_selection)  # type:ignore
+
         if rbf_bias:
             range_frac = jnp.array([b[1] - b[0] for b in bins]) / (
                 collective_variable.metric.bounding_box[:, 1] - collective_variable.metric.bounding_box[:, 0]
             )
             epsilon = 1 / (0.815 * range_frac * jnp.sqrt(collective_variable.metric.ndim))
 
-            print(
-                f"{epsilon=} { (collective_variable.metric.bounding_box[:, 1] - collective_variable.metric.bounding_box[:, 0])= } {bins=} "
-            )
+            # print(
+            #     f"{epsilon=} { (collective_variable.metric.bounding_box[:, 1] - collective_variable.metric.bounding_box[:, 0])= } {bins=} "
+            # )
 
             bias = RbfBias.create(
                 cvs=collective_variable,
@@ -6017,7 +6027,7 @@ class KoopmanModel(MyPyTreeNode):
         chunk_size=None,
         verbose=True,
         trans: CvTrans | None = None,
-        T_scale=1,
+        T_scale: float = 1.0,
         only_diag=False,
         calc_pi=False,
         use_scipy=False,
@@ -6051,7 +6061,7 @@ class KoopmanModel(MyPyTreeNode):
                 trans *= _add_1
 
         def tot_w(w, rho):
-            w_log = [jnp.log(wi) + jnp.log(rhoi) for wi, rhoi in zip(w, rho)]
+            w_log = [jnp.log(wi) / T_scale + jnp.log(rhoi) for wi, rhoi in zip(w, rho)]
 
             z = jnp.hstack(w_log)
             z_max = jnp.max(z)
@@ -6070,7 +6080,7 @@ class KoopmanModel(MyPyTreeNode):
         w_tot = tot_w(w, rho)
         # w_tot_t = tot_w(w_t, rho_t)
 
-        print(f"{trans=} {calc_pi=}")
+        print(f" {calc_pi=}")
 
         cov = Covariances.create(
             cv_0=cv_0,  # type: ignore
@@ -6082,7 +6092,7 @@ class KoopmanModel(MyPyTreeNode):
             calc_pi=calc_pi,
             only_diag=only_diag,
             symmetric=symmetric,
-            T_scale=T_scale,
+            # T_scale=T_scale,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             trans_f=trans,
@@ -6092,177 +6102,8 @@ class KoopmanModel(MyPyTreeNode):
 
         # print(f"{cov=}")
 
-        assert cov.C00 is not None
-        assert cov.C01 is not None
-        assert cov.C11 is not None
-        assert cov.C10 is not None
-
-        argmask = jnp.arange(cov.C00.shape[0])
-
-        print(f"{argmask.shape=}")
-
-        print(f"{cov.sigma_0=}{cov.sigma_1=} {jnp.diag(cov.rho_00)}")
-
-        if eps_pre is not None:
-            b = jnp.logical_and(cov.sigma_0 > eps_pre, cov.sigma_1 > eps_pre)
-            argmask = argmask[b]
-
-        print(f"{argmask.shape=}")
-
-        argsort = jnp.argsort(jnp.diag(cov.rho_01)[argmask], descending=True)
-        argmask = argmask[argsort]
-
-        print(f"{argmask.shape=}")
-
-        if auto_cov_threshold is not None:
-            b = jnp.diag(cov.rho_01)[argmask] > auto_cov_threshold
-            argmask = argmask[b]
-
-        print(f"{argmask.shape=}")
-
-        if max_features is not None:
-            if argmask.shape[0] > max_features:
-                argmask = argmask[:max_features]
-
-        print(f"{argmask.shape=}")
-
-        cov.rho_00 = cov.rho_00[argmask, :][:, argmask]
-        cov.rho_11 = cov.rho_11[argmask, :][:, argmask]
-        cov.rho_01 = cov.rho_01[argmask, :][:, argmask]
-        cov.rho_10 = cov.rho_10[argmask, :][:, argmask]
-
-        if calc_pi:
-            cov.pi_s_0 = cov.pi_s_0[argmask]
-            cov.pi_s_1 = cov.pi_s_1[argmask]
-
-        cov.sigma_0 = cov.sigma_0[argmask]
-        cov.sigma_1 = cov.sigma_1[argmask]
-
-        print(f"{jnp.diag(cov.rho_01)=}")
-
-        if verbose:
-            print("diagonalizing C00")
-
-        W0: Array = cov.whiten(
-            "C00",
-            epsilon=eps,
-            epsilon_pre=eps_pre,
-            verbose=verbose,
-            use_scipy=use_scipy,
-            correlation=correlation_whiten,
-            max_features=max_features,
-        )  # type: ignore
-
-        if verbose:
-            print(f"{W0.shape=}")
-
-        if verbose:
-            print("diagonalizing C11")
-
-        if symmetric:
-            W1 = W0
-
-        else:
-            W1: Array = cov.whiten(
-                "C11",
-                epsilon=eps,
-                epsilon_pre=eps_pre,
-                verbose=verbose,
-                use_scipy=use_scipy,
-                correlation=correlation_whiten,
-                max_features=max_features,
-            )  # type: ignore
-            if verbose:
-                print(f"{W1.shape=}")
-
-        print("reweighing")
-
-        T_tilde = W1 @ cov.C10 @ W0.T
-
-        if verbose:
-            print("koopman': SVD")
-
-        if out_dim is None:
-            out_dim = 10
-
-        if out_dim == -1:
-            out_dim = T_tilde.shape[0]
-
-        if add_1:
-            out_dim += 1
-
-        if out_dim < 20:
-            out_dim = 20
-
-        n_modes = out_dim
-
-        k = min(n_modes, T_tilde.shape[0] - 1)
-        k = min(n_modes, T_tilde.shape[1] - 1)
-
-        if n_modes + 1 < T_tilde.shape[0] / 5 and sparse:
-            from jax.experimental.sparse.linalg import lobpcg_standard
-            from jax.random import PRNGKey, uniform
-
-            x0 = uniform(PRNGKey(0), (T_tilde.shape[0], k))
-
-            print(f"using lobpcg with {n_modes} modes ")
-
-            if symmetric:
-                # matrix should be psd
-
-                s, U, n_iter = lobpcg_standard(
-                    T_tilde.T,
-                    x0,
-                    m=200,
-                )
-
-                print(f"{n_iter=} {s=}")
-
-                VT = U.T
-
-            else:
-                l, V, n_iter = lobpcg_standard(
-                    T_tilde @ T_tilde.T,
-                    x0,
-                    m=200,
-                )
-
-                VT = V.T
-
-                print(n_iter)
-
-                s = l ** (1 / 2)
-                s_inv: jax.Array = jnp.where(s > 1e-12, 1 / s, 0)  # type: ignore
-                U = T_tilde.T @ VT.T @ jnp.diag(s_inv)
-
-        else:
-            if symmetric and W0.shape[0] == W1.shape[0]:
-                print("using eigh")
-                s, U = jax.numpy.linalg.eigh(
-                    T_tilde.T,
-                )
-                VT = U.T
-            else:
-                print("using svd")
-                U, s, VT = jax.numpy.linalg.svd(T_tilde.T)
-
-        idx = jnp.argsort(s, descending=True)
-        U = U[:, idx]
-        s = s[idx]
-        VT = VT[idx, :]
-
-        # W0 and W1 are whitening transforms. A whitening transform is still whitening after a rotation
-        W0 = U.T @ W0
-        W1 = VT @ W1  # V is already transposed
-
-        if out_eps is not None:
-            m = jnp.abs(1 - s) < out_eps
-
-            U = U[:, m]
-            VT = VT[m, :]
-            s = s[m]
-
-            print(f"{jnp.sum(m)=}")
+        argmask = cov.mask(eps_pre, max_features_pre, auto_cov_threshold)
+        W0, W1, s = cov.decompose(out_dim, out_eps=out_eps)
 
         if out_dim is not None:
             if s.shape[0] < out_dim:
@@ -6299,7 +6140,7 @@ class KoopmanModel(MyPyTreeNode):
             only_diag=only_diag,
             eps=eps,
             eps_pre=eps_pre,
-            shape=cov.C01.shape[0],
+            shape=cov.rho_00.shape[0],
             scaled_tau=scaled_tau,
             correlation_whiten=correlation_whiten,
             constant_threshold=constant_threshold,
@@ -6348,7 +6189,7 @@ class KoopmanModel(MyPyTreeNode):
         remove_constant=True,
         n_skip: int | None = None,
     ):
-        o = self.W0.T
+        o = jnp.diag(self.cov.sigma_0_inv) @ self.W0.T
         s = self.s
 
         n_skip = self.get_n_skip(
@@ -6382,7 +6223,9 @@ class KoopmanModel(MyPyTreeNode):
         remove_constant=True,
         # skip_first=None,
     ):
-        o = self.W1.T
+        sigma_1_inv = self.cov.sigma_1_inv
+        assert sigma_1_inv is not None
+        o = jnp.diag(sigma_1_inv) @ self.W1.T
         s = self.s
 
         n_skip = self.get_n_skip(
@@ -6446,7 +6289,11 @@ class KoopmanModel(MyPyTreeNode):
 
         # A = self.W0 @ self.cov.C11 @ self.W1.T @ jnp.diag(self.s)
 
-        A = self.W1 @ self.cov.C11 @ self.W0.T @ jnp.diag(self.s)
+        # print(f"{ self.cov.sigma_1 * self.cov.sigma_0_inv=}   {self.cov.sigma_0_inv.shape=} {self.cov.rho_11.shape=}")
+
+        A = self.W1 @ self.cov.rho_11 @ jnp.diag(self.cov.sigma_1 * self.cov.sigma_0_inv) @ self.W0.T @ jnp.diag(self.s)
+
+        # print(f"post")
 
         # out_idx = jnp.arange(out_dim)
 
@@ -6471,9 +6318,15 @@ class KoopmanModel(MyPyTreeNode):
 
         lv, v = lv[(0,)], v[:, (0,)]
 
+        sigma_1_inv = self.cov.sigma_1_inv
+
+        assert sigma_1_inv is not None
+
+        mu_ref = jnp.diag(sigma_1_inv) @ self.W1.T @ v
+
         f_trans_2 = CvTrans.from_cv_function(
             DataLoaderOutput._transform,
-            q=self.W1.T,
+            q=None,
             l=None,
             pi=self.cov.pi_0 if self.calc_pi else None,
             argmask=self.argmask,
@@ -6481,7 +6334,7 @@ class KoopmanModel(MyPyTreeNode):
             static_argnames=["add_1_pre"],
         )
 
-        @partial(CvTrans.from_cv_function, v=v)
+        @partial(CvTrans.from_cv_function, v=mu_ref)
         def _get_w(cv: CV, _nl, shmap, shmap_kwargs, v: Array):
             x = cv.cv
 
@@ -6491,6 +6344,8 @@ class KoopmanModel(MyPyTreeNode):
 
         if self.trans is not None:
             tr = self.trans * tr
+
+        print(f"{self.cv_0[0].shape}")
 
         w_out_cv, w_out_cv_t = DataLoaderOutput.apply_cv(
             f=tr,
@@ -6567,12 +6422,12 @@ class KoopmanModel(MyPyTreeNode):
         self,
         chunk_size=None,
         macro_chunk=1000,
-        verbose=False,
+        # verbose=False,
         out_dim=None,
         **kwargs,
     ) -> KoopmanModel:
         new_w, new_w_t, new_w_corr, b = self.koopman_weight(
-            verbose=verbose,
+            verbose=self.verbose,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             out_dim=out_dim,
@@ -6601,7 +6456,7 @@ class KoopmanModel(MyPyTreeNode):
             chunk_size=chunk_size,
             trans=self.trans,
             T_scale=self.T_scale,
-            verbose=verbose,
+            verbose=self.verbose,
             calc_pi=self.calc_pi,
             max_features=self.max_features,
             max_features_pre=self.max_features_pre,
@@ -6677,13 +6532,16 @@ class Covariances(MyPyTreeNode):
     rho_11: jax.Array | None
     pi_s_0: jax.Array | None
     pi_s_1: jax.Array | None
-    sigma_0: jax.Array | None
+    sigma_0: jax.Array
     sigma_1: jax.Array | None
+
+    W_0: jax.Array | None = None
+    W_1: jax.Array | None = None
 
     only_diag: bool = False
     trans_f: CvTrans | CvTrans | None = None
     trans_g: CvTrans | CvTrans | None = None
-    T_scale: float = 1
+    # T_scale: float = 1.0
     symmetric: bool = False
 
     @staticmethod
@@ -6700,7 +6558,7 @@ class Covariances(MyPyTreeNode):
         only_diag=False,
         trans_f: CvTrans | CvTrans | None = None,
         trans_g: CvTrans | CvTrans | None = None,
-        T_scale=1,
+        # T_scale=1,
         symmetric=False,
         calc_C00=True,
         calc_C01=True,
@@ -6728,8 +6586,8 @@ class Covariances(MyPyTreeNode):
 
             w_t = [wi / n_t for wi in w_t]
 
-        if T_scale != 1:
-            raise NotImplementedError("T_scale not implemented")
+        # if T_scale != 1:
+        #     raise NotImplementedError("T_scale not implemented")
 
         # @jit_decorator
         def cov_pi(
@@ -6866,7 +6724,7 @@ class Covariances(MyPyTreeNode):
                 sigma_0 = jnp.where(sigma_0_prev == 0, d_sigma_0, sigma_0_prev * d_sigma_0)
 
             if time_series:
-                d_sigma_1 = jnp.sqrt(jnp.where(jnp.diag(rho_11) <= 0, 0.0, jnp.diag(rho_11)))
+                d_sigma_1 = jnp.sqrt(jnp.where(jnp.diag(rho_11) <= 0, 0.0, jnp.diag(rho_11)))  # type: ignore
                 f1 = jnp.where(d_sigma_1 <= 0, 1.0, 1 / d_sigma_1)
 
                 pi_1_new = jnp.einsum("i,i->i", pi_1_new, f1) if calc_pi else None
@@ -6961,7 +6819,9 @@ class Covariances(MyPyTreeNode):
 
         rho_00, rho_01, rho_10, rho_11, pi_s_0, pi_s_1, sigma_0, sigma_1, _w_0, _w_1 = out
 
-        print(f"{_w_0}")
+        # print(f"{_w_0}")
+        assert rho_00 is not None
+        assert sigma_0 is not None
 
         cov = Covariances(
             rho_00=rho_00,
@@ -6973,7 +6833,7 @@ class Covariances(MyPyTreeNode):
             only_diag=only_diag,
             trans_f=trans_f,
             trans_g=trans_g,
-            T_scale=T_scale,
+            # T_scale=T_scale,
             sigma_0=sigma_0,
             sigma_1=sigma_1,
         )
@@ -7001,40 +6861,59 @@ class Covariances(MyPyTreeNode):
 
     @property
     def C01(self):
+        if self.rho_01 is None:
+            return None
+        assert self.sigma_1 is not None
         return jnp.einsum("ij,i,j->ij", self.rho_01, self.sigma_0, self.sigma_1)
 
     @property
     def C10(self):
+        if self.rho_10 is None:
+            return None
+        assert self.sigma_1 is not None
         return jnp.einsum("ij,i,j->ij", self.rho_10, self.sigma_1, self.sigma_0)
 
     @property
     def C11(self):
+        if self.rho_11 is None:
+            return None
+        assert self.sigma_1 is not None
         return jnp.einsum("ij,i,j->ij", self.rho_11, self.sigma_1, self.sigma_1)
 
-    def whiten(
+    @property
+    def sigma_0_inv(self):
+        return jnp.where(self.sigma_0 == 0, 0, 1 / self.sigma_0)
+
+    @property
+    def sigma_1_inv(self):
+        if self.sigma_1 is None:
+            return None
+        return jnp.where(self.sigma_1 == 0, 0, 1 / self.sigma_1)
+
+    def whiten_rho(
         self,
         choice,
         epsilon: float = 1e-4,
-        epsilon_pre: float | None = 1e-6,
-        out_dim=None,
+        # epsilon_pre: float | None = 1e-6,
+        # out_dim=None,
         max_features=None,
         verbose=False,
-        use_scipy=True,
-        filter_argmask=True,
-        correlation=True,
-        cholesky=True,
-        return_P=False,
-    ) -> Array | tuple[Array, Array | None]:
+        # use_scipy=True,
+        # filter_argmask=True,
+        # correlation=True,
+        # cholesky=True,
+        # return_P=False,
+    ) -> Array:
         # returns W such that W C W.T = I and hence w.T W = C^-1
 
         # https://arxiv.org/pdf/1512.00809
 
-        if choice == "C00":
+        if choice == "rho_00":
             rho = self.rho_00
-            sigma = self.sigma_0
-        elif choice == "C11":
+            # sigma = self.sigma_0
+        elif choice == "rho_11":
             rho = self.rho_11
-            sigma = self.sigma_1
+            # sigma = self.sigma_1
         else:
             raise ValueError(f"choice {choice} not known")
 
@@ -7045,15 +6924,15 @@ class Covariances(MyPyTreeNode):
 
         rho = rho
 
-        mask = sigma == 0
+        # mask = sigma == 0
 
-        print(f"eps pre {jnp.sum(mask)=} {sigma / jnp.max(sigma)=}")
-        rho = rho.at[mask, :].set(0.0)
-        rho = rho.at[:, mask].set(0.0)
+        # print(f"eps pre {jnp.sum(mask)=} {sigma / jnp.max(sigma)=}")
+        # rho = rho.at[mask, :].set(0.0)
+        # rho = rho.at[:, mask].set(0.0)
 
-        C = jnp.einsum("ij,i,j->ij", rho, sigma, sigma)
+        # C = jnp.einsum("ij,i,j->ij", rho, sigma, sigma)
 
-        V_inv = jnp.where(mask, 0, 1 / sigma)
+        # V_inv = jnp.where(mask, 0, 1 / sigma)
 
         # if cholesky:
         #     import scipy
@@ -7087,42 +6966,194 @@ class Covariances(MyPyTreeNode):
         # else:
         theta, G = jnp.linalg.eigh(rho)
 
-        # print(f"{theta=} ")
         idx = jnp.argmax(theta)
         mask = theta / theta[idx] > epsilon**2
 
-        print(f"{jnp.sum(mask)=} ")
+        if verbose:
+            print(f"{jnp.sum(mask)=} ")
 
         theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta), 0)
 
-        # print(f" {(rho - G @ jnp.diag(theta) @ G.T)  = }  ")
-
         W = jnp.einsum(
-            "j,i,ji->ij",
-            V_inv,
+            "i,ji->ij",
+            # V_inv,
             theta_inv,
             G,
         )
 
         W = W[mask, :]
 
-        # print(f"{W.shape=}  {V_0.shape=} ")
-
-        P_out = None
+        # P_out = None
 
         if max_features is not None:
             if W.shape[0] > max_features:
                 print(f"whiten: reducing dim to {max_features=}")
                 W = W[:max_features, :]
 
-        # print(f"{W @ C @ W.T}")
+        print(f"{jnp.linalg.norm(W @ rho @ W.T - jnp.eye(W.shape[0]))=}")
 
-        print(f"{jnp.linalg.norm(W @ C @ W.T - jnp.eye(W.shape[0]))=}")
-
-        if return_P:
-            return W, P_out
+        # if return_P:
+        #     return W, P_out
 
         return W
+
+    def mask(
+        self,
+        eps_pre: float | None,
+        max_features: int = 2000,
+        auto_cov_threshold: float | None = None,
+    ):
+        argmask = jnp.arange(self.rho_00.shape[0])
+        if eps_pre is not None:
+            if self.sigma_1 is not None:
+                b = jnp.logical_and(self.sigma_0 > eps_pre, self.sigma_1 > eps_pre)
+            else:
+                b = self.sigma_0 > eps_pre
+            argmask = argmask[b]
+
+        # print(f"{argmask.shape=}")
+
+        if self.rho_01 is not None:
+            argsort = jnp.argsort(jnp.diag(self.rho_01)[argmask], descending=True)
+            argmask = argmask[argsort]
+
+            # print(f"{argmask.shape=}")
+
+            if auto_cov_threshold is not None:
+                b = jnp.diag(self.rho_01)[argmask] > auto_cov_threshold
+                argmask = argmask[b]
+        else:
+            argsort = jnp.argsort(jnp.diag(self.sigma_0)[argmask], descending=True)
+            argmask = argmask[argsort]
+
+        # print(f"{argmask.shape=}")
+
+        if max_features is not None:
+            if argmask.shape[0] > max_features:
+                argmask = argmask[:max_features]
+
+        print(f"{argmask.shape=}")
+
+        self.rho_00 = self.rho_00[argmask, :][:, argmask]
+
+        if self.rho_11 is not None:
+            self.rho_11 = self.rho_11[argmask, :][:, argmask]
+        if self.rho_01 is not None:
+            self.rho_01 = self.rho_01[argmask, :][:, argmask]
+        if self.rho_10 is not None:
+            self.rho_10 = self.rho_10[argmask, :][:, argmask]
+
+        if self.pi_s_0 is not None:
+            self.pi_s_0 = self.pi_s_0[argmask]
+        if self.pi_s_1 is not None:
+            self.pi_s_1 = self.pi_s_1[argmask]
+
+        self.sigma_0 = self.sigma_0[argmask]
+        if self.sigma_1 is not None:
+            self.sigma_1 = self.sigma_1[argmask]
+
+        return argmask
+
+    def decompose(
+        self,
+        out_dim: int | None = None,
+        sparse=True,
+        out_eps: float | None = None,
+    ):
+        # decomposition looks for W_0,W_1 s.t.
+        # W_0 rho_00 W_1.T = I
+        # W_1 rho_11 W_1.T = I
+        # W_0 rho_01 W_1.T = jnp.diag(k)
+
+        W_0 = self.whiten_rho("rho_00")
+        if not self.symmetric:
+            W_1 = self.whiten_rho("rho_11")
+        else:
+            W_1 = W_0
+
+        assert self.rho_01 is not None
+
+        T_tilde = W_1 @ self.rho_10 @ W_0.T
+
+        if out_dim is None:
+            out_dim = 10
+
+        if out_dim == -1:
+            out_dim = T_tilde.shape[0]
+
+        if out_dim < 20:
+            out_dim = 20
+
+        n_modes = out_dim
+
+        k = min(n_modes, T_tilde.shape[0] - 1)
+        k = min(n_modes, T_tilde.shape[1] - 1)
+
+        if n_modes + 1 < T_tilde.shape[0] / 5 and sparse:
+            from jax.experimental.sparse.linalg import lobpcg_standard
+            from jax.random import PRNGKey, uniform
+
+            x0 = uniform(PRNGKey(0), (T_tilde.shape[0], k))
+
+            print(f"using lobpcg with {n_modes} modes ")
+
+            if self.symmetric:
+                # matrix should be psd
+
+                s, U, n_iter = lobpcg_standard(
+                    T_tilde.T,
+                    x0,
+                    m=200,
+                )
+
+                print(f"{n_iter=} {s=}")
+
+                VT = U.T
+
+            else:
+                l, V, n_iter = lobpcg_standard(
+                    T_tilde @ T_tilde.T,
+                    x0,
+                    m=200,
+                )
+
+                VT = V.T
+
+                print(n_iter)
+
+                s = l ** (1 / 2)
+                s_inv: jax.Array = jnp.where(s > 1e-12, 1 / s, 0)  # type: ignore
+                U = T_tilde.T @ VT.T @ jnp.diag(s_inv)
+
+        else:
+            if self.symmetric and W_0.shape[0] == W_1.shape[0]:
+                print("using eigh")
+                s, U = jax.numpy.linalg.eigh(
+                    T_tilde.T,
+                )
+                VT = U.T
+            else:
+                print("using svd")
+                U, s, VT = jax.numpy.linalg.svd(T_tilde.T)
+
+        idx = jnp.argsort(s, descending=True)
+        U = U[:, idx]
+        s = s[idx]
+        VT = VT[idx, :]
+
+        W_0 = U.T @ W_0
+        W_1 = VT @ W_1
+
+        if out_eps is not None:
+            m = jnp.abs(1 - s) < out_eps
+
+            U = U[:, m]
+            VT = VT[m, :]
+            s = s[m]
+
+            print(f"{jnp.sum(m)=}")
+
+        return W_0, W_1, s
 
     # def shrink(S: Array, n: int, shrinkage="OAS"):
     #     # https://arxiv.org/pdf/1602.08776.pdf appendix b
@@ -7207,7 +7238,7 @@ class Covariances(MyPyTreeNode):
         d_sigma_0 = self.sigma_0 / _sigma
         d_sigma_1 = self.sigma_1 / _sigma
 
-        print(f"{d_sigma_0=}")
+        # print(f"{d_sigma_0=}")
 
         _rho_00 = jnp.einsum("ij,i,j->ij", _rho_00, d_sigma_0, d_sigma_0)
         _rho_01 = jnp.einsum("ij,i,j->ij", _rho_01, d_sigma_0, d_sigma_1)

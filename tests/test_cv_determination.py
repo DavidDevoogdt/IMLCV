@@ -96,10 +96,10 @@ def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut, pdf_file: Path):
     assert cv.shape == (out_dim,)
     assert dcv.shape == (out_dim, sp.shape[0], 3)
 
-    assert ~jnp.any(cv.cv == jnp.nan)
-    assert ~jnp.any(dcv.cv.coordinates == jnp.nan)
+    assert jnp.all(jnp.isfinite(cv.cv))
+    assert jnp.all(jnp.isfinite(dcv.cv.coordinates))
     if sp.cell is not None:
-        assert ~jnp.any(dcv.cv.cell == jnp.nan)
+        assert jnp.all(jnp.isfinite(dcv.cv.cell))
 
     # test batch
     dlo, _ = scheme0.rounds.data_loader(

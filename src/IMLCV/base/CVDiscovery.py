@@ -16,29 +16,17 @@ from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
 from IMLCV.implementations.CV import _scale_cv_trans, identity_trans, scale_cv_trans
+from IMLCV.base.datastructures import MyPyTreeNode
 
 if TYPE_CHECKING:
     from IMLCV.base.rounds import DataLoaderOutput
 
 
-class Transformer:
-    def __init__(
-        self,
-        outdim,
-        descriptor: CvTrans | None,
-        pre_scale=True,
-        post_scale=True,
-        T_scale=10,
-        **fit_kwargs,
-    ) -> None:
-        self.outdim = outdim
-
-        self.descriptor = descriptor
-        self.pre_scale = pre_scale
-        self.post_scale = post_scale
-        self.T_scale = T_scale
-
-        self.fit_kwargs = fit_kwargs
+class Transformer(MyPyTreeNode):
+    outdim: int
+    descriptor: CvTrans | None = None
+    pre_scale: bool = True
+    post_scale: bool = True
 
     def pre_fit(
         self,
@@ -226,7 +214,7 @@ class Transformer:
         trans = f
 
         print("starting fit")
-        x, x_t, g, _ = self._fit(
+        x, x_t, g, w = self._fit(
             x=x,
             x_t=x_t,
             w=w,
@@ -234,9 +222,9 @@ class Transformer:
             dlo=dlo,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            T_scale=self.T_scale,
-            **self.fit_kwargs,
-        )
+        )  # type:ignore
+
+        assert w is not None
 
         if trans is None:
             trans = g
@@ -378,7 +366,7 @@ class Transformer:
         chunk_size: int | None = None,
         verbose=True,
         macro_chunk=1000,
-        **fit_kwargs,
+        # **fit_kwargs,
     ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None]:
         raise NotImplementedError
 
@@ -1722,18 +1710,21 @@ class Transformer:
         else:
             trans.append(other)
 
-        return CombineTransformer(trans)
+        return CombineTransformer.create(transformers=trans)
 
 
 class CombineTransformer(Transformer):
-    def __init__(self, transformers: list[Transformer], **fit_kwargs) -> None:
-        self.transformers = transformers
+    transformers: list[Transformer]
 
-        self.outdim = transformers[-1].outdim
-        self.descriptor = transformers[0].descriptor
-        self.pre_scale = transformers[0].pre_scale
-        self.post_scale = transformers[-1].post_scale
-        self.fit_kwargs = fit_kwargs
+    @staticmethod
+    def create(transformers: list[Transformer]) -> CombineTransformer:
+        return CombineTransformer(
+            transformers=transformers,
+            outdim=transformers[-1].outdim,
+            descriptor=transformers[0].descriptor,
+            pre_scale=transformers[0].pre_scale,
+            post_scale=transformers[-1].post_scale,
+        )
 
     def _fit(
         self,
@@ -1745,7 +1736,7 @@ class CombineTransformer(Transformer):
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,
-        **fit_kwargs,
+        # **fit_kwargs,
     ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None]:
         trans = None
 
@@ -1763,8 +1754,8 @@ class CombineTransformer(Transformer):
                 chunk_size=chunk_size,
                 verbose=verbose,
                 macro_chunk=macro_chunk,
-                **t.fit_kwargs,
-                **fit_kwargs,
+                # **t.fit_kwargs,
+                # **fit_kwargs,
             )
 
             if trans is None:
@@ -1802,3 +1793,22 @@ class IdentityTransformer(Transformer):
         x_t = cast(list[CV], x_t)
 
         return x, x_t, identity_trans, w
+
+
+class CvTransTransformer(Transformer):
+    trans:CvTrans 
+
+    
+    def _fit(
+        self,
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None,
+        w: list[jax.Array],
+        w_t: list[jax.Array],
+        dlo: DataLoaderOutput,
+        chunk_size: int | None = None,
+        verbose=True,
+        macro_chunk=1000,
+        # **fit_kwargs,
+    ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None]:
+        raise NotImplementedError
