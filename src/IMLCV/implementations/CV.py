@@ -809,8 +809,9 @@ def _sinkhorn_divergence_trans_2(
 def get_sinkhorn_divergence_2(
     nli: NeighbourListInfo | NeighbourList,
     pi: CV,
-    alpha_rematch:float|None=0.1,
+    alpha_rematch: float | None = 0.1,
     jacobian=True,
+    scale_z=False,
 ) -> CvTrans:
     """Get a function that computes the sinkhorn divergence between two point clouds. p_i and nli are the points to match against."""
 
@@ -824,32 +825,37 @@ def get_sinkhorn_divergence_2(
 
     # computes the average distance to other atoms
 
-    @partial(jax.vmap, in_axes=(0, None, None))
-    @partial(jax.vmap, in_axes=(None, 0, None))
-    def get_d(cv_0: CV, cv_1: CV, nli: NeighbourListInfo):
-        _, _, cv_0_split = nli.nl_split_z(cv_0)
-        _, _, cv_1_split = nli.nl_split_z(cv_1)
+    if scale_z:
 
-        d = []
+        @partial(jax.vmap, in_axes=(0, None, None))
+        @partial(jax.vmap, in_axes=(None, 0, None))
+        def get_d(cv_0: CV, cv_1: CV, nli: NeighbourListInfo):
+            _, _, cv_0_split = nli.nl_split_z(cv_0)
+            _, _, cv_1_split = nli.nl_split_z(cv_1)
 
-        for x, y in zip(cv_0_split, cv_1_split):
-            c = vmap_decorator(
-                vmap_decorator(
-                    partial(kernel_dist, xi=2.0),
-                    in_axes=(None, 0),
-                ),
-                in_axes=(0, None),
-            )(x.cv, y.cv)
+            d = []
 
-            jnp.tril(c)
+            for x, y in zip(cv_0_split, cv_1_split):
+                c = vmap_decorator(
+                    vmap_decorator(
+                        partial(kernel_dist, xi=2.0),
+                        in_axes=(None, 0),
+                    ),
+                    in_axes=(0, None),
+                )(x.cv, y.cv)
 
-            d.append(jnp.mean(jnp.tril(c)))
+                jnp.tril(c)
 
-        return jnp.array(d)
+                d.append(jnp.mean(jnp.tril(c)))
 
-    dz = jax.vmap(jnp.mean, in_axes=(2))(get_d(pi, pi, nli))
+            return jnp.array(d)
 
-    print(f"{dz=} {dz.shape=}")
+        dz = jax.vmap(jnp.mean, in_axes=(2))(get_d(pi, pi, nli))
+
+        print(f"{dz=} {dz.shape=}")
+    else:
+        print(f"{nli.num_z_unique=}")
+        dz = jnp.ones((len(nli.num_z_unique),))
 
     return CvTrans.from_cv_function(
         _sinkhorn_divergence_trans_2,

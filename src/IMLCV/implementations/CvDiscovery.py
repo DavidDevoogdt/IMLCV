@@ -466,6 +466,8 @@ class TransformerMAF(Transformer):
     sym: bool = True
     use_w: bool = True
 
+    min_t_frac: float = 0.1
+
     trans: CvTrans | None = None
     T_scale: float = 1.0
 
@@ -525,8 +527,10 @@ class TransformerMAF(Transformer):
         print(f"timescales: {ts[: jnp.min(jnp.array([10, ts.shape[0]]))]} ns")
 
         for i in range(self.outdim):
-            if ts[i] / ts[0] < 1 / 100:
-                (print(f"cv {i} is too small compared to ref (fraction= {ts[i] / ts[0]}), cutting off "),)
+            if ts[i] / ts[0] < self.min_t_frac:
+                print(
+                    f"cv {i} is too small compared to ref (fraction= {ts[i] / ts[0]}, {self.min_t_frac=}), cutting off "
+                )
                 outdim = i
                 break
 

@@ -191,6 +191,7 @@ class Scheme:
         executors=Executors.training,
         use_common_bias=True,
         first_round_without_ground_bias=False,
+        first_round_no_fes_bias=False,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -264,30 +265,33 @@ class Scheme:
 
             prev_bias = self.rounds.get_bias(c=cv_round, r=i)
 
-            new_bias = self.FESBias(
-                plot=plot,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples_per_bin,
-                choice=choice,
-                num_rnds=fes_bias_rnds,
-                cv_round=cv_round,
-                chunk_size=chunk_size,
-                min_traj_length=steps if enforce_min_traj_length else None,
-                margin=plot_margin,
-                only_finished=only_finished,
-                max_bias=max_bias,
-                n_max=n_max_fes,
-                thermolib=thermolib,
-                macro_chunk=macro_chunk,
-                vmax=max_bias,
-                # T_scale=T_scale,
-                koopman=koopman,
-                lag_n=lag_n,
-                koopman_wham=koopman_wham,
-                out=out,
-                direct_bias=direct_bias,
-                executors=executors,
-            )
+            if first_round_no_fes_bias and i == 1:
+                new_bias = NoneBias(collective_variable=prev_bias.collective_variable)
+            else:
+                new_bias = self.FESBias(
+                    plot=plot,
+                    samples_per_bin=samples_per_bin,
+                    min_samples_per_bin=min_samples_per_bin,
+                    choice=choice,
+                    num_rnds=fes_bias_rnds,
+                    cv_round=cv_round,
+                    chunk_size=chunk_size,
+                    min_traj_length=steps if enforce_min_traj_length else None,
+                    margin=plot_margin,
+                    only_finished=only_finished,
+                    max_bias=max_bias,
+                    n_max=n_max_fes,
+                    thermolib=thermolib,
+                    macro_chunk=macro_chunk,
+                    vmax=max_bias,
+                    # T_scale=T_scale,
+                    koopman=koopman,
+                    lag_n=lag_n,
+                    koopman_wham=koopman_wham,
+                    out=out,
+                    direct_bias=direct_bias,
+                    executors=executors,
+                )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)
 

@@ -1543,16 +1543,18 @@ class Rounds:
 
             p_select_stack = jnp.hstack(p_select)
 
+            # indices = jnp.argsort(p_select_stack, descending=True).reshape((-1,))[: int(out)]
+
             indices = choice(
                 key=key,
                 a=p_select_stack.shape[0],
                 shape=(int(out),),
                 p=p_select_stack,
-                replace=True,
+                replace=False,
             )
 
             w_new = weight
-            rho_new = [jnp.ones_like(a) for a in p_select]
+            rho_new = p_select  # [jnp.ones_like(a) for a in p_select]
 
             return key_return, indices, w_new, rho_new
 
@@ -4465,11 +4467,22 @@ class DataLoaderOutput(MyPyTreeNode):
 
             def get_F_i(F_k: jax.Array, log_x: tuple[Array, Array]):
                 log_b_ik, _ = log_x
-                F_i = -vmap_decorator(Partial_decorator(log_sum_exp_safe), in_axes=(None, 0))(-F_k, -log_b_ik)
+                F_i = -vmap_decorator(log_sum_exp_safe, in_axes=(None, 0))(-F_k, -log_b_ik)
 
                 mask_i = jnp.isfinite(F_i)
 
                 return F_i, mask_i
+
+            def norm_F_k(F_k: Array):
+                mask_k = jnp.isfinite(F_k)
+
+                F_k = jnp.where(jnp.isneginf(F_k), jnp.inf, F_k)
+
+                F_k_norm = log_sum_exp_safe(-F_k)
+
+                F_k += F_k_norm
+
+                return F_k, mask_k
 
             def get_F_k(
                 F_i: Array,
@@ -4488,11 +4501,26 @@ class DataLoaderOutput(MyPyTreeNode):
 
                 # odds of using sample k
                 log_rho_ik = vmap_decorator(
-                    vmap_decorator(_s, in_axes=(0, 0, 0, None, 0)),  # k
-                    in_axes=(0, None, 0, 0, None),  # i
+                    vmap_decorator(
+                        _s,
+                        in_axes=(
+                            0,
+                            None,
+                            0,
+                            None,
+                            0,
+                        ),
+                    ),  # k
+                    in_axes=(
+                        0,
+                        0,
+                        0,
+                        0,
+                        None,
+                    ),  # i
                 )(
-                    jnp.log(H_ik),
-                    -jnp.log(H_k),
+                    -jnp.log(H_ik),
+                    jnp.log(N_i),
                     -log_b_ik,
                     +F_i,
                     -vmap_decorator(log_sum_exp_safe, in_axes=(None, None, 1))(
@@ -4505,9 +4533,17 @@ class DataLoaderOutput(MyPyTreeNode):
                 log_rho_ik = jnp.where(jnp.isfinite(log_rho_ik), log_rho_ik, -jnp.inf)
 
                 log_w_ik = vmap_decorator(
-                    vmap_decorator(_s, in_axes=(0, None)),  # k
-                    in_axes=(0, 0),  # i
-                )(log_b_ik, -F_i)
+                    vmap_decorator(
+                        _s,
+                        in_axes=(0, None, 0, None),
+                    ),  # k
+                    in_axes=(0, 0, 0, 0),  # i
+                )(
+                    jnp.log(H_ik),
+                    -jnp.log(N_i),
+                    log_b_ik,
+                    -F_i,
+                )
 
                 log_w_ik = jnp.where(jnp.isfinite(log_w_ik), log_w_ik, -jnp.inf)
 
@@ -4519,14 +4555,7 @@ class DataLoaderOutput(MyPyTreeNode):
                     log_rho_ik,
                 )  # sum over i
 
-                mask_k = jnp.isfinite(F_k)
-
-                F_k = jnp.where(jnp.isneginf(F_k), jnp.inf, F_k)
-
-                F_k_norm = log_sum_exp_safe(-F_k)
-
-                F_k += F_k_norm
-
+                F_k, mask_k = norm_F_k(F_k)
                 return F_k, (mask_k, log_w_ik, log_rho_ik)
 
             @jit_decorator
@@ -4631,10 +4660,10 @@ class DataLoaderOutput(MyPyTreeNode):
             _H_ik = _H_ik.at[:, arg_mk[~mask_k]].set(0.0)
 
             _mask_k = _mask_k.at[arg_mk].set(mask_k)
-            _mask_k = _mask_k.at[arg_mk].set(mask_k)
+            # _mask_k = _mask_k.at[arg_mk].set(mask_k)
 
             _mask_i = _mask_i.at[arg_mi].set(mask_i)
-            _mask_i = _mask_i.at[arg_mi].set(mask_i)
+            # _mask_i = _mask_i.at[arg_mi].set(mask_i)
 
         F_k = _F_k
         F_i = _F_i
@@ -4644,6 +4673,8 @@ class DataLoaderOutput(MyPyTreeNode):
         mask_k = _mask_k
         w_ik = _w_ik
         rho_ik = _rho_ik
+
+        N_i, H_k, H_ik = get_N_H(mask_i, mask_k, H_ik)
 
         print(f"posr")
 
@@ -4764,6 +4795,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
         s = 0.0
 
+        s_rho_k = jnp.zeros((mask_k.shape[0],))
+
         if output_time_scaling:
             time_scaling = []
 
@@ -4773,13 +4806,12 @@ class DataLoaderOutput(MyPyTreeNode):
         for i, (_u_i, _F_i) in enumerate(zip(u_unstacked, F_i)):
             gi = grid_nums_mask[i].cv.reshape(-1)
 
-            # if not good_md_i[i]:
-            #     print(f"skipping {i=}")
+            # compensates the difference in real u and binned u
+            #
+            # du = _u_i - log_b_ik[i, gi]
+            # w = w_ik[i, gi] * jnp.exp(du)
+            # p_select = rho_ik[i, gi] * jnp.exp(-du)
 
-            #     w = jnp.zeros_like(_u_i)
-            #     p_select = jnp.zeros_like(_u_i)
-
-            # else:
             w = w_ik[i, gi]
             p_select = rho_ik[i, gi]
 
@@ -4788,8 +4820,12 @@ class DataLoaderOutput(MyPyTreeNode):
 
             s += jnp.sum(w * p_select)
 
+            s_rho_k = s_rho_k.at[gi].add(rho_ik[i, gi])
+
             if output_time_scaling:
                 raise
+
+        print(f"{s_rho_k=} ")
 
         output_weight_kwargs = {
             "weights": w_out,
