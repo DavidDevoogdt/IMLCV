@@ -493,6 +493,8 @@ class TransformerMAF(Transformer):
             nl_t=dlo.nl_t,
             w=w if self.use_w else [jnp.ones_like(x) for x in w],
             w_t=w_t if self.use_w else [jnp.ones_like(x) for x in w],
+            rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
+            rho_t=dlo._rho_t if self.use_w else [jnp.ones_like(x) for x in w],
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             calc_pi=False,

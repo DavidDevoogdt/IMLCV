@@ -314,6 +314,8 @@ class Transformer(MyPyTreeNode):
                     margin=0.1,
                     inverted=False,
                     vmax=vmax,
+                    cv_title=cv_titles[1] if isinstance(cv_titles, list) else cv_titles,
+                    data_title=False,
                 )
 
         else:
@@ -335,6 +337,7 @@ class Transformer(MyPyTreeNode):
                 T=dlo.sti.T,
                 plot_FES=True,
                 cv_titles=cv_titles,
+                data_titles=None,
                 duplicate_cv_data=False,
                 vmax=vmax,
             )
@@ -350,6 +353,7 @@ class Transformer(MyPyTreeNode):
                 T=dlo.sti.T,
                 plot_FES=True,
                 cv_titles=cv_titles,
+                data_titles=None,
                 duplicate_cv_data=False,
                 vmax=vmax,
             )
@@ -380,7 +384,7 @@ class Transformer(MyPyTreeNode):
         name: str | Path | None = None,
         labels=None,
         cv_titles: bool | list[str] = True,
-        data_titles=None,
+        data_titles: list[str] | None = None,
         color_trajectories=False,
         margin=0.1,
         plot_FES=False,
@@ -1796,9 +1800,8 @@ class IdentityTransformer(Transformer):
 
 
 class CvTransTransformer(Transformer):
-    trans:CvTrans 
+    trans: CvTrans
 
-    
     def _fit(
         self,
         x: list[CV] | list[SystemParams],

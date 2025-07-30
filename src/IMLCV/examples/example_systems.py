@@ -17,7 +17,11 @@ from IMLCV.implementations.MdEngine import NewYaffEngine
 DATA_ROOT = ROOT_DIR / "data"
 
 
-def alanine_dipeptide_openmm(cv: str | None = "backbone_dihedrals", bias: Bias | None = None):
+def alanine_dipeptide_openmm(
+    cv: str | None = "backbone_dihedrals",
+    bias: Bias | None = None,
+    save_step=5,
+):
     energy = OpenMmEnergy(
         pdb=DATA_ROOT / "ala" / "alanine-dipeptide.pdb",
         forcefield_name="amber14-all.xml",
@@ -55,9 +59,10 @@ def alanine_dipeptide_openmm(cv: str | None = "backbone_dihedrals", bias: Bias |
         T=300 * kelvin,
         timestep=2.0 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
-        write_step=50,
+        write_step=500,
+        save_step=save_step,
         atomic_numbers=atomic_numbers,
-        screen_log=50,
+        screen_log=100,
         equilibration=0 * femtosecond,
         r_cut=None,
     )
@@ -67,6 +72,7 @@ def alanine_dipeptide_openmm(cv: str | None = "backbone_dihedrals", bias: Bias |
         energy=energy,
         sp=sp,
         static_trajectory_info=tic,
+        step=5,
     )
 
     return engine

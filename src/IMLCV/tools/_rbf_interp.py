@@ -18,7 +18,7 @@ from IMLCV.tools._rbfinterp_pythran import (
     evaluate_system,
 )
 
-__all__ = ["RBFInterpolator", "cv_vals"]
+# __all__ = ["RBFInterpolator", "cv_vals"]
 
 
 # These RBFs are implemented.
@@ -151,10 +151,11 @@ def _build_and_solve_system(
 
     kernel_func = NAME_TO_FUNC[kernel]
 
-    K = eval_kernel_matrix(y, y, metric, epsilon, kernel_func) + jnp.diag(smoothing)
+    K = eval_kernel_matrix(y, y, metric, epsilon, kernel_func)
+    # dK = eval_kernel_matrix(y, y, metric, epsilon, kernel_func, norm_jacobian=True)
     P = eval_polynomial_matrix(y, metric=metric, powers=powers)
 
-    print(f"{P=}")
+    # print(f"{dK=} {dK.shape}")
 
     A = jnp.block(
         [
@@ -162,6 +163,9 @@ def _build_and_solve_system(
             [P.T, jnp.zeros((r, r))],
         ]
     )
+
+    # print(f"{jnp.linalg.norm(smoothing)=}")
+    # print(f"{jnp.diag(A)=} {smoothing=}")
 
     b = jnp.vstack([d, jnp.zeros((r, s))])
 

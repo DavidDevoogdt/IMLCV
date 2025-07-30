@@ -125,20 +125,24 @@ class HarmonicBias(Bias):
         if self.k_max is None:
             return parabola(r)
 
-        return jnp.where(
+        o = jnp.where(
             jnp.linalg.norm(r / self.r0) < 1,
             parabola(r),
-            jnp.sqrt(
-                jnp.einsum(
-                    "i,i,i,i->",
-                    self.k_max,
-                    self.k_max,
-                    jnp.abs(r) - self.r0,
-                    jnp.abs(r) - self.r0,
-                ),
-            )
-            + self.y0,
+            (
+                jnp.sqrt(
+                    jnp.einsum(
+                        "i,i,i,i->",
+                        self.k_max,
+                        self.k_max,
+                        jnp.abs(r) - self.r0,
+                        jnp.abs(r) - self.r0,
+                    )
+                )
+                + self.y0
+            ),
         )
+
+        return o[0]
 
 
 class BiasMTD(Bias):

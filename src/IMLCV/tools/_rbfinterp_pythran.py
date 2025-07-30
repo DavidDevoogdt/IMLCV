@@ -78,7 +78,11 @@ def get_d(x: jax.Array, metric: CvMetric, epsilon: jax.Array | float):
 def cv_norm(x: CV, y: CV, metric: CvMetric, eps: jax.Array | float):
     d = get_d(x.cv - y.cv, metric, eps)
 
-    return jnp.sqrt(jnp.sum(d**2))
+    d_sum = jnp.sum(d**2)
+
+    d_sum_safe = jnp.where(d_sum == 0.0, 1.0, d_sum)
+
+    return jnp.where(d_sum == 0.0, 0.0, jnp.sqrt(d_sum_safe))  # avoid division by zero
 
 
 def cv_vals(x: CV, power: jax.Array, metric: CvMetric):
@@ -94,16 +98,29 @@ def cv_vals(x: CV, power: jax.Array, metric: CvMetric):
     return out
 
 
-@partial(jit_decorator, static_argnums=(4))
+@partial(jit_decorator, static_argnums=(4, 5))
 def eval_kernel_matrix(
-    x: CV, y: CV, metric: CvMetric, eps: jax.Array | float, kernel_func: Callable[[jax.Array], jax.Array]
+    x: CV,
+    y: CV,
+    metric: CvMetric,
+    eps: jax.Array | float,
+    kernel_func: Callable[[jax.Array], jax.Array],
+    norm_jacobian: bool = False,
 ):
     """Evaluate RBFs, with centers at `x`, at `x`."""
 
     @partial(vmap_decorator, in_axes=(None, 0), out_axes=1)
     @partial(vmap_decorator, in_axes=(0, None), out_axes=0)
     def f00(x: CV, y: CV):
-        return kernel_func(cv_norm(x, y, metric, eps))
+        def _f00(x, y):
+            return
+
+        r = cv_norm(x, y, metric, eps)
+
+        if norm_jacobian:
+            return jax.jacrev(kernel_func)(r)
+
+        return kernel_func(r)
 
     return f00(x, y)
 

@@ -576,6 +576,8 @@ class Bias(ABC, MyPyTreeNode):
         margin=0.1,
         dpi=300,
         T=300 * kelvin,
+        cv_title: str | bool = True,
+        data_title: str | bool = True,
         **kwargs,
     ):
         from IMLCV.base.CVDiscovery import Transformer
@@ -606,7 +608,8 @@ class Bias(ABC, MyPyTreeNode):
             dpi=dpi,
             T=T,
             indicate_plots=None,
-            cv_titles=True,
+            cv_titles=[cv_title] if isinstance(cv_title, str) else cv_title,
+            data_titles=[data_title] if isinstance(data_title, str) else None,
             **kwargs,
         )
 

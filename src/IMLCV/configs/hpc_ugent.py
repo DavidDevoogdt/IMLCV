@@ -47,9 +47,9 @@ def get_slurm_provider(
     load_cp2k=False,
 ):
     if py_env is None:
-        if env == "hortense":
-            print("setting python env for hortense")
-            py_env = f"""
+        # if env == "hortense":
+        print("setting python env for hortense")
+        py_env = f"""
 echo "init pixi"
 cd {ROOT_DIR}
 pwd
@@ -68,8 +68,8 @@ source pixi_shell_hook.sh
 echo "post init pixi"
 which python
             """
-        else:
-            raise ValueError
+    # else:
+    #     raise ValueError
 
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
@@ -78,22 +78,15 @@ which python
 
     worker_init = f"{py_env}\n"
 
-    if env == "hortense":
-        if load_cp2k:
+    if load_cp2k:
+        if env == "hortense":
             worker_init += "module load CP2K/2023.1-foss-2022b\n"
             worker_init += "module unload SciPy-bundle Python\n"
         # else:
         # worker_init += "module load OpenMPI\n"
 
-    else:
-        raise ValueError()
-
-    # elif env == "stevin":
-    #     if load_cp2k:
-    #         worker_init += "module load CP2K/2023.1-foss-2022b\n"
-    #         worker_init += "module unload SciPy-bundle Python\n"
-    #     else:
-    #         worker_init += "module load OpenMPI\n"
+        else:
+            raise ValueError()
 
     if not parsl_cores:
         if threads_per_core is None:

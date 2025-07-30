@@ -43,14 +43,14 @@ def get_platform():
     if re.search("(node|login)[0-9]*.dodrio.os", node):
         env = "hortense"
     elif re.search(
-        "(node|gligar)[0-9]*.(gastly|accelgor|delcatty|doduo|donphan|gallade|golett|joltik|kirlia|skitty|slaking|swalot|victini).os",
+        "(node|gligar)[0-9]*.(gastly|accelgor|delcatty|doduo|donphan|gallade|golett|joltik|kirlia|skitty|slaking|swalot|victini|shinx).os",
         node,
     ):
         env = "stevin"
     elif node == "david-CMM":
         env = "local"
     else:
-        raise ValueError("unknown pc {node=}, set env")
+        raise ValueError(f"unknown pc {node=}, set env")
 
     print(env)
     return env

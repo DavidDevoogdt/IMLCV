@@ -110,12 +110,14 @@ class Scheme:
             margin=0.0,
         )
 
+        bb = m.bounding_box[:, 1] - m.bounding_box[:, 0]
+
         print(f"{grid=}")
 
         # sigma =
 
         if k is None:
-            mu = jnp.array([a[1] - a[0] for a in grid])
+            mu = bb / n
             k = (2 / mu * jax.scipy.special.erfinv(1 - eps)) ** 2 * self.sti.T * boltzmann
 
             print(f"{k/kjmol=}")
@@ -125,7 +127,7 @@ class Scheme:
                 self.rounds.get_collective_variable(),
                 cv,
                 k,
-                k_max=max_grad,
+                k_max=100 * kjmol / bb,
             )
             for cv in cv_grid
         ]

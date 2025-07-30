@@ -20,8 +20,8 @@ def fun(
     stdout,
     stderr,
     precommand,
-    inputs,
-    outputs,
+    inputs: list[File],
+    outputs: list[File],
     pass_files_in=0,
     pass_files_out=0,
     uses_mpi=False,
@@ -66,7 +66,7 @@ def fun(
     return out
 
 
-def load(inputs=[], outputs=[], auto_log=False, remove_stderr=True, remove_stdout=True):
+def load(inputs: list[File] = [], outputs: list[File] = [], auto_log=False, remove_stderr=True, remove_stdout=True):
     if not auto_log:
         stdout, stderr, lockfile = inputs[-3].filepath, inputs[-2].filepath, inputs[-1].filepath
         inputs = inputs[:-3]
@@ -106,7 +106,7 @@ def bash_app_python(
     profile=False,
     remove_stdout=True,
     remove_stderr=True,
-    execution_folder: Path | None = None,
+    execution_folder: Path | str | None = None,
     stdout: str | Path | None = None,
     stderr: str | Path | None = None,
     inputs: list[str | Path] = [],  # inputs that need te be present but not passed as arguments
@@ -152,7 +152,7 @@ def bash_app_python(
 
         _execution_folder.mkdir(exist_ok=True, parents=True)
 
-        def rename_num(name, i):
+        def rename_num(name: Path, i: int):
             stem = name.name.split(".")
             stem[0] = f"{stem[0]}_{i:0>3}"
             return name.parent / ".".join(stem)

@@ -606,10 +606,6 @@ def sinkhorn_divergence_2(
         c /= scale
 
         if epsilon is None:
-            # P = jnp.eye(c.shape[0], c.shape[1])
-
-            # return jnp.sum(jnp.diag(c))
-
             return jnp.sum(jnp.diag(c)), p1
 
         # jax.debug.print("c {} {}", c, c.shape)
@@ -854,6 +850,8 @@ def get_sinkhorn_divergence_2(
 
         print(f"{dz=} {dz.shape=}")
     else:
+        assert nli.num_z_unique is not None
+
         print(f"{nli.num_z_unique=}")
         dz = jnp.ones((len(nli.num_z_unique),))
 

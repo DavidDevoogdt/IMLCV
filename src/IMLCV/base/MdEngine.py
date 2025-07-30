@@ -33,6 +33,7 @@ from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
 class StaticMdInfo:
     _attr = [
         "timestep",
+        "save_step",
         "r_cut",
         "timecon_thermo",
         "T",
@@ -63,6 +64,7 @@ class StaticMdInfo:
     write_step: int = 100
     equilibration: float | None = None
     screen_log: int = 1000
+    save_step: int = 10
 
     invalid: bool = False
 
@@ -683,7 +685,7 @@ class MDEngine(ABC):
                 print("updating sp from trajectory file")
 
                 self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
-                self.step = self.trajectory_info._size
+                self.step = self.trajectory_info._size * self.static_trajectory_info.save_step
                 self.sp = self.trajectory_info.sp[-1]
 
                 print(f"loaded ti  {self.step=} ")
@@ -715,6 +717,10 @@ class MDEngine(ABC):
             print(f"previous run had {self.step} steps, running for additional {int(steps)} steps!")
         else:
             print(f"running for {int(steps)} steps!")
+
+        if steps <= 0:
+            print("No steps to run, exiting")
+            return
 
         try:
             self._run(int(steps))
@@ -815,11 +821,12 @@ class MDEngine(ABC):
                 str += f"| {ti._cv[0, :]}"
             print(str)
 
-        # write step to trajectory
-        if self.trajectory_info is None:
-            self.trajectory_info = ti
-        else:
-            self.trajectory_info += ti
+        if self.step % self.static_trajectory_info.save_step == 0:
+            # write step to trajectory
+            if self.trajectory_info is None:
+                self.trajectory_info = ti
+            else:
+                self.trajectory_info += ti
 
         if self.step % self.static_trajectory_info.write_step == 0:
             if self.trajectory_file is not None:
@@ -913,7 +920,7 @@ class MDEngine(ABC):
                 if Path(self.trajectory_file).exists():
                     assert self.trajectory_info is not None
 
-                    self.step = self.trajectory_info._size
+                    self.step = self.trajectory_info._size * self.static_trajectory_info.save_step
                     self.sp = self.trajectory_info.sp[-1]
 
             self.time0 = time()
