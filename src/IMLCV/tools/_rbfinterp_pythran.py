@@ -52,7 +52,18 @@ NAME_TO_FUNC: dict[str, Callable[[jax.Array], jax.Array]] = {
 }
 
 
-def get_d(x: jax.Array, metric: CvMetric, epsilon: jax.Array | float):
+@partial(jit_decorator, static_argnums=(3))
+def get_d(
+    x: jax.Array,
+    metric: CvMetric,
+    epsilon: jax.Array | float,
+    periodicities: tuple[bool],
+    y: jax.Array | None = None,
+):
+    epsilon = jnp.array(epsilon).reshape((-1,))
+    if epsilon.shape[0] == 1:
+        epsilon = jnp.full((x.shape[0]), epsilon[0])
+
     def wrap_mod(d: jax.Array):
         d = jnp.mod(d, 1.0)
         d = jnp.where(d > 0.5, d - 1.0, d)
@@ -61,22 +72,46 @@ def get_d(x: jax.Array, metric: CvMetric, epsilon: jax.Array | float):
     def scale(val: jax.Array, metric: CvMetric):
         return val / (metric.bounding_box[:, 1] - metric.bounding_box[:, 0])  # val between zero and 1 (usually)
 
-    d = scale(x, metric=metric)
+    x = scale(x, metric=metric)
+    if y is not None:
+        y = scale(y, metric=metric)
 
-    d = (
-        jnp.where(
-            metric.periodicities,
-            wrap_mod(d),  # norm to dist 1
-            d,
-        )
-        * epsilon
-    )
+    _d = []
 
-    return d
+    for i, pi in enumerate(periodicities):
+        if pi:
+            if y is None:
+                dc = jnp.cos(x[i] * 2 * jnp.pi)
+                ds = jnp.sin(x[i] * 2 * jnp.pi)
+            else:
+                dc = jnp.cos(x[i] * 2 * jnp.pi) - jnp.cos(y[i] * 2 * jnp.pi)
+                ds = jnp.sin(x[i] * 2 * jnp.pi) - jnp.sin(y[i] * 2 * jnp.pi)
+
+            # d.append(jnp.sqrt(pi_x**2 + pi_y**2))
+
+            _d.append(dc * epsilon[i])
+            _d.append(ds * epsilon[i])
+
+        else:
+            if y is None:
+                d = x[i]
+            else:
+                d = x[i] - y[i]
+
+            _d.append(d * epsilon[i])
+
+    return jnp.array(_d)
 
 
-def cv_norm(x: CV, y: CV, metric: CvMetric, eps: jax.Array | float):
-    d = get_d(x.cv - y.cv, metric, eps)
+@partial(jit_decorator, static_argnums=(4))
+def cv_norm(
+    x: CV,
+    y: CV,
+    metric: CvMetric,
+    eps: jax.Array | float,
+    periodicities: tuple[bool],
+):
+    d = get_d(x.cv, metric, eps, periodicities, y.cv)
 
     d_sum = jnp.sum(d**2)
 
@@ -85,26 +120,26 @@ def cv_norm(x: CV, y: CV, metric: CvMetric, eps: jax.Array | float):
     return jnp.where(d_sum == 0.0, 0.0, jnp.sqrt(d_sum_safe))  # avoid division by zero
 
 
-def cv_vals(x: CV, power: jax.Array, metric: CvMetric):
-    d = get_d(x.cv, metric, epsilon=1.0)
+@partial(jit_decorator, static_argnums=(3))
+def cv_vals(
+    x: CV,
+    power: jax.Array,
+    metric: CvMetric,
+    periodicities: tuple[bool],
+):
+    d = get_d(x.cv, metric, epsilon=1.0, periodicities=periodicities)
 
-    # both x^n and [sin(x),cos(nx)] are unisolvent
-    out = jnp.where(
-        metric.periodicities,
-        jnp.where(power >= 0, jnp.cos(power * d * 2 * jnp.pi), jnp.sin(power * d * 2 * jnp.pi)),
-        d**power,
-    )
-
-    return out
+    return d**power
 
 
-@partial(jit_decorator, static_argnums=(4, 5))
+@partial(jit_decorator, static_argnums=(4, 5, 6))
 def eval_kernel_matrix(
     x: CV,
     y: CV,
     metric: CvMetric,
     eps: jax.Array | float,
     kernel_func: Callable[[jax.Array], jax.Array],
+    periodicities: tuple[bool],
     norm_jacobian: bool = False,
 ):
     """Evaluate RBFs, with centers at `x`, at `x`."""
@@ -112,10 +147,7 @@ def eval_kernel_matrix(
     @partial(vmap_decorator, in_axes=(None, 0), out_axes=1)
     @partial(vmap_decorator, in_axes=(0, None), out_axes=0)
     def f00(x: CV, y: CV):
-        def _f00(x, y):
-            return
-
-        r = cv_norm(x, y, metric, eps)
+        r = cv_norm(x, y, metric, eps, periodicities=periodicities)
 
         if norm_jacobian:
             return jax.jacrev(kernel_func)(r)
@@ -125,8 +157,13 @@ def eval_kernel_matrix(
     return f00(x, y)
 
 
-@jit_decorator
-def eval_polynomial_matrix(x: CV, metric: CvMetric, powers: jax.Array):
+@partial(jit_decorator, static_argnums=(3))
+def eval_polynomial_matrix(
+    x: CV,
+    metric: CvMetric,
+    powers: jax.Array,
+    periodicities: tuple[bool],
+):
     """Evaluate monomials, with exponents from `powers`, at `x`."""
 
     @partial(vmap_decorator, in_axes=(None, 0), out_axes=1)
@@ -134,7 +171,12 @@ def eval_polynomial_matrix(x: CV, metric: CvMetric, powers: jax.Array):
     def f00(x: CV, power: jax.Array) -> jax.Array:
         return jnp.prod(
             jnp.array(
-                cv_vals(x=x, power=power, metric=metric),  # type:ignore
+                cv_vals(
+                    x=x,
+                    power=power,
+                    metric=metric,
+                    periodicities=periodicities,
+                ),  # type:ignore
             )
         )
 
@@ -151,6 +193,7 @@ def evaluate_system(
     kernel: str,
     epsilon: float | jax.Array,
     powers: jax.Array,
+    periodicities: tuple[bool],
 ):
     """Construct the coefficients needed to evaluate
     the RBF.
@@ -182,6 +225,6 @@ def evaluate_system(
     kernel_func = NAME_TO_FUNC[kernel]
 
     return (
-        eval_kernel_matrix(x, y, metric, epsilon, kernel_func) @ a
-        + eval_polynomial_matrix(x, metric=metric, powers=powers) @ b
+        eval_kernel_matrix(x, y, metric, epsilon, kernel_func, periodicities=periodicities) @ a
+        + eval_polynomial_matrix(x, metric=metric, powers=powers, periodicities=periodicities) @ b
     )

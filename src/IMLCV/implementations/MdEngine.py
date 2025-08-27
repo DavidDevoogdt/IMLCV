@@ -400,7 +400,3 @@ class NewYaffEngine(MDEngine):
 
         assert self._verlet is not None
         self._verlet.run(int(steps))
-
-    # @property
-    # def yaff_system(self) -> new_yaff.system.YaffSys:
-    #     return new_yaff.system.YaffSys(self, self.static_trajectory_info)

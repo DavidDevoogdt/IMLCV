@@ -43,6 +43,7 @@ class StaticMdInfo:
         "equilibration",
         "screen_log",
         "max_grad",
+        "frac_full",
         "invalid",
     ]
 
@@ -69,6 +70,8 @@ class StaticMdInfo:
     invalid: bool = False
 
     max_grad: float | None = 200 * kjmol / angstrom
+
+    frac_full: float = 1.0
 
     @property
     def masses(self):
@@ -129,10 +132,16 @@ class StaticMdInfo:
         attrs_static = {}
 
         for key, val in hf.items():
-            props_static[key] = val[:]
+            try:
+                props_static[key] = val[:]
+            except Exception as e:
+                print(f"could not load {key=}")
 
         for key, val in hf.attrs.items():
-            attrs_static[key] = val
+            try:
+                attrs_static[key] = val
+            except Exception as e:
+                print(f"could not load {key=}")
 
         return StaticMdInfo(**attrs_static, **props_static)
 
@@ -546,7 +555,7 @@ class TrajectoryInfo(MyPyTreeNode):
 class MDEngine(ABC):
     """Base class for MD engine."""
 
-    bias: Bias
+    bias: Bias | None
     energy: Energy
     sp: SystemParams
     static_trajectory_info: StaticMdInfo
@@ -652,6 +661,11 @@ class MDEngine(ABC):
 
     def save(self, file):
         filename = Path(file)
+
+        b = self.bias
+
+        self.bias = None
+
         if filename.suffix == ".json":
             with open(filename, "w") as f:
                 f.writelines(jsonpickle.encode(self, indent=1, use_base85=True))  # type:ignore
@@ -659,8 +673,10 @@ class MDEngine(ABC):
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
+        self.bias = b
+
     @staticmethod
-    def load(file, **kwargs) -> MDEngine:
+    def load(file, bias: Bias, **kwargs) -> MDEngine:
         filename = Path(file)
 
         if filename.suffix == ".json":
@@ -670,13 +686,15 @@ class MDEngine(ABC):
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
 
+        self.bias = bias
+
         for key in kwargs.keys():
             setattr(self, key, kwargs[key])
 
             if key == "trajectory_file":
                 continue
 
-        assert isinstance(self, MDEngine)
+        assert isinstance(self, MDEngine), f"{self=}"
 
         if (key := "trajectory_file") in kwargs.keys():
             print(f"loading ti  {self.trajectory_file} ")
@@ -695,13 +713,6 @@ class MDEngine(ABC):
         self.update_nl()
 
         return self
-
-    def new_bias(self, bias: Bias, **kwargs) -> MDEngine:
-        with tempfile.NamedTemporaryFile() as tmp:
-            self.save(tmp.name)
-            kwargs["bias"] = bias
-            mde = MDEngine.load(tmp.name, **kwargs)
-        return mde
 
     def run(self, steps):
         """run the integrator for a given number of steps.
@@ -885,6 +896,8 @@ class MDEngine(ABC):
         rel=False,
         shmap_kwargs=ShmapKwargs.create(),
     ) -> tuple[CV, EnergyResult]:
+        assert self.bias is not None
+
         cv, ener = self.bias.compute_from_system_params(
             sp=sp,
             nl=self.nl,

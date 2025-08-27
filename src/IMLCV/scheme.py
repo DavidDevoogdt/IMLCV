@@ -91,7 +91,7 @@ class Scheme:
         steps=1e4,
         k=None,
         n=8,
-        max_grad=None,
+        # max_grad=None,
         plot=True,
         scale_n: int | None = None,
         cv_round: int | None = None,
@@ -103,16 +103,33 @@ class Scheme:
         chunk_size=None,
         # T_scale=10,
         use_common_bias=True,
+        max_grad=100 * kjmol,
+        max_b=100 * kjmol,
+        dT=0.0,
     ):
         m = self.bias.collective_variable.metric
-        grid, _, cv_grid, _ = m.grid(
+        _, cv_mid, _, cv_grid, _ = m.grid(
             n + 1,
             margin=0.0,
         )
 
         bb = m.bounding_box[:, 1] - m.bounding_box[:, 0]
 
-        print(f"{grid=}")
+        print(f"{cv_mid=}")
+
+        bias = self.bias
+
+        if max_b is not None:
+            # print(f"mb")
+            bs, _ = bias.compute_from_cv(cv_grid)
+
+            fesses = -bs
+            bs -= jnp.min(bs)
+
+            b = fesses < max_b
+            print(f"{jnp.sum(b)}/{fesses.shape[0]} umbrellas have ground fes < {max_b/kjmol=}")
+
+            cv_grid = cv_grid[b]
 
         # sigma =
 
@@ -127,7 +144,7 @@ class Scheme:
                 self.rounds.get_collective_variable(),
                 cv,
                 k,
-                k_max=100 * kjmol / bb,
+                k_max=max_grad,
             )
             for cv in cv_grid
         ]
@@ -138,6 +155,8 @@ class Scheme:
             sp0 = SystemParams.stack(*[self.md.sp] * len(biases))
         else:
             sp0 = None
+
+        # raise
 
         self.rounds.run_par(
             biases=biases,
@@ -152,6 +171,7 @@ class Scheme:
             chunk_size=chunk_size,
             # T_scale=T_scale,
             use_common_bias=use_common_bias,
+            dT=dT,
         )
 
     def inner_loop(
@@ -179,6 +199,8 @@ class Scheme:
         only_finished=True,
         plot_umbrella=False,
         max_bias=100 * kjmol,
+        max_grad=100 * kjmol,
+        vmax: float = 100 * kjmol,
         n_max_fes=1e5,
         thermolib=False,
         macro_chunk=10000,
@@ -194,6 +216,8 @@ class Scheme:
         use_common_bias=True,
         first_round_without_ground_bias=False,
         first_round_no_fes_bias=False,
+        dT=0,
+        max_b=100 * kjmol,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -262,7 +286,10 @@ class Scheme:
                 only_finished=i > 1 and only_finished,
                 chunk_size=chunk_size,
                 # T_scale=T_scale,
+                max_grad=max_grad,
                 use_common_bias=not without_ground_bias,
+                dT=dT,
+                max_b=max_b,
             )
 
             prev_bias = self.rounds.get_bias(c=cv_round, r=i)
@@ -285,7 +312,7 @@ class Scheme:
                     n_max=n_max_fes,
                     thermolib=thermolib,
                     macro_chunk=macro_chunk,
-                    vmax=max_bias,
+                    vmax=vmax,
                     # T_scale=T_scale,
                     koopman=koopman,
                     lag_n=lag_n,
@@ -333,6 +360,7 @@ class Scheme:
         macro_chunk=2000,
         macro_chunk_nl=5000,
         verbose=False,
+        koopman=True,
     ):
         self.rounds.update_CV(
             transformer=transformer,
@@ -357,6 +385,7 @@ class Scheme:
             macro_chunk=macro_chunk,
             macro_chunk_nl=macro_chunk_nl,
             verbose=verbose,
+            koopman=koopman,
         )
 
     def transform_CV(

@@ -35,7 +35,16 @@ def alanine_dipeptide_openmm(
                 f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
                 metric=CvMetric.create(
                     periodicities=[True, True],
-                    bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi]],
+                    bounding_box=[[-jnp.pi, jnp.pi], [-jnp.pi, jnp.pi]],
+                ),
+            )
+        elif cv == "ct":
+            cv0 = CollectiveVariable(
+                # f=(dihedral(numbers=(2, 5, 7, 9)) + dihedral(numbers=(9, 15, 17, 19))),
+                f=(dihedral(numbers=(1, 4, 6, 8)) + dihedral(numbers=(8, 14, 16, 18))),
+                metric=CvMetric.create(
+                    periodicities=[True, True],
+                    bounding_box=[[-jnp.pi, jnp.pi], [-jnp.pi, jnp.pi]],
                 ),
             )
         elif cv == "backbone_dihedrals_theta":
@@ -57,7 +66,7 @@ def alanine_dipeptide_openmm(
 
     tic = StaticMdInfo(
         T=300 * kelvin,
-        timestep=2.0 * femtosecond,
+        timestep=0.5 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
         write_step=500,
         save_step=save_step,
@@ -349,7 +358,7 @@ def CsPbI3_MACE(unit_cells=[2]):
     return yaffmd
 
 
-def CsPbI3_MACE_lattice(unit_cells=[2]):
+def CsPbI3_MACE_lattice(unit_cells=[2], save_step=1):
     assert isinstance(unit_cells, list)
 
     if len(unit_cells) == 3:
@@ -383,6 +392,7 @@ def CsPbI3_MACE_lattice(unit_cells=[2]):
         equilibration=0 * femtosecond,
         screen_log=50,
         r_cut=r_cut,
+        save_step=save_step,
     )
 
     from IMLCV.implementations.CV import scale_cv_trans

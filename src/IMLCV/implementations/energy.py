@@ -172,6 +172,7 @@ class AseEnergy(Energy):
 
         if self.atoms.calc is None:
             sp_save = self.sp
+            assert sp_save is not None
             self.atoms.calc = self._calculator()
             self.sp = sp_save
 

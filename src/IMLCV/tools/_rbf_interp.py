@@ -69,6 +69,9 @@ def _monomial_powers(ndim, degree, periodicities):
         monomial.
 
     """
+
+    ndim += jnp.sum(periodicities)  # every periodic dim is split in sin and cos component
+
     nmonos = comb(degree + ndim, ndim, exact=True)
 
     out = jnp.zeros((nmonos, ndim), dtype=int)
@@ -82,29 +85,6 @@ def _monomial_powers(ndim, degree, periodicities):
 
             count += 1
 
-    # out = jnp.array(out)
-
-    # print(f"{out=}")
-
-    # for peridic dimensions, add negative exp
-    # positive are used for cos(nx)
-    # negative for sin(nx)
-    for i, p in enumerate(periodicities):
-        if not p:
-            continue
-
-        out = out
-
-        m = out[:, i] != 0
-
-        print(f"newinv {m=}")
-
-        out_neg = (out.at[:, i].mul(-1))[m, :]
-
-        out = jnp.vstack([out, out_neg])
-
-    # print(f"{out=}")
-
     return jnp.array(out)
 
 
@@ -112,10 +92,11 @@ def _build_and_solve_system(
     y: CV,
     metric: CvMetric,
     d,
-    smoothing,
+    smoothing: jax.Array | None,
     kernel,
     epsilon,
     powers,
+    periodicities: tuple[bool],
     check=True,
 ):
     """Build and solve the RBF interpolation system of equations.
@@ -151,9 +132,26 @@ def _build_and_solve_system(
 
     kernel_func = NAME_TO_FUNC[kernel]
 
-    K = eval_kernel_matrix(y, y, metric, epsilon, kernel_func)
+    K = eval_kernel_matrix(
+        y,
+        y,
+        metric,
+        epsilon,
+        kernel_func,
+        periodicities=periodicities,
+    )
+
+    if smoothing is not None:
+        K += smoothing**2 * jnp.eye(p)
     # dK = eval_kernel_matrix(y, y, metric, epsilon, kernel_func, norm_jacobian=True)
-    P = eval_polynomial_matrix(y, metric=metric, powers=powers)
+    P = eval_polynomial_matrix(
+        y,
+        metric=metric,
+        powers=powers,
+        periodicities=periodicities,
+    )
+
+    # print(f"{P=}")
 
     # print(f"{dK=} {dK.shape}")
 
@@ -164,6 +162,8 @@ def _build_and_solve_system(
         ]
     )
 
+    # print(f"{jnp.sort(jnp.abs(jnp.linalg.eigh(A)[0]))=}")
+
     # print(f"{jnp.linalg.norm(smoothing)=}")
     # print(f"{jnp.diag(A)=} {smoothing=}")
 
@@ -173,7 +173,7 @@ def _build_and_solve_system(
 
     print(f"start time: {dt0:%H:%M:%S}.{dt0.microsecond // 1000:03d}", flush=True)
 
-    coeffs = jax.block_until_ready(jax.scipy.linalg.solve(A, b, assume_a="sym"))
+    coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
 
     dt1 = datetime.now()
 
@@ -190,13 +190,14 @@ class RBFInterpolator(MyPyTreeNode):
     _coeffs: jax.Array
     y: CV
     d: jax.Array
-    smoothing: jax.Array
+    smoothing: jax.Array | None
     epsilon: jax.Array
     powers: jax.Array
     metric: CvMetric
     d_shape: tuple[int, ...] = field(pytree_node=False)
     kernel: str = field(pytree_node=False)
     d_dtype: jnp.dtype | None = field(pytree_node=False, default=None)
+    periodicities: tuple[bool] = field(pytree_node=False, default=None)
 
     @classmethod
     def create(
@@ -204,8 +205,8 @@ class RBFInterpolator(MyPyTreeNode):
         y: CV,
         metric: CvMetric,
         d: jax.Array,
-        smoothing=0.0,
-        kernel="gaussian",
+        smoothing=None,
+        kernel="thin_plate_spline",
         epsilon=None,
         degree=None,
     ):
@@ -220,23 +221,25 @@ class RBFInterpolator(MyPyTreeNode):
         d_shape = d.shape[1:]
         d = d.reshape((ny, -1))
 
-        if jnp.isscalar(smoothing):
-            smoothing = jnp.full(ny, smoothing, dtype=float)
-        else:
-            smoothing = jnp.asarray(smoothing, dtype=float)
-            if smoothing.shape != (ny,):
-                raise ValueError(
-                    f"Expected `smoothing` to be a scalar or have shape ({ny},).",
-                )
+        if smoothing is not None:
+            if jnp.isscalar(smoothing):
+                smoothing = jnp.full(ny, smoothing, dtype=float)
+            else:
+                smoothing = jnp.asarray(smoothing, dtype=float)
+                if smoothing.shape != (ny,):
+                    raise ValueError(
+                        f"Expected `smoothing` to be a scalar or have shape ({ny},).",
+                    )
 
         kernel = kernel.lower()
         if kernel not in _AVAILABLE:
             raise ValueError(f"`kernel` must be one of {_AVAILABLE}.")
 
-        if metric.periodicities.any():
-            assert kernel not in ["linear", "thin_plate_spline", "cubic", "quintic", "multiquadric"], (
-                "for periodic CV, choose decaying kernel"
-            )
+        # if metric.periodicities.any():
+        #     if kernel in ["linear", "thin_plate_spline", "cubic", "quintic", "thin_plate_spline"]:
+        #         print(f"for periodic CV, choose decaying kernel. Switching from {kernel=} to inverse_quadratic ")
+
+        #         kernel = "inverse_quadratic"
 
         if epsilon is None:
             if kernel in _SCALE_INVARIANT:
@@ -264,6 +267,9 @@ class RBFInterpolator(MyPyTreeNode):
                     UserWarning,
                 )
 
+        # if metric.periodicities.any():
+        #     assert degree <= 0, "degree>0 is untested!"
+
         nobs = ny
 
         powers = _monomial_powers(ndim, degree, periodicities=metric.periodicities)
@@ -277,6 +283,8 @@ class RBFInterpolator(MyPyTreeNode):
                 f"`degree` is {degree} and the number of dimensions is {ndim}.",
             )
 
+        periodicities: tuple[bool] = tuple(bool(a) for a in metric.periodicities)
+
         coeffs = _build_and_solve_system(
             y,
             metric,
@@ -285,6 +293,7 @@ class RBFInterpolator(MyPyTreeNode):
             kernel,
             epsilon,
             powers,
+            periodicities=periodicities,
         )
 
         return RBFInterpolator(
@@ -297,6 +306,7 @@ class RBFInterpolator(MyPyTreeNode):
             epsilon=epsilon,
             powers=powers,
             metric=metric,
+            periodicities=periodicities,  # type:ignore
         )
 
     def __call__(self, x: CV):
@@ -334,6 +344,7 @@ class RBFInterpolator(MyPyTreeNode):
             self.kernel,
             self.epsilon,
             self.powers,
+            self.periodicities,
         )
 
         if isbatched:
@@ -350,5 +361,8 @@ class RBFInterpolator(MyPyTreeNode):
 
         if state["y"]._stack_dims is not None:
             state["y"] = state["y"].replace(_stack_dims=None)
+
+        if "periodicities" not in state:
+            state["periodicities"] = tuple(bool(a) for a in state["metric"].periodicities)
 
         self.__init__(**state)

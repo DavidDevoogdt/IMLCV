@@ -85,7 +85,7 @@ def config(
         env = get_platform()
 
     if path_internal is None:
-        path_internal = ROOT_DIR / ".runinfo"
+        path_internal =  "/tmp/.runinfo"
 
     if env == "local":
         execs, labels, precommands, ref_comm, resources = get_config_local(

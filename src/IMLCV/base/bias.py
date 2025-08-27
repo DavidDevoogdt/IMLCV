@@ -330,7 +330,8 @@ class BiasError(Exception):
 class Bias(ABC, MyPyTreeNode):
     """base class for biased MD runs."""
 
-    collective_variable: CollectiveVariable = field(pytree_node=True)
+    collective_variable: CollectiveVariable | None = field(pytree_node=True)
+    collective_variable_path: Path | str | None = field(pytree_node=False, default=None)
     start: int | None = field(pytree_node=False, default=0)
     step: int | None = field(pytree_node=False, default=1)
     finalized: bool = field(pytree_node=False, default=False)
@@ -339,7 +340,7 @@ class Bias(ABC, MyPyTreeNode):
     slice_mean: bool = field(pytree_node=False, default=False)
 
     @staticmethod
-    def create(*args, **kwargs):
+    def create(*args, **kwargs) -> Bias:
         raise NotImplementedError
 
     def update_bias(
@@ -435,6 +436,8 @@ class Bias(ABC, MyPyTreeNode):
                 else:
                     sp = sp_rel
 
+                assert self.collective_variable is not None
+
                 cvs, _ = self.collective_variable.compute_cv(
                     sp=sp,
                     nl=nl,
@@ -478,6 +481,7 @@ class Bias(ABC, MyPyTreeNode):
         else:
             # raise NotImplementedError("adapt to relative coordinates")
 
+            assert self.collective_variable is not None
             [cvs, jac] = self.collective_variable.compute_cv(
                 sp=sp,
                 nl=nl,
@@ -556,13 +560,9 @@ class Bias(ABC, MyPyTreeNode):
         return e, de
 
     @abstractmethod
-    def _compute(self, cvs) -> jax.Array:
+    def _compute(self, cvs: CV) -> jax.Array:
         """function that calculates the bias potential."""
         raise NotImplementedError
-
-    # @staticmethod
-    # def static_plot(bias, **kwargs):
-    #     bias.plot(**kwargs)
 
     def plot(
         self,
@@ -576,6 +576,7 @@ class Bias(ABC, MyPyTreeNode):
         margin=0.1,
         dpi=300,
         T=300 * kelvin,
+        plot_FES=True,
         cv_title: str | bool = True,
         data_title: str | bool = True,
         **kwargs,
@@ -595,14 +596,16 @@ class Bias(ABC, MyPyTreeNode):
             print("inverting bias")
             bias = BiasModify.create(fun=lambda x: -x, bias=bias)
 
+        assert bias.collective_variable is not None
+
         Transformer.plot_app(
-            collective_variables=[self.collective_variable],
+            collective_variables=[bias.collective_variable],
             cv_data=[[traj]] if traj is not None else None,
             duplicate_cv_data=False,
             name=name,
             color_trajectories=True,
             margin=margin,
-            plot_FES=True,
+            plot_FES=plot_FES,
             biases=[[bias]],
             vmax=vmax,
             dpi=dpi,
@@ -617,6 +620,8 @@ class Bias(ABC, MyPyTreeNode):
         # return same bias, but as gridded bias
         from IMLCV.implementations.bias import GridBias
 
+        assert self.collective_variable is not None
+
         return GridBias.create(
             cvs=self.collective_variable,
             bias=self,
@@ -625,15 +630,23 @@ class Bias(ABC, MyPyTreeNode):
             margin=margin,
         )
 
-    def save(self, filename: str | Path, cv_file: Path | None = None):
+    def save(self, filename: str | Path, root: str | Path):
+        # assert root is not None
+
         if isinstance(filename, str):
             filename = Path(filename)
         if not filename.parent.exists():
             filename.parent.mkdir(parents=True, exist_ok=True)
 
-        # if cv_file is not None:
-        #     colvar_backup = self.collective_variable
-        #     self.collective_variable = cv_file
+        if self.collective_variable_path is not None and self.collective_variable is not None:
+            cv_path = Path(root) / Path(self.collective_variable_path)
+
+            if not cv_path.exists():
+                self.collective_variable.save(Path(self.collective_variable_path))
+
+        colvar = self.collective_variable
+
+        self.collective_variable = None  # type:ignore
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
@@ -644,11 +657,10 @@ class Bias(ABC, MyPyTreeNode):
             with open(filename, "wb") as f:
                 cloudpickle.dump(self, f)
 
-        # if cv_file is not None:
-        #     self.collective_variable = colvar_backup
+        self.collective_variable = colvar
 
     @staticmethod
-    def load(filename) -> Bias:
+    def load(filename, root: str | Path) -> Bias:
         filename = Path(filename)
         if filename.suffix == ".json":
             with open(filename) as f:
@@ -661,9 +673,13 @@ class Bias(ABC, MyPyTreeNode):
 
         assert isinstance(self, Bias)
 
-        # substitute real CV
-        if isinstance(self.collective_variable, Path):
-            self.collective_variable = CollectiveVariable.load(self.collective_variable)
+        if self.collective_variable is None:
+            assert self.collective_variable_path is not None
+            cv_path = Path(root) / Path(self.collective_variable_path)
+
+            assert cv_path.exists()
+
+            self.collective_variable = CollectiveVariable.load(cv_path)
 
         return self
 
@@ -694,7 +710,8 @@ class Bias(ABC, MyPyTreeNode):
         margin = 1e-10
 
         colvar = self.collective_variable
-        bins, grid, _, _ = colvar.metric.grid(n=50, margin=0.1)
+        assert self.collective_variable is not None
+        bins, _, grid, _, _ = colvar.metric.grid(n=50, margin=0.1)
 
         beta = 1 / (boltzmann * T)
 
@@ -727,7 +744,8 @@ class Bias(ABC, MyPyTreeNode):
         sign=1.0,
         n=100,
     ):
-        _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=margin)
+        assert self.collective_variable is not None
+        _, _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=margin)
 
         u0 = sign * self.apply([cvs])[0] / (T * boltzmann)
         u0 -= jnp.max(u0)
@@ -765,9 +783,11 @@ class Bias(ABC, MyPyTreeNode):
     ) -> dict[int, dict[tuple[int], Bias]]:
         free_energies = []
 
+        assert self.collective_variable is not None
+
         n_grid = int(n_max_bias ** (1 / self.collective_variable.n))
 
-        _, cv, _, bounds = self.collective_variable.metric.grid(
+        _, _, cv, _, bounds = self.collective_variable.metric.grid(
             n=n_grid,
             margin=margin,
         )
@@ -811,7 +831,7 @@ class Bias(ABC, MyPyTreeNode):
                 if self.log_exp_slice:
 
                     def _f(x):
-                        x_max = jnp.max(x)
+                        x_max = jnp.nanmax(x)
 
                         return (
                             jnp.log(jnp.nansum(jnp.exp((x - x_max) * self.slice_exponent)))
@@ -896,32 +916,48 @@ class CompositeBias(Bias):
     fun: Callable = field(pytree_node=False)
 
     @classmethod
-    def create(cls, biases: list[Bias], fun=jnp.sum) -> CompositeBias:
-        collective_variable: CollectiveVariable = None  # type: ignore
+    def create(cls, biases: list[Bias], fun=jnp.sum) -> CompositeBias | Bias:
+        assert len(biases) > 0
+        collective_variable: CollectiveVariable | None = None  # type: ignore
+        colvar_path: str | Path | None = None
 
         biases_new = []
 
         for b in biases:
-            if b is NoneBias:
+            if isinstance(b, NoneBias):
                 continue
 
             if collective_variable is None:
                 collective_variable = b.collective_variable
-            # else:
-            #     assert (
-            #         collective_variable == b.collective_variable
-            #     ), f"encountered 2 different collective variables {collective_variable=}  {b.collective_variable=} "
+
+            if colvar_path is None:
+                colvar_path = b.collective_variable_path
+
+            b.collective_variable = None
 
             biases_new.append(b)
 
-        if biases_new is None:
-            assert biases[0] is NoneBias
-            biases_new = biases[0]
+        if len(biases_new) == 0:
+            # every bias must be none bias
+
+            assert isinstance(biases[0], NoneBias)
+            biases_new.append(biases[0])
+            collective_variable = biases[0].collective_variable
+            colvar_path = biases[0].collective_variable_path
+
+        if len(biases_new) == 1:
+            # no need for composite bias
+            new_bias = biases_new[0]
+            new_bias.collective_variable = collective_variable
+            new_bias.collective_variable_path = colvar_path
+
+            return new_bias
 
         assert collective_variable is not None
 
         return CompositeBias(
             collective_variable=collective_variable,
+            collective_variable_path=colvar_path,
             biases=biases_new,
             fun=fun,
             start=0,
@@ -957,8 +993,12 @@ class BiasModify(Bias):
 
     @classmethod
     def create(cls, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}) -> BiasModify:  # type: ignore[override]
+        colvar = bias.collective_variable
+        bias.collective_variable = None
+
         return BiasModify(
-            collective_variable=bias.collective_variable,
+            collective_variable=colvar,
+            collective_variable_path=bias.collective_variable_path,
             fun=fun,
             start=None,
             step=None,

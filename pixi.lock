@@ -251,6 +251,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/02/c7/5613524e606ea1688b3bdbf48aa64bafb6d0a4ac3750274c43b6158a390f/prettytable-3.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fa/b1/b59d405d64d31999244643d88c45c8241c58f17cc887e73bcb90602327f8/protobuf-6.31.1-cp39-abi3-manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/61/ad/689f02752eeec26aed679477e80e632ef1b682313be70793d798c1d5fc8f/PyJWT-2.10.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/82/2b/b86705da6bbc42a57e8145420aa5e0d360662efd9cd6126ac2462b0062bd/pymanopt-2.2.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d2/53/d23a97e0a2c690d40b165d1062e2c4ccc796be458a1ce59f6ba030434663/pynndescent-0.5.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/05/e7/df2285f3d08fee213f2d041540fa4fc9ca6c2d44cf36d3a035bf2a8d2bcc/pyparsing-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2e/dd/c9ef1591ca0d0b4f2197751ecfbdf5c718cf4381bc4d7199eeba2dc90c42/python-hostlist-2.2.1.tar.gz
@@ -544,6 +545,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/fa/b1/b59d405d64d31999244643d88c45c8241c58f17cc887e73bcb90602327f8/protobuf-6.31.1-cp39-abi3-manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/e7/d3/c622950d87a2ffd1654208733b5bd1c5645930014abed8f4c0d74863988b/pydata_sphinx_theme-0.15.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/ad/689f02752eeec26aed679477e80e632ef1b682313be70793d798c1d5fc8f/PyJWT-2.10.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/82/2b/b86705da6bbc42a57e8145420aa5e0d360662efd9cd6126ac2462b0062bd/pymanopt-2.2.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d2/53/d23a97e0a2c690d40b165d1062e2c4ccc796be458a1ce59f6ba030434663/pynndescent-0.5.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/05/e7/df2285f3d08fee213f2d041540fa4fc9ca6c2d44cf36d3a035bf2a8d2bcc/pyparsing-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2e/dd/c9ef1591ca0d0b4f2197751ecfbdf5c718cf4381bc4d7199eeba2dc90c42/python-hostlist-2.2.1.tar.gz
@@ -836,6 +838,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/02/c7/5613524e606ea1688b3bdbf48aa64bafb6d0a4ac3750274c43b6158a390f/prettytable-3.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fa/b1/b59d405d64d31999244643d88c45c8241c58f17cc887e73bcb90602327f8/protobuf-6.31.1-cp39-abi3-manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/61/ad/689f02752eeec26aed679477e80e632ef1b682313be70793d798c1d5fc8f/PyJWT-2.10.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/82/2b/b86705da6bbc42a57e8145420aa5e0d360662efd9cd6126ac2462b0062bd/pymanopt-2.2.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d2/53/d23a97e0a2c690d40b165d1062e2c4ccc796be458a1ce59f6ba030434663/pynndescent-0.5.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/05/e7/df2285f3d08fee213f2d041540fa4fc9ca6c2d44cf36d3a035bf2a8d2bcc/pyparsing-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2e/dd/c9ef1591ca0d0b4f2197751ecfbdf5c718cf4381bc4d7199eeba2dc90c42/python-hostlist-2.2.1.tar.gz
@@ -1117,6 +1120,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/02/c7/5613524e606ea1688b3bdbf48aa64bafb6d0a4ac3750274c43b6158a390f/prettytable-3.16.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fa/b1/b59d405d64d31999244643d88c45c8241c58f17cc887e73bcb90602327f8/protobuf-6.31.1-cp39-abi3-manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/61/ad/689f02752eeec26aed679477e80e632ef1b682313be70793d798c1d5fc8f/PyJWT-2.10.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/82/2b/b86705da6bbc42a57e8145420aa5e0d360662efd9cd6126ac2462b0062bd/pymanopt-2.2.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/d2/53/d23a97e0a2c690d40b165d1062e2c4ccc796be458a1ce59f6ba030434663/pynndescent-0.5.13-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/05/e7/df2285f3d08fee213f2d041540fa4fc9ca6c2d44cf36d3a035bf2a8d2bcc/pyparsing-3.2.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/28/d0/def53b4a790cfb21483016430ed828f64830dd981ebe1089971cd10cab25/pytest_cov-6.1.1-py3-none-any.whl
@@ -2248,7 +2252,7 @@ packages:
 - pypi: ./
   name: imlcv
   version: 0.1.0
-  sha256: 0683ff49c05a4dcbca6e8ecbf40a990d83201f2aa40bed64759d1010ba15d015
+  sha256: 5f6d40cbc794483d1b2a4d1f16ee157322f4165f5c520c9cf0b301532ff73067
   requires_dist:
   - cloudpickle
   - filelock
@@ -2272,6 +2276,7 @@ packages:
   - work-queue>=0.0.1,<0.0.2
   - openmm>=8.3.1,<9
   - ty>=0.0.1a16,<0.0.1a17
+  - pymanopt>=2.2.1,<3
   - myst-parser ; extra == 'docs'
   - nbsphinx ; extra == 'docs'
   - nbsphinx-link ; extra == 'docs'
@@ -4285,6 +4290,43 @@ packages:
   - coverage[toml]==5.0.4 ; extra == 'tests'
   - pytest>=6.0.0,<7.0.0 ; extra == 'tests'
   requires_python: '>=3.9'
+- pypi: https://files.pythonhosted.org/packages/82/2b/b86705da6bbc42a57e8145420aa5e0d360662efd9cd6126ac2462b0062bd/pymanopt-2.2.1-py3-none-any.whl
+  name: pymanopt
+  version: 2.2.1
+  sha256: 75fb11cc924252c8f045779a8ed4b054ddb805a540c314989598d60447560818
+  requires_dist:
+  - numpy>=1.16.0
+  - scipy>=1.0,!=1.10.*,!=1.11.*,!=1.12.*
+  - pymanopt[backends,dev] ; extra == 'all'
+  - autograd>=1.2 ; extra == 'autograd'
+  - pymanopt[autograd,jax,tensorflow,torch] ; extra == 'backends'
+  - build==0.8.0 ; extra == 'ci'
+  - pip==22.3.1 ; extra == 'ci'
+  - setuptools==66.1.0 ; extra == 'ci'
+  - wheel==0.38.4 ; extra == 'ci'
+  - black[jupyter]==22.3.0 ; extra == 'dev'
+  - flake8==5.0.4 ; extra == 'dev'
+  - flake8-bugbear==22.12.6 ; extra == 'dev'
+  - flake8-docstrings==1.6.0 ; extra == 'dev'
+  - flake8-import-order==0.18.2 ; extra == 'dev'
+  - flake8-pyproject==1.2.2 ; extra == 'dev'
+  - isort==5.11.5 ; extra == 'dev'
+  - matplotlib ; extra == 'dev'
+  - pre-commit ; extra == 'dev'
+  - pytest==7.2.0 ; extra == 'dev'
+  - pytest-cov==4.0.0 ; extra == 'dev'
+  - docutils==0.16 ; extra == 'docs'
+  - ipykernel==6.4.2 ; extra == 'docs'
+  - myst-parser==0.16.1 ; extra == 'docs'
+  - nbsphinx==0.8.7 ; extra == 'docs'
+  - sphinx==4.2.0 ; extra == 'docs'
+  - sphinx-rtd-theme==1.0.0 ; extra == 'docs'
+  - sphinxcontrib-katex==0.8.6 ; extra == 'docs'
+  - jax>=0.2.0 ; extra == 'jax'
+  - jaxlib ; extra == 'jax'
+  - tensorflow>=2.0.0 ; extra == 'tensorflow'
+  - torch>=1.0.0 ; extra == 'torch'
+  requires_python: '>=3.8'
 - pypi: https://files.pythonhosted.org/packages/d2/53/d23a97e0a2c690d40b165d1062e2c4ccc796be458a1ce59f6ba030434663/pynndescent-0.5.13-py3-none-any.whl
   name: pynndescent
   version: 0.5.13

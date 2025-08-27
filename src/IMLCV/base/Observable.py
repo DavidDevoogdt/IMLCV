@@ -211,7 +211,7 @@ class Observable:
         only_finished=True,
         bounds_percentile=1,
         max_bias=None,
-        rbf_kernel="gaussian",
+        rbf_kernel="thin_plate_spline",
         rbf_degree=None,
     ):
         if temp is None:
@@ -325,6 +325,7 @@ class Observable:
         # divide_by_histogram=True,
         verbose=True,
         max_bias: float = 100 * kjmol,
+        vmax: float = 100 * kjmol,
         kooopman_wham=None,
         samples_per_bin=10,
         min_samples_per_bin=5,
@@ -334,8 +335,8 @@ class Observable:
         if cv_round is None:
             cv_round = rounds.cv
 
-        if kooopman_wham is None:
-            kooopman_wham = cv_round == 1
+        # if kooopman_wham is None:
+        #     kooopman_wham = cv_round == 1
 
         dlo, fb = rounds.data_loader(
             num=num_rnds,
@@ -353,7 +354,7 @@ class Observable:
             verbose=verbose,
             # divide_by_histogram=divide_by_histogram,
             n_max=n_max,
-            wham=kooopman_wham,
+            # wham=kooopman_wham,
             # uniform=True,
             output_FES_bias=True,
             reweight_inverse_bincount=True,
@@ -373,7 +374,7 @@ class Observable:
                 name="FES_bias_wham.png",
                 # traj=dlo.cv,
                 margin=0.1,
-                vmax=max_bias,
+                vmax=vmax,
                 inverted=False,
             )
 
@@ -407,12 +408,12 @@ class Observable:
                     name="FES_bias_wham_data.png",
                     # traj=dlo.cv,
                     margin=0.1,
-                    vmax=max_bias,
+                    vmax=vmax,
                     inverted=False,
                 )
 
         if koopman:
-            weights, _weights_t, w_corr, _ = dlo.koopman_weight(
+            weights, w_corr, _ = dlo.koopman_weight(
                 max_bins=n_max,
                 samples_per_bin=samples_per_bin,
                 # min_samples_per_bin=min_samples_per_bin,
@@ -443,7 +444,7 @@ class Observable:
                     name="FES_bias_koopman.png",
                     # traj=dlo.cv,
                     margin=0.1,
-                    vmax=max_bias,
+                    vmax=vmax,
                     inverted=False,
                 )
 
@@ -465,7 +466,7 @@ class Observable:
                     name="FES_bias_corr.png",
                     # traj=dlo.cv,
                     margin=0.1,
-                    vmax=max_bias / 4,
+                    vmax=vmax / 4,
                     inverted=False,
                 )
 
@@ -481,7 +482,7 @@ class Observable:
                 name="FES_bias_points.png",
                 traj=dlo.cv,
                 margin=0.1,
-                vmax=max_bias,
+                vmax=vmax,
                 inverted=False,
             )
 
@@ -505,6 +506,7 @@ class Observable:
         # divide_by_histogram=True,
         verbose=True,
         max_bias: float | None = 100 * kjmol,
+        vmax: float = 100 * kjmol,
         kooopman_wham=None,
         samples_per_bin=5,
         min_samples_per_bin=1,
@@ -540,6 +542,7 @@ class Observable:
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
             direct_bias=direct_bias,
+            vmax=vmax,
         )
 
         if executors is None:
@@ -562,7 +565,7 @@ class Observable:
         choice="rbf",
         num_rnds=8,
         start_r=1,
-        rbf_kernel="gaussian",
+        rbf_kernel="thin_plate_spline",
         rbf_degree=None,
         samples_per_bin=5,
         min_samples_per_bin=1,
@@ -613,6 +616,7 @@ class Observable:
                     macro_chunk=macro_chunk,
                     weight=False,
                 ),
+                plot_FES=False,
                 margin=margin,
                 vmax=vmax,
             )
@@ -653,6 +657,7 @@ class Observable:
                 # divide_by_histogram=divide_by_histogram,
                 verbose=verbose,
                 max_bias=max_bias,
+                vmax=vmax,
                 kooopman_wham=koopman_wham,
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,

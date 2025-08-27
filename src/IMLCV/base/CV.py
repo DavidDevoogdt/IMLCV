@@ -45,7 +45,7 @@ class ShmapKwargs(MyPyTreeNode):
     axis_name: str | None = field(pytree_node=False, default="i")
     n_devices: int | None = None
     pmap: bool = False
-    explicit_shmap: bool = False
+    explicit_shmap: bool = True
     verbose: bool = False
     device_get: bool = True
     devices: tuple[Any] = field(pytree_node=False, default=None)
@@ -58,7 +58,7 @@ class ShmapKwargs(MyPyTreeNode):
         axis_name: str | None = "i",
         n_devices: int | None = None,
         pmap: bool = False,
-        explicit_shmap: bool = False,
+        explicit_shmap: bool = True,
         verbose: bool = False,
         device_get: bool = True,
         devices=None,
@@ -79,7 +79,7 @@ class ShmapKwargs(MyPyTreeNode):
             explicit_shmap=explicit_shmap,
             verbose=verbose,
             device_get=device_get,
-            devices=devices,
+            devices=devices,  # type: ignore
             mesh=mesh,
         )
 
@@ -155,7 +155,13 @@ def _n_unpad(x, axis, shape, reshape=False, move_axis=True, trim=True, n_chunk_m
     return x
 
 
-def _shard(x_padded, axis, axis_name, mesh, put=True, unflatten=True):
+def _shard(
+    x_padded,
+    axis,
+    axis_name,
+    mesh,
+    put=True,
+):
     shardings = []
     specs = []
 
@@ -166,7 +172,10 @@ def _shard(x_padded, axis, axis_name, mesh, put=True, unflatten=True):
         sharding = jshard.NamedSharding(mesh, spec)
 
         if put:
-            x_padded[i] = jax.device_put(x_padded[i], sharding)
+            x_padded[i] = jax.device_put(
+                x_padded[i],
+                sharding,
+            )
 
         shardings.append(sharding)
         specs.append(spec)
@@ -176,13 +185,21 @@ def _shard(x_padded, axis, axis_name, mesh, put=True, unflatten=True):
     return x_padded, shardings, specs
 
 
-def _shard_out(out_tree_def, axis, axis_name, mesh):
+def _shard_out(
+    out_tree_def,
+    axis,
+    axis_name,
+    mesh,
+    put=True,
+):
     shardings = []
 
     specs = []
 
-    for out_tree_i in out_tree_def:
-        ps = [None] * len(out_tree_i.shape)
+    out_tree_def = [a for a in out_tree_def]
+
+    for i in range(len(out_tree_def)):
+        ps = [None] * len(out_tree_def[i].shape)
         ps[axis] = axis_name
         spec = PartitionSpec(*ps)
 
@@ -191,9 +208,21 @@ def _shard_out(out_tree_def, axis, axis_name, mesh):
         shardings.append(sharding)
         specs.append(spec)
 
+        if put:
+            # print(f"putting out")
+
+            out_tree_def[i] = jax.device_put(
+                out_tree_def[i],
+                jshard.SingleDeviceSharding(jax.devices()[0]),
+            )
+
     specs = tuple(specs)
 
-    return specs, shardings
+    return (
+        tuple(out_tree_def),
+        specs,
+        shardings,
+    )
 
 
 def padded_shard_map(
@@ -210,7 +239,7 @@ def padded_shard_map(
     ):
         # print("no shmap")
 
-        return f(*args, **f_kwargs)
+        # return f(*args, **f_kwargs)
 
         axis = kwargs.axis
         n_devices = kwargs.n_devices
@@ -229,7 +258,7 @@ def padded_shard_map(
         if n_devices == 1:
             if verbose:
                 print(f"no shmap, only 1 devices {jax.devices()=}")
-            return f(*args)
+            return f(*args, **f_kwargs)
 
         in_tree_flat, tree_def = tree_flatten(args)
         out_tree_eval = jax.eval_shape(f, *args)
@@ -253,9 +282,7 @@ def padded_shard_map(
             )
 
         def f_inner(*args):
-            # print(f"inside: {args[0].shape=}")
-
-            return f(*args)
+            return f(*args, **f_kwargs)
 
         @jit_decorator
         def f_flat(*tree_flat):
@@ -300,7 +327,7 @@ def padded_shard_map(
         in_tree_flat_padded = flatten(in_tree_flat)
 
         if pmap:
-            print("WARNING: do not use pmap")
+            # print("WARNING: do not use pmap")
 
             shard_fun = jax.pmap(
                 f_flat,
@@ -312,7 +339,7 @@ def padded_shard_map(
             # assert mesh is not None
             # mesh = kwargs.get_mesh()
 
-            _, sharding, specs = _shard(
+            in_tree_flat_padded, sharding, specs = _shard(
                 in_tree_flat_padded,
                 axis=0,  # axis is moved to 0
                 axis_name=axis_name,
@@ -323,38 +350,56 @@ def padded_shard_map(
             if verbose:
                 print(f"sharding  {specs=} ")
 
-            specs_out, sharding_out = _shard_out(
+            _, specs_out, sharding_out = _shard_out(
                 out_tree_flat_eval,
                 axis=axis,
                 axis_name=axis_name,
                 mesh=mesh,
+                put=False,
             )
 
             # explicit: sharding is done by the user
             # otherwise the compiler figures it out
             # print(".", end="")
-            if explicit_shmap:
-                # print(f"explicit shmap")
+            # if explicit_shmap:
+            #     # print(f"explicit shmap")
 
-                shard_fun = jit_decorator(
-                    shard_map(
-                        f_flat,
-                        mesh=mesh,
-                        in_specs=tuple(specs),  # already sharded
-                        out_specs=specs_out,
-                        check_rep=False,
-                    )
-                )
+            #     # print(f"{in_tree_flat_padded} {tuple(specs)} {specs_out=}")
 
-            else:
-                # WARNING: might result in random crashes, probably related to https://github.com/jax-ml/jax/issues/19691
-                shard_fun = jit_decorator(
+            shard_fun = jit_decorator(
+                shard_map(
                     f_flat,
-                    in_shardings=sharding,
-                    out_shardings=sharding_out,
+                    mesh=mesh,
+                    in_specs=tuple(specs),
+                    out_specs=specs_out,
+                    check_rep=True,
                 )
+            )
+
+            # else:
+            #     # print(f"{sharding_out=}")
+
+            # shard_fun = jit_decorator(
+            #     f_flat,
+            #     in_shardings=tuple(sharding),
+            #     # out_shardings=tuple(sharding_out),
+            # )
+
+            # shard_fun = jit_decorator(
+            #     f_flat,
+            #     in_shardings=tuple(sharding),
+            #     # out_shardings=tuple(sharding_out),
+            # )
 
         out_flat = shard_fun(*in_tree_flat_padded)
+
+        out_flat, sharding, specs = _shard_out(
+            out_flat,
+            axis=0,  # axis is moved to 0
+            axis_name=axis_name,
+            mesh=mesh,
+            put=True,
+        )
 
         @jit_decorator
         def unflatten(out_flat):
@@ -372,6 +417,7 @@ def padded_shard_map(
             return tree_unflatten(out_tree_def, out_flat)
 
         out = unflatten(out_flat)
+
         if verbose:
             print(f"done sharding {f=}")
 
@@ -505,9 +551,9 @@ def macro_chunk_map_fun(
     nl_t: list[NeighbourList] | NeighbourList | None = None,
     macro_chunk: int | None = 1000,
     verbose=False,
-    chunk_func: Callable[[T, X2, X2 | None, Array | None, Array | None], T] | None = None,
+    chunk_func: Callable[[T, X2, X2 | None, Array | None], T] | None = None,
     chunk_func_init_args: T = None,
-    w_t: list[Array] | None = None,
+    # w_t: list[Array] | None = None,
     print_every=10,
     jit_f=True,
 ) -> T:
@@ -523,7 +569,7 @@ def macro_chunk_map_fun(
         chunk_func=chunk_func,
         chunk_func_init_args=chunk_func_init_args,
         w=w,
-        w_t=w_t,
+        # w_t=w_t,
         print_every=print_every,
         jit_f=jit_f,
     )  # type: ignore
@@ -565,9 +611,9 @@ def _macro_chunk_map(
     nl_t: list[NeighbourList] | NeighbourList | None = None,
     macro_chunk: int | None = 1000,
     verbose=False,
-    chunk_func: Callable[[T, X2, X2 | None, Array | None, Array | None], T] | None = None,
+    chunk_func: Callable[[T, X2, X2 | None, Array | None], T] | None = None,
     chunk_func_init_args: T = None,
-    w_t: list[Array] | None = None,
+    # w_t: list[Array] | None = None,
     print_every=10,
     jit_f=True,
 ):
@@ -597,7 +643,7 @@ def _macro_chunk_map(
 
         if chunk_func is not None:
             cf_cache = 0
-            chunk_func = cast(Callable[[T, X2, X2 | None, Array | None, Array | None], T], jit(chunk_func))
+            chunk_func = cast(Callable[[T, X2, X2 | None, Array | None], T], jit(chunk_func))
 
     def single_chunk():
         # print("performing single chunk")
@@ -638,17 +684,17 @@ def _macro_chunk_map(
         else:
             w_stack = None
 
-        if compute_t and w_t is not None:
-            wt_stack = jnp.hstack(w_t)
-        else:
-            wt_stack = None
+        # if compute_t and w_t is not None:
+        #     wt_stack = jnp.hstack(w_t)
+        # else:
+        #     wt_stack = None
 
         return chunk_func(
             chunk_func_init_args,
             z,
             zt if compute_t else None,
             w_stack,
-            wt_stack,
+            # wt_stack,
         )
 
     if macro_chunk is None:
@@ -688,11 +734,11 @@ def _macro_chunk_map(
     yt_chunk: list[X] = []
     nlt_chunk: list[NeighbourList] | None = [] if isinstance(nl_t, list) else None
     zt = []
-    zt_chunk: X2 | None = None
+    zt_chunk: list[X2] | None = None
     last_zt: X2 | None = None
     last_chunk_yt: X | None = None
-    wt_chunk: list[Array] | None
-    wt_chunk = [] if w_t is not None else None
+    # wt_chunk: list[Array] | None
+    # wt_chunk = [] if w_t is not None else None
     last_chunk_nlt: NeighbourList | None = None
     yt_stack: X | None = None
     nlt_stack: NeighbourList | None = None
@@ -731,8 +777,8 @@ def _macro_chunk_map(
                 yt_chunk.append(y_t[n]) if compute_t else None
                 if nlt_chunk is not None and nl_t is not None:
                     nlt_chunk.append(nl_t[n])
-                if wt_chunk is not None and w_t is not None:
-                    wt_chunk.append(w_t[n])
+                # if wt_chunk is not None and w_t is not None:
+                #     wt_chunk.append(w_t[n])
 
             tot_chunk += s
             stack_dims_chunk.append(s)
@@ -776,12 +822,12 @@ def _macro_chunk_map(
                     last_chunk_w = w_last[s_last:yls]
                     w_chunk[-1] = w_last[0:s_last]
 
-                if compute_t and w_t is not None:
-                    if w_t is not None and wt_chunk is not None:
-                        wt_last = wt_chunk[-1]
+                # if compute_t and w_t is not None:
+                #     if w_t is not None and wt_chunk is not None:
+                #         wt_last = wt_chunk[-1]
 
-                        last_chunk_wt = wt_last[s_last:yls]
-                        wt_chunk[-1] = wt_last[0:s_last]
+                #         last_chunk_wt = wt_last[s_last:yls]
+                #         wt_chunk[-1] = wt_last[0:s_last]
 
                 tot_chunk -= y_last.shape[0] - s_last
                 stack_dims_chunk[-1] = s_last
@@ -798,8 +844,8 @@ def _macro_chunk_map(
 
             w_stack = jnp.hstack(w_chunk) if w is not None else None  # type:ignore
 
-            if compute_t and w_t is not None:
-                wt_stack = jnp.hstack(wt_chunk)  # type: ignore
+            # if compute_t and w_t is not None:
+            #     wt_stack = jnp.hstack(wt_chunk)  # type: ignore
 
             # remove the stack dims from the CVs and NLs
 
@@ -814,7 +860,7 @@ def _macro_chunk_map(
                 nl_stack if isinstance(nl, list) else nl,
             )
 
-            _zt_chunk = None
+            _zt_chunk: None | X2 = None
 
             if compute_t:
                 #
@@ -826,7 +872,7 @@ def _macro_chunk_map(
                 if isinstance(nlt_stack, list):
                     nlt_stack.update.stack_dims = None
 
-                assert ft is not None
+                # assert ft is not None
 
                 _zt_chunk = ft(
                     yt_stack,
@@ -956,7 +1002,7 @@ def _macro_chunk_map(
                 z.extend(z_chunk)
                 if compute_t:
                     zt.extend(zt_chunk)  # type: ignore
-                    wt_chunk = [] if w_t is not None else None
+                    # wt_chunk = [] if w_t is not None else None
 
                 # print("exiting")
             else:
@@ -967,7 +1013,7 @@ def _macro_chunk_map(
                     _z_chunk,
                     _zt_chunk if compute_t else None,
                     w_stack,
-                    wt_stack if compute_t else None,
+                    # wt_stack if compute_t else None,
                 )
 
                 if jit_f:
@@ -1000,9 +1046,9 @@ def _macro_chunk_map(
                         yt_chunk = [last_chunk_yt]
                         nlt_chunk = [last_chunk_nlt] if last_chunk_nlt is not None else None
 
-                        if w_t is not None:
-                            assert last_chunk_wt is not None
-                            wt_chunk = [last_chunk_wt]
+                        # if w_t is not None:
+                        #     assert last_chunk_wt is not None
+                        #     wt_chunk = [last_chunk_wt]
 
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
@@ -1024,7 +1070,7 @@ def _macro_chunk_map(
                     if compute_t:
                         yt_chunk = []
                         nlt_chunk = [] if isinstance(nl_t, list) else None
-                        wt_chunk = [] if w_t is not None else None
+                        # wt_chunk = [] if w_t is not None else None
 
                         last_chunk_yt = None
                         last_chunk_nlt = None
@@ -1980,9 +2026,9 @@ class NeighbourListInfo(MyPyTreeNode):
 
     @staticmethod
     def create(
-        r_cut,
-        z_array,
-        r_skin=None,
+        r_cut: float,
+        z_array: Array,
+        r_skin: float | None = None,
     ):
         def to_tuple(a) -> tuple[int] | None:
             if a is None:
@@ -3296,7 +3342,7 @@ class CvMetric(MyPyTreeNode):
         samples,
         n_dims,
         max_bins=None,
-        max_bins_per_dim=50,
+        max_bins_per_dim=100,
     ):
         f = samples / samples_per_bin
         if max_bins is not None:
@@ -3348,7 +3394,7 @@ class CvMetric(MyPyTreeNode):
         mid = [a[:-1] + (a[1:] - a[:-1]) / 2 for a in grid]
         cv_mid = CV.combine(*[CV(cv=j.reshape(-1, 1)) for j in jnp.meshgrid(*mid, indexing=indexing)])
 
-        return grid, cv, cv_mid, b
+        return grid, mid, cv, cv_mid, b
 
     @property
     def ndim(self):
@@ -3365,7 +3411,7 @@ class CvMetric(MyPyTreeNode):
         n=400,
         macro_chunk: int | None = 5000,
         verbose=True,
-    ):
+    ) -> tuple[jax.Array, list[jax.Array], bool]:
         n = int(n)
 
         if margin is None:
@@ -3387,7 +3433,7 @@ class CvMetric(MyPyTreeNode):
 
         ndim = bounding_box.shape[0]
 
-        constants = False
+        constants = jnp.abs(bounding_box[:, 0] - bounding_box[:, 1]) <= 1e-12
 
         for i in range(ndim):
             if jnp.abs(bounding_box[i, 0] - bounding_box[i, 1]) <= 1e-12:
@@ -3395,8 +3441,6 @@ class CvMetric(MyPyTreeNode):
 
                 bounding_box = bounding_box.at[i, 0].set(bounding_box[i, 0] - 0.5)
                 bounding_box = bounding_box.at[i, 1].set(bounding_box[i, 1] + 0.5)
-
-                constants = True
 
         # do bin count over range
 
@@ -3439,6 +3483,7 @@ class CvMetric(MyPyTreeNode):
 
             _f = (a * b).compute_cv
 
+            @jit_decorator
             def f(x, nl):
                 return _f(
                     x,
@@ -3446,8 +3491,6 @@ class CvMetric(MyPyTreeNode):
                     chunk_size=chunk_size,
                     shmap=False,
                 )[0]
-
-            f = jit_decorator(f)
 
             hist = get_histo(
                 cv_0,
@@ -3494,6 +3537,8 @@ class CvMetric(MyPyTreeNode):
         # bounds_margin = jnp.where(   self.periodicities, )
         bounds = bounds.at[:, 0].set(bounds[:, 0] - bounds_margin)
         bounds = bounds.at[:, 1].set(bounds[:, 1] + bounds_margin)
+
+        bounds = jnp.where(constants, bounding_box, bounds)
 
         if verbose:
             print(f"{bounds=}")
@@ -3864,6 +3909,7 @@ class CollectiveVariable(MyPyTreeNode):
     f: CvTrans
     metric: CvMetric
     jac: Callable = field(pytree_node=False, default=jax.jacrev)  # jacfwd is generally faster, but not always supported
+    name: str = field(pytree_node=False, default="")
 
     @partial(
         jit_decorator,

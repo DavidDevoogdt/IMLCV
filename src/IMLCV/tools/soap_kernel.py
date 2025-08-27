@@ -38,6 +38,8 @@ def p_i(
     merge_ZZ=True,
     reshape=True,
     mul_Z=True,
+    normalize=True,
+    Z_weights=None,
 ):
     if sp.batched:
         _f: Callable[[SystemParams, NeighbourList], Array] = Partial_decorator(
@@ -75,13 +77,17 @@ def p_i(
         shmap_kwargs=shmap_kwargs,
     )
 
-    if mul_Z:
+    if mul_Z and Z_weights is not None:
 
         @partial(vmap_decorator, in_axes=(None, None, 0, 2), out_axes=2)
         @partial(vmap_decorator, in_axes=(None, 0, None, 1), out_axes=1)
         @partial(vmap_decorator, in_axes=(0, None, None, 0), out_axes=0)
         def _mul_Z(Z1: Array, Z2: Array, Z3: Array, x: Array) -> Array:
-            return Z1 * Z2 * Z3 * x
+            w1 = Z_weights[jnp.argwhere(jnp.array(nl.info.z_unique) == Z1, size=1)[0, 0]]
+            w2 = Z_weights[jnp.argwhere(jnp.array(nl.info.z_unique) == Z2, size=1)[0, 0]]
+            w3 = Z_weights[jnp.argwhere(jnp.array(nl.info.z_unique) == Z3, size=1)[0, 0]]
+
+            return x * w1 * w2 * w3
 
         out_nzzx = _mul_Z(
             jnp.array(nl.info.z_array),
@@ -106,6 +112,20 @@ def p_i(
 
     if reshape:
         out = jnp.reshape(out, (out.shape[0], -1))
+
+    if normalize:
+        # print(f"pre {out=}")
+
+        @partial(vmap_decorator, in_axes=(0,))
+        def n(x):
+            n = jnp.sum(x**2)
+            n = jnp.where(n > 1e-12, n, 1.0)
+
+            return x / jnp.sqrt(n)
+
+        out = n(out)
+
+        # print(f"post {out=}")
 
     return out
 
@@ -542,23 +562,11 @@ def p_inl_sb(l_max: int, n_max: int, r_cut: float, bessel_fun="jax"):
     def _p_i_sb_2_s(p_ij: Array, atom_index_j: Array) -> Array:
         r_ij_sq = jnp.dot(p_ij, p_ij)
 
-        r_ij_sq_safe = jax.lax.cond(
-            r_ij_sq == 0,
-            lambda: 1e-6,
-            lambda: r_ij_sq,
-        )
-
+        r_ij_sq_safe = jnp.where(r_ij_sq == 0, jnp.full_like(r_ij_sq, 1e-6), r_ij_sq)
         r_ij = jnp.sqrt(r_ij_sq_safe)
 
-        shape = jax.eval_shape(g_nl, r_ij_sq)
-
-        # a_jnl = jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype)
-        # # print("bb")
-        a_jnl = jax.lax.cond(
-            r_ij_sq == 0,
-            lambda: jnp.full(shape=shape.shape, fill_value=0.0, dtype=shape.dtype),
-            lambda: g_nl(r_ij) * f_cut(r_ij),
-        )
+        out = g_nl(r_ij) * f_cut(r_ij)
+        a_jnl = jnp.where(r_ij_sq == 0, jnp.full_like(out, 0.0), out)
 
         return a_jnl
 

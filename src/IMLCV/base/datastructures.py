@@ -65,9 +65,10 @@ def jit_decorator(
     f: Callable[P, T],
     static_argnums: int | Sequence[int] | None = None,
     static_argnames: str | Iterable[str] | None = None,
+    **jit_kwargs,
 ):
     def _f(*args: P.args, **kwargs: P.kwargs) -> T:
-        return jit(f, static_argnames=static_argnames, static_argnums=static_argnums)(*args, **kwargs)
+        return jit(f, static_argnames=static_argnames, static_argnums=static_argnums, **jit_kwargs)(*args, **kwargs)
 
     return _f
 

@@ -177,6 +177,8 @@ def _sb_descriptor(
     l_max,
     bessel_fun="jax",
     mul_Z=False,
+    Z_weights: jax.Array | None = None,
+    normalize=False,
 ):
     assert nl is not None, "provide neighbourlist for sb describport"
 
@@ -202,6 +204,8 @@ def _sb_descriptor(
         mul_Z=mul_Z,
         merge_ZZ=True,
         reshape=True,
+        Z_weights=Z_weights,
+        normalize=normalize,
     )
 
     return CV(cv=a, atomic=True)
@@ -217,6 +221,8 @@ def sb_descriptor(
     chunk_size_neigbourgs=None,
     bessel_fun="jax",
     mul_Z=True,
+    Z_weights: jax.Array | None = None,
+    normalize=True,
 ) -> CvTrans:
     return CvTrans.from_cv_function(
         _sb_descriptor,
@@ -230,6 +236,7 @@ def sb_descriptor(
             "l_max",
             "bessel_fun",
             "mul_Z",
+            "normalize",
         ],
         r_cut=r_cut,
         chunk_size_atoms=chunk_size_atoms,
@@ -240,6 +247,8 @@ def sb_descriptor(
         l_max=l_max,
         bessel_fun=bessel_fun,
         mul_Z=mul_Z,
+        Z_weights=Z_weights,
+        normalize=normalize,
     )
 
 
@@ -517,11 +526,11 @@ def get_inv_sigma_weighing(
 def kernel_dist(p1: jax.Array, p2: jax.Array, xi=2.0):
     # print(f"new dist sum")
 
-    # def log_safe(x: jax.Array):
-    #     x = jnp.abs(x)
-    #     x = jnp.where(x < 1e-10, 1e-10, x)
+    def log_safe(x: jax.Array):
+        x = jnp.abs(x)
+        x = jnp.where(x < 1e-10, 1e-10, x)
 
-    #     return jnp.log(x)
+        return jnp.log(x)
 
     n_1 = jnp.sum(p1 * p1)
     n_1_safe = jnp.where(n_1 == 0, 1.0, n_1)
@@ -533,7 +542,7 @@ def kernel_dist(p1: jax.Array, p2: jax.Array, xi=2.0):
 
     return jnp.sum(jnp.abs(p1 - p2) ** xi)
 
-    # return -xi * log_safe(jnp.sum(p1*p2))
+    # return -xi * log_safe(jnp.sum(jnp.abs(p1 * p2)))
 
 
 def sinkhorn_divergence_2(
@@ -642,8 +651,8 @@ def sinkhorn_divergence_2(
                 tol=1e-12,  # solve exactly
                 implicit_diff_solve=partial(
                     solve_normal_cg,
-                    ridge=1e-10,
-                    tol=1e-12,
+                    # ridge=1e-10,
+                    tol=1e-14,
                     maxiter=1000,
                 ),
                 has_aux=True,
@@ -715,9 +724,15 @@ def sinkhorn_divergence_2(
     else:
         out = jnp.zeros((x2.shape[0], 1))
 
+    # out = jnp.zeros((x2.shape[0], x2.shape[1]))
+
+    # print(f"{p1=} {p2=} {tgt_split=} {z_scale=}")
+
     # solve problem per atom kind
     for i, (p1_i, p2_i, out_i, zi) in enumerate(zip(p1, p2, tgt_split, z_scale)):
         # ef = exp_factor[i] if exp_factor is not None else None
+
+        # p1_j = get_d_p12(p1_i, p2_i, scale=zi)
 
         if jacobian:
             d_j, p1_j = get_d_p12(p1_i, p2_i, scale=zi)
@@ -775,7 +790,7 @@ def _sinkhorn_divergence_trans_2(
 
     out = f(pi, cv)
 
-    print(f"pre {out=}")
+    # print(f"pre {out=}")
 
     if pi.batched:
         # unstacked = [a.unbatch() for a in out]
@@ -797,7 +812,7 @@ def _sinkhorn_divergence_trans_2(
 
         out = CV.combine(*[a.unbatch() for a in out])
 
-        print(f"post {out=}")
+        # print(f"post {out=}")
 
     return out
 
@@ -1138,6 +1153,50 @@ def get_feature_cov(
     trans = CvTrans.from_cv_function(_cv_slice, indices=idx)
 
     return trans
+
+
+def _eigh_rot(
+    cv,
+    nl,
+    shmap,
+    shmap_kwargs,
+    argmask: jax.Array | None = None,
+    pi: jax.Array | None = None,
+    W: jax.Array | None = None,
+) -> jax.Array:
+    x = cv.cv
+
+    # print(f"inside {x.shape=} {q=} {argmask=} ")
+
+    if argmask is not None:
+        x = x[argmask]
+
+    if pi is not None:
+        x = x - pi
+
+    if W is not None:
+        x = x @ W
+
+    return cv.replace(cv=x, _combine_dims=None)
+
+
+def eigh_rot(x: list[CV], w: list[Array] | None):
+    from IMLCV.base.rounds import Covariances
+
+    c = Covariances.create(
+        cv_0=x,
+        shrink=False,
+        w=w,
+    )
+
+    l, U = jnp.linalg.eigh(c.rho_00)
+
+    tr_rot = CvTrans.from_cv_function(
+        _eigh_rot,
+        W=U.T,
+    )
+
+    return tr_rot
 
 
 ######################################

@@ -15,7 +15,7 @@ from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs
 from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
-from IMLCV.implementations.CV import _scale_cv_trans, identity_trans, scale_cv_trans
+from IMLCV.implementations.CV import _scale_cv_trans, identity_trans, scale_cv_trans, eigh_rot
 from IMLCV.base.datastructures import MyPyTreeNode
 
 if TYPE_CHECKING:
@@ -104,21 +104,21 @@ class Transformer(MyPyTreeNode):
         macro_chunk=1000,
         shmap_kwargs=ShmapKwargs.create(),
         **kwargs,
-    ) -> tuple[list[CV], CollectiveVariable, Bias]:
+    ) -> tuple[list[CV], CollectiveVariable, Bias, list[jax.Array]]:
         if plot:
             assert plot_folder is not None, "plot_folder must be specified if plot=True"
 
         assert dlo._weights is not None
         assert dlo._rho is not None
 
-        assert dlo._weights_t is not None
-        assert dlo._rho_t is not None
+        # assert dlo._weights_t is not None
+        # assert dlo._rho_t is not None
 
         w = dlo._weights
         rho = dlo._rho
 
-        w_t = dlo._weights_t
-        rho_t = dlo._rho_t
+        # w_t = dlo._weights_t
+        # rho_t = dlo._rho_t
 
         print("computing bias")
 
@@ -131,6 +131,7 @@ class Transformer(MyPyTreeNode):
             max_bias=max_fes_bias,
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
+            recalc_bounds=False,
         )
 
         if plot:
@@ -160,7 +161,7 @@ class Transformer(MyPyTreeNode):
         # koopman_weight
 
         if koopman:
-            w, w_t, _, _ = dlo.koopman_weight(
+            w, _, _ = dlo.koopman_weight(
                 verbose=verbose,
                 max_bins=n_max,
                 samples_per_bin=samples_per_bin,
@@ -168,11 +169,11 @@ class Transformer(MyPyTreeNode):
                 # correlation=False,
                 koopman_eps=0,
                 koopman_eps_pre=0,
-                add_1=True,
+                # add_1=True,
             )  # type: ignore
 
             w: list[jax.Array]
-            w_t: list[jax.Array]
+            # w_t: list[jax.Array]
 
             bias_km: Bias = dlo.get_fes_bias_from_weights(
                 weights=w,
@@ -182,6 +183,7 @@ class Transformer(MyPyTreeNode):
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
+                recalc_bounds=False,
             )
 
             if plot:
@@ -218,7 +220,6 @@ class Transformer(MyPyTreeNode):
             x=x,
             x_t=x_t,
             w=w,
-            w_t=w_t,
             dlo=dlo,
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
@@ -233,13 +234,22 @@ class Transformer(MyPyTreeNode):
 
         print("getting bounds")
 
-        # w_tot_log = [jnp.log(a) + jnp.log(b) for a, b in zip(w, dlo._rho)]
+        # # first: rotate
+        # tr_rot = eigh_rot(x, dlo._rho)
 
-        # w_log_tot = jnp.hstack(w_tot_log)
-        # w_log_tot_max = jnp.max(w_log_tot)
-        # w_log_tot_norm = jnp.log(jnp.sum(jnp.exp(w_log_tot - w_log_tot_max))) + w_log_tot_max
+        # x, x_t = dlo.apply_cv(
+        #     tr_rot,
+        #     x,
+        #     x_t,
+        #     dlo.nl,
+        #     dlo.nl_t,
+        #     chunk_size=chunk_size,
+        #     macro_chunk=macro_chunk,
+        #     shmap=shmap,
+        #     verbose=verbose,
+        # )  # type: ignore
 
-        # w_tot = [jnp.exp(a - w_log_tot_norm) for a in w_tot_log]
+        # trans *= tr_rot
 
         # remove outliers from the data
         bounds, mask, constants = CvMetric.bounds_from_cv(
@@ -252,14 +262,14 @@ class Transformer(MyPyTreeNode):
             chunk_size=chunk_size,
         )
 
-        assert not constants, "found constant collective variables"
+        assert not jnp.any(constants), "found constant collective variables"
 
         if self.post_scale:
             print("post scaling")
             s_trans = CvTrans.from_cv_function(
                 _scale_cv_trans,
-                upper=0.9,  # 10 % margin
-                lower=0.1,
+                upper=0.95,  # 10 % margin
+                lower=0.05,
                 mini=bounds[:, 0],
                 diff=bounds[:, 1] - bounds[:, 0],
             )
@@ -288,6 +298,7 @@ class Transformer(MyPyTreeNode):
                 periodicities=None,
                 bounding_box=bounds,
             ),
+            name=cv_titles[1] if isinstance(cv_titles, list) else "",
         )
 
         if transform_FES:
@@ -306,6 +317,7 @@ class Transformer(MyPyTreeNode):
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
+                recalc_bounds=False,
             )
 
             if plot:
@@ -358,14 +370,14 @@ class Transformer(MyPyTreeNode):
                 vmax=vmax,
             )
 
-        return x, new_collective_variable, bias_new
+        return x, new_collective_variable, bias_new, w
 
     def _fit(
         self,
         x: list[CV] | list[SystemParams],
         x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
-        w_t: list[jax.Array],
+        # w_t: list[jax.Array],
         dlo: DataLoaderOutput,
         chunk_size: int | None = None,
         verbose=True,
@@ -393,12 +405,13 @@ class Transformer(MyPyTreeNode):
         vmax=100 * kjmol,
         dpi=300,
         n_max_bias=1e6,
-        row_color=None,
+        row_color: list[int] | None = None,
         # indicate_cv_data=True,
         macro_chunk=10000,
         cmap="jet",
         offset=True,
         bar_label="FES [kJ/mol]",
+        title="Collective Variables",
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
@@ -543,6 +556,7 @@ class Transformer(MyPyTreeNode):
             vmin=vmin,
             vmax=vmax,
             plot_FES=plot_FES,
+            title=title,
         ):
             dim = inoutdims[cv_in]
 
@@ -632,6 +646,7 @@ class Transformer(MyPyTreeNode):
         data_titles=None,
         indicate_plots=None,
         plot_FES=False,
+        title="Collective Variables",
         # indicate_cv_data=True,
     ):
         spaces = 1 if max(dims) < 3 else 2
@@ -746,7 +761,7 @@ class Transformer(MyPyTreeNode):
         fig.text(
             x=(pos0.x0 + pos1.x1) / 2,
             y=(pos0.y0 + pos1.y1) / 2 + offset,
-            s="Collective Variables",
+            s=title,
             ha="center",
             va="center",
         )
@@ -982,7 +997,7 @@ class Transformer(MyPyTreeNode):
             # print("obtaining 2d fes")
 
             # cv grid is centered
-            bins, _, cv_grid, _ = metric.grid(
+            bins, _, _, cv_grid, _ = metric.grid(
                 n=100,
                 # endpoints=True,
                 margin=margin,
@@ -1215,7 +1230,7 @@ class Transformer(MyPyTreeNode):
 
             n_grid = 30
 
-            bins, cv_grid, cv_mid, _ = metric.grid(
+            bins, _, cv_grid, cv_mid, _ = metric.grid(
                 n=n_grid,
                 margin=margin,
                 indexing="ij",
@@ -1735,7 +1750,7 @@ class CombineTransformer(Transformer):
         x: list[CV] | list[SystemParams],
         x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
-        w_t: list[jax.Array],
+        # w_t: list[jax.Array],
         dlo: DataLoaderOutput,
         chunk_size=None,
         verbose=True,
@@ -1753,7 +1768,7 @@ class CombineTransformer(Transformer):
                 x,
                 x_t,
                 w,
-                w_t,
+                # w_t,
                 dlo,
                 chunk_size=chunk_size,
                 verbose=verbose,
@@ -1781,7 +1796,7 @@ class IdentityTransformer(Transformer):
         x: list[CV] | list[SystemParams],
         x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
-        w_t: list[jax.Array],
+        # w_t: list[jax.Array],
         dlo: DataLoaderOutput,
         chunk_size=None,
         verbose=True,
@@ -1807,7 +1822,7 @@ class CvTransTransformer(Transformer):
         x: list[CV] | list[SystemParams],
         x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
-        w_t: list[jax.Array],
+        # w_t: list[jax.Array],
         dlo: DataLoaderOutput,
         chunk_size: int | None = None,
         verbose=True,

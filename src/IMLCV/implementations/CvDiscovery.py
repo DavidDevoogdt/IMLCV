@@ -9,7 +9,7 @@ from jax import Array, jit, random
 from IMLCV.base.CV import CV, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
-from IMLCV.base.rounds import DataLoaderOutput
+from IMLCV.base.rounds import DataLoaderOutput, Covariances
 from IMLCV.base.UnitsConstants import nanosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize
 
@@ -471,12 +471,41 @@ class TransformerMAF(Transformer):
     trans: CvTrans | None = None
     T_scale: float = 1.0
 
+    disciminating_CVs: CV | None = None
+
+    shrink: bool = True
+
+    @staticmethod
+    def _transform(
+        cv,
+        nl,
+        shmap,
+        shmap_kwargs,
+        argmask: jax.Array | None = None,
+        pi: jax.Array | None = None,
+        W: jax.Array | None = None,
+    ) -> jax.Array:
+        x = cv.cv
+
+        # print(f"inside {x.shape=} {q=} {argmask=} ")
+
+        if argmask is not None:
+            x = x[argmask]
+
+        if pi is not None:
+            x = x - pi
+
+        if W is not None:
+            x = x @ W
+
+        return cv.replace(cv=x, _combine_dims=None)
+
     def _fit(
         self,
         x: list[CV] | list[SystemParams],
         x_t: list[CV] | list[SystemParams] | None,
         w: list[jax.Array],
-        w_t: list[jax.Array],
+        # w_t: list[jax.Array],
         dlo: DataLoaderOutput,
         macro_chunk=1000,
         chunk_size=None,
@@ -486,21 +515,74 @@ class TransformerMAF(Transformer):
 
         outdim = self.outdim
 
+        # def tot_w(w, rho):
+        #     w_log = [(jnp.log(wi) + jnp.log(rhoi)) / self.T_scale for wi, rhoi in zip(w, rho)]
+
+        #     z = jnp.hstack(w_log)
+        #     z_max = jnp.max(z)
+        #     norm = jnp.log(jnp.sum(jnp.exp(z - z_max))) + z_max
+
+        #     w_tot = [jnp.exp(w_log_i - norm) for w_log_i in w_log]
+
+        #     s = 0
+        #     for wi in w_tot:
+        #         s += jnp.sum(wi)
+
+        #     print(f"{s=}")
+
+        #     return w_tot
+
+        # w_tot = tot_w(w, dlo._rho)
+        # # w_tot_t = tot_w(w_t, rho_t)
+
+        # # print(f" {calc_pi=}")
+
+        # cov = Covariances.create(
+        #     cv_0=x,  # type: ignore
+        #     cv_1=x,  # type: ignore
+        #     nl=dlo.nl,
+        #     nl_t=dlo.nl_t,
+        #     w=w_tot,
+        #     calc_pi=True,
+        #     # only_diag=only_diag,
+        #     symmetric=False,
+        #     chunk_size=chunk_size,
+        #     macro_chunk=macro_chunk,
+        #     trans_f=self.trans,
+        #     trans_g=self.trans,
+        #     verbose=verbose,
+        #     shrink=False,
+        #     # shrinkage_method=shrinkage_method,
+        # )
+
+        # argmask = cov.mask(
+        #     eps_pre=self.eps_pre,
+        #     max_features=self.max_features,
+        #     auto_cov_threshold=0.1,
+        # )
+
+        # W, _ = cov.decompose_pymanopt(out_dim=outdim)
+
+        # trans_km = CvTrans.from_cv_function(
+        #     TransformerMAF._transform,
+        #     W=W,
+        #     pi=cov.pi_0,
+        #     argmask=argmask,
+        # )
+
         km = dlo.koopman_model(
             cv_0=x,
             cv_t=x_t,
             nl=dlo.nl,
             nl_t=dlo.nl_t,
             w=w if self.use_w else [jnp.ones_like(x) for x in w],
-            w_t=w_t if self.use_w else [jnp.ones_like(x) for x in w],
             rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
-            rho_t=dlo._rho_t if self.use_w else [jnp.ones_like(x) for x in w],
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
-            calc_pi=False,
+            calc_pi=True,
             add_1=True,
-            eps_pre=1e-5,
-            eps=1e-5,
+            eps_pre=self.eps,
+            eps=self.eps_pre,
             symmetric=False,
             trans=self.trans,
             verbose=True,
@@ -508,20 +590,50 @@ class TransformerMAF(Transformer):
             max_features=self.max_features,
             max_features_pre=self.max_features_pre,
             T_scale=self.T_scale,
+            shrink=False,
+            # shrinkage_method="BC",
         )
 
-        if self.sym:
-            km = km.weighted_model(
-                symmetric=True,
-                add_1=True,
-            )
+        # if self.sym:
+        km = km.weighted_model(
+            symmetric=True,
+            shrink=True,
+            add_1=False,
+        )
 
-        ##########
+        # assert km.w is not None
+        # w = km.w
+
+        #########
+
+        # trans_km = km.f_stiefel(
+        #     out_dim=outdim,
+        #     # n_skip=None,
+        #     # remove_constant=True,
+        #     # mask=b,
+        # )
+
+        # if self.disciminating_CVs is not None:
+        #     cvs_d, _ = km.f(out_dim=None).compute_cv(self.disciminating_CVs)
+
+        #     @partial(vmap_decorator, in_axes=(0, None))
+        #     @partial(vmap_decorator, in_axes=(None, 0))
+        #     def close(x1, x2):
+        #         return jnp.abs(x1 - x2)
+
+        #     dist = jax.vmap(lambda x: x[jnp.triu_indices_from(x, k=1)], in_axes=(2))(close(cvs_d.cv, cvs_d.cv))
+
+        #     b = (dist > 0.1).any(axis=1)
+
+        #     print(f"close results {dist} {b=}  {cvs_d} ")
+        # else:
+        #     b = None
 
         ts = (
             km.timescales(
                 n_skip=None,
                 remove_constant=True,
+                # mask=b,
             )
             / nanosecond
         )
@@ -540,6 +652,7 @@ class TransformerMAF(Transformer):
             out_dim=outdim,
             n_skip=None,
             remove_constant=True,
+            # mask=b,
         )
 
         print("applying transformation")

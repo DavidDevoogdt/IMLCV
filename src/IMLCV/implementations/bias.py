@@ -7,7 +7,7 @@ from jax import Array
 from typing_extensions import Self
 
 from IMLCV.base.bias import Bias, CompositeBias
-from IMLCV.base.CV import CV, CollectiveVariable
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
 from IMLCV.base.datastructures import field
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.tools._rbf_interp import RBFInterpolator
@@ -31,27 +31,38 @@ class MinBias(CompositeBias):
         return b
 
 
-# #@partial(dataclass, frozen=False, eq=False)
-# @dataclass
-# class DiffBias(Bias):
-#     biases: Iterable[Bias]
-#     beta: float
+class DTBias(Bias):
+    # scales the bias with dt
 
-#     def _compute(self, cvs: CV):
-#         return -jnp.exp(-self.beta * self.biases[0]._compute(cvs))* jnp.abs(self.biases[0]._compute(cvs) - self.biases[1]._compute(cvs))
-#         # return jnp.exp(-self.beta * self.biases[0]._compute(cvs)) * jnp.abs(
-#         #     self.biases[0]._compute(cvs) - self.biases[1]._compute(cvs)
-#         # )
+    T: float
+    dT: float
+    bias: Bias
 
-#     @classmethod
-#     def create(cls, biases: Iterable[Bias], T=300 * kelvin) -> Self:
-#         assert len(biases) == 2
+    @classmethod
+    def create(cls, bias: Bias, T: float, dT: float) -> Bias:
+        if dT == 0.0:
+            return bias
 
-#         return DiffBias(
-#             biases=biases,
-#             beta=1 / (T * boltzmann),
-#             collective_variable=biases[0].collective_variable,
-#         )
+        colvar = bias.collective_variable
+        bias.collective_variable = None
+
+        return DTBias(
+            collective_variable=colvar,
+            collective_variable_path=bias.collective_variable_path,
+            start=bias.start,
+            step=bias.step,
+            finalized=bias.finalized,
+            slice_exponent=bias.slice_exponent,
+            slice_mean=bias.slice_mean,
+            dT=dT,
+            bias=bias,
+            T=T,
+        )
+
+    def _compute(self, cvs: CV) -> Array:
+        b = self.bias._compute(cvs)
+
+        return b * (self.T / (self.T + self.dT))
 
 
 class HarmonicBias(Bias):
@@ -60,17 +71,19 @@ class HarmonicBias(Bias):
     # __: KW_ONLY
 
     q0: CV
-    k: Array
-    k_max: Array | None = None
-    y0: Array | None = None
-    r0: Array | None = None
+    k: float
+    k_max: float | None = None
+    size: Array | None = None
+    y0: float | None = None
+    r0: float | None = None
+    metric: CvMetric
 
     @staticmethod
     def create(
         cvs: CollectiveVariable,
         q0: CV,
         k: float | Array,
-        k_max: Array | float | None = None,
+        k_max: float | None = None,
         start=None,
         step=None,
         finalized=True,
@@ -83,22 +96,21 @@ class HarmonicBias(Bias):
             k: force constant spring
         """
 
+        _k: Array
+
         if isinstance(k, float):
             _k = jnp.zeros_like(q0.cv) + k
         else:
-            _k = k
+            _k = k  # type:ignore
 
         assert _k.shape == q0.cv.shape
 
-        if k_max is not None:
-            k_max = jnp.array(k_max)
-
-            assert k_max.shape == q0.cv.shape  # type:ignore
+        k_float = float(jnp.mean(_k))
+        size = jnp.sqrt(_k / k_float)
 
         if k_max is not None:
-            assert np.all(k_max > 0)
-            r0 = k_max / _k
-            y0 = jnp.einsum("i,i,i->", _k, r0, r0) / 2
+            r0 = k_max / k_float
+            y0 = k_float * r0**2 / 2
         else:
             r0 = None
             y0 = None
@@ -106,43 +118,33 @@ class HarmonicBias(Bias):
         return HarmonicBias(
             collective_variable=cvs,
             q0=q0,
-            k=_k,
+            k=k_float,
+            size=size,
             k_max=k_max,
             r0=r0,
             y0=y0,
             start=start,
             step=step,
             finalized=finalized,
+            metric=cvs.metric,
         )
 
     def _compute(self, cvs: CV):
         # assert isinstance(cvs, CV)
-        r = self.collective_variable.metric.difference(cvs, self.q0)
+        r = jnp.linalg.norm(self.metric.difference(cvs, self.q0) * self.size)
 
-        def parabola(r):
-            return jnp.einsum("i,i,i->", self.k, r, r) / 2
+        para = self.k * r**2 / 2
 
         if self.k_max is None:
-            return parabola(r)
+            return para
 
         o = jnp.where(
-            jnp.linalg.norm(r / self.r0) < 1,
-            parabola(r),
-            (
-                jnp.sqrt(
-                    jnp.einsum(
-                        "i,i,i,i->",
-                        self.k_max,
-                        self.k_max,
-                        jnp.abs(r) - self.r0,
-                        jnp.abs(r) - self.r0,
-                    )
-                )
-                + self.y0
-            ),
+            r < self.r0,
+            para,
+            (r - self.r0) * self.k_max + self.y0,
         )
 
-        return o[0]
+        return o
 
 
 class BiasMTD(Bias):
@@ -273,9 +275,9 @@ class RbfBias(Bias):
         cv: CV,
         start=None,
         step=None,
-        kernel="gaussian",
+        kernel="thin_plate_spline",
         epsilon=None,
-        smoothing=0.0,
+        smoothing: int | Array = 0.0,
         degree=None,
         finalized=True,
         slice_exponent=1,
@@ -340,7 +342,7 @@ class GridBias(Bias):
         margin=0.1,
         order=1,
     ) -> GridBias:
-        grid, cv, _, bounds = cvs.metric.grid(
+        grid, _, cv, _, bounds = cvs.metric.grid(
             n=n,
             bounds=bounds,
             margin=margin,
@@ -368,6 +370,7 @@ class GridBias(Bias):
         return jsp.ndimage.map_coordinates(
             self.vals,
             coords * (self.n - 1),  # type:ignore
-            mode="nearest",
-            order=1,
+            mode="constant",
+            cval=jnp.nan,
+            order=self.order,
         )
