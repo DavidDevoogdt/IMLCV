@@ -110,3 +110,4 @@ muller_brown_ref.png
 *.egg-info
 .pixi_cache
 pixi_shell_hook.sh
+scripts/*

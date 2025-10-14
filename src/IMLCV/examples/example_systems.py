@@ -3,14 +3,26 @@ import ase.units
 import jax
 import jax.numpy as jnp
 import numpy as np
+from openmm import System
+from openmm.app import ForceField, PDBFile
 
 from IMLCV.base.bias import Bias, BiasF, EnergyFn, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, SystemParams
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, NeighbourListInfo, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.implementations.bias import HarmonicBias
-from IMLCV.implementations.CV import LatticeInvariants, NoneCV, Volume, dihedral
+from IMLCV.implementations.CV import (
+    LatticeInvariants,
+    NoneCV,
+    Volume,
+    dihedral,
+    mean_trans,
+    pair,
+    quad,
+    rotate_2d,
+    trip,
+)
 from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, OpenMmEnergy
 from IMLCV.implementations.MdEngine import NewYaffEngine
 
@@ -18,76 +30,30 @@ DATA_ROOT = ROOT_DIR / "data"
 
 
 def alanine_dipeptide_openmm(
-    cv: str | None = "backbone_dihedrals",
+    # cv: str | None = "backbone_dihedrals",
+    cv_phi: bool = True,
+    cv_psi: bool = True,
+    cv_theta_1: bool = False,
+    cv_theta_2: bool = False,
     bias: Bias | None = None,
     save_step=5,
 ):
+    pdb = DATA_ROOT / "ala" / "alanine-dipeptide.pdb"
+
+    assert pdb.exists(), f"cannot find {pdb}"
+
+    topo = PDBFile(str(pdb)).topology
+
+    forcefield = ForceField("amber14-all.xml")
+    system: System = forcefield.createSystem(topo)
+
     energy = OpenMmEnergy(
-        pdb=DATA_ROOT / "ala" / "alanine-dipeptide.pdb",
-        forcefield_name="amber14-all.xml",
+        topology=topo,
+        system=system,
     )
 
-    sp, atomic_numbers = energy.get_info()
+    _, atomic_numbers = energy.get_info()
 
-    if bias is None:
-        if cv == "backbone_dihedrals":
-            cv0 = CollectiveVariable(
-                f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16))),
-                metric=CvMetric.create(
-                    periodicities=[True, True],
-                    bounding_box=[[-jnp.pi, jnp.pi], [-jnp.pi, jnp.pi]],
-                ),
-            )
-        elif cv == "ct":
-            cv0 = CollectiveVariable(
-                # f=(dihedral(numbers=(2, 5, 7, 9)) + dihedral(numbers=(9, 15, 17, 19))),
-                f=(dihedral(numbers=(1, 4, 6, 8)) + dihedral(numbers=(8, 14, 16, 18))),
-                metric=CvMetric.create(
-                    periodicities=[True, True],
-                    bounding_box=[[-jnp.pi, jnp.pi], [-jnp.pi, jnp.pi]],
-                ),
-            )
-        elif cv == "backbone_dihedrals_theta":
-            cv0 = CollectiveVariable(
-                f=(dihedral(numbers=(4, 6, 8, 14)) + dihedral(numbers=(6, 8, 14, 16)) + dihedral(numbers=(1, 4, 6, 8))),
-                metric=CvMetric.create(
-                    periodicities=[True, True, True],
-                    bounding_box=[[-np.pi, np.pi], [-np.pi, np.pi], [-np.pi, np.pi]],
-                ),
-            )
-        elif cv is None:
-            cv0 = NoneCV()
-        else:
-            raise ValueError(
-                f"unknown value {cv} for cv 'backbone_dihedrals'",
-            )
-
-        bias = NoneBias.create(collective_variable=cv0)
-
-    tic = StaticMdInfo(
-        T=300 * kelvin,
-        timestep=0.5 * femtosecond,
-        timecon_thermo=100.0 * femtosecond,
-        write_step=500,
-        save_step=save_step,
-        atomic_numbers=atomic_numbers,
-        screen_log=100,
-        equilibration=0 * femtosecond,
-        r_cut=None,
-    )
-
-    engine = NewYaffEngine(
-        bias=bias,
-        energy=energy,
-        sp=sp,
-        static_trajectory_info=tic,
-        step=5,
-    )
-
-    return engine
-
-
-def alanine_dipeptide_refs():
     sp0 = SystemParams(
         coordinates=jnp.array(
             [
@@ -134,7 +100,7 @@ def alanine_dipeptide_refs():
                 [29.991, 26.660, -6.699],
                 [30.753, 27.301, -4.872],
                 [30.920, 25.078, -7.447],
-                [30.233, 28.236, -8.053],
+                [30.233, 28.236, -8.053],  ## import required packages
                 [26.856, 23.398, -4.858],
                 [27.483, 21.402, -5.810],
                 [25.732, 23.673, -2.608],
@@ -148,7 +114,432 @@ def alanine_dipeptide_refs():
         cell=None,
     )
 
-    return sp0 + sp1
+    refs = sp0 + sp1
+
+    f = None
+    periodicities = []
+    bounding_box = []
+    names = []
+
+    if cv_phi:
+        f += dihedral(numbers=(4, 6, 8, 14))
+        periodicities.append(True)
+        bounding_box.append([-jnp.pi, jnp.pi])
+        names.append("φ")
+
+    if cv_psi:
+        f += dihedral(numbers=(6, 8, 14, 16))
+        periodicities.append(True)
+        bounding_box.append([-jnp.pi, jnp.pi])
+        names.append("ψ")
+
+    if cv_theta_1:
+        f += dihedral(numbers=(1, 4, 6, 8))
+        periodicities.append(True)
+        bounding_box.append([-jnp.pi, jnp.pi])
+        names.append("θ1")
+
+    if cv_theta_2:
+        f += dihedral(numbers=(8, 14, 16, 18))
+        periodicities.append(True)
+        bounding_box.append([-jnp.pi, jnp.pi])
+        names.append("θ2")
+
+    if f is not None:
+        cv0 = CollectiveVariable(
+            f=f,
+            metric=CvMetric.create(
+                periodicities=periodicities,
+                bounding_box=bounding_box,
+            ),
+            cvs_name=tuple(names),
+        )
+    else:
+        cv0 = NoneCV()
+
+    bias = NoneBias.create(collective_variable=cv0)
+
+    tic = StaticMdInfo(
+        T=300 * kelvin,
+        timestep=2 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        write_step=1000,
+        save_step=save_step,
+        atomic_numbers=atomic_numbers,
+        screen_log=1000,
+        equilibration=0 * femtosecond,
+        r_cut=None,
+    )
+
+    engine = NewYaffEngine(
+        bias=bias,
+        energy=energy,
+        sp=refs[0],
+        static_trajectory_info=tic,
+    )
+
+    return engine, refs
+
+
+def butane(save_step=10, CV=True):
+    import openmm.app as omm_app
+
+    psf = omm_app.CharmmPsfFile(str(DATA_ROOT / "butane" / "butane.psf"))
+    topo = omm_app.PDBFile(str(DATA_ROOT / "butane" / "butane.pdb")).topology
+
+    params = omm_app.CharmmParameterSet(
+        str(DATA_ROOT / "butane" / "top_all35_ethers.rtf"),
+        str(DATA_ROOT / "butane" / "par_all35_ethers.prm"),
+    )
+
+    system: System = psf.createSystem(params, nonbondedMethod=omm_app.NoCutoff)
+    # 3, 6, 9, 13
+
+    energy = OpenMmEnergy(
+        topology=topo,
+        system=system,
+    )
+
+    from jax.numpy import float64
+
+    sp_gauche_1 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [2.15703615, 1.56241502, 0.2855983],
+                [1.98902398, -1.45477068, -1.04414907],
+                [3.72412497, -0.72114134, 1.89025943],
+                [3.35438037, -0.14439145, 0.02248188],
+                [4.85064669, 0.5925671, -3.58561873],
+                [6.63841114, 2.480373, -1.18370997],
+                [5.7073375, 0.70564265, -1.63979844],
+                [8.40386285, -1.80486496, -0.27301189],
+                [9.02017102, -0.77540604, -3.37037211],
+                [7.55912958, -1.29061105, -2.13670307],
+                [5.05302663, -4.55737119, -1.78523772],
+                [5.13546015, -3.19381872, -4.89337193],
+                [7.77161377, -5.19325172, -3.67891667],
+                [6.42227882, -3.666439, -3.19428947],
+            ],
+            dtype=float64,
+        ),
+        cell=None,
+    )
+
+    sp_gauche_2 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [-4.25627582, -0.80851557, -5.32877152],
+                [-1.56220456, -1.21466246, -7.1658655],
+                [-2.14104165, -3.52219106, -4.69780741],
+                [-2.24645047, -1.46261627, -5.30020942],
+                [-1.20312824, 1.88888633, -3.10670941],
+                [-0.70056235, -1.25758393, -1.39051604],
+                [-0.50457241, -0.05036129, -3.3143475],
+                [3.23291176, 0.47419084, -2.03164796],
+                [2.5795043, 1.59552406, -5.25495941],
+                [2.26625037, -0.02161397, -3.8465963],
+                [2.97659818, -4.02486853, -3.52053269],
+                [3.06401843, -2.88287415, -6.59734388],
+                [5.95752335, -2.44401742, -4.45481468],
+                [3.81350026, -2.45176556, -4.59651993],
+            ],
+            dtype=float64,
+        ),
+        cell=None,
+    )
+
+    sp_chair = SystemParams(
+        coordinates=jnp.array(
+            [
+                [0.31217485, 4.30747718, -2.35561618],
+                [-3.0130301, 3.22509444, -2.44461085],
+                [-2.0281344, 4.98140872, 0.25302459],
+                [-1.35741616, 3.56421956, -1.16327537],
+                [-2.18045573, 0.76684422, 1.59277161],
+                [0.01511773, -0.1746373, -0.6448474],
+                [-0.48480415, 1.38138251, 0.51353031],
+                [3.37474654, 1.43746045, 1.93203223],
+                [1.46398436, 4.09126858, 2.916611],
+                [1.56343925, 2.03910965, 2.5431388],
+                [0.62406391, -1.29840078, 4.78305274],
+                [2.34578069, 0.95295519, 6.4473915],
+                [-0.73534707, 1.54878882, 5.74220872],
+                [0.86332793, 0.75572427, 4.99051189],
+            ],
+            dtype=float64,
+        ),
+        cell=None,
+    )
+
+    sps = sp_gauche_1 + sp_gauche_2 + sp_chair
+
+    _, atomic_numbers = energy.get_info()
+
+    if CV:
+        cv0 = CollectiveVariable(
+            f=dihedral(numbers=(3, 6, 9, 13)),
+            metric=CvMetric.create(
+                periodicities=[True],
+                bounding_box=[
+                    [-jnp.pi, jnp.pi],
+                ],
+            ),
+        )
+    else:
+        cv0 = NoneCV()
+
+    bias = NoneBias.create(collective_variable=cv0)
+
+    tic = StaticMdInfo(
+        T=300 * kelvin,
+        timestep=2 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        write_step=1000,
+        atomic_numbers=atomic_numbers,
+        screen_log=1000,
+        equilibration=0 * femtosecond,
+        r_cut=None,
+    )
+
+    engine = NewYaffEngine(
+        bias=bias,
+        energy=energy,
+        sp=sps[0],
+        static_trajectory_info=tic,
+        step=1,
+    )
+
+    return engine, sps
+
+
+from functools import partial
+from itertools import combinations, permutations
+
+import jax
+import jax.numpy as jnp
+from jax import Array
+from jaxopt.linear_solve import solve_normal_cg
+
+from IMLCV.base.CV import (
+    CV,
+    CollectiveVariable,
+    CvMetric,
+    CvTrans,
+    NeighbourList,
+    NeighbourListInfo,
+    SystemParams,
+)
+from IMLCV.base.datastructures import vmap_decorator
+from IMLCV.base.UnitsConstants import angstrom
+
+
+def _ring_distance(
+    sp: SystemParams,
+    nl,
+    shmap,
+    shmap_kwargs,
+    idx: Array,
+):
+    # Extract coordinates of the atoms in the ring
+    coords = sp.coordinates[idx, :]
+
+    # Center the coordinates
+    centroid = jnp.mean(coords, axis=0)
+    coords_centered = coords - centroid
+
+    # Compute covariance matrix and perform SVD
+    _, s, vh = jnp.linalg.svd(coords_centered, full_matrices=False)
+
+    # jax.debug.print("Singular values: {s}", s=s)
+
+    normal = vh[-1]  # Normal vector to the best-fit plane
+
+    # Compute signed distances to the plane
+    distances = jnp.dot(coords_centered, normal)
+
+    out = []
+    # output some invariants
+    # out.append( jnp.sum(distances   ) ) # should be zero
+
+    # out.append( jnp.sum(distances**2)  )
+
+    # roll up to 3 times, afterwards it is not independent anymore
+    # out.append( jnp.sum(distances * jnp.roll(distances,1) ) )
+    # out.append( jnp.sum(distances * jnp.roll(distances,2) ) )
+    out.append(jnp.mean(distances * jnp.roll(distances, 3)))
+
+    return CV(cv=jnp.array(out))
+
+
+ring_distance = CvTrans.from_cv_function(_ring_distance, idx=jnp.array([0, 1, 2, 3, 4, 5]))
+
+
+def cyclohexane(CV=True):
+    from openff.toolkit.topology import Molecule
+    from openmm.app import ForceField, PDBFile
+    from openmmforcefields.generators import GAFFTemplateGenerator
+
+    # Load your molecule (from SMILES or SDF, not PDB)
+    mol = Molecule.from_smiles("C1CCCCC1")  # cyclohexane
+    mol.generate_conformers(n_conformers=1)
+
+    # Write to PDB if needed
+    mol.to_file("cyclohexane.sdf", file_format="SDF")
+
+    # Set up GAFF generator
+    gaff = GAFFTemplateGenerator(molecules=mol)
+    forcefield = ForceField("amber14/protein.ff14SB.xml", "amber14/tip3p.xml")
+    forcefield.registerTemplateGenerator(gaff.generator)
+
+    # Load topology from OpenFF molecule, not from PDB!
+    top = mol.to_topology().to_openmm()
+    system = forcefield.createSystem(top)
+    energy = OpenMmEnergy(
+        topology=top,
+        system=system,
+    )
+
+    boat_at: ase.Atoms = ase.io.read(ROOT_DIR / "data" / "cyclohexane" / "boat.xyz")  # type: ignore
+    chair_at: ase.Atoms = ase.io.read(ROOT_DIR / "data" / "cyclohexane" / "chair.xyz")  # type: ignore
+
+    boat_arr = jnp.array(boat_at.arrays["positions"]) * angstrom
+    chair_arr = jnp.array(chair_at.arrays["positions"]) * angstrom
+
+    sp_chair_1 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [0.14340799, -5.5372373, 5.34681911],
+                [0.9568797, -4.34122565, 2.8962363],
+                [1.1149015, -1.45663735, 2.98579955],
+                [2.86872198, -0.62206835, 5.10053147],
+                [2.50200018, -1.97847043, 7.74353036],
+                [2.0419397, -4.89994324, 7.50705148],
+                [-1.48072997, -4.69531493, 6.078978],
+                [0.06260481, -7.66620182, 5.32951227],
+                [-0.32391459, -4.76528068, 1.26129106],
+                [3.00467527, -4.83333736, 2.60268685],
+                [1.93431338, -0.92145111, 1.04109729],
+                [-0.51627553, -0.36884488, 3.45334254],
+                [2.73536712, 1.44740621, 5.45218237],
+                [4.78993623, -0.90174677, 4.24019788],
+                [3.85158187, -1.60115884, 9.12383317],
+                [0.77439239, -1.46164296, 8.56725176],
+                [1.69298074, -5.71357011, 9.43240747],
+                [3.82923522, -5.83319959, 7.30832802],
+            ]
+        ),
+        cell=None,
+    )
+    sp_chair_2 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [5.35441023, -4.70819595, 6.41865159],
+                [4.04211194, -3.64086112, 3.94300161],
+                [2.09217629, -1.50039002, 4.73210238],
+                [0.40473182, -2.24873483, 6.81806505],
+                [1.69140691, -3.32278052, 9.207577],
+                [3.49180702, -5.52927396, 8.28809331],
+                [6.53003465, -6.24416939, 5.67732876],
+                [6.76369033, -3.45010061, 7.24454657],
+                [3.58352181, -4.80543457, 2.3507693],
+                [5.5723133, -2.53781245, 3.03394903],
+                [3.23103678, 0.03490877, 5.48694605],
+                [1.04470013, -0.73265091, 3.20538319],
+                [-0.71450764, -3.95829218, 6.13002214],
+                [-0.9574964, -0.80094665, 7.3101736],
+                [2.26373786, -2.09024162, 10.76916016],
+                [0.03039064, -4.32678488, 10.0310324],
+                [2.02216756, -6.71721661, 7.28297305],
+                [4.24766686, -6.71865322, 9.73890222],
+            ]
+        ),
+        cell=None,
+    )
+    sp_boat_1 = SystemParams(
+        coordinates=jnp.array(
+            [
+                [6.23430978, 0.80105139, 0.48504902],
+                [9.053529, 1.46816163, 0.28888063],
+                [10.43357183, 0.86590955, 2.73076558],
+                [8.71926481, 1.17977965, 5.14344244],
+                [6.34182613, 3.11311203, 4.76937591],
+                [4.87828094, 2.63150712, 2.19680632],
+                [5.2382716, 0.94624833, -1.40137538],
+                [6.01991953, -1.12545573, 1.20750946],
+                [9.24198632, 3.45298957, -0.46347865],
+                [10.00354669, 0.42621852, -1.33882473],
+                [11.12829779, -1.10930555, 2.82581887],
+                [12.23582477, 1.90998409, 2.95916797],
+                [9.90363198, 1.35287764, 6.87138157],
+                [7.91851494, -0.80643757, 5.52546991],
+                [5.06244734, 3.43785814, 6.31866243],
+                [7.14318756, 5.06192419, 4.59889832],
+                [4.56742581, 4.4412369, 1.2562198],
+                [2.95924271, 2.16135193, 2.55708493],
+            ]
+        ),
+        cell=None,
+    )
+
+    sps = sp_chair_1 + sp_chair_2 + sp_boat_1
+    # sps = sp_chair + sp_boat_chair_flip
+
+    _, atomic_numbers = energy.get_info()
+
+    cv0, _ = ring_distance.compute_cv(sps)
+
+    b = jnp.array([[jnp.min(cv0.cv), jnp.max(cv0.cv)]])
+    s = b[0, 1] - b[0, 0]
+    b = b + jnp.array([-0.1 * s, 0.1 * s])
+
+    # colvar = CollectiveVariable(
+    #     f=ring_distance,
+    #     metric=CvMetric.create(
+    #         periodicities=[False],
+    #         bounding_box=b,
+    #     ),
+    # )
+
+    if not CV:
+        colvar = NoneCV()
+    else:
+        colvar = CollectiveVariable(
+            f=(dihedral(numbers=(0, 1, 2, 3)) + dihedral(numbers=(3, 4, 5, 0))) * rotate_2d(-jnp.pi / 4),
+            metric=CvMetric.create(
+                periodicities=[False, False],
+                bounding_box=jnp.array(
+                    [
+                        [-jnp.pi / 3, jnp.pi / 3],
+                        [-jnp.pi / 3, jnp.pi / 3],
+                    ]
+                )
+                * jnp.sqrt(2),
+            ),
+            cvs_name=("$\\phi$", "$\\psi$"),
+        )
+
+    bias = NoneBias.create(collective_variable=colvar)
+
+    tic = StaticMdInfo(
+        T=300 * kelvin,
+        timestep=2 * femtosecond,
+        timecon_thermo=100.0 * femtosecond,
+        write_step=500,
+        atomic_numbers=atomic_numbers,
+        screen_log=500,
+        equilibration=0 * femtosecond,
+        r_cut=None,
+    )
+
+    engine = NewYaffEngine(
+        bias=bias,
+        energy=energy,
+        sp=sps[0],
+        static_trajectory_info=tic,
+        step=1,
+    )
+
+    return engine, sps
 
 
 # def mil53_yaff():

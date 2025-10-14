@@ -553,10 +553,14 @@ def macro_chunk_map_fun(
     verbose=False,
     chunk_func: Callable[[T, X2, X2 | None, Array | None], T] | None = None,
     chunk_func_init_args: T = None,
-    # w_t: list[Array] | None = None,
+    w_t: list[Array] | None = None,
+    d_w: list[Array] | None = None,
     print_every=10,
     jit_f=True,
 ) -> T:
+    if w_t is None and y_t is not None:
+        w_t = w
+
     return _macro_chunk_map(
         f=f,
         y=y,
@@ -569,7 +573,8 @@ def macro_chunk_map_fun(
         chunk_func=chunk_func,
         chunk_func_init_args=chunk_func_init_args,
         w=w,
-        # w_t=w_t,
+        w_t=w_t,
+        d_w=d_w,
         print_every=print_every,
         jit_f=jit_f,
     )  # type: ignore
@@ -611,9 +616,10 @@ def _macro_chunk_map(
     nl_t: list[NeighbourList] | NeighbourList | None = None,
     macro_chunk: int | None = 1000,
     verbose=False,
-    chunk_func: Callable[[T, X2, X2 | None, Array | None], T] | None = None,
+    chunk_func: Callable[[T, X2, X2 | None, Array | None, Array | None], T] | None = None,
     chunk_func_init_args: T = None,
-    # w_t: list[Array] | None = None,
+    w_t: list[Array] | None = None,
+    d_w: list[Array] | None = None,
     print_every=10,
     jit_f=True,
 ):
@@ -684,17 +690,21 @@ def _macro_chunk_map(
         else:
             w_stack = None
 
-        # if compute_t and w_t is not None:
-        #     wt_stack = jnp.hstack(w_t)
-        # else:
-        #     wt_stack = None
+        if compute_t and w_t is not None:
+            wt_stack = jnp.hstack(w_t)
+        else:
+            wt_stack = None
+
+        if compute_t and d_w is not None:
+            dw_stack = jnp.hstack(d_w)
 
         return chunk_func(
             chunk_func_init_args,
             z,
             zt if compute_t else None,
             w_stack,
-            # wt_stack,
+            wt_stack,
+            dw_stack if compute_t and d_w is not None else None,
         )
 
     if macro_chunk is None:
@@ -737,8 +747,11 @@ def _macro_chunk_map(
     zt_chunk: list[X2] | None = None
     last_zt: X2 | None = None
     last_chunk_yt: X | None = None
-    # wt_chunk: list[Array] | None
-    # wt_chunk = [] if w_t is not None else None
+    wt_chunk: list[Array] | None
+    wt_chunk = [] if w_t is not None else None
+    dw_chunk: list[Array] | None
+    dw_chunk = [] if d_w is not None else None
+
     last_chunk_nlt: NeighbourList | None = None
     yt_stack: X | None = None
     nlt_stack: NeighbourList | None = None
@@ -777,8 +790,11 @@ def _macro_chunk_map(
                 yt_chunk.append(y_t[n]) if compute_t else None
                 if nlt_chunk is not None and nl_t is not None:
                     nlt_chunk.append(nl_t[n])
-                # if wt_chunk is not None and w_t is not None:
-                #     wt_chunk.append(w_t[n])
+                if wt_chunk is not None and w_t is not None:
+                    wt_chunk.append(w_t[n])
+
+                if dw_chunk is not None and d_w is not None:
+                    dw_chunk.append(d_w[n])
 
             tot_chunk += s
             stack_dims_chunk.append(s)
@@ -822,12 +838,18 @@ def _macro_chunk_map(
                     last_chunk_w = w_last[s_last:yls]
                     w_chunk[-1] = w_last[0:s_last]
 
-                # if compute_t and w_t is not None:
-                #     if w_t is not None and wt_chunk is not None:
-                #         wt_last = wt_chunk[-1]
+                if compute_t and w_t is not None:
+                    if w_t is not None and wt_chunk is not None:
+                        wt_last = wt_chunk[-1]
 
-                #         last_chunk_wt = wt_last[s_last:yls]
-                #         wt_chunk[-1] = wt_last[0:s_last]
+                        last_chunk_wt = wt_last[s_last:yls]
+                        wt_chunk[-1] = wt_last[0:s_last]
+
+                    if d_w is not None and dw_chunk is not None:
+                        dw_last = dw_chunk[-1]
+
+                        last_chunk_dw = dw_last[s_last:yls]
+                        dw_chunk[-1] = dw_last[0:s_last]
 
                 tot_chunk -= y_last.shape[0] - s_last
                 stack_dims_chunk[-1] = s_last
@@ -844,8 +866,11 @@ def _macro_chunk_map(
 
             w_stack = jnp.hstack(w_chunk) if w is not None else None  # type:ignore
 
-            # if compute_t and w_t is not None:
-            #     wt_stack = jnp.hstack(wt_chunk)  # type: ignore
+            if compute_t and w_t is not None:
+                wt_stack = jnp.hstack(wt_chunk)  # type: ignore
+
+            if compute_t and d_w is not None:
+                dw_stack = jnp.hstack(dw_chunk)  # type: ignore
 
             # remove the stack dims from the CVs and NLs
 
@@ -1002,7 +1027,8 @@ def _macro_chunk_map(
                 z.extend(z_chunk)
                 if compute_t:
                     zt.extend(zt_chunk)  # type: ignore
-                    # wt_chunk = [] if w_t is not None else None
+                    wt_chunk = [] if w_t is not None else None
+                    dw_chunk = [] if d_w is not None else None
 
                 # print("exiting")
             else:
@@ -1013,7 +1039,8 @@ def _macro_chunk_map(
                     _z_chunk,
                     _zt_chunk if compute_t else None,
                     w_stack,
-                    # wt_stack if compute_t else None,
+                    wt_stack if compute_t else None,
+                    dw_stack if compute_t and d_w is not None else None,
                 )
 
                 if jit_f:
@@ -1046,9 +1073,13 @@ def _macro_chunk_map(
                         yt_chunk = [last_chunk_yt]
                         nlt_chunk = [last_chunk_nlt] if last_chunk_nlt is not None else None
 
-                        # if w_t is not None:
-                        #     assert last_chunk_wt is not None
-                        #     wt_chunk = [last_chunk_wt]
+                        if w_t is not None:
+                            assert last_chunk_wt is not None
+                            wt_chunk = [last_chunk_wt]
+
+                        if d_w is not None:
+                            assert last_chunk_dw is not None
+                            dw_chunk = [last_chunk_dw]
 
                     tot_chunk = last_chunk_y.shape[0]
                     stack_dims_chunk = [tot_chunk]
@@ -1414,7 +1445,7 @@ class SystemParams(MyPyTreeNode):
         if verbose:
             print(f"obtaining neighs {num_neighs=}")
 
-        nn, _, a, ijk, center_op = get_f(num_neighs)(sp)
+        nn, r, a, ijk, center_op = get_f(num_neighs)(sp)
 
         if sp.batched:
             nn = jnp.max(nn)
@@ -1444,6 +1475,7 @@ class SystemParams(MyPyTreeNode):
                 op_cell=op_cell,
                 op_coor=op_coor,
                 op_center=center_op,
+                _inside_cut_bools=r < info.r_cut,
             ),
         )
 
@@ -2020,9 +2052,9 @@ class NeighbourListInfo(MyPyTreeNode):
     r_cut: float = field(pytree_node=False)
     r_skin: float = field(pytree_node=False)
 
-    z_array: tuple[int] | None = field(pytree_node=False, default=None)
-    z_unique: tuple[int] | None = field(pytree_node=False, default=None)
-    num_z_unique: tuple[int] | None = field(pytree_node=False, default=None)
+    z_array: tuple[int, ...] = field(pytree_node=False)
+    z_unique: tuple[int, ...] = field(pytree_node=False)
+    num_z_unique: tuple[int, ...] = field(pytree_node=False)
 
     @staticmethod
     def create(
@@ -2030,13 +2062,11 @@ class NeighbourListInfo(MyPyTreeNode):
         z_array: Array,
         r_skin: float | None = None,
     ):
-        def to_tuple(a) -> tuple[int] | None:
-            if a is None:
-                return None
-            return tuple([int(ai) for ai in a])  # type: ignore
+        def to_tuple(a) -> tuple[int]:
+            return tuple([int(ai) for ai in a])
 
-        zu = jnp.unique(jnp.array(z_array)) if z_array is not None else None
-        nzu = vmap_decorator(lambda zu: jnp.sum(jnp.array(z_array) == zu))(zu) if zu is not None else None
+        zu = jnp.unique(jnp.array(z_array))
+        nzu = vmap_decorator(lambda zu: jnp.sum(jnp.array(z_array) == zu))(zu)
 
         if r_skin is None:
             r_skin = 0.0
@@ -2059,6 +2089,24 @@ class NeighbourListInfo(MyPyTreeNode):
         p = [jax.tree.map(lambda pi: pi[a], tree=p) for a in arg_split]  # type: ignore
 
         return jnp.array(bool_masks), arg_split, p  # type: ignore
+
+    def get_random_permutation(self, key: jax.Array | None = None) -> jax.Array:
+        assert self.z_array is not None
+        assert self.z_unique is not None
+
+        out = jnp.zeros_like(jnp.array(self.z_array))
+
+        if key is None:
+            key = jax.random.PRNGKey(0)
+
+        for u in self.z_unique:
+            key, key1 = jax.random.split(key)
+            idx = jnp.argwhere(jnp.array(self.z_array) == u).ravel()
+            perm = jax.random.permutation(key1, idx)
+
+            out = out.at[idx].set(perm)
+
+        return out
 
     def __getstate__(self):
         return self.__dict__
@@ -2130,6 +2178,7 @@ class NeighbourList(MyPyTreeNode):
 
     ijk_indices: Array | None = field(default=None)
     _padding_bools: Array | None = field(default=None)
+    _inside_cut_bools: Array | None = field(default=None)
 
     @staticmethod
     def create(
@@ -2374,8 +2423,8 @@ class NeighbourList(MyPyTreeNode):
         self,
         sp: SystemParams,
         func_double: Callable[[jax.Array, jax.Array, T, jax.Array, jax.Array, T], S],
-        func_single: Callable[[jax.Array, jax.Array], T] = lambda x, y: None,
-        r_cut=None,
+        func_single: Callable[[jax.Array, jax.Array], T] | None = None,
+        r_cut: float | None = None,
         fill_value=0.0,
         reduce="full",  # or 'z' or 'none'
         split_z=False,  #
@@ -2432,6 +2481,9 @@ class NeighbourList(MyPyTreeNode):
 
             assert self is not None
 
+        if r_cut is None:
+            r_cut = self.info.r_cut
+
         pos = self.neighbour_pos(sp)
         ind = self.atom_indices
 
@@ -2444,7 +2496,10 @@ class NeighbourList(MyPyTreeNode):
 
             @partial(padded_vmap, chunk_size=chunk_size_neigbourgs)
             def _f1(j: jax.Array, pos_j: jax.Array, ind_j: jax.Array, padding_bools_j: jax.Array):
-                r_j = jnp.linalg.norm(pos_j, axis=-1)
+                r_j_2 = jnp.sum(pos_j**2, axis=-1)
+                r_j_2_safe = jnp.where(r_j_2 < 1e-16, 1, r_j_2)
+                r_j = jnp.where(r_j_2 < 1e-16, 0, 1 / jnp.sqrt(r_j_2_safe))
+
                 b = jnp.logical_and(padding_bools_j, r_j < r_cut)
 
                 if exclude_self:
@@ -2452,10 +2507,9 @@ class NeighbourList(MyPyTreeNode):
 
                 if func_single is not None:
                     out = func_single(pos_j, ind_j)
+                    out: T | None = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
                 else:
                     out = None
-
-                out: T | None = jax.tree.map(lambda x: jnp.where(b, x, jnp.zeros_like(x) + fill_value), out)
 
                 return (b, out)
 
@@ -2498,6 +2552,8 @@ class NeighbourList(MyPyTreeNode):
 
                 return (b, out)
 
+            # print(f"{data_single_i=}")
+
             out_tree_n = _f2(
                 nj,
                 nk,
@@ -2507,8 +2563,8 @@ class NeighbourList(MyPyTreeNode):
                 pos_i[nk],
                 ind_i[nj],
                 ind_i[nk],
-                data_single_i[nj],
-                data_single_i[nk],
+                jax.tree.map(lambda x: x[nj], data_single_i) if data_single_i is not None else None,
+                jax.tree.map(lambda x: x[nk], data_single_i) if data_single_i is not None else None,
             )
 
             # replace vals with fill_value if bools is False
@@ -2597,11 +2653,9 @@ class NeighbourList(MyPyTreeNode):
         if self.sp_orig is None:
             return True
 
-        max_displacement = jnp.max(
-            jnp.linalg.norm(self.neighbour_pos(self.sp_orig) - self.neighbour_pos(sp), axis=-1),
-        )
+        max_displacement = jnp.sum((sp.coordinates - self.sp_orig.coordinates) ** 2, axis=-1)
 
-        return max_displacement > self.info.r_skin / 2  # type:ignore
+        return jnp.any(max_displacement > self.info.r_skin**2 / 4)  # type:ignore
 
     @partial(
         jit_decorator,
@@ -2848,6 +2902,91 @@ class NeighbourList(MyPyTreeNode):
             )
 
         self.__init__(**sd)
+
+    def get_pairs_trips_quads(self, sp: SystemParams, r_cut: float | None = None):
+        if r_cut is None:
+            r_cut = self.info.r_cut
+
+        def dist(r, i):
+            return jnp.linalg.norm(r)
+
+        b0, d0 = self.apply_fun_neighbour(sp, dist, reduce="none", exclude_self=True)
+
+        @partial(jax.vmap, in_axes=(0, 0))
+        @partial(jax.vmap, in_axes=(None, 0))
+        def dub(n, a):
+            return jnp.array([n, a])
+
+        p = dub(jnp.arange(self.atom_indices.shape[0]), self.atom_indices)
+        pairs = p[b0, :]
+        pairs = jnp.unique(pairs, axis=0)
+
+        @partial(jax.vmap, in_axes=(0, None))
+        @partial(jax.vmap, in_axes=(None, 0))
+        def trip(d1, d2):
+            i1, i2 = d1[0], d1[1]
+            j1, j2 = d2[0], d2[1]
+
+            dup = 0
+            dup += i1 == j1
+            dup += i2 == j2
+            dup += i1 == j2
+            dup += i2 == j1
+
+            return jnp.logical_and(dup == 1, ~jnp.all(d1 == d2)), jnp.array([i1, i2, j1, j2])
+
+        b, p = trip(pairs, pairs)
+
+        @jax.vmap
+        def order_triplet(t):
+            a0, a1, b0, b1 = t
+            # find the middle one
+            ci = jnp.array([-1, -1])
+            ci = jnp.where(a0 == a1, jnp.array([0, 1]), ci)
+            ci = jnp.where(a0 == b0, jnp.array([0, 2]), ci)
+            ci = jnp.where(a0 == b1, jnp.array([0, 3]), ci)
+            ci = jnp.where(a1 == b0, jnp.array([1, 2]), ci)
+            ci = jnp.where(a1 == b1, jnp.array([1, 3]), ci)
+            ci = jnp.where(b0 == b1, jnp.array([2, 3]), ci)
+
+            (t_ind,) = jnp.where(t != t[ci[0]], size=2)
+
+            to = jnp.sort(t[t_ind])
+
+            return jnp.array([to[0], t[ci[0]], to[1]])
+
+        triplets = order_triplet(p[b])
+        triplets = jnp.unique(triplets, axis=0)
+
+        @partial(jax.vmap, in_axes=(0, None))
+        @partial(jax.vmap, in_axes=(None, 0))
+        def quad(t0, t1):
+            # middle atom is one of the outside atoms
+            b0 = jnp.logical_or(t0[1] == t1[0], t0[1] == t1[2])
+            b1 = jnp.logical_or(t0[2] == t1[0], t0[2] == t1[1])
+
+            b = jnp.logical_and(b0, b1)
+
+            return b, jnp.array([t0[0], t0[1], t0[2], t1[0], t1[1], t1[2]])
+
+        b, p = quad(triplets, triplets)
+
+        @jax.vmap
+        def order_quartet(q):
+            a0, a1, a2, b0, b1, b2 = jnp.where(q[1] > q[4], q[jnp.array([3, 4, 5, 0, 1, 2])], q)
+            a = jnp.array([a0, a1, a2])
+            b = jnp.array([b0, b1, b2])
+
+            # find the middle one
+            ia = jnp.where(a0 == b1, jnp.array([2, 0]), jnp.array([0, 2]))
+            ib = jnp.where(b0 == a1, jnp.array([2, 0]), jnp.array([0, 2]))
+
+            return jnp.array([a[ia[0]], a[1], a[ia[1]], b[ib[0]]])
+
+        quads = order_quartet(p[b])
+        quads = jnp.unique(quads, axis=0)
+
+        return pairs, triplets, quads
 
     @property
     def stack_dims(self):
@@ -3223,12 +3362,14 @@ class CvMetric(MyPyTreeNode):
 
     bounding_box: jax.Array
     periodicities: jax.Array
+    _extensible: jax.Array | None = field(default=None)
 
     @classmethod
     def create(
         cls,
         periodicities=None,
         bounding_box=None,
+        extensible=None,
         # map_meshgrids=None,
     ) -> CvMetric:
         if periodicities is None:
@@ -3253,7 +3394,19 @@ class CvMetric(MyPyTreeNode):
             if bounding_box.ndim == 1:
                 bounding_box = jnp.reshape(bounding_box, (1, 2))
 
-        return CvMetric(bounding_box=bounding_box, periodicities=periodicities)
+        if extensible is not None:
+            if isinstance(extensible, list):
+                extensible = jnp.array(extensible, dtype=jnp.bool)
+
+            assert extensible.shape == periodicities.shape
+
+        return CvMetric(bounding_box=bounding_box, periodicities=periodicities, _extensible=extensible)
+
+    @property
+    def extensible(self):
+        if self._extensible is None:
+            return jnp.logical_not(self.periodicities)
+        return self._extensible
 
     def norm(self, x1: CV, x2: CV, k=1.0):
         diff = self.difference(x1=x1, x2=x2) * k
@@ -3331,9 +3484,15 @@ class CvMetric(MyPyTreeNode):
         periodicities = jnp.hstack((self.periodicities, other.periodicities))
         bounding_box = jnp.vstack((self.bounding_box, other.bounding_box))
 
+        if (self.extensible is not None) or (other.extensible is not None):
+            extensible = jnp.hstack((self.extensible, other.extensible))
+        else:
+            extensible = None
+
         return CvMetric(
             periodicities=periodicities,
             bounding_box=bounding_box,
+            _extensible=extensible,
         )
 
     @staticmethod
@@ -3376,7 +3535,7 @@ class CvMetric(MyPyTreeNode):
 
                 diff = jnp.where(diff < 1e-12, 1, diff * margin)
 
-                diff = jnp.where(self.periodicities, 0, diff)  # if periodic, do not add bounds
+                diff = jnp.where(self.extensible, diff, 0)  # if periodic, do not add bounds
 
                 b = b.at[:, 0].set(b[:, 0] - diff)
                 b = b.at[:, 1].set(b[:, 1] + diff)
@@ -3538,7 +3697,7 @@ class CvMetric(MyPyTreeNode):
         bounds = bounds.at[:, 0].set(bounds[:, 0] - bounds_margin)
         bounds = bounds.at[:, 1].set(bounds[:, 1] + bounds_margin)
 
-        bounds = jnp.where(constants, bounding_box, bounds)
+        bounds = jax.vmap(lambda x, y: jnp.where(constants, x, y), in_axes=(1, 1), out_axes=(1))(bounding_box, bounds)
 
         if verbose:
             print(f"{bounds=}")
@@ -3570,6 +3729,7 @@ class CvMetric(MyPyTreeNode):
         return CvMetric(
             bounding_box=self.bounding_box[idx],
             periodicities=self.periodicities[idx],
+            _extensible=self._extensible[idx] if self._extensible is not None else None,
         )
 
 
@@ -3786,6 +3946,8 @@ class _ParralelCvTrans(MyPyTreeNode):
 
             out.append(_x)
 
+        # jax.debug.print("parallel cv  {out}", out=out)
+
         return CV(cv=jnp.hstack([cvi.cv for cvi in out]))
 
 
@@ -3899,6 +4061,12 @@ class CvTrans(MyPyTreeNode):
     def __add__(self: CvTrans, other: CvTrans):
         return CvTrans(trans=_ParralelCvTrans(trans=(self.trans, other.trans)))
 
+    def __radd__(self: CvTrans, other: CvTrans | None):
+        if other is None:
+            return self
+
+        return self + other
+
 
 ######################################
 #       Collective variable          #
@@ -3908,8 +4076,10 @@ class CvTrans(MyPyTreeNode):
 class CollectiveVariable(MyPyTreeNode):
     f: CvTrans
     metric: CvMetric
-    jac: Callable = field(pytree_node=False, default=jax.jacrev)  # jacfwd is generally faster, but not always supported
+    jac: Callable = field(pytree_node=False, default=jax.jacrev)
     name: str = field(pytree_node=False, default="")
+    cvs_name: tuple[str, ...] | None = field(pytree_node=False, default=None)
+    extra_info: tuple[str, ...] | None = field(pytree_node=False, default=None)
 
     @partial(
         jit_decorator,
@@ -3990,6 +4160,8 @@ class CollectiveVariable(MyPyTreeNode):
     def __getitem__(self, tup):
         from IMLCV.implementations.CV import _cv_slice
 
+        assert isinstance(tup, tuple)
+
         return CollectiveVariable(
             f=self.f
             * CvTrans.from_cv_function(
@@ -3998,4 +4170,7 @@ class CollectiveVariable(MyPyTreeNode):
             ),
             jac=self.jac,
             metric=self.metric[tup],
+            name=self.name,
+            cvs_name=tuple(self.cvs_name[i] for i in tup) if self.cvs_name is not None else None,
+            extra_info=tuple(self.extra_info[i] for i in tup) if self.extra_info is not None else None,
         )

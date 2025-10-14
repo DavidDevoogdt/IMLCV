@@ -8,9 +8,8 @@ from parsl import HighThroughputExecutor, WorkQueueExecutor
 from parsl.executors.base import ParslExecutor
 from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig, TaskVineManagerConfig
 from parsl.executors.threads import ThreadPoolExecutor
-from parsl.launchers import SingleNodeLauncher, SimpleLauncher
+from parsl.launchers import SimpleLauncher, SingleNodeLauncher
 from parsl.providers import LocalProvider, SlurmProvider
-# from parsl.
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 
@@ -387,7 +386,7 @@ def config(
                     label=label,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=4,
+                    max_blocks=50,
                     parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=training_cores,

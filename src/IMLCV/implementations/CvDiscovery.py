@@ -9,7 +9,7 @@ from jax import Array, jit, random
 from IMLCV.base.CV import CV, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
-from IMLCV.base.rounds import DataLoaderOutput, Covariances
+from IMLCV.base.rounds import Covariances, DataLoaderOutput
 from IMLCV.base.UnitsConstants import nanosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize
 
@@ -278,7 +278,7 @@ class TranformerAutoEncoder(Transformer):
         if cv_t is not None:
             cv_t = f_enc.compute_cv(_cv_t)[0].unstack()
 
-        return cv, cv_t, un_atomize * f_enc, w
+        return cv, cv_t, un_atomize * f_enc, w, None
 
 
 def _LDA_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha, outdim, solver):
@@ -452,7 +452,7 @@ class TransoformerLDA(Transformer):
 
             full_trans = un_atomize * _f * _g
 
-        return cv.unstack(), cv_t.unstack(), full_trans, w
+        return cv.unstack(), cv_t.unstack(), full_trans, w, None
 
 
 class TransformerMAF(Transformer):
@@ -467,11 +467,14 @@ class TransformerMAF(Transformer):
     use_w: bool = True
 
     min_t_frac: float = 0.1
+    max_t_cutoff = 0.01 * nanosecond
 
     trans: CvTrans | None = None
     T_scale: float = 1.0
 
     disciminating_CVs: CV | None = None
+
+    generator: bool = False
 
     shrink: bool = True
 
@@ -570,36 +573,64 @@ class TransformerMAF(Transformer):
         #     argmask=argmask,
         # )
 
-        km = dlo.koopman_model(
-            cv_0=x,
-            cv_t=x_t,
-            nl=dlo.nl,
-            nl_t=dlo.nl_t,
-            w=w if self.use_w else [jnp.ones_like(x) for x in w],
-            rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            calc_pi=True,
-            add_1=True,
-            eps_pre=self.eps,
-            eps=self.eps_pre,
-            symmetric=False,
-            trans=self.trans,
-            verbose=True,
-            auto_cov_threshold=0.1,
-            max_features=self.max_features,
-            max_features_pre=self.max_features_pre,
-            T_scale=self.T_scale,
-            shrink=False,
-            # shrinkage_method="BC",
-        )
+        if self.generator:
+            km = dlo.koopman_model(
+                cv_0=x,
+                cv_t=x_t,
+                nl=dlo.nl,
+                nl_t=dlo.nl_t,
+                w=w if self.use_w else [jnp.ones_like(x) for x in w],
+                rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                calc_pi=True,
+                add_1=True,
+                eps_pre=self.eps,
+                eps=self.eps_pre,
+                symmetric=True,
+                trans=self.trans,
+                verbose=True,
+                # auto_cov_threshold=0.1,
+                max_features=self.max_features,
+                max_features_pre=self.max_features_pre,
+                T_scale=self.T_scale,
+                shrink=False,
+                generator=True,
+                # shrinkage_method="BC",
+            )
 
-        # if self.sym:
-        km = km.weighted_model(
-            symmetric=True,
-            shrink=True,
-            add_1=False,
-        )
+        else:
+            km = dlo.koopman_model(
+                cv_0=x,
+                cv_t=x_t,
+                nl=dlo.nl,
+                nl_t=dlo.nl_t,
+                w=w if self.use_w else [jnp.ones_like(x) for x in w],
+                rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                calc_pi=True,
+                add_1=True,
+                eps_pre=self.eps,
+                eps=self.eps_pre,
+                symmetric=False,
+                trans=self.trans,
+                verbose=True,
+                # auto_cov_threshold=0.1,
+                max_features=self.max_features,
+                max_features_pre=self.max_features_pre,
+                T_scale=1.0,
+                shrink=False,
+                # shrinkage_method="BC",
+            )
+
+            # if self.sym:
+            km = km.weighted_model(
+                symmetric=True,
+                shrink=True,
+                add_1=True,
+                # T_scale=self.T_scale,
+            )
 
         # assert km.w is not None
         # w = km.w
@@ -641,12 +672,14 @@ class TransformerMAF(Transformer):
         print(f"timescales: {ts[: jnp.min(jnp.array([10, ts.shape[0]]))]} ns")
 
         for i in range(self.outdim):
-            if ts[i] / ts[0] < self.min_t_frac:
+            if (ts[i] / ts[0] < self.min_t_frac) and (ts[i] < self.max_t_cutoff / nanosecond):
                 print(
                     f"cv {i} is too small compared to ref (fraction= {ts[i] / ts[0]}, {self.min_t_frac=}), cutting off "
                 )
                 outdim = i
                 break
+
+        exta_info = [f"{ts[i]:.4f}" for i in range(self.outdim)]
 
         trans_km = km.f(
             out_dim=outdim,
@@ -668,4 +701,4 @@ class TransformerMAF(Transformer):
             verbose=True,
         )
 
-        return x, x_t, trans_km, w
+        return (x, x_t, trans_km, w, exta_info)

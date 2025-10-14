@@ -85,10 +85,16 @@ class StaticMdInfo:
     def barostat(self):
         return self.P is not None
 
-    @property
-    def neighbour_list_info(self) -> NeighbourListInfo:
+    # @property
+    def neighbour_list_info(self, r_cut=None) -> NeighbourListInfo | None:
+        if r_cut is None:
+            r_cut = self.r_cut
+
+        if r_cut is None:
+            return None
+
         return NeighbourListInfo.create(
-            r_cut=self.r_cut,
+            r_cut=r_cut,
             z_array=self.atomic_numbers,
         )
 
@@ -161,6 +167,7 @@ class TrajectoryInfo(MyPyTreeNode):
     _e_bias: Array | None = None
 
     _w: Array | None = None
+    _w_t: Array | None = None
     _rho: Array | None = None
 
     _cv: Array | None = None
@@ -174,6 +181,7 @@ class TrajectoryInfo(MyPyTreeNode):
 
     _capacity: int = field(pytree_node=False, default=-1)
     _size: int = field(pytree_node=False, default=-1)
+    _prev_save: int = field(pytree_node=False, default=0)
 
     _finished: int = field(pytree_node=False, default=False)
     _invalid: int = field(pytree_node=False, default=False)
@@ -187,6 +195,7 @@ class TrajectoryInfo(MyPyTreeNode):
         "_P",
         "_err",
         "_w",
+        "_w_t",
         "_rho",
     ]
     _items_vec = [
@@ -207,6 +216,7 @@ class TrajectoryInfo(MyPyTreeNode):
         cv: Array | None = None,
         cv_orig: Array | None = None,
         w: Array | None = None,
+        w_t: Array | None = None,
         rho: Array | None = None,
         T: Array | None = None,
         P: Array | None = None,
@@ -231,6 +241,7 @@ class TrajectoryInfo(MyPyTreeNode):
             "_cv": cv,
             "_cv_orig": cv_orig,
             "_w": w,
+            "_w_t": w_t,
             "_rho": rho,
             "_T": T,
             "_P": P,
@@ -273,6 +284,7 @@ class TrajectoryInfo(MyPyTreeNode):
             # _e_pot_vtens=self._e_pot_vtens[slz, :] if self._e_pot_vtens is not None else None,
             _e_bias=self._e_bias[slz,] if self._e_bias is not None else None,
             _w=self._w[slz,] if self._w is not None else None,
+            _w_t=self._w_t[slz,] if self._w_t is not None else None,
             _rho=self._rho[slz,] if self._rho is not None else None,
             # _e_bias_gpos=self._e_bias_gpos[slz, :] if self._e_bias_gpos is not None else None,
             # _e_bias_vtens=self._e_bias_vtens[slz, :] if self._e_bias_vtens is not None else None,
@@ -296,7 +308,21 @@ class TrajectoryInfo(MyPyTreeNode):
 
         index = ti_out._size
 
-        keys = ["_positions", "_cell", "_charges", "_e_pot", "_e_bias", "_w", "_rho", "_cv", "_T", "_P", "_err", "_t"]
+        keys = [
+            "_positions",
+            "_cell",
+            "_charges",
+            "_e_pot",
+            "_e_bias",
+            "_w",
+            "_w_t",
+            "_rho",
+            "_cv",
+            "_T",
+            "_P",
+            "_err",
+            "_t",
+        ]
 
         for tii in ti:
             _s = tii._size
@@ -304,7 +330,10 @@ class TrajectoryInfo(MyPyTreeNode):
             for key in keys:
                 if ti_out.__dict__[key] is not None:
                     ti_out.__dict__[key] = dynamic_update_slice_in_dim(
-                        ti_out.__dict__[key], dynamic_slice_in_dim(tii.__dict__[key], 0, _s), index, 0
+                        ti_out.__dict__[key],
+                        dynamic_slice_in_dim(tii.__dict__[key], 0, _s),
+                        index,
+                        0,
                     )
 
             index += _s
@@ -329,6 +358,7 @@ class TrajectoryInfo(MyPyTreeNode):
         dict = {
             "_capacity": int(nc),
             "_size": int(self._size),
+            "_prev_save": int(self._size),
         }
 
         for name in self._items_vec:
@@ -341,6 +371,8 @@ class TrajectoryInfo(MyPyTreeNode):
             prop = self.__dict__[name]
             if prop is not None:
                 dict[name] = jnp.hstack([prop, jnp.zeros(delta)])  # type:ignore
+
+        print(f"new capacity is {dict['_capacity']} ")
 
         return TrajectoryInfo(**dict)  # type:ignore
 
@@ -360,6 +392,7 @@ class TrajectoryInfo(MyPyTreeNode):
                 dict[name] = prop[: self._size]
 
         dict["_capacity"] = int(self._size)
+        dict["_prev_save"] = int(self._size)
         dict["_size"] = int(self._size)
         dict["_finished"] = int(self._finished)
 
@@ -376,18 +409,39 @@ class TrajectoryInfo(MyPyTreeNode):
             self._save(hf=hf)
 
     def _save(self, hf: h5py.File):
+        print(f"saving trajectory info to {hf.filename}, size {self._size}/{self._capacity}")
+
         for name in [*self._items_scal, *self._items_vec]:
             prop = self.__getattribute__(name)
             if prop is not None:
-                if name in hf:
-                    del hf[name]  # might be different size
+                # if name in hf:
+                #     del hf[name]  # might be different size
 
-                hf[name] = prop.__array__()  # save as numpy array
+                if name not in hf:
+                    # print(f"creating {name} with size {self._capacity} ")
+
+                    hf[name] = prop.__array__()
+
+                else:
+                    # check if size changed
+                    if hf[name].shape[0] != self._capacity:
+                        # print(f"resizing {name} from {hf[name].shape[0]} to {self._capacity} ")
+
+                        del hf[name]
+
+                        hf[name] = prop.__array__()
+                    else:
+                        hf[name][self._prev_save : self._size] = prop[
+                            self._prev_save : self._size
+                        ].__array__()  # save as numpy array, only the changed part
+
+        self._prev_save = self._size
 
         hf.attrs.create("_capacity", self._capacity)
         hf.attrs.create("_size", self._size)
         hf.attrs.create("_finished", self._finished)
         hf.attrs.create("_invalid", self._invalid)
+        hf.attrs.create("_prev_save", self._size)
 
     @staticmethod
     def load(filename) -> TrajectoryInfo:
@@ -460,6 +514,12 @@ class TrajectoryInfo(MyPyTreeNode):
         if self._w is None:
             return None
         return self._w[0 : self._size]
+
+    @property
+    def w_t(self) -> Array | None:
+        if self._w_t is None:
+            return None
+        return self._w_t[0 : self._size]
 
     @property
     def rho(self) -> Array | None:
@@ -633,6 +693,9 @@ class MDEngine(ABC):
             b = True
         else:
             nl = self.nl
+
+            # print(f"{nl=} {self.sp=} { self.nl.needs_update=}")
+
             b = not self.nl.needs_update(self.sp)
 
         info = nl.info
@@ -708,9 +771,12 @@ class MDEngine(ABC):
 
                 print(f"loaded ti  {self.step=} ")
 
+        # else:
+        #     print(f"{self.sp=}")
+
         self.time0 = time()
 
-        self.update_nl()
+        # self.update_nl()
 
         return self
 
@@ -944,4 +1010,4 @@ class MDEngine(ABC):
             )
             raise e
 
-        self.update_nl()
+        # self.update_nl()

@@ -6,7 +6,7 @@ import numpy as np
 from jax import Array
 from typing_extensions import Self
 
-from IMLCV.base.bias import Bias, CompositeBias
+from IMLCV.base.bias import Bias, CompositeBias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
 from IMLCV.base.datastructures import field
 from IMLCV.base.MdEngine import MDEngine
@@ -29,6 +29,37 @@ class MinBias(CompositeBias):
     def create(cls, biases: list[Bias]) -> CompositeBias:
         b = CompositeBias.create(biases=biases, fun=jnp.min)
         return b
+
+
+# class SliceBias(Bias):
+#     # scales the bias with dt
+
+#     idx: jax.Array
+#     bias: Bias
+
+#     @classmethod
+#     def create(cls, bias: Bias, idx: jax.Array) -> Bias:
+#         colvar = bias.collective_variable
+#         bias.collective_variable = None
+
+#         return SliceBias(
+#             collective_variable=colvar,
+#             collective_variable_path=bias.collective_variable_path,
+#             start=bias.start,
+#             step=bias.step,
+#             finalized=bias.finalized,
+#             slice_exponent=bias.slice_exponent,
+#             slice_mean=bias.slice_mean,
+#             bias=bias,
+#             idx=idx,
+#         )
+
+#     def _compute(self, cvs: CV) -> Array:
+#         b = self.bias._compute(cvs)
+
+#         print(f"{b.shape=}, {self.idx=}")
+
+#         return b[self.idx]
 
 
 class DTBias(Bias):
@@ -277,25 +308,30 @@ class RbfBias(Bias):
         step=None,
         kernel="thin_plate_spline",
         epsilon=None,
-        smoothing: int | Array = 0.0,
+        smoothing: Array | float | None = -1,
         degree=None,
         finalized=True,
         slice_exponent=1,
         log_exp_slice=True,
         slice_mean=False,
-    ) -> RbfBias:
+    ) -> RbfBias | NoneBias:
         assert cv.batched
         assert cv.shape[1] == cvs.n, f"{cv.shape}[1] != {cvs.n}"
         assert len(vals.shape) == 1
         assert cv.shape[0] == vals.shape[0]
 
+        if cv.shape[0] == 1:
+            from IMLCV.base.bias import NoneBias
+
+            return NoneBias.create(collective_variable=cvs)
+
         # lift
-        offset = jnp.min(vals)
+        # offset = jnp.min(vals)
 
         rbf = RBFInterpolator.create(
             y=cv,
             kernel=kernel,
-            d=vals - offset,
+            d=vals,
             metric=cvs.metric,
             smoothing=smoothing,
             epsilon=epsilon,
@@ -311,7 +347,7 @@ class RbfBias(Bias):
             slice_exponent=slice_exponent,
             log_exp_slice=log_exp_slice,
             slice_mean=slice_mean,
-            offset=offset,
+            offset=0.0,  # offset,
         )
 
     def _compute(self, cvs: CV):
@@ -367,6 +403,7 @@ class GridBias(Bias):
 
         import jax.scipy as jsp
 
+        # def f(x):
         return jsp.ndimage.map_coordinates(
             self.vals,
             coords * (self.n - 1),  # type:ignore
@@ -374,3 +411,69 @@ class GridBias(Bias):
             cval=jnp.nan,
             order=self.order,
         )
+
+
+class GridMaskBias(Bias):
+    """Bias interpolated from lookup table on uniform grid.
+
+    values are caluclated in bin centers
+    """
+
+    n: int
+    bounds: jax.Array
+    vals: jax.Array
+    order: int = field(pytree_node=False, default=1)
+
+    @classmethod
+    def create(
+        cls,
+        cvs: CollectiveVariable,
+        bias: Bias,
+        n=30,
+        bounds: Array | None = None,
+        margin=0.1,
+        order=1,
+    ) -> GridBias:
+        grid, _, cv, _, bounds = cvs.metric.grid(
+            n=n,
+            bounds=bounds,
+            margin=margin,
+        )
+
+        vals, _ = bias.compute_from_cv(cv)
+
+        vals = vals.reshape((n,) * cvs.n)
+
+        return GridBias(
+            collective_variable=cvs,
+            n=n,
+            vals=vals,
+            bounds=bounds,
+            order=order,
+        )
+
+    def _compute(self, cvs: CV):
+        # map between vals 0 and 1
+        # if self.bounds is not None:
+        coords = (cvs.cv - self.bounds[:, 0]) / (self.bounds[:, 1] - self.bounds[:, 0])
+
+        import jax.scipy as jsp
+
+        # def f(x):
+        return jsp.ndimage.map_coordinates(
+            self.vals,
+            coords * (self.n - 1),  # type:ignore
+            mode="constant",
+            cval=jnp.nan,
+            order=self.order,
+        )
+
+        # print(f"{self.vals.shape=}, {coords=}")
+
+        # if self.vals.ndim == 1:
+        #     return f(self.vals)
+
+        # if self.vals.ndim == 2:
+        #     return jax.vmap(f)(self.vals)
+
+        # raise NotImplementedError(f"not implemented for {self.vals.ndim=} ndim")

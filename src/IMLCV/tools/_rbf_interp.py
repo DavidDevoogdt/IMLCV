@@ -35,7 +35,12 @@ _AVAILABLE = {
 
 
 # The shape parameter does not need to be specified when using these RBFs.
-_SCALE_INVARIANT = {"linear", "thin_plate_spline", "cubic", "quintic"}
+_SCALE_INVARIANT = {
+    "linear",
+    "thin_plate_spline",
+    "cubic",
+    "quintic",
+}
 
 
 # For RBFs that are conditionally positive definite of order m, the interpolant
@@ -98,6 +103,7 @@ def _build_and_solve_system(
     powers,
     periodicities: tuple[bool],
     check=True,
+    return_lcov=False,
 ):
     """Build and solve the RBF interpolation system of equations.
 
@@ -162,24 +168,49 @@ def _build_and_solve_system(
         ]
     )
 
-    # print(f"{jnp.sort(jnp.abs(jnp.linalg.eigh(A)[0]))=}")
+    l, U = jnp.linalg.eigh(A)
 
-    # print(f"{jnp.linalg.norm(smoothing)=}")
-    # print(f"{jnp.diag(A)=} {smoothing=}")
+    # Check condition number and lightly regularize tiny/zero eigenvalues to avoid numerical blow-up.
+    l_abs = jnp.abs(l)
+    lmax = jnp.max(l_abs)
+    lmin = jnp.min(l_abs)
+
+    # estimated condition number (use abs of eigenvalues)
+    cond = jnp.where(lmin == 0, jnp.inf, lmax / lmin)
+
+    # # warn for ill-conditioning or singularity
+    # if jnp.isfinite(cond) and cond > 1e12:
+    #     warnings.warn(f"Ill-conditioned system: estimated condition number {float(cond):.3e}", UserWarning)
+    # elif not jnp.isfinite(cond):
+    #     warnings.warn("Singular system detected (zero eigenvalue). Regularizing tiny eigenvalues.", UserWarning)
+
+    # regularize eigenvalues smaller than machine-tolerance-scaled threshold
+    tol = lmax * max(A.shape) * jnp.finfo(l.dtype).eps * 10
+    # print(f"{tol=}")
+    small = jnp.abs(l) < tol
+    if jnp.any(small):
+        num_small = int(jnp.sum(small))
+        warnings.warn(f"Regularizing {num_small} eigenvalue(s) below tol={float(tol):.3e}", UserWarning)
+        l = jnp.where(small, tol, l)
 
     b = jnp.vstack([d, jnp.zeros((r, s))])
 
-    dt0 = datetime.now()
+    # print(f"{l=}")
 
-    print(f"start time: {dt0:%H:%M:%S}.{dt0.microsecond // 1000:03d}", flush=True)
+    A_inv = U @ jnp.diag(l ** (-1)) @ U.T
 
-    coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
+    # coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
 
-    dt1 = datetime.now()
+    coeffs = A_inv @ b
 
-    print(f"end time: {dt1:%H:%M:%S}.{dt1.microsecond // 1000:03d}", flush=True)
+    if return_lcov:
+        soln = A_inv[:, :p] @ d
+        errors = soln[:p] / jnp.diag(A_inv[:p, :p])[:, None]
+        loocv = jnp.linalg.norm(errors)
 
-    # print(f"{coeffs=}")
+        # print(f"{loocv=}")
+
+        return coeffs, loocv
 
     return coeffs
 
@@ -205,7 +236,7 @@ class RBFInterpolator(MyPyTreeNode):
         y: CV,
         metric: CvMetric,
         d: jax.Array,
-        smoothing=None,
+        smoothing=-1,
         kernel="thin_plate_spline",
         epsilon=None,
         degree=None,
@@ -284,6 +315,47 @@ class RBFInterpolator(MyPyTreeNode):
             )
 
         periodicities: tuple[bool] = tuple(bool(a) for a in metric.periodicities)
+
+        loocv = False
+
+        if smoothing is not None:
+            if jnp.any(smoothing < 0):
+                loocv = True
+
+        def score_fn(s_min, s_max, step):
+            s_vals = 10.0 ** (jnp.arange(s_min, s_max, step))
+            scores = []
+
+            print(f"Using LOOCV to determine smoothing parameter, {s_vals=}")
+
+            for s in s_vals:
+                coeffs, score = _build_and_solve_system(
+                    y,
+                    metric,
+                    d,
+                    s,
+                    kernel,
+                    epsilon,
+                    powers,
+                    periodicities=periodicities,
+                    return_lcov=loocv,
+                )
+                if jnp.isnan(coeffs).any() or jnp.isinf(coeffs).any():
+                    continue
+
+                scores.append(score)
+
+            scores = jnp.array(scores)
+            best = jnp.nanargmin(scores)
+            smoothing = s_vals[best]
+            print(f"Choosing smoothing={smoothing} with l_cov={scores[best]} {scores=}")
+            return smoothing
+
+        if loocv:
+            smoothing = score_fn(-5.0, 5.0, 1.0)
+            print(f"first order s {smoothing=}")
+            smoothing = score_fn(jnp.log10(smoothing) - 0.5, jnp.log10(smoothing) + 0.5, 0.1)
+            print(f"second order s {smoothing=}")
 
         coeffs = _build_and_solve_system(
             y,

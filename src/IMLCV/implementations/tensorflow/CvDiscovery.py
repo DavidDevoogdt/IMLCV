@@ -74,14 +74,12 @@ class hkFunBase(CvFunBase):
 
 
 class TranformerUMAP(Transformer):
-
-    decoder:bool=False
-    nunits:int=256
-    nlayers:int=3
-    parametric:bool=True
-    densmap:bool=False
-    n_neighbors:int =20
-
+    decoder: bool = False
+    nunits: int = 256
+    nlayers: int = 3
+    parametric: bool = True
+    densmap: bool = False
+    n_neighbors: int = 20
 
     # def __init__(
     #     self,
@@ -205,4 +203,4 @@ class TranformerUMAP(Transformer):
         cv_0 = f.compute_cv(x, chunk_size=chunk_size)[0].unstack()
         cv_t = f.compute_cv(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
 
-        return cv_0, cv_t, un_atomize * f, w
+        return cv_0, cv_t, un_atomize * f, w, None

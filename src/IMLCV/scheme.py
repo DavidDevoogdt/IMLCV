@@ -115,6 +115,8 @@ class Scheme:
 
         bb = m.bounding_box[:, 1] - m.bounding_box[:, 0]
 
+        bb *= jnp.sqrt(bb.shape[0])  # distance to the corner of the box
+
         print(f"{cv_mid=}")
 
         bias = self.bias

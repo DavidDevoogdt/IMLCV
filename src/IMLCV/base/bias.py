@@ -458,6 +458,8 @@ class Bias(ABC, MyPyTreeNode):
 
                 (ener, cvs), de = value_and_grad(_compute, has_aux=True)(sp_rel, nl)
 
+                # jax.debug.print("{de}", de=de)
+
                 if gpos:
                     if rel:
                         assert c_inv is not None
@@ -799,6 +801,8 @@ class Bias(ABC, MyPyTreeNode):
         else:
             x /= boltzmann * T
 
+        # print(f"{jnp.sort(x)=}")
+
         # if self.log_exp_slice:
         #     w = jnp.exp(w)
 
@@ -850,6 +854,8 @@ class Bias(ABC, MyPyTreeNode):
                         _f = vmap_decorator(_f, in_axes=int(d - n_before))
 
                     x_sum = _f(x)
+
+                    # print(f"{x_sum=}")
                     # result is in reverse order
 
                     # x_sum = jnp.transpose(x_sum)  # reverses order of all axes

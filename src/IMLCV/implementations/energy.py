@@ -1,13 +1,15 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import ase
+import jax
 import jax.numpy as jnp
 import numpy as np
 from ase import geometry as ase_geometry
-from openmm import State, Vec3
-from openmm.app import Simulation
+from openmm import State, System, Vec3
+from openmm.app import Simulation, Topology
 
 from IMLCV.base.bias import Energy, EnergyError, EnergyResult
 from IMLCV.base.CV import NeighbourList, SystemParams
@@ -17,10 +19,67 @@ from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
 
 @dataclass
 class OpenMmEnergy(Energy):
-    pdb: Path
-    forcefield_name: str = "amber14-all.xml"
+    topology: Topology
+    system: System
 
     _simul: Simulation | None = None
+
+    @property
+    def nl(self) -> NeighbourList | None:
+        return None
+
+    @nl.setter
+    def nl(self, nl: NeighbourList):
+        return
+
+    @property
+    def cell(self) -> jax.Array | None:
+        if self.topology._periodicBoxVectors is None:
+            return None
+
+        print(f"{self.topology._periodicBoxVectors=}")
+
+        if self._simul is None:
+            self._get_simul()
+
+        state: State = self._simul.context.getState()
+
+        if (c := state.getPeriodicBoxVectors(asNumpy=True)) is None:
+            return None
+
+        print(f"{c=}")
+
+        cell = jnp.array(c) * nanometer
+
+        return cell
+
+    @cell.setter
+    def cell(self, cell: jax.Array | None):
+        if cell is None or self.topology._periodicBoxVectors is None:
+            return
+
+        if self._simul is None:
+            self._get_simul()
+
+        self._simul.context.setPeriodicBoxVectors(
+            Vec3(*(cell[0, :].__array__() / nanometer)),
+            Vec3(*(cell[1, :].__array__() / nanometer)),
+            Vec3(*(cell[2, :].__array__() / nanometer)),
+        )
+
+    @property
+    def coordinates(self) -> jax.Array | None:
+        state: State = self._simul.context.getState(positions=True)
+
+        coor = jnp.array(state.getPositions(asNumpy=True)) * nanometer
+
+        return coor
+
+    @coordinates.setter
+    def coordinates(self, coordinates: jax.Array):
+        self._simul.context.setPositions(
+            coordinates.__array__() / nanometer,
+        )
 
     @staticmethod
     def to_jax_vec(thing):
@@ -37,14 +96,7 @@ class OpenMmEnergy(Energy):
             dtype=int,
         )
 
-        state: State = self._simul.context.getState(positions=True)
-
-        coor = jnp.array(state.getPositions(asNumpy=True)) * nanometer
-
-        sp = SystemParams(
-            coordinates=coor,
-            cell=None,
-        )
+        sp = self.sp
 
         return sp, atomic_numbers
 
@@ -56,18 +108,7 @@ class OpenMmEnergy(Energy):
 
         assert self._simul is not None
 
-        self._simul.context
-
-        self._simul.context.setPositions(
-            sp.coordinates.__array__() / nanometer,
-        )
-
-        if sp.cell is not None:
-            self._simul.context.setPeriodicBoxVectors(
-                Vec3(*(sp.cell[0, :] / nanometer)),
-                Vec3(*(sp.cell[1, :] / nanometer)),
-                Vec3(*(sp.cell[2, :] / nanometer)),
-            )
+        self.sp = sp
 
         state: State = self._simul.context.getState(
             energy=True,
@@ -75,11 +116,6 @@ class OpenMmEnergy(Energy):
         )
 
         assert not vir
-
-        # if vir:
-        #     vtens = (
-        #         OpenMmEnergy.to_jax_vec(MonteCarloFlexibleBarostat.computeCurrentPressure(self._simul.context)) * kjmol
-        #     )
 
         res = EnergyResult(
             energy=state.getPotentialEnergy()._value * kjmol,  # type:ignore
@@ -92,14 +128,12 @@ class OpenMmEnergy(Energy):
         import openmm.unit as openmm_unit
         from openmm import LangevinIntegrator, System
         from openmm.app import (
-            ForceField,
-            PDBFile,
             Simulation,
         )
 
-        pdb = PDBFile(str(self.pdb))
-        forcefield = ForceField("amber14-all.xml")
-        system: System = forcefield.createSystem(pdb.topology)
+        # pdb = PDBFile(str(self.pdb))
+        topo = self.topology
+        system: System = self.system
 
         # values don't matter, a integrator is needed
         integrator = LangevinIntegrator(
@@ -107,21 +141,63 @@ class OpenMmEnergy(Energy):
             1 / openmm_unit.picosecond,  # type:ignore
             0.004 * openmm_unit.picoseconds,  # type:ignore
         )
-        simulation = Simulation(pdb.topology, system, integrator)
-        simulation.context.setPositions(pdb.positions)
+        simulation = Simulation(topo, system, integrator)
+        # simulation.context.setPositions(pdb.positions)
 
-        if (c := pdb.topology.getPeriodicBoxVectors()) is not None:
+        if (c := topo.getPeriodicBoxVectors()) is not None:
             simulation.context.setPeriodicBoxVectors(*c)
 
         self._simul = simulation
 
     def __getstate__(self):
-        return dict(pdb=self.pdb, forcefield_name=self.forcefield_name)
+        return dict(
+            topology=self.topology,
+            system=self.system,
+        )
 
     def __setstate__(self, state):
-        self.pdb = state["pdb"]
-        self.forcefield_name = state["forcefield_name"]
-        # return OpenMmEnergy(**state)
+        if "pdb" in state:
+            self.topology = state["topology"]
+
+        if "topology" in state:
+            self.topology = state["topology"]
+
+        if "system" in state:
+            self.system = state["system"]
+        else:
+            from openmm.app import (
+                ForceField,
+            )
+
+            forcefield = ForceField("amber14-all.xml")
+            system: System = forcefield.createSystem(self.topology)
+
+            self.system = system
+
+    def get_bonds(self):
+        bonds = []
+
+        for b in self.topology.bonds():
+            bonds.append([b.atom1.index, b.atom2.index])
+
+        b_arr = jnp.array(bonds)
+
+        # n_atoms = sp_boat.coordinates.shape[0]
+        n_atoms = len(list(self.topology.atoms()))
+
+        _, num_bonds = jnp.unique(b_arr, return_counts=True)
+
+        max_bonds = int(jnp.max(num_bonds))
+
+        @jax.vmap
+        def _match(i):
+            b = jnp.argwhere(jnp.any(b_arr == i, axis=1), size=max_bonds, fill_value=-1).reshape(-1)
+
+            out = jnp.where(b == -1, -1, jnp.where(b_arr[b, 0] == i, b_arr[b, 1], b_arr[b, 0]))
+
+            return out
+
+        return _match(jnp.arange(n_atoms))
 
 
 class AseEnergy(Energy):

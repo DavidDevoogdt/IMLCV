@@ -95,9 +95,9 @@ class Observable:
 
             # # do not update periodic bounds
             bounding_box = jnp.where(
-                dlo.collective_variable.metric.periodicities,
-                dlo.collective_variable.metric.bounding_box,
+                dlo.collective_variable.metric.extensible,
                 bounds,
+                dlo.collective_variable.metric.bounding_box,
             )
 
             print(f"updated bounding box: {bounding_box}")
@@ -326,6 +326,7 @@ class Observable:
         verbose=True,
         max_bias: float = 100 * kjmol,
         vmax: float = 100 * kjmol,
+        smoothing=-1,
         kooopman_wham=None,
         samples_per_bin=10,
         min_samples_per_bin=5,
@@ -393,13 +394,14 @@ class Observable:
         if direct_bias:
             fes_bias_wham = fes_bias_wham_p
         else:
-            fes_bias_wham = dlo.get_fes_bias_from_weights(
+            fes_bias_wham, _ = dlo.get_fes_bias_from_weights(
                 n_max=n_max,
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 max_bias=max_bias,
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
+                smoothing=smoothing,
             )
 
             if plot_selected_points:
@@ -413,7 +415,7 @@ class Observable:
                 )
 
         if koopman:
-            weights, w_corr, _ = dlo.koopman_weight(
+            weights, weights_t, w_corr, _ = dlo.koopman_weight(
                 max_bins=n_max,
                 samples_per_bin=samples_per_bin,
                 # min_samples_per_bin=min_samples_per_bin,
@@ -429,7 +431,7 @@ class Observable:
 
             assert weights is not None
 
-            fes_bias_tot = dlo.get_fes_bias_from_weights(
+            fes_bias_tot, _ = dlo.get_fes_bias_from_weights(
                 weights=weights,
                 n_max=n_max,
                 max_bias=max_bias,
@@ -451,7 +453,7 @@ class Observable:
             assert w_corr is not None
 
             if plot_selected_points:
-                fes_bias_tot_corr = dlo.get_fes_bias_from_weights(
+                fes_bias_tot_corr, _ = dlo.get_fes_bias_from_weights(
                     weights=w_corr,
                     rho=[jnp.ones_like(x) for x in w_corr],
                     n_max=n_max,

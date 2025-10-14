@@ -40,6 +40,7 @@ def p_i(
     mul_Z=True,
     normalize=True,
     Z_weights=None,
+    reduce_Z=False,
 ):
     if sp.batched:
         _f: Callable[[SystemParams, NeighbourList], Array] = Partial_decorator(
@@ -126,6 +127,25 @@ def p_i(
         out = n(out)
 
         # print(f"post {out=}")
+
+    # if sum_Z:
+
+    if reduce_Z:
+        print(f"summing over Z {out.shape=}")
+
+        @vmap_decorator
+        def add(val, z):
+            index = jnp.argwhere(jnp.array(nl.info.z_unique) == z, size=1)[0, 0]
+
+            out = jnp.zeros((len(nl.info.z_unique), *val.shape))
+            out = out.at[index].add(val)
+
+            return out
+
+        out = add(out, jnp.array(nl.info.z_array))
+        out = jnp.sum(out, axis=0)
+
+        print(f"post summing {out.shape=}")
 
     return out
 
@@ -302,8 +322,9 @@ def p_innl_soap(
             l = jnp.arange(l_max + 1, dtype=jnp.int64)
 
             # print(f"{phi_n.shape=} {l.shape=}")
+            print(f" r**l")
 
-            return jnp.outer(phi_n, 1**l)
+            return jnp.outer(phi_n, r_ij**l)
 
     def S_nm(n: int, m: int):
         def g(r: jax.Array, sigma_a: float, r_cut: float, n_max: int):
@@ -354,8 +375,6 @@ def p_innl_soap(
             a_jnl_safe,
         )  # type:ignore
 
-        # print(f"{a_jnl.shape=}")
-
         return a_jnl
 
     # @jit
@@ -398,7 +417,7 @@ def p_inl_sb(l_max: int, n_max: int, r_cut: float, bessel_fun="jax"):
     # for explanation soap:
     # https://aip.scitation.org/doi/suppl/10.1063/1.5111045
 
-    assert l_max == n_max, "l_max should be  equal to n_max"
+    # assert l_max == n_max, "l_max should be  equal to n_max"
 
     def f_cut(r: Array) -> Array:
         return jnp.where(r > r_cut, 0.0, 1.0)  # type:ignore
@@ -529,7 +548,9 @@ def p_inl_sb(l_max: int, n_max: int, r_cut: float, bessel_fun="jax"):
 
         return jnp.einsum("nl,ml->nml", _f_nl, _f_nl) * r**2
 
-    S_nml = quad(g, 1e-10, r_cut, n=50)()
+    # print(f"integrating S")
+
+    S_nml = quad(g, 1e-10, r_cut, n=100)()
 
     @partial(vmap_decorator, in_axes=(2), out_axes=(2))
     def _u_inv(S: Array):
@@ -590,7 +611,7 @@ def p_inl_sb(l_max: int, n_max: int, r_cut: float, bessel_fun="jax"):
             return lax.cond(
                 l <= n,
                 lambda: a[n - l, l],
-                lambda: jnp.zeros_like(a[0, 0]),
+                lambda: 0.0,
             )
 
         g_nml_l_j = a_nml_l(n_vec, l_vec, a_jnl)
