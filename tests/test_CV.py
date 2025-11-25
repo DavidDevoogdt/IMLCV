@@ -108,7 +108,7 @@ def test_neigh():
     def func(r_ij: jax.Array, index: jax.Array) -> tuple[jax.Array, jax.Array]:
         return (jnp.linalg.norm(r_ij), index)
 
-    s1 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func=func)
+    s1 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func_single=func)
     neigh_calc, (r_calc, index_calc) = s1
 
     # campare agains mathematical predictions for uniform fille sphere
@@ -135,13 +135,13 @@ def test_neigh():
     nl2 = sp2.get_neighbour_list(info=nl.info)
     assert nl2 is not None
 
-    s2 = nl2.apply_fun_neighbour(sp=sp2, func=func, r_cut=r_cut)
+    s2 = nl2.apply_fun_neighbour(sp=sp2, func_single=func, r_cut=r_cut)
 
     _comp(s1, s2)
 
     # test 3: with neighbourlist, split z
 
-    s3 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func=func, split_z=True)
+    s3 = nl.apply_fun_neighbour(sp=sp, r_cut=r_cut, func_single=func, split_z=True)
     s3_u = jax.tree.map(lambda x: jnp.sum(x, axis=1), s3)  # resum over z axis
     _comp(s1, s3_u)
 
@@ -150,7 +150,7 @@ def test_neigh():
     s4 = nl.apply_fun_neighbour(
         sp=sp,
         r_cut=r_cut,
-        func=func,
+        func_single=func,
         reduce="none",
     )
     s4_u = jax.tree.map(lambda x: jnp.sum(x, axis=1), s4)  # resum over z axis
@@ -163,7 +163,7 @@ def test_neigh():
     s5 = nl.apply_fun_neighbour(
         sp=sp,
         r_cut=r_cut,
-        func=func,
+        func_single=func,
         reduce="z",
     )
 
@@ -172,7 +172,7 @@ def test_neigh():
     s6 = nl.apply_fun_neighbour(
         sp=sp,
         r_cut=r_cut,
-        func=func,
+        func_single=func,
         reduce="none",
     )
 

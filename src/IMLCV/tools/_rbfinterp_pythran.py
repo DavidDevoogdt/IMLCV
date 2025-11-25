@@ -57,7 +57,7 @@ def get_d(
     x: jax.Array,
     metric: CvMetric,
     epsilon: jax.Array | float,
-    periodicities: tuple[bool],
+    periodicities: tuple[bool, ...],
     y: jax.Array | None = None,
 ):
     epsilon = jnp.array(epsilon).reshape((-1,))
@@ -109,7 +109,7 @@ def cv_norm(
     y: CV,
     metric: CvMetric,
     eps: jax.Array | float,
-    periodicities: tuple[bool],
+    periodicities: tuple[bool, ...],
 ):
     d = get_d(x.cv, metric, eps, periodicities, y.cv)
 
@@ -125,7 +125,7 @@ def cv_vals(
     x: CV,
     power: jax.Array,
     metric: CvMetric,
-    periodicities: tuple[bool],
+    periodicities: tuple[bool, ...],
 ):
     d = get_d(x.cv, metric, epsilon=1.0, periodicities=periodicities)
 
@@ -139,7 +139,7 @@ def eval_kernel_matrix(
     metric: CvMetric,
     eps: jax.Array | float,
     kernel_func: Callable[[jax.Array], jax.Array],
-    periodicities: tuple[bool],
+    periodicities: tuple[bool, ...],
     norm_jacobian: bool = False,
 ):
     """Evaluate RBFs, with centers at `x`, at `x`."""
@@ -162,7 +162,7 @@ def eval_polynomial_matrix(
     x: CV,
     metric: CvMetric,
     powers: jax.Array,
-    periodicities: tuple[bool],
+    periodicities: tuple[bool, ...],
 ):
     """Evaluate monomials, with exponents from `powers`, at `x`."""
 

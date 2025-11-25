@@ -190,7 +190,7 @@ class TBCombination(BarostatHook):
         assert self.step_thermo is not None
 
         self.thermo_expects_call = bool(
-            iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
+            iterative.counter >= self.start and (iterative.counter - self.start) % self.step_baro == 0
         )
 
         self.baro_expects_call = bool(

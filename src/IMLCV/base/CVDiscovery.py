@@ -5,12 +5,17 @@ from typing import TYPE_CHECKING, cast
 
 import jax
 import jax.numpy as jnp
-import matplotlib as mpl
+import matplotlib
+
+# import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
 
-from IMLCV.base.bias import Bias, NoneBias
+from IMLCV.base.bias import Bias, NoneBias, StdBias, GridBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import kelvin, kjmol
@@ -126,7 +131,7 @@ class Transformer(MyPyTreeNode):
 
         from IMLCV.base.rounds import DataLoaderOutput
 
-        bias, _ = dlo.get_fes_bias_from_weights(
+        bias, _, _, _ = dlo.get_fes_bias_from_weights(
             samples_per_bin=samples_per_bin,
             min_samples_per_bin=min_samples_per_bin,
             n_max=n_max,
@@ -134,6 +139,7 @@ class Transformer(MyPyTreeNode):
             macro_chunk=macro_chunk,
             chunk_size=chunk_size,
             recalc_bounds=False,
+            smoothing=None,
         )
 
         if plot:
@@ -163,7 +169,7 @@ class Transformer(MyPyTreeNode):
         # koopman_weight
 
         if koopman:
-            w, wt, _ = dlo.koopman_weight(
+            w, wt, _, _ = dlo.koopman_weight(
                 verbose=verbose,
                 max_bins=n_max,
                 samples_per_bin=samples_per_bin,
@@ -177,7 +183,7 @@ class Transformer(MyPyTreeNode):
             w: list[jax.Array]
             # w_t: list[jax.Array]
 
-            bias_km, _ = dlo.get_fes_bias_from_weights(
+            bias_km, _, _, _ = dlo.get_fes_bias_from_weights(
                 weights=w,
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
@@ -186,6 +192,7 @@ class Transformer(MyPyTreeNode):
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 recalc_bounds=False,
+                smoothing=None,
             )
 
             if plot:
@@ -218,7 +225,7 @@ class Transformer(MyPyTreeNode):
         trans = f
 
         print("starting fit")
-        x, x_t, g, w, extra_info = self._fit(
+        x, x_t, g, w, extra_info, periodicities = self._fit(
             x=x,
             x_t=x_t,
             w=w,
@@ -265,6 +272,15 @@ class Transformer(MyPyTreeNode):
             chunk_size=chunk_size,
         )
 
+        if periodicities is not None:
+            bounds = jnp.where(
+                jnp.array(periodicities)[:, None],
+                jnp.array([[-jnp.pi, jnp.pi]] * len(periodicities)),
+                bounds,
+            )
+
+        print(f"pre {bounds=} {periodicities=}")
+
         assert not jnp.any(constants), "found constant collective variables"
 
         if self.post_scale:
@@ -273,12 +289,23 @@ class Transformer(MyPyTreeNode):
                 _scale_cv_trans,
                 upper=1.0,
                 lower=0.0,
-                mini=bounds[:, 0],
-                diff=bounds[:, 1] - bounds[:, 0],
+                mini=jnp.where(periodicities, 0.0, bounds[:, 0]) if periodicities is not None else bounds[:, 0],
+                diff=jnp.where(periodicities, 1.0, bounds[:, 1] - bounds[:, 0])
+                if periodicities is not None
+                else bounds[:, 1] - bounds[:, 0],
             )
 
-            bounds = jnp.zeros_like(bounds)
-            bounds = bounds.at[:, 1].set(1)
+            bounds_unit = jnp.zeros_like(bounds)
+            bounds_unit = bounds_unit.at[:, 1].set(1)
+
+            if periodicities is not None:
+                bounds = jnp.where(
+                    jnp.array(periodicities)[:, None],
+                    jnp.array([[-jnp.pi, jnp.pi]] * len(periodicities)),
+                    bounds_unit,
+                )
+            else:
+                bounds = bounds_unit
 
             x, x_t = dlo.apply_cv(
                 s_trans,
@@ -294,22 +321,26 @@ class Transformer(MyPyTreeNode):
 
             trans *= s_trans
 
+        print(f"post {bounds=}")
+
         new_collective_variable = CollectiveVariable(
             f=trans,
             jac=jac,
             metric=CvMetric.create(
-                periodicities=None,
+                periodicities=periodicities,
                 bounding_box=bounds,
             ),
             name=cv_titles[1] if isinstance(cv_titles, list) else "",
             extra_info=extra_info,
         )
 
+        print(f"{periodicities=}")
+
         if transform_FES:
             print("transforming FES")
             from IMLCV.base.rounds import DataLoaderOutput
 
-            bias_new, _ = DataLoaderOutput._get_fes_bias_from_weights(
+            bias_new, _, _, _ = DataLoaderOutput._get_fes_bias_from_weights(
                 dlo.sti.T,
                 weights=w,
                 rho=rho,
@@ -321,7 +352,7 @@ class Transformer(MyPyTreeNode):
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
-                recalc_bounds=False,
+                recalc_bounds=True,
             )
 
             if plot:
@@ -387,7 +418,7 @@ class Transformer(MyPyTreeNode):
         verbose=True,
         macro_chunk=1000,
         # **fit_kwargs,
-    ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, tuple[str, ...] | None]:
+    ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, tuple[str, ...] | None, jax.Array | None]:
         raise NotImplementedError
 
     @staticmethod
@@ -405,11 +436,12 @@ class Transformer(MyPyTreeNode):
         margin=0.1,
         plot_FES=False,
         T: float | None = None,
-        vmin=0,
-        vmax=100 * kjmol,
+        vmin: float | list[float] = 0,
+        vmax: float | list[float] = 100 * kjmol,
         dpi=300,
         n_max_bias=1e6,
-        row_color: list[int] | None = None,
+        row_color: list[int] | jax.Array | None = None,
+        plot_std: bool = False,
         # indicate_cv_data=True,
         macro_chunk=10000,
         cmap="jet",
@@ -513,7 +545,7 @@ class Transformer(MyPyTreeNode):
 
         print(f"Plotting, dims: {inoutdims} {name if name is not None else ''}")
 
-        # plt.rc("text", usetex=False)
+        plt.rc("text", usetex=False)
         plt.rc("font", family="DejaVu Sans", size=16)
 
         # change figsize depending on the number of CVs
@@ -563,6 +595,16 @@ class Transformer(MyPyTreeNode):
             title=title,
         ):
             dim = inoutdims[cv_in]
+
+            if isinstance(vmin, list):
+                _vmin = vmin[data_in]
+            else:
+                _vmin = vmin
+
+            if isinstance(vmax, list):
+                _vmax = vmax[data_in]
+            else:
+                _vmax = vmax
 
             data_proc = None
             if cv_data is not None:
@@ -619,10 +661,11 @@ class Transformer(MyPyTreeNode):
                 # weight=weight is not None,
                 margin=margin,
                 fesses=fesses[data_in][cv_in] if plot_FES else None,
-                vmax=vmax,
-                vmin=vmin,
+                vmax=_vmax,
+                vmin=_vmin,
                 T=T,
                 cmap=plt.get_cmap(cmap),
+                plot_std=plot_std,
                 **kwargs,
             )
 
@@ -655,8 +698,8 @@ class Transformer(MyPyTreeNode):
         margin=0.1,
         plot_FES=False,
         T=300 * kelvin,
-        vmin=0,
-        vmax=100 * kjmol,
+        vmin: float | list[float] = 0,
+        vmax: float | list[float] = 100 * kjmol,
         dpi=300,
         n_max_bias=1e6,
         macro_chunk=1000,
@@ -674,6 +717,7 @@ class Transformer(MyPyTreeNode):
         plot_density=True,
         rbf_bias=False,
         extra_info_title: str | None = None,
+        get_fes_bias_kwargs={},
     ):
         # data_converted = []
 
@@ -817,7 +861,7 @@ class Transformer(MyPyTreeNode):
 
                 # print(f"{cv_proj_idx[0].shape=}")
 
-                fes, dens, color = DataLoaderOutput._get_fes_bias_from_weights(
+                fes, _, dens, color = DataLoaderOutput._get_fes_bias_from_weights(
                     T=T,
                     weights=weights_i,
                     rho=[jnp.ones_like(w) / w.shape[0] for w in weights_i],
@@ -834,12 +878,10 @@ class Transformer(MyPyTreeNode):
                     rbf_bias=rbf_bias,
                     observable=color,
                     grid_bias_order=grid_bias_order,
-                    smoothing=-1,
+                    smoothing=1,
                 )
 
-                print(f"{jnp.min(fes.vals)=} {jnp.max(fes.vals)=} {jnp.min(dens.vals)=} {jnp.max(dens.vals)=}")
-
-                print(f"{T=} {vmin/kjmol=} {vmax/kjmol=}")
+                # print(f"{T=} {vmin/kjmol=} {vmax/kjmol=}")
 
                 # print(f"{len(n_proj_idx)=} {fes=}")
 
@@ -866,6 +908,8 @@ class Transformer(MyPyTreeNode):
                     vmin=vmin,
                 )
 
+                assert dens is not None
+
                 plot_f(
                     fig=fig,
                     grid=gs[
@@ -886,8 +930,6 @@ class Transformer(MyPyTreeNode):
                 )
 
                 for j in range(col_var_i.n):
-                    from IMLCV.implementations.bias import GridBias
-
                     print(f"{j=}  ")
 
                     # print(f"{color["vals"].shape=}")
@@ -978,7 +1020,7 @@ class Transformer(MyPyTreeNode):
                     x=cv_data_i,
                 )
 
-                fes, dens = DataLoaderOutput._get_fes_bias_from_weights(
+                fes, _, dens, _ = DataLoaderOutput._get_fes_bias_from_weights(
                     T=T,
                     weights=weights_i,
                     rho=[jnp.ones_like(w) / w.shape[0] for w in weights_i],
@@ -994,7 +1036,7 @@ class Transformer(MyPyTreeNode):
                     output_density_bias=False,
                     rbf_bias=rbf_bias,
                     grid_bias_order=grid_bias_order,
-                    smoothing=-1,
+                    smoothing=1,
                 )
 
                 if len(indices) == 1:
@@ -1049,7 +1091,7 @@ class Transformer(MyPyTreeNode):
             y = left_cell.y1
 
             fig.add_artist(
-                mpl.lines.Line2D(
+                Line2D(
                     xdata=[x0, x1],
                     ydata=[y, y],
                     color="black",
@@ -1074,7 +1116,7 @@ class Transformer(MyPyTreeNode):
             y1 = left_cell_top.y1
 
             fig.add_artist(
-                mpl.lines.Line2D(
+                Line2D(
                     xdata=[x, x],
                     ydata=[y0, y1],
                     color="black",
@@ -1146,9 +1188,10 @@ class Transformer(MyPyTreeNode):
             pos_width = top_pos.x1 - top_pos.x0
             x = top_pos.x0 + (pos_width - cb_width) / 2.0
 
-            ax_cb = fig.add_axes([x, y0, cb_width, height])
-            norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
-            m = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+            ax_cb = fig.add_axes(rect=(x, y0, cb_width, height))
+
+            norm = Normalize(vmin=vmin, vmax=vmax)
+            m = ScalarMappable(norm=norm, cmap=cmap)
             m.set_array([])
             cbar = fig.colorbar(
                 m,
@@ -1158,11 +1201,13 @@ class Transformer(MyPyTreeNode):
             )
 
             if exp:
+                assert norm.vmax is not None
+
                 ticks = jnp.arange(
                     norm.vmin,
                     norm.vmax + 1e-5,
                 )
-                cbar.set_ticks(ticks)
+                cbar.set_ticks(ticks)  # type: ignore
                 cbar.set_ticklabels([f"$10^{{{int(-t)}}}$" for t in ticks])
 
             cbar.ax.tick_params(labelsize=fontsize_small)
@@ -1204,6 +1249,7 @@ class Transformer(MyPyTreeNode):
         cv_data: list[list[CV]],
         sp_data: list[list[SystemParams]],
         weights: list[list[jax.Array]] | None = None,
+        std: list[list[jax.Array]] | None = None,
         name: str | Path | None = None,
         timescales: list[list[float]] | None = None,
         projection_cv_title: str | None = None,
@@ -1222,7 +1268,7 @@ class Transformer(MyPyTreeNode):
         vmax_dens=3,
         vmin_dens=-1,
         offset=True,
-        bar_label="Free Energy [kJ/mol]",
+        bar_label=None,
         title="Collective Variables",
         fontsize_small=16,
         fontsize_large=20,
@@ -1233,11 +1279,18 @@ class Transformer(MyPyTreeNode):
         overlay_mask=True,
         extra_info_title: str | None = None,
         get_fes_bias_kwargs: dict = {},
+        plot_std=False,
     ):
         # data_converted = []
 
         from IMLCV.base.rounds import DataLoaderOutput
         from IMLCV.implementations.CV import _cv_slice
+
+        if bar_label is None:
+            if plot_std:
+                bar_label = "Free Energy Std Dev [kJ/mol]"
+            else:
+                bar_label = "Free Energy [kJ/mol]"
 
         dim_map = [
             [(0,)],
@@ -1253,6 +1306,10 @@ class Transformer(MyPyTreeNode):
         cmap_fes.set_under(alpha=0)
 
         collective_variables = [a.replace(cvs_name=[f"$q_{i}$" for i in range(a.n)]) for a in collective_variables]
+        if collective_variable_projection.cvs_name is None:
+            collective_variable_projection = collective_variable_projection.replace(
+                cvs_name=[f"$z_{i}$" for i in range(collective_variable_projection.n)]
+            )
 
         ncv = len(collective_variables)
 
@@ -1348,6 +1405,7 @@ class Transformer(MyPyTreeNode):
 
             # print(f"################### plotting for CV set {i} #########################")
 
+            print(f"############################## FES plots for projection CV alone")
             for j, ab in enumerate(dim_map[dim_1 - 1]):
                 # print(f"################## {ab} #########################")
                 print(f"{ab=}")
@@ -1382,11 +1440,13 @@ class Transformer(MyPyTreeNode):
                     smoothing=smoothing,
                     set_outer_border=False,
                     overlay_mask=overlay_mask,
+                    std_bias=plot_std,
+                    weights_std=std[i] if std is not None else None,
                 )
 
                 kw.update(get_fes_bias_kwargs)
 
-                fes, dens = DataLoaderOutput._get_fes_bias_from_weights(**kw)
+                fes, std_bias, dens, _ = DataLoaderOutput._get_fes_bias_from_weights(**kw)  # type: ignore
 
                 if colvar_ab.n == 1:
                     plot_f = Transformer._plot_1d
@@ -1394,13 +1454,18 @@ class Transformer(MyPyTreeNode):
                 else:
                     plot_f = Transformer._plot_2d
 
+                if plot_std:
+                    f = std_bias
+                else:
+                    f = fes
+
                 plot_f(
                     fig=fig,
                     grid=gs[
                         1 + i * (dim_1 + 1) + start_row + j,
                         0,
                     ],  # type: ignore
-                    fesses=fes.slice(T=T),
+                    fesses=f.slice(T=T),
                     indices=(0, 1),
                     margin=margin,
                     collective_variable=colvar_ab,
@@ -1412,6 +1477,7 @@ class Transformer(MyPyTreeNode):
                     vmin=vmin,
                 )
 
+            print(f"############################## FES plots for projection CV vs new CV")
             # FES plots for one CV refernce vs one CV new
             for a, b in itertools.product(jnp.arange(dim_1), jnp.arange(dim_2_r[i])):
                 # print(f"################## {(a,b)=} #########################")
@@ -1440,6 +1506,9 @@ class Transformer(MyPyTreeNode):
                 colvar_a = collective_variable_projection[(int(a),)]
                 colvar_b = col_var_i[(int(b),)]
 
+                assert colvar_a.cvs_name is not None
+                assert colvar_b.cvs_name is not None
+
                 colvar_ab = CollectiveVariable(
                     f=colvar_a.f + colvar_b.f,
                     metric=CvMetric.create(
@@ -1448,7 +1517,7 @@ class Transformer(MyPyTreeNode):
                         extensible=jnp.hstack([colvar_a.metric.extensible, colvar_b.metric.extensible]),
                     ),
                     name="",
-                    cvs_name=[*colvar_a.cvs_name, *colvar_b.cvs_name],
+                    cvs_name=tuple([*colvar_a.cvs_name, *colvar_b.cvs_name]),
                 )
 
                 # print(f"{cv_proj_idx[0].shape=}")
@@ -1472,21 +1541,27 @@ class Transformer(MyPyTreeNode):
                     smoothing=smoothing,
                     set_outer_border=False,
                     overlay_mask=overlay_mask,
+                    std_bias=plot_std,
+                    weights_std=std[i] if std is not None else None,
                 )
 
                 kw.update(get_fes_bias_kwargs)
 
-                fes, dens = DataLoaderOutput._get_fes_bias_from_weights(**kw)
+                fes, std_bias, dens, _ = DataLoaderOutput._get_fes_bias_from_weights(**kw)  # type: ignore
 
                 plot_f = Transformer._plot_2d
 
+                if plot_std:
+                    f = std_bias
+                else:
+                    f = fes
                 plot_f(
                     fig=fig,
                     grid=gs[
                         1 + i * (dim_1 + 1) + start_row + a,
                         start_col + b,
                     ],  # type: ignore
-                    fesses=fes.slice(T=T),
+                    fesses=f.slice(T=T),
                     indices=(0, 1),
                     margin=margin,
                     collective_variable=colvar_ab,
@@ -1499,8 +1574,9 @@ class Transformer(MyPyTreeNode):
                 )
 
             # FES plot for new CVs
-
             idx = jnp.array(jnp.meshgrid(jnp.arange(n_needed), jnp.arange(max_dim_2))).reshape(2, -1)
+
+            print(f"############################## FES plots for new CV alone")
 
             for j, indices in enumerate(dim_map[col_var_i.n - 1]):
                 # print(f"################## {indices} #########################")
@@ -1535,16 +1611,23 @@ class Transformer(MyPyTreeNode):
                     smoothing=smoothing,
                     set_outer_border=False,
                     overlay_mask=overlay_mask,
+                    std_bias=plot_std,
+                    weights_std=std[i] if std is not None else None,
                 )
 
                 kw.update(get_fes_bias_kwargs)
 
-                fes, dens = DataLoaderOutput._get_fes_bias_from_weights(**kw)
+                fes, std_bias, dens, _ = DataLoaderOutput._get_fes_bias_from_weights(**kw)
 
                 if len(indices) == 1:
                     plot_f = Transformer._plot_1d
                 else:
                     plot_f = Transformer._plot_2d
+
+                if plot_std:
+                    f = std_bias
+                else:
+                    f = fes
 
                 plot_f(
                     fig=fig,
@@ -1552,7 +1635,7 @@ class Transformer(MyPyTreeNode):
                         1 + start_row + (dim_1 + 1) * i + idx[1, j],
                         start_col + max_dim_2 + idx[0, j],
                     ],  # type: ignore
-                    fesses=fes.slice(T=T),
+                    fesses=f.slice(T=T),
                     indices=(0, 1),
                     margin=margin,
                     collective_variable=colvar_i_slice,
@@ -1573,7 +1656,7 @@ class Transformer(MyPyTreeNode):
             y = left_cell.y1
 
             fig.add_artist(
-                mpl.lines.Line2D(
+                Line2D(
                     xdata=[x0, x1],
                     ydata=[y, y],
                     color="black",
@@ -1596,7 +1679,7 @@ class Transformer(MyPyTreeNode):
             y1 = left_cell_top.y1
 
             fig.add_artist(
-                mpl.lines.Line2D(
+                Line2D(
                     xdata=[x, x],
                     ydata=[y0, y1],
                     color="black",
@@ -1682,9 +1765,9 @@ class Transformer(MyPyTreeNode):
             pos_width = top_pos.x1 - top_pos.x0
             x = top_pos.x0 + (pos_width - cb_width) / 2.0
 
-            ax_cb = fig.add_axes([x, y0, cb_width, height])
-            norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
-            m = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+            ax_cb = fig.add_axes((x, y0, cb_width, height))
+            norm = Normalize(vmin=vmin, vmax=vmax)
+            m = ScalarMappable(norm=norm, cmap=cmap)
             m.set_array([])
             cbar = fig.colorbar(
                 m,
@@ -1734,10 +1817,10 @@ class Transformer(MyPyTreeNode):
         ncv,
         ndata,
         skip,
-        vmin,
-        vmax,
+        vmin: float | list[float],
+        vmax: float | list[float],
         cmap,
-        bar_label="FES [kJ/mol]",
+        bar_label: str | list[str] = "FES [kJ/mol]",
         cv_titles=None,
         data_titles=None,
         indicate_plots=None,
@@ -1771,18 +1854,29 @@ class Transformer(MyPyTreeNode):
             hspace=h_space,
         )
 
-        if plot_FES:
-            norm = mpl.colors.Normalize(vmin=vmin / kjmol, vmax=vmax / kjmol)  # type: ignore
+        def plot_colorbar(vmin, vmax, ystart, yend, l):
+            norm = Normalize(vmin=vmin / kjmol, vmax=vmax / kjmol)  # type: ignore
 
-            ax_cbar = fig.add_subplot(spec[1:, -2])
+            ax_cbar = fig.add_subplot(spec[ystart:yend, -2])
 
             fig.colorbar(
-                mappable=mpl.cm.ScalarMappable(norm=norm, cmap=cmap),  # type: ignore
+                mappable=ScalarMappable(norm=norm, cmap=cmap),  # type: ignore
                 cax=ax_cbar,  # type: ignore
                 orientation="vertical",
                 ticks=[vmin / kjmol, (vmin + vmax) / (2 * kjmol), vmax / kjmol],
             )
-            ax_cbar.set_ylabel(bar_label)
+            ax_cbar.set_ylabel(l)
+
+        if plot_FES:
+            if isinstance(vmin, list) or isinstance(vmax, list):
+                for i in range(ndata):
+                    vmin_i = vmin[i] if isinstance(vmin, list) else vmin
+                    vmax_i = vmax[i] if isinstance(vmax, list) else vmax
+                    _l = bar_label[i] if isinstance(bar_label, list) else bar_label
+                    plot_colorbar(vmin_i, vmax_i, i + 1, i + 2, _l)
+
+            else:
+                plot_colorbar(vmin, vmax, 1, ndata + 1, bar_label)
 
         for data_in in range(ndata):
             for cv_in in range(ncv):
@@ -1911,10 +2005,10 @@ class Transformer(MyPyTreeNode):
         collective_variable: CollectiveVariable,
         data: jax.Array | None = None,
         colors: jax.Array | None = None,
-        labels: str | None = None,
+        labels: tuple[str, ...] | str | None = None,
         fesses: dict[int, dict[tuple, Bias]] | None = None,
         indices: tuple | None = None,
-        margin=None,
+        margin: float = 0.2,
         T=None,
         vmin=0,
         vmax=100 * kjmol,
@@ -1922,9 +2016,10 @@ class Transformer(MyPyTreeNode):
         print_labels=True,
         show_1d_marginals=True,
         fontsize=None,
+        plot_std=False,
         **scatter_kwargs,
     ):
-        print(f"{vmin/kjmol=} {vmax / kjmol=} {cmap=}")
+        # print(f"{vmin/kjmol=} {vmax / kjmol=} {cmap=}")
 
         gs = grid.subgridspec(  # type: ignore
             ncols=3,
@@ -1943,14 +2038,14 @@ class Transformer(MyPyTreeNode):
 
         metric = collective_variable.metric
 
-        print(f"{metric=}")
+        # print(f"{metric=}")
 
         m = (metric.bounding_box[:, 1] - metric.bounding_box[:, 0]) * margin
         x_l = metric.bounding_box[0, :]
         m_x = m[0]
         x_lim = [x_l[0] - m_x, x_l[1] + m_x]
 
-        print(f"{x_lim=}")
+        # print(f"{x_lim=}")
 
         if data is not None:
             y_lim = [jnp.min(data[:, 1]) - 0.5, jnp.max(data[:, 1]) + 0.5]
@@ -2009,18 +2104,48 @@ class Transformer(MyPyTreeNode):
             x_range = jnp.linspace(x_lim[0], x_lim[1], 2000)
 
             # print(f"{fesses=}")
+            bias: Bias | StdBias = fesses[1][(indices[0],)]
 
-            x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
+            # if plot_std:
+            #     if isinstance(FES, StdBias):
+            #         print(f"plotting std FES")
+
+            #         bias = bias.std_bias
+            #     else:
+            #         raise ValueError("plot_std is True but FES is not StdBias")
+
+            x_fes, _ = bias.compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
 
             ax_histx.scatter(
                 x_range,
-                -x_fes / kjmol,
+                x_fes / kjmol if plot_std else -x_fes / kjmol,
                 c=-x_fes / kjmol,
                 s=1,
                 vmin=vmin / kjmol,
                 vmax=vmax / kjmol,
                 cmap=cmap,
             )
+
+            # if isinstance(bias, StdBias):
+            #     print(f"plotting std shading")
+
+            #     x_std, _ = bias.compute_std_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
+
+            #     ax_histx.fill_between(
+            #         x_range,
+            #         (-x_fes - x_std) / kjmol,
+            #         (-x_fes + x_std) / kjmol,
+            #         color="gray",
+            #         alpha=0.5,
+            #     )
+
+            #     # ax_histx.fill_between(
+            #     #     x_range,
+            #     #     (-x_fes - x_std) / kjmol,
+            #     #     (-x_fes + x_std) / kjmol,
+            #     #     color="gray",
+            #     #     alpha=0.5,
+            #     # )
 
             ax_histx.set_xlim(x_lim[0], x_lim[1])  # type: ignore
             ax_histx.set_ylim(vmin / kjmol, vmax / kjmol)
@@ -2036,7 +2161,7 @@ class Transformer(MyPyTreeNode):
 
             ax_histx.tick_params(
                 top=False,
-                bottom=False,
+                bottom=True,
                 left=False,
                 right=False,
                 labelleft=False,
@@ -2051,12 +2176,14 @@ class Transformer(MyPyTreeNode):
             ax_histx.yaxis.set_ticks_position("none")
             ax_histx.tick_params(
                 top=False,
-                bottom=False,
+                bottom=True,
                 left=False,
                 right=False,
                 labelleft=False,
                 labelbottom=False,
             )
+
+        ax_histx.set_xticks([x_l[0], (x_l[0] + x_l[1]) / 2, x_l[1]])
 
         if print_labels and indices is not None and labels is not None:
             ax_histx.set_xlabel(labels[indices[0]], labelpad=-1, fontsize=fontsize)
@@ -2072,7 +2199,7 @@ class Transformer(MyPyTreeNode):
         collective_variable: CollectiveVariable,
         data: jax.Array | None = None,
         colors: jax.Array | None = None,
-        labels: str | None = None,
+        labels: tuple[str, ...] | str | None = None,
         fesses: dict[int, dict[tuple, Bias]] | None = None,
         indices: tuple | None = None,
         margin: float = 0.1,
@@ -2084,8 +2211,11 @@ class Transformer(MyPyTreeNode):
         plot_y=True,
         show_1d_marginals=True,
         fontsize=None,
+        plot_std=False,
         **scatter_kwargs,
     ):
+        cmap.set_over(alpha=0)
+        cmap.set_under(alpha=0)
         gs = grid.subgridspec(  # type: ignore
             ncols=3,
             nrows=3,
@@ -2100,6 +2230,8 @@ class Transformer(MyPyTreeNode):
         ax_histy = fig.add_subplot(gs[1, 2], sharey=ax)
 
         metric = collective_variable.metric
+
+        # print(f"inside plot 2d, got {metric=}")
 
         if margin is None:
             margin = 0.0
@@ -2135,6 +2267,14 @@ class Transformer(MyPyTreeNode):
 
             from IMLCV.base.rounds import DataLoaderOutput
 
+            # if plot_std:
+            #     if isinstance(FES, StdBias):
+            #         print(f"plotting std FES")
+
+            #         FES = FES.std_bias
+            #     else:
+            #         raise ValueError("plot_std is True but FES is not StdBias")
+
             bias = DataLoaderOutput._apply_bias(
                 x=[cv_grid],
                 bias=FES,
@@ -2143,11 +2283,17 @@ class Transformer(MyPyTreeNode):
                 shmap=False,
             )[0]
 
+            # if isinstance(bias, StdBias):
+            # print(f"{bias[bias>0]/kjmol=}")
+
             # print(f"fes: {bias=}")
 
             bias = bias.reshape(len(bins[0]) - 1, len(bins[1]) - 1)
 
             print(f"{jnp.nanmin(bias)/kjmol=}, {jnp.nanmax(bias)/kjmol=}")
+
+            # if plot_std:
+            #     bias = -bias
 
             # bias -= jnp.max(bias)
 
@@ -2217,8 +2363,17 @@ class Transformer(MyPyTreeNode):
                 x_range = jnp.linspace(x_lim[0], x_lim[1], 500)
                 y_range = jnp.linspace(y_lim[0], y_lim[1], 500)
 
-                x_fes, _ = fesses[1][(indices[0],)].compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
-                y_fes, _ = fesses[1][(indices[1],)].compute_from_cv(CV(cv=jnp.array(y_range).reshape((-1, 1))))
+                x_bias = fesses[1][(indices[0],)]
+                y_bias = fesses[1][(indices[1],)]
+
+                x_fes, _ = x_bias.compute_from_cv(CV(cv=jnp.array(x_range).reshape((-1, 1))))
+                y_fes, _ = y_bias.compute_from_cv(CV(cv=jnp.array(y_range).reshape((-1, 1))))
+
+                # if plot_std:
+                #     x_fes = -x_fes
+                #     y_fes = -y_fes
+
+                # print(f"{x_fes[x_fes<0]/kjmol=}, {y_fes[y_fes<0]/kjmol=}")
 
                 ax_histx.scatter(
                     x_range,
@@ -2278,7 +2433,7 @@ class Transformer(MyPyTreeNode):
 
         # ax.locator_params(nbins=4)
         ax.set_xticks([x_l[0], (x_l[0] + x_l[1]) / 2, x_l[1]])
-        ax.set_xticks([y_l[0], (y_l[0] + y_l[1]) / 2, y_l[1]])
+        ax.set_yticks([y_l[0], (y_l[0] + y_l[1]) / 2, y_l[1]])
 
         ax.set_xticklabels([])
         ax.set_yticklabels([])
@@ -2311,6 +2466,7 @@ class Transformer(MyPyTreeNode):
         T=None,
         print_labels=True,
         cmap=plt.get_cmap("jet"),
+        plot_std=False,
         **scatter_kwargs,
     ):
         metric = collective_variable.metric
@@ -2660,6 +2816,7 @@ class Transformer(MyPyTreeNode):
                 vmax=vmax,
                 print_labels=print_labels,
                 cmap=cmap,
+                plot_std=plot_std,
                 **scatter_kwargs,
             )
 
@@ -2891,15 +3048,17 @@ class CombineTransformer(Transformer):
         verbose=True,
         macro_chunk=1000,
         # **fit_kwargs,
-    ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, tuple[str, ...] | None]:
+    ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, tuple[str, ...] | None, jax.Array | None]:
         trans = None
 
         assert len(self.transformers) > 0, "No transformers to fit"
 
+        periods = []
+
         for i, t in enumerate(self.transformers):
             print(f"fitting transformer {i + 1}/{len(self.transformers)}")
 
-            x, x_t, trans_t, _ = t._fit(
+            x, x_t, trans_t, _, per = t._fit(
                 x,
                 x_t,
                 w,
@@ -2917,12 +3076,14 @@ class CombineTransformer(Transformer):
             else:
                 trans *= trans_t
 
+            periods = [per]
+
         assert trans is not None
 
         x = cast(list[CV], x)
         x_t = cast(list[CV], x_t)
 
-        return x, x_t, trans, w, None
+        return x, x_t, trans, w, None, jnp.concatenate(periods)
 
 
 class IdentityTransformer(Transformer):
@@ -2937,7 +3098,7 @@ class IdentityTransformer(Transformer):
         verbose=True,
         macro_chunk=1000,
         **fit_kwargs,
-    ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None]:
+    ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None, jax.Array | None]:
         assert isinstance(x, list) and isinstance(x_t, list), "x and x_t must be lists"
 
         assert isinstance(x[0], CV), "x must be a list of CV objects"
@@ -2946,7 +3107,7 @@ class IdentityTransformer(Transformer):
         x = cast(list[CV], x)
         x_t = cast(list[CV], x_t)
 
-        return x, x_t, identity_trans, w, tuple[str, ...] | None
+        return x, x_t, identity_trans, w, tuple[str, ...] | None, None
 
 
 class CvTransTransformer(Transformer):
@@ -2963,5 +3124,5 @@ class CvTransTransformer(Transformer):
         verbose=True,
         macro_chunk=1000,
         # **fit_kwargs,
-    ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None]:
+    ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, jax.Array | None]:
         raise NotImplementedError

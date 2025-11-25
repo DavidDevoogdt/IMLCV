@@ -201,7 +201,7 @@ def lch_to_hpluv(lch):
     _hx_max = _max_safe_chroma_for_l(l)
     s = c / _hx_max * 100.0
 
-    jnp.select(
+    return jnp.select(
         [l > 100.0 - 1e-7, l < 1e-08, True],
         [jnp.array([h, 0.0, 100.0]), jnp.array([h, 0.0, 0.0]), jnp.array([h, s, l])],
     )

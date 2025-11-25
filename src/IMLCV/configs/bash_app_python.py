@@ -322,7 +322,7 @@ if __name__ == "__main__":
     # os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={len(os.sched_getaffinity(0))}"
     import jax
 
-    jax.config.update("jax_platform_name", "cpu")
+    # jax.config.update("jax_platform_name", "cpu")
     jax.config.update("jax_enable_x64", True)
     # jax.config.update("jax_pmap_no_rank_reduction", False)
 
@@ -342,7 +342,9 @@ if __name__ == "__main__":
         print(f"Version: {my_system.version}")
         print(f"Machine: {my_system.machine}")
         print(f"Processor: {my_system.processor}")
-        print(f"working with {jax.local_device_count()=},   {jax.device_count()=}  {os.sched_getaffinity(0)=}")
+        print(f"working with {jax.local_devices()=},   {jax.device_count()=}  {os.sched_getaffinity(0)=}")
+
+        jax.print_environment_info()
 
         file_in = Path(args.file_in)
 
@@ -370,6 +372,11 @@ if __name__ == "__main__":
         print(f"loaded  {ref_com=}  ")
 
         print("#" * 20)
+        print("ENVIRONMENT VARIABLES:")
+        for k in sorted(os.environ):
+            print(f"{k}={os.environ[k]}")
+        print("#" * 20)
+
     else:
         func = None
         fargs = None

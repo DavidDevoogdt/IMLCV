@@ -35,6 +35,7 @@ class StaticMdInfo:
         "timestep",
         "save_step",
         "r_cut",
+        "r_skin",
         "timecon_thermo",
         "T",
         "P",
@@ -59,6 +60,7 @@ class StaticMdInfo:
     atomic_numbers: Array
 
     r_cut: float | None = None
+    r_skin: float | None = None
     P: float | None = None
     timecon_baro: float | None = None
 
@@ -86,16 +88,20 @@ class StaticMdInfo:
         return self.P is not None
 
     # @property
-    def neighbour_list_info(self, r_cut=None) -> NeighbourListInfo | None:
+    def neighbour_list_info(self, r_cut=None, r_skin=None) -> NeighbourListInfo | None:
         if r_cut is None:
             r_cut = self.r_cut
 
         if r_cut is None:
             return None
 
+        if r_skin is None:
+            r_skin = self.r_skin
+
         return NeighbourListInfo.create(
             r_cut=r_cut,
             z_array=self.atomic_numbers,
+            r_skin=r_skin,
         )
 
     def __post_init__(self):
@@ -157,7 +163,6 @@ class StaticMdInfo:
             return StaticMdInfo._load(hf=hf)
 
 
-# @partial(flax_dataclass, frozen=False, eq=False)
 class TrajectoryInfo(MyPyTreeNode):
     _positions: Array
     _cell: Array | None = None
@@ -169,6 +174,8 @@ class TrajectoryInfo(MyPyTreeNode):
     _w: Array | None = None
     _w_t: Array | None = None
     _rho: Array | None = None
+
+    _sigma: Array | None = None
 
     _cv: Array | None = None
     _cv_orig: Array | None = None  # usefull to reconstruct CV discovery
@@ -197,6 +204,7 @@ class TrajectoryInfo(MyPyTreeNode):
         "_w",
         "_w_t",
         "_rho",
+        "_sigma",
     ]
     _items_vec = [
         "_positions",
@@ -218,6 +226,7 @@ class TrajectoryInfo(MyPyTreeNode):
         w: Array | None = None,
         w_t: Array | None = None,
         rho: Array | None = None,
+        sigma: Array | None = None,
         T: Array | None = None,
         P: Array | None = None,
         err: Array | None = None,
@@ -227,11 +236,6 @@ class TrajectoryInfo(MyPyTreeNode):
         finished=False,
         invalid=False,
     ) -> TrajectoryInfo:
-        if capacity == -1:
-            capacity = 1
-        if size == -1:
-            size = 1
-
         dict = {
             "_positions": positions,
             "_cell": cell,
@@ -243,6 +247,7 @@ class TrajectoryInfo(MyPyTreeNode):
             "_w": w,
             "_w_t": w_t,
             "_rho": rho,
+            "_sigma": sigma,
             "_T": T,
             "_P": P,
             "_err": err,
@@ -255,6 +260,7 @@ class TrajectoryInfo(MyPyTreeNode):
 
         # batch
         if len(positions.shape) == 2:
+            # print("adding batch dimension to trajectory info")
             for name in [*TrajectoryInfo._items_vec, *TrajectoryInfo._items_scal]:
                 prop = dict[name]
                 if prop is not None:
@@ -264,6 +270,12 @@ class TrajectoryInfo(MyPyTreeNode):
         if dict["_cell"] is not None:
             if dict["_cell"].shape[-2] == 0:
                 dict["_cell"] = None
+
+        if capacity == -1:
+            dict["_capacity"] = dict["_positions"].shape[0]
+
+        if size == -1:
+            dict["_size"] = dict["_positions"].shape[0]
 
         return TrajectoryInfo(**dict)
 
@@ -280,14 +292,11 @@ class TrajectoryInfo(MyPyTreeNode):
             _cell=self._cell[slz, :] if self._cell is not None else None,
             _charges=(self._charges[slz, :] if self._cell is not None else None) if self._charges is not None else None,
             _e_pot=self._e_pot[slz,] if self._e_pot is not None else None,
-            # _e_pot_gpos=self._e_pot_gpos[slz, :] if self._e_pot_gpos is not None else None,
-            # _e_pot_vtens=self._e_pot_vtens[slz, :] if self._e_pot_vtens is not None else None,
             _e_bias=self._e_bias[slz,] if self._e_bias is not None else None,
             _w=self._w[slz,] if self._w is not None else None,
             _w_t=self._w_t[slz,] if self._w_t is not None else None,
             _rho=self._rho[slz,] if self._rho is not None else None,
-            # _e_bias_gpos=self._e_bias_gpos[slz, :] if self._e_bias_gpos is not None else None,
-            # _e_bias_vtens=self._e_bias_vtens[slz, :] if self._e_bias_vtens is not None else None,
+            _sigma=self._sigma[slz,] if self._sigma is not None else None,
             _cv=self._cv[slz, :] if self._cv is not None else None,
             _T=self._T[slz,] if self._T is not None else None,
             _P=self._P[slz,] if self._P is not None else None,
@@ -317,6 +326,7 @@ class TrajectoryInfo(MyPyTreeNode):
             "_w",
             "_w_t",
             "_rho",
+            "_sigma",
             "_cv",
             "_T",
             "_P",
@@ -424,14 +434,12 @@ class TrajectoryInfo(MyPyTreeNode):
 
                 else:
                     # check if size changed
-                    if hf[name].shape[0] != self._capacity:
-                        # print(f"resizing {name} from {hf[name].shape[0]} to {self._capacity} ")
-
+                    if hf[name].shape[0] != self._capacity:  # type:ignore
                         del hf[name]
 
                         hf[name] = prop.__array__()
                     else:
-                        hf[name][self._prev_save : self._size] = prop[
+                        hf[name][self._prev_save : self._size] = prop[  # type:ignore
                             self._prev_save : self._size
                         ].__array__()  # save as numpy array, only the changed part
 
@@ -526,6 +534,12 @@ class TrajectoryInfo(MyPyTreeNode):
         if self._rho is None:
             return None
         return self._rho[0 : self._size]
+
+    @property
+    def sigma(self) -> Array | None:
+        if self._sigma is None:
+            return None
+        return self._sigma[0 : self._size]
 
     @property
     def e_bias(self) -> Array | None:
@@ -626,7 +640,7 @@ class MDEngine(ABC):
     step: int = 1
 
     nl: NeighbourList | None = None
-    r_skin = 1.0 * angstrom
+    # r_skin = 1.0 * angstrom
 
     @classmethod
     def create(
@@ -681,11 +695,7 @@ class MDEngine(ABC):
             return None
 
         if self.nl is None:
-            info = NeighbourListInfo.create(
-                r_cut=self.static_trajectory_info.r_cut,
-                z_array=self.static_trajectory_info.atomic_numbers,
-                r_skin=self.r_skin,
-            )
+            info = self.static_trajectory_info.neighbour_list_info()
 
             nl = self.sp.get_neighbour_list(info)  # jitted update
 
@@ -708,17 +718,15 @@ class MDEngine(ABC):
             print("nl - slow update")
             nl = self.sp.get_neighbour_list(info)
 
-        assert nl is not None
+            assert nl is not None
 
-        nneigh = nl.nneighs()
+            nneigh = nl.nneighs()
 
-        if jnp.mean(nneigh) <= 2.0:
-            raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh - 1} {self.sp=}")
+            if jnp.mean(nneigh) <= 2.0:
+                raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh - 1} {self.sp=}")
 
-        if jnp.max(nneigh) > 100:
-            raise ValueError(f"neighbour list is too large for at leat one  atom {nneigh=}")
-
-        # nl = jax.device_put(nl, jax.devices("cpu")[0])
+            if jnp.max(nneigh) > 100:
+                raise ValueError(f"neighbour list is too large for at leat one  atom {nneigh=}")
 
         self.nl = nl
 
@@ -748,6 +756,8 @@ class MDEngine(ABC):
         else:
             with open(filename, "rb") as f:
                 self = cloudpickle.load(f)
+
+        assert isinstance(self, MDEngine), f"{self=}"
 
         self.bias = bias
 
@@ -841,73 +851,80 @@ class MDEngine(ABC):
         gpos_bias_rmsd=None,
         canonicalize=False,
     ):
-        if canonicalize and self.nl is not None:
-            sp = self.nl.canonicalized_sp(self.sp)
-        else:
-            sp = self.sp
+        screen_log = self.step % self.static_trajectory_info.screen_log == 0
+        save_step = self.step % self.static_trajectory_info.save_step == 0
+        write_step = self.step % self.static_trajectory_info.write_step == 0
 
-        ti = TrajectoryInfo.create(
-            positions=sp.coordinates,
-            cell=sp.cell,
-            e_pot=e_pot,
-            e_bias=e_bias,
-            cv=cv,
-            T=T,
-            P=P,
-            t=t,
-            err=err,
-        )
-
-        if self.step == 1:
-            str = f"{'step': ^10s}"
-            str += f"|{'cons err': ^10s}"
-            str += f"|{'e_pot[Kj/mol]': ^15s}"
-            str += f"|{'e_bias[Kj/mol]': ^15s}"
-            if ti._P is not None:
-                str += f"|{'P[bar]': ^10s}"
-            str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
-            if gpos_rmsd is not None:
-                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                str += f"|{ss: ^13s}"
-            if gpos_bias_rmsd is not None:
-                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                str += f"|{ss: ^13s}"
-
-            str += f"|{' CV': ^10s}"
-            print(str, sep="")
-            print(f"{'=' * len(str)}")
-
-        if self.step % self.static_trajectory_info.screen_log == 0:
-            str = f"{self.step: >10d}"
-            assert ti._err is not None
-            assert ti._T is not None
-            assert ti._e_pot is not None
-            assert ti._e_bias is not None
-
-            str += f"|{ti._err[0]: >10.4f}"
-            str += f"|{ti._e_pot[0] / kjmol: >15.8f}"
-            str += f"|{ti._e_bias[0] / kjmol: >15.8f}"
-            if ti._P is not None:
-                str += f" {ti._P[0] / bar: >10.2f}"
-            str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
-            if gpos_rmsd is not None:
-                str += f"|{(gpos_rmsd / kjmol * angstrom): >13.2f}"
-            if gpos_bias_rmsd is not None:
-                str += f"|{(gpos_bias_rmsd / kjmol * angstrom): >13.2f}"
-            if ti._cv is not None:
-                str += f"| {ti._cv[0, :]}"
-            print(str)
-
-        if self.step % self.static_trajectory_info.save_step == 0:
-            # write step to trajectory
-            if self.trajectory_info is None:
-                self.trajectory_info = ti
+        if screen_log or save_step or write_step:
+            if canonicalize and self.nl is not None:
+                sp = self.nl.canonicalized_sp(self.sp)
             else:
-                self.trajectory_info += ti
+                sp = self.sp
 
-        if self.step % self.static_trajectory_info.write_step == 0:
-            if self.trajectory_file is not None:
-                self.trajectory_info.save(self.trajectory_file)  # type: ignore
+            ti = TrajectoryInfo.create(
+                positions=sp.coordinates,
+                cell=sp.cell,
+                e_pot=e_pot,
+                e_bias=e_bias,
+                cv=cv,
+                T=T,
+                P=P,
+                t=t,
+                err=err,
+            )
+
+            if self.step == 1:
+                str = f"{'step': ^10s}"
+                str += f"|{'cons err': ^10s}"
+                str += f"|{'e_pot[Kj/mol]': ^15s}"
+                str += f"|{'e_bias[Kj/mol]': ^15s}"
+                if ti._P is not None:
+                    str += f"|{'P[bar]': ^10s}"
+                str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
+                if gpos_rmsd is not None:
+                    ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                    str += f"|{ss: ^13s}"
+                if gpos_bias_rmsd is not None:
+                    ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                    str += f"|{ss: ^13s}"
+
+                str += f"|{' CV': ^10s}"
+                print(str, sep="")
+                print(f"{'=' * len(str)}")
+
+            if self.step % self.static_trajectory_info.screen_log == 0:
+                str = f"{self.step: >10d}"
+                assert ti._err is not None
+                assert ti._T is not None
+                assert ti._e_pot is not None
+                assert ti._e_bias is not None
+
+                str += f"|{ti._err[0]: >10.4f}"
+                str += f"|{ti._e_pot[0] / kjmol: >15.8f}"
+                str += f"|{ti._e_bias[0] / kjmol: >15.8f}"
+                if ti._P is not None:
+                    str += f" {ti._P[0] / bar: >10.2f}"
+                str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
+                if gpos_rmsd is not None:
+                    str += f"|{(gpos_rmsd / kjmol * angstrom): >13.2f}"
+                if gpos_bias_rmsd is not None:
+                    str += f"|{(gpos_bias_rmsd / kjmol * angstrom): >13.2f}"
+                if ti._cv is not None:
+                    str += f"| {ti._cv[0, :]}"
+                print(str)
+
+            if self.step % self.static_trajectory_info.save_step == 0:
+                # write step to trajectory
+                if self.trajectory_info is None:
+                    self.trajectory_info = ti
+                else:
+                    self.trajectory_info += ti
+
+            if self.step % self.static_trajectory_info.write_step == 0:
+                if self.trajectory_file is not None:
+                    self.trajectory_info.save(self.trajectory_file)  # type: ignore
+
+            assert self.bias is not None
 
         self.bias = self.bias.update_bias(self)
 

@@ -8,12 +8,71 @@ from parsl import HighThroughputExecutor, WorkQueueExecutor
 from parsl.executors.base import ParslExecutor
 from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig, TaskVineManagerConfig
 from parsl.executors.threads import ThreadPoolExecutor
-from parsl.launchers import SimpleLauncher, SingleNodeLauncher
+from parsl.launchers import SimpleLauncher, SingleNodeLauncher, SrunLauncher
+from parsl.launchers.launchers import Launcher
 from parsl.providers import LocalProvider, SlurmProvider
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent
 
 logger = logging.getLogger(__name__)
+
+
+class SlurmLauncher(Launcher):
+    def __init__(self, debug: bool = True, overrides: str = ""):
+        super().__init__(debug=debug)
+        self.overrides = overrides
+
+    def __call__(self, command: str, tasks_per_node: int, nodes_per_block: int) -> str:
+        x = """set -e
+
+NODELIST=$(scontrol show hostnames)
+NODE_ARRAY=($NODELIST)
+NODE_COUNT=${{#NODE_ARRAY[@]}}
+EXPECTED_NODE_COUNT={nodes_per_block}
+
+# Check if the length of NODELIST matches the expected number of nodes
+if [ $NODE_COUNT -ne $EXPECTED_NODE_COUNT ]; then
+  echo "Error: Expected $EXPECTED_NODE_COUNT nodes, but got $NODE_COUNT nodes."
+  exit 1
+fi
+
+
+
+
+for NODE in $NODELIST; do
+  srun --nodes=1  --export=ALL  -l {overrides} --nodelist=$NODE {command} &
+  if [ $? -ne 0 ]; then
+    echo "Command failed on node $NODE"
+  fi
+done
+
+wait
+""".format(
+            nodes_per_block=nodes_per_block,
+            command=command,
+            overrides=self.overrides,
+        )
+        return x
+
+
+class MyWorkQueueExecutor(WorkQueueExecutor):
+    def __init__(self, *args, port: None | int | tuple[int, int] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if port is not None:
+            self.port = port
+
+    def _get_launch_command(self, block_id):
+        return self.worker_command
+
+
+class MySlurmProvider(SlurmProvider):
+    def __init__(self, *args, tasks_per_node=1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tasks_per_node = tasks_per_node
+
+    def submit(self, command: str, tasks_per_node: int, job_name="parsl.slurm") -> str:
+        return super().submit(command, self.tasks_per_node, job_name)
 
 
 def get_slurm_provider(
@@ -27,22 +86,20 @@ def get_slurm_provider(
     # channel=LocalChannel(),
     gpu=False,
     threads_per_core: int | None = None,
-    use_open_mp=False,
-    parsl_cores=False,
     mem=None,
     memory_per_core=None,
     wall_time="48:00:00",
     init_blocks=1,
     min_blocks=1,
     max_blocks=1,
-    parallelism=1,
+    # parallelism=1,
     executor="htex",
     wq_timeout: int = 60,  # in seconds
     gpu_part="gpu_rome_a100",
     cpu_part="cpu_rome",
     py_env=None,
     provider="slurm",
-    launcher=SimpleLauncher(),
+    # launcher=SimpleLauncher(),
     load_cp2k=False,
 ):
     if py_env is None:
@@ -52,9 +109,13 @@ def get_slurm_provider(
 echo "init pixi"
 cd {ROOT_DIR}
 pwd
+export PIXI_CACHE_DIR="./.pixi_cache"
+
+
+export PATH="~/.pixi/bin:$PATH"
+
 
 which pixi
-
 
 if ! test -f pixi_shell_hook.sh; then
     echo "first time init pixi shell"
@@ -63,9 +124,18 @@ fi
 
 source pixi_shell_hook.sh
 
+# print node name
+echo "Node name: $(hostname)"
+
 
 echo "post init pixi"
 which python
+
+which work_queue_worker
+
+
+
+
             """
     # else:
     #     raise ValueError
@@ -78,33 +148,51 @@ which python
     worker_init = f"{py_env}\n"
 
     if load_cp2k:
-        if env == "hortense":
-            worker_init += "module load CP2K/2023.1-foss-2022b\n"
-            worker_init += "module unload SciPy-bundle Python\n"
-        # else:
-        # worker_init += "module load OpenMPI\n"
+        raise ValueError()
 
-        else:
-            raise ValueError()
+    # only submit 1/ parsl_tasks_per_block blocks at a time
+    parallelism = 1 / parsl_tasks_per_block
 
-    if not parsl_cores:
-        if threads_per_core is None:
-            threads_per_core = 1
+    if threads_per_core is None:
+        threads_per_core = 1
 
-        total_cores = parsl_tasks_per_block * threads_per_core
+    total_cores = parsl_tasks_per_block * threads_per_core
 
-        # worker_init += f"export OMP_NUM_THREADS={threads_per_core}\n"
+    # give all cores to xla
+    worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
 
-        # give all cores to xla
-        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
+    if gpu:
+        # dynamic memory allocation, both for jax and pytorch, for all blocks.
+        worker_init += "export TF_GPU_ALLOCATOR=cuda_malloc_async\n"
+        worker_init += "export XLA_PYTHON_CLIENT_PREALLOCATE=false\n"
+        worker_init += "export PYTORCH_ALLOC_CONF=backend:cudaMallocAsync\n"
 
-    else:
-        assert threads_per_core is None, "parsl doens't use openmp cores"
-        total_cores = parsl_tasks_per_block
+        worker_init += """
+# start MPS
+export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps_$SLURM_JOB_ID
+mkdir -p "$CUDA_MPS_PIPE_DIRECTORY"
+chmod 700 "$CUDA_MPS_PIPE_DIRECTORY"
+export CUDA_MPS_LOG_DIRECTORY="$CUDA_MPS_PIPE_DIRECTORY"
+nvidia-cuda-mps-control -d
+echo "CUDA MPS server started at $CUDA_MPS_PIPE_DIRECTORY"
 
-        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={total_cores}'\n"
+# ensure MPS is stopped and cleaned up on exit (normal or via signal)
+cleanup() {
+  printf "quit\\n" | nvidia-cuda-mps-control || true
+  rm -rf "$CUDA_MPS_PIPE_DIRECTORY" || true
+  echo "CUDA MPS server stopped"
+}
+trap cleanup EXIT
 
-    # worker_init += f"mpirun -report-bindings -np {total_cores} echo 'a' " if load_cp2k else ""
+# give MPS a moment to initialize
+sleep 1 
+"""
+        worker_init += "nvidia-smi\n"
+
+    overrides = f"--ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core}"
+
+    # if gpu:
+    #     overrides += " --gres=gpu:1"
 
     common_kwargs = {
         # "channel": channel,
@@ -114,7 +202,7 @@ which python
         "parallelism": parallelism,
         "nodes_per_block": 1,
         "worker_init": worker_init,
-        "launcher": launcher,
+        "launcher": SlurmLauncher(overrides=overrides),
     }
 
     if provider == "slurm":
@@ -126,7 +214,7 @@ which python
                     mem = total_cores * memory_per_core
 
         vsc_kwargs = {
-            # "cluster": cpu_cluster if not gpu else gpu_cluster,
+            "clusters": cpu_cluster if not gpu else gpu_cluster,
             "partition": cpu_part if not gpu else gpu_part,
             "account": account,
             "exclusive": False,
@@ -136,18 +224,19 @@ which python
             "cmd_timeout": 60,
         }
 
+        # no exports from submission env
         sheduler_options = f"""
 #SBATCH --cpus-per-task={threads_per_core}
 #SBATCH -v
-#SBATCH --export=ALL"""
+#SBATCH --export=NONE 
+
+ """
 
         if gpu:
-            sheduler_options += (
-                "\n#SBATCH --gpus=1\n#SBATCH --cpus-per-gpu={parsl_tasks_per_block}\n#SBATCH --export=None"
-            )
+            sheduler_options += f"\n#SBATCH --gres=gpu:1\n"
 
         vsc_kwargs["scheduler_options"] = sheduler_options
-        _provider = SlurmProvider(**common_kwargs, **vsc_kwargs)
+        _provider = MySlurmProvider(**common_kwargs, **vsc_kwargs, tasks_per_node=parsl_tasks_per_block)
     elif provider == "local":
         _provider = LocalProvider(
             **common_kwargs,
@@ -158,6 +247,7 @@ which python
 
     # let slurm use the cores as threads
     # pre_command = f"srun  --cpus-per-task {threads_per_core} "
+    # pre_command = f"srun --cpus-per-task {threads_per_core} --ntasks=1 "
     pre_command = ""
 
     ref_comm: dict[str, str] = {
@@ -180,7 +270,7 @@ which python
     if executor == "work_queue":
         worker_options = [
             f"--cores={threads_per_core}",
-            f"--gpus={0 if not gpu else 1}",
+            # f"--gpus={0 if not gpu else 1}", #gpu is not for workqueue, but command launched inside workqueue
         ]
 
         if wall_time_s is not None:
@@ -189,39 +279,18 @@ which python
         worker_options.append(f"--timeout={wq_timeout}")
         worker_options.append("--parent-death")
 
-        _executor: ParslExecutor = WorkQueueExecutor(
+        _executor: ParslExecutor = MyWorkQueueExecutor(
             label=label,
             working_dir=str(Path(path_internal) / label),
             provider=_provider,
             shared_fs=True,
             autolabel=False,
             autocategory=False,
-            port=0,
+            port=(50000, 60000),
             max_retries=1,  # do not retry task max once
             worker_options=" ".join(worker_options),
             coprocess=False,
             worker_executable="work_queue_worker",
-            # scaling_cores_per_worker=threads_per_core,
-        )
-
-    elif executor == "task_vine":
-        _executor: ParslExecutor = TaskVineExecutor(
-            label=label,
-            factory_config=TaskVineFactoryConfig(
-                cores=parsl_tasks_per_block,
-                batch_type="slurm",
-                gpus=0 if not gpu else 1,
-                scratch_dir=str(Path(path_internal) / label),
-                # batch_options={}
-            ),
-            manager_config=TaskVineManagerConfig(
-                # shared_fs=True,
-                # port=8887,
-                # init_command=worker_init,
-            ),
-            provider=_provider,
-            # function_exec_mode="serverless",
-            # worker_launch_method="provider",
         )
 
     elif executor == "htex":
@@ -234,6 +303,7 @@ which python
         )
     else:
         raise ValueError(f"unknown executor {executor=}")
+
     return _executor, pre_command, ref_comm
 
 
@@ -248,6 +318,7 @@ def config(
     path_internal: Path | None = None,
     cpu_cluster: str | list[str] | None = None,
     gpu_cluster: str | list[str] | None = None,
+    reference_blocks: int = 1,
     py_env=None,
     account=None,
     executor="htex",
@@ -256,6 +327,8 @@ def config(
     training_on_threads=False,
     training_cores=12,
     load_cp2k=False,
+    training_on_gpu=False,
+    reference_on_gpu=False,
 ):
     def get_kwargs(cpu_cluster=None, gpu_cluster=None):
         if env == "hortense":
@@ -295,6 +368,7 @@ def config(
                     "donphan",
                     "gallade",
                     "shinx",
+                    "accelgor",
                 ]
 
             if gpu_cluster is not None:
@@ -321,6 +395,9 @@ def config(
     if not isinstance(gpu_cluster, list) and gpu_cluster is not None:
         gpu_cluster = [gpu_cluster]
 
+    if training_on_gpu or reference_on_gpu:
+        assert gpu_cluster is not None, "gpu_cluster must be provided when training_on_gpu or reference_on_gpu is True"
+
     if bootstrap:
         raise NotImplementedError
 
@@ -340,6 +417,11 @@ def config(
         "reference": {"cores": singlepoint_nodes},
         "threadpool": {"cores": default_threads},
     }
+
+    # if training_on_gpu:
+    #     resources["training"]["gpus"] = 1
+    # if reference_on_gpu:
+    #     resources["reference"]["gpus"] = 1
 
     reference_command = None
 
@@ -375,7 +457,7 @@ def config(
         training_pre_commands.append("")
 
     else:
-        if gpu_cluster is not None:
+        if training_on_gpu:
             for gpu in gpu_cluster:
                 kw = get_kwargs(gpu_cluster=gpu)
 
@@ -386,11 +468,10 @@ def config(
                     label=label,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=50,
-                    parallelism=1,
+                    max_blocks=5,
+                    # parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=training_cores,
-                    parsl_cores=False,
                     wall_time=walltime_training,
                     **kw,
                 )
@@ -407,11 +488,10 @@ def config(
                     label=label,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=16,
-                    parallelism=1,
+                    max_blocks=50,
+                    # parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=training_cores,
-                    parsl_cores=False,
                     wall_time=walltime_training,
                     **kw,
                 )
@@ -419,37 +499,65 @@ def config(
                 training_labels.append(label)
                 training_pre_commands.append(pre_command)
 
-    if cpu_cluster is not None:
-        for cpu in cpu_cluster:
-            kw = get_kwargs(cpu_cluster=cpu)
+        if reference_on_gpu:
+            for gpu in gpu_cluster:
+                kw = get_kwargs(gpu_cluster=gpu)
 
-            label = f"reference_{cpu}"
+                label = f"reference_{gpu}"
 
-            reference, pre_command, ref_com = get_slurm_provider(
-                label=label,
-                memory_per_core=memory_per_core,
-                mem=min_memery_per_node,
-                init_blocks=0,
-                min_blocks=0,
-                max_blocks=2048,
-                parallelism=1,
-                parsl_tasks_per_block=1,
-                threads_per_core=singlepoint_nodes,
-                parsl_cores=False,
-                wall_time=walltime_ref,
-                load_cp2k=load_cp2k,
-                **kw,
-            )
+                reference, pre_command, ref_com = get_slurm_provider(
+                    gpu=True,
+                    label=label,
+                    memory_per_core=memory_per_core,
+                    mem=min_memery_per_node,
+                    init_blocks=0,
+                    min_blocks=0,
+                    max_blocks=48,
+                    # parallelism=1,
+                    parsl_tasks_per_block=reference_blocks,
+                    threads_per_core=singlepoint_nodes,
+                    wall_time=walltime_ref,
+                    load_cp2k=load_cp2k,
+                    **kw,
+                )
 
-            execs.append(reference)
-            reference_labels.append(label)
-            reference_pre_commands.append(pre_command)
+                execs.append(reference)
+                reference_labels.append(label)
+                reference_pre_commands.append(pre_command)
 
-            if reference_command is None:
-                reference_command = ref_com
+                if reference_command is None:
+                    reference_command = ref_com
 
-            if not default_on_threads:
-                # general tasks
+        else:
+            for cpu in cpu_cluster:
+                kw = get_kwargs(cpu_cluster=cpu)
+
+                label = f"reference_{cpu}"
+
+                reference, pre_command, ref_com = get_slurm_provider(
+                    label=label,
+                    memory_per_core=memory_per_core,
+                    mem=min_memery_per_node,
+                    init_blocks=0,
+                    min_blocks=0,
+                    max_blocks=2048,
+                    # parallelism=1,
+                    parsl_tasks_per_block=reference_blocks,
+                    threads_per_core=singlepoint_nodes,
+                    wall_time=walltime_ref,
+                    load_cp2k=load_cp2k,
+                    **kw,
+                )
+
+                execs.append(reference)
+                reference_labels.append(label)
+                reference_pre_commands.append(pre_command)
+
+                if reference_command is None:
+                    reference_command = ref_com
+
+        if not default_on_threads:
+            for cpu in cpu_cluster:
                 label = f"default_{cpu}"
 
                 default, pre_command, _ = get_slurm_provider(
@@ -457,10 +565,9 @@ def config(
                     init_blocks=1,
                     min_blocks=0,
                     max_blocks=2048,
-                    parallelism=1,
+                    # parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=default_threads,
-                    parsl_cores=False,
                     wall_time=walltime_ref,
                     **kw,
                 )

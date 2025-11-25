@@ -203,4 +203,4 @@ class TranformerUMAP(Transformer):
         cv_0 = f.compute_cv(x, chunk_size=chunk_size)[0].unstack()
         cv_t = f.compute_cv(x_t, chunk_size=chunk_size)[0].unstack() if x_t is not None else None
 
-        return cv_0, cv_t, un_atomize * f, w, None
+        return cv_0, cv_t, un_atomize * f, w, None, None

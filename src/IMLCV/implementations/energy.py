@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from ase import geometry as ase_geometry
+from ase.calculators.calculator import Calculator
 from openmm import State, System, Vec3
 from openmm.app import Simulation, Topology
 
@@ -19,10 +20,36 @@ from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
 
 @dataclass
 class OpenMmEnergy(Energy):
-    topology: Topology
-    system: System
+    # topology: Topology
+    # system: System
 
-    _simul: Simulation | None = None
+    _simul: Simulation
+
+    @staticmethod
+    def create(topo: Topology, system: System):
+        import openmm.unit as openmm_unit
+        from openmm import LangevinIntegrator, System
+        from openmm.app import (
+            Simulation,
+        )
+
+        # pdb = PDBFile(str(self.pdb))
+        # topo = self.topology
+        # system: System = self.system
+
+        # values don't matter, a integrator is needed
+        integrator = LangevinIntegrator(
+            300 * openmm_unit.kelvin,  # type:ignore
+            1 / openmm_unit.picosecond,  # type:ignore
+            0.004 * openmm_unit.picoseconds,  # type:ignore
+        )
+        simulation = Simulation(topo, system, integrator)
+        # simulation.context.setPositions(pdb.positions)
+
+        if (c := topo.getPeriodicBoxVectors()) is not None:
+            simulation.context.setPeriodicBoxVectors(*c)
+
+        return OpenMmEnergy(_simul=simulation)
 
     @property
     def nl(self) -> NeighbourList | None:
@@ -33,14 +60,15 @@ class OpenMmEnergy(Energy):
         return
 
     @property
+    def topology(self) -> Topology:
+        return self._simul.topology
+
+    @property
     def cell(self) -> jax.Array | None:
         if self.topology._periodicBoxVectors is None:
             return None
 
         print(f"{self.topology._periodicBoxVectors=}")
-
-        if self._simul is None:
-            self._get_simul()
 
         state: State = self._simul.context.getState()
 
@@ -57,9 +85,6 @@ class OpenMmEnergy(Energy):
     def cell(self, cell: jax.Array | None):
         if cell is None or self.topology._periodicBoxVectors is None:
             return
-
-        if self._simul is None:
-            self._get_simul()
 
         self._simul.context.setPeriodicBoxVectors(
             Vec3(*(cell[0, :].__array__() / nanometer)),
@@ -86,11 +111,6 @@ class OpenMmEnergy(Energy):
         return jnp.array([[a._value.x, a._value.y, a._value.z] for a in thing])
 
     def get_info(self):
-        if self._simul is None:
-            self._get_simul()
-
-        assert self._simul is not None
-
         atomic_numbers = jnp.array(
             [a.element.atomic_number for a in self._simul.topology.atoms()],
             dtype=int,
@@ -101,13 +121,6 @@ class OpenMmEnergy(Energy):
         return sp, atomic_numbers
 
     def _compute_coor(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
-        if self._simul is None:
-            self._get_simul()
-
-        # print(f"computing energy {sp/ nanometer=}")
-
-        assert self._simul is not None
-
         self.sp = sp
 
         state: State = self._simul.context.getState(
@@ -124,55 +137,95 @@ class OpenMmEnergy(Energy):
 
         return res
 
-    def _get_simul(self):
-        import openmm.unit as openmm_unit
-        from openmm import LangevinIntegrator, System
-        from openmm.app import (
-            Simulation,
-        )
-
-        # pdb = PDBFile(str(self.pdb))
-        topo = self.topology
-        system: System = self.system
-
-        # values don't matter, a integrator is needed
-        integrator = LangevinIntegrator(
-            300 * openmm_unit.kelvin,  # type:ignore
-            1 / openmm_unit.picosecond,  # type:ignore
-            0.004 * openmm_unit.picoseconds,  # type:ignore
-        )
-        simulation = Simulation(topo, system, integrator)
-        # simulation.context.setPositions(pdb.positions)
-
-        if (c := topo.getPeriodicBoxVectors()) is not None:
-            simulation.context.setPeriodicBoxVectors(*c)
-
-        self._simul = simulation
-
     def __getstate__(self):
+        from openmm import XmlSerializer
+
+        import tempfile
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
+        tmp_name = tmp.name
+
+        # save the simulation state to a temporary file and read it back
+        self._simul.saveState(tmp_name)
+        with open(tmp_name, "r") as f:
+            state = f.read()
+
+        os.unlink(tmp_name)
+
         return dict(
+            state=state,
             topology=self.topology,
-            system=self.system,
+            system=XmlSerializer.serialize(self._simul.system),
+            integrator=XmlSerializer.serialize(self._simul.integrator),
         )
 
     def __setstate__(self, state):
-        if "pdb" in state:
-            self.topology = state["topology"]
+        print(f"unpickling {self.__class__}")
 
-        if "topology" in state:
-            self.topology = state["topology"]
+        topology = state["topology"]
+        system = state["system"]
 
-        if "system" in state:
-            self.system = state["system"]
+        if isinstance(system, str):
+            from openmm import XmlSerializer
+
+            system = XmlSerializer.deserialize(system)
+
+        if "integrator" in state:
+            from openmm import XmlSerializer
+
+            integrator = XmlSerializer.deserialize(state["integrator"])
         else:
-            from openmm.app import (
-                ForceField,
+            from openmm import LangevinIntegrator
+            import openmm.unit as openmm_unit
+
+            integrator = LangevinIntegrator(
+                300 * openmm_unit.kelvin,  # type:ignore
+                1 / openmm_unit.picosecond,  # type:ignore
+                0.004 * openmm_unit.picoseconds,  # type:ignore
             )
 
-            forcefield = ForceField("amber14-all.xml")
-            system: System = forcefield.createSystem(self.topology)
+        from openmm.app import Simulation
 
-            self.system = system
+        simul = Simulation(topology, system, integrator)
+
+        if not "state" in state:
+            self._simul = simul
+            return self
+
+        import tempfile
+        import os
+
+        # write the saved state XML to a temporary file, load it and remove the temp file
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
+
+        tmp.write(state["state"].encode("utf-8"))
+        tmp.flush()
+        tmp.close()
+
+        simul.loadState(file=tmp.name)
+
+        os.unlink(tmp.name)
+
+        self._simul = simul
+
+        return self
+
+        # else:
+        #     from openmm.app import (
+        #         ForceField,
+        #     )
+
+        #     forcefield = ForceField("amber14-all.xml")
+        #     system: System = forcefield.createSystem(self.topology)
+
+        #     self.system = system
+
+        # self._simul = state.get("simulation", None)
+
+        # if isinstance(self.system, str):
+        #     from openmm import XmlSerializer
+
+        #     self.system = XmlSerializer.deserialize(self.system)
 
     def get_bonds(self):
         bonds = []
@@ -200,20 +253,38 @@ class OpenMmEnergy(Energy):
         return _match(jnp.arange(n_atoms))
 
 
+@dataclass
 class AseEnergy(Energy):
     """Conversion to ASE energy"""
 
-    def __init__(
-        self,
-        atoms: ase.Atoms,  # , : ase.Atoms,
-        calculator=None,  #: ase.calculators.calculator.Calculator | None = None,
+    atoms: ase.Atoms
+    # calculator: Calculator | None
+
+    @property
+    def calculator(self) -> Calculator | None:
+        return self.atoms.calc
+
+    @calculator.setter
+    def calculator(self, calc: Calculator):
+        self.atoms.calc = calc
+        return
+
+    @staticmethod
+    def create(
+        atoms: ase.Atoms,
+        calculator: Calculator | None = None,
     ):
-        self.atoms = atoms
+        self = AseEnergy(
+            atoms=atoms,
+        )
 
         if calculator is not None:
-            self.atoms.calc = self.calculator
+            self.calculator = calculator
+
         else:
-            self.atoms.calc = self._calculator()
+            self.calculator = self._calculator()
+
+        return self
 
     @property
     def cell(self):
@@ -246,13 +317,12 @@ class AseEnergy(Energy):
 
         self.sp = sp
 
-        if self.atoms.calc is None:
+        if self.calculator is None:
+            print("ASE calculator is None, recreating")
             sp_save = self.sp
             assert sp_save is not None
-            self.atoms.calc = self._calculator()
+            self.calculator = self._calculator()
             self.sp = sp_save
-
-            # self.atoms.calc.atoms = self.atoms
 
         try:
             energy = self.atoms.get_potential_energy() * electronvolt
@@ -307,44 +377,70 @@ class AseEnergy(Energy):
         print(f"setting {atom_params=}")
 
         self.calculator = clss(**calc_params)
-        self.atoms.calc = self.calculator
 
 
+@dataclass
 class Cp2kEnergy(AseEnergy):
     # override default params, only if explicitly set
-    default_parameters = dict(
-        auto_write=False,
-        basis_set=None,
-        basis_set_file=None,
-        charge=None,
-        cutoff=None,
-        force_eval_method=None,
-        inp="",
-        max_scf=None,
-        potential_file=None,
-        pseudo_potential=None,
-        stress_tensor=True,
-        uks=False,
-        poisson_solver=None,
-        xc=None,
-        print_level="LOW",
+    # default_parameters = dict(
+    #     auto_write=False,
+    #     basis_set=None,
+    #     basis_set_file=None,
+    #     charge=None,
+    #     cutoff=None,
+    #     force_eval_method=None,
+    #     inp="",
+    #     max_scf=None,
+    #     potential_file=None,
+    #     pseudo_potential=None,
+    #     stress_tensor=True,
+    #     uks=False,
+    #     poisson_solver=None,
+    #     xc=None,
+    #     print_level="LOW",
+    # )
+
+    cp2k_inp: str
+
+    input_kwargs: dict = field(
+        default_factory=lambda: dict(
+            auto_write=False,
+            basis_set=None,
+            basis_set_file=None,
+            charge=None,
+            cutoff=None,
+            force_eval_method=None,
+            inp="",
+            max_scf=None,
+            potential_file=None,
+            pseudo_potential=None,
+            stress_tensor=True,
+            uks=False,
+            poisson_solver=None,
+            xc=None,
+            print_level="LOW",
+        )
     )
 
-    def __init__(
-        self,
+    kwargs: dict = field(default_factory=dict)
+
+    @staticmethod
+    def create(
         atoms,  # ase.Atoms,
         input_file,
         input_kwargs: dict,
-        cp2k_path: Path | None = None,
+        # cp2k_path: Path | None = None,
         **kwargs,
     ):
-        self.atoms = atoms
-        self.cp2k_inp = input_file  # = os.path.abspath(input_file)
-        self.input_kwargs = input_kwargs
-        self.kwargs = kwargs
-        super().__init__(atoms)
-
-        self.rp = cp2k_path
+        self = Cp2kEnergy(
+            atoms=atoms,
+            # cp2k_path=cp2k_path,
+            cp2k_inp=input_file,
+            input_kwargs=input_kwargs,
+            kwargs=kwargs,
+        )
+        if self.calculator is None:
+            self.calculator = self._calculator()
 
     # def replace_paths(self,old_path:Path, new_path: Path):
     #     len_old = len(old_path.parts)
@@ -382,7 +478,7 @@ class Cp2kEnergy(AseEnergy):
         with open(inp) as f:
             inp = "".join(f.readlines()).format(**new_dict)
 
-        params = self.default_parameters.copy()
+        params = self.input_kwargs
         params.update(**{"inp": inp, **self.kwargs})
 
         if "label" in params:
@@ -403,8 +499,11 @@ class Cp2kEnergy(AseEnergy):
         return calc
 
     def _handle_exception(self, e=None):
+        if self.calculator is None:
+            raise Energy("no calculator")
+
         print(f"{e=}")
-        p = f"{self.atoms.calc.directory}/cp2k.out"
+        p = f"{self.calculator.directory}/cp2k.out"
         assert os.path.exists(p), "no cp2k output file after failure"
         with open(p) as f:
             lines = f.readlines()
@@ -442,25 +541,40 @@ class Cp2kEnergy(AseEnergy):
                 n = val.parts.index("src")
                 input_kwargs[key] = Path(*val.parts[n + 2 :])
 
-        self.__init__(
+        self = Cp2kEnergy(
             atoms=ase.Atoms.fromdict(atoms_dict),
-            input_file=cp2k_inp,
             input_kwargs=input_kwargs,
-            **kwargs,
+            cp2k_inp=cp2k_inp,
+            kwargs=kwargs,
         )
 
+        self.calculator = self._calculator()
 
+        return self
+
+
+@dataclass
 class MACEASE(AseEnergy):
+    model: str | Path = "medium"
+    dtype: str = "float32"
+
     def _calculator(self):
         from mace.calculators import mace_mp
 
-        return mace_mp(
-            model="medium",
+        import torch
+
+        torch.set_num_threads(jax.device_count())
+        print(f"{torch.get_num_threads()=}")
+
+        print(f"loading MACE model from {self.model} with dtype {self.dtype}")
+
+        calc = mace_mp(
+            model=self.model,
             dispersion=False,
-            default_dtype="float64",
-            device="cpu",
-            # compile_mode="default", #doens't compute stress
+            default_dtype=self.dtype,
         )
+
+        return calc
 
     def __getstate__(self):
         dict = {
@@ -478,4 +592,3 @@ class MACEASE(AseEnergy):
             self.atoms = ase.Atoms.fromdict(state["atoms"])
 
         self.calculator = self._calculator()
-        self.atoms.calc = self.calculator

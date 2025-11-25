@@ -102,7 +102,7 @@ def _cv_discovery_asserts(scheme0: Scheme, out_dim, r_cut, pdf_file: Path):
         assert jnp.all(jnp.isfinite(dcv.cv.cell))
 
     # test batch
-    dlo, _ = scheme0.rounds.data_loader(
+    dlo = scheme0.rounds.data_loader(
         out=1e2,
         split_data=False,
         num=1,
@@ -175,7 +175,7 @@ def test_cv_discovery(
     else:
         raise ValueError
 
-    dlo, _ = scheme0.rounds.data_loader(out=2e3, split_data=True, new_r_cut=r_cut)
+    dlo = scheme0.rounds.data_loader(out=2e3, split_data=True, new_r_cut=r_cut)
 
     scheme0.update_CV(
         transformer=tf,
@@ -206,7 +206,7 @@ def test_LDA_CV(tmpdir, config_test, out_dim=1, r_cut=3 * angstrom):
         sort="rematch",
     )
 
-    dlo, _ = scheme0.rounds.data_loader(out=5e2, new_r_cut=r_cut, split_data=True, chunk_size=200)
+    dlo = scheme0.rounds.data_loader(out=5e2, new_r_cut=r_cut, split_data=True, chunk_size=200)
 
     scheme0.update_CV(
         transformer=tf,

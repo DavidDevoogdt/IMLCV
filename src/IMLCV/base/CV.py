@@ -40,14 +40,14 @@ P2 = ParamSpec("P2")
 
 
 class ShmapKwargs(MyPyTreeNode):
-    axis: int = 0
-    out_axes: int = 0
+    axis: int = field(pytree_node=False, default=0)
+    out_axes: int = field(pytree_node=False, default=0)
     axis_name: str | None = field(pytree_node=False, default="i")
-    n_devices: int | None = None
-    pmap: bool = False
-    explicit_shmap: bool = True
-    verbose: bool = False
-    device_get: bool = True
+    n_devices: int | None = field(pytree_node=False, default=None)
+    pmap: bool = field(pytree_node=False, default=False)
+    explicit_shmap: bool = field(pytree_node=False, default=True)
+    verbose: bool = field(pytree_node=False, default=False)
+    device_get: bool = field(pytree_node=False, default=True)
     devices: tuple[Any] = field(pytree_node=False, default=None)
     mesh: Mesh | None = field(pytree_node=False, default=None)
 
@@ -292,9 +292,8 @@ def padded_shard_map(
                 if not explicit_shmap:
                     _f = vmap_decorator(f_inner, in_axes=0 if move_axis else axis)  # vmap_decorator over sharded axis
                 else:
-                    tree_flat = [
-                        jnp.sqeeze(x, 0 if move_axis else axis) for x in tree_flat
-                    ]  # sharding keeps axis, pmap removes it
+                    tree_flat = [jnp.sqeeze(x, 0 if move_axis else axis) for x in tree_flat]  # type: ignore
+
                     _f = f_inner
             else:
                 _f = f_inner
@@ -365,6 +364,8 @@ def padded_shard_map(
             #     # print(f"explicit shmap")
 
             #     # print(f"{in_tree_flat_padded} {tuple(specs)} {specs_out=}")
+
+            assert mesh is not None
 
             shard_fun = jit_decorator(
                 shard_map(
@@ -551,7 +552,7 @@ def macro_chunk_map_fun(
     nl_t: list[NeighbourList] | NeighbourList | None = None,
     macro_chunk: int | None = 1000,
     verbose=False,
-    chunk_func: Callable[[T, X2, X2 | None, Array | None], T] | None = None,
+    chunk_func: Callable[[T, X2, X2 | None, Array | None, Array | None, Array | None], T] | None = None,
     chunk_func_init_args: T = None,
     w_t: list[Array] | None = None,
     d_w: list[Array] | None = None,
@@ -616,7 +617,7 @@ def _macro_chunk_map(
     nl_t: list[NeighbourList] | NeighbourList | None = None,
     macro_chunk: int | None = 1000,
     verbose=False,
-    chunk_func: Callable[[T, X2, X2 | None, Array | None, Array | None], T] | None = None,
+    chunk_func: Callable[[T, X2, X2 | None, Array | None, Array | None, Array | None], T] | None = None,
     chunk_func_init_args: T = None,
     w_t: list[Array] | None = None,
     d_w: list[Array] | None = None,
@@ -649,7 +650,9 @@ def _macro_chunk_map(
 
         if chunk_func is not None:
             cf_cache = 0
-            chunk_func = cast(Callable[[T, X2, X2 | None, Array | None], T], jit(chunk_func))
+            chunk_func = cast(
+                Callable[[T, X2, X2 | None, Array | None, Array | None, Array | None], T], jit(chunk_func)
+            )
 
     def single_chunk():
         # print("performing single chunk")
@@ -1847,6 +1850,7 @@ class SystemParams(MyPyTreeNode):
             return sp
 
         assert not sp.batched, "apply vmap_decorator"
+        assert self.cell is not None
 
         new_cell = jnp.diag(signs) @ self.cell @ q
         new_coordinates = self.coordinates @ q
@@ -1893,7 +1897,7 @@ class SystemParams(MyPyTreeNode):
         cell = self.cell
         coordinates = self.coordinates
 
-        if self.cell is None:
+        if cell is None:
             return self, jnp.zeros_like(coordinates, dtype=jnp.int64)
 
         trans = vmap_decorator(vmap_decorator(jnp.dot, in_axes=(0, None)), in_axes=(None, 0))(
@@ -2006,6 +2010,8 @@ class SystemParams(MyPyTreeNode):
 
         coor = []
 
+        z_list: list[int] | None = None
+
         if info is not None:
             z_list = []
 
@@ -2016,7 +2022,8 @@ class SystemParams(MyPyTreeNode):
             z_list.extend(info.z_array)  # type:ignore
 
         if info is not None:
-            info = NeighbourListInfo.create(r_cut=info.r_cut, z_array=z_list, r_skin=info.r_skin)
+            assert z_list is not None
+            info = NeighbourListInfo.create(r_cut=info.r_cut, z_array=jnp.array(z_list), r_skin=info.r_skin)
 
         print(f"{jnp.array(n).shape=} {self.cell.shape} {jnp.array(n) *self.cell=}")
 
@@ -2059,10 +2066,10 @@ class NeighbourListInfo(MyPyTreeNode):
     @staticmethod
     def create(
         r_cut: float,
-        z_array: Array,
-        r_skin: float | None = None,
+        z_array: Array | list[int] | tuple[int, ...],
+        r_skin: Array | float | None = None,
     ):
-        def to_tuple(a) -> tuple[int]:
+        def to_tuple(a) -> tuple[int, ...]:
             return tuple([int(ai) for ai in a])
 
         zu = jnp.unique(jnp.array(z_array))
@@ -2097,10 +2104,10 @@ class NeighbourListInfo(MyPyTreeNode):
         out = jnp.zeros_like(jnp.array(self.z_array))
 
         if key is None:
-            key = jax.random.PRNGKey(0)
+            key = jax.random.PRNGKey(42)
 
         for u in self.z_unique:
-            key, key1 = jax.random.split(key)
+            key, key1 = jax.random.split(key)  # type: ignore
             idx = jnp.argwhere(jnp.array(self.z_array) == u).ravel()
             perm = jax.random.permutation(key1, idx)
 
@@ -2183,11 +2190,11 @@ class NeighbourList(MyPyTreeNode):
     @staticmethod
     def create(
         r_cut,
+        z_array: jax.Array,
         sp_orig,
         atom_indices=None,
         r_skin=None,
         ijk_indices=None,
-        z_array=None,
         nxyz=None,
         op_cell=None,
         op_coor=None,
@@ -2303,7 +2310,7 @@ class NeighbourList(MyPyTreeNode):
     def apply_fun_neighbour(
         self,
         sp: SystemParams,
-        func: Callable[[jax.Array, jax.Array], T],
+        func_single: Callable[[jax.Array, jax.Array], T],
         r_cut: float | None = None,
         fill_value=0,
         reduce="full",  # or 'z' or 'none'
@@ -2319,7 +2326,7 @@ class NeighbourList(MyPyTreeNode):
             _g: Callable[[NeighbourList, SystemParams], tuple[jax.Array, T]] = padded_vmap(
                 Partial_decorator(
                     NeighbourList.apply_fun_neighbour,
-                    func=func,
+                    func_single=func_single,
                     r_cut=r_cut,
                     fill_value=fill_value,
                     reduce=reduce,
@@ -2359,7 +2366,7 @@ class NeighbourList(MyPyTreeNode):
             if exclude_self:
                 b = jnp.logical_and(b, r_ij > 1e-16)
 
-            out = func(
+            out = func_single(
                 pos_ij,
                 ind_ij,
             )
@@ -2563,8 +2570,8 @@ class NeighbourList(MyPyTreeNode):
                 pos_i[nk],
                 ind_i[nj],
                 ind_i[nk],
-                jax.tree.map(lambda x: x[nj], data_single_i) if data_single_i is not None else None,
-                jax.tree.map(lambda x: x[nk], data_single_i) if data_single_i is not None else None,
+                jax.tree.map(lambda x: x[nj], data_single_i) if data_single_i is not None else None,  # type: ignore
+                jax.tree.map(lambda x: x[nk], data_single_i) if data_single_i is not None else None,  # type: ignore
             )
 
             # replace vals with fill_value if bools is False
@@ -2831,7 +2838,7 @@ class NeighbourList(MyPyTreeNode):
 
         return NeighbourList(
             info=NeighbourListInfo.create(
-                r_cut,
+                r_cut,  # type: ignore
                 z_array,
                 r_skin=r_skin,
             ),
@@ -2903,14 +2910,23 @@ class NeighbourList(MyPyTreeNode):
 
         self.__init__(**sd)
 
-    def get_pairs_trips_quads(self, sp: SystemParams, r_cut: float | None = None):
+    def get_pairs_trips_quads(
+        self,
+        sp: SystemParams,
+        r_cut: float | None = None,
+        calc_trips=True,
+        calc_quads=True,
+        filter_z: jax.Array | Callable[[jax.Array], jax.Array] = None,
+    ):
         if r_cut is None:
             r_cut = self.info.r_cut
+
+        assert self.atom_indices is not None
 
         def dist(r, i):
             return jnp.linalg.norm(r)
 
-        b0, d0 = self.apply_fun_neighbour(sp, dist, reduce="none", exclude_self=True)
+        b0, d0 = self.apply_fun_neighbour(sp=sp, func_single=dist, reduce="none", exclude_self=True, r_cut=r_cut)
 
         @partial(jax.vmap, in_axes=(0, 0))
         @partial(jax.vmap, in_axes=(None, 0))
@@ -2919,7 +2935,26 @@ class NeighbourList(MyPyTreeNode):
 
         p = dub(jnp.arange(self.atom_indices.shape[0]), self.atom_indices)
         pairs = p[b0, :]
+        pairs = jnp.sort(pairs, axis=1)
+
         pairs = jnp.unique(pairs, axis=0)
+
+        if filter_z is not None:
+            if not isinstance(filter_z, Callable):
+
+                def _filter(x):
+                    return jnp.any(x == filter_z)
+            else:
+                _filter = filter_z
+
+            _filter = jax.vmap(
+                lambda x: jnp.logical_and(
+                    _filter(jnp.array(self.info.z_array)[x[0]]),
+                    _filter(jnp.array(self.info.z_array)[x[1]]),
+                )
+            )(pairs)
+
+            pairs = pairs[_filter, :]
 
         @partial(jax.vmap, in_axes=(0, None))
         @partial(jax.vmap, in_axes=(None, 0))
@@ -2936,6 +2971,10 @@ class NeighbourList(MyPyTreeNode):
             return jnp.logical_and(dup == 1, ~jnp.all(d1 == d2)), jnp.array([i1, i2, j1, j2])
 
         b, p = trip(pairs, pairs)
+
+        if calc_trips is False:
+            assert calc_quads is False
+            return pairs, None, None
 
         @jax.vmap
         def order_triplet(t):
@@ -2957,6 +2996,9 @@ class NeighbourList(MyPyTreeNode):
 
         triplets = order_triplet(p[b])
         triplets = jnp.unique(triplets, axis=0)
+
+        if calc_quads is False:
+            return pairs, triplets, None
 
         @partial(jax.vmap, in_axes=(0, None))
         @partial(jax.vmap, in_axes=(None, 0))
@@ -2985,6 +3027,9 @@ class NeighbourList(MyPyTreeNode):
 
         quads = order_quartet(p[b])
         quads = jnp.unique(quads, axis=0)
+
+        b = quads[:, 0] != quads[:, 3]
+        quads = quads[b, :]
 
         return pairs, triplets, quads
 
@@ -3501,7 +3546,7 @@ class CvMetric(MyPyTreeNode):
         samples,
         n_dims,
         max_bins=None,
-        max_bins_per_dim=100,
+        max_bins_per_dim=1000,
     ):
         f = samples / samples_per_bin
         if max_bins is not None:
@@ -3514,7 +3559,7 @@ class CvMetric(MyPyTreeNode):
 
         return out
 
-    def grid(self, n=30, bounds=None, margin=0.1, indexing="ij"):
+    def grid(self, n=30, bounds=None, margin=0.0, indexing="ij"):
         """forms regular grid in mapped space. If coordinate is periodic, last rows are ommited.
 
         Args:
@@ -3562,7 +3607,7 @@ class CvMetric(MyPyTreeNode):
     @staticmethod
     def bounds_from_cv(
         cv_0: list[CV],
-        percentile=0.1,
+        percentile=0.0,
         weights: list[Array] | None = None,
         rho: list[Array] | None = None,
         margin=None,
@@ -3570,7 +3615,7 @@ class CvMetric(MyPyTreeNode):
         n=400,
         macro_chunk: int | None = 5000,
         verbose=True,
-    ) -> tuple[jax.Array, list[jax.Array], bool]:
+    ) -> tuple[jax.Array, list[jax.Array], jax.Array]:
         n = int(n)
 
         if margin is None:
@@ -3725,11 +3770,24 @@ class CvMetric(MyPyTreeNode):
         self.__init__(**statedict)
 
     def __getitem__(self, idx):
-        idx = jnp.array(idx)
+        # print(f"indexing CvMetric with {idx=}")
+
+        # print(f"{self.periodicities.shape=}, {self.bounding_box.shape=}")
+
+        bb = []
+        p = []
+        ext = [] if self._extensible is not None else None
+
+        for i in idx:
+            bb.append(self.bounding_box[i, :])
+            p.append(self.periodicities[i])
+            if ext is not None:
+                ext.append(self._extensible[i])
+
         return CvMetric(
-            bounding_box=self.bounding_box[idx],
-            periodicities=self.periodicities[idx],
-            _extensible=self._extensible[idx] if self._extensible is not None else None,
+            bounding_box=jnp.array(bb),
+            periodicities=jnp.array(p),
+            _extensible=jnp.array(ext) if self._extensible is not None else None,
         )
 
 
@@ -3739,10 +3797,10 @@ class CvMetric(MyPyTreeNode):
 
 
 class CvFunBase(ABC, MyPyTreeNode):
-    # __: KW_ONLY
     kwargs: dict = field(pytree_node=True, default_factory=dict)
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
-    # jacfun: Callable = field(pytree_node=False, default=jax.jacfwd)
+    learnable_kwargs: tuple[str] | None = field(pytree_node=False, default=None)
+    apply_rule: Callable[[dict, dict], dict] | None = field(pytree_node=False, default=None)
 
     @partial(
         jit_decorator,
@@ -3763,6 +3821,7 @@ class CvFunBase(ABC, MyPyTreeNode):
         reverse=False,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
+        learnable_kwargs: dict | None = None,
     ) -> tuple[CV, CV | None]:
         if x.batched:
             # if nl is not None:
@@ -3775,6 +3834,7 @@ class CvFunBase(ABC, MyPyTreeNode):
                     chunk_size=None,
                     shmap=False,
                     reverse=reverse,
+                    learnable_kwargs=learnable_kwargs,
                 ),
                 chunk_size=chunk_size,
             )
@@ -3785,7 +3845,13 @@ class CvFunBase(ABC, MyPyTreeNode):
             return _f(x, nl)
 
         def f(x):
-            return self._compute_cv(x, nl, shmap=shmap, shmap_kwargs=shmap_kwargs)[0]
+            return self._compute_cv(
+                x,
+                nl,
+                shmap=shmap,
+                shmap_kwargs=shmap_kwargs,
+                learnable_kwargs=learnable_kwargs,
+            )[0]
 
         y = f(x)
         if jacobian:
@@ -3813,6 +3879,7 @@ class CvFunBase(ABC, MyPyTreeNode):
         reverse=False,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
+        learnable_kwargs: dict | None = None,
     ) -> CV:
         raise
 
@@ -3826,6 +3893,84 @@ class CvFunBase(ABC, MyPyTreeNode):
             statedict.pop("static_kwarg_names")
 
         self.__init__(**statedict)
+
+    @property
+    def learnable_params_shape(self):
+        if self.learnable_kwargs is None:
+            return None
+
+        out = {}
+
+        for k in self.learnable_kwargs:
+            v = self.kwargs[k]
+
+            out[k] = v.shape if isinstance(v, jax.Array) else None
+
+        return out
+
+    @property
+    def num_learnable_params(self):
+        p = self.learnable_params_shape
+
+        if p is None:
+            return 0
+
+        n = 0
+
+        x, _ = tree_flatten(p)
+        for xi in x:
+            if xi is not None:
+                n += jnp.prod(jnp.array(xi))
+
+        return n
+
+    def apply_learnable_kwargs(self, learnable_kwargs: dict) -> CvFunBase:
+        if self.learnable_kwargs is None:
+            return self
+
+        # print(f"{self.kwargs=} {learnable_kwargs=}")
+
+        kw = self.kwargs.copy()
+
+        for k in self.learnable_kwargs:
+            kw[k] = learnable_kwargs[k]
+
+        if self.apply_rule is not None:
+            kw = self.apply_rule(kw, self.static_kwargs)
+
+        return self.replace(kwargs=kw)
+
+    def init_learnable_params(self, key: jax.random.KeyArray, initializer=jax.nn.initializers.lecun_normal()):
+        if self.learnable_kwargs is None:
+            return None
+
+        kwargs = {}
+
+        for k in self.learnable_kwargs:
+            v = self.kwargs[k]
+            key, subkey = jax.random.split(key)
+
+            try:
+                kwargs[k] = initializer(subkey, v.shape)
+            except Exception as e:
+                kwargs[k] = jnp.zeros_like(v)
+
+        if self.apply_rule is not None:
+            kwargs = self.apply_rule(kwargs, self.static_kwargs)
+
+        return kwargs
+
+    def get_learnable_params(self):
+        if self.learnable_kwargs is None:
+            return None
+
+        kwargs = {}
+
+        for k in self.learnable_kwargs:
+            v = self.kwargs[k]
+            kwargs[k] = v
+
+        return kwargs
 
 
 class CvFun(CvFunBase):
@@ -3848,7 +3993,16 @@ class CvFun(CvFunBase):
         reverse=False,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
+        learnable_kwargs: dict | None = None,
     ) -> CV:
+        kwargs = self.kwargs
+
+        if learnable_kwargs is not None and self.learnable_kwargs is not None:
+            print(f"applying learnable kwargs {learnable_kwargs=}")
+
+            for k in self.learnable_kwargs:
+                kwargs[k] = learnable_kwargs[k]
+
         if reverse:
             assert self.backward is not None
             return Partial_decorator(
@@ -3892,12 +4046,13 @@ class _SerialCvTrans(MyPyTreeNode):
         reverse=False,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
+        learnable_kwargs: dict = {},
     ) -> CV:
         ordered = reversed(self.trans) if reverse else self.trans
 
         assert len(self.trans) > 0
 
-        for tr in ordered:
+        for i, tr in enumerate(ordered):
             x = tr._compute_cv(
                 x=x,
                 nl=nl,
@@ -3907,6 +4062,39 @@ class _SerialCvTrans(MyPyTreeNode):
             )
 
         return x  # type: ignore
+
+    @property
+    def learnable_params_shape(self):
+        return [tr.learnable_params_shape for tr in self.trans]
+
+    def apply_learnable_kwargs(self, learnable_kwargs) -> _SerialCvTrans:
+        return self.replace(trans=tuple(tr.apply_learnable_kwargs(lp) for tr, lp in zip(self.trans, learnable_kwargs)))
+
+    def init_learnable_params(self, key: jax.Array | None, initializer=jax.nn.initializers.lecun_normal()) -> dict:
+        out = []
+
+        if key is None:
+            key = jax.random.PRNGKey(42)
+
+        for tr in self.trans:
+            key, subkey = jax.random.split(key)
+            out.append(tr.init_learnable_params(subkey, initializer=initializer))
+        return tuple(out)
+
+    def get_learnable_params(self) -> dict:
+        out = []
+
+        for tr in self.trans:
+            out.append(tr.get_learnable_params())
+        return tuple(out)
+
+    @property
+    def num_learnable_params(self):
+        n = 0
+
+        for tr in self.trans:
+            n += tr.num_learnable_params
+        return n
 
 
 class _ParralelCvTrans(MyPyTreeNode):
@@ -3950,6 +4138,41 @@ class _ParralelCvTrans(MyPyTreeNode):
 
         return CV(cv=jnp.hstack([cvi.cv for cvi in out]))
 
+    @property
+    def learnable_params_shape(self):
+        return [tr.learnable_params_shape for tr in self.trans]
+
+    @property
+    def num_learnable_params(self):
+        n = 0
+
+        for tr in self.trans:
+            n += tr.num_learnable_params
+        return n
+
+    def apply_learnable_kwargs(self, learnable_kwargs) -> _ParralelCvTrans:
+        return self.replace(trans=tuple(tr.apply_learnable_kwargs(lp) for tr, lp in zip(self.trans, learnable_kwargs)))
+
+    def init_learnable_params(self, key: jax.Array | None, initializer=jax.nn.initializers.lecun_normal()) -> dict:
+        out = []
+
+        if key is None:
+            key = jax.random.PRNGKey(42)
+
+        for tr in self.trans:
+            key, subkey = jax.random.split(key)
+            out.append(tr.init_learnable_params(subkey, initializer=initializer))
+
+        return tuple(out)
+
+    def get_learnable_params(self) -> dict:
+        out = []
+
+        for tr in self.trans:
+            out.append(tr.get_learnable_params())
+
+        return tuple(out)
+
 
 class CvTrans(MyPyTreeNode):
     trans: _ParralelCvTrans | _SerialCvTrans
@@ -3960,6 +4183,8 @@ class CvTrans(MyPyTreeNode):
         # jacfun: Callable = None,
         static_argnames=None,
         check_input: bool = True,
+        learnable_argnames: tuple[str] | None = None,
+        apply_rule: Callable[[dict, dict], dict] | None = None,
         **kwargs,
     ) -> CvTrans:
         static_kwargs = {}
@@ -3968,7 +4193,13 @@ class CvTrans(MyPyTreeNode):
             for a in static_argnames:
                 static_kwargs[a] = kwargs.pop(a)
 
-        kw = dict(forward=f, kwargs=kwargs, static_kwargs=static_kwargs)
+        kw = dict(
+            forward=f,
+            kwargs=kwargs,
+            static_kwargs=static_kwargs,
+            learnable_kwargs=learnable_argnames,
+            apply_rule=apply_rule,
+        )
 
         if check_input:
 
@@ -3986,6 +4217,10 @@ class CvTrans(MyPyTreeNode):
                     raise e
 
                 # check if
+
+            if learnable_argnames is not None:
+                for a in learnable_argnames:
+                    assert a in kw["kwargs"], f"learnable arg {a} not in kwargs"
 
             for k, v in list(kw["static_kwargs"].items()):
                 try:
@@ -4067,6 +4302,23 @@ class CvTrans(MyPyTreeNode):
 
         return self + other
 
+    @property
+    def learnable_params_shape(self):
+        return [a.learnable_params_shape for a in self.trans.trans]
+
+    def init_learnable_params(self, key: jax.Array | None, initializer=jax.nn.initializers.lecun_normal()):
+        return self.trans.init_learnable_params(key, initializer=initializer)
+
+    def apply_learnable_params(self, learnable_params: dict) -> CvTrans:
+        return self.replace(trans=self.trans.apply_learnable_kwargs(learnable_params))
+
+    def get_learnable_params(self) -> dict:
+        return self.trans.get_learnable_params()
+
+    @property
+    def num_learnable_params(self):
+        return self.trans.num_learnable_params
+
 
 ######################################
 #       Collective variable          #
@@ -4100,6 +4352,7 @@ class CollectiveVariable(MyPyTreeNode):
         shmap=False,
         push_jac=False,
         shmap_kwargs=ShmapKwargs.create(),
+        learnable_kwargs=None,
     ) -> tuple[CV, SystemParams | None]:
         if push_jac:
             raise ValueError("push_jax not supported")

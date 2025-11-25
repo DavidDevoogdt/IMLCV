@@ -60,6 +60,9 @@ def config(
     env=None,
     singlepoint_nodes=16,
     local_ref_threads=4,
+    training_on_gpu=False,
+    reference_on_gpu=False,
+    reference_blocks=4,
     walltime_training="6:00:00",
     walltime_ref="1:00:00",
     bootstrap=False,
@@ -77,6 +80,8 @@ def config(
     work_queue_local=True,
     max_threads_local=10,
 ):
+    print(f"{reference_blocks=}")
+
     if parsl.DataFlowKernelLoader._dfk is not None:  # type: ignore
         print("parsl already configured, using previous setup")
         return
@@ -85,7 +90,7 @@ def config(
         env = get_platform()
 
     if path_internal is None:
-        path_internal =  "/tmp/.runinfo"
+        path_internal = "/tmp/.runinfo"
 
     if env == "local":
         execs, labels, precommands, ref_comm, resources = get_config_local(
@@ -112,6 +117,9 @@ def config(
             default_threads=local_ref_threads,
             training_cores=training_cores,
             training_on_threads=training_on_threads,
+            reference_blocks=reference_blocks,
+            training_on_gpu=training_on_gpu,
+            reference_on_gpu=reference_on_gpu,
         )
 
     config = Config(

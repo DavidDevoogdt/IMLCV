@@ -481,12 +481,19 @@ class VerletIntegrator(MyPyTreeNode):
                 hook(self)
 
     def run(self: VerletIntegrator, nstep=None):
+        def _step(self: VerletIntegrator):
+            self = self.propagate()
+            self.call_hooks()
+
+            # if self.cons_err > 10.0:
+            #     raise ValueError("Energy conservation error too large, stopping simulation.")
+
+            return self
+
         if nstep is None:
             while True:
-                self = self.propagate()
-                self.call_hooks()
+                self = _step(self)
         else:
             for i in range(nstep):
-                self = self.propagate()
-                self.call_hooks()
+                self = _step(self)
         self.finalize()

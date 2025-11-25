@@ -6,11 +6,12 @@ import numpy as np
 from jax import Array
 from typing_extensions import Self
 
-from IMLCV.base.bias import Bias, CompositeBias, NoneBias
+from IMLCV.base.bias import Bias, CompositeBias, NoneBias, GridBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
-from IMLCV.base.datastructures import field
+from IMLCV.base.datastructures import field, vmap_decorator
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.tools._rbf_interp import RBFInterpolator
+from IMLCV.base.UnitsConstants import boltzmann
 
 ######################################
 # helper functions that are pickable #
@@ -26,40 +27,9 @@ def _clip(x, a_min, a_max):
 
 class MinBias(CompositeBias):
     @classmethod
-    def create(cls, biases: list[Bias]) -> CompositeBias:
+    def create(cls, biases: list[Bias]) -> CompositeBias | Bias:
         b = CompositeBias.create(biases=biases, fun=jnp.min)
         return b
-
-
-# class SliceBias(Bias):
-#     # scales the bias with dt
-
-#     idx: jax.Array
-#     bias: Bias
-
-#     @classmethod
-#     def create(cls, bias: Bias, idx: jax.Array) -> Bias:
-#         colvar = bias.collective_variable
-#         bias.collective_variable = None
-
-#         return SliceBias(
-#             collective_variable=colvar,
-#             collective_variable_path=bias.collective_variable_path,
-#             start=bias.start,
-#             step=bias.step,
-#             finalized=bias.finalized,
-#             slice_exponent=bias.slice_exponent,
-#             slice_mean=bias.slice_mean,
-#             bias=bias,
-#             idx=idx,
-#         )
-
-#     def _compute(self, cvs: CV) -> Array:
-#         b = self.bias._compute(cvs)
-
-#         print(f"{b.shape=}, {self.idx=}")
-
-#         return b[self.idx]
 
 
 class DTBias(Bias):
@@ -75,7 +45,7 @@ class DTBias(Bias):
             return bias
 
         colvar = bias.collective_variable
-        bias.collective_variable = None
+        # bias.collective_variable = None
 
         return DTBias(
             collective_variable=colvar,
@@ -83,8 +53,6 @@ class DTBias(Bias):
             start=bias.start,
             step=bias.step,
             finalized=bias.finalized,
-            slice_exponent=bias.slice_exponent,
-            slice_mean=bias.slice_mean,
             dT=dT,
             bias=bias,
             T=T,
@@ -104,7 +72,7 @@ class HarmonicBias(Bias):
     q0: CV
     k: float
     k_max: float | None = None
-    size: Array | None = None
+    size: Array
     y0: float | None = None
     r0: float | None = None
     metric: CvMetric
@@ -161,7 +129,6 @@ class HarmonicBias(Bias):
         )
 
     def _compute(self, cvs: CV):
-        # assert isinstance(cvs, CV)
         r = jnp.linalg.norm(self.metric.difference(cvs, self.q0) * self.size)
 
         para = self.k * r**2 / 2
@@ -189,8 +156,6 @@ class BiasMTD(Bias):
     variables.
     """
 
-    # __: KW_ONLY
-
     q0s: jax.Array
     sigmas: jax.Array
     K: jax.Array
@@ -207,7 +172,7 @@ class BiasMTD(Bias):
         start=None,
         step=None,
         finalized=False,
-    ) -> Self:
+    ) -> BiasMTD:
         """_summary_
 
         Args:
@@ -236,7 +201,7 @@ class BiasMTD(Bias):
         # tempering = tempering
         K = K
 
-        return cls(
+        return BiasMTD(
             collective_variable=cvs,
             start=start,
             step=step,
@@ -276,8 +241,11 @@ class BiasMTD(Bias):
     def _compute(self, cvs):
         """Computes sum of hills."""
 
+        assert self.collective_variable is not None
+        metric = self.collective_variable.metric
+
         def f(x):
-            return self.collective_variable.metric.difference(x1=CV(cv=x), x2=cvs)
+            return metric.difference(x1=CV(cv=x), x2=cvs)
 
         deltas = jnp.apply_along_axis(f, axis=1, arr=self.q0s)
 
@@ -293,8 +261,6 @@ class RbfBias(Bias):
     values are caluclated in bin centers
     """
 
-    # __: KW_ONLY
-
     rbf: RBFInterpolator
     offset: float | jax.Array = 0.0
 
@@ -308,12 +274,10 @@ class RbfBias(Bias):
         step=None,
         kernel="thin_plate_spline",
         epsilon=None,
-        smoothing: Array | float | None = -1,
+        smoothing: float | None = -1.0,
         degree=None,
         finalized=True,
-        slice_exponent=1,
-        log_exp_slice=True,
-        slice_mean=False,
+        sigma: Array | None = None,
     ) -> RbfBias | NoneBias:
         assert cv.batched
         assert cv.shape[1] == cvs.n, f"{cv.shape}[1] != {cvs.n}"
@@ -325,9 +289,6 @@ class RbfBias(Bias):
 
             return NoneBias.create(collective_variable=cvs)
 
-        # lift
-        # offset = jnp.min(vals)
-
         rbf = RBFInterpolator.create(
             y=cv,
             kernel=kernel,
@@ -336,6 +297,7 @@ class RbfBias(Bias):
             smoothing=smoothing,
             epsilon=epsilon,
             degree=degree,
+            sigma=sigma,
         )
 
         return RbfBias(
@@ -344,10 +306,47 @@ class RbfBias(Bias):
             step=step,
             rbf=rbf,
             finalized=finalized,
-            slice_exponent=slice_exponent,
-            log_exp_slice=log_exp_slice,
-            slice_mean=slice_mean,
             offset=0.0,  # offset,
+        )
+
+    def from_grid_bias(
+        self,
+        bias: GridBias,
+        kernel="thin_plate_spline",
+        epsilon=None,
+        smoothing: Array | float | None = -1.0,
+        degree=None,
+    ) -> RbfBias:
+        Warning("this method is untested")
+
+        vals = bias.vals.reshape((-1,))
+        _, _, _, y, _ = bias.collective_variable.metric.grid(
+            n=bias.n,
+            bounds=bias.bounds,
+            margin=0.0,
+        )
+
+        mask = jnp.isfinite(vals)
+        vals = vals[mask]
+        y = y[mask]
+
+        rbf = RBFInterpolator.create(
+            y=y,
+            kernel=kernel,
+            d=vals,
+            metric=bias.collective_variable.metric,
+            smoothing=smoothing,
+            epsilon=epsilon,
+            degree=degree,
+        )
+
+        return RbfBias(
+            collective_variable=bias.collective_variable,
+            start=bias.start,
+            step=bias.step,
+            rbf=rbf,
+            finalized=bias.finalized,
+            offset=0.0,
         )
 
     def _compute(self, cvs: CV):
@@ -355,62 +354,6 @@ class RbfBias(Bias):
         if cvs.batched:
             return out
         return out[0]
-
-
-class GridBias(Bias):
-    """Bias interpolated from lookup table on uniform grid.
-
-    values are caluclated in bin centers
-    """
-
-    n: int
-    bounds: jax.Array
-    vals: jax.Array
-    order: int = field(pytree_node=False, default=1)
-
-    @classmethod
-    def create(
-        cls,
-        cvs: CollectiveVariable,
-        bias: Bias,
-        n=30,
-        bounds: Array | None = None,
-        margin=0.1,
-        order=1,
-    ) -> GridBias:
-        grid, _, cv, _, bounds = cvs.metric.grid(
-            n=n,
-            bounds=bounds,
-            margin=margin,
-        )
-
-        vals, _ = bias.compute_from_cv(cv)
-
-        vals = vals.reshape((n,) * cvs.n)
-
-        return GridBias(
-            collective_variable=cvs,
-            n=n,
-            vals=vals,
-            bounds=bounds,
-            order=order,
-        )
-
-    def _compute(self, cvs: CV):
-        # map between vals 0 and 1
-        # if self.bounds is not None:
-        coords = (cvs.cv - self.bounds[:, 0]) / (self.bounds[:, 1] - self.bounds[:, 0])
-
-        import jax.scipy as jsp
-
-        # def f(x):
-        return jsp.ndimage.map_coordinates(
-            self.vals,
-            coords * (self.n - 1),  # type:ignore
-            mode="constant",
-            cval=jnp.nan,
-            order=self.order,
-        )
 
 
 class GridMaskBias(Bias):

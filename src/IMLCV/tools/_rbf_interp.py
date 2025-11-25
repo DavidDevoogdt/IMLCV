@@ -93,6 +93,53 @@ def _monomial_powers(ndim, degree, periodicities):
     return jnp.array(out)
 
 
+# inspired by https://github.com/treverhines/RBF/blob/master/rbf/interpolate.py
+def _loocv(
+    P,
+    K,
+    d,
+) -> jax.Array:
+    """Compute the LOOCV score for the RBF interpolation system."""
+    p = K.shape[0]
+
+    r = P.shape[0]
+
+    A = jnp.block(
+        [
+            [K, P],
+            [P.T, jnp.zeros((r, r))],
+        ]
+    )
+
+    l, U = jnp.linalg.eigh(A)
+
+    A_inv = U @ jnp.diag(l ** (-1)) @ U.T
+
+    soln = A_inv[:, :p] @ d
+    errors = soln[:p] / jnp.diag(A_inv[:p, :p])[:, None]
+
+    return jnp.sum(errors**2)
+
+
+def _gml(P, K, d):
+    """Compute the generalized maximum likelihood (GML) score for the RBF interpolation system."""
+    """the polynomial part is projected out, the rest is treated as a Gaussian process"""
+
+    n, m = P.shape
+    Q, _ = jnp.linalg.qr(P, mode="complete")
+    Q2 = Q[:, m:]
+    K_proj = Q2.T @ K @ Q2
+    d_proj = Q2.T @ d
+
+    L = jnp.linalg.cholesky(K_proj)
+    L_inv = jax.scipy.linalg.solve_triangular(L, jnp.eye(n - m), lower=True)
+
+    weighted_d_proj = L_inv @ d_proj
+    log_dist = jnp.log(jnp.sum(weighted_d_proj**2)) + jnp.sum(2.0 * jnp.log(jnp.diag(L))) / (n - m)
+
+    return log_dist
+
+
 def _build_and_solve_system(
     y: CV,
     metric: CvMetric,
@@ -101,9 +148,8 @@ def _build_and_solve_system(
     kernel,
     epsilon,
     powers,
-    periodicities: tuple[bool],
-    check=True,
-    return_lcov=False,
+    periodicities: tuple[bool, ...],
+    sigma: jax.Array | None = None,
 ):
     """Build and solve the RBF interpolation system of equations.
 
@@ -147,9 +193,6 @@ def _build_and_solve_system(
         periodicities=periodicities,
     )
 
-    if smoothing is not None:
-        K += smoothing**2 * jnp.eye(p)
-    # dK = eval_kernel_matrix(y, y, metric, epsilon, kernel_func, norm_jacobian=True)
     P = eval_polynomial_matrix(
         y,
         metric=metric,
@@ -157,9 +200,13 @@ def _build_and_solve_system(
         periodicities=periodicities,
     )
 
-    # print(f"{P=}")
+    b = jnp.vstack([d, jnp.zeros((r, s))])
 
-    # print(f"{dK=} {dK.shape}")
+    if smoothing is not None:
+        print(f"adding smoothing={smoothing}")
+        K += smoothing**2 * jnp.diag(sigma**2) if sigma is not None else jnp.diag(smoothing**2)
+
+    # print(f"{K=} {sigma=}")
 
     A = jnp.block(
         [
@@ -168,51 +215,14 @@ def _build_and_solve_system(
         ]
     )
 
-    l, U = jnp.linalg.eigh(A)
+    coeffs = jax.scipy.linalg.solve(A, b)
 
-    # Check condition number and lightly regularize tiny/zero eigenvalues to avoid numerical blow-up.
-    l_abs = jnp.abs(l)
-    lmax = jnp.max(l_abs)
-    lmin = jnp.min(l_abs)
+    # print(f"{coeffs=}")
 
-    # estimated condition number (use abs of eigenvalues)
-    cond = jnp.where(lmin == 0, jnp.inf, lmax / lmin)
+    # if sigma is not None:
+    #     coeffs = jnp.diag(jnp.hstack([sigma, jnp.zeros(r)])) @ coeffs
 
-    # # warn for ill-conditioning or singularity
-    # if jnp.isfinite(cond) and cond > 1e12:
-    #     warnings.warn(f"Ill-conditioned system: estimated condition number {float(cond):.3e}", UserWarning)
-    # elif not jnp.isfinite(cond):
-    #     warnings.warn("Singular system detected (zero eigenvalue). Regularizing tiny eigenvalues.", UserWarning)
-
-    # regularize eigenvalues smaller than machine-tolerance-scaled threshold
-    tol = lmax * max(A.shape) * jnp.finfo(l.dtype).eps * 10
-    # print(f"{tol=}")
-    small = jnp.abs(l) < tol
-    if jnp.any(small):
-        num_small = int(jnp.sum(small))
-        warnings.warn(f"Regularizing {num_small} eigenvalue(s) below tol={float(tol):.3e}", UserWarning)
-        l = jnp.where(small, tol, l)
-
-    b = jnp.vstack([d, jnp.zeros((r, s))])
-
-    # print(f"{l=}")
-
-    A_inv = U @ jnp.diag(l ** (-1)) @ U.T
-
-    # coeffs = jax.scipy.linalg.solve(A, b, assume_a="sym")
-
-    coeffs = A_inv @ b
-
-    if return_lcov:
-        soln = A_inv[:, :p] @ d
-        errors = soln[:p] / jnp.diag(A_inv[:p, :p])[:, None]
-        loocv = jnp.linalg.norm(errors)
-
-        # print(f"{loocv=}")
-
-        return coeffs, loocv
-
-    return coeffs
+    return coeffs, K, P
 
 
 class RBFInterpolator(MyPyTreeNode):
@@ -222,6 +232,7 @@ class RBFInterpolator(MyPyTreeNode):
     y: CV
     d: jax.Array
     smoothing: jax.Array | None
+
     epsilon: jax.Array
     powers: jax.Array
     metric: CvMetric
@@ -229,6 +240,7 @@ class RBFInterpolator(MyPyTreeNode):
     kernel: str = field(pytree_node=False)
     d_dtype: jnp.dtype | None = field(pytree_node=False, default=None)
     periodicities: tuple[bool] = field(pytree_node=False, default=None)
+    sigma: jax.Array | None = field(default=None)
 
     @classmethod
     def create(
@@ -236,10 +248,12 @@ class RBFInterpolator(MyPyTreeNode):
         y: CV,
         metric: CvMetric,
         d: jax.Array,
-        smoothing=-1,
+        smoothing: float | None | jax.Array = -1,
         kernel="thin_plate_spline",
         epsilon=None,
         degree=None,
+        smoothing_solver: str | None = "gml",
+        sigma: jax.Array | None = None,
     ):
         ny, ndim = y.shape
 
@@ -298,23 +312,18 @@ class RBFInterpolator(MyPyTreeNode):
                     UserWarning,
                 )
 
-        # if metric.periodicities.any():
-        #     assert degree <= 0, "degree>0 is untested!"
-
-        nobs = ny
-
         powers = _monomial_powers(ndim, degree, periodicities=metric.periodicities)
 
         # The polynomial matrix must have full column rank in order for the
         # interpolant to be well-posed, which is not possible if there are
         # fewer observations than monomials.
-        if powers.shape[0] > nobs:
+        if powers.shape[0] > ny:
             raise ValueError(
                 f"At least {powers.shape[0]} data points are required when "
                 f"`degree` is {degree} and the number of dimensions is {ndim}.",
             )
 
-        periodicities: tuple[bool] = tuple(bool(a) for a in metric.periodicities)
+        periodicities: tuple[bool, ...] = tuple(bool(a) for a in metric.periodicities)
 
         loocv = False
 
@@ -322,42 +331,54 @@ class RBFInterpolator(MyPyTreeNode):
             if jnp.any(smoothing < 0):
                 loocv = True
 
-        def score_fn(s_min, s_max, step):
-            s_vals = 10.0 ** (jnp.arange(s_min, s_max, step))
-            scores = []
+        if sigma is None:
+            sigma = jnp.ones(ny)
 
-            print(f"Using LOOCV to determine smoothing parameter, {s_vals=}")
-
-            for s in s_vals:
-                coeffs, score = _build_and_solve_system(
-                    y,
-                    metric,
-                    d,
-                    s,
-                    kernel,
-                    epsilon,
-                    powers,
-                    periodicities=periodicities,
-                    return_lcov=loocv,
-                )
-                if jnp.isnan(coeffs).any() or jnp.isinf(coeffs).any():
-                    continue
-
-                scores.append(score)
-
-            scores = jnp.array(scores)
-            best = jnp.nanargmin(scores)
-            smoothing = s_vals[best]
-            print(f"Choosing smoothing={smoothing} with l_cov={scores[best]} {scores=}")
-            return smoothing
+        # sigma_inv_d = d / sigma
 
         if loocv:
-            smoothing = score_fn(-5.0, 5.0, 1.0)
-            print(f"first order s {smoothing=}")
-            smoothing = score_fn(jnp.log10(smoothing) - 0.5, jnp.log10(smoothing) + 0.5, 0.1)
-            print(f"second order s {smoothing=}")
+            _, K, P = _build_and_solve_system(
+                y,
+                metric,
+                d,
+                0.0,
+                kernel,
+                epsilon,
+                powers,
+                periodicities=periodicities,
+                sigma=sigma,
+            )
 
-        coeffs = _build_and_solve_system(
+            def obj(log_smooth):
+                smooth = jnp.exp(log_smooth)
+
+                if smoothing_solver == "loocv":
+                    return _loocv(P, K + smooth**2 * jnp.diag(sigma**2), d)
+
+                return _gml(P, K + smooth**2 * jnp.diag(sigma**2), d)
+
+            from jaxopt import ScipyMinimize, GaussNewton, GradientDescent
+
+            print(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Starting {smoothing_solver} optimization of smoothing parameter...",
+            )
+
+            solver = GradientDescent(
+                fun=obj,
+                tol=1e-6,
+                maxiter=30,
+                verbose=True,
+            )
+
+            out = solver.run(0.0)
+
+            smoothing = jnp.exp(out.params)
+
+            print(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {smoothing_solver} selected smoothing={smoothing:.3e}, {out.state=}",
+            )
+
+        coeffs, _, _ = _build_and_solve_system(
             y,
             metric,
             d,
@@ -366,6 +387,7 @@ class RBFInterpolator(MyPyTreeNode):
             epsilon,
             powers,
             periodicities=periodicities,
+            sigma=sigma,
         )
 
         return RBFInterpolator(
@@ -379,6 +401,7 @@ class RBFInterpolator(MyPyTreeNode):
             powers=powers,
             metric=metric,
             periodicities=periodicities,  # type:ignore
+            sigma=sigma,
         )
 
     def __call__(self, x: CV):
@@ -418,6 +441,10 @@ class RBFInterpolator(MyPyTreeNode):
             self.powers,
             self.periodicities,
         )
+
+        # if self.sigma is not None:
+        #     # print("scaling back with sigma")
+        #     out = out * self.sigma
 
         if isbatched:
             return out.reshape((nx, -1))

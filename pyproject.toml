@@ -30,8 +30,10 @@ authors = [
     {name = "David Devoogdt", email = "david.devoogdt@ugent.be"},
     {name = "David Devoogdt", email = "david.devoogdt@gmail.com"},
 ]
-dependencies = [ "cloudpickle", "filelock", "importlib-metadata", "matplotlib", "openmm", "ase", "distrax", "dm-haiku", "flax", "h5py", "hsluv", "jax", "jaxlib", "jaxopt", "jsonpickle", "mace-torch", "optax", "ott-jax", "parsl", "umap-learn", "work-queue", "ty", "pymanopt",
+dependencies = [ "cloudpickle", "filelock", "importlib-metadata", "matplotlib", "openmm", "ase>=3.26.0,<4", "distrax>=0.1.7,<0.2", "dm-haiku>=0.0.15,<0.0.16", "flax>=0.12.0,<0.13", "h5py>=3.15.1,<4", "hsluv>=5.0.4,<6", "jaxopt>=0.8.5,<0.9", "jsonpickle>=4.1.1,<5", "mace-torch>=0.3.14,<0.4", "optax>=0.2.6,<0.3", "ott-jax>=0.6.0,<0.7", "parsl>=2025.11.17,<2026", "umap-learn>=0.5.9.post2,<0.6", "work-queue>=0.0.1,<0.0.2", "ivy>=1.0.0.5,<2", "jax[cuda13]>=0.8.0,<0.9", "jaxlib>=0.8.0,<0.9", "torch2jax>=0.1.0,<0.2", "e3nn-jax>=0.20.8,<0.21", "wrap-torch2jax>=0.7.0,<0.8", "ninja>=1.13.0,<2", "cuequivariance>=0.7.0,<0.8", "cuequivariance-torch>=0.7.0,<0.8", "cuequivariance-ops-torch-cu13>=0.7.0,<0.8",
 ]
+
+
 
 readme = "README.md"
 license = {text = "MIT"}
@@ -85,13 +87,18 @@ testpaths = [
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
+
+
 [tool.pixi.pypi-dependencies]
+molmod = { path = "ext/molmod", editable = true }
+thermolib = { path = "ext/ThermoLIB", editable = true }
+mace_jax = { path = "ext/mace-jax", editable = true }
+#psiflow = { path = "ext/psiflow", editable = true }
 IMLCV = { path = ".", editable = true }
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
-
 lint = { features = ["lint"], solve-group = "default" }
 test = { features = ["test"], solve-group = "default" }
 
@@ -99,9 +106,10 @@ test = { features = ["test"], solve-group = "default" }
 
 [tool.pixi.dependencies]
 python = "3.12.*"
-ruff = "*"
-jupyter = "*"
-pre-commit = "*"
-ndcctools = "*"
-pytest = "*"
-openmmforcefields = "*"
+ruff = ">=0.14.5,<0.15"
+jupyter = ">=1.1.1,<2"
+pre-commit = ">=4.4.0,<5"
+ndcctools = ">=7.15.14,<8"
+pytest = ">=9.0.1,<10"
+openmmforcefields = ">=0.15.0,<0.16"
+cudatoolkit-dev = ">=11.7.0,<12"

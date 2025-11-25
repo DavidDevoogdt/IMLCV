@@ -12,7 +12,7 @@ from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
-from IMLCV.base.UnitsConstants import boltzmann, kjmol
+from IMLCV.base.UnitsConstants import boltzmann, kjmol, angstrom
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import HarmonicBias
 
@@ -179,7 +179,7 @@ class Scheme:
     def inner_loop(
         self,
         rnds=10,
-        convergence_kl=0.1,
+        convergence_kl=0.1 * kjmol,
         # init=0,
         steps=5e4,
         K=None,
@@ -204,6 +204,7 @@ class Scheme:
         max_grad=100 * kjmol,
         vmax: float = 100 * kjmol,
         n_max_fes=1e5,
+        n_max_lin=100,
         thermolib=False,
         macro_chunk=10000,
         # T_scale=10,
@@ -256,10 +257,10 @@ class Scheme:
                 print("kl div exactly zero, assuming it's not a real bias")
             else:
                 if kl_div < convergence_kl:
-                    print(f"already converged {kl_div=}")
+                    print(f"already converged {kl_div/kjmol=}")
                     return
                 else:
-                    print(f"not converged {kl_div=}")
+                    print(f"not converged {kl_div/kjmol=}")
 
         print(f"{i_0=}")
 
@@ -322,6 +323,7 @@ class Scheme:
                     out=out,
                     direct_bias=direct_bias,
                     executors=executors,
+                    n_max_lin=n_max_lin,
                 )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)
@@ -332,7 +334,7 @@ class Scheme:
                 symmetric=True,
             )
 
-            print(f"{kl_div=}")
+            print(f"{kl_div/kjmol=}")
 
             if kl_div < convergence_kl:
                 break
@@ -346,6 +348,7 @@ class Scheme:
         chunk_size=None,
         plot=True,
         new_r_cut=None,
+        new_r_skin: float | None = 2.0 * angstrom,
         save_samples=True,
         save_multiple_cvs=False,
         jac=jax.jacrev,
@@ -371,6 +374,7 @@ class Scheme:
             chunk_size=chunk_size,
             plot=plot,
             new_r_cut=new_r_cut,
+            new_r_skin=new_r_skin,
             save_samples=save_samples,
             save_multiple_cvs=save_multiple_cvs,
             jac=jac,

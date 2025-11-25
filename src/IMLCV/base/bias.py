@@ -50,14 +50,14 @@ class EnergyResult(MyPyTreeNode):
         assert isinstance(other, EnergyResult)
 
         gpos = self.gpos
-        if self.gpos is None:
+        if gpos is None:
             assert other.gpos is None
         else:
             assert other.gpos is not None
             gpos += other.gpos
 
         vtens = self.vtens
-        if self.vtens is None:
+        if vtens is None:
             assert other.vtens is None
         else:
             assert other.vtens is not None
@@ -335,9 +335,6 @@ class Bias(ABC, MyPyTreeNode):
     start: int | None = field(pytree_node=False, default=0)
     step: int | None = field(pytree_node=False, default=1)
     finalized: bool = field(pytree_node=False, default=False)
-    slice_exponent: float = field(pytree_node=False, default=1.0)
-    log_exp_slice: bool = field(pytree_node=False, default=True)
-    slice_mean: bool = field(pytree_node=False, default=False)
 
     @staticmethod
     def create(*args, **kwargs) -> Bias:
@@ -523,7 +520,7 @@ class Bias(ABC, MyPyTreeNode):
         # if return_cv:
         return cvs, ener_out
 
-    @partial(jit_decorator, static_argnames=["diff", "chunk_size", "shmap", "shmap_kwargs"])
+    @partial(jit_decorator, static_argnames=["diff", "chunk_size", "shmap"])
     def compute_from_cv(
         self,
         cvs: CV,
@@ -590,7 +587,7 @@ class Bias(ABC, MyPyTreeNode):
 
         if traj is None and dlo is not None:
             assert dlo_kwargs is not None
-            traj = dlo.data_loader(**dlo_kwargs)[0].cv
+            traj = dlo.data_loader(**dlo_kwargs).cv
 
         bias = self
 
@@ -620,7 +617,6 @@ class Bias(ABC, MyPyTreeNode):
 
     def resample(self, cv_grid: CV | None = None, n=40, margin=0.3) -> Bias:
         # return same bias, but as gridded bias
-        from IMLCV.implementations.bias import GridBias
 
         assert self.collective_variable is not None
 
@@ -712,7 +708,8 @@ class Bias(ABC, MyPyTreeNode):
         margin = 1e-10
 
         colvar = self.collective_variable
-        assert self.collective_variable is not None
+        assert colvar is not None
+
         bins, _, grid, _, _ = colvar.metric.grid(n=50, margin=0.1)
 
         beta = 1 / (boltzmann * T)
@@ -771,7 +768,9 @@ class Bias(ABC, MyPyTreeNode):
             kl += jnp.sum(f(p_other, p_self))  # type: ignore
             kl *= 0.5
 
-        return kl
+        # express in kjmol
+
+        return kl * (boltzmann * T)  # type: ignore
 
     def slice(
         self,
@@ -779,7 +778,7 @@ class Bias(ABC, MyPyTreeNode):
         inverted=True,
         vmax=None,
         n_max_bias=1e5,
-        margin=0.2,
+        margin=0.1,
         macro_chunk=10000,
         offset=True,
     ) -> dict[int, dict[tuple[int], Bias]]:
@@ -794,19 +793,11 @@ class Bias(ABC, MyPyTreeNode):
             margin=margin,
         )
 
+        # assert cv.shape[0] == n_grid
+
         x = self.apply([cv], macro_chunk_size=macro_chunk)[0]
 
-        if not self.log_exp_slice:
-            x /= boltzmann * T
-        else:
-            x /= boltzmann * T
-
-        # print(f"{jnp.sort(x)=}")
-
-        # if self.log_exp_slice:
-        #     w = jnp.exp(w)
-
-        # print(f"{x=}")
+        x /= boltzmann * T
 
         x = x.reshape((n_grid,) * self.collective_variable.n)
 
@@ -816,8 +807,6 @@ class Bias(ABC, MyPyTreeNode):
 
         from itertools import combinations
 
-        # free_energies[cvi.n] = dict()
-
         for nd in range(cvi.n):
             free_energies[nd + 1] = dict()
 
@@ -826,71 +815,22 @@ class Bias(ABC, MyPyTreeNode):
                 dims = jnp.delete(dims, jnp.array(tup))
                 dims = tuple([int(a) for a in dims])
 
-                # print(f"{tup=} {dims=} ")
+                def _f(x):
+                    x_max = jnp.nanmax(x)
 
-                # print(f"{w_max=}")
+                    return jnp.log(jnp.nansum(jnp.exp((x - x_max)))) + x_max
 
-                # print(f"{self.log_exp_slice=}")
+                for i, d in enumerate(jnp.flip(jnp.array(tup))):
+                    n_before = len(tup) - i - 1
 
-                if self.log_exp_slice:
+                    _f = vmap_decorator(_f, in_axes=int(d - n_before))
 
-                    def _f(x):
-                        x_max = jnp.nanmax(x)
+                x_sum = _f(x)
 
-                        return (
-                            jnp.log(jnp.nansum(jnp.exp((x - x_max) * self.slice_exponent)))
-                            + x_max * self.slice_exponent
-                        )
+                values = x_sum * boltzmann * T
 
-                    # print(f"{tup=}")
-
-                    for i, d in enumerate(jnp.flip(jnp.array(tup))):
-                        # print(f"vmap_decoratorping over {i=} {d=} {d-i=}")
-
-                        n_before = len(tup) - i - 1
-
-                        # print(f"{n_before=} {d=} {i=} {d-n_before}")
-
-                        _f = vmap_decorator(_f, in_axes=int(d - n_before))
-
-                    x_sum = _f(x)
-
-                    # print(f"{x_sum=}")
-                    # result is in reverse order
-
-                    # x_sum = jnp.transpose(x_sum)  # reverses order of all axes
-
-                    # x_sum = jnp.apply_over_axes(_f, x, dims)
-
-                else:
-                    x_sum = jnp.nansum(x**self.slice_exponent, axis=dims)
-
-                # print(f"{x_sum=}")
-
-                if self.log_exp_slice:
-                    x_sum /= self.slice_exponent
-                else:
-                    x_sum = x_sum ** (1 / self.slice_exponent)
-
-                # print(f"{x_sum=}")
-
-                if self.log_exp_slice:
-                    # output is log exp slice
-                    values = x_sum * boltzmann * T
-
-                else:
-                    print(f"{x_sum=}")
-                    values = x_sum * (boltzmann * T)
-
-                # if inverted:
-                #     values = -values
-
-                if offset and self.log_exp_slice:
+                if offset:
                     values -= jnp.nanmax(values)
-
-                # print(f"{values=}")
-
-                from IMLCV.implementations.bias import GridBias
 
                 fes_nd = GridBias(
                     collective_variable=self.collective_variable[tup],
@@ -939,7 +879,7 @@ class CompositeBias(Bias):
             if colvar_path is None:
                 colvar_path = b.collective_variable_path
 
-            b.collective_variable = None
+            # b.collective_variable = None
 
             biases_new.append(b)
 
@@ -1000,7 +940,7 @@ class BiasModify(Bias):
     @classmethod
     def create(cls, fun: Callable, bias: Bias, kwargs: dict = {}, static_kwargs: dict = {}) -> BiasModify:  # type: ignore[override]
         colvar = bias.collective_variable
-        bias.collective_variable = None
+        # bias.collective_variable = None
 
         return BiasModify(
             collective_variable=colvar,
@@ -1069,3 +1009,248 @@ class NoneBias(BiasF):
             collective_variable=collective_variable,
             g=_zero_fun,
         )
+
+
+class GridBias(Bias):
+    """Bias interpolated from lookup table on uniform grid.
+
+    values are caluclated in bin centers
+    """
+
+    n: int
+    bounds: jax.Array
+    vals: jax.Array
+    order: int = field(pytree_node=False, default=1)
+
+    @staticmethod
+    def adjust_bounds(bounds: Array, n) -> Array:
+        print(f"new")
+        diff = (bounds[:, 1] - bounds[:, 0]) / n  # space for each bin
+        print(f"{diff=}")
+        return jnp.array([[bounds[i, 0] + diff[i] / 2, bounds[i, 1] - diff[i] / 2] for i in range(bounds.shape[0])])
+
+    @classmethod
+    def create(
+        cls,
+        cvs: CollectiveVariable,
+        bias: Bias,
+        n=30,
+        bounds: Array | None = None,
+        margin=0.1,
+        order=1,
+    ) -> GridBias:
+        grid, _, cv, _, bounds = cvs.metric.grid(
+            n=n,
+            bounds=bounds,
+            margin=margin,
+        )
+
+        vals, _ = bias.compute_from_cv(cv)
+
+        vals = vals.reshape((n,) * cvs.n)
+
+        return GridBias(
+            collective_variable=cvs,
+            n=n,
+            vals=vals,
+            bounds=bounds,
+            order=order,
+        )
+
+    def _compute(self, cvs: CV):
+        # map between vals 0 and 1
+        # if self.bounds is not None:
+        coords = (cvs.cv - self.bounds[:, 0]) / (self.bounds[:, 1] - self.bounds[:, 0])
+
+        import jax.scipy as jsp
+
+        # def f(x):
+        return jsp.ndimage.map_coordinates(
+            self.vals,
+            coords * (self.n - 1),  # type:ignore
+            mode="constant",
+            cval=jnp.nan,
+            order=self.order,
+        )
+
+    def slice(
+        self,
+        T,
+        inverted=True,
+        vmax=None,
+        n_max_bias=1e5,
+        margin=0.2,
+        macro_chunk=10000,
+        offset=True,
+    ) -> dict[int, dict[tuple[int], Bias]]:
+        # not only transform free energy, but also comopute std
+
+        free_energies = []
+
+        assert self.collective_variable is not None
+
+        log_w = self.vals / (boltzmann * T)
+
+        n_grid = self.n
+        bounds = self.bounds
+        order = self.order
+
+        cvi = self.collective_variable
+
+        free_energies = dict()
+
+        from itertools import combinations
+
+        for nd in range(cvi.n):
+            free_energies[nd + 1] = dict()
+
+            for tup in combinations(range(cvi.n), nd + 1):
+                print(f" {nd=} {tup=}")
+
+                dims = jnp.arange(cvi.n)
+                dims = jnp.delete(dims, jnp.array(tup))
+                dims = tuple([int(a) for a in dims])
+
+                def _log_sum_exp(x, fac=1.0):
+                    x_max = jnp.nanmax(x)
+
+                    return jnp.log(jnp.nansum(jnp.exp(fac * (x - x_max)))) + fac * x_max
+
+                _f_n = _log_sum_exp
+                print(f"new f")
+
+                for i, d in enumerate(jnp.flip(jnp.array(tup))):
+                    n_before = len(tup) - i - 1
+
+                    _f_n = vmap_decorator(_f_n, in_axes=int(d - n_before))
+
+                log_w_sum = _f_n(log_w)
+
+                if offset:
+                    log_w_sum -= jnp.nanmax(log_w_sum)
+
+                w_nd = GridBias(
+                    collective_variable=self.collective_variable[tup],
+                    n=n_grid,
+                    vals=log_w_sum * (boltzmann * T),
+                    bounds=bounds[jnp.array(tup)],
+                    order=order,
+                )
+
+                free_energies[nd + 1][tup] = w_nd
+
+        return free_energies
+
+
+class StdBias(Bias):
+    """Class that keeps track of variance of bias."""
+
+    _bias: GridBias  # F
+    _log_exp_sigma: GridBias  # sigma e^(-beta F)
+    T: float = field(pytree_node=False, default=300.0)
+
+    @staticmethod
+    def create(bias: GridBias, log_exp_sigma: GridBias) -> StdBias:  # type:ignore
+        colvar = bias.collective_variable
+
+        assert bias.n == log_exp_sigma.n
+
+        return StdBias(
+            collective_variable=colvar,
+            collective_variable_path=bias.collective_variable_path,
+            _bias=bias,
+            _log_exp_sigma=log_exp_sigma,
+            start=0,
+            step=1,
+            finalized=bias.finalized and log_exp_sigma.finalized,
+        )
+
+    def _compute(self, cvs):
+        print(f"new test  {cvs=}")
+
+        return -jnp.exp(self._log_exp_sigma._compute(cvs) - self._bias._compute(cvs) / (boltzmann * self.T))
+
+    def slice(
+        self,
+        T,
+        inverted=True,
+        vmax=None,
+        n_max_bias=1e5,
+        margin=0.2,
+        macro_chunk=10000,
+        offset=True,
+    ) -> dict[int, dict[tuple[int], Bias]]:
+        # not only transform free energy, but also comopute std
+
+        free_energies = []
+
+        assert self.collective_variable is not None
+
+        log_w = self._bias.vals / (boltzmann * T)
+        w_sigma = self._log_exp_sigma.vals
+
+        n_grid = self._bias.n
+
+        bounds = self._bias.bounds
+        order = self._bias.order
+
+        # print(f"{n_grid=} {bounds=} ")
+
+        cvi = self.collective_variable
+
+        free_energies = dict()
+
+        from itertools import combinations
+
+        for nd in range(cvi.n):
+            free_energies[nd + 1] = dict()
+
+            for tup in combinations(range(cvi.n), nd + 1):
+                print(f" {nd=} {tup=}")
+
+                dims = jnp.arange(cvi.n)
+                dims = jnp.delete(dims, jnp.array(tup))
+                dims = tuple([int(a) for a in dims])
+
+                def _log_sum_exp(x, fac=1.0):
+                    x_max = jnp.nanmax(x)
+
+                    return jnp.log(jnp.nansum(jnp.exp(fac * (x - x_max)))) + fac * x_max
+
+                _f_n = _log_sum_exp
+                print(f"new f")
+
+                for i, d in enumerate(jnp.flip(jnp.array(tup))):
+                    n_before = len(tup) - i - 1
+
+                    _f_n = vmap_decorator(_f_n, in_axes=(int(d - n_before), None))
+
+                log_w_sum = _f_n(log_w, 1.0)
+                log_sigma_sum = _f_n(w_sigma, 2.0) / 2.0
+
+                # print(f"{n_grid=} {bounds=}")
+
+                w_nd = GridBias(
+                    collective_variable=self.collective_variable[tup],
+                    n=n_grid,
+                    vals=log_w_sum * (boltzmann * T),
+                    bounds=bounds[jnp.array(tup)],
+                    order=order,
+                )
+
+                w_sigma_sq_nd = GridBias(
+                    collective_variable=self.collective_variable[tup],
+                    n=n_grid,
+                    vals=log_sigma_sum,
+                    bounds=bounds[jnp.array(tup)],
+                    order=order,
+                )
+
+                bias_std = StdBias.create(
+                    bias=w_nd,
+                    log_exp_sigma=w_sigma_sq_nd,
+                )
+
+                free_energies[nd + 1][tup] = bias_std
+
+        return free_energies

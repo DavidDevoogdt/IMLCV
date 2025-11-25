@@ -278,7 +278,7 @@ class TranformerAutoEncoder(Transformer):
         if cv_t is not None:
             cv_t = f_enc.compute_cv(_cv_t)[0].unstack()
 
-        return cv, cv_t, un_atomize * f_enc, w, None
+        return cv, cv_t, un_atomize * f_enc, w, None, None
 
 
 def _LDA_trans(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, alpha, outdim, solver):
@@ -452,7 +452,7 @@ class TransoformerLDA(Transformer):
 
             full_trans = un_atomize * _f * _g
 
-        return cv.unstack(), cv_t.unstack(), full_trans, w, None
+        return cv.unstack(), cv_t.unstack(), full_trans, w, None, None
 
 
 class TransformerMAF(Transformer):
@@ -468,6 +468,9 @@ class TransformerMAF(Transformer):
 
     min_t_frac: float = 0.1
     max_t_cutoff = 0.01 * nanosecond
+    periodicities: jax.Array | None = None
+
+    add_1: bool = True
 
     trans: CvTrans | None = None
     T_scale: float = 1.0
@@ -585,8 +588,8 @@ class TransformerMAF(Transformer):
                 macro_chunk=macro_chunk,
                 calc_pi=True,
                 add_1=True,
-                eps_pre=self.eps,
-                eps=self.eps_pre,
+                eps_pre=self.eps_pre,
+                eps=self.eps,
                 symmetric=True,
                 trans=self.trans,
                 verbose=True,
@@ -594,8 +597,9 @@ class TransformerMAF(Transformer):
                 max_features=self.max_features,
                 max_features_pre=self.max_features_pre,
                 T_scale=self.T_scale,
-                shrink=False,
+                shrink=True,
                 generator=True,
+                periodicities=self.periodicities,
                 # shrinkage_method="BC",
             )
 
@@ -610,27 +614,28 @@ class TransformerMAF(Transformer):
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
                 calc_pi=True,
-                add_1=True,
-                eps_pre=self.eps,
-                eps=self.eps_pre,
-                symmetric=False,
+                add_1=self.add_1,
+                eps_pre=self.eps_pre,
+                eps=self.eps,
+                symmetric=self.sym,
                 trans=self.trans,
                 verbose=True,
                 # auto_cov_threshold=0.1,
                 max_features=self.max_features,
                 max_features_pre=self.max_features_pre,
-                T_scale=1.0,
+                T_scale=self.T_scale,
                 shrink=False,
+                periodicities=self.periodicities,
                 # shrinkage_method="BC",
             )
 
             # if self.sym:
-            km = km.weighted_model(
-                symmetric=True,
-                shrink=True,
-                add_1=True,
-                # T_scale=self.T_scale,
-            )
+            #     km = km.weighted_model(
+            #         symmetric=True,
+            #         shrink=False,
+            #         add_1=self.add_1,
+            #         # T_scale=self.T_scale,
+            #     )
 
         # assert km.w is not None
         # w = km.w
@@ -681,7 +686,7 @@ class TransformerMAF(Transformer):
 
         exta_info = [f"{ts[i]:.4f}" for i in range(self.outdim)]
 
-        trans_km = km.f(
+        trans_km, per = km.f(
             out_dim=outdim,
             n_skip=None,
             remove_constant=True,
@@ -701,4 +706,4 @@ class TransformerMAF(Transformer):
             verbose=True,
         )
 
-        return (x, x_t, trans_km, w, exta_info)
+        return (x, x_t, trans_km, w, exta_info, per)

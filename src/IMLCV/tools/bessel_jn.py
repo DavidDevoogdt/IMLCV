@@ -312,7 +312,7 @@ def j0(z):
 
 
 @functools.partial(jit_decorator, static_argnames=["v", "maxiter"])
-def _besseljn_power_series(z, v: int, maxiter: int = 100):
+def _besseljn_power_series(z, v, maxiter: int = 100):
     """
     Power series expansion of the Bessel function of the first kind at z << v
     """
@@ -332,7 +332,7 @@ def _besseljn_power_series(z, v: int, maxiter: int = 100):
 
 
 @functools.partial(jit_decorator, static_argnames=["v", "n_iter"])
-def _besseljn_backward_recurrence(z, v: int, n_iter: int):
+def _besseljn_backward_recurrence(z, v, n_iter: int):
     """
     Implementation of Miller's backward recurrence algorithm for computing Bessel function of the first kind at x < v
     """
@@ -374,7 +374,7 @@ def besseljn_backward_recurrence_cutoff(v, z):
 
 
 @functools.partial(jit_decorator, static_argnames=["v"])
-def _besseljn_forward_recurrence(z, v: int):
+def _besseljn_forward_recurrence(z, v):
     """
     This is a stripped down version of the proposed Bessel function
     """
@@ -461,7 +461,7 @@ def bessel_jn(v, z):
                 j0(zabs),
                 j1(zabs),
                 _besseljn_power_series(zabs, v=vabs),
-                _besseljn_backward_recurrence(zabs, v=vabs, n_iter=n_iter),
+                _besseljn_backward_recurrence(zabs, v=vabs, n_iter=n_iter),  # type: ignore
                 _besseljn_forward_recurrence(zabs, vabs),
             ],
         )

@@ -55,6 +55,18 @@ def _Volume(
 Volume = CvTrans.from_cv_function(_Volume)
 
 
+def _real(
+    x: CV,
+    nl,
+    shmap,
+    shmap_kwargs,
+):
+    return x.replace(cv=jnp.angle(x.cv))
+
+
+cv_trans_real = CvTrans.from_cv_function(_real)
+
+
 def _lattice_invariants(
     sp: SystemParams,
     nl,
@@ -564,18 +576,18 @@ def _pip_pol(
     trips,
     quads,
     r_cut=3 * angstrom,
-    a=0.5 * angstrom,
+    r_delta=0.5 * angstrom,
 ):
-    # def f_cut(r: Array, r_cut, r_delta) -> Array:
-    #     return jax.lax.cond(
-    #         r > r_cut,
-    #         lambda: 0.0,
-    #         lambda: jax.lax.cond(
-    #             r < r_cut - r_delta,
-    #             lambda: 1.0,
-    #             lambda: jnp.exp(-1 / (1 - ((r - (r_cut - r_delta)) / r_delta) ** 4) + 1),
-    #         ),
-    #     )
+    def f_cut(r: Array, r_cut, r_delta) -> Array:
+        return jax.lax.cond(
+            r > r_cut,
+            lambda: 0.0,
+            lambda: jax.lax.cond(
+                r < r_cut - r_delta,
+                lambda: 1.0,
+                lambda: jnp.exp(-1 / (1 - ((r - (r_cut - r_delta)) / r_delta) ** 4) + 1),
+            ),
+        )
 
     def get_u(x1, x2):
         r = jnp.sum((x1 - x2) ** 2)
@@ -583,9 +595,9 @@ def _pip_pol(
         r_safe = jnp.where(r == 0, 1.0, r)
         r = jnp.where(r == 0, 0.0, jnp.sqrt(r_safe))
 
-        # u = jnp.exp(-r / a) * f_cut(r, r_cut, r_cut)
+        u = r / r_cut * f_cut(r, r_cut, r_delta)
 
-        return r
+        return u
 
     @jax.jit
     def generate_f2_terms(p):
@@ -669,7 +681,7 @@ def pip_pol(pairs: Array, trips: Array, quads: Array, r_cut=3 * angstrom, a=0.5 
         trips=trips,
         quads=quads,
         r_cut=r_cut,
-        a=a,
+        r_delta=a,
     )
 
 
@@ -778,6 +790,272 @@ def get_pair_pol(n_max=3, sp: SystemParams | None = None, nl: NeighbourList | No
 # pair_pol = CvTrans.from_cv_function(_get_pair_pol)
 
 
+def _pol_features(
+    sp: SystemParams,
+    _nl,
+    shmap,
+    shmap_kwargs,
+    pairs,
+    trips,
+    quads,
+    r_cut=3 * angstrom,
+    r_delta=0.5 * angstrom,
+    max_deg_n=2,
+    max_deg_l=2,
+):
+    # print(f"pol_features called with {pairs=}, {trips=}, {quads=} {r_cut=}, {r_delta=}, {max_deg=}")
+
+    def f_cut(r: Array, r_cut, r_delta) -> Array:
+        return jax.lax.cond(
+            r > r_cut,
+            lambda: 0.0,
+            lambda: jax.lax.cond(
+                r < r_cut - r_delta,
+                lambda: 1.0,
+                lambda: jnp.exp(-1 / (1 - ((r - (r_cut - r_delta)) / r_delta) ** 4) + 1),
+            ),
+        )
+
+    def get_u(x1, x2):
+        r = jnp.sum((x1 - x2) ** 2)
+
+        r_safe = jnp.where(r == 0, 1.0, r)
+        r = jnp.where(r == 0, 0.0, jnp.sqrt(r_safe))
+        r_inv = jnp.where(r == 0, 0.0, 1 / r_safe)
+
+        return x1 - x2, r, r_inv, f_cut(r, r_cut, r_delta)
+
+    @jax.jit
+    def generate_f2_terms(p):
+        _, r, _, fc = get_u(p[0], p[1])
+        out = r ** jnp.arange(max_deg_n + 1) * fc
+
+        # print(f"f2 terms: {out=}")
+        return out
+
+    @jax.jit
+    def generate_f3_terms(p):
+        x1, _, r1_inv, f1 = get_u(p[0], p[1])
+        x2, _, r2_inv, f2 = get_u(p[2], p[1])
+
+        cos_theta = jnp.dot(x1 * r1_inv, x2 * r2_inv)
+        theta = jnp.arccos(jnp.clip(cos_theta, -1.0, 1.0))
+
+        return theta ** jnp.arange(max_deg_l + 1)
+
+    @jax.jit
+    def generate_f4_terms(p):
+        p0, p1, p2, p3 = p[0], p[1], p[2], p[3]
+
+        b0 = -1.0 * (p1 - p0)
+        b1 = p2 - p1
+        b2 = p3 - p2
+
+        b1, _ = _norm_safe(b1)
+
+        v = b0 - jnp.dot(b0, b1) * b1
+        w = b2 - jnp.dot(b2, b1) * b1
+
+        v, _ = _norm_safe(v)
+        w, _ = _norm_safe(w)
+
+        cos = jnp.dot(v, w)
+        sin = jnp.dot(jnp.cross(b1, v), w)
+
+        theta = jnp.arctan2(sin, cos)
+
+        # out = theta * jnp.arange(max_deg_l + 1)
+
+        return theta * jnp.arange(max_deg_l + 1)
+
+    out = []
+
+    if pairs is not None:
+        vals_f2 = jax.vmap(generate_f2_terms)(sp.coordinates[pairs])
+        out.append(vals_f2.flatten())
+
+    if trips is not None:
+        vals_f3 = jax.vmap(generate_f3_terms)(sp.coordinates[trips])
+        out.append(vals_f3.flatten())
+
+    if quads is not None:
+        vals_f4 = jax.vmap(generate_f4_terms)(sp.coordinates[quads])
+        out.append(vals_f4.flatten())
+
+    if len(out) == 0:
+        raise ValueError("provide at least pairs, trips or quads")
+
+    vals = jnp.concatenate(out, axis=0)
+
+    return CV(cv=vals)
+
+
+def pol_features(
+    pairs: Array, trips: Array, quads: Array, r_cut=3 * angstrom, a=0.5 * angstrom, max_deg_n=2, max_deg_l=2
+):
+    periodic = []
+    if pairs is not None:
+        periodic.extend([False] * (max_deg_n + 1) * pairs.shape[0])
+    if trips is not None:
+        periodic.extend([False] * (max_deg_l + 1) * trips.shape[0])
+    if quads is not None:
+        periodic.extend([True] * (max_deg_l + 1) * quads.shape[0])
+
+    return CvTrans.from_cv_function(
+        _pol_features,
+        static_argnames=["max_deg_l", "max_deg_n"],
+        pairs=pairs,
+        trips=trips,
+        quads=quads,
+        r_cut=r_cut,
+        r_delta=a,
+        max_deg_l=max_deg_l,
+        max_deg_n=max_deg_n,
+    ), jnp.array(periodic)
+
+
+def _pair_features_2(
+    sp: SystemParams,
+    _nl,
+    shmap,
+    shmap_kwargs,
+    pairs,
+    neg_deg_n=2,
+    pos_deg_n=2,
+    r_cut: float = 3 * angstrom,
+):
+    def get_u(x1, x2):
+        r = jnp.sum((x1 - x2) ** 2)
+        r /= r_cut**2
+
+        r_safe = jnp.where(r == 0, 1.0, r)
+        r = jnp.where(r == 0, 0.0, jnp.sqrt(r_safe))
+        r_inv = jnp.where(r == 0, 0.0, 1 / r_safe)
+
+        return r, r_inv
+
+    @jax.jit
+    def generate_f2_terms(p):
+        r, r_inv = get_u(p[0], p[1])
+
+        out = jnp.hstack([r ** jnp.arange(1, pos_deg_n + 1), r_inv ** jnp.arange(1, neg_deg_n + 1)])
+
+        return out
+
+    vals = jax.vmap(generate_f2_terms)(sp.coordinates[pairs]).flatten()
+
+    print(f"pair features 2 {vals.shape=}")
+
+    return CV(cv=vals)
+
+
+def pair_features_2(pairs: Array, neg_deg_n=2, pos_deg_n=2, r_cut: float = 3 * angstrom):
+    return CvTrans.from_cv_function(
+        _pair_features_2,
+        static_argnames=["neg_deg_n", "pos_deg_n"],
+        pairs=pairs,
+        neg_deg_n=neg_deg_n,
+        pos_deg_n=pos_deg_n,
+        r_cut=r_cut,
+    )
+
+
+def _linear_layer_apply_rule(
+    kwargs,
+    static_kwargs,
+):
+    print(f"apply rule linear layer")
+
+    spectral_norm = static_kwargs.get("spectral_norm", False)
+
+    if spectral_norm:
+        weights = kwargs["weights"]
+        sigma = jnp.linalg.norm(weights, ord=2)
+
+        kwargs["weights"] = weights / sigma
+
+    return kwargs
+
+
+def _linear_layer(
+    x: CV,
+    _nl,
+    shmap,
+    shmap_kwargs,
+    weights: jnp.ndarray,
+    biases: jnp.ndarray,
+    spectral_norm=False,
+):
+    print(f"{weights=},{biases=}")
+
+    # if spectral_norm:
+    #     sigma = jnp.linalg.norm(weights, ord=2)
+
+    #     weights = weights / sigma
+
+    return x.replace(cv=weights @ x.cv + biases)
+
+
+def linear_layer(
+    weights: jnp.ndarray,
+    biases: jnp.ndarray,
+    spectral_norm: bool = False,
+) -> CvTrans:
+    return CvTrans.from_cv_function(
+        _linear_layer,
+        learnable_argnames=["weights", "biases"],
+        static_argnames=["spectral_norm"],
+        weights=weights,
+        biases=biases,
+        spectral_norm=spectral_norm,
+        apply_rule=_linear_layer_apply_rule,
+    )
+
+
+activation_functions = {
+    "relu": jax.nn.relu,
+    "tanh": jnp.tanh,
+    "sigmoid": jax.nn.sigmoid,
+    "swish": jax.nn.swish,
+    "gelu": jax.nn.gelu,
+    "softplus": jax.nn.softplus,
+    "selu": jax.nn.selu,
+    "leaky_relu": jax.nn.leaky_relu,
+    "elu": jax.nn.elu,
+    "hard_sigmoid": jax.nn.hard_sigmoid,
+    "hard_swish": jax.nn.hard_swish,
+    "softsign": jax.nn.soft_sign,
+}
+
+
+def _activation_layer(
+    x: CV,
+    _nl,
+    shmap,
+    shmap_kwargs,
+    activation: str,
+):
+    func = activation_functions.get(activation)
+
+    if func is None:
+        return x
+
+    return x.replace(cv=func(x.cv))
+
+
+def get_activation_trans(name: str):
+    name = name.lower()
+    assert name in activation_functions, (
+        f"activation {name} not recognized. Available: {list(activation_functions.keys())}"
+    )
+
+    return CvTrans.from_cv_function(
+        _activation_layer,
+        static_argnames=["activation"],
+        activation=name,
+    )
+
+
 ######################################
 #           CV trans                 #
 ######################################
@@ -837,13 +1115,25 @@ def _scale_cv_trans(x, nl, shmap, shmap_kwargs, upper, lower, mini, diff):
     return x.replace(cv=((x.cv - mini) / diff) * (upper - lower) + lower)
 
 
-def scale_cv_trans(array: CV, lower: float = 0.0, upper: float = 1.0):
+def scale_cv_trans(array: CV, lower: float = 0.0, upper: float = 1.0, periodic: jax.Array | None = None) -> CvTrans:
     "axis 0 is batch axis"
     maxi = jnp.nanmax(array.cv, axis=0)
     mini = jnp.nanmin(array.cv, axis=0)
 
     diff = maxi - mini
     diff = jnp.where(diff == 0, 1, diff)
+
+    upper = jnp.full_like(maxi, upper)
+    lower = jnp.full_like(mini, lower)
+
+    if periodic is not None:
+        mini = jnp.where(periodic, 0.0, mini)
+        diff = jnp.where(periodic, 1.0, diff)
+
+        upper = jnp.where(periodic, 1.0, upper)
+        lower = jnp.where(periodic, 0.0, lower)
+
+    print(f"{mini=}, {maxi=}, {diff=} {upper=} {lower=} ")
 
     return CvTrans.from_cv_function(_scale_cv_trans, upper=upper, lower=lower, mini=mini, diff=diff)
 
@@ -1235,7 +1525,7 @@ def _sinkhorn_divergence_trans_2(
             r_skin=nl_i.r_skin,
             z_array=nl_i.z_array * n,
             z_unique=nl_i.z_unique,
-            num_z_unique=(a * n for a in nl_i.num_z_unique),
+            num_z_unique=tuple(a * n for a in nl_i.num_z_unique),
         )
 
         # f = vmap_decorator(f, in_axes=(0, None))
@@ -1566,6 +1856,7 @@ def get_feature_cov(
 
     print("computing feature covariances done")
     assert cov.C00 is not None
+    assert cov.C01 is not None
     assert cov.C11 is not None
 
     cov_n = jnp.sqrt(cov.C00 * cov.C11)
@@ -1707,119 +1998,76 @@ def eigh_rot(x: list[CV], w: list[Array] | None):
     return tr_rot
 
 
-######################################
-#           CV Fun                   #
-######################################
+def _matmul_trans(
+    cv: CV,
+    nl: NeighbourList | None,
+    shmap,
+    shmap_kwargs,
+    M: jax.Array,
+):
+    return cv.replace(cv=cv.cv @ M, _combine_dims=None)
 
 
-# class RealNVP(CvFunNn):
-#     _: dataclasses.KW_ONLY
-#     features: int
-#     cv_input: CvFunInput
+def _coordination_number(
+    x: SystemParams, nl, shmap, shmap_kwargs, group_1: jax.Array, group_2: jax.Array, r: float, n: int = 6, m: int = 12
+):
+    @partial(jax.vmap, in_axes=(0, None))
+    @partial(jax.vmap, in_axes=(None, 0))
+    def get(idx1, idx2):
+        r_min = x.min_distance(idx1, idx2)
+        _r = r_min / r
 
-#     def setup(self) -> None:
-#         self.s = Dense(features=self.features)
-#         self.t = Dense(features=self.features)
+        eps = _r - 1
 
-#     def forward(
-#         self,
-#         x: CV,
-#         nl: NeighbourList | None,
-#         conditioners: list[CV] | None = None,
-#         shmap=False,
-#     ):
-#         y = CV.combine(*conditioners).cv
-#         return CV(cv=x.cv * self.s(y) + self.t(y))
+        out = jnp.where(
+            jnp.abs(eps) < 1e-3,
+            n / m
+            + (n) * (n - m) / (2 * m) * eps
+            + n * (m**2 - 3 * m * (n - 1) + n * (2 * n - 3)) / (12 * m) * (eps**2),
+            (1 - _r**n) / (1 - _r**m),
+        )
 
-#     def backward(
-#         self,
-#         z: CV,
-#         nl: NeighbourList | None,
-#         conditioners: list[CV] | None = None,
-#         shmap=False,
-#     ):
-#         y = CV.combine(*conditioners).cv
-#         return CV(cv=(z.cv - self.t(y)) / self.s(y))
+        return out
+
+    coordination = jnp.sum(get(group_1, group_2))
+
+    return CV(cv=jnp.array([coordination]))
 
 
-# class DistraxRealNVP(CvFunDistrax):
-#     _: dataclasses.KW_ONLY
-#     latent_dim: int
+def _mix(x: CV, nl, shmap, shmap_kwargs, order: int = 2, include_inverse: bool = False):
+    if include_inverse:
+        d_inv = jnp.where(x.cv != 0, 1 / x.cv, 0)
+        d = jnp.hstack([x.cv, d_inv, 1])
+    else:
+        d = jnp.hstack([x.cv, 1])
 
-#     def setup(self):
-#         """Creates the flow model."""
+    d = jnp.ravel(d)
+    n = d.shape[0]
+    idx = jnp.arange(n)
 
-#         try:
-#             from tensorflow_probability.substrates import jax as tfp
-#         except ImportError:
-#             raise ImportError("isntall tensorflow-probability")
+    # Create an order-dimensional meshgrid of indices
+    grids = jnp.meshgrid(*([idx] * order), indexing="ij")
+    stacked = jnp.stack(grids, axis=-1)  # shape (..., order)
 
-#         self.s = Dense(features=self.latent_dim)
-#         self.t = Dense(features=self.latent_dim)
+    # Keep only non-decreasing tuples (i1 <= i2 <= ...), i.e. unique combinations up to permutation
 
-#         # Alternating binary mask.
-#         self.bijector = distrax.as_bijector(
-#             tfp.bijectors.RealNVP(
-#                 fraction_masked=0.5,
-#                 shift_and_log_scale_fn=self.shift_and_scale,
-#             ),
-#         )
+    n_masked = 1
+    for i in range(order):
+        n_masked *= (n - i) / (i + 1)
 
-#     def shift_and_scale(self, x0, input_depth, **condition_kwargs):
-#         return self.s(x0), self.t(x0)
+    n_masked += n  # diagonal
+    print(f"{n_masked=}")
 
+    comb_indices = jnp.argwhere(jnp.all(jnp.diff(stacked, axis=-1) >= 0, axis=-1), size=int(n_masked))
+    print(f"{comb_indices.shape=}")
 
-######################################
-#           Test                     #
-######################################
+    # Values corresponding to each unique combination (product along each tuple)
+    comb_values = jnp.prod(jnp.take(d, comb_indices), axis=1)
 
-
-# class MetricUMAP(CvMetric):
-#     def __init__(self, periodicities, bounding_box=None) -> None:
-#         m = CvMetric.create(periodicities=periodicities, bounding_box=bounding_box)
-
-#         # bb = np.array(self.bounding_box)
-#         per = np.array(self.periodicities)
-
-#         import numba
-
-#         # @numba.njit
-#         # def map(y):
-
-#         #     return (y - bb[:, 0]) / (
-#         #         bb[:, 1] - bb[:, 0])
-
-#         @numba.njit
-#         def _periodic_wrap(xs, min=False):
-#             coor = np.mod(xs, 1)  # between 0 and 1
-#             if min:
-#                 # between [-0.5,0.5]
-#                 coor = np.where(coor > 0.5, coor - 1, coor)
-
-#             return np.where(per, coor, xs)
-
-#         @numba.njit
-#         def g(x, y):
-#             # r1 = map(x)\
-#             # r2 = map(y)
-
-#             return _periodic_wrap(x - y, min=True)
-
-#         @numba.njit
-#         def val_and_grad(x, y):
-#             r = g(x, y)
-#             d = np.sqrt(np.sum(r**2))
-
-#             return d, r / (d + 1e-6)
-
-#         self.umap_f = val_and_grad
+    return x.replace(cv=comb_values)
 
 
-# class hyperTorus(CvMetric):
-#     def __init__(self, n) -> None:
-#         periodicities = [True for _ in range(n)]
-#         boundaries = jnp.zeros((n, 2))
-#         boundaries = boundaries.at[:, 0].set(-jnp.pi)
-#         boundaries = boundaries.at[:, 1].set(jnp.pi)
-
-#         super().__init__(periodicities, boundaries)
+def mix_trans(order=2, include_inverse=False):
+    return CvTrans.from_cv_function(
+        _mix, static_argnames=["order", "include_inverse"], order=order, include_inverse=include_inverse
+    )

@@ -1,29 +1,27 @@
+from pathlib import Path
+
 import ase.io
-import ase.units
 import jax
 import jax.numpy as jnp
-import numpy as np
+from ase.io import read
 from openmm import System
 from openmm.app import ForceField, PDBFile
 
 from IMLCV.base.bias import Bias, BiasF, EnergyFn, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, NeighbourListInfo, SystemParams
+from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
-from IMLCV.implementations.bias import HarmonicBias
 from IMLCV.implementations.CV import (
     LatticeInvariants,
     NoneCV,
-    Volume,
+    _coordination_number,
+    _matmul_trans,
     dihedral,
-    mean_trans,
-    pair,
-    quad,
     rotate_2d,
-    trip,
+    _cv_index,
 )
-from IMLCV.implementations.energy import MACEASE, Cp2kEnergy, OpenMmEnergy
+from IMLCV.implementations.energy import MACEASE, OpenMmEnergy
 from IMLCV.implementations.MdEngine import NewYaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"
@@ -36,7 +34,7 @@ def alanine_dipeptide_openmm(
     cv_theta_1: bool = False,
     cv_theta_2: bool = False,
     bias: Bias | None = None,
-    save_step=5,
+    save_step=50,
 ):
     pdb = DATA_ROOT / "ala" / "alanine-dipeptide.pdb"
 
@@ -47,8 +45,8 @@ def alanine_dipeptide_openmm(
     forcefield = ForceField("amber14-all.xml")
     system: System = forcefield.createSystem(topo)
 
-    energy = OpenMmEnergy(
-        topology=topo,
+    energy = OpenMmEnergy.create(
+        topo=topo,
         system=system,
     )
 
@@ -161,9 +159,9 @@ def alanine_dipeptide_openmm(
 
     tic = StaticMdInfo(
         T=300 * kelvin,
-        timestep=2 * femtosecond,
+        timestep=0.5 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
-        write_step=1000,
+        write_step=50 * save_step,
         save_step=save_step,
         atomic_numbers=atomic_numbers,
         screen_log=1000,
@@ -181,7 +179,7 @@ def alanine_dipeptide_openmm(
     return engine, refs
 
 
-def butane(save_step=10, CV=True):
+def butane(save_step=50, CV=True):
     import openmm.app as omm_app
 
     psf = omm_app.CharmmPsfFile(str(DATA_ROOT / "butane" / "butane.psf"))
@@ -193,10 +191,9 @@ def butane(save_step=10, CV=True):
     )
 
     system: System = psf.createSystem(params, nonbondedMethod=omm_app.NoCutoff)
-    # 3, 6, 9, 13
 
-    energy = OpenMmEnergy(
-        topology=topo,
+    energy = OpenMmEnergy.create(
+        topo=topo,
         system=system,
     )
 
@@ -292,12 +289,13 @@ def butane(save_step=10, CV=True):
 
     tic = StaticMdInfo(
         T=300 * kelvin,
-        timestep=2 * femtosecond,
+        timestep=0.5 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
         write_step=1000,
         atomic_numbers=atomic_numbers,
         screen_log=1000,
         equilibration=0 * femtosecond,
+        save_step=save_step,
         r_cut=None,
     )
 
@@ -312,13 +310,9 @@ def butane(save_step=10, CV=True):
     return engine, sps
 
 
-from functools import partial
-from itertools import combinations, permutations
-
 import jax
 import jax.numpy as jnp
 from jax import Array
-from jaxopt.linear_solve import solve_normal_cg
 
 from IMLCV.base.CV import (
     CV,
@@ -326,10 +320,8 @@ from IMLCV.base.CV import (
     CvMetric,
     CvTrans,
     NeighbourList,
-    NeighbourListInfo,
     SystemParams,
 )
-from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.base.UnitsConstants import angstrom
 
 
@@ -374,7 +366,7 @@ def _ring_distance(
 ring_distance = CvTrans.from_cv_function(_ring_distance, idx=jnp.array([0, 1, 2, 3, 4, 5]))
 
 
-def cyclohexane(CV=True):
+def cyclohexane(CV=True, save_step=50):
     from openff.toolkit.topology import Molecule
     from openmm.app import ForceField, PDBFile
     from openmmforcefields.generators import GAFFTemplateGenerator
@@ -394,8 +386,8 @@ def cyclohexane(CV=True):
     # Load topology from OpenFF molecule, not from PDB!
     top = mol.to_topology().to_openmm()
     system = forcefield.createSystem(top)
-    energy = OpenMmEnergy(
-        topology=top,
+    energy = OpenMmEnergy.create(
+        topo=top,
         system=system,
     )
 
@@ -522,13 +514,14 @@ def cyclohexane(CV=True):
 
     tic = StaticMdInfo(
         T=300 * kelvin,
-        timestep=2 * femtosecond,
+        timestep=0.5 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
         write_step=500,
         atomic_numbers=atomic_numbers,
         screen_log=500,
         equilibration=0 * femtosecond,
         r_cut=None,
+        save_step=save_step,
     )
 
     engine = NewYaffEngine(
@@ -540,165 +533,6 @@ def cyclohexane(CV=True):
     )
 
     return engine, sps
-
-
-# def mil53_yaff():
-#     T = 300 * kelvin
-#     P = 1 * atm
-
-#     import yaff
-
-#     def f():
-#         rd = ROOT_DIR / "data" / "MIL53"
-#         system = yaff.System.from_file(str(rd / "MIL53.chk"))
-#         ff = yaff.ForceField.generate(system, str(rd / "MIL53_pars.txt"))
-#         return ff
-
-#     cvs = CollectiveVariable(
-#         f=Volume,
-#         metric=CvMetric.create(
-#             periodicities=[False],
-#             bounding_box=jnp.array(
-#                 [850, 1500],
-#             )
-#             * angstrom**3,
-#         ),
-#     )
-
-#     bias = HarmonicBias.create(
-#         cvs=cvs,
-#         q0=CV(cv=jnp.array([3000 * angstrom**3])),
-#         k=jnp.array([0.1 * kjmol]),
-#     )
-
-#     bias = NoneBias.create(collective_variable=cvs)
-
-#     energy = YaffEnergy(f=f)
-
-#     st = StaticMdInfo(
-#         T=T,
-#         P=P,
-#         timestep=1.0 * femtosecond,
-#         timecon_thermo=100.0 * femtosecond,
-#         timecon_baro=200.0 * femtosecond,
-#         write_step=1,
-#         screen_log=1,
-#         atomic_numbers=energy.ff.system.numbers,
-#     )
-
-#     yaffmd = NewYaffEngine.create(
-#         energy=energy,
-#         bias=bias,
-#         static_trajectory_info=st,
-#     )
-
-#     return yaffmd
-
-
-# def CsPbI3(cv=None, unit_cells=[2]):
-#     assert isinstance(unit_cells, list)
-
-#     if len(unit_cells) == 3:
-#         [x, y, z] = unit_cells
-#     elif len(unit_cells) == 1:
-#         [n] = unit_cells
-#         x = n
-#         y = n
-#         z = n
-#     else:
-#         raise ValueError(
-#             f"provided unit cell {unit_cells}, please provide 1 or 3 arguments ",
-#         )
-
-#     fb = DATA_ROOT / "CsPbI_3" / f"{x}x{y}x{z}"
-
-#     path_source = DATA_ROOT / "CsPbI_3" / "Libraries"
-
-#     assert (p := path_source).exists(), f"cannot find {p}"
-
-#     path_potentials = path_source / "GTH_POTENTIALS"
-#     path_basis = path_source / "BASIS_SETS"
-#     path_dispersion = path_source / "dftd3.dat"
-
-#     assert (p := fb / "cp2k.inp").exists(), f"cannot find {p}"
-
-#     for p in [path_potentials, path_basis, path_dispersion]:
-#         assert p.exists(), f"cannot find {p}"
-
-#     input_params = {
-#         "PATH_DISPERSION": path_dispersion,
-#         "BASIS_SET_FILE_NAME": path_basis,
-#         "POTENTIAL_FILE_NAME": path_potentials,
-#     }
-
-#     refs, z_array, atoms = CsPbI3_refs(x, y, z)
-
-#     energy = Cp2kEnergy(
-#         atoms=atoms[0],
-#         input_file=fb / "cp2k.inp",
-#         input_kwargs=input_params,
-#         stress_tensor=True,
-#         debug=False,
-#     )
-
-#     from IMLCV.base.CV import CvTrans
-
-#     r_cut = 5 * angstrom
-
-#     tic = StaticMdInfo(
-#         write_step=1,
-#         T=300 * kelvin,
-#         P=1.0 * bar,
-#         timestep=2.0 * femtosecond,
-#         timecon_thermo=100.0 * femtosecond,
-#         timecon_baro=100.0 * femtosecond,
-#         atomic_numbers=z_array,
-#         equilibration=0 * femtosecond,
-#         screen_log=1,
-#         r_cut=r_cut,
-#     )
-
-#     if cv == "cell_vec":
-
-#         @CvTrans.from_function
-#         def f(sp: SystemParams, _: NeighbourList | None):
-#             import jax.numpy as jnp
-
-#             assert sp.cell is not None
-
-#             sp = sp.minkowski_reduce()[0]
-
-#             l = jnp.linalg.norm(sp.cell, axis=1)
-#             l0 = jnp.max(l)
-#             l1 = jnp.min(l)
-
-#             return CV(cv=jnp.array([(l0 - l1) / 2, (l0 + l1) / 2]))
-
-#         assert x == y
-#         assert x == z
-
-#         cv = CollectiveVariable(
-#             f=f,
-#             metric=CvMetric.create(
-#                 periodicities=[False, False],
-#                 bounding_box=jnp.array([[0.0, 3.0 * x], [5.5 * x, 8.0 * x]]) * angstrom,
-#             ),
-#         )
-
-#     elif cv is None:
-#         cv = NoneCV()
-#     else:
-#         raise ValueError(f"unknown value {cv} for cv choose 'cell_vec'")
-
-#     bias = NoneBias.create(collective_variable=cv)
-
-#     yaffmd = NewYaffEngine.create(
-#         energy=energy,
-#         bias=bias,
-#         static_trajectory_info=tic,
-#     )
-
-#     return yaffmd
 
 
 def CsPbI3_MACE(unit_cells=[2]):
@@ -1080,3 +914,370 @@ def toy_periodic_phase_trans():
     )
 
     return mde, [sp0, sp1]
+
+
+def _cv_system_1(
+    sp: SystemParams,
+    nl,
+    shmap,
+    shmap_kwargs,
+    z_array: jax.Array,
+):
+    # z_array = nl.info.z_array
+
+    coordinaten_idx_O = jnp.arange(97, 289) - 1
+    coordinaten_idx_C = jnp.array([289, 290]) - 1
+    coordinaten_idx_H = jnp.array([294, 295, 291, 292, 293]) - 1
+    r_O_C = 2.2 * angstrom
+    r_C_H = 1.5 * angstrom
+    r_O_H = 1.5 * angstrom
+
+    # assert jnp.all(z_array[coordinaten_idx_H] == 1)
+    # assert jnp.all(z_array[coordinaten_idx_C] == 6)
+    # assert jnp.all(z_array[coordinaten_idx_O] == 8)
+
+    coordination_OH = _coordination_number(
+        sp,
+        nl,
+        shmap,
+        shmap_kwargs,
+        group_1=coordinaten_idx_O,
+        group_2=coordinaten_idx_H,
+        r=r_O_H,
+        n=6,
+        m=12,
+    )
+
+    coordination_CH = _coordination_number(
+        sp,
+        nl,
+        shmap,
+        shmap_kwargs,
+        group_1=coordinaten_idx_C,
+        group_2=coordinaten_idx_H,
+        r=r_C_H,
+        n=6,
+        m=12,
+    )
+
+    coordination_CO = _coordination_number(
+        sp,
+        nl,
+        shmap,
+        shmap_kwargs,
+        group_1=coordinaten_idx_O,
+        group_2=coordinaten_idx_C,
+        r=r_O_C,
+        n=6,
+        m=12,
+    )
+
+    ehtnene_COM = jnp.mean(sp.coordinates[coordinaten_idx_C], axis=0)
+    AL_idx = 95
+
+    distance_COM_AL = jnp.linalg.norm(ehtnene_COM - sp.coordinates[AL_idx, :])
+
+    dihedral_oxygens = jnp.array([116, 114, 197])
+
+    def dihedral_angle(C1, C2, O, Al):
+        C = jnp.array([C1, C2])
+
+        CO_distances = jnp.linalg.norm(sp.coordinates[C, :] - sp.coordinates[O, :], axis=1)
+        min_dist = jnp.argmin(CO_distances)
+        C1, C2 = C[min_dist], C[1 - min_dist]
+
+        b0 = sp.coordinates[C1, :] - sp.coordinates[C2, :]
+        b1 = sp.coordinates[O, :] - sp.coordinates[C1, :]
+        b2 = sp.coordinates[Al, :] - sp.coordinates[O, :]
+
+        b1 /= jnp.linalg.norm(b1)
+
+        v = b0 - jnp.dot(b0, b1) * b1
+        w = b2 - jnp.dot(b2, b1) * b1
+
+        v /= jnp.linalg.norm(v)
+        w /= jnp.linalg.norm(w)
+
+        x = jnp.dot(v, w)
+        y = jnp.dot(jnp.cross(b1, v), w)
+
+        return x, y
+
+    dihedrals_cos, dihedrals_sin = jax.vmap(
+        dihedral_angle,
+        in_axes=(None, None, 0, None),
+    )(coordinaten_idx_C[0], coordinaten_idx_C[1], dihedral_oxygens, 95)
+
+    return CV(
+        cv=jnp.hstack(
+            [
+                coordination_OH.cv,
+                coordination_CH.cv,
+                coordination_CO.cv,
+                distance_COM_AL,
+                dihedrals_cos.flatten(),
+                dihedrals_sin.flatten(),
+            ]
+        )
+    )
+
+
+def system_1():
+    path = Path.home() / "shared" / "massimo" / "umbrella_sampling"
+
+    mace_pth = path / "MACE.pth"
+
+    files = [f for f in path.iterdir() if f.is_file()]
+    print(files)
+
+    subfolders = [f for f in path.iterdir() if f.is_dir()]
+    print(subfolders)
+
+    initial_dataset = read(path / "initial_dataset_ethene_to_ethoxide.xyz", index=":")
+
+    z_array = jnp.array(initial_dataset[0].get_atomic_numbers())
+
+    sti = StaticMdInfo(
+        timestep=0.5 * femtosecond,
+        timecon_thermo=100 * femtosecond,
+        timecon_baro=500 * femtosecond,
+        atomic_numbers=z_array,
+        r_cut=None,
+        write_step=1000,
+        screen_log=100,
+        save_step=50,
+        T=573,
+        P=None,
+    )
+
+    sps = SystemParams.stack(
+        *[
+            SystemParams(
+                coordinates=jnp.array(a.positions) * angstrom,
+                cell=jnp.array(a.cell) * angstrom if a.cell is not None else None,
+            )
+            for a in initial_dataset
+        ]
+    )
+
+    # print(sps)
+
+    coordinaten_idx_O = jnp.arange(97, 289) - 1
+    coordinaten_idx_C = jnp.array([289, 290]) - 1
+    coordinaten_idx_H = jnp.array([294, 295, 291, 292, 293]) - 1
+    r_O_C = 2.2 * angstrom
+    r_C_H = 1.5 * angstrom
+    r_O_H = 1.5 * angstrom
+
+    assert jnp.all(z_array[coordinaten_idx_H] == 1)
+    assert jnp.all(z_array[coordinaten_idx_C] == 6)
+    assert jnp.all(z_array[coordinaten_idx_O] == 8)
+
+    # f = (
+    #     CvTrans.from_cv_function(
+    #         _coordination_number,
+    #         static_argnames=["n", "m"],
+    #         group_1=coordinaten_idx_O,
+    #         group_2=coordinaten_idx_C,
+    #         r=r_O_C,
+    #         n=6,
+    #         m=12,
+    #     )
+    #     +
+    f = CvTrans.from_cv_function(
+        _coordination_number,
+        static_argnames=["n", "m"],
+        group_1=coordinaten_idx_C,
+        group_2=coordinaten_idx_H,
+        r=r_C_H,
+        n=6,
+        m=12,
+    )
+    #     + CvTrans.from_cv_function(
+    #         _coordination_number,
+    #         static_argnames=["n", "m"],
+    #         group_1=coordinaten_idx_O,
+    #         group_2=coordinaten_idx_H,
+    #         r=r_O_H,
+    #         n=6,
+    #         m=12,
+    #     )
+    # ) * CvTrans.from_cv_function(
+    #     _matmul_trans,
+    #     M=jnp.array([[1.0, 0.5, -0.5]]).T,
+    # )
+
+    cv_vals, _ = f.compute_cv(sps)
+
+    print(f"{cv_vals=}")
+
+    energy = MACEASE(
+        atoms=sps[0].to_ase(static_trajectory_info=sti),
+        model=mace_pth,
+    )
+
+    bounding_box = jnp.vstack([jnp.min(cv_vals.cv, axis=0), jnp.max(cv_vals.cv, axis=0)]).T
+
+    # colvar= NoneCV()
+    colvar = CollectiveVariable(
+        f=f,
+        metric=CvMetric.create(bounding_box=bounding_box),
+    )
+
+    print(f"{colvar.metric.bounding_box=}")
+
+    bias = NoneBias.create(colvar)
+
+    mde = NewYaffEngine.create(
+        bias=bias,
+        static_trajectory_info=sti,
+        energy=energy,
+        sp=sps[0],
+    )
+
+    return mde, sps
+
+
+def _system_2_cvs(
+    sp: SystemParams,
+    nl,
+    shmap,
+    shmap_kwargs,
+):
+    propene_idx = jnp.array([1, 2, 220, 221, 222, 223, 225, 226, 227]) - 1
+    ring_idx = jnp.array([26, 3, 4, 63, 50, 49, 48, 47, 42, 41, 40, 39, 30, 29, 28, 27]) - 1
+    bas_idx = jnp.array([219, 224]) - 1
+    com_cc_idx = jnp.array([1, 2]) - 1
+
+    r1_weight = jnp.cos(2 * jnp.pi / 16 * (jnp.arange(16) + 1))
+    r2_weight = jnp.sin(2 * jnp.pi / 16 * (jnp.arange(16) + 1))
+
+    propene_pos = sp.coordinates[propene_idx]
+    ring_pos = sp.coordinates[ring_idx]
+    bas_pos = sp.coordinates[bas_idx]
+
+    com_propene = jnp.mean(propene_pos, axis=0)
+    com_ring = jnp.mean(ring_pos, axis=0)
+    com_bas = jnp.mean(bas_pos, axis=0)
+    com_cc = jnp.mean(sp.coordinates[com_cc_idx], axis=0)
+
+    r1 = jnp.sum(r1_weight[:, None] * ring_pos, axis=0)
+    r2 = jnp.sum(r2_weight[:, None] * ring_pos, axis=0)
+
+    ring_radius = jnp.sqrt(jnp.mean(jnp.sum((ring_pos - com_ring) ** 2, axis=1)))
+
+    ring_normal = jnp.cross(r1, r2)
+    ring_normal = ring_normal / jnp.linalg.norm(ring_normal)
+
+    posc = sp.coordinates[1]
+    posdb = sp.coordinates[0]
+    posmt = sp.coordinates[221]
+
+    v1 = posdb - posc
+    v2 = posmt - posc
+
+    n_prop = jnp.cross(v1, v2)
+    n_prop = n_prop / jnp.linalg.norm(n_prop)
+
+    cos_psi = jnp.dot(ring_normal, n_prop)
+    sin_psi = jnp.linalg.norm(jnp.cross(ring_normal, n_prop))
+    psi = jnp.arctan2(sin_psi, cos_psi)
+
+    cos_khi = jnp.dot(ring_normal, v1)
+    sin_khi = jnp.linalg.norm(jnp.cross(ring_normal, v1))
+    khi = jnp.arctan2(sin_khi, cos_khi)
+
+    cos_ksi = jnp.dot(ring_normal, v2)
+    sin_ksi = jnp.linalg.norm(jnp.cross(ring_normal, v2))
+    ksi = jnp.arctan2(sin_ksi, cos_ksi)
+
+    dist_cv = jnp.dot(com_propene - com_ring, ring_normal)
+
+    dist_bas1 = jnp.linalg.norm(com_cc - bas_pos[0])
+    dist_bas2 = jnp.linalg.norm(com_cc - bas_pos[1])
+
+    return CV(
+        cv=jnp.array([dist_cv, ring_radius, dist_bas1, dist_bas2, cos_psi, sin_psi, cos_khi, sin_khi, cos_ksi, sin_ksi])
+    )
+
+
+def system_2():
+    path = Path.home() / "shared" / "pieter_C"
+
+    mace_pth = path / "mace-model" / "MACE.pth"
+
+    files = [f for f in path.iterdir() if f.is_file()]
+    print(files)
+
+    subfolders = [f for f in path.iterdir() if f.is_dir()]
+    print(subfolders)
+
+    from IMLCV.implementations.energy import MACEASE
+
+    from ase.io import read
+
+    initial_dataset = read(path / "start_umb.xyz", index=":")
+
+    z_array = jnp.array(initial_dataset[0].get_atomic_numbers())
+
+    sti = StaticMdInfo(
+        timestep=0.5 * femtosecond,
+        timecon_thermo=100 * femtosecond,
+        timecon_baro=500 * femtosecond,
+        atomic_numbers=z_array,
+        r_cut=None,
+        write_step=100,
+        screen_log=10,
+        save_step=10,
+        T=300 * kelvin,
+        P=None,
+    )
+
+    sps = SystemParams.stack(
+        *[
+            SystemParams(
+                coordinates=jnp.array(a.positions) * angstrom,
+                cell=jnp.array(a.cell) * angstrom if a.cell is not None else None,
+            )
+            for a in initial_dataset
+        ]
+    )
+
+    f = CvTrans.from_cv_function(
+        f=_system_2_cvs,
+    ) * CvTrans.from_cv_function(
+        _cv_index,
+        indices=jnp.array([0]),
+    )
+
+    cv_vals, _ = f.compute_cv(sps)
+
+    print(f"{cv_vals.cv.shape}")
+
+    energy = MACEASE(
+        atoms=sps[0].to_ase(static_trajectory_info=sti),
+        model=mace_pth,
+    )
+
+    bounding_box = jnp.vstack([jnp.min(cv_vals.cv, axis=0), jnp.max(cv_vals.cv, axis=0)]).T
+
+    print(f"{bounding_box.shape=}")
+
+    # colvar= NoneCV()
+    colvar = CollectiveVariable(
+        f=f,
+        metric=CvMetric.create(bounding_box=bounding_box),
+    )
+
+    print(f"{colvar.metric.bounding_box.shape=}")
+
+    bias = NoneBias.create(colvar)
+
+    mde = NewYaffEngine.create(
+        bias=bias,
+        static_trajectory_info=sti,
+        energy=energy,
+        sp=sps[0],
+    )
+
+    return mde, sps
