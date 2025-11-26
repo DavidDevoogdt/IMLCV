@@ -6,7 +6,7 @@ from pathlib import Path
 import parsl
 from parsl.config import Config
 
-from IMLCV.configs.hpc_ugent import config as config_ugent
+from IMLCV.configs.cluster import config as config_cluster
 from IMLCV.configs.local_threadpool import get_config as get_config_local
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -14,7 +14,6 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 print(f"{ROOT_DIR=}")
 
-py_env = " which python"
 
 
 PARSL_DICT: dict[str, tuple[list[str], str]] = {}
@@ -24,7 +23,6 @@ RESOURCES_DICT = {}
 REFERENCE_COMMANDS: dict[str, str] = {
     "cp2k": "mpirun cp2k_shell.psmp",
 }
-
 
 class Executors(Enum):
     default = "default"
@@ -36,24 +34,9 @@ class Executors(Enum):
 class ReferenceCommands(Enum):
     cp2k = "cp2k"
 
-
-def get_platform():
-    node = platform.node()
-    print("node")
-    if re.search("(node|login)[0-9]*.dodrio.os", node):
-        env = "hortense"
-    elif re.search(
-        "(node|gligar)[0-9]*.(gastly|accelgor|delcatty|doduo|donphan|gallade|golett|joltik|kirlia|skitty|slaking|swalot|victini|shinx).os",
-        node,
-    ):
-        env = "stevin"
-    elif node == "david-CMM":
-        env = "local"
-    else:
-        raise ValueError(f"unknown pc {node=}, set env")
-
-    print(env)
-    return env
+class GpuKind(Enum):
+    nvidia = "nvidia"
+    rocm = "rocm"
 
 
 def config(
@@ -71,6 +54,8 @@ def config(
     path_internal: Path | None = None,
     cpu_cluster=None,
     gpu_cluster=None,
+    cpu_part=None,
+    gpu_part=None,
     initialize_logging=False,
     account=None,
     executor="work_queue",
@@ -79,6 +64,8 @@ def config(
     training_on_threads=False,
     work_queue_local=True,
     max_threads_local=10,
+    gpu_kind:GpuKind=GpuKind.nvidia,
+
 ):
     print(f"{reference_blocks=}")
 
@@ -86,8 +73,7 @@ def config(
         print("parsl already configured, using previous setup")
         return
 
-    if env is None:
-        env = get_platform()
+
 
     if path_internal is None:
         path_internal = "/tmp/.runinfo"
@@ -99,8 +85,8 @@ def config(
             max_threads=max_threads_local,
             work_queue=work_queue_local,
         )
-    elif env == "hortense" or env == "stevin":
-        execs, labels, precommands, ref_comm, resources = config_ugent(
+    else:
+        execs, labels, precommands, ref_comm, resources = config_cluster(
             env=env,
             path_internal=path_internal,
             singlepoint_nodes=singlepoint_nodes,
@@ -111,6 +97,8 @@ def config(
             min_memery_per_node=min_memery_per_node,
             cpu_cluster=cpu_cluster,
             gpu_cluster=gpu_cluster,
+            cpu_part=cpu_part,
+            gpu_part=gpu_part,
             account=account,
             executor=executor,
             default_on_threads=default_on_threads,
@@ -120,6 +108,7 @@ def config(
             reference_blocks=reference_blocks,
             training_on_gpu=training_on_gpu,
             reference_on_gpu=reference_on_gpu,
+            gpu_kind=gpu_kind,
         )
 
     config = Config(

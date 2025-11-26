@@ -18,6 +18,7 @@ include = [
 typeCheckingMode = "basic"
 
 
+
 [tool.pdm]
 distribution = true
 package-dir = "src"
@@ -30,7 +31,28 @@ authors = [
     {name = "David Devoogdt", email = "david.devoogdt@ugent.be"},
     {name = "David Devoogdt", email = "david.devoogdt@gmail.com"},
 ]
-dependencies = [ "cloudpickle", "filelock", "importlib-metadata", "matplotlib", "openmm", "ase>=3.26.0,<4", "distrax>=0.1.7,<0.2", "dm-haiku>=0.0.15,<0.0.16", "flax>=0.12.0,<0.13", "h5py>=3.15.1,<4", "hsluv>=5.0.4,<6", "jaxopt>=0.8.5,<0.9", "jsonpickle>=4.1.1,<5", "mace-torch>=0.3.14,<0.4", "optax>=0.2.6,<0.3", "ott-jax>=0.6.0,<0.7", "parsl>=2025.11.17,<2026", "umap-learn>=0.5.9.post2,<0.6", "work-queue>=0.0.1,<0.0.2", "ivy>=1.0.0.5,<2", "jax[cuda13]>=0.8.0,<0.9", "jaxlib>=0.8.0,<0.9", "torch2jax>=0.1.0,<0.2", "e3nn-jax>=0.20.8,<0.21", "wrap-torch2jax>=0.7.0,<0.8", "ninja>=1.13.0,<2", "cuequivariance>=0.7.0,<0.8", "cuequivariance-torch>=0.7.0,<0.8", "cuequivariance-ops-torch-cu13>=0.7.0,<0.8",
+
+
+dependencies = [ "cloudpickle",
+    "filelock", 
+    "importlib-metadata", 
+    "matplotlib", 
+    "openmm", 
+    "ase", 
+    "distrax", 
+    "dm-haiku", 
+    "flax", 
+    "h5py", 
+    "hsluv", 
+    "jaxopt", 
+    "jsonpickle",  
+    "optax", 
+    "ott-jax", 
+    "parsl", 
+    "umap-learn", 
+    "work-queue", 
+    "mace-torch",
+    "openmmforcefields@git+https://github.com/openmm/openmmforcefields.git",
 ]
 
 
@@ -51,27 +73,7 @@ Documentation = "https://imlcv.readthedocs.io/en/main/?badge=main"
 Source = "https://github.com/DavidDevoogdt/IMLCV"
 Changelog = "https://github.com/DavidDevoogdt/IMLCV/latest/changelog.html"
 
-[project.optional-dependencies]
-docs = [
-    "myst-parser",
-    "nbsphinx",
-    "nbsphinx-link",
-    "pandoc",
-    "sphinx",
-    "sphinx-autoapi",
-    "sphinx-autodoc-typehints",
-    "sphinx-book-theme",
-    "sphinx-design",
-]
 
-lint = [
-    "ruff",
-]
-test = [
-    "pytest",
-    "pytest-cov",
-    "setuptools",
-]
 
 
 [tool.pytest.ini_options]
@@ -87,20 +89,55 @@ testpaths = [
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
-
-
 [tool.pixi.pypi-dependencies]
-molmod = { path = "ext/molmod", editable = true }
-thermolib = { path = "ext/ThermoLIB", editable = true }
-mace_jax = { path = "ext/mace-jax", editable = true }
-#psiflow = { path = "ext/psiflow", editable = true }
+jax = "*"
+jaxlib = "*"
+torch = "*"
+
+
 IMLCV = { path = ".", editable = true }
 
+[tool.pixi.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cpu"]
+
+
+[tool.pixi.feature.rocm.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/rocm7.1"]
+
+[tool.pixi.feature.cuda13.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu130"]
+
+[tool.pixi.feature.cuda12.pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
+
+
+[tool.pixi.feature.rocm.pypi-dependencies]
+jax-rocm7-pjrt = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.1/jax_rocm7_pjrt-0.7.1-py3-none-manylinux_2_28_x86_64.whl" }
+jax-rocm7-plugin = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.1/jax_rocm7_plugin-0.7.1-cp312-cp312-manylinux_2_28_x86_64.whl" }
+
+
+[tool.pixi.feature.cuda13.pypi-dependencies]
+
+jax = { extras = ["cuda13"], version = "*" }
+cuequivariance-ops-torch-cu13  = "*"
+cuequivariance   = "*"
+cuequivariance-torch  = "*"
+
+
+[tool.pixi.feature.cuda12.pypi-dependencies]
+
+jax = { extras = ["cuda12"], version = "*" }
+cuequivariance-ops-torch-cu12  = "*"
+cuequivariance   = "*"
+cuequivariance-torch  = "*"
+
+
+# Environments (cpu is default; add rocm variants too)
 [tool.pixi.environments]
-default = { solve-group = "default" }
-docs = { features = ["docs"], solve-group = "default" }
-lint = { features = ["lint"], solve-group = "default" }
-test = { features = ["test"], solve-group = "default" }
+cpu  = { features = [] }
+rocm      = { features = ["rocm"] }
+cuda13    = { features = ["cuda13"] }
+cuda12    = { features = ["cuda12"] }
 
 [tool.pixi.tasks]
 
@@ -111,5 +148,4 @@ jupyter = ">=1.1.1,<2"
 pre-commit = ">=4.4.0,<5"
 ndcctools = ">=7.15.14,<8"
 pytest = ">=9.0.1,<10"
-openmmforcefields = ">=0.15.0,<0.16"
-cudatoolkit-dev = ">=11.7.0,<12"
+

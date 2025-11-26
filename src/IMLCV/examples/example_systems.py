@@ -1202,15 +1202,12 @@ def _system_2_cvs(
 
 
 def system_2():
-    path = Path.home() / "shared" / "pieter_C"
 
-    mace_pth = path / "mace-model" / "MACE.pth"
+    path = DATA_ROOT/"system_2"
 
-    files = [f for f in path.iterdir() if f.is_file()]
-    print(files)
+    mace_pth = path / "MACE.pth"
 
-    subfolders = [f for f in path.iterdir() if f.is_dir()]
-    print(subfolders)
+   
 
     from IMLCV.implementations.energy import MACEASE
 
