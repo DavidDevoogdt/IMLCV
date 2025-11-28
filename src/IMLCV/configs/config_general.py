@@ -15,7 +15,6 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 print(f"{ROOT_DIR=}")
 
 
-
 PARSL_DICT: dict[str, tuple[list[str], str]] = {}
 
 RESOURCES_DICT = {}
@@ -23,6 +22,7 @@ RESOURCES_DICT = {}
 REFERENCE_COMMANDS: dict[str, str] = {
     "cp2k": "mpirun cp2k_shell.psmp",
 }
+
 
 class Executors(Enum):
     default = "default"
@@ -33,6 +33,7 @@ class Executors(Enum):
 
 class ReferenceCommands(Enum):
     cp2k = "cp2k"
+
 
 class GpuKind(Enum):
     nvidia = "nvidia"
@@ -64,16 +65,13 @@ def config(
     training_on_threads=False,
     work_queue_local=True,
     max_threads_local=10,
-    gpu_kind:GpuKind=GpuKind.nvidia,
-
+    gpu_kind: GpuKind = GpuKind.nvidia,
 ):
     print(f"{reference_blocks=}")
 
     if parsl.DataFlowKernelLoader._dfk is not None:  # type: ignore
         print("parsl already configured, using previous setup")
         return
-
-
 
     if path_internal is None:
         path_internal = "/tmp/.runinfo"

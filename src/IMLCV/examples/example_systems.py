@@ -16,10 +16,12 @@ from IMLCV.implementations.CV import (
     LatticeInvariants,
     NoneCV,
     _coordination_number,
+    _cv_index,
+    _dihedral,
     _matmul_trans,
+    cv_trans_real,
     dihedral,
     rotate_2d,
-    _cv_index,
 )
 from IMLCV.implementations.energy import MACEASE, OpenMmEnergy
 from IMLCV.implementations.MdEngine import NewYaffEngine
@@ -921,7 +923,6 @@ def _cv_system_1(
     nl,
     shmap,
     shmap_kwargs,
-    z_array: jax.Array,
 ):
     # z_array = nl.info.z_array
 
@@ -1001,9 +1002,11 @@ def _cv_system_1(
         x = jnp.dot(v, w)
         y = jnp.dot(jnp.cross(b1, v), w)
 
-        return x, y
+        theta = jnp.atan2(y, x)
 
-    dihedrals_cos, dihedrals_sin = jax.vmap(
+        return jnp.exp(1j * theta)
+
+    dihedrals = jax.vmap(
         dihedral_angle,
         in_axes=(None, None, 0, None),
     )(coordinaten_idx_C[0], coordinaten_idx_C[1], dihedral_oxygens, 95)
@@ -1015,23 +1018,16 @@ def _cv_system_1(
                 coordination_CH.cv,
                 coordination_CO.cv,
                 distance_COM_AL,
-                dihedrals_cos.flatten(),
-                dihedrals_sin.flatten(),
+                dihedrals,
             ]
         )
     )
 
 
 def system_1():
-    path = Path.home() / "shared" / "massimo" / "umbrella_sampling"
+    path = DATA_ROOT / "system_1"
 
     mace_pth = path / "MACE.pth"
-
-    files = [f for f in path.iterdir() if f.is_file()]
-    print(files)
-
-    subfolders = [f for f in path.iterdir() if f.is_dir()]
-    print(subfolders)
 
     initial_dataset = read(path / "initial_dataset_ethene_to_ethoxide.xyz", index=":")
 
@@ -1175,21 +1171,23 @@ def _system_2_cvs(
 
     v1 = posdb - posc
     v2 = posmt - posc
+    v1 /= jnp.linalg.norm(v1)
+    v2 /= jnp.linalg.norm(v2)
 
     n_prop = jnp.cross(v1, v2)
     n_prop = n_prop / jnp.linalg.norm(n_prop)
 
     cos_psi = jnp.dot(ring_normal, n_prop)
-    sin_psi = jnp.linalg.norm(jnp.cross(ring_normal, n_prop))
-    psi = jnp.arctan2(sin_psi, cos_psi)
+    # sin_psi = jnp.linalg.norm(jnp.cross(ring_normal, n_prop))
+    # psi = jnp.arctan2(sin_psi, cos_psi)
 
     cos_khi = jnp.dot(ring_normal, v1)
-    sin_khi = jnp.linalg.norm(jnp.cross(ring_normal, v1))
-    khi = jnp.arctan2(sin_khi, cos_khi)
+    # sin_khi = jnp.linalg.norm(jnp.cross(ring_normal, v1))
+    # khi = jnp.arctan2(sin_khi, cos_khi)
 
     cos_ksi = jnp.dot(ring_normal, v2)
-    sin_ksi = jnp.linalg.norm(jnp.cross(ring_normal, v2))
-    ksi = jnp.arctan2(sin_ksi, cos_ksi)
+    # sin_ksi = jnp.linalg.norm(jnp.cross(ring_normal, v2))
+    # ksi = jnp.arctan2(sin_ksi, cos_ksi)
 
     dist_cv = jnp.dot(com_propene - com_ring, ring_normal)
 
@@ -1197,21 +1195,28 @@ def _system_2_cvs(
     dist_bas2 = jnp.linalg.norm(com_cc - bas_pos[1])
 
     return CV(
-        cv=jnp.array([dist_cv, ring_radius, dist_bas1, dist_bas2, cos_psi, sin_psi, cos_khi, sin_khi, cos_ksi, sin_ksi])
+        cv=jnp.array(
+            [
+                dist_cv,
+                ring_radius,
+                dist_bas1,
+                dist_bas2,
+                cos_psi,
+                cos_khi,
+                cos_ksi,
+            ]
+        ).flatten(),
     )
 
 
 def system_2():
-
-    path = DATA_ROOT/"system_2"
+    path = DATA_ROOT / "system_2"
 
     mace_pth = path / "MACE.pth"
 
-   
+    from ase.io import read
 
     from IMLCV.implementations.energy import MACEASE
-
-    from ase.io import read
 
     initial_dataset = read(path / "start_umb.xyz", index=":")
 
@@ -1240,11 +1245,15 @@ def system_2():
         ]
     )
 
-    f = CvTrans.from_cv_function(
-        f=_system_2_cvs,
-    ) * CvTrans.from_cv_function(
-        _cv_index,
-        indices=jnp.array([0]),
+    f = (
+        CvTrans.from_cv_function(
+            f=_system_2_cvs,
+        )
+        * CvTrans.from_cv_function(
+            _cv_index,
+            indices=jnp.array([0]),
+        )
+        * cv_trans_real
     )
 
     cv_vals, _ = f.compute_cv(sps)

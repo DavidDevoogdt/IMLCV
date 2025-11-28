@@ -34,23 +34,23 @@ authors = [
 
 
 dependencies = [ "cloudpickle",
-    "filelock", 
-    "importlib-metadata", 
-    "matplotlib", 
-    "openmm", 
-    "ase", 
-    "distrax", 
-    "dm-haiku", 
-    "flax", 
-    "h5py", 
-    "hsluv", 
-    "jaxopt", 
-    "jsonpickle",  
-    "optax", 
-    "ott-jax", 
-    "parsl", 
-    "umap-learn", 
-    "work-queue", 
+    "filelock",
+    "importlib-metadata",
+    "matplotlib",
+    "openmm",
+    "ase",
+    "distrax",
+    "dm-haiku",
+    "flax",
+    "h5py",
+    "hsluv",
+    "jaxopt",
+    "jsonpickle",
+    "optax",
+    "ott-jax",
+    "parsl",
+    "umap-learn",
+    "work-queue",
     "mace-torch",
     "openmmforcefields@git+https://github.com/openmm/openmmforcefields.git",
 ]
@@ -95,6 +95,7 @@ jaxlib = "*"
 torch = "*"
 
 
+
 IMLCV = { path = ".", editable = true }
 
 [tool.pixi.pypi-options]
@@ -102,7 +103,7 @@ extra-index-urls = ["https://download.pytorch.org/whl/cpu"]
 
 
 [tool.pixi.feature.rocm.pypi-options]
-extra-index-urls = ["https://download.pytorch.org/whl/rocm7.1"]
+extra-index-urls = ["https://download.pytorch.org/whl/rocm6.4"]
 
 [tool.pixi.feature.cuda13.pypi-options]
 extra-index-urls = ["https://download.pytorch.org/whl/cu130"]
@@ -112,9 +113,13 @@ extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
 
 
 [tool.pixi.feature.rocm.pypi-dependencies]
-jax-rocm7-pjrt = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.1/jax_rocm7_pjrt-0.7.1-py3-none-manylinux_2_28_x86_64.whl" }
-jax-rocm7-plugin = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.1/jax_rocm7_plugin-0.7.1-cp312-cp312-manylinux_2_28_x86_64.whl" }
 
+# https://github.com/ROCm/jax/releases/download/rocm-jax-v0.7.1/jaxlib-0.7.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+
+jax = "==0.7.1"
+jax-rocm7-pjrt  = "==0.7.1"
+jax-rocm7-plugin = "==0.7.1"
+jaxlib = { url = "https://github.com/ROCm/jax/releases/download/rocm-jax-v0.7.1/jaxlib-0.7.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" }
 
 [tool.pixi.feature.cuda13.pypi-dependencies]
 
@@ -148,4 +153,3 @@ jupyter = ">=1.1.1,<2"
 pre-commit = ">=4.4.0,<5"
 ndcctools = ">=7.15.14,<8"
 pytest = ">=9.0.1,<10"
-

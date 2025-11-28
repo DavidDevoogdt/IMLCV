@@ -467,7 +467,7 @@ class TransformerMAF(Transformer):
     use_w: bool = True
 
     min_t_frac: float = 0.1
-    max_t_cutoff = 0.01 * nanosecond
+    max_t_cutoff = 1 * nanosecond
     periodicities: jax.Array | None = None
 
     add_1: bool = True
@@ -617,7 +617,7 @@ class TransformerMAF(Transformer):
                 add_1=self.add_1,
                 eps_pre=self.eps_pre,
                 eps=self.eps,
-                symmetric=self.sym,
+                symmetric=False,
                 trans=self.trans,
                 verbose=True,
                 # auto_cov_threshold=0.1,
@@ -629,13 +629,13 @@ class TransformerMAF(Transformer):
                 # shrinkage_method="BC",
             )
 
-            # if self.sym:
-            #     km = km.weighted_model(
-            #         symmetric=True,
-            #         shrink=False,
-            #         add_1=self.add_1,
-            #         # T_scale=self.T_scale,
-            #     )
+            if self.sym:
+                km = km.weighted_model(
+                    symmetric=True,
+                    shrink=True,
+                    add_1=self.add_1,
+                    # T_scale=self.T_scale,
+                )
 
         # assert km.w is not None
         # w = km.w

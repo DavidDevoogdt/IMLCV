@@ -138,9 +138,9 @@ class OpenMmEnergy(Energy):
         return res
 
     def __getstate__(self):
-        from openmm import XmlSerializer
-
         import tempfile
+
+        from openmm import XmlSerializer
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
         tmp_name = tmp.name
@@ -175,8 +175,8 @@ class OpenMmEnergy(Energy):
 
             integrator = XmlSerializer.deserialize(state["integrator"])
         else:
-            from openmm import LangevinIntegrator
             import openmm.unit as openmm_unit
+            from openmm import LangevinIntegrator
 
             integrator = LangevinIntegrator(
                 300 * openmm_unit.kelvin,  # type:ignore
@@ -192,8 +192,8 @@ class OpenMmEnergy(Energy):
             self._simul = simul
             return self
 
-        import tempfile
         import os
+        import tempfile
 
         # write the saved state XML to a temporary file, load it and remove the temp file
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xml")
@@ -559,12 +559,12 @@ class MACEASE(AseEnergy):
     dtype: str = "float32"
 
     def _calculator(self):
-        from mace.calculators import mace_mp
-
         import torch
+        from mace.calculators import mace_mp
 
         torch.set_num_threads(jax.device_count())
         print(f"{torch.get_num_threads()=}")
+        print(f"{torch.cuda.is_available()=}")
 
         print(f"loading MACE model from {self.model} with dtype {self.dtype}")
 

@@ -17,10 +17,8 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jax.random import PRNGKey, choice, split
-import jax.numpy as jnp
 
-
-from IMLCV.base.bias import Bias, BiasModify, CompositeBias, StdBias, GridBias
+from IMLCV.base.bias import Bias, BiasModify, CompositeBias, GridBias, StdBias
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
@@ -39,11 +37,11 @@ from IMLCV.base.CV import (
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo
-from IMLCV.base.UnitsConstants import atomic_masses, boltzmann, kelvin, kjmol, angstrom, nanosecond
+from IMLCV.base.UnitsConstants import angstrom, atomic_masses, boltzmann, kelvin, kjmol, nanosecond
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import DTBias, GridMaskBias, RbfBias, _clip
-from IMLCV.implementations.CV import cv_trans_real, _cv_slice
+from IMLCV.implementations.CV import _cv_slice, cv_trans_real
 
 
 @dataclass
@@ -5581,7 +5579,7 @@ class DataLoaderOutput(MyPyTreeNode):
             errors = jnp.array(errors)
 
             # try:
-            from jaxopt import ScipyMinimize, GaussNewton
+            from jaxopt import GaussNewton, ScipyMinimize
 
             def fit_func(x, B, err):
                 t_int, TE = x
@@ -5981,7 +5979,7 @@ class DataLoaderOutput(MyPyTreeNode):
         use_w=True,
         periodicities: jax.Array | None = None,
         iters_nonlin: int = 10000,
-        epochs: int = 2000,
+        epochs: int = 10000,
         batch_size: int = 10000,
         init_learnable_params=True,
     ) -> "KoopmanModel":
@@ -7421,18 +7419,6 @@ class KoopmanModel(MyPyTreeNode):
 
                 _trans = trans.apply_learnable_params(learnable_params)
 
-                # cv_0, cv_t = DataLoaderOutput.apply_cv(
-                #     f=_trans,
-                #     x=[x_0],
-                #     x_t=[x_t] if x_t is not None else None,
-                #     nl=nl,
-                #     nl_t=nl_t,
-                #     chunk_size=None,
-                #     shmap=False,
-                #     macro_chunk=None,
-                #     verbose=False,
-                # )
-
                 cov = Covariances.create(
                     cv_0=[x_0],
                     cv_1=[x_t],
@@ -7443,8 +7429,9 @@ class KoopmanModel(MyPyTreeNode):
                     trans_f=_trans,
                     trans_g=_trans,
                     shrink=False,
-                    calc_pi=False,
+                    calc_pi=True,
                     get_diff=False,
+                    pi_argmask=jnp.array([-1]) if add_1 else None,
                     symmetric=symmetric,
                     generator=False,
                     chunk_size=None,
@@ -7463,39 +7450,44 @@ class KoopmanModel(MyPyTreeNode):
                 # else:
                 K = W0 @ cov.rho_01 @ W1.T
 
-                # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
-                # dl, _ = jnp.linalg.eigh(dK)
+                loss = -jnp.sum(K**2)  # vamp-2 score
 
-                if symmetric:
-                    l, u = jnp.linalg.eigh(K)
+                # # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
+                # # dl, _ = jnp.linalg.eigh(dK)
 
-                else:
-                    l, u = jnp.linalg.eig(K)
+                # if symmetric:
+                #     l, u = jnp.linalg.eigh(K)
 
-                    # if not generator:
-                    # l = -tau / jnp.log(l) / nanosecond
-
-                l = l[::-1]
-                l = l[1:]
-                # dl = dl[1:]
-                # dl = dl[::-1]
-
-                # ts = -tau / jnp.log(l) / nanosecond
                 # else:
-                #     l = l
-                # jax.debug.print("timescales: {l}", l=ts)
-                # jax.debug.print("dK matrix: {dl}", dl=dl)
-                # jax.debug.print("dK/ts  {}", dl / ts)
-                # jax.debug.print("improved eigenvalues: {l}", l=l)
+                #     l, u = jnp.linalg.eig(K)
 
-                print(f"{l=}")
+                #     # if not generator:
+                # l = -tau / jnp.log(l) / nanosecond
 
-                # miximize timescales
-                loss = -jnp.sum(l)
+                # remove the constant eigenvalue
+                # l = l[:-1]
+                # # l = l[1:]
+                # # dl = dl[1:]
+                # # dl = dl[::-1]
+
+                # # ts = -tau / jnp.log(l) / nanosecond
+                # # else:
+                # #     l = l
+                # # jax.debug.print("timescales: {l}", l=ts)
+                # # jax.debug.print("dK matrix: {dl}", dl=dl)
+                # # jax.debug.print("dK/ts  {}", dl / ts)
+                # # jax.debug.print("improved eigenvalues: {l}", l=l)
+
+                # print(f"{l=}")
+
+                # # miximize timescales
+                # loss = -jnp.sum(l)
+
+                # loss = -jnp.sum(K**2)
 
                 return loss, (None)
 
-            optimizer = optax.adamw(learning_rate=1e-4, weight_decay=1e-3)
+            optimizer = optax.adamw(learning_rate=1e-3, weight_decay=1e-4)
 
             cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0])
             # lambdas = jnp.zeros((cv_out_shape.cv.shape[1],))
@@ -9328,7 +9320,7 @@ class Covariances(MyPyTreeNode):
             theta, G = jnp.linalg.eigh(C)
 
             idx = jnp.argmax(theta)
-            mask = theta / theta[idx] > epsilon**2
+            mask = jnp.abs(theta / theta[idx]) > epsilon**2
 
             if verbose:
                 print(f"{jnp.sum(mask)=} ")

@@ -1,8 +1,9 @@
 import logging
 import os
+from enum import Enum
 from pathlib import Path
-
 from typing import TYPE_CHECKING
+
 from parsl import HighThroughputExecutor, WorkQueueExecutor
 
 # from parsl.channels import LocalChannel
@@ -12,9 +13,6 @@ from parsl.executors.threads import ThreadPoolExecutor
 from parsl.launchers import SimpleLauncher, SingleNodeLauncher, SrunLauncher
 from parsl.launchers.launchers import Launcher
 from parsl.providers import LocalProvider, SlurmProvider
-from enum import Enum
-
-
 
 if TYPE_CHECKING:
     from IMLCV.configs.cluster import GpuKind
@@ -81,7 +79,6 @@ class MySlurmProvider(SlurmProvider):
         return super().submit(command, self.tasks_per_node, job_name)
 
 
-
 def get_slurm_provider(
     env,
     label,
@@ -92,7 +89,6 @@ def get_slurm_provider(
     gpu_cluster=None,
     cpu_part=None,
     gpu_part=None,
-    
     account=None,
     # channel=LocalChannel(),
     gpu=False,
@@ -106,16 +102,14 @@ def get_slurm_provider(
     # parallelism=1,
     executor="htex",
     wq_timeout: int = 60,  # in seconds
-
     py_env=None,
     provider="slurm",
     load_cp2k=False,
-    
 ):
     if py_env is None:
         # if env == "hortense":
 
-        environment = ("cuda13"  if gpu_kind.value=="nvidia" else "rocm")  if gpu else "cpu"
+        environment = ("cuda13" if gpu_kind.value == "nvidia" else "rocm") if gpu else "cpu"
 
         print("setting python env for hortense")
         py_env = f"""
@@ -155,12 +149,10 @@ which work_queue_worker
 
     if gpu:
         # dynamic memory allocation, both for jax and pytorch, for all blocks.
-        
+
         worker_init += "export XLA_PYTHON_CLIENT_PREALLOCATE=false\n"
 
         if gpu_kind.value == "nvidia":
-
-
             worker_init += "export TF_GPU_ALLOCATOR=cuda_malloc_async\n"
             worker_init += "export PYTORCH_ALLOC_CONF=backend:cudaMallocAsync\n"
             worker_init += """
@@ -181,11 +173,13 @@ cleanup() {
 trap cleanup EXIT
 
 # give MPS a moment to initialize
-sleep 1 
+sleep 1
 """
             worker_init += "nvidia-smi\n"
         elif gpu_kind.value == "rocm":
             worker_init += "rocm-smi\n"
+
+            worker_init += "export LLVM_PATH=/opt/rocm/llvm \n "
 
     overrides = f"--ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core}"
 
@@ -226,8 +220,7 @@ sleep 1
         sheduler_options = f"""
 #SBATCH --cpus-per-task={threads_per_core}
 #SBATCH -v
-#SBATCH --export=NONE 
-
+#SBATCH --export=NONE
  """
 
         if gpu:
@@ -305,7 +298,6 @@ sleep 1
     return _executor, pre_command, ref_comm
 
 
-
 def config(
     gpu_kind,
     env=None,
@@ -318,8 +310,8 @@ def config(
     path_internal: Path | None = None,
     cpu_cluster: str | list[str] | None = None,
     gpu_cluster: str | list[str] | None = None,
-    cpu_part: str| list[str] | None = None,
-    gpu_part: str| list[str] | None = None,
+    cpu_part: str | list[str] | None = None,
+    gpu_part: str | list[str] | None = None,
     reference_blocks: int = 1,
     py_env=None,
     account=None,
@@ -331,26 +323,20 @@ def config(
     load_cp2k=False,
     training_on_gpu=False,
     reference_on_gpu=False,
-    
 ):
-
-
-    kw={
+    kw = {
         "cpu_cluster": cpu_cluster,
         "gpu_cluster": gpu_cluster,
         "cpu_part": cpu_part,
         "gpu_part": gpu_part,
         "path_internal": path_internal,
         "gpu_kind": gpu_kind,
-        
     }
 
     kw["env"] = env
     kw["py_env"] = py_env
     kw["executor"] = executor
     kw["account"] = account
-
-
 
     if not isinstance(cpu_cluster, list) and cpu_cluster is not None:
         cpu_cluster = [cpu_cluster]
@@ -418,9 +404,7 @@ def config(
 
     else:
         if training_on_gpu:
-            
             for gpu in gpu_cluster:
-               
                 label = f"training_{gpu}"
 
                 gpu_part, pre_command, _ = get_slurm_provider(
@@ -440,7 +424,6 @@ def config(
                 training_labels.append(label)
         else:
             for cpu in cpu_cluster:  # type:ignore
-             
                 label = f"training_{cpu}"
 
                 cpu_part, pre_command, _ = get_slurm_provider(
@@ -460,8 +443,6 @@ def config(
 
         if reference_on_gpu:
             for gpu in gpu_cluster:
-              
-
                 label = f"reference_{gpu}"
 
                 reference, pre_command, ref_com = get_slurm_provider(
@@ -471,7 +452,7 @@ def config(
                     mem=min_memery_per_node,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=48,
+                    max_blocks=256,
                     # parallelism=1,
                     parsl_tasks_per_block=reference_blocks,
                     threads_per_core=singlepoint_nodes,
@@ -489,8 +470,6 @@ def config(
 
         else:
             for cpu in cpu_cluster:
-               
-
                 label = f"reference_{cpu}"
 
                 reference, pre_command, ref_com = get_slurm_provider(

@@ -3933,6 +3933,9 @@ class CvFunBase(ABC, MyPyTreeNode):
         kw = self.kwargs.copy()
 
         for k in self.learnable_kwargs:
+            if learnable_kwargs[k] is None:
+                continue
+
             kw[k] = learnable_kwargs[k]
 
         if self.apply_rule is not None:
@@ -3948,6 +3951,10 @@ class CvFunBase(ABC, MyPyTreeNode):
 
         for k in self.learnable_kwargs:
             v = self.kwargs[k]
+
+            if not isinstance(v, jax.Array):
+                continue
+
             key, subkey = jax.random.split(key)
 
             try:

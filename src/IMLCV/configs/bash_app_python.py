@@ -326,6 +326,8 @@ if __name__ == "__main__":
     jax.config.update("jax_enable_x64", True)
     # jax.config.update("jax_pmap_no_rank_reduction", False)
 
+    import torch
+
     import IMLCV  # noqa: F401
 
     if rank == 0:
@@ -343,8 +345,8 @@ if __name__ == "__main__":
         print(f"Machine: {my_system.machine}")
         print(f"Processor: {my_system.processor}")
         print(f"working with {jax.local_devices()=},   {jax.device_count()=}  {os.sched_getaffinity(0)=}")
-
-        jax.print_environment_info()
+        print(f"{torch.get_num_threads()=}")
+        print(f"{torch.cuda.is_available()=}")
 
         file_in = Path(args.file_in)
 
@@ -371,10 +373,10 @@ if __name__ == "__main__":
 
         print(f"loaded  {ref_com=}  ")
 
-        print("#" * 20)
-        print("ENVIRONMENT VARIABLES:")
-        for k in sorted(os.environ):
-            print(f"{k}={os.environ[k]}")
+        # print("#" * 20)
+        # print("ENVIRONMENT VARIABLES:")
+        # for k in sorted(os.environ):
+        #     print(f"{k}={os.environ[k]}")
         print("#" * 20)
 
     else:

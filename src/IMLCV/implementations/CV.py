@@ -61,7 +61,7 @@ def _real(
     shmap,
     shmap_kwargs,
 ):
-    return x.replace(cv=jnp.angle(x.cv))
+    return x.replace(cv=jnp.real(x.cv))
 
 
 cv_trans_real = CvTrans.from_cv_function(_real)
@@ -983,27 +983,26 @@ def _linear_layer(
     shmap,
     shmap_kwargs,
     weights: jnp.ndarray,
-    biases: jnp.ndarray,
+    biases: jnp.ndarray | None,
     spectral_norm=False,
 ):
     print(f"{weights=},{biases=}")
 
-    # if spectral_norm:
-    #     sigma = jnp.linalg.norm(weights, ord=2)
+    y = weights @ x.cv
+    if biases is not None:
+        y += biases
 
-    #     weights = weights / sigma
-
-    return x.replace(cv=weights @ x.cv + biases)
+    return x.replace(cv=y)
 
 
 def linear_layer(
     weights: jnp.ndarray,
-    biases: jnp.ndarray,
+    biases: jnp.ndarray | None = None,
     spectral_norm: bool = False,
 ) -> CvTrans:
     return CvTrans.from_cv_function(
         _linear_layer,
-        learnable_argnames=["weights", "biases"],
+        learnable_argnames=["weights", "biases"] if biases is not None else ["weights"],
         static_argnames=["spectral_norm"],
         weights=weights,
         biases=biases,
@@ -2060,6 +2059,8 @@ def _mix(x: CV, nl, shmap, shmap_kwargs, order: int = 2, include_inverse: bool =
 
     comb_indices = jnp.argwhere(jnp.all(jnp.diff(stacked, axis=-1) >= 0, axis=-1), size=int(n_masked))
     print(f"{comb_indices.shape=}")
+
+    # jax.debug.print("comb_indices {}", comb_indices)
 
     # Values corresponding to each unique combination (product along each tuple)
     comb_values = jnp.prod(jnp.take(d, comb_indices), axis=1)
