@@ -36,7 +36,7 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
-from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo
+from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, FullTrajectoryInfo, EagerTrajectoryInfo
 from IMLCV.base.UnitsConstants import angstrom, atomic_masses, boltzmann, kelvin, kjmol, nanosecond
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
@@ -1011,6 +1011,7 @@ class Rounds:
         time_correlation_method="blav",
         preselect_filter: int = 1,
         n_skip: int = 0,
+        load_sp=True,
     ) -> DataLoaderOutput:
         if cv is None:
             c = self.cv
@@ -1070,8 +1071,8 @@ class Rounds:
         if verbose:
             print("obtaining raw data")
 
-        sp: list[SystemParams] = []
-        cv: list[CV] = []
+        # sp: list[SystemParams] = []
+        # cv: list[CV] = []
         ti: list[TrajectoryInfo] = []
 
         weights: list[Array] = []
@@ -1120,8 +1121,8 @@ class Rounds:
 
         for cvi in cvrnds:
             # sti_c: StaticMdInfo | None = None
-            sp_c: list[SystemParams] = []
-            cv_c: list[CV] = []
+            # sp_c: list[SystemParams] = []
+            # cv_c: list[CV] = []
             ti_c: list[TrajectoryInfo] = []
 
             if get_bias_list:
@@ -1176,11 +1177,6 @@ class Rounds:
 
                 ti_c.append(_ti)
 
-                sp0 = _ti.sp
-                cv0 = _ti.CV
-
-                # print(f"{cv0=}")
-
                 if load_weight:
                     _w_i = _ti.w
                     _rho_i = _ti.rho
@@ -1190,11 +1186,9 @@ class Rounds:
                             f"weights are not stored for {cvi=} {round_info.round=} {traj_info.num=}. (pass load_weight=False)   "
                         )
 
-                    assert _w_i.shape[0] == sp0.shape[0], (
-                        f"weights and sp shape are different: {_w_i.shape=} {sp0.shape=}"
-                    )
-                    assert _rho_i.shape[0] == sp0.shape[0], (
-                        f"weights and sp shape are different: {_rho_i.shape=} {sp0.shape=}"
+                    assert _w_i.shape[0] == _ti._size, f"weights and sp shape are different: {_w_i.shape=} {_ti._size=}"
+                    assert _rho_i.shape[0] == _ti._size, (
+                        f"weights and sp shape are different: {_rho_i.shape=} {_ti._size=}"
                     )
 
                     loaded_rho.append(_rho_i)
@@ -1203,11 +1197,6 @@ class Rounds:
                     _sigma_i = _ti.sigma
 
                     loaded_sigma.append(_sigma_i)
-
-                if cv0 is not None:
-                    assert sp0.shape[0] == cv0.shape[0], (
-                        f"shapes do not match {sp0.shape=} {cv0.shape=} "  # type: ignore
-                    )
 
                 if new_r_cut is not None:
                     if nl_info is None:
@@ -1226,7 +1215,7 @@ class Rounds:
                             only_update=True,
                             update=update_info,
                         )(
-                            self=sp0,
+                            self=_ti.sp,
                         )
 
                         update_info = NeighbourListUpdate.create(
@@ -1250,7 +1239,7 @@ class Rounds:
                                 # "shmap_kwargs",
                             ],
                         )(
-                            self=sp0,
+                            self=_ti.sp,
                             info=nl_info,
                             chunk_size=chunk_size,
                             chunk_size_inner=10,
@@ -1285,30 +1274,33 @@ class Rounds:
                 if n_tot % 100 == 0:
                     print("")
 
-                if cv0 is None:
-                    if colvar is None:
-                        bias = traj_info.get_bias()
-                        assert bias is not None
-                        colvar = bias.collective_variable
+                # if cv0 is None:
+                #     raise
+                #     print(f"recalculating cv for {cvi=} {round_info.round=} {traj_info.num=}")
 
-                    assert colvar is not None
+                #     if colvar is None:
+                #         bias = traj_info.get_bias()
+                #         assert bias is not None
+                #         colvar = bias.collective_variable
 
-                    nlr = (
-                        sp0.get_neighbour_list(
-                            info=NeighbourListInfo.create(
-                                r_cut=round_info.tic.r_cut,
-                                z_array=round_info.tic.atomic_numbers,
-                            ),
-                            chunk_size=chunk_size,
-                        )
-                        if round_info.tic.r_cut is not None
-                        else None
-                    )
+                #     assert colvar is not None
 
-                    cv0, _ = colvar.compute_cv(sp=sp0, nl=nlr)
+                #     nlr = (
+                #         _ti.sp.get_neighbour_list(
+                #             info=NeighbourListInfo.create(
+                #                 r_cut=round_info.tic.r_cut,
+                #                 z_array=round_info.tic.atomic_numbers,
+                #             ),
+                #             chunk_size=chunk_size,
+                #         )
+                #         if round_info.tic.r_cut is not None
+                #         else None
+                #     )
 
-                sp_c.append(sp0)
-                cv_c.append(cv0)
+                #     cv0, _ = colvar.compute_cv(sp=_ti.sp, nl=nlr)
+
+                # sp_c.append(sp0)
+                # cv_c.append(cv0)
 
                 if get_bias_list:
                     bias = traj_info.get_bias()
@@ -1317,7 +1309,7 @@ class Rounds:
 
             print("")
 
-            if len(sp_c) == 0:
+            if len(ti_c) == 0:
                 continue
 
             if load_weight:
@@ -1325,29 +1317,29 @@ class Rounds:
                 d_c = loaded_rho
                 if calculate_std:
                     weights_std.extend(loaded_sigma)
-                ps_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                nb_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                neb_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                F_c = [jnp.zeros((spi.shape[0])) for spi in sp_c]  # type: ignore
+                ps_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                nb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                neb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                F_c = [jnp.zeros((_ti._size)) for _ti in ti_c]  # type: ignore
                 grid_nums_c = None
 
                 # if calculate_std:
 
-                labels_c = [0] * len(sp_c)
+                labels_c = [0] * len(ti_c)
 
                 # if output_FES_bias:
                 #     FES_biases.append(None)
 
             elif weight_c:
                 if verbose:
-                    print(f"getting weights for cv_round {cvi} {len(sp_c)} trajectories")
+                    print(f"getting weights for cv_round {cvi} {len(ti_c)} trajectories")
 
                 assert sti_c is not None
                 assert colvar_c is not None
 
                 dlo = DataLoaderOutput(
-                    sp=sp_c,
-                    cv=cv_c,
+                    # sp=sp_c,
+                    # cv=cv_c,
                     ti=ti_c,
                     sti=sti_c,
                     nl=None,
@@ -1415,21 +1407,20 @@ class Rounds:
             else:
                 print("setting weights to one!")
 
-                w_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                ps_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                d_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                nb_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                neb_c = [jnp.ones((spi.shape[0])) for spi in sp_c]
-                F_c = [jnp.zeros((spi.shape[0])) for spi in sp_c]
+                w_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                ps_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                d_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                nb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                neb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
+                F_c = [jnp.zeros((_ti._size)) for _ti in ti_c]
 
-                n_samples_eff_total += sum([spi.shape[0] for spi in sp_c])
-
+                n_samples_eff_total += sum([_ti._size for _ti in ti_c])
                 grid_nums_c = None
 
-                labels_c = [0] * len(sp_c)
+                labels_c = [0] * len(ti_c)
 
-            sp.extend(sp_c)
-            cv.extend(cv_c)
+            # sp.extend(sp_c)
+            # cv.extend(cv_c)
             ti.extend(ti_c)
 
             weights.extend(w_c)
@@ -1462,19 +1453,19 @@ class Rounds:
         if verbose:
             print("Checking data")
 
-        assert len(sp) != 0, "no data found"
+        assert len(ti) != 0, "no data found"
 
         if load_weight:
             print("loaded weights from disk, not recalculating them")
 
             dlo = DataLoaderOutput(
-                sp=sp,
-                cv=cv,
+                # sp=sp,
+                # cv=cv,
                 ti=ti,
                 sti=sti_c,  # type: ignore
-                _weights=weights,
-                _rho=density,
-                _weights_std=weights_std,
+                # _weights=weights,
+                # _rho=density,
+                # _weights_std=weights_std,
                 nl=None,
                 collective_variable=colvar,  # type: ignore
             )
@@ -1486,16 +1477,17 @@ class Rounds:
         key = PRNGKey(0)
 
         if out == -1:
-            out = len(sp) - 1
+            out = len(ti) - 1
 
-            out_sp = sp
-            out_cv = cv
-            out_ti = ti
+            out_ti = []
 
             out_biases = bias_list if get_bias_list else None
 
-            out_weights = [a * b for a, b in zip(weights, density)]
-            out_rho = [a / c for a, c in zip(p_select, n_bin)]
+            for i, a in enumerate(ti):
+                a.w = weights[i] * density[i]
+                a.rho = p_select[i] / n_bin[i]
+
+                out_ti.append(a)
 
             out_weights_std = weights_std
 
@@ -1505,8 +1497,8 @@ class Rounds:
             print(f"{update_info=}")
 
             if T_max_over_T is not None and ti[0].T is not None:
-                sp_new: list[SystemParams] = []
-                cv_new: list[CV] = []
+                # sp_new: list[SystemParams] = []
+                # cv_new: list[CV] = []
                 ti_new: list[TrajectoryInfo] = []
 
                 w_new: list[Array] = []
@@ -1526,7 +1518,7 @@ class Rounds:
                 if get_bias_list:
                     new_bias_list = []
 
-                for n in range(len(sp)):
+                for n in range(len(ti)):
                     assert ti[n].T is not None
 
                     indices = jnp.where(ti[n].T > sti.T * T_max_over_T)[0]  # type: ignore
@@ -1535,9 +1527,9 @@ class Rounds:
                         print(f"temperature threshold surpassed in time_series {n=}, removing the data")
                         continue
 
-                    sp_new.append(sp[n])
+                    # sp_new.append(sp[n])
 
-                    cv_new.append(cv[n])
+                    # cv_new.append(cv[n])
                     ti_new.append(ti[n])
                     if get_bias_list:
                         new_bias_list.append(bias_list[n])
@@ -1556,9 +1548,9 @@ class Rounds:
                     if calculate_std:
                         weights_std_new.append(weights_std[n])
 
-                sp = sp_new
+                # sp = sp_new
                 ti = ti_new
-                cv = cv_new
+                # cv = cv_new
 
                 weights = w_new
                 p_select = ps_new
@@ -1578,16 +1570,16 @@ class Rounds:
                 if calculate_std:
                     weights_std = weights_std_new
 
-            print(f"len(sp) = {len(sp)}")
+            print(f"len(sp) = {len(ti)}")
 
-            for j, k in zip(sp, cv):
-                if j.shape[0] != k.shape[0]:
-                    print(f"shapes do not match {j.shape=} {k.shape=}")
+            # for j, k in zip(sp, cv):
+            #     if j.shape[0] != k.shape[0]:
+            #         print(f"shapes do not match {j.shape=} {k.shape=}")
 
-            for w_i, p_i, spi in zip(weights, p_select, sp):
-                assert w_i.shape[0] == spi.shape[0], f"weights and sp shape are different: {w_i.shape=} {spi.shape=}"
+            # for w_i, p_i, spi in zip(weights, p_select, ti.sp):
+            #     assert w_i.shape[0] == spi.shape[0], f"weights and sp shape are different: {w_i.shape=} {spi.shape=}"
 
-                assert p_i.shape[0] == spi.shape[0], f"p_select and sp shape are different: {p_i.shape=} {spi.shape=}"
+            #     assert p_i.shape[0] == spi.shape[0], f"p_select and sp shape are different: {p_i.shape=} {spi.shape=}"
 
             c_list = []
             lag_indices = []
@@ -1945,21 +1937,21 @@ class Rounds:
             # storing data    #
             ###################
 
-            out_sp: list[SystemParams] = []
-            out_cv: list[CV] = []
+            # out_sp: list[SystemParams] = []
+            # out_cv: list[CV] = []
             out_ti: list[TrajectoryInfo] = []
-            out_weights: list[Array] = []
-            out_rho: list[Array] = []
+            # out_weights: list[Array] = []
+            # out_rho: list[Array] = []
 
             out_weights_std: list[Array] | None = [] if calculate_std else None
 
             if time_series:
-                out_sp_t: list[SystemParams] = []
-                out_cv_t: list[CV] = []
+                # out_sp_t: list[SystemParams] = []
+                # out_cv_t: list[CV] = []
                 out_ti_t: list[TrajectoryInfo] = []
 
-                out_weights_t: list[Array] = []
-                out_rho_t: list[Array] = []
+                # out_weights_t: list[Array] = []
+                # out_rho_t: list[Array] = []
 
                 out_dynamic_weights: list[Array] = []
 
@@ -1967,9 +1959,6 @@ class Rounds:
                 out_biases = []
             else:
                 out_biases = None
-
-            # if verbose and time_series and percentage_list is not None:
-            #     print("interpolating data")
 
             n_tot = 0
 
@@ -1983,14 +1972,9 @@ class Rounds:
                     print("")
                     n_tot = 0
 
-                out_sp.append(sp[n][indices_n])
-                out_cv.append(cv[n][indices_n])
-
-                ti_n = ti[n][indices_n]
-                out_ti.append(ti_n)
-                out_weights.append(out_reweights[n][indices_n])
-
-                out_rho.append(out_rhos[n][indices_n])
+                ti_n: TrajectoryInfo = ti[n][indices_n]
+                ti_n.w = out_reweights[n][indices_n]
+                ti_n.rho = out_rhos[n][indices_n]
 
                 if calculate_std:
                     out_weights_std.append(weights_std[n][indices_n])
@@ -1999,25 +1983,16 @@ class Rounds:
                     idx_t = lag_indices[n][indices_n]
                     idx_t_p = idx_t + 1
 
-                    # print(f"{idx_t=} {idx_t_p=}")
-
                     if percentage_list is None:
-                        out_sp_t.append(sp[n][idx_t])
-                        out_cv_t.append(cv[n][idx_t])
-                        out_ti_t.append(ti[n][idx_t])
-                        out_weights_t.append(out_reweights[n][idx_t])
-                        out_rho_t.append(out_rhos[n][idx_t])
+                        ti_n_t: TrajectoryInfo = ti[n][idx_t]
+
+                        ti_n_t.w = out_reweights[n][idx_t]
+                        ti_n_t.rho = out_rhos[n][idx_t]
 
                         out_dynamic_weights.append(jnp.sqrt(out_dw[n][idx_t] / out_dw[n][indices_n]))
 
                     else:
-                        # print(f"interpolating {n=}")
-
                         percentage = percentage_list[n][indices_n]
-
-                        # print(f"{percentage.shape=} {sp[n][idx_t].shape=} {sp[n][idx_t_p].shape=}")
-
-                        # this performs a lineat interpolation between the two points
 
                         @partial(vmap_decorator, in_axes=(0, 0, 0))
                         def interp(xi, yi, pi):
@@ -2029,19 +2004,23 @@ class Rounds:
 
                         # TODO: make interp a CV function and use apply
 
-                        out_sp_t.append(interp(sp[n][idx_t], sp[n][idx_t_p], percentage))
-                        out_cv_t.append(interp(cv[n][idx_t], cv[n][idx_t_p], percentage))
-                        ti_t_n = interp(ti[n][idx_t], ti[n][idx_t_p], percentage)
+                        # inerp needs full
+                        ti_n_t_ = ti[n][idx_t]
+                        ti_n_tp = ti[n][idx_t_p]
+
+                        if isinstance(ti_n_t_, EagerTrajectoryInfo):
+                            ti_n_t_ = ti_n_t_.to_full()
+                        if isinstance(ti_n_tp, EagerTrajectoryInfo):
+                            ti_n_tp = ti_n_tp.to_full()
+
+                        ti_t_n: FullTrajectoryInfo = interp(ti_n_t_, ti_n_tp, percentage)
 
                         ti_t_n.t = ti_n.t + lag_n * timestep
 
-                        # times need to be compensated
-                        # ti_t_n.t = ti_n.t + lag_n * sti.timestep* sti.write_step
+                        ti_t_n.w = interp(out_reweights[n][idx_t], out_reweights[n][idx_t_p], percentage)
+                        ti_t_n.rho = interp(out_rhos[n][idx_t], out_rhos[n][idx_t_p], percentage)
 
-                        out_ti_t.append(ti_t_n)
-
-                        out_weights_t.append(interp(out_reweights[n][idx_t], out_reweights[n][idx_t_p], percentage))
-                        out_rho_t.append(interp(out_rhos[n][idx_t], out_rhos[n][idx_t_p], percentage))
+                        # out_ti_t.append(ti_t_n)
 
                         out_dynamic_weights.append(
                             jnp.sqrt(
@@ -2054,33 +2033,42 @@ class Rounds:
                             )
                         )
 
+                    ti_n.w_t = ti_n_t.w
+                    ti_n.rho_t = ti_n_t.rho
+                    ti_n.positions_t = ti_n_t.positions
+                    ti_n.cell_t = ti_n_t.cell
+
+                    ti_n.cv_t = ti_n_t.cv
+
+                out_ti.append(ti_n)
+
                 if get_bias_list:
                     assert out_biases is not None
                     out_biases.append(bias_list[n])
 
-            print("")
-            # print(f"c05 {jnp.hstack(out_weights).shape=} {w_full.shape} ")
-            # print(f"c05 {jnp.hstack(out_weights)-w_full=} ")
+            # print("")
+            # # print(f"c05 {jnp.hstack(out_weights).shape=} {w_full.shape} ")
+            # # print(f"c05 {jnp.hstack(out_weights)-w_full=} ")
 
-            def norm_rho(w, rho):
-                w_log = [(jnp.log(wi) + jnp.log(rhoi)) for wi, rhoi in zip(w, rho)]
+            # def norm_rho(w, rho):
+            #     w_log = [(jnp.log(wi) + jnp.log(rhoi)) for wi, rhoi in zip(w, rho)]
 
-                z = jnp.hstack(w_log)
-                z_max = jnp.max(z)
-                norm = jnp.log(jnp.sum(jnp.exp(z - z_max))) + z_max
+            #     z = jnp.hstack(w_log)
+            #     z_max = jnp.max(z)
+            #     norm = jnp.log(jnp.sum(jnp.exp(z - z_max))) + z_max
 
-                rho = [jnp.exp(jnp.log(rho_i) - norm) for rho_i in rho]
+            #     rho = [jnp.exp(jnp.log(rho_i) - norm) for rho_i in rho]
 
-                return rho
+            #     return rho
 
-            out_rho = norm_rho(out_weights, out_rho)
+            # out_rho = norm_rho(out_weights, out_rho)
 
-            if time_series:
-                # print(f"normalizing time series rho {out_rho_t=}")
+            # if time_series:
+            #     # print(f"normalizing time series rho {out_rho_t=}")
 
-                out_rho_t = norm_rho(out_weights_t, out_rho_t)
+            #     out_rho_t = norm_rho(out_weights_t, out_rho_t)
 
-            print(f"len(out_sp) = {len(out_sp)} ")
+            # # print(f"len(out_sp) = {len(out_sp)} ")
 
         ###################
 
@@ -2140,18 +2128,18 @@ class Rounds:
         ###################
 
         dlo_kwargs = dict(
-            sp=out_sp,
+            # sp=out_sp,
             nl=out_nl,
-            cv=out_cv,
+            # cv=out_cv,
             ti=out_ti,
             sti=sti,
             collective_variable=colvar,
             time_series=time_series,
             bias=out_biases,
             ground_bias=ground_bias,
-            _weights=out_weights,
+            # _weights=out_weights,
             scaled_tau=scale_times,
-            _rho=out_rho,
+            # _rho=out_rho,
             labels=out_labels,
             frac_full=frac_full,
             _weights_std=out_weights_std,
@@ -2161,13 +2149,8 @@ class Rounds:
 
         if time_series:
             dlo_kwargs.update(
-                sp_t=out_sp_t,
                 nl_t=out_nl_t,  # type:ignore
-                cv_t=out_cv_t,
-                ti_t=out_ti_t,
                 tau=tau,  # type:ignore
-                _weights_t=out_weights_t,
-                _rho_t=out_rho_t,
                 dynamic_weights=out_dynamic_weights,
             )
 
@@ -2268,11 +2251,16 @@ class Rounds:
         r: int,
         i: int,
         c: int | None = None,
+        eager: bool = True,
     ) -> TrajectoryInformation:
         if c is None:
             c = self.cv
 
-        ti = TrajectoryInfo.load(self.path(c=c, r=r, i=i) / "trajectory_info.h5")
+        if eager:
+            # print(f"loading eager trajectory info for {c=} {r=} {i=}")
+            ti = EagerTrajectoryInfo.create(self.path(c=c, r=r, i=i) / "trajectory_info.h5")
+        else:
+            ti = FullTrajectoryInfo.load(self.path(c=c, r=r, i=i) / "trajectory_info.h5")
 
         return TrajectoryInformation(
             ti=ti,
@@ -2492,6 +2480,26 @@ class Rounds:
             return True
 
         return False
+
+    def frac_finished(self, c: int | None = None, r: int | None = None):
+        if c is None:
+            c = self.cv
+        if r is None:
+            r = self.get_round(c=c)
+
+        i_vals = self._i_vals(c=c, r=r)
+        n_finished = 0
+        n_total = 0
+        for i in i_vals:
+            if not self.is_valid(c=c, r=r, i=i):
+                continue
+
+            n_total += 1
+
+            if self.is_finished(c=c, r=r, i=i):
+                n_finished += 1
+
+        return n_finished / n_total if n_total > 0 else 0.0
 
     def get_collective_variable(
         self,
@@ -3437,7 +3445,7 @@ class Rounds:
             # assert w_t_new is not None
             assert dlo._rho is not None
 
-            new_traj_info = TrajectoryInfo.create(
+            new_traj_info = FullTrajectoryInfo.create(
                 positions=traj_info.positions,
                 cell=traj_info.cell,
                 charges=traj_info.charges,
@@ -3449,11 +3457,11 @@ class Rounds:
                 # w_t=w_t_new[i],
                 rho=dlo._rho[i],
                 sigma=dlo._weights_std[i] if dlo._weights_std is not None else None,
-                T=traj_info._T,
-                P=traj_info._P,
-                err=traj_info._err,
-                t=traj_info._t,
-                capacity=traj_info._capacity,
+                T=traj_info.T,
+                P=traj_info.P,
+                err=traj_info.err,
+                t=traj_info.t,
+                # capacity=traj_info.capacity,
                 size=traj_info._size,
                 finished=True,
             )
@@ -3464,7 +3472,6 @@ class Rounds:
                 self.invalidate_data(c=self.cv, r=self.round, i=i)
 
 
-# @dataclass(repr=False)
 class WeightOutput(MyPyTreeNode):
     weight: list[Array]  # e^( beta U - F_i ), ammount of bias
     p_select: list[Array]  # selection probability, due to sampling
@@ -3491,27 +3498,17 @@ class WeightOutput(MyPyTreeNode):
     N_samples_eff: int | None = None
 
 
-# @dataclass(repr=False)
 class DataLoaderOutput(MyPyTreeNode):
-    sp: list[SystemParams]
-    cv: list[CV]
     sti: StaticMdInfo
     ti: list[TrajectoryInfo]
     collective_variable: CollectiveVariable
     labels: list[Array] | None = None
     nl: list[NeighbourList] | NeighbourList | None = None
-    sp_t: list[SystemParams] | None = None
     nl_t: list[NeighbourList] | NeighbourList | None = None
-    cv_t: list[CV] | None = None
-    ti_t: list[TrajectoryInfo] | None = None
     time_series: bool = False
     tau: float | None = None
     bias: list[Bias] | None = None
     ground_bias: Bias | None = None
-    _weights: list[Array] | None = None
-    _weights_t: list[Array] | None = None
-    _rho: list[Array] | None = None
-    _rho_t: list[Array] | None = None
     _weights_std: list[Array] | None = None
     dynamic_weights: list[Array] | None = None
     scaled_tau: bool = False
@@ -3520,47 +3517,33 @@ class DataLoaderOutput(MyPyTreeNode):
     bounds: jax.Array | None = None
     n_hist: int | None = None
 
-    def __add__(self, other):
-        assert isinstance(other, DataLoaderOutput)
+    @property
+    def sp(self) -> list[SystemParams] | None:
+        return [ti.sp for ti in self.ti]
 
-        assert self.time_series == other.time_series
+    @property
+    def sp_t(self) -> list[SystemParams] | None:
+        return [ti.sp_t for ti in self.ti] if self.ti[0].sp_t is not None else None
 
-        if self.tau is not None:
-            assert self.tau == other.tau
-        else:
-            assert other.tau is None
+    @property
+    def cv(self) -> list[CV] | None:
+        return [ti.CV for ti in self.ti] if self.ti[0].CV is not None else None
 
-        kwargs = dict(
-            sti=self.sti,
-            time_series=self.time_series,
-            tau=self.tau,
-            ground_bias=None,
-            collective_variable=self.collective_variable,
-        )
+    @property
+    def cv_t(self) -> list[CV] | None:
+        return [ti.CV_t for ti in self.ti] if self.ti[0].CV_t is not None else None
 
-        kwargs["sp"] = [*self.sp, *other.sp]  # type:ignore
-        kwargs["nl"] = [*self.nl, *other.nl] if self.nl is not None else None  # type:ignore
-        kwargs["cv"] = [*self.cv, *other.cv]  # type:ignore
-        kwargs["ti"] = [*self.ti, *other.ti]  # type:ignore
+    @property
+    def _weights(self) -> list[Array] | None:
+        return [ti.w for ti in self.ti] if self.ti[0].w is not None else None
 
-        if self.time_series:
-            kwargs["sp_t"] = [*self.sp_t, *other.sp_t] if self.sp_t is not None else None  # type:ignore
-            kwargs["nl_t"] = [*self.nl_t, *other.nl_t] if self.nl_t is not None else None  # type:ignore
-            kwargs["cv_t"] = [*self.cv_t, *other.cv_t] if self.cv_t is not None else None  # type:ignore
-            kwargs["ti_t"] = [*self.ti_t, *other.ti]  # type:ignore
+    @property
+    def _rho(self) -> list[Array] | None:
+        return [ti.rho for ti in self.ti] if self.ti[0].rho is not None else None
 
-        if self.bias is not None:
-            assert other.bias is not None
-            kwargs["bias"] = [*self.bias, *other.bias]  # type:ignore
-
-        if self.ground_bias is not None and other.ground_bias is not None:
-            if self.ground_bias == other.ground_bias:
-                kwargs["ground_bias"] = self.ground_bias  # type:ignore
-
-            else:
-                print("ground_bias not the same, omitting")
-
-        return DataLoaderOutput(**kwargs)  # type:ignore
+    @property
+    def _weights_t(self) -> list[Array] | None:
+        return [ti.w_t for ti in self.ti] if self.ti[0].w_t is not None else None
 
     @staticmethod
     def get_histo(
@@ -4094,432 +4077,6 @@ class DataLoaderOutput(MyPyTreeNode):
 
         return new_rho
 
-    # def dhamed_weight(
-    #     self,
-    #     samples_per_bin=5,
-    #     n_max=1e5,
-    #     chunk_size=None,
-    #     wham_eps=1e-7,
-    #     cv_0: list[CV] | None = None,
-    #     cv_t: list[CV] | None = None,
-    #     macro_chunk=1000,
-    #     verbose=False,
-    #     margin=0.1,
-    #     bias_cutoff=100 * kjmol,  # bigger values can lead to nans, about 10^-17
-    #     # min_f_i=1e-30,
-    #     log_sum_exp=True,
-    #     return_bias=False,
-    # ):
-    #     if cv_0 is None:
-    #         cv_0 = self.cv
-
-    #     if cv_t is None:
-    #         cv_t = self.cv_t
-
-    #     # https://pubs.acs.org/doi/full/10.1021/acs.jctc.7b00373
-
-    #     u_unstacked = []
-    #     beta = 1 / (self.sti.T * boltzmann)
-
-    #     # u_masks = []
-
-    #     for ti_i in self.ti:
-    #         e = ti_i.e_bias
-
-    #         if e is None:
-    #             if verbose:
-    #                 print("WARNING: no bias enerrgy found")
-    #             e = jnp.zeros((ti_i.sp.shape[0],))
-
-    #         u = beta * e  # - u0
-
-    #         u_unstacked.append(u)
-
-    #     sd = [a.shape[0] for a in cv_0]
-    #     tot_samples = sum(sd)
-
-    #     ndim = cv_0[0].shape[1]
-
-    #     def unstack_w(w_stacked, stack_dims=None):
-    #         if stack_dims is None:
-    #             stack_dims = sd
-    #         return self._unstack_weights(stack_dims, w_stacked)
-
-    #     # prepare histo
-
-    #     n_hist = CvMetric.get_n(
-    #         samples_per_bin=samples_per_bin,
-    #         samples=tot_samples,
-    #         n_dims=ndim,
-    #         max_bins=n_max,
-    #     )
-
-    #     if verbose:
-    #         print(f"using {n_hist=}")
-
-    #     print("getting bounds")
-    #     grid_bounds, _, constants = CvMetric.bounds_from_cv(
-    #         cv_0,
-    #         margin=margin,
-    #         # chunk_size=chunk_size,
-    #         # n=20,
-    #     )
-
-    #     print("getting histo")
-    #     cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
-    #         metric=self.collective_variable.metric,
-    #         n_grid=n_hist,
-    #         grid_bounds=grid_bounds,
-    #         chunk_size=chunk_size,
-    #     )
-
-    #     # assert self.bias is not None
-
-    #     if verbose:
-    #         print("step 1 dham")
-
-    #     grid_nums, _ = self.apply_cv(
-    #         closest,
-    #         cv_0,
-    #         chunk_size=chunk_size,
-    #         macro_chunk=macro_chunk,
-    #     )
-
-    #     if verbose:
-    #         print("getting histo")
-
-    #     log_hist = get_histo(
-    #         grid_nums,
-    #         None,
-    #         log_w=True,
-    #         verbose=True,
-    #         macro_chunk=macro_chunk,
-    #     )
-
-    #     hist_mask = log_hist > jnp.log(5)
-    #     print(f"{jnp.sum(hist_mask)=}")
-
-    #     # get histos and expectations values e^-beta U_a
-
-    #     len_a = len(u_unstacked)
-    #     len_i = int(jnp.sum(hist_mask))
-
-    #     log_b_ai = jnp.full((len_a, len_i), -jnp.inf)
-
-    #     for a in range(len_a):
-    #         if verbose:
-    #             print(".", end="", flush=True)
-    #             if (a + 1) % 100 == 0:
-    #                 print("")
-    #         log_hist_a_weights = get_histo(
-    #             [grid_nums[a]],
-    #             [-u_unstacked[a]],
-    #             log_w=True,
-    #         )[hist_mask]
-
-    #         log_hist_a_num = get_histo(
-    #             [grid_nums[a]],
-    #             None,
-    #             log_w=True,
-    #         )[hist_mask]
-
-    #         # e^(-beta U'_alpha) =< e^(-beta U_alpha) delta_i > _alpha
-    #         log_b_a = jnp.where(
-    #             log_hist_a_weights == -jnp.inf,
-    #             -jnp.inf,
-    #             log_hist_a_num - log_hist_a_weights,
-    #         )
-    #         log_b_ai = log_b_ai.at[a, :].set(log_b_a)
-
-    #     idx = jnp.arange(hist_mask.shape[0])[hist_mask]
-    #     idx_inv = jnp.zeros(hist_mask.shape[0], dtype=jnp.int_)
-    #     idx_inv = idx_inv.at[hist_mask].set(jnp.arange(jnp.sum(hist_mask)))
-
-    #     # find transitions counts, make sparse arrays
-
-    #     list_unique = []
-    #     list_counts = []
-    #     list_unique_all = []
-
-    #     diag_unique = []
-    #     diag_counts = []
-
-    #     for a, g_i in enumerate(grid_nums):
-    #         u, c = jnp.unique(
-    #             jnp.hstack([idx_inv[g_i.cv[1:]], idx_inv[g_i.cv[:-1]]]),
-    #             axis=0,
-    #             return_counts=True,
-    #         )
-
-    #         list_unique_all.append(jnp.unique(u))
-
-    #         diag = u[:, 0] == u[:, 1]
-
-    #         diag_vals = c[diag]
-
-    #         diag_unique.append(jnp.hstack([jnp.full((diag_vals.shape[0], 1), a), u[diag, 0].reshape(-1, 1)]))
-    #         diag_counts.append(diag_vals)
-
-    #         c = c.at[diag].set(0)
-
-    #         # print(u)
-
-    #         u = jnp.hstack([jnp.full((u.shape[0], 1), a), u])
-
-    #         list_unique.append(u)
-    #         list_counts.append(c)
-
-    #     list_unique = jnp.vstack(list_unique)
-    #     list_counts = jnp.hstack(list_counts)
-
-    #     diag_unique = jnp.vstack(diag_unique)
-    #     diag_counts = jnp.hstack(diag_counts)
-
-    #     from jax.experimental.sparse import BCOO, sparsify
-
-    #     N_a_ik = BCOO((list_counts, list_unique), shape=(len_a, len_i, len_i))
-    #     # t_a_k: sum_i  N_a_ik
-    #     # in prev, diqg elems are removed
-    #     t_a_k = sparsify(lambda x: jnp.sum(x, axis=(1)))(N_a_ik) + BCOO(
-    #         (diag_counts, diag_unique), shape=(len_a, len_i)
-    #     )
-
-    #     _counts_out = sparsify(lambda x: jnp.sum(x, axis=(0, 1)))(N_a_ik).todense()
-    #     _counts_in = sparsify(lambda x: jnp.sum(x, axis=(0, 2)))(N_a_ik).todense()
-
-    #     log_denom_k = jnp.log(_counts_out)
-
-    #     max_bins_per_run = max([a.shape[0] for a in list_unique_all])
-    #     print(f"{max_bins_per_run=}")
-
-    #     # cahnge dat structure. instead of storing all i and k, ze store used s and tm per md run a
-
-    #     bin_list = jnp.full((len_a, max_bins_per_run), -1)
-    #     log_bias_a_t = jnp.full((len_a, max_bins_per_run), -jnp.inf)
-
-    #     t_a_t = jnp.full((len_a, max_bins_per_run), -1)
-    #     N_a_st = jnp.full((len_a, max_bins_per_run, max_bins_per_run), -1)
-
-    #     @jit_decorator
-    #     def upd(bin_list, log_bias_a_t, t_a_t, N_a_st, a, n):
-    #         bin_list = bin_list.at[a, : len(n)].set(n)
-    #         log_bias_a_t = log_bias_a_t.at[a, : len(n)].set(log_b_ai[a, n])
-    #         t_a_t = t_a_t.at[a, : len(n)].set(t_a_k[a, n].todense())
-
-    #         N_a_st = N_a_st.at[a, : len(n), : len(n)].set(N_a_ik[a, n, :][:, n].todense())
-
-    #         return bin_list, log_bias_a_t, t_a_t, N_a_st
-
-    #     for a, n in enumerate(list_unique_all):
-    #         print(".", flush=True, end="")
-
-    #         bin_list, log_bias_a_t, t_a_t, N_a_st = upd(bin_list, log_bias_a_t, t_a_t, N_a_st, a, n)
-
-    #     # to sum over all i != k, ze need to create index
-
-    #     @vmap_decorator
-    #     def _idx_k(k):
-    #         return jnp.sum(bin_list == k)
-
-    #     max_k_in_runs = jnp.max(_idx_k(jnp.arange(len_i)))
-
-    #     assert max_k_in_runs <= len_a
-
-    #     print(f"{max_k_in_runs=}")
-
-    #     @vmap_decorator
-    #     def _arg_k(k):
-    #         return jnp.argwhere(bin_list == k, size=max_k_in_runs, fill_value=-1)
-
-    #     k_pos = _arg_k(jnp.arange(len_i))
-
-    #     # define fixed point fun
-
-    #     @jit_decorator
-    #     def T(log_p):
-    #         @partial(vmap_decorator, in_axes=0, out_axes=0)  # a
-    #         @partial(vmap_decorator, in_axes=(0, 1, None, 0, None, 0, None, 0), out_axes=0)  # s
-    #         @partial(vmap_decorator, in_axes=(0, 0, 0, None, 0, None, 0, None), out_axes=0)  # t
-    #         def _nom(N_st, N_ts, t_t, t_s, u_t, u_s, log_p_t, log_p_s):
-    #             use = jnp.logical_and(N_ts != -1, N_st != -1)
-
-    #             nom = jnp.log(N_st + N_ts) + u_t + jnp.log(t_t)
-
-    #             m = jnp.max(jnp.array([u_t - log_p_t, u_s - log_p_s]))
-
-    #             m = jnp.where(m == -jnp.inf, 0, m)
-
-    #             denom = jnp.log(t_t * jnp.exp(u_t - log_p_t - m) + t_s * jnp.exp(u_s - log_p_s - m)) + m
-
-    #             return jnp.where(use, nom - denom, -jnp.inf)
-
-    #         @partial(vmap_decorator, in_axes=(None, 0), out_axes=0)
-    #         def _log_p(log_p, bin_list_a):
-    #             return log_p[bin_list_a]
-
-    #         log_p_t = _log_p(log_p, bin_list)
-
-    #         log_nom_a_st = _nom(
-    #             N_a_st,
-    #             N_a_st,
-    #             t_a_t,
-    #             t_a_t,
-    #             log_bias_a_t,
-    #             log_bias_a_t,
-    #             log_p_t,
-    #             log_p_t,
-    #         )
-
-    #         @partial(vmap_decorator, in_axes=0, out_axes=0)
-    #         @partial(vmap_decorator, in_axes=1, out_axes=0)  # sum over s (i) axis
-    #         def _out_a_t(out_s):
-    #             m = jnp.nanmax(out_s)
-
-    #             m = jnp.where(m == -jnp.inf, 0, m)
-    #             return jnp.log(jnp.nansum(jnp.exp(out_s - m))) + m
-
-    #         log_nom_a_t = _out_a_t(log_nom_a_st)
-    #         # log_denom_a_t = _out_a_t(log_denom_a_st)
-
-    #         @partial(vmap_decorator, in_axes=(0, None))
-    #         def _get_k(k_pos, arr):
-    #             @vmap_decorator
-    #             def _get_k_n(k_pos_n):
-    #                 b = jnp.all(k_pos_n == jnp.array([-1, -1]))
-    #                 return jnp.where(b, -jnp.inf, arr[k_pos_n[0], k_pos_n[1]])
-
-    #             log_out = _get_k_n(k_pos)
-
-    #             m = jnp.nanmax(log_out)
-    #             m = jnp.where(m == -jnp.inf, 0, m)
-
-    #             return jnp.log(jnp.nansum(jnp.exp(log_out - m))) + m
-
-    #         log_nom_k = _get_k(k_pos, log_nom_a_t)
-
-    #         log_p = log_nom_k - log_denom_k
-
-    #         m = jnp.max(log_p)
-    #         log_p -= jnp.log(jnp.sum(jnp.exp(log_p - m))) + m
-
-    #         return log_p
-
-    #     # get fixed point
-    #     import jaxopt
-
-    #     solver = jaxopt.FixedPointIteration(
-    #         fixed_point_fun=T,
-    #         maxiter=100,
-    #         tol=wham_eps,
-    #     )
-
-    #     print("solving dham")
-
-    #     log_p = jnp.log(jnp.ones((len_i)) / len_i)
-
-    #     # with jax.debug_nans():
-    #     out = solver.run(log_p)
-
-    #     print("dham done")
-
-    #     log_p = out.params
-
-    #     # if verbose:
-    #     print(f" {out.state.iter_num=} {out.state.error=} {log_p=}")
-
-    #     # get per sample weights
-    #     @jit_decorator
-    #     def w_k(log_p):
-    #         @partial(vmap_decorator, in_axes=0, out_axes=0)  # a
-    #         @partial(vmap_decorator, in_axes=(0, 1, None, 0, None, 0, None, 0), out_axes=0)  # s
-    #         @partial(vmap_decorator, in_axes=(0, 0, 0, None, 0, None, 0, None), out_axes=0)  # t
-    #         def _nom(N_st, N_ts, t_t, t_s, u_t, u_s, log_p_t, log_p_s):
-    #             use = jnp.logical_and(N_ts != -1, N_st != -1)
-
-    #             nom = jnp.log(N_st + N_ts) + u_t  # ommited, t_t is count and e^{beta U} is
-
-    #             m = jnp.max(jnp.array([u_t - log_p_t, u_s - log_p_s]))
-
-    #             m = jnp.where(m == -jnp.inf, 0, m)
-
-    #             denom = jnp.log(t_t * jnp.exp(u_t - log_p_t - m) + t_s * jnp.exp(u_s - log_p_s - m)) + m
-
-    #             return jnp.where(use, nom - denom, -jnp.inf)
-
-    #         @partial(vmap_decorator, in_axes=(None, 0), out_axes=0)
-    #         def _log_p(log_p, bin_list_a):
-    #             return log_p[bin_list_a]
-
-    #         log_p_t = _log_p(log_p, bin_list)
-
-    #         log_nom_a_st = _nom(
-    #             N_a_st,
-    #             N_a_st,
-    #             t_a_t,
-    #             t_a_t,
-    #             log_bias_a_t,
-    #             log_bias_a_t,
-    #             log_p_t,
-    #             log_p_t,
-    #         )
-
-    #         @partial(vmap_decorator, in_axes=0)
-    #         @partial(vmap_decorator, in_axes=1)  # sum over s (i) axis
-    #         def _out_a_t(out_s):
-    #             m = jnp.nanmax(out_s)
-
-    #             m = jnp.where(m == -jnp.inf, 0, m)
-    #             return jnp.log(jnp.nansum(jnp.exp(out_s - m))) + m
-
-    #         log_nom_a_t = _out_a_t(log_nom_a_st)
-
-    #         @partial(vmap_decorator, in_axes=(0, 0))
-    #         def _out_a_k(log_nom_a_t, bin_t):
-    #             x = jnp.full((len_i,), -jnp.inf)
-    #             x = x.at[bin_t].set(log_nom_a_t)
-    #             x -= log_denom_k
-
-    #             return x
-
-    #         return _out_a_k(log_nom_a_t, bin_list)
-
-    #     x_a_k = w_k(log_p)
-    #     out_weights = []
-
-    #     s = 0
-
-    #     for a in range(len_a):
-    #         grid_nums_a = grid_nums[a]
-
-    #         w = jnp.exp(x_a_k[a, idx_inv[grid_nums_a.cv]]).reshape(-1)
-
-    #         s += jnp.sum(w)
-
-    #         out_weights.append(w)
-
-    #     out_weights = [oi / s for oi in out_weights]
-
-    #     if not return_bias:
-    #         return out_weights
-
-    #     # divide by grid spacing?
-    #     fes_grid = -log_p / beta
-    #     fes_grid -= jnp.min(fes_grid)
-
-    #     print("computing rbf")
-
-    #     from IMLCV.implementations.bias import RbfBias
-
-    #     bias = RbfBias.create(
-    #         cvs=self.collective_variable,
-    #         cv=cv_mid[hist_mask],
-    #         kernel="thin_plate_spline",
-    #         vals=-fes_grid,
-    #         # epsilon=1 / (0.815 * jnp.array([b[1] - b[0] for b in bins])),
-    #     )
-
-    #     return out_weights, bias
-
     def wham_weight(
         self,
         samples_per_bin: int = 10,
@@ -4560,7 +4117,7 @@ class DataLoaderOutput(MyPyTreeNode):
             if e is None:
                 if verbose:
                     print("WARNING: no bias enerrgy found")
-                e = jnp.zeros((ti_i.sp.shape[0],))
+                e = jnp.zeros((ti_i.shape,))
 
             e -= jnp.min(e)
 
@@ -8428,24 +7985,6 @@ class PeriodicKoopmanModel(MyPyTreeNode):
             trans_nonperiodic=self.trans_nonperiodic,
             trans=self.trans,
         )
-
-
-# class VAC(MyPyTreeNode):
-
-#     def create(
-#             cv_0: list[X],
-#             cv_1: list[X] | None = None,
-#             nl: list[NeighbourList] | NeighbourList | None = None,
-#             nl_t: list[NeighbourList] | NeighbourList | None = None,
-#             w: list[Array] | None = None,
-#             w_t: list[Array] | None = None,
-#             dynamic_weights: list[Array] | None = None,
-#             calc_pi=True,
-#             macro_chunk=1000,
-#             chunk_size=None,
-#             only_diag=False,
-#             trans_f: CvTrans | CvTrans | None = None,
-#     )
 
 
 X = TypeVar("X", "CV", "SystemParams", "NeighbourList")

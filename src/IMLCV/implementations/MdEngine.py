@@ -19,7 +19,7 @@ import IMLCV.new_yaff.verlet
 from IMLCV.base.bias import Bias, Energy
 from IMLCV.base.CV import SystemParams
 from IMLCV.base.datastructures import field
-from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, time
+from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, FullTrajectoryInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
 
 
@@ -37,7 +37,7 @@ class AseEngine(MDEngine):
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
         sp: SystemParams | None = None,
-        trajectory_info: TrajectoryInfo | None = None,
+        trajectory_info: FullTrajectoryInfo | None = None,
         trajectory_file=None,
         langevin=True,
         **kwargs,
@@ -50,7 +50,7 @@ class AseEngine(MDEngine):
             trajectory_file = Path(trajectory_file)
             # continue with existing file if it exists
             assert Path(trajectory_file).exists()
-            trajectory_info = TrajectoryInfo.load(trajectory_file)
+            trajectory_info = FullTrajectoryInfo.load(trajectory_file)
             cont = True
 
         if not cont:
@@ -267,7 +267,7 @@ class NewYaffEngine(MDEngine):
         energy: Energy,
         static_trajectory_info: StaticMdInfo,
         sp: SystemParams | None = None,
-        trajectory_info: TrajectoryInfo | None = None,
+        trajectory_info: FullTrajectoryInfo | None = None,
         trajectory_file=None,
         # additional_parts=[],
         **kwargs,
@@ -280,7 +280,7 @@ class NewYaffEngine(MDEngine):
             trajectory_file = Path(trajectory_file)
             # continue with existing file if it exists
             assert Path(trajectory_file).exists()
-            trajectory_info = TrajectoryInfo.load(trajectory_file)
+            trajectory_info = FullTrajectoryInfo.load(trajectory_file)
             cont = True
 
         if not cont:

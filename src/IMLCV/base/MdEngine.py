@@ -111,9 +111,6 @@ class StaticMdInfo:
         if self.barostat:
             assert self.timecon_baro is not None
 
-        # if self.equilibration is None:
-        #     self.equilibration = 200 * self.timestep
-
     def _save(self, hf: h5py.File):
         for name in self._arr:
             prop = self.__getattribute__(name)
@@ -163,9 +160,273 @@ class StaticMdInfo:
             return StaticMdInfo._load(hf=hf)
 
 
-class TrajectoryInfo(MyPyTreeNode):
+# static values
+_items_scal = [
+    "_t",
+    "_e_pot",
+    "_e_bias",
+    "_T",
+    "_P",
+    "_err",
+    "_w",
+    "_w_t",
+    "_rho",
+    "_rho_t",
+    "_sigma",
+]
+_items_vec = [
+    "_positions",
+    "_positions_t_cell",
+    "_cell_t",
+    "_charges",
+    "_cv",
+    "_cv_t",
+    "_cv_orig",
+]
+
+
+class TrajectoryInfo(MyPyTreeNode, ABC):
+    _size: int = field(pytree_node=False, default=-1)
+
+    @abstractmethod
+    def _get(self, prop_name: str):
+        pass
+
+    @abstractmethod
+    def _set(self, prop_name: str, value: Array):
+        pass
+
+    @abstractmethod
+    def __getitem__(self, slices) -> TrajectoryInfo:
+        pass
+
+    @property
+    def shape(self):
+        return self._size
+
+    @property
+    def volume(self):
+        if self.cell is not None:
+            vol_unsigned = jnp.linalg.det(self.cell)
+            if (vol_unsigned < 0).any():
+                print("cell volume was negative")
+
+            return jnp.abs(vol_unsigned)
+        return None
+
+    @property
+    def sp(self) -> SystemParams:
+        return SystemParams(
+            coordinates=self.positions,
+            cell=self.cell,
+        )
+
+    @sp.setter
+    def sp(self, value: SystemParams):
+        self.coordinates = value.coordinates
+        self.cell = value.cell
+
+    @property
+    def sp_t(self) -> SystemParams | None:
+        if self.positions_t is None:
+            return None
+
+        return SystemParams(
+            coordinates=self.positions_t,
+            cell=self.cell_t,
+        )
+
+    @sp_t.setter
+    def sp_t(self, value: SystemParams):
+        self.positions_t = value.coordinates
+        self.cell_t = value.cell
+
+    @property
+    def CV(self) -> CV | None:
+        if self.cv is not None:
+            return CV(cv=self.cv)
+        return None
+
+    @CV.setter
+    def CV(self, value: CV):
+        self.cv = value.cv
+
+    @property
+    def CV_t(self) -> CV | None:
+        if self.cv is not None:
+            return CV(cv=self.cv)
+        return None
+
+    @CV_t.setter
+    def CV_t(self, value: CV):
+        self.cv_t = value.cv
+
+    @property
+    def CV_orig(self) -> CV | None:
+        if self.cv_orig is not None:
+            return CV(cv=self.cv_orig)
+        return None
+
+    @CV_orig.setter
+    def CV_orig(self, value: CV):
+        self.cv_orig = value.cv
+
+    @property
+    def positions(self):
+        return self._get("_positions")
+
+    @positions.setter
+    def positions(self, value: Array):
+        self._set("_positions", value)
+
+    @property
+    def positions_t(self):
+        return self._get("_positions_t")
+
+    @positions_t.setter
+    def positions_t(self, value: Array):
+        self._set("_positions_t", value)
+
+    @property
+    def cell(self):
+        return self._get("_cell")
+
+    @cell.setter
+    def cell(self, value: Array):
+        self._set("_cell", value)
+
+    @property
+    def cell_t(self):
+        return self._get("_cell_t")
+
+    @cell_t.setter
+    def cell_t(self, value: Array):
+        self._set("_cell_t", value)
+
+    @property
+    def charges(self):
+        return self._get("_charges")
+
+    @charges.setter
+    def charges(self, value: Array):
+        self._set("_charges", value)
+
+    @property
+    def e_pot(self):
+        return self._get("_e_pot")
+
+    @e_pot.setter
+    def e_pot(self, value: Array):
+        self._set("_e_pot", value)
+
+    @property
+    def e_bias(self):
+        return self._get("_e_bias")
+
+    @e_bias.setter
+    def e_bias(self, value: Array):
+        self._set("_e_bias", value)
+
+    @property
+    def w(self):
+        return self._get("_w")
+
+    @w.setter
+    def w(self, value: Array):
+        self._set("_w", value)
+
+    @property
+    def w_t(self):
+        return self._get("_w_t")
+
+    @w_t.setter
+    def w_t(self, value: Array):
+        self._set("_w_t", value)
+
+    @property
+    def rho(self):
+        return self._get("_rho")
+
+    @rho.setter
+    def rho(self, value: Array):
+        self._set("_rho", value)
+
+    @property
+    def rho_t(self):
+        return self._get("_rho_t")
+
+    @rho_t.setter
+    def rho_t(self, value: Array):
+        self._set("_rho_t", value)
+
+    @property
+    def sigma(self):
+        return self._get("_sigma")
+
+    @sigma.setter
+    def sigma(self, value: Array):
+        self._set("_sigma", value)
+
+    @property
+    def cv(self):
+        return self._get("_cv")
+
+    @cv.setter
+    def cv(self, value: Array):
+        self._set("_cv", value)
+
+    @property
+    def cv_t(self):
+        return self._get("_cv_t")
+
+    @cv_t.setter
+    def cv_t(self, value: Array):
+        self._set("_cv_t", value)
+
+    @property
+    def T(self):
+        return self._get("_T")
+
+    @property
+    def P(self):
+        return self._get("_P")
+
+    @property
+    def err(self):
+        return self._get("_err")
+
+    @property
+    def t(self):
+        return self._get("_t")
+
+    @t.setter
+    def t(self, value: Array):
+        self._set("_t", value)
+
+    @property
+    def finished(self):
+        return self._get("_finished")
+
+    @finished.setter
+    def finished(self, value: bool):
+        self._set("_finished", value)
+
+    @property
+    def invalid(self):
+        return self._get("_invalid")
+
+    @invalid.setter
+    def invalid(self, value: bool):
+        self._set("_invalid", value)
+
+
+class FullTrajectoryInfo(TrajectoryInfo):
     _positions: Array
+    _positions_t: Array | None = None
+
     _cell: Array | None = None
+    _cell_t: Array | None = None
+
     _charges: Array | None = None
 
     _e_pot: Array | None = None
@@ -174,10 +435,13 @@ class TrajectoryInfo(MyPyTreeNode):
     _w: Array | None = None
     _w_t: Array | None = None
     _rho: Array | None = None
+    _rho_t: Array | None = None
 
     _sigma: Array | None = None
 
     _cv: Array | None = None
+    _cv_t: Array | None = None
+
     _cv_orig: Array | None = None  # usefull to reconstruct CV discovery
 
     _T: Array | None = None
@@ -192,27 +456,6 @@ class TrajectoryInfo(MyPyTreeNode):
 
     _finished: int = field(pytree_node=False, default=False)
     _invalid: int = field(pytree_node=False, default=False)
-
-    # static values
-    _items_scal = [
-        "_t",
-        "_e_pot",
-        "_e_bias",
-        "_T",
-        "_P",
-        "_err",
-        "_w",
-        "_w_t",
-        "_rho",
-        "_sigma",
-    ]
-    _items_vec = [
-        "_positions",
-        "_cell",
-        "_charges",
-        "_cv",
-        "_cv_orig",
-    ]
 
     @staticmethod
     def create(
@@ -235,7 +478,7 @@ class TrajectoryInfo(MyPyTreeNode):
         size: int = -1,
         finished=False,
         invalid=False,
-    ) -> TrajectoryInfo:
+    ) -> FullTrajectoryInfo:
         dict = {
             "_positions": positions,
             "_cell": cell,
@@ -261,7 +504,7 @@ class TrajectoryInfo(MyPyTreeNode):
         # batch
         if len(positions.shape) == 2:
             # print("adding batch dimension to trajectory info")
-            for name in [*TrajectoryInfo._items_vec, *TrajectoryInfo._items_scal]:
+            for name in [*_items_vec, *_items_scal]:
                 prop = dict[name]
                 if prop is not None:
                     dict[name] = jnp.expand_dims(prop, 0)  # jnp.array([prop])
@@ -277,9 +520,29 @@ class TrajectoryInfo(MyPyTreeNode):
         if size == -1:
             dict["_size"] = dict["_positions"].shape[0]
 
-        return TrajectoryInfo(**dict)
+        return FullTrajectoryInfo(**dict)
 
-    def __getitem__(self, slices):
+    def _get(self, prop_name: str):
+        prop = self.__getattribute__(prop_name)
+        if prop is None:
+            return None
+
+        return prop[0 : self._size]  # type:ignore
+
+    def _set(self, prop_name: str, value: Array):
+        print(f"setting trajectory info property {prop_name} ")
+
+        if self._get(prop_name) is None:
+            self.__dict__[prop_name] = jnp.zeros((self._capacity, *value.shape[1:]))  # type:ignore
+
+        self.__dict__[prop_name] = dynamic_update_slice_in_dim(
+            self.__dict__[prop_name],
+            value,
+            0,
+            0,
+        )
+
+    def __getitem__(self, slices) -> FullTrajectoryInfo:
         "gets slice from indices. the output is truncated to the to include only items wihtin _size"
 
         slz = (jnp.ones(self._capacity, dtype=jnp.int64).cumsum() - 1)[slices]
@@ -287,7 +550,7 @@ class TrajectoryInfo(MyPyTreeNode):
 
         # dynamic_slice_in_dim
 
-        return TrajectoryInfo(
+        return FullTrajectoryInfo(
             _positions=self._positions[slz, :],
             _cell=self._cell[slz, :] if self._cell is not None else None,
             _charges=(self._charges[slz, :] if self._cell is not None else None) if self._charges is not None else None,
@@ -306,8 +569,7 @@ class TrajectoryInfo(MyPyTreeNode):
             _size=int(jnp.size(slz)),
         )
 
-    # @jit
-    def _stack(ti_out, *ti: TrajectoryInfo):
+    def _stack(ti_out, *ti: FullTrajectoryInfo):
         tot_size = ti_out._size + sum([t._size for t in ti])
 
         # ti_out = ti[0]
@@ -352,10 +614,10 @@ class TrajectoryInfo(MyPyTreeNode):
 
         return ti_out
 
-    def __add__(self, ti: TrajectoryInfo) -> TrajectoryInfo:
+    def __add__(self, ti: FullTrajectoryInfo) -> FullTrajectoryInfo:
         return self._stack(ti)
 
-    def _expand_capacity(self, nc=None) -> TrajectoryInfo:
+    def _expand_capacity(self, nc=None) -> FullTrajectoryInfo:
         if nc is None:
             nc = min(self._capacity * 2, self._capacity + 1000)
 
@@ -371,32 +633,32 @@ class TrajectoryInfo(MyPyTreeNode):
             "_prev_save": int(self._size),
         }
 
-        for name in self._items_vec:
+        for name in _items_vec:
             prop = self.__dict__[name]
 
             if prop is not None:
                 dict[name] = jnp.vstack((prop, jnp.zeros((delta, *prop.shape[1:]))))  # type:ignore
 
-        for name in self._items_scal:
+        for name in _items_scal:
             prop = self.__dict__[name]
             if prop is not None:
                 dict[name] = jnp.hstack([prop, jnp.zeros(delta)])  # type:ignore
 
         print(f"new capacity is {dict['_capacity']} ")
 
-        return TrajectoryInfo(**dict)  # type:ignore
+        return FullTrajectoryInfo(**dict)  # type:ignore
 
-    def _shrink_capacity(self) -> TrajectoryInfo:
+    def _shrink_capacity(self) -> FullTrajectoryInfo:
         dict = {}
 
         print(f"shrinking capacity from {self._capacity} to {self._size} ")
 
-        for name in self._items_vec:
+        for name in _items_vec:
             prop = self.__getattribute__(name)
             if prop is not None:
                 dict[name] = prop[: self._size, :]
 
-        for name in self._items_scal:
+        for name in _items_scal:
             prop = self.__getattribute__(name)
             if prop is not None:
                 dict[name] = prop[: self._size]
@@ -406,7 +668,7 @@ class TrajectoryInfo(MyPyTreeNode):
         dict["_size"] = int(self._size)
         dict["_finished"] = int(self._finished)
 
-        return TrajectoryInfo(**dict)
+        return FullTrajectoryInfo(**dict)
 
     def save(self, filename: str | Path):
         if isinstance(filename, str):
@@ -421,7 +683,7 @@ class TrajectoryInfo(MyPyTreeNode):
     def _save(self, hf: h5py.File):
         print(f"saving trajectory info to {hf.filename}, size {self._size}/{self._capacity}")
 
-        for name in [*self._items_scal, *self._items_vec]:
+        for name in [*_items_scal, *_items_vec]:
             prop = self.__getattribute__(name)
             if prop is not None:
                 # if name in hf:
@@ -452,9 +714,9 @@ class TrajectoryInfo(MyPyTreeNode):
         hf.attrs.create("_prev_save", self._size)
 
     @staticmethod
-    def load(filename) -> TrajectoryInfo:
+    def load(filename) -> FullTrajectoryInfo:
         with h5py.File(str(filename), "r") as hf:
-            return TrajectoryInfo._load(hf=hf)
+            return FullTrajectoryInfo._load(hf=hf)
 
     @staticmethod
     def _load(hf: h5py.File):
@@ -462,7 +724,7 @@ class TrajectoryInfo(MyPyTreeNode):
         attrs = {}
 
         for key, val in hf.items():
-            if (key not in TrajectoryInfo._items_scal) and (key not in TrajectoryInfo._items_vec):
+            if (key not in _items_scal) and (key not in _items_vec):
                 # print(f"{key=} deprecated, ignoring")
                 continue
 
@@ -471,153 +733,78 @@ class TrajectoryInfo(MyPyTreeNode):
         for key, val in hf.attrs.items():
             attrs[key] = val
 
-        return TrajectoryInfo(
+        return FullTrajectoryInfo(
             **props,
             **attrs,
         )
 
-    @property
-    def sp(self) -> SystemParams:
-        return SystemParams(
-            coordinates=jnp.array(self._positions[0 : self._size, :]),
-            cell=jnp.array(self._cell[0 : self._size, :]) if self._cell is not None else None,
+
+class EagerTrajectoryInfo(TrajectoryInfo):
+    """Loads trajectory info from file on demand, only the requested properties."""
+
+    path: Path
+    indices: Array
+    overide_dict: dict = field(pytree_node=False, default_factory=dict)
+
+    @staticmethod
+    def create(file_path) -> EagerTrajectoryInfo:
+        with h5py.File(str(file_path), "r") as hf:
+            size = hf.attrs["_size"]
+
+        return EagerTrajectoryInfo(
+            path=Path(file_path),
+            indices=jnp.arange(size),
+            _size=size,
         )
 
-    @property
-    def positions(self) -> Array | None:
-        if self._positions is None:
+    def to_full(self) -> FullTrajectoryInfo:
+        with h5py.File(str(self.path), "r") as hf:
+            out = FullTrajectoryInfo._load(hf=hf)[self.indices]
+
+        for key in self.overide_dict.keys():
+            out._set(key, self.overide_dict[key])
+
+        return out
+
+    def _get(self, prop_name: str):
+        # print(f"getting {prop_name} from eager trajectory info")
+
+        if prop_name in self.overide_dict:
+            print(f"getting overriden {prop_name} from eager trajectory info")
+            return self.overide_dict[prop_name]
+
+        # this first loads the full property from file, then selects indices
+        # h5py fancy indexing doens't fully replicate numpy/jax behaviour
+
+        with h5py.File(str(self.path), "r") as hf:
+            if prop_name in hf:
+                if prop_name in _items_scal:
+                    return jnp.array(hf[prop_name])[self.indices]
+                elif prop_name in _items_vec:
+                    return jnp.array(hf[prop_name])[self.indices, :]
+                else:
+                    return hf[prop_name]
+
             return None
-        return self._positions[0 : self._size, :]
 
-    @property
-    def cell(self) -> Array | None:
-        if self._cell is None:
-            return None
-        return self._cell[0 : self._size, :]
+    def _set(self, prop_name: str, value: Array):
+        print(f"setting trajectory info property {prop_name} in eager trajectory info")
+        self.overide_dict[prop_name] = value
 
-    @property
-    def volume(self):
-        if self.cell is not None:
-            vol_unsigned = jnp.linalg.det(self._cell)
-            if (vol_unsigned < 0).any():
-                print("cell volume was negative")
+    def __getitem__(self, slices) -> EagerTrajectoryInfo:
+        for key in self.overide_dict.keys():
+            if key in _items_scal:
+                self.overide_dict[key] = self.overide_dict[key][slices]
+            elif key in _items_vec:
+                self.overide_dict[key] = self.overide_dict[key][slices, :]
+            else:
+                self.overide_dict[key] = self.overide_dict[key]
 
-            return jnp.abs(vol_unsigned)
-        return None
-
-    @property
-    def charges(self) -> Array | None:
-        if self._charges is None:
-            return None
-        return self._charges[0 : self._size, :]
-
-    @property
-    def e_pot(self) -> Array | None:
-        if self._e_pot is None:
-            return None
-        return self._e_pot[0 : self._size]
-
-    @property
-    def w(self) -> Array | None:
-        if self._w is None:
-            return None
-        return self._w[0 : self._size]
-
-    @property
-    def w_t(self) -> Array | None:
-        if self._w_t is None:
-            return None
-        return self._w_t[0 : self._size]
-
-    @property
-    def rho(self) -> Array | None:
-        if self._rho is None:
-            return None
-        return self._rho[0 : self._size]
-
-    @property
-    def sigma(self) -> Array | None:
-        if self._sigma is None:
-            return None
-        return self._sigma[0 : self._size]
-
-    @property
-    def e_bias(self) -> Array | None:
-        if self._e_bias is None:
-            return None
-        return self._e_bias[0 : self._size]
-
-    @e_bias.setter
-    def e_bias(self, val):
-        assert val.shape[0] == self._size
-
-        val = jnp.array(val)
-
-        if self._e_bias is None:
-            self._e_bias = jnp.zeros((self._capacity,))
-
-        self._e_bias = self._e_bias.at[: self._size].set(val)
-
-    @property
-    def cv(self) -> Array | None:
-        if self._cv is None:
-            return None
-        return self._cv[0 : self._size, :]
-
-    @property
-    def cv_orig(self) -> Array | None:
-        if self._cv_orig is None:
-            return None
-        return self._cv_orig[0 : self._size, :]
-
-    @property
-    def T(self) -> Array | None:
-        if self._T is None:
-            return None
-        return self._T[0 : self._size]
-
-    @property
-    def P(self) -> Array | None:
-        if self._P is None:
-            return None
-        return self._P[0 : self._size]
-
-    @property
-    def err(self) -> Array | None:
-        if self._err is None:
-            return None
-        return self._err[0 : self._size]
-
-    @property
-    def t(self) -> Array | None:
-        if self._t is None:
-            return None
-        return self._t[0 : self._size]
-
-    @t.setter
-    def t(self, val):
-        assert val.shape[0] == self._size
-
-        if self._t is None:
-            self._t = jnp.zeros((self._capacity,))
-
-        self._t = self._t.at[: self._size].set(val)
-
-    @property
-    def shape(self):
-        return self._size
-
-    @property
-    def CV(self) -> CV | None:
-        if self._cv is not None:
-            return CV(cv=self._cv[0 : self._size, :])
-        return None
-
-    @property
-    def CV_orig(self) -> CV | None:
-        if self._cv_orig is not None:
-            return CV(cv=self._cv_orig[0 : self._size, :])
-        return None
+        return EagerTrajectoryInfo(
+            path=self.path,
+            indices=self.indices[slices],
+            overide_dict=self.overide_dict,
+        )
 
 
 ######################################
@@ -633,7 +820,7 @@ class MDEngine(ABC):
     energy: Energy
     sp: SystemParams
     static_trajectory_info: StaticMdInfo
-    trajectory_info: TrajectoryInfo | None = field(default=None)
+    trajectory_info: FullTrajectoryInfo | None = field(default=None)
     trajectory_file: Path | None = None
     time0: float = field(default_factory=time)
 
@@ -661,7 +848,7 @@ class MDEngine(ABC):
             trajectory_file = Path(trajectory_file)
             # continue with existing file if it exists
             if Path(trajectory_file).exists():
-                trajectory_info = TrajectoryInfo.load(trajectory_file)
+                trajectory_info = FullTrajectoryInfo.load(trajectory_file)
                 cont = True
 
         if not cont or trajectory_info is None:
@@ -775,7 +962,7 @@ class MDEngine(ABC):
             if Path(trajectory_file).exists():
                 print("updating sp from trajectory file")
 
-                self.trajectory_info = TrajectoryInfo.load(self.trajectory_file)
+                self.trajectory_info = FullTrajectoryInfo.load(self.trajectory_file)
                 self.step = self.trajectory_info._size * self.static_trajectory_info.save_step
                 self.sp = self.trajectory_info.sp[-1]
 
@@ -833,7 +1020,7 @@ class MDEngine(ABC):
     def _run(self, steps):
         raise NotImplementedError
 
-    def get_trajectory(self) -> TrajectoryInfo:
+    def get_trajectory(self) -> FullTrajectoryInfo:
         assert self.trajectory_info is not None
 
         return self.trajectory_info._shrink_capacity()
@@ -861,7 +1048,7 @@ class MDEngine(ABC):
             else:
                 sp = self.sp
 
-            ti = TrajectoryInfo.create(
+            ti = FullTrajectoryInfo.create(
                 positions=sp.coordinates,
                 cell=sp.cell,
                 e_pot=e_pot,
