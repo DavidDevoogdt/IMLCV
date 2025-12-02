@@ -1,0 +1,62 @@
+Bootstrap: docker
+From: ghcr.io/prefix-dev/pixi:latest
+Stage: build
+
+%labels
+    Author ddvoogdt
+    Version v1
+
+%files
+    IMLCV/src /app/src
+    IMLCV/pyproject.toml /app/pyproject.toml
+
+%post
+    # set -euo pipefail
+
+    rm -rf /app/src/IMLCV/data
+
+    apt-get update && apt-get install -y git libdw1 && apt-get clean
+
+    # ensure /app exists and work inside it
+    # mkdir -p /app
+    # chown root:root /app
+    cd /app 
+    # ls
+
+    pixi install -e cpu
+    # create the environment activation script
+    pixi shell-hook -e cpu > /shell-hook.sh
+    cat /shell-hook.sh
+
+    echo 'exec "$@"' >> /shell-hook.sh
+    chmod +x /shell-hook.sh
+
+    pixi clean cache --yes
+
+    #remove the app build directory to save space
+    # ls -a /app
+    # ls -a /root
+    # ls -a ~/
+
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/* /root/.cache/*
+    
+
+    mkdir -p /mnt/overlay
+
+
+%environment
+    export PATH="app/.pixi/envs/cpu/bin:$PATH"
+    export PIXI_HOME="app/.pixi"
+
+%test
+    echo "Running container tests..."
+
+    echo "IMLCV version:"
+    exec /bin/bash /shell-hook.sh python -c "import IMLCV; print(IMLCV.__version__)"
+    echo "work queue worker command"
+    exec /bin/bash /shell-hook.sh echo "$(which work_queue_worker)"
+
+%runscript
+    cd /mnt/overlay
+    # Activate environment and run passed command
+    exec /bin/bash /shell-hook.sh "$@"

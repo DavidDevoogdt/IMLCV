@@ -2622,7 +2622,7 @@ packages:
 - pypi: ./
   name: imlcv
   version: 0.1.0
-  sha256: 5075bbeae4df5772b1ede1f57b3cdbf818a075cbd644b8098ef5f20bd9234f66
+  sha256: 51253e386b3116fed753eb1bd8a57f0db99d0c4718c6acc20c127746220ddefd
   requires_dist:
   - cloudpickle
   - filelock

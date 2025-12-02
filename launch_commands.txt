@@ -1,0 +1,2 @@
+# jupyter lab launch command
+sbatch --export=None --partition=small -N 1 -c 10 --account=project_465001796   --time 72:00:00  test.sh jupyter lab --allow-root --ip 0.0.0.0 --no-browser

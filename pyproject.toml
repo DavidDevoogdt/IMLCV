@@ -94,8 +94,6 @@ jax = "*"
 jaxlib = "*"
 torch = "*"
 
-
-
 IMLCV = { path = ".", editable = true }
 
 [tool.pixi.pypi-options]
