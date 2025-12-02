@@ -357,7 +357,7 @@ class RBFInterpolator(MyPyTreeNode):
 
                 return _gml(P, K + smooth**2 * jnp.diag(sigma**2), d)
 
-            from jaxopt import ScipyMinimize, GaussNewton, GradientDescent
+            from jaxopt import GaussNewton, GradientDescent, ScipyMinimize
 
             print(
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Starting {smoothing_solver} optimization of smoothing parameter...",

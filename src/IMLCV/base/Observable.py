@@ -13,7 +13,7 @@ from IMLCV.base.bias import Bias, BiasModify, GridBias, StdBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
 from IMLCV.base.datastructures import Partial_decorator
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
-from IMLCV.base.UnitsConstants import kelvin, kjmol, picosecond, boltzmann
+from IMLCV.base.UnitsConstants import boltzmann, kelvin, kjmol, picosecond
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import RbfBias, _clip
@@ -150,14 +150,14 @@ class Observable:
         #     cvs = [[a[:, i] for a in trajectories] for i in range(nd)]
 
         if nd == 1:
-            from thermolib.thermodynamics.histogram import Histogram1D
             from thermolib.thermodynamics.bias import BiasPotential2D
+            from thermolib.thermodynamics.histogram import Histogram1D
 
             BiasND = BiasPotential2D
             HistND = Histogram1D
         elif nd == 2:
-            from thermolib.thermodynamics.histogram import Histogram2D
             from thermolib.thermodynamics.bias import BiasPotential2D
+            from thermolib.thermodynamics.histogram import Histogram2D
 
             BiasND = BiasPotential2D
             HistND = Histogram2D

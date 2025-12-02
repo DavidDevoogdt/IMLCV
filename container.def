@@ -20,7 +20,7 @@ Stage: build
     # ensure /app exists and work inside it
     # mkdir -p /app
     # chown root:root /app
-    cd /app 
+    cd /app
     # ls
 
     pixi install -e cpu
@@ -39,7 +39,7 @@ Stage: build
     # ls -a ~/
 
     rm -rf /var/lib/apt/lists/* /var/cache/apt/* /root/.cache/*
-    
+
 
     mkdir -p /mnt/overlay
 

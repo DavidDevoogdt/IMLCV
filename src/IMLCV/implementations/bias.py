@@ -6,12 +6,12 @@ import numpy as np
 from jax import Array
 from typing_extensions import Self
 
-from IMLCV.base.bias import Bias, CompositeBias, NoneBias, GridBias
+from IMLCV.base.bias import Bias, CompositeBias, GridBias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
 from IMLCV.base.datastructures import field, vmap_decorator
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.tools._rbf_interp import RBFInterpolator
 from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.tools._rbf_interp import RBFInterpolator
 
 ######################################
 # helper functions that are pickable #

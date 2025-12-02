@@ -10,12 +10,12 @@ import matplotlib
 # import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
-from matplotlib.colors import Normalize
-from matplotlib.cm import ScalarMappable
 
-from IMLCV.base.bias import Bias, NoneBias, StdBias, GridBias
+from IMLCV.base.bias import Bias, GridBias, NoneBias, StdBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import kelvin, kjmol

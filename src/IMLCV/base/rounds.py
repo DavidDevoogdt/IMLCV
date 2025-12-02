@@ -36,7 +36,7 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
-from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, TrajectoryInfo, FullTrajectoryInfo, EagerTrajectoryInfo
+from IMLCV.base.MdEngine import EagerTrajectoryInfo, FullTrajectoryInfo, MDEngine, StaticMdInfo, TrajectoryInfo
 from IMLCV.base.UnitsConstants import angstrom, atomic_masses, boltzmann, kelvin, kjmol, nanosecond
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors

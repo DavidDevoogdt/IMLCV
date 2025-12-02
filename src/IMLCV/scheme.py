@@ -12,7 +12,7 @@ from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
-from IMLCV.base.UnitsConstants import boltzmann, kjmol, angstrom
+from IMLCV.base.UnitsConstants import angstrom, boltzmann, kjmol
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import HarmonicBias
 
