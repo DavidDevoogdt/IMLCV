@@ -2897,8 +2897,6 @@ class Transformer(MyPyTreeNode):
 
         use_macro_chunk = True
 
-        print(close)
-
         def _f(color_data, nl, shmap, shmap_kwargs, close, dim, pp) -> jax.Array:
             # print(f"{color_data=} {close=} {dim=}")
             if close:
@@ -2977,9 +2975,10 @@ class Transformer(MyPyTreeNode):
                     dim=dim,
                     pp=pp,
                 ),
-                verbose=False,
-                macro_chunk=320,
+                verbose=True,
+                macro_chunk=10000,
                 shmap=False,
+                jit_f=True,
             )
 
         else:

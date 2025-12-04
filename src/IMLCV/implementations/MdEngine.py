@@ -59,7 +59,7 @@ class AseEngine(MDEngine):
         else:
             assert trajectory_info is not None
 
-            create_kwargs["step"] = trajectory_info._size
+            create_kwargs["step"] = trajectory_info.size
             sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
                 create_kwargs["time0"] = time()
@@ -249,7 +249,6 @@ class AseEngine(MDEngine):
         self._verlet.run(int(steps))
 
 
-@dataclass
 class NewYaffEngine(MDEngine):
     """MD engine with YAFF as backend.
 
@@ -259,6 +258,7 @@ class NewYaffEngine(MDEngine):
 
     _verlet_initialized: bool = False
     _verlet: IMLCV.new_yaff.verlet.VerletIntegrator | None = None
+    _verlet_hook: IMLCV.new_yaff.verlet.VerletHook | None = None
     _yaff_ener: Any | None = None
 
     @staticmethod
@@ -289,7 +289,7 @@ class NewYaffEngine(MDEngine):
         else:
             assert trajectory_info is not None
 
-            create_kwargs["step"] = trajectory_info._size
+            create_kwargs["step"] = trajectory_info.size
             sp = trajectory_info.sp[-1]
             if trajectory_info.t is not None:
                 create_kwargs["time0"] = time()
@@ -327,8 +327,7 @@ class NewYaffEngine(MDEngine):
                     cv=iterative.cv,
                     e_bias=iterative.e_bias,
                     e_pot=iterative.epot - iterative.e_bias,
-                    gpos_rmsd=iterative.rmsd_gpos,
-                    gpos_bias_rmsd=iterative.rmsd_gpos_bias,
+                    sp=iterative.sp,
                 )
 
                 if hasattr(iterative, "press"):
@@ -336,20 +335,19 @@ class NewYaffEngine(MDEngine):
 
                 self.md_engine.save_step(**kwargs)  # type:ignore
 
-                # print(f"{iterative.ff.system.sp=}")
-
-                self.md_engine.sp = iterative.ff.system.sp
-                self.md_engine.update_nl()
-
             def expects_call(self, counter):
                 return True
 
         from IMLCV.new_yaff.ff import YaffFF
 
         self._yaff_ener = YaffFF.create(
-            md_engine=self,
-            # additional_parts=self.additional_parts,
+            energy=self.energy,
+            bias=self.bias,
+            sp=self.sp,
+            tic=self.static_trajectory_info,
         )
+
+        self._yaff_ener.system.update_nl()
 
         thermo = None
 
@@ -375,11 +373,13 @@ class NewYaffEngine(MDEngine):
                 anisotropic=True,
             )
 
-        hooks.append(myHook(md_engine=self))
+        hooks.append(
+            myHook(md_engine=self),
+        )
 
         from IMLCV.new_yaff.verlet import VerletIntegrator
 
-        self._verlet = VerletIntegrator.create(
+        self._verlet, self._verlet_hook = VerletIntegrator.create(
             ff=self._yaff_ener,
             timestep=self.static_trajectory_info.timestep,
             temp0=self.static_trajectory_info.T,
@@ -394,9 +394,11 @@ class NewYaffEngine(MDEngine):
     def load(file, **kwargs) -> MDEngine:
         return MDEngine.load(file, **kwargs)
 
-    def _run(self, steps):
+    def run(self, steps):
         if not self._verlet_initialized:
             self._setup_verlet()
 
-        assert self._verlet is not None
-        self._verlet.run(int(steps))
+        return super().run(steps)
+
+    def _step(self):
+        self._verlet, self._verlet_hook = self._verlet.step(self._verlet_hook)

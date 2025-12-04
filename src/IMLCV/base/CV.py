@@ -2695,6 +2695,26 @@ class NeighbourList(MyPyTreeNode):
 
         return a, b
 
+    def slow_update_nl(
+        self,
+        sp: SystemParams,
+    ):
+        b = self.needs_update(sp)
+
+        if not b:
+            return self
+
+        b, nl = self.update_nl(sp)
+
+        if b:
+            return nl
+
+        print(f"slow update_nl")
+
+        self = sp.get_neighbour_list(self.info)
+
+        return self
+
     def nl_split_z(self, p):
         f = self.info.nl_split_z
 
@@ -3958,7 +3978,7 @@ class CvFunBase(ABC, MyPyTreeNode):
             key, subkey = jax.random.split(key)
 
             try:
-                kwargs[k] = initializer(subkey, v.shape)
+                kwargs[k] = initializer(subkey, v.shape, v.dtype)
             except Exception as e:
                 kwargs[k] = jnp.zeros_like(v)
 

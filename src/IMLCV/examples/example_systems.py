@@ -1002,11 +1002,11 @@ def _cv_system_1(
         x = jnp.dot(v, w)
         y = jnp.dot(jnp.cross(b1, v), w)
 
-        theta = jnp.atan2(y, x)
+        # theta = jnp.atan2(y, x)
 
-        return jnp.exp(1j * theta)
+        return x, y
 
-    dihedrals = jax.vmap(
+    dihedrals_cos, dihedrals_sin = jax.vmap(
         dihedral_angle,
         in_axes=(None, None, 0, None),
     )(coordinaten_idx_C[0], coordinaten_idx_C[1], dihedral_oxygens, 95)
@@ -1018,7 +1018,8 @@ def _cv_system_1(
                 coordination_CH.cv,
                 coordination_CO.cv,
                 distance_COM_AL,
-                dihedrals,
+                dihedrals_cos,
+                dihedrals_sin,
             ]
         )
     )
@@ -1228,9 +1229,9 @@ def system_2():
         timecon_baro=500 * femtosecond,
         atomic_numbers=z_array,
         r_cut=None,
-        write_step=100,
-        screen_log=10,
-        save_step=10,
+        write_step=1000,
+        screen_log=100,
+        save_step=50,
         T=300 * kelvin,
         P=None,
     )

@@ -74,7 +74,7 @@ class EnergyError(Exception):
     pass
 
 
-class Energy:
+class Energy(MyPyTreeNode, ABC):
     external_callback = True
     manual_vtens = False
 
@@ -192,7 +192,36 @@ class Energy:
                 gpos=gpos,
             )
 
-        return self._compute_coor(sp, nl, gpos=gpos, vir=vir)
+        # mock evaluation for pure callback
+        def f(sp, nl):
+            return self._compute_coor(
+                sp,
+                nl,
+                gpos=gpos,
+                vir=vir,
+            )
+
+        if self.external_callback:
+
+            def _mock_f(sp):
+                return EnergyResult(
+                    energy=jnp.array(1.0),
+                    gpos=None if not gpos else sp.coordinates,
+                    vtens=None if not vir else sp.cell,
+                )
+
+            dtypes = jax.eval_shape(_mock_f, sp)
+
+            out = jax.pure_callback(
+                f,
+                dtypes,
+                sp,
+                self.nl,
+            )
+        else:
+            out = f(sp, self.nl)
+
+        return out
 
     def save(self, filename: str | Path):
         filename = Path(filename)
@@ -312,10 +341,6 @@ class EnergyFn(Energy, MyPyTreeNode):
         )
 
         return res
-
-
-class PlumedEnerg(Energy):
-    pass
 
 
 ######################################

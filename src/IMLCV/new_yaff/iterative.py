@@ -75,7 +75,7 @@ class Hook(MyPyTreeNode):
     step: jax.Array = field(default_factory=lambda: jnp.array(1))
 
     def expects_call(self, counter):
-        return bool(counter >= self.start and (counter - self.start) % self.step == 0)
+        return jnp.logical_and(counter >= self.start, (counter - self.start) % self.step == 0)
 
     def __call__(self, iterative):
         raise NotImplementedError

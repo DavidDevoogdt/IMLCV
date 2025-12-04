@@ -276,9 +276,9 @@ class CSVRThermostat(ThermostatHook):
         fact = (1 - c) * self.kin / iterative.ndof / iterative.ekin
         alpha = jnp.sign(R + jnp.sqrt(c / fact)) * jnp.sqrt(c + (S + R**2) * fact + 2 * R * jnp.sqrt(c * fact))
         iterative.vel = alpha * iterative.vel
-        iterative.ekin_new = alpha**2 * iterative.ekin
-        self.econs_correction += (1 - alpha**2) * iterative.ekin
-        iterative.ekin = iterative.ekin_new
+        ekin_new = alpha**2 * iterative.ekin
+        self.econs_correction += iterative.ekin - ekin_new
+        iterative.ekin = ekin_new
 
         return self, iterative
 
@@ -399,38 +399,54 @@ class NHChain(MyPyTreeNode):
     temp: jax.Array
     timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
 
-    restart_pos: bool = False
+    # restart_pos: bool = False
     restart_vel: bool = False
 
-    pos0: jax.Array | None = None
-    vel0: jax.Array | None = None
+    # pos0: jax.Array | None = None
+    # vel0: jax.Array | None = None
 
-    pos: jax.Array | None = None
-    vel: jax.Array | None = None
+    pos: jax.Array
+    vel: jax.Array
 
-    masses: jax.Array | None = None
+    masses: jax.Array
 
     ndof: int = 0
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
-    def __post_init__(self):
-        if self.pos0 is not None:
-            self.restart_pos = True
-        if self.vel0 is not None:
-            self.restart_vel = True
+    @staticmethod
+    def create(
+        pos0: jax.Array | None,
+        vel0: jax.Array | None,
+        masses: jax.Array,
+        length: int,
+        timestep: jax.Array,
+        temp: jax.Array,
+        timecon: jax.Array = jnp.array(100 * femtosecond),
+        ndof: int = 0,
+        key: jax.Array = jax.random.key(42),
+    ) -> NHChain:
+        pos = pos0 if pos0 is not None else jnp.zeros(length)
+        vel = vel0 if vel0 is not None else jnp.zeros(length)
 
-        if self.ndof > 0:  # avoid setting self.masses with zero gaussian-width in set_ndof if ndof=0
-            self.set_ndof(self.ndof)
+        restart_vel = vel0 is not None
 
-        # allocate degrees of freedom
-        if self.restart_pos:
-            self.pos = self.pos0
-        else:
-            self.pos = jnp.zeros(self.length)
-        if self.restart_vel:
-            self.vel = self.vel0
-        else:
-            self.vel = jnp.zeros(self.length)
+        chain = NHChain(
+            length=length,
+            timestep=timestep,
+            temp=temp,
+            timecon=timecon,
+            pos=pos,
+            vel=vel,
+            masses=masses,
+            ndof=ndof,
+            restart_vel=restart_vel,
+            key=key,
+        )
+
+        if chain.ndof > 0:
+            chain = chain.set_ndof(chain.ndof)
+
+        return chain
 
     def set_ndof(self, ndof: int) -> NHChain:
         # set the masses according to the time constant
@@ -570,6 +586,7 @@ class NHCThermostat(ThermostatHook):
         # If needed, determine the number of _internal_ degrees of freedom
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
+
         # Configure the chain
         self.chain.timestep = iterative.timestep
         self.chain.set_ndof(iterative.ndof)
@@ -588,26 +605,3 @@ class NHCThermostat(ThermostatHook):
         self.econs_correction = self.chain.get_econs_correction()
 
         return self, iterative
-
-
-class NHCAttributeStateItem(StateItem):
-    attr: str
-
-    def get_value(self, iterative: VerletIntegrator):
-        chain = None
-        from IMLCV.new_yaff.npt import TBCombination
-
-        hook = iterative.verlet_hook
-
-        # for hook in iterative.hooks:
-        if isinstance(hook, NHCThermostat):
-            chain = hook.chain
-
-        elif isinstance(hook, TBCombination):
-            if isinstance(hook.thermostat, NHCThermostat):
-                chain = hook.thermostat.chain
-
-        if chain is None:
-            raise TypeError("Iterative does not contain a NHCThermostat hook.")
-
-        return getattr(chain, self.attr)

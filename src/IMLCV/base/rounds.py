@@ -373,6 +373,8 @@ class Rounds:
             )
 
         if plot_points:
+            print("loading data")
+
             dlo = self.data_loader(
                 num=1,
                 out=-1,
@@ -383,6 +385,8 @@ class Rounds:
                 split_data=True,
                 **dlo_kwargs,
             )  # type: ignore
+
+            print("plotting data")
 
             Transformer.plot_app(
                 collective_variables=[dlo.collective_variable],
@@ -516,7 +520,7 @@ class Rounds:
                 if (not _r_i.finished) and only_finished:
                     continue
                 # no points in collection
-                if _r_i.ti._size <= 0:
+                if _r_i.ti.size <= 0:
                     continue
 
                 # if T is None:
@@ -953,7 +957,7 @@ class Rounds:
                 if (not _r_i.finished) and only_finished:
                     continue
                 # no points in collection
-                if _r_i.ti._size <= 0:
+                if _r_i.ti.size <= 0:
                     continue
 
                 t_y = time.time()
@@ -1159,8 +1163,8 @@ class Rounds:
                 only_finished=only_finished,
             ):
                 if min_traj_length is not None:
-                    if traj_info.ti._size < min_traj_length or traj_info.ti._size <= lag_n:
-                        # print(f"skipping trajectyory because it's not long enough {traj.ti._size}<{min_traj_length}")
+                    if traj_info.ti.size < min_traj_length or traj_info.ti.size <= lag_n:
+                        # print(f"skipping trajectyory because it's not long enough {traj.ti.size}<{min_traj_length}")
                         continue
                     # else:
                     # print("adding traweights=jectory")
@@ -1171,7 +1175,7 @@ class Rounds:
                 _ti = traj_info.ti
 
                 if n_skip > 0:
-                    if _ti._size <= n_skip:
+                    if _ti.size <= n_skip:
                         continue
                     _ti = _ti[n_skip:]
 
@@ -1186,9 +1190,9 @@ class Rounds:
                             f"weights are not stored for {cvi=} {round_info.round=} {traj_info.num=}. (pass load_weight=False)   "
                         )
 
-                    assert _w_i.shape[0] == _ti._size, f"weights and sp shape are different: {_w_i.shape=} {_ti._size=}"
-                    assert _rho_i.shape[0] == _ti._size, (
-                        f"weights and sp shape are different: {_rho_i.shape=} {_ti._size=}"
+                    assert _w_i.shape[0] == _ti.size, f"weights and sp shape are different: {_w_i.shape=} {_ti.size=}"
+                    assert _rho_i.shape[0] == _ti.size, (
+                        f"weights and sp shape are different: {_rho_i.shape=} {_ti.size=}"
                     )
 
                     loaded_rho.append(_rho_i)
@@ -1317,10 +1321,10 @@ class Rounds:
                 d_c = loaded_rho
                 if calculate_std:
                     weights_std.extend(loaded_sigma)
-                ps_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                nb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                neb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                F_c = [jnp.zeros((_ti._size)) for _ti in ti_c]  # type: ignore
+                ps_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                nb_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                neb_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                F_c = [jnp.zeros((_ti.size)) for _ti in ti_c]  # type: ignore
                 grid_nums_c = None
 
                 # if calculate_std:
@@ -1407,14 +1411,14 @@ class Rounds:
             else:
                 print("setting weights to one!")
 
-                w_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                ps_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                d_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                nb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                neb_c = [jnp.ones((_ti._size)) for _ti in ti_c]
-                F_c = [jnp.zeros((_ti._size)) for _ti in ti_c]
+                w_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                ps_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                d_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                nb_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                neb_c = [jnp.ones((_ti.size)) for _ti in ti_c]
+                F_c = [jnp.zeros((_ti.size)) for _ti in ti_c]
 
-                n_samples_eff_total += sum([_ti._size for _ti in ti_c])
+                n_samples_eff_total += sum([_ti.size for _ti in ti_c])
                 grid_nums_c = None
 
                 labels_c = [0] * len(ti_c)
@@ -1685,16 +1689,16 @@ class Rounds:
                         # ti[n]._t = integral
 
                     else:
-                        c = ti_i._size - lag_n
+                        c = ti_i.size - lag_n
                         lag_idx = jnp.arange(c) + lag_n
 
-                        weights_lag.append(jnp.where(lag_idx <= ti_i._size, weights[n][lag_idx], 0))
+                        weights_lag.append(jnp.where(lag_idx <= ti_i.size, weights[n][lag_idx], 0))
 
                     c_list.append(c)
                     lag_indices.append(lag_idx)
 
                 else:
-                    c = ti_i._size
+                    c = ti_i.size
 
                     lag_indices.append(jnp.arange(c))
                     c_list.append(c)
@@ -2040,6 +2044,24 @@ class Rounds:
 
                     ti_n.cv_t = ti_n_t.cv
 
+                # do sanity check
+                num_expected = indices_n.shape[0]
+                assert ti_n.size == num_expected, f"sizes do not match {ti_n.size=} {num_expected=}"
+                assert ti_n.w.shape[0] == num_expected, f"sizes do not match {ti_n.w.shape[0]=} {num_expected=}"
+                assert ti_n.rho.shape[0] == num_expected, f"sizes do not match {ti_n.rho.shape[0]=} {num_expected=}"
+                assert ti_n.positions.shape[0] == num_expected, (
+                    f"sizes do not match {ti_n.positions.shape[0]=} {num_expected=}"
+                )
+
+                if time_series:
+                    assert ti_n.w_t.shape[0] == num_expected, f"sizes do not match {ti_n.w_t.shape[0]=} {num_expected=}"
+                    assert ti_n.rho_t.shape[0] == num_expected, (
+                        f"sizes do not match {ti_n.rho_t.shape[0]=} {num_expected=}"
+                    )
+                    assert ti_n.positions_t.shape[0] == num_expected, (
+                        f"sizes do not match {ti_n.positions_t.shape[0]=} {num_expected=}"
+                    )
+
                 out_ti.append(ti_n)
 
                 if get_bias_list:
@@ -2068,7 +2090,7 @@ class Rounds:
 
             #     out_rho_t = norm_rho(out_weights_t, out_rho_t)
 
-            # # print(f"len(out_sp) = {len(out_sp)} ")
+            # print(f"len(out_sp) = {len(out_sp)} ")
 
         ###################
 
@@ -2090,40 +2112,45 @@ class Rounds:
         if time_series:
             out_nl_t = out_nl
 
-        if time_series:
-            tau = None
+        if lag_tau is not None:
+            tau = lag_tau
+        else:
+            tau = lag_n * sti_c.timestep * sti_c.save_step
 
-            arr = []
+        # if time_series:
+        #     tau = None
 
-            for tii, ti_ti in zip(out_ti, out_ti_t):
-                tii: TrajectoryInfo
-                ti_ti: TrajectoryInfo
+        #     arr = []
 
-                assert ti_ti.t is not None
-                assert tii.t is not None
+        #     for tii, ti_ti in zip(out_ti):
+        #         tii: TrajectoryInfo
+        #         ti_ti: TrajectoryInfo
 
-                dt = ti_ti.t - tii.t
+        #         assert ti_ti.t is not None
+        #         assert tii.t is not None
 
-                tau = jnp.median(dt) if tau is None else tau
+        #         dt = ti_ti.t - tii.t
 
-                mask = jnp.allclose(dt, tau)
+        #         tau = jnp.median(dt) if tau is None else tau
 
-                if not mask.all():
-                    arr.append(jnp.sum(jnp.logical_not(mask)))
+        #         mask = jnp.allclose(dt, tau)
 
-            if tau is None:
-                print("WARNING: tau None")
-            else:
-                if len(arr) != 0:
-                    print(
-                        f"WARNING:time steps are not equal, {jnp.array(arr)} out of {out} trajectories have different time steps"
-                    )
+        #         if not mask.all():
+        #             arr.append(jnp.sum(jnp.logical_not(mask)))
 
-                from IMLCV.base.UnitsConstants import femtosecond
+        #     if tau is None:
+        #         print("WARNING: tau None")
+        #     else:
+        #         if len(arr) != 0:
+        #             print(
+        #                 f"WARNING:time steps are not equal, {jnp.array(arr)} out of {out} trajectories have different time steps"
+        #             )
 
-                print(
-                    f"tau = {tau / femtosecond:.2f} fs, lag_time*timestep*write_step = {lag_n * sti.timestep * sti.save_step / femtosecond:.2f} fs"
-                )
+        #         from IMLCV.base.UnitsConstants import femtosecond
+
+        #         print(
+        #             f"tau = {tau / femtosecond:.2f} fs, lag_time*timestep*write_step = {lag_n * sti.timestep * sti.save_step / femtosecond:.2f} fs"
+        #         )
 
         ###################
 
@@ -2500,6 +2527,80 @@ class Rounds:
                 n_finished += 1
 
         return n_finished / n_total if n_total > 0 else 0.0
+
+    def subsample(
+        self,
+        factor: int | None = None,
+        new_save_step: int | None = None,
+        c: int | None = None,
+        r_range=None,
+        i_range=None,
+        init_size=None,
+    ):
+        if c is None:
+            c = self.cv
+
+        if factor is None and new_save_step is None:
+            raise ValueError("provide subsampling factor or new save step")
+
+        if factor is not None and new_save_step is not None:
+            raise ValueError("provide only one of subsampling factor or new save step")
+
+        print(f"subsampling trajectories by factor {factor} for cv round {c}")
+
+        print(f"{r_range=}, {i_range=}")
+
+        if r_range is None:
+            _r = self._r_vals(c=c)
+        else:
+            _r = r_range
+
+        for r in _r:
+            if r == 0:
+                continue
+
+            if new_save_step is not None:
+                stic = self.get_static_trajectory_info(c=c, r=r)
+                factor = new_save_step // stic.save_step
+                if factor == 0:
+                    print(f"new save step {new_save_step} is smaller than current save step {stic.save_step}, skipping")
+                    continue
+
+                if factor == 1:
+                    print(f"new save step {new_save_step} is equal to current save step {stic.save_step}, skipping")
+                    continue
+
+                print(f"{factor=}")
+
+            print(f"subsampling round {r} by factor {factor}")
+
+            if i_range is not None:
+                i_vals = i_range
+            else:
+                i_vals = self._i_vals(c=c, r=r)
+
+            for i in i_vals:
+                try:
+                    p = self.path(c=c, r=r, i=i) / "trajectory_info.h5"
+                    ti = FullTrajectoryInfo.load(p)
+                    if init_size is not None:
+                        assert ti.size == init_size, f"wrong size {ti.size=}"
+
+                    ti = ti[::factor]
+                    ti.save(p)
+                    print(".", end="", flush=True)
+                except Exception as e:
+                    print(f"could not subsample trajectory {c=} {r=} {i=}: {e}")
+
+            print("")
+
+            p = self.path(c=c, r=r) / "static_trajectory_info.h5"
+
+            stic = StaticMdInfo.load(p)
+            stic.save_step *= factor
+            stic.save(p)
+
+        print("done subsampling")
 
     def get_collective_variable(
         self,
@@ -3431,10 +3532,7 @@ class Rounds:
         if w_new is None:
             w_new = dlo._weights
 
-        # if w_t_new is None:
-        #     w_t_new = dlo._weights_t
-
-        for i in range(len(dlo.cv)):
+        for i in range(len(dlo.ti)):
             round_path = self.path(c=self.cv, r=0, i=i)
             round_path.mkdir(parents=True, exist_ok=True)
 
@@ -3442,7 +3540,6 @@ class Rounds:
 
             assert traj_info.positions is not None
             assert w_new is not None
-            # assert w_t_new is not None
             assert dlo._rho is not None
 
             new_traj_info = FullTrajectoryInfo.create(
@@ -3452,17 +3549,16 @@ class Rounds:
                 e_pot=traj_info.e_pot,
                 e_bias=traj_info.e_bias,
                 cv=new_cvs[i].cv,
-                cv_orig=dlo.cv[i].cv,
+                cv_orig=traj_info.cv,
                 w=w_new[i],
                 # w_t=w_t_new[i],
-                rho=dlo._rho[i],
+                rho=traj_info.rho,
                 sigma=dlo._weights_std[i] if dlo._weights_std is not None else None,
                 T=traj_info.T,
                 P=traj_info.P,
                 err=traj_info.err,
                 t=traj_info.t,
-                # capacity=traj_info.capacity,
-                size=traj_info._size,
+                size=traj_info.size,
                 finished=True,
             )
 
@@ -3540,6 +3636,10 @@ class DataLoaderOutput(MyPyTreeNode):
     @property
     def _rho(self) -> list[Array] | None:
         return [ti.rho for ti in self.ti] if self.ti[0].rho is not None else None
+
+    @property
+    def _rho_t(self) -> list[Array] | None:
+        return [ti.rho_t for ti in self.ti] if self.ti[0].rho_t is not None else None
 
     @property
     def _weights_t(self) -> list[Array] | None:

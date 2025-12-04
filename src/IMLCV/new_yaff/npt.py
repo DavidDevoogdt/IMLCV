@@ -62,9 +62,6 @@ class TBCombination(BarostatHook):
     step_thermo: jax.Array = field(default_factory=lambda: jnp.array(1))
     step_baro: jax.Array = field(default_factory=lambda: jnp.array(1))
 
-    baro_expects_call: bool = field(pytree_node=False, default=True)
-    thermo_expects_call: bool = field(pytree_node=False, default=True)
-
     chainvel0: jax.Array | None = None
     G1_add: jax.Array | None = None
 
@@ -119,8 +116,7 @@ class TBCombination(BarostatHook):
         return self, iterative
 
     def pre(self, iterative: VerletIntegrator, chainvel0=None):
-        # determine whether the barostat should be called
-        if self.baro_expects_call:
+        def baro_call(self: TBCombination, iterative):
             from IMLCV.new_yaff.nvt import NHCThermostat
 
             if isinstance(self.thermostat, NHCThermostat):
@@ -133,8 +129,20 @@ class TBCombination(BarostatHook):
                 self.chainvel0 = self.thermostat.chain.vel[0]
             # actual barostat update
             self.barostat, iterative = self.barostat.pre(iterative, self.chainvel0)
-        # determine whether the thermostat should be called
-        if self.thermo_expects_call:
+
+            return self, iterative
+
+        self, iterative = jax.lax.cond(
+            jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_baro == 0),
+            baro_call,
+            lambda self, iterative: (self, iterative),
+            self,
+            iterative,
+        )
+
+        def thermo_call(self: TBCombination, iterative):
+            # determine whether the thermostat should be called
+            # if self.thermo_expects_call:
             if isinstance(self.barostat, MTKBarostat):
                 # in case the thermostat is coupled with a MTK barostat:
                 # update equation of v_{xi,1} is altered via G_1
@@ -142,19 +150,42 @@ class TBCombination(BarostatHook):
             # actual thermostat update
             self.thermostat, iterative = self.thermostat.pre(iterative, self.G1_add)
 
+            return self, iterative
+
+        self, iterative = jax.lax.cond(
+            jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_thermo == 0),
+            thermo_call,
+            lambda self, iterative: (self, iterative),
+            self,
+            iterative,
+        )
+
         return self, iterative
 
     def post(self, iterative: VerletIntegrator, chainvel0=None):
-        # determine whether the thermostat should be called
-        if self.thermo_expects_call:
+        def thermo_call(self: TBCombination, iterative):
+            # determine whether the thermostat should be called
+            # if self.thermo_expects_call:
             if isinstance(self.barostat, MTKBarostat):
                 # in case the thermostat is coupled with a MTK barostat:
                 # update equation of v_{xi,1} is altered via G_1
                 self.G1_add = self.barostat.add_press_cont()
             # actual thermostat update
             self.thermostat, iterative = self.thermostat.post(iterative, self.G1_add)
-        # determine whether the barostat should be called
-        if self.baro_expects_call:
+
+            return self, iterative
+
+        self, iterative = jax.lax.cond(
+            jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_thermo == 0),
+            thermo_call,
+            lambda self, iterative: (self, iterative),
+            self,
+            iterative,
+        )
+
+        def baro_call(self: TBCombination, iterative):
+            # determine whether the barostat should be called
+            # if self.baro_expects_call:
             if isinstance(self.thermostat, NHCThermostat):
                 # in case the barostat is coupled with a NHC thermostat:
                 # v_{xi,1} is needed to update v_g
@@ -164,6 +195,17 @@ class TBCombination(BarostatHook):
                 self.chainvel0 = self.thermostat.chain.vel[0]
             # actual barostat update
             self.barostat, iterative = self.barostat.post(iterative, self.chainvel0)
+
+            return self, iterative
+
+        self, iterative = jax.lax.cond(
+            jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_baro == 0),
+            baro_call,
+            lambda self, iterative: (self, iterative),
+            self,
+            iterative,
+        )
+
         # update the correction on E_cons due to thermostat and barostat
         self.econs_correction = self.thermostat.econs_correction + self.barostat.econs_correction
         if isinstance(self.thermostat, NHCThermostat):
@@ -183,19 +225,8 @@ class TBCombination(BarostatHook):
 
         return self, iterative
 
-    # def expectscall(self, iterative: VerletIntegrator, kind):
-    #     return True
-
     def __call__(self, iterative: VerletIntegrator):
-        assert self.step_thermo is not None
-
-        self.thermo_expects_call = bool(
-            iterative.counter >= self.start and (iterative.counter - self.start) % self.step_baro == 0
-        )
-
-        self.baro_expects_call = bool(
-            iterative.counter >= self.start and (iterative.counter - self.start) % self.step_thermo == 0
-        )
+        pass
 
     def verify(self):
         # returns whether the thermostat and barostat instances are currently supported by yaff
@@ -280,7 +311,7 @@ class McDonaldBarostat(BarostatHook):
             iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
 
             assert iterative.gpos is not None
-            iterative.acc = -iterative.gpos / iterative.masses.reshape(-1, 1)
+            # iterative.acc = -iterative.gpos / iterative.masses.reshape(-1, 1)
 
             return iterative
 
@@ -415,10 +446,9 @@ class BerendsenBarostat(BarostatHook):
 
         rvecs_new = jnp.dot(iterative.rvecs, mu)
         iterative.ff.system.pos = pos_new
-        # iterative.pos[:] = pos_new
         iterative.pos = pos_new
         iterative.ff.system.cell.rvecs = rvecs_new
-        # iterative.rvecs[:] = rvecs_new
+
         iterative.rvecs = rvecs_new
         # calculation of the virial tensor
 

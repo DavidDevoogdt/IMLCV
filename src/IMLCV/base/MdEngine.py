@@ -29,8 +29,7 @@ from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
 ######################################
 
 
-@dataclass
-class StaticMdInfo:
+class StaticMdInfo(MyPyTreeNode):
     _attr = [
         "timestep",
         "save_step",
@@ -176,24 +175,32 @@ _items_scal = [
 ]
 _items_vec = [
     "_positions",
-    "_positions_t_cell",
+    "_positions_t",
+    "_cell",
     "_cell_t",
     "_charges",
     "_cv",
     "_cv_t",
     "_cv_orig",
 ]
+_items_attr = [
+    "_finished",
+    "_invalid",
+    "_size",
+    "_capacity",
+    "_prev_save",
+]
 
 
 class TrajectoryInfo(MyPyTreeNode, ABC):
-    _size: int = field(pytree_node=False, default=-1)
+    # _size: int = field(pytree_node=False, default=-1)
 
     @abstractmethod
     def _get(self, prop_name: str):
         pass
 
     @abstractmethod
-    def _set(self, prop_name: str, value: Array):
+    def _set(self, prop_name: str, value):
         pass
 
     @abstractmethod
@@ -202,7 +209,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
 
     @property
     def shape(self):
-        return self._size
+        return self.size
 
     @property
     def volume(self):
@@ -215,7 +222,10 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         return None
 
     @property
-    def sp(self) -> SystemParams:
+    def sp(self) -> SystemParams | None:
+        if self.positions is None:
+            return None
+
         return SystemParams(
             coordinates=self.positions,
             cell=self.cell,
@@ -223,7 +233,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
 
     @sp.setter
     def sp(self, value: SystemParams):
-        self.coordinates = value.coordinates
+        self.positions = value.coordinates
         self.cell = value.cell
 
     @property
@@ -276,11 +286,11 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         return self._get("_positions")
 
     @positions.setter
-    def positions(self, value: Array):
+    def positions(self, value: Array) -> Array | None:
         self._set("_positions", value)
 
     @property
-    def positions_t(self):
+    def positions_t(self) -> Array | None:
         return self._get("_positions_t")
 
     @positions_t.setter
@@ -288,7 +298,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_positions_t", value)
 
     @property
-    def cell(self):
+    def cell(self) -> Array | None:
         return self._get("_cell")
 
     @cell.setter
@@ -296,7 +306,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_cell", value)
 
     @property
-    def cell_t(self):
+    def cell_t(self) -> Array | None:
         return self._get("_cell_t")
 
     @cell_t.setter
@@ -312,7 +322,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_charges", value)
 
     @property
-    def e_pot(self):
+    def e_pot(self) -> Array | None:
         return self._get("_e_pot")
 
     @e_pot.setter
@@ -320,7 +330,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_e_pot", value)
 
     @property
-    def e_bias(self):
+    def e_bias(self) -> Array | None:
         return self._get("_e_bias")
 
     @e_bias.setter
@@ -328,7 +338,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_e_bias", value)
 
     @property
-    def w(self):
+    def w(self) -> Array | None:
         return self._get("_w")
 
     @w.setter
@@ -336,7 +346,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_w", value)
 
     @property
-    def w_t(self):
+    def w_t(self) -> Array | None:
         return self._get("_w_t")
 
     @w_t.setter
@@ -344,7 +354,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_w_t", value)
 
     @property
-    def rho(self):
+    def rho(self) -> Array | None:
         return self._get("_rho")
 
     @rho.setter
@@ -352,7 +362,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_rho", value)
 
     @property
-    def rho_t(self):
+    def rho_t(self) -> Array | None:
         return self._get("_rho_t")
 
     @rho_t.setter
@@ -360,7 +370,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_rho_t", value)
 
     @property
-    def sigma(self):
+    def sigma(self) -> Array | None:
         return self._get("_sigma")
 
     @sigma.setter
@@ -368,7 +378,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_sigma", value)
 
     @property
-    def cv(self):
+    def cv(self) -> Array | None:
         return self._get("_cv")
 
     @cv.setter
@@ -376,7 +386,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_cv", value)
 
     @property
-    def cv_t(self):
+    def cv_t(self) -> Array | None:
         return self._get("_cv_t")
 
     @cv_t.setter
@@ -384,19 +394,19 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_cv_t", value)
 
     @property
-    def T(self):
+    def T(self) -> Array | None:
         return self._get("_T")
 
     @property
-    def P(self):
+    def P(self) -> Array | None:
         return self._get("_P")
 
     @property
-    def err(self):
+    def err(self) -> Array | None:
         return self._get("_err")
 
     @property
-    def t(self):
+    def t(self) -> Array | None:
         return self._get("_t")
 
     @t.setter
@@ -404,7 +414,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_t", value)
 
     @property
-    def finished(self):
+    def finished(self) -> bool:
         return self._get("_finished")
 
     @finished.setter
@@ -412,12 +422,28 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self._set("_finished", value)
 
     @property
-    def invalid(self):
+    def invalid(self) -> bool:
         return self._get("_invalid")
 
     @invalid.setter
     def invalid(self, value: bool):
         self._set("_invalid", value)
+
+    @property
+    def size(self) -> int:
+        return self._get("_size")
+
+    @size.setter
+    def size(self, value: int):
+        self._set("_size", value)
+
+    @property
+    def capacity(self):
+        return self._get("_capacity")
+
+    @capacity.setter
+    def capacity(self, value: int):
+        self._set("_capacity", value)
 
 
 class FullTrajectoryInfo(TrajectoryInfo):
@@ -481,15 +507,19 @@ class FullTrajectoryInfo(TrajectoryInfo):
     ) -> FullTrajectoryInfo:
         dict = {
             "_positions": positions,
+            "_positions_t": None,
             "_cell": cell,
+            "_cell_t": None,
             "_charges": charges,
             "_e_pot": e_pot,
             "_e_bias": e_bias,
             "_cv": cv,
+            "_cv_t": None,
             "_cv_orig": cv_orig,
             "_w": w,
             "_w_t": w_t,
             "_rho": rho,
+            "_rho_t": None,
             "_sigma": sigma,
             "_T": T,
             "_P": P,
@@ -527,13 +557,29 @@ class FullTrajectoryInfo(TrajectoryInfo):
         if prop is None:
             return None
 
-        return prop[0 : self._size]  # type:ignore
+        if prop_name in _items_attr:
+            return prop
+
+        if prop_name in _items_scal:
+            return prop[0 : self.size]  # type:ignore
+
+        if prop_name in _items_vec:
+            return prop[0 : self.size, :]  # type:ignore
+
+        raise ValueError(f"property {prop_name} not found in trajectory info")
 
     def _set(self, prop_name: str, value: Array):
         print(f"setting trajectory info property {prop_name} ")
 
+        if prop_name in _items_attr:
+            self.__dict__[prop_name] = value
+            return
+
         if self._get(prop_name) is None:
-            self.__dict__[prop_name] = jnp.zeros((self._capacity, *value.shape[1:]))  # type:ignore
+            if prop_name in _items_scal:
+                self.__dict__[prop_name] = jnp.zeros((self._capacity,))  # type:ignore
+            elif prop_name in _items_vec:
+                self.__dict__[prop_name] = jnp.zeros((self._capacity, *value.shape[1:]))  # type:ignore
 
         self.__dict__[prop_name] = dynamic_update_slice_in_dim(
             self.__dict__[prop_name],
@@ -548,61 +594,42 @@ class FullTrajectoryInfo(TrajectoryInfo):
         slz = (jnp.ones(self._capacity, dtype=jnp.int64).cumsum() - 1)[slices]
         slz = slz[slz <= self._size]
 
-        # dynamic_slice_in_dim
+        new_dict = {}
 
-        return FullTrajectoryInfo(
-            _positions=self._positions[slz, :],
-            _cell=self._cell[slz, :] if self._cell is not None else None,
-            _charges=(self._charges[slz, :] if self._cell is not None else None) if self._charges is not None else None,
-            _e_pot=self._e_pot[slz,] if self._e_pot is not None else None,
-            _e_bias=self._e_bias[slz,] if self._e_bias is not None else None,
-            _w=self._w[slz,] if self._w is not None else None,
-            _w_t=self._w_t[slz,] if self._w_t is not None else None,
-            _rho=self._rho[slz,] if self._rho is not None else None,
-            _sigma=self._sigma[slz,] if self._sigma is not None else None,
-            _cv=self._cv[slz, :] if self._cv is not None else None,
-            _T=self._T[slz,] if self._T is not None else None,
-            _P=self._P[slz,] if self._P is not None else None,
-            _err=self._err[slz,] if self._err is not None else None,
-            _t=self._t[slz,] if self._t is not None else None,
-            _capacity=int(jnp.size(slz)),
-            _size=int(jnp.size(slz)),
-        )
+        for name in _items_scal:
+            prop = self.__dict__[name]
+            if prop is not None:
+                new_dict[name] = prop[slz,]
 
-    def _stack(ti_out, *ti: FullTrajectoryInfo):
-        tot_size = ti_out._size + sum([t._size for t in ti])
+        for name in _items_vec:
+            prop = self.__dict__[name]
+            if prop is not None:
+                new_dict[name] = prop[slz, :]
+
+        new_dict["_capacity"] = int(jnp.size(slz))
+        new_dict["_size"] = int(jnp.size(slz))
+
+        return FullTrajectoryInfo(**new_dict)
+
+    def _stack(self, *ti: FullTrajectoryInfo):
+        tot_size = self._size + sum([t._size for t in ti])
 
         # ti_out = ti[0]
 
-        if ti_out._capacity <= tot_size:
-            ti_out = ti_out._expand_capacity(nc=tot_size * 1.4)
+        if self._capacity <= tot_size:
+            self = self._expand_capacity(nc=tot_size * 1.4)
 
-        index = ti_out._size
+        index = self._size
 
-        keys = [
-            "_positions",
-            "_cell",
-            "_charges",
-            "_e_pot",
-            "_e_bias",
-            "_w",
-            "_w_t",
-            "_rho",
-            "_sigma",
-            "_cv",
-            "_T",
-            "_P",
-            "_err",
-            "_t",
-        ]
+        keys = [*_items_vec, *_items_scal]
 
         for tii in ti:
             _s = tii._size
 
             for key in keys:
-                if ti_out.__dict__[key] is not None:
-                    ti_out.__dict__[key] = dynamic_update_slice_in_dim(
-                        ti_out.__dict__[key],
+                if self.__dict__[key] is not None:
+                    self.__dict__[key] = dynamic_update_slice_in_dim(
+                        self.__dict__[key],
                         dynamic_slice_in_dim(tii.__dict__[key], 0, _s),
                         index,
                         0,
@@ -610,9 +637,9 @@ class FullTrajectoryInfo(TrajectoryInfo):
 
             index += _s
 
-        ti_out._size = index
+        self._size = index
 
-        return ti_out
+        return self
 
     def __add__(self, ti: FullTrajectoryInfo) -> FullTrajectoryInfo:
         return self._stack(ti)
@@ -742,7 +769,7 @@ class FullTrajectoryInfo(TrajectoryInfo):
 class EagerTrajectoryInfo(TrajectoryInfo):
     """Loads trajectory info from file on demand, only the requested properties."""
 
-    path: Path
+    path: Path = field(pytree_node=False)
     indices: Array
     overide_dict: dict = field(pytree_node=False, default_factory=dict)
 
@@ -754,57 +781,69 @@ class EagerTrajectoryInfo(TrajectoryInfo):
         return EagerTrajectoryInfo(
             path=Path(file_path),
             indices=jnp.arange(size),
-            _size=size,
         )
 
     def to_full(self) -> FullTrajectoryInfo:
-        with h5py.File(str(self.path), "r") as hf:
-            out = FullTrajectoryInfo._load(hf=hf)[self.indices]
+        ti = {}
 
-        for key in self.overide_dict.keys():
-            out._set(key, self.overide_dict[key])
+        for name in _items_scal:
+            ti[name] = self._get(name)
+
+        for name in _items_vec:
+            ti[name] = self._get(name)
+
+        out = FullTrajectoryInfo.create(**ti)
 
         return out
 
     def _get(self, prop_name: str):
-        # print(f"getting {prop_name} from eager trajectory info")
-
         if prop_name in self.overide_dict:
-            print(f"getting overriden {prop_name} from eager trajectory info")
-            return self.overide_dict[prop_name]
-
-        # this first loads the full property from file, then selects indices
-        # h5py fancy indexing doens't fully replicate numpy/jax behaviour
+            thing = self.overide_dict[prop_name]
+            return thing
 
         with h5py.File(str(self.path), "r") as hf:
-            if prop_name in hf:
-                if prop_name in _items_scal:
-                    return jnp.array(hf[prop_name])[self.indices]
-                elif prop_name in _items_vec:
-                    return jnp.array(hf[prop_name])[self.indices, :]
-                else:
-                    return hf[prop_name]
+            if prop_name in _items_attr:
+                thing = hf.attrs[prop_name]
+            elif prop_name in hf.keys():
+                thing = jnp.array(hf[prop_name])
+            else:
+                return None
 
-            return None
+        if prop_name in _items_attr:
+            self._set(prop_name, thing)  # cache attribute
+            return thing
+
+        if prop_name in _items_scal:
+            return thing[self.indices]
+
+        if prop_name in _items_vec:
+            return thing[self.indices, :]
+
+        raise ValueError(f"property {prop_name} not found in trajectory info")
 
     def _set(self, prop_name: str, value: Array):
-        print(f"setting trajectory info property {prop_name} in eager trajectory info")
         self.overide_dict[prop_name] = value
 
     def __getitem__(self, slices) -> EagerTrajectoryInfo:
+        new_overide = {}
+
         for key in self.overide_dict.keys():
             if key in _items_scal:
-                self.overide_dict[key] = self.overide_dict[key][slices]
+                new_overide[key] = self.overide_dict[key][slices]
             elif key in _items_vec:
-                self.overide_dict[key] = self.overide_dict[key][slices, :]
+                new_overide[key] = self.overide_dict[key][slices, :]
             else:
-                self.overide_dict[key] = self.overide_dict[key]
+                new_overide[key] = self.overide_dict[key]
 
         return EagerTrajectoryInfo(
             path=self.path,
             indices=self.indices[slices],
-            overide_dict=self.overide_dict,
+            overide_dict=new_overide,
         )
+
+    @property
+    def size(self):
+        return self.indices.shape[0]
 
 
 ######################################
@@ -812,16 +851,15 @@ class EagerTrajectoryInfo(TrajectoryInfo):
 ######################################
 
 
-@dataclass
-class MDEngine(ABC):
+class MDEngine(MyPyTreeNode, ABC):
     """Base class for MD engine."""
 
-    bias: Bias | None
+    bias: Bias
     energy: Energy
     sp: SystemParams
     static_trajectory_info: StaticMdInfo
     trajectory_info: FullTrajectoryInfo | None = field(default=None)
-    trajectory_file: Path | None = None
+    trajectory_file: Path | None = field(pytree_node=False, default=None)
     time0: float = field(default_factory=time)
 
     step: int = 1
@@ -857,7 +895,7 @@ class MDEngine(ABC):
                 energy.sp = sp
 
         else:
-            create_kwargs["step"] = trajectory_info._size
+            create_kwargs["step"] = trajectory_info.size
             energy.sp = trajectory_info.sp[-1]
 
         # self.update_nl()
@@ -883,39 +921,12 @@ class MDEngine(ABC):
 
         if self.nl is None:
             info = self.static_trajectory_info.neighbour_list_info()
+            assert info is not None
 
-            nl = self.sp.get_neighbour_list(info)  # jitted update
+            self.nl = self.sp.get_neighbour_list(info)  # jitted update
+            return
 
-            assert nl is not None
-            b = True
-        else:
-            nl = self.nl
-
-            # print(f"{nl=} {self.sp=} { self.nl.needs_update=}")
-
-            b = not self.nl.needs_update(self.sp)
-
-        info = nl.info
-
-        if not b:
-            print("nl - update")
-            b, nl = nl.update_nl(self.sp)
-
-        if not b:
-            print("nl - slow update")
-            nl = self.sp.get_neighbour_list(info)
-
-            assert nl is not None
-
-            nneigh = nl.nneighs()
-
-            if jnp.mean(nneigh) <= 2.0:
-                raise ValueError(f"Not all atoms have neighbour. Number neighbours = {nneigh - 1} {self.sp=}")
-
-            if jnp.max(nneigh) > 100:
-                raise ValueError(f"neighbour list is too large for at leat one  atom {nneigh=}")
-
-        self.nl = nl
+        self.nl = self.nl.slow_update_nl(self.sp)
 
     def save(self, file):
         filename = Path(file)
@@ -963,7 +974,7 @@ class MDEngine(ABC):
                 print("updating sp from trajectory file")
 
                 self.trajectory_info = FullTrajectoryInfo.load(self.trajectory_file)
-                self.step = self.trajectory_info._size * self.static_trajectory_info.save_step
+                self.step = self.trajectory_info.size * self.static_trajectory_info.save_step
                 self.sp = self.trajectory_info.sp[-1]
 
                 print(f"loaded ti  {self.step=} ")
@@ -997,7 +1008,8 @@ class MDEngine(ABC):
             return
 
         try:
-            self._run(int(steps))
+            for _ in range(int(steps)):
+                self._step()
 
             if self.trajectory_info is not None:
                 self.trajectory_info._finished = True
@@ -1017,7 +1029,7 @@ class MDEngine(ABC):
                 self.trajectory_info.save(self.trajectory_file)
 
     @abstractmethod
-    def _run(self, steps):
+    def _step(self):
         raise NotImplementedError
 
     def get_trajectory(self) -> FullTrajectoryInfo:
@@ -1034,8 +1046,7 @@ class MDEngine(ABC):
         cv=None,
         e_bias=None,
         e_pot=None,
-        gpos_rmsd=None,
-        gpos_bias_rmsd=None,
+        sp: SystemParams = None,
         canonicalize=False,
     ):
         screen_log = self.step % self.static_trajectory_info.screen_log == 0
@@ -1043,10 +1054,10 @@ class MDEngine(ABC):
         write_step = self.step % self.static_trajectory_info.write_step == 0
 
         if screen_log or save_step or write_step:
-            if canonicalize and self.nl is not None:
-                sp = self.nl.canonicalized_sp(self.sp)
-            else:
-                sp = self.sp
+            # if canonicalize and self.nl is not None:
+            #     sp = self.nl.canonicalized_sp(self.sp)
+            # else:
+            #     sp = self.sp
 
             ti = FullTrajectoryInfo.create(
                 positions=sp.coordinates,
@@ -1068,12 +1079,12 @@ class MDEngine(ABC):
                 if ti._P is not None:
                     str += f"|{'P[bar]': ^10s}"
                 str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
-                if gpos_rmsd is not None:
-                    ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                    str += f"|{ss: ^13s}"
-                if gpos_bias_rmsd is not None:
-                    ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                    str += f"|{ss: ^13s}"
+                # if gpos_rmsd is not None:
+                #     ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                #     str += f"|{ss: ^13s}"
+                # if gpos_bias_rmsd is not None:
+                #     ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                #     str += f"|{ss: ^13s}"
 
                 str += f"|{' CV': ^10s}"
                 print(str, sep="")
@@ -1092,10 +1103,10 @@ class MDEngine(ABC):
                 if ti._P is not None:
                     str += f" {ti._P[0] / bar: >10.2f}"
                 str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
-                if gpos_rmsd is not None:
-                    str += f"|{(gpos_rmsd / kjmol * angstrom): >13.2f}"
-                if gpos_bias_rmsd is not None:
-                    str += f"|{(gpos_bias_rmsd / kjmol * angstrom): >13.2f}"
+                # if gpos_rmsd is not None:
+                #     str += f"|{(gpos_rmsd / kjmol * angstrom): >13.2f}"
+                # if gpos_bias_rmsd is not None:
+                #     str += f"|{(gpos_bias_rmsd / kjmol * angstrom): >13.2f}"
                 if ti._cv is not None:
                     str += f"| {ti._cv[0, :]}"
                 print(str)
@@ -1120,44 +1131,23 @@ class MDEngine(ABC):
     def get_energy(
         self,
         sp: SystemParams,
+        nl: NeighbourList | None = None,
         gpos: bool = False,
         vtens: bool = False,
         manual_vir=None,
     ) -> EnergyResult:
-        def f(sp, nl):
-            return self.energy.compute_from_system_params(
-                gpos=gpos,
-                vir=vtens,
-                sp=sp,
-                nl=nl,
-                manual_vir=manual_vir,
-            )
-
-        if self.energy.external_callback:
-
-            def _mock_f(sp):
-                return EnergyResult(
-                    energy=jnp.array(1.0),
-                    gpos=None if not gpos else sp.coordinates,
-                    vtens=None if not vtens else sp.cell,
-                )
-
-            dtypes = jax.eval_shape(_mock_f, sp)
-
-            out = jax.pure_callback(
-                f,
-                dtypes,
-                sp,
-                self.nl,
-            )
-        else:
-            out = f(sp, self.nl)
-
-        return out
+        return self.energy.compute_from_system_params(
+            gpos=gpos,
+            vir=vtens,
+            sp=sp,
+            nl=nl,
+            manual_vir=manual_vir,
+        )
 
     def get_bias(
         self,
         sp: SystemParams,
+        nl: NeighbourList | None = None,
         gpos: bool = False,
         vtens: bool = False,
         shmap: bool = False,
@@ -1170,7 +1160,7 @@ class MDEngine(ABC):
 
         cv, ener = self.bias.compute_from_system_params(
             sp=sp,
-            nl=self.nl,
+            nl=nl,
             gpos=gpos,
             vir=vtens,
             shmap=shmap,
@@ -1203,7 +1193,7 @@ class MDEngine(ABC):
                 if Path(self.trajectory_file).exists():
                     assert self.trajectory_info is not None
 
-                    self.step = self.trajectory_info._size * self.static_trajectory_info.save_step
+                    self.step = self.trajectory_info.size * self.static_trajectory_info.save_step
                     self.sp = self.trajectory_info.sp[-1]
 
             self.time0 = time()

@@ -5,6 +5,7 @@ import jax.numpy as jnp
 
 from IMLCV.base.datastructures import MyPyTreeNode
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, SystemParams
+from IMLCV.base.CV import NeighbourList
 
 
 # @partial(dataclass, frozen=False)
@@ -42,13 +43,18 @@ class YaffSys(MyPyTreeNode):
     cell: YaffCell
     charges: jax.Array | None = None
 
+    tic: StaticMdInfo
+
+    nl: NeighbourList | None = None
+
     @staticmethod
-    def create(md: MDEngine, tic: StaticMdInfo):
+    def create(sp: SystemParams, tic: StaticMdInfo, nl: NeighbourList | None = None):
         return YaffSys(
             numbers=tic.atomic_numbers,
             masses=jnp.array(tic.masses),
-            pos=md.sp.coordinates,
-            cell=YaffCell.create(md.sp),
+            pos=sp.coordinates,
+            cell=YaffCell.create(sp),
+            tic=tic,
         )
 
     @property
@@ -63,3 +69,9 @@ class YaffSys(MyPyTreeNode):
             coordinates=self.pos,
             cell=self.cell.rvecs if self.cell.rvecs.shape[0] != 0 else None,
         )
+
+    def update_nl(self):
+        if self.nl is None:
+            return
+
+        self.nl = self.nl.slow_update_nl(self.sp)

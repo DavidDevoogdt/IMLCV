@@ -1,5 +1,6 @@
 import os
-from dataclasses import dataclass, field
+# from dataclasses import dataclass, field
+
 from pathlib import Path
 from typing import Callable
 
@@ -16,14 +17,15 @@ from IMLCV.base.bias import Energy, EnergyError, EnergyResult
 from IMLCV.base.CV import NeighbourList, SystemParams
 from IMLCV.base.UnitsConstants import angstrom, electronvolt, kjmol, nanometer
 from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
+from IMLCV.base.datastructures import MyPyTreeNode, field
 
 
-@dataclass
+# @dataclass
 class OpenMmEnergy(Energy):
     # topology: Topology
     # system: System
 
-    _simul: Simulation
+    _simul: Simulation = field(pytree_node=False)
 
     @staticmethod
     def create(topo: Topology, system: System):
@@ -253,12 +255,12 @@ class OpenMmEnergy(Energy):
         return _match(jnp.arange(n_atoms))
 
 
-@dataclass
+# @dataclass
 class AseEnergy(Energy):
     """Conversion to ASE energy"""
 
-    atoms: ase.Atoms
-    # calculator: Calculator | None
+    atoms: ase.Atoms = field(pytree_node=False)
+    # calculator: Calculator =
 
     @property
     def calculator(self) -> Calculator | None:
@@ -379,7 +381,7 @@ class AseEnergy(Energy):
         self.calculator = clss(**calc_params)
 
 
-@dataclass
+# @dataclass
 class Cp2kEnergy(AseEnergy):
     # override default params, only if explicitly set
     # default_parameters = dict(
@@ -553,10 +555,10 @@ class Cp2kEnergy(AseEnergy):
         return self
 
 
-@dataclass
+# @dataclass
 class MACEASE(AseEnergy):
-    model: str | Path = "medium"
-    dtype: str = "float32"
+    model: str | Path = field(pytree_node=False, default="medium")
+    dtype: str = field(pytree_node=False, default="float32")
 
     def _calculator(self):
         import torch
