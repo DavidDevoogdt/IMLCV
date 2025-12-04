@@ -43,8 +43,16 @@ if [ $NODE_COUNT -ne $EXPECTED_NODE_COUNT ]; then
 fi
 
 
+echo $SLURM_MEM_PER_CPU
+echo $SLURM_MEM_PER_GPU
+echo $SLURM_MEM_PER_NODE
+
+# Unset memory-related SLURM environment variables to avoid conflicts
+unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+
+
 for NODE in $NODELIST; do
-  srun --nodes=1  --export=ALL  -l {overrides} --nodelist=$NODE {command} &
+  srun --nodes=1 --export=All -l {overrides} --nodelist=$NODE {command} &
   if [ $? -ne 0 ]; then
     echo "Command failed on node $NODE"
   fi

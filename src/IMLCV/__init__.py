@@ -95,12 +95,20 @@ class JaxHandler(BaseHandler):
 
     def flatten(self, obj, data):
         self.context: jsonpickle.Unpickler  # type:ignore
-        data["array"] = self.context.flatten(np.array(obj).copy(), reset=False)
+
+        # handle complex numbers
+        if jnp.dtype(obj) == jnp.complex_:
+            obj = jnp.real(obj).__array__() + 1j * jnp.imag(obj).__array__()
+        else:
+            obj = obj.__array__()
+
+        data["array"] = self.context.flatten(obj, reset=False)
         return data
 
     def restore(self, data):
         self.context: jsonpickle.Pickler
-        return jnp.array(self.context.restore(data["array"], reset=False))  # type:ignore
+
+        return jnp.asarray(self.context.restore(data["array"], reset=False))
 
 
 register(jax.Array, JaxHandler, base=True)

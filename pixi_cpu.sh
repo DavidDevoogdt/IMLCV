@@ -8,14 +8,10 @@ export PIXI_CACHE_DIR="./.pixi_cache"
 export PATH="~/.pixi/bin:$PATH"
 which pixi
 
-echo $@
-echo $@:2
+eval "$(pixi shell-hook -e cpu --as-is )"
 
 
-eval "$(pixi shell-hook -e $1 --as-is )"
-
-
-"$@:3"
+"$@"
 
 echo "Script finished"
 
