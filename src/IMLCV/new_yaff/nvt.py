@@ -86,7 +86,7 @@ class AndersenThermostat(ThermostatHook):
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         # Andersen thermostat step before usual Verlet hook, since it largely affects the velocities
         # Needed to correct the conserved quantity
-        ekin_before = iterative._compute_ekin()
+        ekin_before = iterative.ekin
         # Change the (selected) velocities
         key, key0 = jax.random.split(self.key)
         self.key = key
@@ -102,7 +102,7 @@ class AndersenThermostat(ThermostatHook):
             iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
         )
         # Update the kinetic energy and the reference for the conserved quantity
-        ekin_after = iterative._compute_ekin()
+        ekin_after = iterative.ekin
         self.econs_correction += ekin_before - ekin_after
         # Optional annealing
         self.temp *= self.annealing
@@ -160,7 +160,6 @@ class BerendsenThermostat(ThermostatHook):
         temp_inst = 2.0 * iterative.ekin / (boltzmann * iterative.ndof)
         c = jnp.sqrt(1 + iterative.timestep / self.timecon * (self.temp / temp_inst - 1))
         iterative.vel = c * iterative.vel
-        iterative.ekin = iterative._compute_ekin()
         self.econs_correction += (1 - c**2) * ekin
 
         return self, iterative
@@ -212,7 +211,6 @@ class LangevinThermostat(ThermostatHook):
         c1 = jnp.exp(-iterative.timestep / self.timecon / 2)
         c2 = jnp.sqrt((1.0 - c1**2) * self.temp * boltzmann / iterative.masses).reshape(-1, 1)
         iterative.vel = c1 * iterative.vel + c2 * jax.random.normal(key1, shape=iterative.vel.shape)
-        iterative.ekin = iterative._compute_ekin()
 
         return self, iterative
 
@@ -272,13 +270,12 @@ class CSVRThermostat(ThermostatHook):
 
         R = jax.random.normal(key0, ())
         S = (jax.random.normal(key1, (iterative.ndof - 1,)) ** 2).sum()
-        iterative.ekin = iterative._compute_ekin()
+
         fact = (1 - c) * self.kin / iterative.ndof / iterative.ekin
         alpha = jnp.sign(R + jnp.sqrt(c / fact)) * jnp.sqrt(c + (S + R**2) * fact + 2 * R * jnp.sqrt(c * fact))
         iterative.vel = alpha * iterative.vel
         ekin_new = alpha**2 * iterative.ekin
         self.econs_correction += iterative.ekin - ekin_new
-        iterative.ekin = ekin_new
 
         return self, iterative
 
@@ -385,7 +382,7 @@ class GLEThermostat(ThermostatHook):
         )
         self.s[:] = s_extended_new[1 : s_extended_new.shape[0], :]
         # update the kinetic energy
-        iterative.ekin = iterative._compute_ekin()
+
         # update the conserved quantity
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1

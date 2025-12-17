@@ -569,7 +569,7 @@ class FullTrajectoryInfo(TrajectoryInfo):
         raise ValueError(f"property {prop_name} not found in trajectory info")
 
     def _set(self, prop_name: str, value: Array):
-        print(f"setting trajectory info property {prop_name} ")
+        # print(f"setting trajectory info property {prop_name} ")
 
         if prop_name in _items_attr:
             self.__dict__[prop_name] = value
@@ -785,18 +785,26 @@ class EagerTrajectoryInfo(TrajectoryInfo):
 
     def to_full(self) -> FullTrajectoryInfo:
         ti = {}
-
         for name in _items_scal:
             ti[name] = self._get(name)
 
         for name in _items_vec:
             ti[name] = self._get(name)
 
-        out = FullTrajectoryInfo.create(**ti)
+        for name in _items_attr:
+            ti[name] = self._get(name)
+
+        out = FullTrajectoryInfo(**ti)
 
         return out
 
     def _get(self, prop_name: str):
+        if prop_name == "_size":
+            return self.size
+
+        if prop_name == "_capacity":
+            return self.size
+
         if prop_name in self.overide_dict:
             thing = self.overide_dict[prop_name]
             return thing
@@ -855,6 +863,7 @@ class MDEngine(MyPyTreeNode, ABC):
     """Base class for MD engine."""
 
     bias: Bias
+    permanent_bias: Bias | None = field(default=None)
     energy: Energy
     sp: SystemParams
     static_trajectory_info: StaticMdInfo
@@ -932,8 +941,9 @@ class MDEngine(MyPyTreeNode, ABC):
         filename = Path(file)
 
         b = self.bias
-
+        pb = self.permanent_bias
         self.bias = None
+        self.permanent_bias = None
 
         if filename.suffix == ".json":
             with open(filename, "w") as f:
@@ -943,9 +953,10 @@ class MDEngine(MyPyTreeNode, ABC):
                 cloudpickle.dump(self, f)
 
         self.bias = b
+        self.permanent_bias = pb
 
     @staticmethod
-    def load(file, bias: Bias, **kwargs) -> MDEngine:
+    def load(file, bias: Bias, permant_bias: Bias | None = None, **kwargs) -> MDEngine:
         filename = Path(file)
 
         if filename.suffix == ".json":
@@ -958,6 +969,7 @@ class MDEngine(MyPyTreeNode, ABC):
         assert isinstance(self, MDEngine), f"{self=}"
 
         self.bias = bias
+        self.permanent_bias = permant_bias
 
         for key in kwargs.keys():
             setattr(self, key, kwargs[key])
@@ -1169,6 +1181,21 @@ class MDEngine(MyPyTreeNode, ABC):
             rel=rel,
             shmap_kwargs=shmap_kwargs,
         )
+
+        if self.permanent_bias is not None:
+            cv2, ener2 = self.permanent_bias.compute_from_system_params(
+                sp=sp,
+                nl=nl,
+                gpos=gpos,
+                vir=vtens,
+                shmap=shmap,
+                use_jac=use_jac,
+                push_jac=push_jac,
+                rel=rel,
+                shmap_kwargs=shmap_kwargs,
+            )
+
+            ener = ener + ener2
 
         return cv, ener
 

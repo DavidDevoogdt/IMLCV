@@ -52,28 +52,24 @@ class TemperatureStateItem(StateItem):
 
 class ConsErrTracker(MyPyTreeNode):
     """
-    A class that tracks the errors on the conserved quantity.
-    Given its superior numerical accuracy, the algorithm below
-    is used to calculate the running average. Its properties are discussed
-    in Donald Knuth's Art of Computer Programming, vol. 2, p. 232, 3rd edition.
+    welford algorithm to compute the variance in Ekin and Econs
     """
 
-    counter: jax.Array = field(default_factory=lambda: jnp.array(0))
+    ekin_mean: jax.Array
+    econs_mean: jax.Array
 
-    ekin_m: jax.Array
-    econs_m: jax.Array
-
-    ekin_s: jax.Array = field(default_factory=lambda: jnp.array(0.0))
-    econs_s: jax.Array = field(default_factory=lambda: jnp.array(0.0))
+    counter: jax.Array = field(default_factory=lambda: jnp.array(1))
+    ekin_var: jax.Array = field(default_factory=lambda: jnp.array(0.0))
+    econs_var: jax.Array = field(default_factory=lambda: jnp.array(0.0))
 
     def update(self, ekin, econs):
-        d_ekin = ekin - self.ekin_m
-        self.ekin_m += d_ekin / (self.counter + 1)
-        self.ekin_s += d_ekin * (ekin - self.ekin_m)
+        d_ekin = ekin - self.ekin_mean
+        self.ekin_mean += d_ekin / (self.counter + 1)
+        self.ekin_var += d_ekin * (ekin - self.ekin_mean)
 
-        econs_tmp = econs - self.econs_m
-        self.econs_m += econs_tmp / (self.counter + 1)
-        self.econs_s += econs_tmp * (econs - self.econs_m)
+        d_econs = econs - self.econs_mean
+        self.econs_mean += d_econs / (self.counter + 1)
+        self.econs_var += d_econs * (econs - self.econs_mean)
 
         self.counter += 1
 
@@ -83,7 +79,7 @@ class ConsErrTracker(MyPyTreeNode):
         # Returns the square root of the ratio of the
         # variance in Ekin to the variance in Econs
 
-        return jnp.where(self.counter >= 1, jnp.sqrt(self.econs_s / self.ekin_s), 0.0)
+        return jnp.where(self.counter >= 2, jnp.sqrt(self.econs_var / self.ekin_var), 0.0)
 
 
 class VerletHook(Hook):
@@ -210,7 +206,7 @@ class VerletIntegrator(MyPyTreeNode):
     temp: jax.Array
     press: jax.Array
 
-    ekin: jax.Array
+    # ekin: jax.Array
     epot: jax.Array
     etot: jax.Array
     e_bias: jax.Array
@@ -353,7 +349,7 @@ class VerletIntegrator(MyPyTreeNode):
             gpos=gpos,
             gpos_bias=gpos_bias,
             temp=jnp.array(temp0),
-            ekin=jnp.array(0.0),
+            # ekin=jnp.array(0.0),
             epot=epot,
             etot=jnp.array(0.0),
             econs=jnp.array(0.0),
@@ -404,11 +400,14 @@ class VerletIntegrator(MyPyTreeNode):
 
         # time t + dt/2
         self.vel += 0.5 * acc * self.timestep
+
         # time t + dt
         self.pos += self.timestep * self.vel
 
         self.ff.system.pos = self.pos
+
         res, (bias, cv) = self.ff.compute(gpos=True)
+
         assert res.gpos is not None
         self.epot, self.gpos = res.energy, res.gpos
         assert bias.gpos is not None
@@ -417,7 +416,6 @@ class VerletIntegrator(MyPyTreeNode):
         # time t + dt
         acc = -self.gpos / self.masses.reshape(-1, 1)
         self.vel += 0.5 * acc * self.timestep
-        self.ekin = self._compute_ekin()
 
         # Allow specialized verlet hooks to modify the state after the step
 
@@ -437,23 +435,25 @@ class VerletIntegrator(MyPyTreeNode):
 
         return self, verlet_hook
 
+    @property
     @jit_decorator
-    def _compute_ekin(self):
+    def ekin(self):
         return 0.5 * jnp.sum((self.vel**2 * self.masses.reshape(-1, 1)))
 
     @jit_decorator
     def compute_properties(self, verlet_hook: VerletHook):
-        # assert self.delta is not None
-
-        self.ekin = self._compute_ekin()
-        self.temp = self.ekin / self.ndof * 2.0 / boltzmann
         self.etot = self.ekin + self.epot
         self.econs = self.etot
+        self.temp = self.ekin / self.ndof * 2.0 / boltzmann
 
         self.econs += verlet_hook.econs_correction
 
         if self._cons_err_tracker is None:
-            self._cons_err_tracker = ConsErrTracker(counter=self.counter, ekin_m=self.ekin, econs_m=self.econs)
+            self._cons_err_tracker = ConsErrTracker(
+                counter=jnp.array(1),
+                ekin_mean=self.ekin,
+                econs_mean=self.econs,
+            )
         else:
             self._cons_err_tracker = self._cons_err_tracker.update(self.ekin, self.econs)
 
@@ -467,17 +467,18 @@ class VerletIntegrator(MyPyTreeNode):
     def finalize(self):
         pass
 
-    def call_hooks(self, verlet_hook):
+    def call_hooks(self, verlet_hook: VerletHook):
         # state_updated = False
 
-        if jnp.any(jnp.isnan(self.ff.system.sp.coordinates)):
-            raise ValueError(f"sp containes nans: {self.ff.system.sp=}")
+        if jnp.any(jnp.isnan(self.pos)):
+            raise ValueError(f"sp containes nans: {self.pos=}")
 
-        if self.ff.system.sp.cell is not None:
-            if jnp.any(jnp.isnan(self.ff.system.sp.cell)):
-                raise ValueError(f"sp containes nans: {self.ff.system.sp=}")
+        if self.rvecs is not None:
+            if jnp.any(jnp.isnan(self.rvecs)):
+                raise ValueError(f"sp containes nans: {self.rvecs=}")
 
         for hook in [verlet_hook, *self.other_hooks]:
+            hook: Hook
             if hook.expects_call(self.counter):
                 hook(self)
 
@@ -485,8 +486,8 @@ class VerletIntegrator(MyPyTreeNode):
         self, verlet_hook = self.propagate(verlet_hook)
         self.call_hooks(verlet_hook)
 
-        if self.cons_err > 2.0:
-            raise ValueError("Energy conservation error too large, stopping simulation.")
+        # if self.cons_err > 2.0:
+        #     raise ValueError("Energy conservation error too large, stopping simulation.")
 
         return self, verlet_hook
 

@@ -343,6 +343,7 @@ class NewYaffEngine(MDEngine):
         self._yaff_ener = YaffFF.create(
             energy=self.energy,
             bias=self.bias,
+            permanent_bias=self.permanent_bias,
             sp=self.sp,
             tic=self.static_trajectory_info,
         )

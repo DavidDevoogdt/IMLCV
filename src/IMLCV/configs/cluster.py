@@ -124,11 +124,14 @@ def get_slurm_provider(
 echo "init pixi"
 cd {ROOT_DIR}
 pwd
+set -e
 export PIXI_CACHE_DIR="./.pixi_cache"
 export PATH="~/.pixi/bin:$PATH"
 which pixi
-eval "$(pixi shell-hook -e {environment} --as-is )"
 
+
+eval  "$(pixi shell-hook -e {environment} --as-is )"
+echo "after pixi"
 which work_queue_worker
             """
     # else:

@@ -487,7 +487,7 @@ def _quad(sp: SystemParams, _nl, shmap, shmap_kwargs, quads):
         cos = jnp.dot(v, w)
         sin = jnp.dot(jnp.cross(b1, v), w)
 
-        return jnp.array([cos, sin])
+        return jnp.array([jnp.arctan2(sin, cos)])
 
     print(f"{quads.shape=}")
 
@@ -526,10 +526,11 @@ def _trip(sp: SystemParams, _nl, shmap, shmap_kwargs, trips):
         b1, _ = _norm_safe(b1)
 
         cos = jnp.dot(b0, b1)
+        alpha = jnp.arccos(jnp.clip(cos, -1.0, 1.0))
 
         # _, sin = _norm_safe(jnp.cross(b0, b1))
 
-        return jnp.array([cos])
+        return jnp.array([alpha])
 
     vals = get(
         sp.coordinates[trips[:, 0]],

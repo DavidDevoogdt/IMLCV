@@ -116,3 +116,4 @@ scripts/*
 
 core
 image.sif
+plots_cv_discovery/*

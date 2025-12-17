@@ -235,7 +235,7 @@ class Observable:
         directory=None,
         temp=None,
         shmap=False,
-        only_finished=True,
+        only_finished=False,
         bounds_percentile=1,
         max_bias=None,
         rbf_kernel="thin_plate_spline",
@@ -244,6 +244,7 @@ class Observable:
         time_correlation_method=None,
         return_std_bias=False,
         n_hist=None,
+        equilibration_time=5 * picosecond,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -262,6 +263,7 @@ class Observable:
             "only_finished": only_finished,
             "weight": False,
             "out": -1,
+            "equilibration_time": equilibration_time,
         }
 
         kwargs = dict(
@@ -369,7 +371,7 @@ class Observable:
         lag_n=10,
         start_r=1,
         min_traj_length=None,
-        only_finished=True,
+        only_finished=False,
         chunk_size=None,
         macro_chunk=1000,
         # T_scale=10,
@@ -392,6 +394,7 @@ class Observable:
         direct_bias=False,
         time_correlation_method=None,
         return_std_bias=False,
+        equilibration_time=5 * picosecond,
     ):
         if cv is None:
             cv = rounds.cv
@@ -418,6 +421,7 @@ class Observable:
             min_samples_per_bin=min_samples_per_bin,
             time_correlation_method=time_correlation_method,
             n_hist=n_hist,
+            equilibration_time=equilibration_time,
         )
 
         fes_bias_wham, std_bias_wham, _, _ = dlo.get_fes_bias_from_weights(
@@ -567,6 +571,7 @@ class Observable:
         time_correlation_method=None,
         return_std_bias=False,
         n_hist=None,
+        equilibration_time=5 * picosecond,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -602,6 +607,7 @@ class Observable:
             time_correlation_method=time_correlation_method,
             return_std_bias=return_std_bias,
             n_hist=n_hist,
+            equilibration_time=equilibration_time,
         )
 
         if executors is None:
@@ -634,7 +640,7 @@ class Observable:
         n_max=1e5,
         min_traj_length=None,
         margin=0.1,
-        only_finished=True,
+        only_finished=False,
         shmap=False,
         thermolib=False,
         lag_n=30,
@@ -651,6 +657,7 @@ class Observable:
         time_correlation_method="blav",
         return_std_bias=False,
         n_hist=None,
+        equilibration_time=5 * picosecond,
     ):
         print(f"{n_max_lin=}")
 
@@ -671,7 +678,7 @@ class Observable:
                 dlo_kwargs=dict(
                     out=-1,  # max number of points to plot
                     num=1,
-                    ignore_invalid=False,
+                    ignore_invalid=True,
                     cv=self.cv_round,
                     split_data=True,
                     new_r_cut=None,
@@ -707,6 +714,7 @@ class Observable:
                 time_correlation_method=time_correlation_method,
                 return_std_bias=return_std_bias,
                 n_hist=n_hist,
+                equilibration_time=equilibration_time,
             )
 
         else:
@@ -737,6 +745,7 @@ class Observable:
                 time_correlation_method=time_correlation_method,
                 return_std_bias=return_std_bias,
                 n_hist=n_hist,
+                equilibration_time=equilibration_time,
             )
 
         return fes_bias_tot

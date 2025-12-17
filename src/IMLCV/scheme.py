@@ -12,7 +12,7 @@ from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
-from IMLCV.base.UnitsConstants import angstrom, boltzmann, kjmol
+from IMLCV.base.UnitsConstants import angstrom, boltzmann, kjmol, picosecond
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import HarmonicBias
 
@@ -95,11 +95,11 @@ class Scheme:
         plot=True,
         scale_n: int | None = None,
         cv_round: int | None = None,
-        ignore_invalid=False,
+        ignore_invalid=True,
         eps=0.1,  # overlap between wave functions
         min_traj_length=None,
         recalc_cv=False,
-        only_finished=True,
+        only_finished=False,
         chunk_size=None,
         # T_scale=10,
         use_common_bias=True,
@@ -198,7 +198,7 @@ class Scheme:
         plot_margin=0.1,
         enforce_min_traj_length=False,
         recalc_cv=False,
-        only_finished=True,
+        only_finished=False,
         plot_umbrella=False,
         max_bias=100 * kjmol,
         max_grad=100 * kjmol,
@@ -221,6 +221,7 @@ class Scheme:
         first_round_no_fes_bias=False,
         dT=0,
         max_b=100 * kjmol,
+        equilibration_time=2 * picosecond,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -282,7 +283,7 @@ class Scheme:
                 plot=plot_umbrella,
                 scale_n=scale_n,
                 cv_round=cv_round,
-                ignore_invalid=False,
+                ignore_invalid=True,
                 eps=eps_umbrella if not without_bias else 1,
                 min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
                 recalc_cv=recalc_cv,
@@ -324,6 +325,7 @@ class Scheme:
                     direct_bias=direct_bias,
                     executors=executors,
                     n_max_lin=n_max_lin,
+                    equilibration_time=5 * picosecond,
                 )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)
@@ -366,6 +368,7 @@ class Scheme:
         macro_chunk_nl=5000,
         verbose=False,
         koopman=True,
+        equilibration_time=2 * picosecond,
     ):
         self.rounds.update_CV(
             transformer=transformer,
@@ -392,6 +395,7 @@ class Scheme:
             macro_chunk_nl=macro_chunk_nl,
             verbose=verbose,
             koopman=koopman,
+            equilibration_time=equilibration_time,
         )
 
     def transform_CV(

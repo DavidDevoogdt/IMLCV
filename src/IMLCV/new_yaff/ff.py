@@ -23,6 +23,7 @@ class YaffFF(MyPyTreeNode):
 
     energy: Energy
     bias: Bias
+    permanent_bias: Bias | None = field(default=None)
 
     # md_engine: NewYaffEngine
 
@@ -30,12 +31,14 @@ class YaffFF(MyPyTreeNode):
     def create(
         energy: Energy,
         bias: Bias,
+        permanent_bias: Bias | None,
         sp: SystemParams,
         tic: StaticMdInfo,
     ):
         yaff_ff = YaffFF(
             energy=energy,
             bias=bias,
+            permanent_bias=permanent_bias,
             system=YaffSys.create(
                 sp=sp,
                 tic=tic,
@@ -82,6 +85,16 @@ class YaffFF(MyPyTreeNode):
             gpos=gpos,
             vir=vtens,
         )
+
+        if self.permanent_bias is not None:
+            _, perm_bias = self.permanent_bias.compute_from_system_params(
+                sp=sp,
+                nl=nl,
+                gpos=gpos,
+                vir=vtens,
+            )
+
+            bias = bias + perm_bias
 
         res = energy + bias
 

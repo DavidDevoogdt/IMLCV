@@ -182,6 +182,25 @@ class Energy(MyPyTreeNode, ABC):
         shmap=False,
         shmap_kwarg=ShmapKwargs.create(),
     ) -> EnergyResult:
+        if sp.batched:
+            f = padded_vmap(
+                Partial_decorator(
+                    self.compute_from_system_params,
+                    gpos=gpos,
+                    vir=vir,
+                    nl=nl,
+                    manual_vir=manual_vir,
+                    shmap=False,
+                    shmap_kwarg=None,
+                ),
+                chunk_size=None,
+            )
+
+            if shmap:
+                f = padded_shard_map(f, shmap_kwarg)
+
+            return f(sp)
+
         if manual_vir is None:
             manual_vir = self.manual_vtens
 
@@ -356,7 +375,7 @@ class Bias(ABC, MyPyTreeNode):
     """base class for biased MD runs."""
 
     collective_variable: CollectiveVariable | None = field(pytree_node=True)
-    collective_variable_path: Path | str | None = field(pytree_node=False, default=None)
+    # collective_variable_path: Path | str | None = field(pytree_node=False, default=None)
     start: int | None = field(pytree_node=False, default=0)
     step: int | None = field(pytree_node=False, default=1)
     finalized: bool = field(pytree_node=False, default=False)
@@ -653,7 +672,7 @@ class Bias(ABC, MyPyTreeNode):
             margin=margin,
         )
 
-    def save(self, filename: str | Path, root: str | Path):
+    def save(self, filename: str | Path):
         # assert root is not None
 
         if isinstance(filename, str):
@@ -661,11 +680,11 @@ class Bias(ABC, MyPyTreeNode):
         if not filename.parent.exists():
             filename.parent.mkdir(parents=True, exist_ok=True)
 
-        if self.collective_variable_path is not None and self.collective_variable is not None:
-            cv_path = Path(root) / Path(self.collective_variable_path)
+        # if self.collective_variable_path is not None and self.collective_variable is not None:
+        #     cv_path = Path(root) / Path(self.collective_variable_path)
 
-            if not cv_path.exists():
-                self.collective_variable.save(Path(self.collective_variable_path))
+        #     if not cv_path.exists():
+        #         self.collective_variable.save(Path(self.collective_variable_path))
 
         colvar = self.collective_variable
 
@@ -683,7 +702,7 @@ class Bias(ABC, MyPyTreeNode):
         self.collective_variable = colvar
 
     @staticmethod
-    def load(filename, root: str | Path) -> Bias:
+    def load(filename, collective_variable: CollectiveVariable) -> Bias:
         filename = Path(filename)
         if filename.suffix == ".json":
             with open(filename) as f:
@@ -696,18 +715,23 @@ class Bias(ABC, MyPyTreeNode):
 
         assert isinstance(self, Bias)
 
-        if self.collective_variable is None:
-            assert self.collective_variable_path is not None
-            cv_path = Path(root) / Path(self.collective_variable_path)
+        self.collective_variable = collective_variable
 
-            assert cv_path.exists()
+        # if self.collective_variable is None:
+        #     assert self.collective_variable_path is not None
+        #     cv_path = Path(root) / Path(self.collective_variable_path)
 
-            self.collective_variable = CollectiveVariable.load(cv_path)
+        #     assert cv_path.exists()
+
+        #     self.collective_variable = CollectiveVariable.load(cv_path)
 
         return self
 
     def __getstate__(self):
-        return self.__dict__
+        d = self.__dict__.copy()
+        # d["collective_variable"] = None
+
+        return d
 
     def __setstate__(self, statedict: dict):
         removed = []
@@ -720,6 +744,9 @@ class Bias(ABC, MyPyTreeNode):
 
             for k in removed:
                 del statedict[k]
+
+            if "collective_variable" not in statedict:
+                statedict["collective_variable"] = None
 
             self.__init__(**statedict)
 
@@ -890,7 +917,7 @@ class CompositeBias(Bias):
     def create(cls, biases: list[Bias], fun=jnp.sum) -> CompositeBias | Bias:
         assert len(biases) > 0
         collective_variable: CollectiveVariable | None = None  # type: ignore
-        colvar_path: str | Path | None = None
+        # colvar_path: str | Path | None = None
 
         biases_new = []
 
@@ -901,8 +928,8 @@ class CompositeBias(Bias):
             if collective_variable is None:
                 collective_variable = b.collective_variable
 
-            if colvar_path is None:
-                colvar_path = b.collective_variable_path
+            # if colvar_path is None:
+            #     colvar_path = b.collective_variable_path
 
             # b.collective_variable = None
 
@@ -914,13 +941,13 @@ class CompositeBias(Bias):
             assert isinstance(biases[0], NoneBias)
             biases_new.append(biases[0])
             collective_variable = biases[0].collective_variable
-            colvar_path = biases[0].collective_variable_path
+            # colvar_path = biases[0].collective_variable_path
 
         if len(biases_new) == 1:
             # no need for composite bias
             new_bias = biases_new[0]
             new_bias.collective_variable = collective_variable
-            new_bias.collective_variable_path = colvar_path
+            # new_bias.collective_variable_path = colvar_path
 
             return new_bias
 
@@ -928,7 +955,7 @@ class CompositeBias(Bias):
 
         return CompositeBias(
             collective_variable=collective_variable,
-            collective_variable_path=colvar_path,
+            # collective_variable_path=colvar_path,
             biases=biases_new,
             fun=fun,
             start=0,
@@ -944,6 +971,30 @@ class CompositeBias(Bias):
         md: MDEngine,
     ) -> Bias:
         return self.replace(biases=[a.update_bias(md) for a in self.biases])
+
+
+class RoundBias(Bias):
+    bias_r: Bias
+    bias_i: Bias
+
+    @classmethod
+    def create(cls, bias_r: Bias, bias_i: Bias) -> RoundBias:
+        assert bias_r.collective_variable is not None
+        assert bias_i.collective_variable is not None
+        # assert bias_r.collective_variable == bias_i.collective_variable
+        return RoundBias(
+            bias_r=bias_r,
+            bias_i=bias_i,
+            collective_variable=bias_r.collective_variable,
+            start=0,
+            step=1,
+            finalized=bias_r.finalized and bias_i.finalized,
+        )
+
+    def _compute(self, cvs: CV):
+        r = self.bias_r._compute(cvs)
+        i = self.bias_i._compute(cvs)
+        return r + i
 
 
 def _zero_fun(cvs: CV):
@@ -969,7 +1020,7 @@ class BiasModify(Bias):
 
         return BiasModify(
             collective_variable=colvar,
-            collective_variable_path=bias.collective_variable_path,
+            # collective_variable_path=bias.collective_variable_path,
             fun=fun,
             start=None,
             step=None,
@@ -1182,7 +1233,7 @@ class StdBias(Bias):
 
         return StdBias(
             collective_variable=colvar,
-            collective_variable_path=bias.collective_variable_path,
+            # collective_variable_path=bias.collective_variable_path,
             _bias=bias,
             _log_exp_sigma=log_exp_sigma,
             start=0,

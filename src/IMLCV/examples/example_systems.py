@@ -933,6 +933,8 @@ def _cv_system_1(
     r_C_H = 1.5 * angstrom
     r_O_H = 1.5 * angstrom
 
+    neighbour_O = jnp.array([114, 197, 106, 116])
+
     # assert jnp.all(z_array[coordinaten_idx_H] == 1)
     # assert jnp.all(z_array[coordinaten_idx_C] == 6)
     # assert jnp.all(z_array[coordinaten_idx_O] == 8)
@@ -973,20 +975,22 @@ def _cv_system_1(
         m=12,
     )
 
-    ehtnene_COM = jnp.mean(sp.coordinates[coordinaten_idx_C], axis=0)
+    ehtnene_COM = jnp.mean(sp.coordinates[coordinaten_idx_C, :], axis=0)
     AL_idx = 95
 
     distance_COM_AL = jnp.linalg.norm(ehtnene_COM - sp.coordinates[AL_idx, :])
 
-    dihedral_oxygens = jnp.array([116, 114, 197])
+    dihedral_oxygen = 116
 
+    cc_distance = jnp.linalg.norm(
+        sp.coordinates[coordinaten_idx_C[0], :] - sp.coordinates[coordinaten_idx_C[1], :],
+    )
+    from functools import partial
+
+    print(f"{cc_distance=}")
+
+    @partial(jax.vmap, in_axes=(0, 0, None, None))
     def dihedral_angle(C1, C2, O, Al):
-        C = jnp.array([C1, C2])
-
-        CO_distances = jnp.linalg.norm(sp.coordinates[C, :] - sp.coordinates[O, :], axis=1)
-        min_dist = jnp.argmin(CO_distances)
-        C1, C2 = C[min_dist], C[1 - min_dist]
-
         b0 = sp.coordinates[C1, :] - sp.coordinates[C2, :]
         b1 = sp.coordinates[O, :] - sp.coordinates[C1, :]
         b2 = sp.coordinates[Al, :] - sp.coordinates[O, :]
@@ -1002,14 +1006,29 @@ def _cv_system_1(
         x = jnp.dot(v, w)
         y = jnp.dot(jnp.cross(b1, v), w)
 
-        # theta = jnp.atan2(y, x)
-
         return x, y
 
-    dihedrals_cos, dihedrals_sin = jax.vmap(
-        dihedral_angle,
-        in_axes=(None, None, 0, None),
-    )(coordinaten_idx_C[0], coordinaten_idx_C[1], dihedral_oxygens, 95)
+    # O_idx = jnp.argmin(
+    #     jax.vmap(lambda x: jnp.linalg.norm(sp.coordinates[dihedral_oxygen, :] - sp.coordinates[x, :]))(
+    #         coordinaten_idx_C
+    #     )
+    # )
+
+    # print(f"{O_idx=}")
+
+    # c1, c2 = jnp.array([[288, 289], [289, 288]])[O_idx]
+
+    # print(f"{c1=}, {c2=}")
+
+    dihedrals_cos, dihedrals_sin = dihedral_angle(coordinaten_idx_C, coordinaten_idx_C[::-1], dihedral_oxygen, 95)
+
+    out_dih = jnp.vstack([dihedrals_cos, dihedrals_sin]).T
+
+    print(f"{dihedrals_cos=}, {dihedrals_sin=}")
+
+    O_CC_distances = jax.vmap(
+        lambda o_idx: jnp.linalg.norm(sp.coordinates[o_idx, :] - jnp.mean(sp.coordinates[coordinaten_idx_C, :], axis=0))
+    )(neighbour_O)
 
     return CV(
         cv=jnp.hstack(
@@ -1018,11 +1037,38 @@ def _cv_system_1(
                 coordination_CH.cv,
                 coordination_CO.cv,
                 distance_COM_AL,
-                dihedrals_cos,
-                dihedrals_sin,
+                cc_distance,
+                O_CC_distances.reshape(-1),
+                out_dih.reshape(-1),
             ]
         )
     )
+
+
+def _system_1_perm_cvs(
+    sp: SystemParams,
+    nl,
+    shmap,
+    shmap_kwargs,
+):
+    coordinaten_idx_C = jnp.array([289, 290]) - 1
+    ehtnene_COM = jnp.mean(sp.coordinates[coordinaten_idx_C, :], axis=0)
+    AL_idx = 95
+
+    distance_COM_AL = jnp.linalg.norm(ehtnene_COM - sp.coordinates[AL_idx, :])
+
+    return CV(cv=jnp.array([distance_COM_AL]))
+
+
+def _system_1_walls(
+    cv: CV,
+):
+    print(f"computing wall")
+    distance_COM_AL = cv.cv[0]
+
+    d0 = 6.5 * angstrom
+
+    return jnp.where(distance_COM_AL < d0, 0.0, 3000 * kjmol * (distance_COM_AL - d0) ** 2)
 
 
 def system_1():
@@ -1127,6 +1173,17 @@ def system_1():
 
     mde = NewYaffEngine.create(
         bias=bias,
+        permanent_bias=BiasF.create(
+            cvs=CollectiveVariable(
+                f=CvTrans.from_cv_function(
+                    _system_1_perm_cvs,
+                ),
+                metric=CvMetric.create(
+                    bounding_box=jnp.array([[0.0 * angstrom, 10.0 * angstrom]]),
+                ),
+            ),
+            g=_system_1_walls,
+        ),
         static_trajectory_info=sti,
         energy=energy,
         sp=sps[0],
@@ -1160,11 +1217,19 @@ def _system_2_cvs(
 
     r1 = jnp.sum(r1_weight[:, None] * ring_pos, axis=0)
     r2 = jnp.sum(r2_weight[:, None] * ring_pos, axis=0)
-
     ring_radius = jnp.sqrt(jnp.mean(jnp.sum((ring_pos - com_ring) ** 2, axis=1)))
 
     ring_normal = jnp.cross(r1, r2)
     ring_normal = ring_normal / jnp.linalg.norm(ring_normal)
+
+    def project(r):
+        print(f"{r=}")
+
+        rx = jnp.dot(r, r1)
+        ry = jnp.dot(r, r2)
+        rz = jnp.dot(r, ring_normal)
+
+        return jnp.array([rx, ry, rz, rx**2 + ry**2])
 
     posc = sp.coordinates[1]
     posdb = sp.coordinates[0]
@@ -1178,36 +1243,99 @@ def _system_2_cvs(
     n_prop = jnp.cross(v1, v2)
     n_prop = n_prop / jnp.linalg.norm(n_prop)
 
-    cos_psi = jnp.dot(ring_normal, n_prop)
+    x1, y1, z1, x12_sq = project(com_propene - com_ring)
+    vec_1 = project(v1)
+    vec_2 = project(v2)
+    vec_n_prop = project(n_prop)
+
+    print(f"{vec_1=}")
+
+    # cos_psi = jnp.dot(ring_normal, n_prop)
     # sin_psi = jnp.linalg.norm(jnp.cross(ring_normal, n_prop))
     # psi = jnp.arctan2(sin_psi, cos_psi)
 
-    cos_khi = jnp.dot(ring_normal, v1)
+    # cos_khi = jnp.dot(ring_normal, v1)
     # sin_khi = jnp.linalg.norm(jnp.cross(ring_normal, v1))
     # khi = jnp.arctan2(sin_khi, cos_khi)
 
-    cos_ksi = jnp.dot(ring_normal, v2)
+    # cos_ksi = jnp.dot(ring_normal, v2)
     # sin_ksi = jnp.linalg.norm(jnp.cross(ring_normal, v2))
     # ksi = jnp.arctan2(sin_ksi, cos_ksi)
 
-    dist_cv = jnp.dot(com_propene - com_ring, ring_normal)
+    cos_alpha = jnp.dot(v1, v2)
+
+    # p = com_propene - com_ring
+    # dist_cv = jnp.dot(p, ring_normal)
+    # p_perp = p - jnp.dot(p, ring_normal) * ring_normal
+    # dist_perp = jnp.linalg.norm(p_perp)
 
     dist_bas1 = jnp.linalg.norm(com_cc - bas_pos[0])
     dist_bas2 = jnp.linalg.norm(com_cc - bas_pos[1])
 
     return CV(
-        cv=jnp.array(
+        cv=jnp.hstack(
             [
-                dist_cv,
+                z1,
+                x1,
+                y1,
+                x12_sq,
+                vec_1,
+                vec_2,
+                vec_n_prop,
                 ring_radius,
                 dist_bas1,
                 dist_bas2,
-                cos_psi,
-                cos_khi,
-                cos_ksi,
+                cos_alpha,
             ]
         ).flatten(),
     )
+
+
+def _system_2_perm_cvs(
+    sp: SystemParams,
+    nl,
+    shmap,
+    shmap_kwargs,
+):
+    propene_idx = jnp.array([1, 2, 220, 221, 222, 223, 225, 226, 227]) - 1
+    ring_idx = jnp.array([26, 3, 4, 63, 50, 49, 48, 47, 42, 41, 40, 39, 30, 29, 28, 27]) - 1
+
+    r1_weight = jnp.cos(2 * jnp.pi / 16 * (jnp.arange(16) + 1))
+    r2_weight = jnp.sin(2 * jnp.pi / 16 * (jnp.arange(16) + 1))
+
+    propene_pos = sp.coordinates[propene_idx]
+    ring_pos = sp.coordinates[ring_idx]
+
+    com_propene = jnp.mean(propene_pos, axis=0)
+    com_ring = jnp.mean(ring_pos, axis=0)
+
+    r1 = jnp.sum(r1_weight[:, None] * ring_pos, axis=0)
+    r2 = jnp.sum(r2_weight[:, None] * ring_pos, axis=0)
+
+    ring_normal = jnp.cross(r1, r2)
+    ring_normal = ring_normal / jnp.linalg.norm(ring_normal)
+
+    dist_cv = jnp.dot(com_propene - com_ring, ring_normal)
+
+    r_sq = jnp.dot(com_propene - com_ring, com_propene - com_ring) - dist_cv**2
+
+    return CV(
+        cv=jnp.array([dist_cv, r_sq]),
+    )
+
+
+def _system_2_walls(
+    cv: CV,
+):
+    print(f"computing wall")
+    dist_cv = jnp.abs(cv.cv[0])
+    d0 = 9.0 * angstrom
+    d1 = 23.0 * angstrom**2
+
+    w1 = jnp.where(dist_cv < d0, 0.0, 3000 * kjmol * (dist_cv - d0) ** 2)
+    w2 = jnp.where(cv.cv[1] < d1, 0.0, 3000 * kjmol * (cv.cv[1] - d1) ** 2)
+
+    return w1 + w2
 
 
 def system_2():
@@ -1282,6 +1410,17 @@ def system_2():
 
     mde = NewYaffEngine.create(
         bias=bias,
+        permanent_bias=BiasF.create(
+            cvs=CollectiveVariable(
+                f=CvTrans.from_cv_function(
+                    _system_2_perm_cvs,
+                ),
+                metric=CvMetric.create(
+                    bounding_box=jnp.array([[-10.0 * angstrom, 10.0 * angstrom]]),
+                ),
+            ),
+            g=_system_2_walls,
+        ),
         static_trajectory_info=sti,
         energy=energy,
         sp=sps[0],

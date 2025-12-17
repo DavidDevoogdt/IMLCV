@@ -15,6 +15,7 @@ from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
+from IMLCV.base.MdEngine import TrajectoryInfo
 from IMLCV.base.bias import Bias, GridBias, NoneBias, StdBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, vmap_decorator
@@ -22,15 +23,18 @@ from IMLCV.base.UnitsConstants import kelvin, kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
 from IMLCV.implementations.CV import _scale_cv_trans, eigh_rot, identity_trans, scale_cv_trans
 
+
+from functools import partial
+
 if TYPE_CHECKING:
     from IMLCV.base.rounds import DataLoaderOutput
 
 
 class Transformer(MyPyTreeNode):
-    outdim: int
     descriptor: CvTrans | None = None
     pre_scale: bool = True
     post_scale: bool = True
+    pass_trans: bool = False
 
     def pre_fit(
         self,
@@ -131,18 +135,18 @@ class Transformer(MyPyTreeNode):
 
         from IMLCV.base.rounds import DataLoaderOutput
 
-        bias, _, _, _ = dlo.get_fes_bias_from_weights(
-            samples_per_bin=samples_per_bin,
-            min_samples_per_bin=min_samples_per_bin,
-            n_max=n_max,
-            max_bias=max_fes_bias,
-            macro_chunk=macro_chunk,
-            chunk_size=chunk_size,
-            recalc_bounds=False,
-            smoothing=None,
-        )
-
         if plot:
+            bias, _, _, _ = dlo.get_fes_bias_from_weights(
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                n_max=n_max,
+                max_bias=max_fes_bias,
+                macro_chunk=macro_chunk,
+                chunk_size=chunk_size,
+                recalc_bounds=False,
+                smoothing=None,
+            )
+
             Transformer.plot_app(
                 name=str(plot_folder / "cvdiscovery_pre_data_bias.png"),  # type: ignore
                 collective_variables=[dlo.collective_variable],
@@ -352,7 +356,8 @@ class Transformer(MyPyTreeNode):
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
-                recalc_bounds=True,
+                # recalc_bounds=True,
+                bounds=bounds,
             )
 
             if plot:
@@ -1246,10 +1251,11 @@ class Transformer(MyPyTreeNode):
     def plot_CV_corr(
         collective_variable_projection: CollectiveVariable,
         collective_variables: list[CollectiveVariable],
-        cv_data: list[list[CV]],
-        sp_data: list[list[SystemParams]],
-        weights: list[list[jax.Array]] | None = None,
-        std: list[list[jax.Array]] | None = None,
+        ti: list[list[TrajectoryInfo]],
+        # cv_data: list[list[CV]],
+        # sp_data: list[list[SystemParams]],
+        # weights: list[list[jax.Array]] | None = None,
+        # std: list[list[jax.Array]] | None = None,
         name: str | Path | None = None,
         timescales: list[list[float]] | None = None,
         projection_cv_title: str | None = None,
@@ -1293,10 +1299,104 @@ class Transformer(MyPyTreeNode):
                 bar_label = "Free Energy [kJ/mol]"
 
         dim_map = [
-            [(0,)],
-            [(0, 1)],
-            [(0, 1), (1, 2), (0, 2)],
-            [(0, 1), (2, 3)],
+            [(0,)],  # 1
+            [(0, 1)],  # 2
+            [(0, 1), (1, 2), (0, 2)],  # 3
+            [(0, 1), (2, 3)],  # 4
+            [(0, 1), (2, 3), (4)],  # 5
+            [(0, 1), (2, 3), (4, 5)],  # 6
+            [(0, 1), (2, 3), (4, 5), (6)],  # 7
+            [(0, 1), (2, 3), (4, 5), (6, 7)],  # 8
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8),
+            ],  # 9
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+            ],  # 10
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10),
+            ],  # 11
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+            ],  # 12
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+                (12),
+            ],  # 13
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+                (12, 13),
+            ],  # 14
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+                (12, 13),
+                (14),
+            ],  # 15
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+                (12, 13),
+                (14, 15),
+            ],  # 16
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+                (12, 13),
+                (14, 15),
+                (16,),
+            ],  # 17
+            [
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (6, 7),
+                (8, 9),
+                (10, 11),
+                (12, 13),
+                (14, 15),
+                (16, 17),
+            ],  # 17
         ]
 
         if isinstance(cmap_fes, str):
@@ -1378,19 +1478,21 @@ class Transformer(MyPyTreeNode):
         for i in range(len(collective_variables)):
             print(f"{i=}")
 
-            cv_data_i = cv_data[i]
+            ti_i = ti[i]
+
             col_var_i = collective_variables[i]
 
             # print(f"{col_var_i=} {i=} ")
+            cv_data_i = [a.CV for a in ti_i]
+            sp_data_i = [a.sp for a in ti_i]
+            weights_i = [a.w for a in ti_i]
 
-            sp_data_i = sp_data[i]
+            assert cv_data_i is not None, "cv_data cannot be None when using TrajectoryInfo"
 
-            # print(f"{cv_data_i=}, {col_var_i=}")
-
-            if weights is not None:
-                weights_i = weights[i]
-            else:
+            if weights_i is None:
                 weights_i = [jnp.ones(len(ci.cv)) for ci in cv_data_i]
+
+            sigma_i = [a.sigma for a in ti_i] if ti_i[0].sigma is not None else None
 
             cv_proj, _ = DataLoaderOutput.apply_cv(
                 f=collective_variable_projection.f,
@@ -1441,7 +1543,7 @@ class Transformer(MyPyTreeNode):
                     set_outer_border=False,
                     overlay_mask=overlay_mask,
                     std_bias=plot_std,
-                    weights_std=std[i] if std is not None else None,
+                    weights_std=sigma_i,
                 )
 
                 kw.update(get_fes_bias_kwargs)
@@ -1542,7 +1644,7 @@ class Transformer(MyPyTreeNode):
                     set_outer_border=False,
                     overlay_mask=overlay_mask,
                     std_bias=plot_std,
-                    weights_std=std[i] if std is not None else None,
+                    weights_std=sigma_i,
                 )
 
                 kw.update(get_fes_bias_kwargs)
@@ -1612,7 +1714,7 @@ class Transformer(MyPyTreeNode):
                     set_outer_border=False,
                     overlay_mask=overlay_mask,
                     std_bias=plot_std,
-                    weights_std=std[i] if std is not None else None,
+                    weights_std=sigma_i,
                 )
 
                 kw.update(get_fes_bias_kwargs)
@@ -3030,7 +3132,7 @@ class CombineTransformer(Transformer):
     def create(transformers: list[Transformer]) -> CombineTransformer:
         return CombineTransformer(
             transformers=transformers,
-            outdim=transformers[-1].outdim,
+            # outdim=transformers[-1].outdim,
             descriptor=transformers[0].descriptor,
             pre_scale=transformers[0].pre_scale,
             post_scale=transformers[-1].post_scale,
@@ -3052,37 +3154,55 @@ class CombineTransformer(Transformer):
 
         assert len(self.transformers) > 0, "No transformers to fit"
 
-        periods = []
+        # periods = []
+
+        pass_trans = None
 
         for i, t in enumerate(self.transformers):
             print(f"fitting transformer {i + 1}/{len(self.transformers)}")
 
-            x, x_t, trans_t, _, per = t._fit(
-                x,
-                x_t,
-                w,
-                # w_t,
-                dlo,
-                chunk_size=chunk_size,
-                verbose=verbose,
-                macro_chunk=macro_chunk,
-                # **t.fit_kwargs,
-                # **fit_kwargs,
-            )
+            if t.pass_trans:
+                _, _, trans_t, _, _, _ = t._fit(
+                    x,
+                    x_t,
+                    w,
+                    dlo,
+                    chunk_size=chunk_size,
+                    verbose=verbose,
+                    macro_chunk=macro_chunk,
+                )
 
-            if trans is None:
-                trans = trans_t
+                if pass_trans is None:
+                    pass_trans = trans_t
+                else:
+                    pass_trans *= trans
+
             else:
-                trans *= trans_t
+                x, x_t, trans_t, w, _, _ = t._fit(
+                    x,
+                    x_t,
+                    w,
+                    dlo,
+                    chunk_size=chunk_size,
+                    verbose=verbose,
+                    macro_chunk=macro_chunk,
+                    trans=pass_trans,
+                )
+                pass_trans = None
 
-            periods = [per]
+                if trans is None:
+                    trans = trans_t
+                else:
+                    trans *= trans_t
+
+            # periods = [per]
 
         assert trans is not None
 
         x = cast(list[CV], x)
         x_t = cast(list[CV], x_t)
 
-        return x, x_t, trans, w, None, jnp.concatenate(periods)
+        return x, x_t, trans, w, None, None
 
 
 class IdentityTransformer(Transformer):
@@ -3106,7 +3226,7 @@ class IdentityTransformer(Transformer):
         x = cast(list[CV], x)
         x_t = cast(list[CV], x_t)
 
-        return x, x_t, identity_trans, w, tuple[str, ...] | None, None
+        return x, x_t, identity_trans, w, None, None
 
 
 class CvTransTransformer(Transformer):
@@ -3124,4 +3244,14 @@ class CvTransTransformer(Transformer):
         macro_chunk=1000,
         # **fit_kwargs,
     ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, jax.Array | None]:
-        raise NotImplementedError
+        x, x_t = dlo.apply_cv(
+            x=x,
+            x_t=x_t,
+            f=self.trans,
+            chunk_size=chunk_size,
+            verbose=verbose,
+            macro_chunk=macro_chunk,
+            jit_f=True,
+        )
+
+        return x, x_t, self.trans, w, None, None

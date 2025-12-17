@@ -6,7 +6,7 @@ from flax import linen as nn
 from flax.training import train_state
 from jax import Array, jit, random
 
-from IMLCV.base.CV import CV, CvTrans, NeighbourList, SystemParams
+from IMLCV.base.CV import CV, CvTrans, NeighbourList, SystemParams, CvMetric, CvTrans
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
 from IMLCV.base.rounds import Covariances, DataLoaderOutput
@@ -457,7 +457,7 @@ class TransoformerLDA(Transformer):
 
 class TransformerMAF(Transformer):
     # Maximum Autocorrelation Factors
-
+    outdim: int
     eps: float = 1e-5
     eps_pre: float = 1e-5
     max_features: int = 500
@@ -516,6 +516,7 @@ class TransformerMAF(Transformer):
         macro_chunk=1000,
         chunk_size=None,
         verbose=True,
+        trans: CvTrans | None = None,
     ):
         print("getting koopman")
 
@@ -576,6 +577,13 @@ class TransformerMAF(Transformer):
         #     argmask=argmask,
         # )
 
+        trans_tot = trans
+        if self.trans is not None:
+            if trans_tot is None:
+                trans_tot = self.trans
+            else:
+                trans_tot *= self.trans
+
         if self.generator:
             km = dlo.koopman_model(
                 cv_0=x,
@@ -591,7 +599,7 @@ class TransformerMAF(Transformer):
                 eps_pre=self.eps_pre,
                 eps=self.eps,
                 symmetric=True,
-                trans=self.trans,
+                trans=trans_tot,
                 verbose=True,
                 # auto_cov_threshold=0.1,
                 max_features=self.max_features,
@@ -618,7 +626,7 @@ class TransformerMAF(Transformer):
                 eps_pre=self.eps_pre,
                 eps=self.eps,
                 symmetric=False,
-                trans=self.trans,
+                trans=trans_tot,
                 verbose=True,
                 # auto_cov_threshold=0.1,
                 max_features=self.max_features,
@@ -707,3 +715,223 @@ class TransformerMAF(Transformer):
         )
 
         return (x, x_t, trans_km, w, exta_info, per)
+
+
+# def _smoothstep(u: jnp.ndarray) -> jnp.ndarray:
+#     u = jnp.clip(u, 0.0, 1.0)
+#     return 3.0 * u**2 - 2.0 * u**3
+
+
+# def _soft_triangle(
+#     x_in: jax.Array,
+#     center: jax.Array,
+#     width: jax.Array,
+#     smooth: bool = True,
+#     periodic: bool = False,
+#     order: int = 1,
+# ) -> jax.Array:
+#     d = jnp.where(
+#         periodic,
+#         jnp.mod(x_in - center + jnp.pi, 2 * jnp.pi) - jnp.pi,
+#         x_in - center,
+#     )
+
+#     t = jnp.clip(1.0 - jnp.abs(d) / (width + 1e-12), 0.0, 1.0)
+#     return t ** jnp.arange(order) * (_smoothstep(t) if smooth else t)
+
+
+def _forward_apply_rule(
+    kwargs,
+    static_kwargs,
+):
+    print(f"apply rule linear layer")
+
+    weights = kwargs["weights"]
+    min_val = kwargs.get("min_val", 0.1)
+    max_val = kwargs.get("max_val", 1.0)
+
+    weights = (jnp.tanh(weights) + 1) / 2 * (max_val - min_val) + min_val
+
+    # jax.debug.print(
+    #     "w in boudns {}",
+    #     jnp.all(
+    #         jnp.logical_and(
+    #             weights >= min_val,
+    #             weights <= max_val,
+    #         )
+    #     ),
+    # )
+
+    kwargs["weights"] = weights
+
+    return kwargs
+
+
+def _forward(
+    cv: CV,
+    nl: NeighbourList | None,
+    shmap,
+    shmap_kwargs,
+    bounds: jax.Array,
+    weights: jax.Array,
+    M: jax.Array,
+    periodicities: jax.Array | None = None,
+    min_val: float = 0.1,
+    max_val: float = 1.0,
+    n: int = 8,
+) -> CV:
+    xvals = cv.cv
+
+    # def smoothstep(x):
+    #     return jnp.where(x <= 0, 0, jnp.where(x >= 1, 1, x**2 * (3 - 2 * x)))
+
+    def smoothstep(x):
+        # return jnp.where(x <= 0, 0, jnp.where(x >= 1, 1, x**2 * (3 - 2 * x)))
+        return (jnp.tanh(x) + 1) / 2
+
+    def smooth(x, center, width, periodic):
+        d = jnp.where(periodic, (jnp.mod(x - center + jnp.pi, 2 * jnp.pi) - jnp.pi), (x - center))
+
+        d = jnp.where(
+            periodic,
+            jnp.select(
+                [jnp.abs(d) <= jnp.pi / 2, jnp.abs(d) > jnp.pi / 2],
+                [d, jnp.sign(d) * (jnp.pi - jnp.abs(d))],
+            ),
+            d,
+        )
+
+        return smoothstep(d / width)
+
+    @partial(jax.vmap, in_axes=[0, 0, 0, 0])
+    def _get(bounds, cv, weights, periodicities):
+        grid = jnp.linspace(bounds[0], bounds[1], num=n, endpoint=True)
+        centers = 0.5 * (grid[1:] + grid[:-1])
+        half_width = centers[1] - centers[0]
+
+        return jnp.einsum(
+            "w,w...->...",
+            weights,
+            jax.vmap(
+                smooth,
+                in_axes=(
+                    None,
+                    0,
+                    None,
+                    None,
+                ),
+            )(
+                cv,
+                centers,
+                half_width,
+                periodicities,
+            ),
+        )
+
+    print(f"{bounds.shape=} {xvals.shape=} {weights.shape=} {periodicities=}")
+
+    out = _get(bounds, xvals, weights, periodicities)
+
+    print(f"{out.shape=} {M.shape=}")
+
+    out = out @ M
+
+    return CV(
+        cv=out.reshape(-1),
+        _stack_dims=cv._stack_dims,
+    )
+
+
+class IndicatorSplitterTransformer(Transformer):
+    """Split a 1D collective variable into n smooth triangular indicator functions.
+
+    The transformer assumes the input CV values are scalar (or uses the first
+    dimension if multi-dimensional). It creates a CvTrans that maps each input
+    sample to an n-dimensional vector of indicators using a smooth triangle
+    (hat) function.
+
+    Parameters:
+      n: number of indicator functions (output dimension)
+      lower: lower bound for centers (if None, determined from data)
+      upper: upper bound for centers (if None, determined from data)
+      smooth: whether to apply cubic smoothstep to the linear triangle
+    """
+
+    n: int = 8
+    lower: float | None = None
+    upper: float | None = None
+    smooth: bool = True
+    periodicities: jax.Array | None = None
+
+    min_val: float = 0.1
+    max_val: float = 1.0
+    outdim: int = 2
+
+    def _fit(
+        self,
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None,
+        w: list[jax.Array],
+        dlo: DataLoaderOutput,
+        chunk_size: int | None = None,
+        verbose=True,
+        macro_chunk=1000,
+    ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None, jax.Array | None]:
+        # Expect list of CV objects
+        assert isinstance(x, list) and len(x) > 0, "x must be a non-empty list of CV"
+        assert isinstance(x[0], CV), "x must be a list of CV objects"
+
+        bounds, _, _ = CvMetric.bounds_from_cv(x)
+
+        if self.periodicities is None:
+            per = jnp.full((len(bounds),), False)
+        else:
+            per = self.periodicities
+
+        bounds = jax.vmap(
+            lambda x, y: jnp.where(
+                x,
+                jnp.array([-jnp.pi, jnp.pi]),
+                y,
+            )
+        )(per, jnp.array(bounds))
+
+        print(f"{bounds=}")
+
+        print(f"IndicatorSplitterTransformer: using bounds {bounds}")
+
+        # create CvTrans from forward
+        f_trans = CvTrans.from_cv_function(
+            f=_forward,
+            static_argnames=["n"],
+            bounds=jnp.array(bounds),
+            n=self.n,
+            periodicities=per,
+            learnable_argnames=["weights", "M"],
+            apply_rule=_forward_apply_rule,
+            min_val=self.min_val,
+            max_val=self.max_val,
+            weights=jnp.zeros(
+                (
+                    bounds.shape[0],
+                    self.n - 1,
+                )
+            ),
+            M=jnp.zeros((bounds.shape[0], self.outdim)),
+        )
+
+        print(f"{f_trans.get_learnable_params()=}")
+
+        x, x_t = dlo.apply_cv(
+            x=x,
+            x_t=x_t,
+            f=f_trans,
+            verbose=verbose,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            shmap=False,
+        )
+
+        print(f"{x[0]=}")
+
+        return x, x_t, f_trans, w, None, None

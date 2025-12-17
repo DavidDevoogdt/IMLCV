@@ -671,9 +671,6 @@ class LangevinBarostat(BarostatHook):
         # iterative.vel[:] = vel_new
         iterative.vel = vel_new
 
-        # update kinetic energy
-        iterative.ekin = iterative._compute_ekin()
-
         # second part of the barostat velocity tensor update
         self = update_baro_vel(self)
 
@@ -694,14 +691,7 @@ class LangevinBarostat(BarostatHook):
         )
 
         R = (rand + rand.T) / 2
-        # R = jnp.zeros(shape)
-        # # create initial symmetric pressure velocity tensor
-        # for i in range(3):
-        #     for j in range(3):
-        #         if i >= j:
-        #             R = R.at[i, j].set(rand[i, j])
-        #         else:
-        #             R = R.at[i, j].set(rand[j, i])
+
         return R, self
 
 
@@ -939,7 +929,6 @@ class MTKBarostat(BarostatHook):
         # update the velocities and the kinetic energy
         # iterative.vel[:] = vel_new
         iterative.vel = vel_new
-        iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update
         update_baro_vel()
@@ -1207,7 +1196,6 @@ class PRBarostat(BarostatHook):
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
-        iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update
         update_baro_vel()
@@ -1478,7 +1466,6 @@ class TadmorBarostat(BarostatHook):
         # update the velocities and the kinetic energy
         # iterative.vel[:] = vel_new
         iterative.vel = vel_new
-        iterative.ekin = iterative._compute_ekin()
 
         # second part of the barostat velocity tensor update
         update_baro_vel()
