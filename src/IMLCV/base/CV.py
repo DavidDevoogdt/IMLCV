@@ -2056,8 +2056,8 @@ class SystemParams(MyPyTreeNode):
 
 class NeighbourListInfo(MyPyTreeNode):
     # esssential information to create a neighbour list
-    r_cut: float = field(pytree_node=False)
-    r_skin: float = field(pytree_node=False)
+    r_cut: float
+    r_skin: float
 
     z_array: tuple[int, ...] = field(pytree_node=False)
     z_unique: tuple[int, ...] = field(pytree_node=False)

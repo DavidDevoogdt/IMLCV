@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -15,16 +16,13 @@ from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
-from IMLCV.base.MdEngine import TrajectoryInfo
 from IMLCV.base.bias import Bias, GridBias, NoneBias, StdBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, vmap_decorator
+from IMLCV.base.MdEngine import TrajectoryInfo
 from IMLCV.base.UnitsConstants import kelvin, kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
 from IMLCV.implementations.CV import _scale_cv_trans, eigh_rot, identity_trans, scale_cv_trans
-
-
-from functools import partial
 
 if TYPE_CHECKING:
     from IMLCV.base.rounds import DataLoaderOutput

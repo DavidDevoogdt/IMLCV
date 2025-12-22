@@ -31,23 +31,14 @@ from typing import Self
 import jax
 import jax.numpy as jnp
 
+from IMLCV.base.CV import NeighbourList, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, field, jit_decorator
 from IMLCV.base.UnitsConstants import boltzmann
 from IMLCV.new_yaff.ff import YaffFF
 from IMLCV.new_yaff.iterative import (
-    AttributeStateItem,
-    CellStateItem,
     Hook,
-    PosStateItem,
-    StateItem,
 )
 from IMLCV.new_yaff.utils import get_random_vel
-from IMLCV.base.CV import NeighbourList, SystemParams
-
-
-class TemperatureStateItem(StateItem):
-    def get_value(self, iterative):
-        return getattr(iterative, "temp", None)
 
 
 class ConsErrTracker(MyPyTreeNode):
@@ -177,11 +168,11 @@ class NVE(VerletHook):
 
 class NlUpdateHook(Hook):
     def __call__(self, iterative: VerletIntegrator):
-        iterative.ff.system.update_nl()
+        iterative.yaff_ff.system.update_nl()
 
 
 class VerletIntegrator(MyPyTreeNode):
-    ff: YaffFF
+    yaff_ff: YaffFF
 
     counter: jax.Array
     time: jax.Array
@@ -212,7 +203,7 @@ class VerletIntegrator(MyPyTreeNode):
     e_bias: jax.Array
 
     # conserved quantity
-    _cons_err_tracker: ConsErrTracker | None = None
+    _cons_err_tracker: ConsErrTracker
     econs: jax.Array
     cons_err: jax.Array
 
@@ -341,7 +332,7 @@ class VerletIntegrator(MyPyTreeNode):
             )
 
         self = VerletIntegrator(
-            ff=ff,
+            yaff_ff=ff,
             pos=pos,
             vel=vel,
             masses=masses,
@@ -364,7 +355,10 @@ class VerletIntegrator(MyPyTreeNode):
             e_bias=e_bias,
             vtens=vtens,
             other_hooks=other_hooks,
-            _cons_err_tracker=None,
+            _cons_err_tracker=ConsErrTracker(
+                ekin_mean=jnp.array(0.0),
+                econs_mean=jnp.array(0.0),
+            ),
         )
 
         verlet_hook = vh
@@ -383,6 +377,8 @@ class VerletIntegrator(MyPyTreeNode):
     def propagate(self: VerletIntegrator, verlet_hook: VerletHook) -> tuple[VerletIntegrator, VerletHook]:
         # Allow specialized hooks to modify the state before the regular verlet
         # step.
+
+        print(f"verlet jit compile {self.counter=}")
 
         verlet_hook, self = jax.lax.cond(
             verlet_hook.expects_call(self.counter),
@@ -404,9 +400,9 @@ class VerletIntegrator(MyPyTreeNode):
         # time t + dt
         self.pos += self.timestep * self.vel
 
-        self.ff.system.pos = self.pos
+        self.yaff_ff.system.pos = self.pos
 
-        res, (bias, cv) = self.ff.compute(gpos=True)
+        res, (bias, cv) = self.yaff_ff.compute(gpos=True)
 
         assert res.gpos is not None
         self.epot, self.gpos = res.energy, res.gpos
@@ -458,8 +454,8 @@ class VerletIntegrator(MyPyTreeNode):
             self._cons_err_tracker = self._cons_err_tracker.update(self.ekin, self.econs)
 
         self.cons_err = self._cons_err_tracker.get()
-        if self.ff.system.cell.nvec > 0:
-            self.ptens = (jnp.dot(self.vel.T * self.masses, self.vel) - self.vtens) / self.ff.system.cell.volume
+        if self.yaff_ff.system.cell.nvec > 0:
+            self.ptens = (jnp.dot(self.vel.T * self.masses, self.vel) - self.vtens) / self.yaff_ff.system.cell.volume
             self.press = jnp.trace(self.ptens) / 3
 
         return self
@@ -486,12 +482,11 @@ class VerletIntegrator(MyPyTreeNode):
         self, verlet_hook = self.propagate(verlet_hook)
         self.call_hooks(verlet_hook)
 
-        # if self.cons_err > 2.0:
-        #     raise ValueError("Energy conservation error too large, stopping simulation.")
-
         return self, verlet_hook
 
     def run(self: VerletIntegrator, verlet_hook: VerletHook, nstep=None):
+        print(f"Starting MD run for {nstep} steps")
+
         if nstep is None:
             while True:
                 self, verlet_hook = self.step(verlet_hook)

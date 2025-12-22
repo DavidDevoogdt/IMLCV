@@ -24,45 +24,34 @@ logger = logging.getLogger(__name__)
 
 
 class SlurmLauncher(Launcher):
-    def __init__(self, debug: bool = True, overrides: str = ""):
+    def __init__(self, debug: bool = True, overrides: str = "", image="image.sif"):
         super().__init__(debug=debug)
         self.overrides = overrides
+        self.image = image
 
     def __call__(self, command: str, tasks_per_node: int, nodes_per_block: int) -> str:
         x = """set -e
 
-NODELIST=$(scontrol show hostnames)
-NODE_ARRAY=($NODELIST)
-NODE_COUNT=${{#NODE_ARRAY[@]}}
-EXPECTED_NODE_COUNT={nodes_per_block}
+module list
 
-# Check if the length of NODELIST matches the expected number of nodes
-if [ $NODE_COUNT -ne $EXPECTED_NODE_COUNT ]; then
-  echo "Error: Expected $EXPECTED_NODE_COUNT nodes, but got $NODE_COUNT nodes."
-  exit 1
-fi
-
-
-echo $SLURM_MEM_PER_CPU
-echo $SLURM_MEM_PER_GPU
-echo $SLURM_MEM_PER_NODE
+# echo $SLURM_MEM_PER_CPU
+# echo $SLURM_MEM_PER_GPU
+# echo $SLURM_MEM_PER_NODE
 
 # Unset memory-related SLURM environment variables to avoid conflicts
-unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+# unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 
 
-for NODE in $NODELIST; do
-  srun --nodes=1 --export=All -l {overrides} --nodelist=$NODE {command} &
-  if [ $? -ne 0 ]; then
-    echo "Command failed on node $NODE"
-  fi
-done
+srun  --nodes=1  -l {overrides} singularity run -B {ROOT_DIR}/src/:/app/src/ {image} {command}
 
-wait
+
+
 """.format(
             nodes_per_block=nodes_per_block,
             command=command,
             overrides=self.overrides,
+            image=self.image,
+            ROOT_DIR=ROOT_DIR,
         )
         return x
 
@@ -121,18 +110,18 @@ def get_slurm_provider(
 
         print("setting python env for hortense")
         py_env = f"""
-echo "init pixi"
+# echo "init pixi"
 cd {ROOT_DIR}
-pwd
-set -e
-export PIXI_CACHE_DIR="./.pixi_cache"
-export PATH="~/.pixi/bin:$PATH"
-which pixi
+# pwd
+# set -e
+# export PIXI_CACHE_DIR="./.pixi_cache"
+# export PATH="~/.pixi/bin:$PATH"
+# which pixi
 
 
-eval  "$(pixi shell-hook -e {environment} --as-is )"
-echo "after pixi"
-which work_queue_worker
+# eval  "$(pixi shell-hook -e {environment} --as-is )"
+# echo "after pixi"
+# which work_queue_worker
             """
     # else:
     #     raise ValueError
@@ -205,7 +194,10 @@ sleep 1
         "parallelism": parallelism,
         "nodes_per_block": 1,
         "worker_init": worker_init,
-        "launcher": SlurmLauncher(overrides=overrides),
+        "launcher": SlurmLauncher(
+            overrides=overrides,
+            image="image.sif" if not gpu else "image_rocm.sif",
+        ),
     }
 
     if provider == "slurm":
@@ -231,7 +223,8 @@ sleep 1
         sheduler_options = f"""
 #SBATCH --cpus-per-task={threads_per_core}
 #SBATCH -v
-#SBATCH --export=NONE
+
+
  """
 
         if gpu:
@@ -326,7 +319,7 @@ def config(
     reference_blocks: int = 1,
     py_env=None,
     account=None,
-    executor="htex",
+    executor="work_queue",
     default_on_threads=False,
     default_threads=4,
     training_on_threads=False,

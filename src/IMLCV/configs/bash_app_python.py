@@ -334,6 +334,8 @@ if __name__ == "__main__":
         print("#" * 20)
         import platform
 
+        print(f"new version")
+
         my_system = platform.uname()
         print(f"got input {sys.argv}")
         print(f"task started at {datetime.now():%d/%m/%Y %H:%M:%S }")

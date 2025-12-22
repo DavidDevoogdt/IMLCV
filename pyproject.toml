@@ -52,7 +52,7 @@ dependencies = [ "cloudpickle",
     "umap-learn",
     "work-queue",
     "mace-torch",
-   "openmmforcefields@git+https://github.com/openmm/openmmforcefields.git",
+   "openmmforcefields@git+https://github.com/openmm/openmmforcefields.git", "memory-profiler>=0.61.0,<0.62",
 ]
 
 

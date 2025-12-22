@@ -28,29 +28,29 @@ from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
 #             Trajectory             #
 ######################################
 
+_static_attr = [
+    "timestep",
+    "save_step",
+    "r_cut",
+    "r_skin",
+    "timecon_thermo",
+    "T",
+    "P",
+    "timecon_baro",
+    "write_step",
+    "equilibration",
+    "screen_log",
+    "max_grad",
+    "frac_full",
+    "invalid",
+]
+
+_static_arr = [
+    "atomic_numbers",
+]
+
 
 class StaticMdInfo(MyPyTreeNode):
-    _attr = [
-        "timestep",
-        "save_step",
-        "r_cut",
-        "r_skin",
-        "timecon_thermo",
-        "T",
-        "P",
-        "timecon_baro",
-        "write_step",
-        "equilibration",
-        "screen_log",
-        "max_grad",
-        "frac_full",
-        "invalid",
-    ]
-
-    _arr = [
-        "atomic_numbers",
-    ]
-
     timestep: float
 
     T: float
@@ -111,7 +111,7 @@ class StaticMdInfo(MyPyTreeNode):
             assert self.timecon_baro is not None
 
     def _save(self, hf: h5py.File):
-        for name in self._arr:
+        for name in _static_arr:
             prop = self.__getattribute__(name)
             if prop is not None:
                 if name in hf:
@@ -119,7 +119,7 @@ class StaticMdInfo(MyPyTreeNode):
 
                 hf[name] = prop
 
-        for name in self._attr:
+        for name in _static_attr:
             prop = self.__getattribute__(name)
             if prop is not None:
                 hf.attrs[name] = prop
@@ -282,7 +282,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self.cv_orig = value.cv
 
     @property
-    def positions(self):
+    def positions(self) -> Array | None:
         return self._get("_positions")
 
     @positions.setter
@@ -613,8 +613,6 @@ class FullTrajectoryInfo(TrajectoryInfo):
 
     def _stack(self, *ti: FullTrajectoryInfo):
         tot_size = self._size + sum([t._size for t in ti])
-
-        # ti_out = ti[0]
 
         if self._capacity <= tot_size:
             self = self._expand_capacity(nc=tot_size * 1.4)
@@ -1066,10 +1064,7 @@ class MDEngine(MyPyTreeNode, ABC):
         write_step = self.step % self.static_trajectory_info.write_step == 0
 
         if screen_log or save_step or write_step:
-            # if canonicalize and self.nl is not None:
-            #     sp = self.nl.canonicalized_sp(self.sp)
-            # else:
-            #     sp = self.sp
+            # print(f"{self.step=}  {screen_log=} or {save_step=} or {write_step=}")
 
             ti = FullTrajectoryInfo.create(
                 positions=sp.coordinates,
@@ -1135,6 +1130,13 @@ class MDEngine(MyPyTreeNode, ABC):
                     self.trajectory_info.save(self.trajectory_file)  # type: ignore
 
             assert self.bias is not None
+
+            # print(f"{jax.tree_util.tree_map(lambda x: x.shape,self.trajectory_info)=}")
+            print(
+                f"{self.trajectory_info.size=}  {self.trajectory_info.capacity=} {self.trajectory_info.positions.shape=}"
+            )
+
+            # print(f"done")
 
         self.bias = self.bias.update_bias(self)
 

@@ -5,7 +5,7 @@
 # (CMM), Ghent University, Ghent, Belgium; all rights reserved unless otherwise
 # stated.
 #
-# This file is part of YAFF.
+# This file is part of YANone
 #
 # YAFF is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -30,41 +30,6 @@ import jax
 import jax.numpy as jnp
 
 from IMLCV.base.datastructures import MyPyTreeNode, field
-
-
-class StateItem(MyPyTreeNode):
-    key: str = field(pytree_node=False)
-    value: Any
-
-    def update(self, iterative):
-        self.value = self.get_value(iterative)
-
-    def get_value(self, iterative) -> Any:
-        raise NotImplementedError
-
-
-class AttributeStateItem(StateItem):
-    def get_value(self, iterative):
-        return getattr(iterative, self.key, None)
-
-
-class ConsErrStateItem(StateItem):
-    def get_value(self, iterative):
-        return getattr(iterative._cons_err_tracker, self.key, None)
-
-
-class PosStateItem(StateItem):
-    key = "pos"
-
-    def get_value(self, iterative):
-        return iterative.ff.system.pos
-
-
-class CellStateItem(StateItem):
-    key = "cell"
-
-    def get_value(self, iterative):
-        return iterative.ff.system.cell.rvecs
 
 
 class Hook(MyPyTreeNode):

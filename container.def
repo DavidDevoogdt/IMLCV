@@ -11,7 +11,7 @@ Stage: build
     IMLCV/pyproject.toml /app/pyproject.toml
 
 %post
-    # set -euo pipefail
+    set -euo
 
     rm -rf /app/src/IMLCV/data
 
@@ -52,10 +52,10 @@ Stage: build
     echo "Running container tests..."
 
     echo "IMLCV version:"
-    exec /bin/bash /shell-hook.sh python -c "import IMLCV; print(IMLCV.__version__)"
-    echo "work queue worker command"
-    exec /bin/bash /shell-hook.sh echo "$(which work_queue_worker)"
+    /bin/bash /shell-hook.sh python -c "import IMLCV; print(IMLCV.__version__)"
 
+    echo "work queue worker command"
+    /bin/bash /shell-hook.sh which work_queue_worker
 %runscript
     cd /mnt/overlay
     # Activate environment and run passed command

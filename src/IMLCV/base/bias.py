@@ -75,48 +75,48 @@ class EnergyError(Exception):
 
 
 class Energy(MyPyTreeNode, ABC):
-    external_callback = True
-    manual_vtens = False
+    external_callback: bool = field(pytree_node=False, default=True)
+    manual_vtens: bool = field(pytree_node=False, default=False)
 
-    @property
-    def nl(self) -> NeighbourList | None:
-        return None
+    # @property
+    # def nl(self) -> NeighbourList | None:
+    #     return None
 
-    @nl.setter
-    def nl(self, nl: NeighbourList):
-        return
+    # @nl.setter
+    # def nl(self, nl: NeighbourList):
+    #     return
 
-    @property
-    @abstractmethod
-    def cell(self) -> jax.Array | None:
-        pass
+    # @property
+    # @abstractmethod
+    # def cell(self) -> jax.Array | None:
+    #     pass
 
-    @cell.setter
-    @abstractmethod
-    def cell(self, cell: jax.Array | None):
-        pass
+    # @cell.setter
+    # @abstractmethod
+    # def cell(self, cell: jax.Array | None):
+    #     pass
 
-    @property
-    @abstractmethod
-    def coordinates(self) -> jax.Array | None:
-        pass
+    # @property
+    # @abstractmethod
+    # def coordinates(self) -> jax.Array | None:
+    #     pass
 
-    @coordinates.setter
-    @abstractmethod
-    def coordinates(self, coordinates: jax.Array):
-        pass
+    # @coordinates.setter
+    # @abstractmethod
+    # def coordinates(self, coordinates: jax.Array):
+    #     pass
 
-    @property
-    def sp(self) -> SystemParams | None:
-        c = self.coordinates
-        if c is None:
-            return None
-        return SystemParams(coordinates=c, cell=self.cell)
+    # @property
+    # def sp(self) -> SystemParams | None:
+    #     c = self.coordinates
+    #     if c is None:
+    #         return None
+    #     return SystemParams(coordinates=c, cell=self.cell)
 
-    @sp.setter
-    def sp(self, sp: SystemParams):
-        self.cell = sp.cell
-        self.coordinates = sp.coordinates
+    # @sp.setter
+    # def sp(self, sp: SystemParams):
+    #     self.cell = sp.cell
+    #     self.coordinates = sp.coordinates
 
     @abstractmethod
     def _compute_coor(self, sp: SystemParams, nl: NeighbourList | None, gpos=False, vir=False) -> EnergyResult:
@@ -172,6 +172,16 @@ class Energy(MyPyTreeNode, ABC):
             vtens=virial,
         )
 
+    @partial(
+        jit_decorator,
+        static_argnames=[
+            "gpos",
+            "vir",
+            "manual_vir",
+            "shmap",
+            "shmap_kwarg",
+        ],
+    )
     def compute_from_system_params(
         self,
         sp: SystemParams,
@@ -183,7 +193,7 @@ class Energy(MyPyTreeNode, ABC):
         shmap_kwarg=ShmapKwargs.create(),
     ) -> EnergyResult:
         if sp.batched:
-            f = padded_vmap(
+            _f = padded_vmap(
                 Partial_decorator(
                     self.compute_from_system_params,
                     gpos=gpos,
@@ -197,9 +207,9 @@ class Energy(MyPyTreeNode, ABC):
             )
 
             if shmap:
-                f = padded_shard_map(f, shmap_kwarg)
+                _f = padded_shard_map(_f, shmap_kwarg)
 
-            return f(sp)
+            return _f(sp)
 
         if manual_vir is None:
             manual_vir = self.manual_vtens
@@ -235,10 +245,10 @@ class Energy(MyPyTreeNode, ABC):
                 f,
                 dtypes,
                 sp,
-                self.nl,
+                nl,
             )
         else:
-            out = f(sp, self.nl)
+            out = f(sp, nl)
 
         return out
 
@@ -274,55 +284,12 @@ class Energy(MyPyTreeNode, ABC):
 
 
 class EnergyFn(Energy, MyPyTreeNode):
-    external_callback = False
+    external_callback: bool = field(pytree_node=False, default=False)
 
     f: Callable = field(pytree_node=False)
-    _sp: SystemParams | None = None
-    _nl: NeighbourList | None = None
+
     kwargs: dict = field(pytree_node=True, default_factory=dict)
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
-
-    @property
-    def nl(self):
-        return self._nl
-
-    @nl.setter
-    def nl(self, nl):
-        self._nl = nl
-
-    @property
-    def cell(self) -> jax.Array | None:
-        if self._sp is None:
-            return None
-
-        return self._sp.cell
-
-    @cell.setter
-    def cell(self, cell):
-        assert self._sp is not None, "first set coordinates"
-        self._sp.cell = cell
-
-    @property
-    def coordinates(self) -> Array | None:
-        if self._sp is None:
-            return None
-
-        return self._sp.coordinates
-
-    @coordinates.setter
-    def coordinates(self, coordinates: Array):
-        if self._sp is None:
-            self._sp = SystemParams(coordinates=coordinates)
-            return
-        self._sp.coordinates = coordinates
-
-    @property
-    def sp(self) -> SystemParams | None:
-        return self._sp
-
-    @sp.setter
-    def sp(self, sp: SystemParams):
-        self._sp = sp
 
     @partial(jit_decorator, static_argnames=["gpos", "vir"])
     def _compute_coor(
@@ -376,9 +343,9 @@ class Bias(ABC, MyPyTreeNode):
 
     collective_variable: CollectiveVariable | None = field(pytree_node=True)
     # collective_variable_path: Path | str | None = field(pytree_node=False, default=None)
-    start: int | None = field(pytree_node=False, default=0)
-    step: int | None = field(pytree_node=False, default=1)
-    finalized: bool = field(pytree_node=False, default=False)
+    start: int | None = False
+    step: int | None = 1
+    finalized: bool = False
 
     @staticmethod
     def create(*args, **kwargs) -> Bias:
@@ -793,18 +760,33 @@ class Bias(ABC, MyPyTreeNode):
         symmetric=True,
         margin=0.2,
         sign=1.0,
-        n=100,
+        n=50,
+        macro_chunk_size=1000,
     ):
         assert self.collective_variable is not None
         _, _, cvs, _, _ = self.collective_variable.metric.grid(n=n, margin=margin)
 
-        u0 = sign * self.apply([cvs])[0] / (T * boltzmann)
+        u0 = (
+            sign
+            * self.apply(
+                [cvs],
+                macro_chunk_size=1000,
+            )[0]
+            / (T * boltzmann)
+        )
         u0 -= jnp.max(u0)
 
         p_self = jnp.exp(u0)
         p_self /= jnp.sum(p_self)
 
-        u1 = sign * other.apply([cvs])[0] / (T * boltzmann)
+        u1 = (
+            sign
+            * other.apply(
+                [cvs],
+                macro_chunk_size=1000,
+            )[0]
+            / (T * boltzmann)
+        )
         u1 -= jnp.max(u1)
 
         p_other = jnp.exp(u1)
@@ -1223,7 +1205,7 @@ class StdBias(Bias):
 
     _bias: GridBias  # F
     _log_exp_sigma: GridBias  # sigma e^(-beta F)
-    T: float = field(pytree_node=False, default=300.0)
+    T: float = 300.0
 
     @staticmethod
     def create(bias: GridBias, log_exp_sigma: GridBias) -> StdBias:  # type:ignore

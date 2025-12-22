@@ -6,7 +6,7 @@
 
 set -Eeuox pipefail
 
-# srun 
+# srun
 
 # echo "Setting up pixi environment"
 # export PIXI_CACHE_DIR="./.pixi_cache"

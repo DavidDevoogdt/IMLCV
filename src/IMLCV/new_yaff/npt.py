@@ -37,7 +37,8 @@ from IMLCV.base.UnitsConstants import (
     boltzmann,
     femtosecond,
 )
-from IMLCV.new_yaff.iterative import StateItem
+
+# from IMLCV.new_yaff.iterative import StateItem
 from IMLCV.new_yaff.nvt import NHCThermostat
 from IMLCV.new_yaff.utils import (
     cell_symmetrize,
@@ -302,10 +303,10 @@ class McDonaldBarostat(BarostatHook):
         def compute(pos, rvecs):
             iterative.pos = pos
 
-            iterative.ff.system.cell.rvecs = rvecs
-            iterative.ff.system.pos = pos
+            iterative.yaff_ff.system.cell.rvecs = rvecs
+            iterative.yaff_ff.system.pos = pos
 
-            res, _ = iterative.ff.compute(gpos=True, vtens=False)
+            res, _ = iterative.yaff_ff.compute(gpos=True, vtens=False)
             assert res.gpos is not None
             assert res.vtens is not None
             iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -315,7 +316,7 @@ class McDonaldBarostat(BarostatHook):
 
             return iterative
 
-        natom = iterative.ff.system.natom
+        natom = iterative.yaff_ff.system.natom
         # Change the logarithm of the volume isotropically.
 
         key, key0, key1 = jax.random.split(self.key, 3)
@@ -323,14 +324,14 @@ class McDonaldBarostat(BarostatHook):
 
         scale = jnp.exp(jax.random.uniform(key0, minval=-self.amp, maxval=self.amp))
         # Keep track of old state
-        vol0 = iterative.ff.system.cell.volume
+        vol0 = iterative.yaff_ff.system.cell.volume
         epot0 = iterative.epot
-        rvecs0 = iterative.ff.system.cell.rvecs.copy()
+        rvecs0 = iterative.yaff_ff.system.cell.rvecs.copy()
         pos0 = iterative.pos.copy()
         # Scale the system and recompute the energy
         iterative = compute(pos0 * scale, rvecs0 * scale)
         epot1 = iterative.epot
-        vol1 = iterative.ff.system.cell.volume
+        vol1 = iterative.yaff_ff.system.cell.volume
         # Compute the acceptance ratio
         beta = 1 / (boltzmann * self.temp)
         arg = epot1 - epot0 + self.press * (vol1 - vol0) - (natom + 1) / beta * jnp.log(vol1 / vol0)
@@ -399,20 +400,20 @@ class BerendsenBarostat(BarostatHook):
         assert self.timecon_press is not None
         assert self.beta is not None
         self.mass_press = 3.0 * self.timecon_press / self.beta
-        self.dim = iterative.ff.system.cell.nvec
+        self.dim = iterative.yaff_ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
 
-        self.cell = iterative.ff.system.cell.rvecs.copy()
+        self.cell = iterative.yaff_ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
 
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -431,7 +432,7 @@ class BerendsenBarostat(BarostatHook):
         # calculation of the internal pressure tensor
         ptens = (
             jnp.dot(iterative.vel.T * iterative.masses, iterative.vel) - iterative.vtens
-        ) / iterative.ff.system.cell.volume
+        ) / iterative.yaff_ff.system.cell.volume
         # determination of mu
         assert self.mass_press is not None
         dmu = self.timestep_press / self.mass_press * (self.press * jnp.eye(3) - ptens)
@@ -445,14 +446,15 @@ class BerendsenBarostat(BarostatHook):
         pos_new = jnp.dot(iterative.pos, mu)
 
         rvecs_new = jnp.dot(iterative.rvecs, mu)
-        iterative.ff.system.pos = pos_new
         iterative.pos = pos_new
-        iterative.ff.system.cell.rvecs = rvecs_new
+        iterative.yaff_ff.system.pos = pos_new
 
         iterative.rvecs = rvecs_new
+        iterative.yaff_ff.system.cell.rvecs = rvecs_new
+
         # calculation of the virial tensor
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -511,19 +513,19 @@ class LangevinBarostat(BarostatHook):
     """
 
     def init(self, iterative: VerletIntegrator):
-        self.dim = iterative.ff.system.cell.nvec
+        self.dim = iterative.yaff_ff.system.cell.nvec
 
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
 
         if self.anisotropic:
             # symmetrize the cell tensor
-            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, _, _ = cell_symmetrize(iterative.ff)
+            iterative.yaff_ff.system.cell.rvecs, iterative.yaff_ff.system.pos, _, _ = cell_symmetrize(iterative.yaff_ff)
 
         # self.cell = iterative.ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # set the number of internal degrees of freedom (no restriction on p_cm)
 
@@ -542,7 +544,7 @@ class LangevinBarostat(BarostatHook):
 
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -599,7 +601,8 @@ class LangevinBarostat(BarostatHook):
             assert iterative.ndof is not None
             G = (
                 ptens_vol
-                + (2.0 * iterative.ekin / iterative.ndof - self.press * iterative.ff.system.cell.volume) * jnp.eye(3)
+                + (2.0 * iterative.ekin / iterative.ndof - self.press * iterative.yaff_ff.system.cell.volume)
+                * jnp.eye(3)
             ) / self.mass_press
             R, self = self.getR()
             if self.vol_constraint:
@@ -639,15 +642,15 @@ class LangevinBarostat(BarostatHook):
             rvecs_new = c * iterative.rvecs
 
         # update the positions and cell vectors
-        iterative.ff.system.cell.rvecs = rvecs_new
-        iterative.ff.system.pos = pos_new
+        iterative.yaff_ff.system.cell.rvecs = rvecs_new
+        iterative.yaff_ff.system.pos = pos_new
 
         iterative.pos = pos_new
         iterative.rvecs = rvecs_new
 
         # update the potential energy
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -763,19 +766,19 @@ class MTKBarostat(BarostatHook):
     """
 
     def init(self, iterative: VerletIntegrator):
-        self.dim = iterative.ff.system.cell.nvec
+        self.dim = iterative.yaff_ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
 
         if self.anisotropic:
             # symmetrize the cell tensor
-            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, _, _ = cell_symmetrize(iterative.ff)
+            iterative.yaff_ff.system.cell.rvecs, iterative.yaff_ff.system.pos, _, _ = cell_symmetrize(iterative.yaff_ff)
 
-        self.cell = iterative.ff.system.cell.rvecs.copy()
+        self.cell = iterative.yaff_ff.system.cell.rvecs.copy()
 
         self.timestep_press = iterative.timestep
 
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
@@ -802,7 +805,7 @@ class MTKBarostat(BarostatHook):
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -850,7 +853,7 @@ class MTKBarostat(BarostatHook):
         self.econs_correction = self._compute_ekin_baro()
         # add the PV term if the volume is not constrained
         if not self.vol_constraint:
-            self.econs_correction += self.press * iterative.ff.system.cell.volume
+            self.econs_correction += self.press * iterative.yaff_ff.system.cell.volume
         if self.baro_thermo is not None:
             # add the correction due to the barostat thermostat
             self.econs_correction += self.baro_thermo.chain.get_econs_correction()
@@ -869,7 +872,8 @@ class MTKBarostat(BarostatHook):
             assert iterative.ndof is not None
             G = (
                 ptens_vol
-                + (2.0 * iterative.ekin / iterative.ndof - self.press * iterative.ff.system.cell.volume) * jnp.eye(3)
+                + (2.0 * iterative.ekin / iterative.ndof - self.press * iterative.yaff_ff.system.cell.volume)
+                * jnp.eye(3)
             ) / self.mass_press
             if not self.anisotropic:
                 G = jnp.trace(G)
@@ -897,16 +901,16 @@ class MTKBarostat(BarostatHook):
             rvecs_new = c * iterative.rvecs
 
         # update the positions and cell vectors
-        iterative.ff.system.pos = pos_new
+        iterative.yaff_ff.system.pos = pos_new
         # iterative.pos[:] = pos_new
         iterative.pos = pos_new
-        iterative.ff.system.cell.rvecs = rvecs_new
+        iterative.yaff_ff.system.cell.rvecs = rvecs_new
         # iterative.rvecs[:] = rvecs_new
         iterative.rvecs = rvecs_new
 
         # update the potential energy
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -1020,30 +1024,30 @@ class PRBarostat(BarostatHook):
         if not isinstance(self.press, jax.Array):
             self.press = self.press * jnp.eye(3)
 
-        self.dim = iterative.ff.system.cell.nvec
+        self.dim = iterative.yaff_ff.system.cell.nvec
 
         self.P = jnp.trace(self.press) / 3
         self.S_ani = self.press - self.P * jnp.eye(3)
         self.S_ani = 0.5 * (
             self.S_ani + self.S_ani.T
         )  # only symmetric part of stress tensor contributes to individual motion
-        self.cellinv0: jax.Array = jnp.linalg.inv(iterative.ff.system.cell.rvecs)
-        self.vol0 = iterative.ff.system.cell.volume
+        self.cellinv0: jax.Array = jnp.linalg.inv(iterative.yaff_ff.system.cell.rvecs)
+        self.vol0 = iterative.yaff_ff.system.cell.volume
         # definition of Sigma = V_0*h_0^{-1} S_ani h_0^{-T}
         self.Sigma = self.vol0 * jnp.dot(jnp.dot(self.cellinv0.T, self.S_ani), self.cellinv0)
 
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
         if self.anisotropic:
             # symmetrize the cell and stress tensor
-            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, vc, tn = cell_symmetrize(
-                iterative.ff, tensor_list=[self.press]
+            iterative.yaff_ff.system.cell.rvecs, iterative.yaff_ff.system.pos, vc, tn = cell_symmetrize(
+                iterative.yaff_ff, tensor_list=[self.press]
             )
             self.press = tn[0]
 
         self.timestep_press = iterative.timestep
 
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
@@ -1072,7 +1076,7 @@ class PRBarostat(BarostatHook):
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -1120,7 +1124,7 @@ class PRBarostat(BarostatHook):
 
         self.econs_correction = (
             self._compute_ekin_baro()
-            + self.P * iterative.ff.system.cell.volume
+            + self.P * iterative.yaff_ff.system.cell.volume
             + 0.5 * jnp.trace(jnp.dot(jnp.dot(self.Sigma, h), h.T))
         )
 
@@ -1146,7 +1150,8 @@ class PRBarostat(BarostatHook):
             # definition of G
             G = (
                 jnp.dot(
-                    ptens_vol - self.P * iterative.ff.system.cell.volume * jnp.eye(3) - S_PK2_vol, jnp.linalg.inv(h)
+                    ptens_vol - self.P * iterative.yaff_ff.system.cell.volume * jnp.eye(3) - S_PK2_vol,
+                    jnp.linalg.inv(h),
                 )
                 / self.mass_press
             )
@@ -1181,10 +1186,10 @@ class PRBarostat(BarostatHook):
         pos_new = jnp.dot(iterative.pos, rot_mat_r)
         vel_new = jnp.dot(iterative.vel, rot_mat_v)
 
-        iterative.ff.system.pos = pos_new
+        iterative.yaff_ff.system.pos = pos_new
         # iterative.pos[:] = pos_new
         iterative.pos = pos_new
-        iterative.ff.system.cell.rvecs = rvecs_new
+        iterative.yaff_ff.system.cell.rvecs = rvecs_new
         # iterative.rvecs[:] = rvecs_new
         iterative.rvecs = rvecs_new
         # iterative.vel[:] = vel_new
@@ -1192,7 +1197,7 @@ class PRBarostat(BarostatHook):
 
         # update the potential and kinetic energy
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -1289,21 +1294,21 @@ class TadmorBarostat(BarostatHook):
     """
 
     def init(self, iterative: VerletIntegrator):
-        self.dim = iterative.ff.system.cell.nvec
+        self.dim = iterative.yaff_ff.system.cell.nvec
         self.baro_ndof = get_ndof_baro(self.dim, self.anisotropic, self.vol_constraint)
         if self.anisotropic:
             # symmetrize the cell tensor
-            iterative.ff.system.cell.rvecs, iterative.ff.system.pos, _, _ = cell_symmetrize(iterative.ff)
-        self.cell = iterative.ff.system.cell.rvecs.copy()
+            iterative.yaff_ff.system.cell.rvecs, iterative.yaff_ff.system.pos, _, _ = cell_symmetrize(iterative.yaff_ff)
+        self.cell = iterative.yaff_ff.system.cell.rvecs.copy()
         self.cellinv0: jax.Array = jnp.linalg.inv(self.cell)  # type:ignore
-        self.vol0 = iterative.ff.system.cell.volume
+        self.vol0 = iterative.yaff_ff.system.cell.volume
         # definition of h0^{-1} S h_0^{-T}
         self.Strans = jnp.dot(jnp.dot(self.cellinv0, self.press), self.cellinv0.T)
 
         self.timestep_press = iterative.timestep
 
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # determine the internal degrees of freedom
         if iterative.ndof is None:
@@ -1330,7 +1335,7 @@ class TadmorBarostat(BarostatHook):
         # compute gpos and vtens, since they differ
         # after symmetrising the cell tensor
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -1441,12 +1446,12 @@ class TadmorBarostat(BarostatHook):
             rvecs_new = c * iterative.rvecs
 
         # update the positions and cell vectors
-        iterative.ff.system.cell.rvecs = rvecs_new
+        iterative.yaff_ff.system.cell.rvecs = rvecs_new
         iterative.rvecs = rvecs_new
 
         # update the potential energy
 
-        res, _ = iterative.ff.compute(gpos=True, vtens=True)
+        res, _ = iterative.yaff_ff.compute(gpos=True, vtens=True)
         assert res.gpos is not None
         assert res.vtens is not None
         iterative.epot, iterative.gpos, iterative.vtens = res.energy, res.gpos, res.vtens
@@ -1494,28 +1499,28 @@ class TadmorBarostat(BarostatHook):
         return jnp.dot(pos.T, masses.reshape(-1, 1) * vel)
 
 
-class MTKAttributeStateItem(StateItem):
-    key: str = "MTKattr"
-    attr: str
+# class MTKAttributeStateItem(StateItem):
+#     key: str = "MTKattr"
+#     attr: str
 
-    def get_value(self, iterative: VerletIntegrator):
-        baro = None
+#     def get_value(self, iterative: VerletIntegrator):
+#         baro = None
 
-        hook = iterative.verlet_hook
-        if isinstance(hook, MTKBarostat):
-            baro = hook
+#         hook = iterative.verlet_hook
+#         if isinstance(hook, MTKBarostat):
+#             baro = hook
 
-        elif isinstance(hook, TBCombination):
-            if isinstance(hook.barostat, MTKBarostat):
-                baro = hook.barostat
+#         elif isinstance(hook, TBCombination):
+#             if isinstance(hook.barostat, MTKBarostat):
+#                 baro = hook.barostat
 
-        if baro is None:
-            raise TypeError("Iterative does not contain an MTKBarostat hook.")
-        if self.key.startswith("baro_chain_"):
-            if baro.baro_thermo is not None:
-                key = self.key.split("_")[2]
-                return getattr(baro.baro_thermo.chain, key)
-            else:
-                return 0
-        else:
-            return getattr(baro, self.attr)
+#         if baro is None:
+#             raise TypeError("Iterative does not contain an MTKBarostat hook.")
+#         if self.key.startswith("baro_chain_"):
+#             if baro.baro_thermo is not None:
+#                 key = self.key.split("_")[2]
+#                 return getattr(baro.baro_thermo.chain, key)
+#             else:
+#                 return 0
+#         else:
+#             return getattr(baro, self.attr)

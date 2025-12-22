@@ -654,7 +654,7 @@ class Observable:
         executors=Executors.training,
         direct_bias=False,
         n_max_lin: int = 50,
-        time_correlation_method="blav",
+        time_correlation_method=None,
         return_std_bias=False,
         n_hist=None,
         equilibration_time=5 * picosecond,

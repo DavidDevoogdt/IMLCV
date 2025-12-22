@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jax import Array
 from jax.random import PRNGKey, choice, split
 
-from IMLCV.base.bias import Bias, BiasModify, CompositeBias, GridBias, StdBias, RoundBias
+from IMLCV.base.bias import Bias, BiasModify, CompositeBias, GridBias, RoundBias, StdBias
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
@@ -1182,6 +1182,7 @@ class Rounds:
         ti: list[TrajectoryInfo] = []
 
         weights: list[Array] = []
+        weight_wall: list[Array] = []
         p_select: list[Array] = []
         F: list[Array] = []
         density: list[Array] = []
@@ -1227,6 +1228,10 @@ class Rounds:
 
         equilibration_n = None
 
+        pb = self.get_permanent_bias()
+
+        print(f"{pb=}")
+
         for cvi in cvrnds:
             # sti_c: StaticMdInfo | None = None
             # sp_c: list[SystemParams] = []
@@ -1244,6 +1249,8 @@ class Rounds:
                 print(f"could not load ground bias {e=}")
                 ground_bias_c = None
                 weight_c = False
+
+            weight_pb = False
 
             try:
                 colvar_c = self.get_collective_variable(c=cvi)
@@ -1538,10 +1545,19 @@ class Rounds:
 
                 labels_c = [0] * len(ti_c)
 
+            if pb is not None:
+                print("applying permanent bias selection")
+                beta = 1.0 / (boltzmann * sti_c.T)
+                weight_perm = [jnp.exp(-beta * pb.compute_from_system_params(ti_ci.sp)[1].energy) for ti_ci in ti_c]
+
+            else:
+                weight_perm = [jnp.ones_like(wi) for wi in w_c]
+
             # sp.extend(sp_c)
             # cv.extend(cv_c)
             ti.extend(ti_c)
 
+            weight_wall.extend(weight_perm)
             weights.extend(w_c)
             p_select.extend(ps_c)
             F.extend(F_c)
@@ -1578,13 +1594,8 @@ class Rounds:
             print("loaded weights from disk, not recalculating them")
 
             dlo = DataLoaderOutput(
-                # sp=sp,
-                # cv=cv,
                 ti=ti,
-                sti=sti_c,  # type: ignore
-                # _weights=weights,
-                # _rho=density,
-                # _weights_std=weights_std,
+                sti=sti_c,
                 nl=None,
                 collective_variable=colvar,  # type: ignore
             )
@@ -1621,6 +1632,7 @@ class Rounds:
                 ti_new: list[TrajectoryInfo] = []
 
                 w_new: list[Array] = []
+                ww_new: list[Array] = []
                 ps_new: list[Array] = []
                 F_new: list[Array] = []
                 d_new: list[Array] = []
@@ -1654,6 +1666,7 @@ class Rounds:
                         new_bias_list.append(bias_list[n])
 
                     w_new.append(weights[n])
+                    ww_new.append(weight_wall[n])
                     ps_new.append(p_select[n])
                     F_new.append(F[n])
                     d_new.append(density[n])
@@ -1672,6 +1685,7 @@ class Rounds:
                 # cv = cv_new
 
                 weights = w_new
+                weight_wall = ww_new
                 p_select = ps_new
                 F = F_new
                 density = d_new
@@ -1771,9 +1785,7 @@ class Rounds:
                         #     )
 
                         # else:
-                        dw = jnp.exp((jnp.log(scales[1:]) + jnp.log(scales[:-1])) / 2) * sinhc(
-                            (jnp.log(scales[1:]) - jnp.log(scales[:-1])) / 2
-                        )
+                        dw = (scales[1:] + jnp.log(scales[:-1])) / 2
 
                         assert ti_i.t is not None
                         dt = ti_i.t[1:] - ti_i.t[:-1]
@@ -1864,6 +1876,7 @@ class Rounds:
             def choose(
                 key,
                 weight: list[Array],
+                weight_wall: list[Array],
                 weight_lag: list[Array],
                 ps: list[Array],
                 F: list[Array],
@@ -1877,7 +1890,7 @@ class Rounds:
 
                 print("new choice")
 
-                ps_stack = jnp.where(jnp.hstack(nb) != 0, jnp.hstack(ps) / jnp.hstack(nb), 0)
+                ps_stack = jnp.where(jnp.hstack(nb) != 0, jnp.hstack(ps) / jnp.hstack(nb), 0) * jnp.hstack(weight_wall)
                 # ps_stack = jnp.hstack(ps)
 
                 assert jnp.isfinite(ps_stack).all(), "rho_stack contains non-finite values"
@@ -1998,6 +2011,7 @@ class Rounds:
 
             # else:
             _w: list[Array] = []
+            _ww: list[Array] = []
             _wl: list[Array] = []
             _ps: list[Array] = []
             _F: list[Array] = []
@@ -2007,10 +2021,11 @@ class Rounds:
 
             _grid_nums: list[Array] | None = [] if grid_nums is not None else None
 
-            for n, (w_i, wl_i, ps_i, F_i, d_i, nb_i, neb_i, c_i) in enumerate(
-                zip(weights, weights_lag, p_select, F, density, n_bin, n_eff_bin, c_list)
+            for n, (w_i, ww_i, wl_i, ps_i, F_i, d_i, nb_i, neb_i, c_i) in enumerate(
+                zip(weights, weight_wall, weights_lag, p_select, F, density, n_bin, n_eff_bin, c_list)
             ):
                 _w.append(remove_lag(w_i, c_i))
+                _ww.append(remove_lag(ww_i, c_i))
                 _wl.append(remove_lag(wl_i, c_i))
                 _nb.append(remove_lag(nb_i, c_i))
                 _d.append(remove_lag(d_i, c_i))
@@ -2024,6 +2039,7 @@ class Rounds:
             key, indices, out_reweights, out_rhos, nums_full, out_dw = choose(
                 key=key,
                 weight=_w,
+                weight_wall=_ww,
                 weight_lag=_wl,
                 ps=_ps,
                 F=_F,
@@ -2760,7 +2776,7 @@ class Rounds:
 
     #     return Bias.load(self.full_path(bn), root=self.folder)
 
-    def get_engine(self, c: int | None = None, r: int | None = None) -> MDEngine:
+    def get_engine(self, c: int | None = None, r: int | None = None, i: int | None = None) -> MDEngine:
         if c is None:
             c = self.cv
 
@@ -2772,7 +2788,14 @@ class Rounds:
         assert name is not None
 
         return MDEngine.load(
-            self.full_path(name), bias=self.get_bias(c=c, r=r), permant_bias=self.get_permanent_bias(), filename=None
+            self.full_path(name),
+            bias=self.get_bias(
+                c=c,
+                r=r,
+                i=i,
+            ),
+            permant_bias=self.get_permanent_bias(),
+            filename=None,
         )
 
     ######################################
@@ -4597,10 +4620,11 @@ class DataLoaderOutput(MyPyTreeNode):
         compute_std: bool = False,
         sparse_inverse: bool = True,
         recalc_bounds=True,
-        correlation_method: str | None = "blav",
+        correlation_method: str | None = None,
         blav_pair=False,
         n_subgrids: int = 5,
         n_hist: int | None = None,
+        get_e_wall=True,
     ) -> WeightOutput:
         if cv_0 is None:
             cv_0 = self.cv
@@ -4613,6 +4637,7 @@ class DataLoaderOutput(MyPyTreeNode):
         # get raw rescaling
         u_unstacked = []
         e_unstacked = []
+
         beta = 1 / (self.sti.T * boltzmann)
 
         for ti_i in self.ti:
@@ -5329,7 +5354,7 @@ class DataLoaderOutput(MyPyTreeNode):
     def _correlation_time(
         cv_0: list[CV],
         verbose: bool = True,
-        method: str = "blav",
+        method: str = None,
         const_acf: float = 5.0,
         periodicities: jax.Array | None = None,
     ):
@@ -5492,7 +5517,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
             cv_data = cv_i
 
-            if method == "blav":
+            if method == None:
                 t_int_i = _blav(cv_data)
             elif method == "acf":
                 t_int_i = _acf(cv_data)

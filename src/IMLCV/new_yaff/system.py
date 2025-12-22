@@ -3,12 +3,11 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from IMLCV.base.CV import NeighbourList
 from IMLCV.base.datastructures import MyPyTreeNode
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, SystemParams
-from IMLCV.base.CV import NeighbourList
 
 
-# @partial(dataclass, frozen=False)
 class YaffCell(MyPyTreeNode):
     rvecs: jax.Array
 
@@ -35,7 +34,6 @@ class YaffCell(MyPyTreeNode):
         return jnp.abs(vol_unsigned)
 
 
-# @partial(dataclass, frozen=False)
 class YaffSys(MyPyTreeNode):
     numbers: jax.Array
     masses: jax.Array
@@ -63,8 +61,6 @@ class YaffSys(MyPyTreeNode):
 
     @property
     def sp(self):
-        # print(f"getting sp {self.cell.rvecs}")
-
         return SystemParams(
             coordinates=self.pos,
             cell=self.cell.rvecs if self.cell.rvecs.shape[0] != 0 else None,

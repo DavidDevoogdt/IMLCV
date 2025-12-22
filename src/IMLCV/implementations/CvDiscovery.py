@@ -6,7 +6,7 @@ from flax import linen as nn
 from flax.training import train_state
 from jax import Array, jit, random
 
-from IMLCV.base.CV import CV, CvTrans, NeighbourList, SystemParams, CvMetric, CvTrans
+from IMLCV.base.CV import CV, CvMetric, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
 from IMLCV.base.rounds import Covariances, DataLoaderOutput
@@ -896,7 +896,7 @@ class IndicatorSplitterTransformer(Transformer):
             )
         )(per, jnp.array(bounds))
 
-        print(f"{bounds=}")
+        print(f"{bounds=} {bounds.shape=}")
 
         print(f"IndicatorSplitterTransformer: using bounds {bounds}")
 

@@ -70,11 +70,11 @@ class HarmonicBias(Bias):
     # __: KW_ONLY
 
     q0: CV
-    k: float
-    k_max: float | None = None
+    k: Array
+    k_max: Array | None = None
     size: Array
-    y0: float | None = None
-    r0: float | None = None
+    y0: Array | None = None
+    r0: Array | None = None
     metric: CvMetric
 
     @staticmethod
@@ -160,7 +160,7 @@ class BiasMTD(Bias):
     sigmas: jax.Array
     K: jax.Array
     Ks: jax.Array
-    tempering: float = field(pytree_node=False, default=0.0)
+    tempering: float = 0.0
 
     @classmethod
     def create(

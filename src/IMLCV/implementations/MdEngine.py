@@ -310,6 +310,8 @@ class NewYaffEngine(MDEngine):
         )
 
     def _setup_verlet(self):
+        print("Setting up YAFF verlet integrator")
+
         hooks = []
 
         class myHook(IMLCV.new_yaff.iterative.Hook):

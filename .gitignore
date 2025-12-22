@@ -117,3 +117,5 @@ scripts/*
 core
 image.sif
 plots_cv_discovery/*
+image.sif.sha256
+image_rocm.sif

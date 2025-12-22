@@ -48,11 +48,14 @@ def alanine_dipeptide_openmm(
     system: System = forcefield.createSystem(topo)
 
     energy = OpenMmEnergy.create(
-        topo=topo,
+        # topo=topo,
         system=system,
     )
 
-    _, atomic_numbers = energy.get_info()
+    atomic_numbers = jnp.array(
+        [a.element.atomic_number for a in topo.atoms()],
+        dtype=int,
+    )
 
     sp0 = SystemParams(
         coordinates=jnp.array(
@@ -163,7 +166,7 @@ def alanine_dipeptide_openmm(
         T=300 * kelvin,
         timestep=0.5 * femtosecond,
         timecon_thermo=100.0 * femtosecond,
-        write_step=50 * save_step,
+        write_step=20 * save_step,
         save_step=save_step,
         atomic_numbers=atomic_numbers,
         screen_log=1000,
@@ -195,7 +198,7 @@ def butane(save_step=50, CV=True):
     system: System = psf.createSystem(params, nonbondedMethod=omm_app.NoCutoff)
 
     energy = OpenMmEnergy.create(
-        topo=topo,
+        # topo=topo,
         system=system,
     )
 
@@ -389,7 +392,7 @@ def cyclohexane(CV=True, save_step=50):
     top = mol.to_topology().to_openmm()
     system = forcefield.createSystem(top)
     energy = OpenMmEnergy.create(
-        topo=top,
+        # topo=top,
         system=system,
     )
 
@@ -1229,7 +1232,7 @@ def _system_2_cvs(
         ry = jnp.dot(r, r2)
         rz = jnp.dot(r, ring_normal)
 
-        return jnp.array([rx, ry, rz, rx**2 + ry**2])
+        return jnp.array([rx, ry, rz])
 
     posc = sp.coordinates[1]
     posdb = sp.coordinates[0]
@@ -1243,7 +1246,7 @@ def _system_2_cvs(
     n_prop = jnp.cross(v1, v2)
     n_prop = n_prop / jnp.linalg.norm(n_prop)
 
-    x1, y1, z1, x12_sq = project(com_propene - com_ring)
+    x1, y1, z1 = project(com_propene - com_ring)
     vec_1 = project(v1)
     vec_2 = project(v2)
     vec_n_prop = project(n_prop)
@@ -1262,7 +1265,7 @@ def _system_2_cvs(
     # sin_ksi = jnp.linalg.norm(jnp.cross(ring_normal, v2))
     # ksi = jnp.arctan2(sin_ksi, cos_ksi)
 
-    cos_alpha = jnp.dot(v1, v2)
+    # cos_alpha = jnp.dot(v1, v2)
 
     # p = com_propene - com_ring
     # dist_cv = jnp.dot(p, ring_normal)
@@ -1278,14 +1281,13 @@ def _system_2_cvs(
                 z1,
                 x1,
                 y1,
-                x12_sq,
                 vec_1,
                 vec_2,
                 vec_n_prop,
                 ring_radius,
                 dist_bas1,
                 dist_bas2,
-                cos_alpha,
+                # cos_alpha,
             ]
         ).flatten(),
     )

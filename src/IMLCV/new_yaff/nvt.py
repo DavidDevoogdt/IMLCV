@@ -32,7 +32,6 @@ import jax.numpy as jnp
 
 from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
-from IMLCV.new_yaff.iterative import StateItem
 from IMLCV.new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
 from IMLCV.new_yaff.verlet import ThermostatHook, VerletIntegrator
 
@@ -78,7 +77,7 @@ class AndersenThermostat(ThermostatHook):
     def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
 
         return self, iterative
@@ -99,7 +98,7 @@ class AndersenThermostat(ThermostatHook):
             )
         # Zero any external momenta after choosing new velocities
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # Update the kinetic energy and the reference for the conserved quantity
         ekin_after = iterative.ekin
@@ -146,7 +145,7 @@ class BerendsenThermostat(ThermostatHook):
     def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
@@ -182,7 +181,7 @@ class LangevinThermostat(ThermostatHook):
 
         # It is mandatory to zero the external momenta.
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
 
         return self, iterative
@@ -253,7 +252,7 @@ class CSVRThermostat(ThermostatHook):
     def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta.
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         if iterative.ndof is None:
             iterative.ndof = get_ndof_internal_md(iterative.pos.shape[0], iterative.ff.system.cell.nvec)
@@ -334,7 +333,7 @@ class GLEThermostat(ThermostatHook):
 
         # It is mandatory to zero the external momenta
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # Initialize the additional momenta
         self.key, key0 = jax.random.split(self.key, 2)
@@ -578,7 +577,7 @@ class NHCThermostat(ThermostatHook):
     def init(self, iterative: VerletIntegrator):
         # It is mandatory to zero the external momenta
         iterative.pos, iterative.vel = clean_momenta(
-            iterative.pos, iterative.vel, iterative.masses, iterative.ff.system.cell
+            iterative.pos, iterative.vel, iterative.masses, iterative.yaff_ff.system.cell
         )
         # If needed, determine the number of _internal_ degrees of freedom
         if iterative.ndof is None:
@@ -591,14 +590,13 @@ class NHCThermostat(ThermostatHook):
         return self, iterative
 
     def pre(self, iterative: VerletIntegrator, G1_add=None):
-        vel_new, iterative.ekin, self.chain = self.chain.update(iterative.ekin, iterative.vel, G1_add)
+        vel_new, _, self.chain = self.chain.update(iterative.ekin, iterative.vel, G1_add)
         iterative.vel = vel_new
 
         return self, iterative
 
     def post(self, iterative: VerletIntegrator, G1_add=None):
-        vel_new, iterative.ekin, self.chain = self.chain.update(iterative.ekin, iterative.vel, G1_add)
-        iterative.vel = vel_new
+        iterative.vel, _, self.chain = self.chain.update(iterative.ekin, iterative.vel, G1_add)
         self.econs_correction = self.chain.get_econs_correction()
 
         return self, iterative

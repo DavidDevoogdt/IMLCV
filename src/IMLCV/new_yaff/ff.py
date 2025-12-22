@@ -11,10 +11,9 @@ from IMLCV.new_yaff.system import YaffSys
 if TYPE_CHECKING:
     from IMLCV.implementations.MdEngine import NewYaffEngine
 
-from IMLCV.base.bias import EnergyResult
-from IMLCV.base.bias import Energy, Bias
+from IMLCV.base.bias import Bias, Energy, EnergyResult
+from IMLCV.base.CV import NeighbourList, SystemParams
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo
-from IMLCV.base.CV import SystemParams, NeighbourList
 
 
 # @partial(dataclass, frozen=False)

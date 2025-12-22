@@ -10,6 +10,7 @@ from IMLCV.configs.cluster import config as config_cluster
 from IMLCV.configs.local_threadpool import get_config as get_config_local
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+VER = 1
 
 
 print(f"{ROOT_DIR=}")
@@ -42,11 +43,12 @@ class GpuKind(Enum):
 
 def config(
     env=None,
-    singlepoint_nodes=16,
+    singlepoint_cores=16,
+    training_cores=32,
+    reference_blocks=4,
     local_ref_threads=4,
     training_on_gpu=False,
     reference_on_gpu=False,
-    reference_blocks=4,
     walltime_training="6:00:00",
     walltime_ref="1:00:00",
     bootstrap=False,
@@ -61,7 +63,6 @@ def config(
     account=None,
     executor="work_queue",
     default_on_threads=False,
-    training_cores=32,
     training_on_threads=False,
     work_queue_local=True,
     max_threads_local=10,
@@ -74,7 +75,7 @@ def config(
         return
 
     if path_internal is None:
-        path_internal = "/tmp/.runinfo"
+        path_internal = Path("/tmp/.runinfo")
 
     if env == "local":
         execs, labels, precommands, ref_comm, resources = get_config_local(
@@ -87,7 +88,7 @@ def config(
         execs, labels, precommands, ref_comm, resources = config_cluster(
             env=env,
             path_internal=path_internal,
-            singlepoint_nodes=singlepoint_nodes,
+            singlepoint_nodes=singlepoint_cores,
             walltime_training=walltime_training,
             walltime_ref=walltime_ref,
             bootstrap=bootstrap,
@@ -114,7 +115,6 @@ def config(
         usage_tracking=False,
         run_dir=str(path_internal),
         initialize_logging=initialize_logging,
-        app_cache=False,
         retries=0,
     )
 
