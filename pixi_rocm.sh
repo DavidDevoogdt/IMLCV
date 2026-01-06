@@ -2,17 +2,9 @@
 
 set -e
 
-pwd
+set -Eeuox pipefail
 
-export PIXI_CACHE_DIR="./.pixi_cache"
-export PATH="~/.pixi/bin:$PATH"
-which pixi
-
-eval "$(pixi shell-hook -e rocm --as-is )"
+echo "Starting script"
 
 
-"$@"
-
-echo "Script finished"
-
-exit 0
+~/.pixi/bin/pixi run -e rocm --as-is "$@"

@@ -15,7 +15,6 @@ import jax.numpy as jnp
 import jsonpickle
 from ase.data import atomic_masses
 from jax import Array
-from jax.lax import dynamic_slice_in_dim, dynamic_update_slice_in_dim
 from typing_extensions import Self
 
 from IMLCV import unpickler
@@ -575,18 +574,21 @@ class FullTrajectoryInfo(TrajectoryInfo):
             self.__dict__[prop_name] = value
             return
 
-        if self._get(prop_name) is None:
+        if self.__getattribute__(prop_name) is None:
             if prop_name in _items_scal:
                 self.__dict__[prop_name] = jnp.zeros((self._capacity,))  # type:ignore
             elif prop_name in _items_vec:
                 self.__dict__[prop_name] = jnp.zeros((self._capacity, *value.shape[1:]))  # type:ignore
 
-        self.__dict__[prop_name] = dynamic_update_slice_in_dim(
-            self.__dict__[prop_name],
-            value,
-            0,
-            0,
-        )
+        if prop_name in _items_vec:
+            self.__dict__[prop_name] = self.__dict__[prop_name].at[: value.shape[0], :].set(value)
+            return
+
+        if prop_name in _items_scal:
+            self.__dict__[prop_name] = self.__dict__[prop_name].at[: value.shape[0]].set(value)
+            return
+
+        raise ValueError(f"property {prop_name} not found in trajectory info")
 
     def __getitem__(self, slices) -> FullTrajectoryInfo:
         "gets slice from indices. the output is truncated to the to include only items wihtin _size"
@@ -619,19 +621,18 @@ class FullTrajectoryInfo(TrajectoryInfo):
 
         index = self._size
 
-        keys = [*_items_vec, *_items_scal]
-
         for tii in ti:
             _s = tii._size
 
-            for key in keys:
+            for key in _items_vec:
                 if self.__dict__[key] is not None:
-                    self.__dict__[key] = dynamic_update_slice_in_dim(
-                        self.__dict__[key],
-                        dynamic_slice_in_dim(tii.__dict__[key], 0, _s),
-                        index,
-                        0,
-                    )
+                    assert tii.__dict__[key] is not None
+                    self.__dict__[key] = self.__dict__[key].at[index : index + _s, :].set(tii.__dict__[key][0:_s, :])
+
+            for key in _items_scal:
+                if self.__dict__[key] is not None:
+                    assert tii.__dict__[key] is not None
+                    self.__dict__[key] = self.__dict__[key].at[index : index + _s].set(tii.__dict__[key][0:_s])
 
             index += _s
 
@@ -640,7 +641,9 @@ class FullTrajectoryInfo(TrajectoryInfo):
         return self
 
     def __add__(self, ti: FullTrajectoryInfo) -> FullTrajectoryInfo:
-        return self._stack(ti)
+        out = self._stack(ti)
+
+        return out
 
     def _expand_capacity(self, nc=None) -> FullTrajectoryInfo:
         if nc is None:
@@ -648,7 +651,7 @@ class FullTrajectoryInfo(TrajectoryInfo):
 
         nc = int(nc)
 
-        print(f"expanding capacity from {self._capacity} to {nc}")
+        # print(f"expanding capacity from {self._capacity} to {nc}")
 
         delta = nc - self._capacity
 
@@ -669,7 +672,7 @@ class FullTrajectoryInfo(TrajectoryInfo):
             if prop is not None:
                 dict[name] = jnp.hstack([prop, jnp.zeros(delta)])  # type:ignore
 
-        print(f"new capacity is {dict['_capacity']} ")
+        # print(f"new capacity is {dict['_capacity']} ")
 
         return FullTrajectoryInfo(**dict)  # type:ignore
 
@@ -706,7 +709,7 @@ class FullTrajectoryInfo(TrajectoryInfo):
             self._save(hf=hf)
 
     def _save(self, hf: h5py.File):
-        print(f"saving trajectory info to {hf.filename}, size {self._size}/{self._capacity}")
+        # print(f"saving trajectory info to {hf.filename}, size {self._size}/{self._capacity}")
 
         for name in [*_items_scal, *_items_vec]:
             prop = self.__getattribute__(name)
@@ -1132,9 +1135,9 @@ class MDEngine(MyPyTreeNode, ABC):
             assert self.bias is not None
 
             # print(f"{jax.tree_util.tree_map(lambda x: x.shape,self.trajectory_info)=}")
-            print(
-                f"{self.trajectory_info.size=}  {self.trajectory_info.capacity=} {self.trajectory_info.positions.shape=}"
-            )
+            # print(
+            #     f"{self.trajectory_info.size=}  {self.trajectory_info.capacity=} {self.trajectory_info.positions.shape=}"
+            # )
 
             # print(f"done")
 

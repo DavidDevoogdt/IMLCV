@@ -113,21 +113,52 @@ def _lattice_invariants_2(
 LatticeInvariants2 = CvTrans.from_cv_function(_lattice_invariants_2)
 
 
-def _distance(x: SystemParams, *_):
-    x = x.canonicalize()[0]
+def _distance(
+    x: SystemParams,
+    nl,
+    shmap,
+    shmap_kwargs,
+    idx: Array | None = None,
+    idx2: Array | None = None,
+    distances: Array | None = None,
+):
+    if idx is None:
+        idx = jnp.arange(x.shape[0])
 
-    n = x.shape[-2]
+    if idx2 is None:
+        idx2 = idx
+        same = True
+    else:
+        same = False
 
-    out = vmap_decorator(vmap_decorator(x.min_distance, in_axes=(0, None)), in_axes=(None, 0))(
-        jnp.arange(n),
-        jnp.arange(n),
+    dist = vmap_decorator(
+        vmap_decorator(
+            x.min_distance,
+            in_axes=(0, None),
+        ),
+        in_axes=(None, 0),
+    )(
+        idx,
+        idx2,
     )
 
-    return x.replace(cv=out[jnp.triu_indices_from(out, k=1)], _combine_dims=None)
+    if same:
+        dist = dist[jnp.triu_indices_from(dist, k=1)]
+    else:
+        dist = dist.flatten()
+
+    return CV(cv=dist / angstrom)
 
 
-def distance_descriptor():
-    return CvTrans.from_cv_function(_distance)
+def distance_descriptor(
+    idx: Array | None = None,
+    idx2: Array | None = None,
+):
+    return CvTrans.from_cv_function(
+        _distance,
+        idx=idx,
+        idx2=idx2,
+    )
 
 
 def _position_index(sp: SystemParams, _nl, shmap, shmap_kwargs, idx):
@@ -965,15 +996,58 @@ def _linear_layer_apply_rule(
     kwargs,
     static_kwargs,
 ):
-    print(f"apply rule linear layer")
+    # print(f"apply rule linear layer")
 
-    spectral_norm = static_kwargs.get("spectral_norm", False)
+    kind = static_kwargs.get("kind", "dens")
 
-    if spectral_norm:
-        weights = kwargs["weights"]
+    if kind == "spectral_norm":
+        print(f"spectral norm linear layer")
+        weights = kwargs["_weights"]
         sigma = jnp.linalg.norm(weights, ord=2)
 
         kwargs["weights"] = weights / sigma
+    elif kind == "dense":
+        kwargs["weights"] = kwargs["_weights"]
+    elif kind == "ortho":
+        # print(f"ortho linear layer")
+        _weights = kwargs["_weights"]
+
+        # print(f"{_weights.shape=}")
+
+        M, N = static_kwargs["M"], static_kwargs["N"]
+        K = max(M, N)
+        L = min(M, N)
+
+        # print(f"{M=}, {N=},")
+
+        A = jnp.zeros((K, K))
+        A = A.at[jnp.triu_indices(K, k=1)].set(_weights)
+        A = A - A.T
+        # print(f"{A=}")
+
+        I = jnp.eye(A.shape[0])
+
+        # Q = jnp.linalg.inv(I + A) @ (I - A)
+
+        lhs = I - A
+        rhs = I + A
+
+        rhs = rhs[:, :L]
+
+        # print(f"{lhs.shape=}, {rhs.shape=}")
+        Q = jnp.linalg.solve(lhs, rhs)
+
+        # print(f"{ jnp.allclose(Q.T @ Q, jnp.eye(L))=}")
+
+        if M < N:
+            Q = Q.T
+
+        kwargs["weights"] = Q
+
+        # print(f"{kwargs['weights']=}")
+
+    else:
+        raise ValueError(f"kind {kind} not recognized in linear layer")
 
     return kwargs
 
@@ -984,11 +1058,12 @@ def _linear_layer(
     shmap,
     shmap_kwargs,
     weights: jnp.ndarray,
+    _weights: jnp.ndarray | None,
     biases: jnp.ndarray | None,
-    spectral_norm=False,
+    M: int | None = None,
+    N: int | None = None,
+    kind: str = "dense",
 ):
-    print(f"{weights=},{biases=}")
-
     y = weights @ x.cv
     if biases is not None:
         y += biases
@@ -997,19 +1072,60 @@ def _linear_layer(
 
 
 def linear_layer(
-    weights: jnp.ndarray,
-    biases: jnp.ndarray | None = None,
-    spectral_norm: bool = False,
+    kind: str = "dense",
+    M: int | None = None,
+    N: int | None = None,
+    biases: bool = True,
 ) -> CvTrans:
+    """Ax+b linear layer, with A matrix of shape (M,N)"""
+
+    if biases:
+        biases = jnp.zeros((M,))
+    else:
+        biases = None
+
+    if kind in ["dense", "spectral_norm"]:
+        _weights = jnp.ones((M, N))
+    elif kind == "ortho":
+        # assert M >= N, "for ortho linear layer, M must be >= N"
+        K = max(M, N)
+        _weights = jnp.ones((K * (K - 1) // 2))
+
     return CvTrans.from_cv_function(
         _linear_layer,
-        learnable_argnames=["weights", "biases"] if biases is not None else ["weights"],
-        static_argnames=["spectral_norm"],
-        weights=weights,
+        learnable_argnames=["_weights", "biases"] if biases is not None else ["_weights"],
+        static_argnames=["kind", "M", "N"],
+        _weights=_weights,
+        weights=_linear_layer_apply_rule(
+            {"_weights": _weights},
+            {"kind": kind, "M": M, "N": N},
+        )["weights"],
         biases=biases,
-        spectral_norm=spectral_norm,
+        kind=kind,
         apply_rule=_linear_layer_apply_rule,
+        M=M,
+        N=N,
     )
+
+
+def groupsort(x: jax.Array, axis=-1, group_size=2):
+    shape = x.shape
+    assert shape[axis] % group_size == 0, f"{group_size=} must divide axis size {shape[axis]=}"
+    n_groups = shape[axis] // group_size
+    new_shape = shape[:axis] + (n_groups, group_size) + shape[axis + 2 :]
+    # print(f"{shape[:axis] =} {shape[axis + 2 :]=} ")
+    # print(f"{shape=} {new_shape=}")
+    x_reshaped = x.reshape(new_shape)
+    x_sorted = jnp.sort(x_reshaped, axis=axis + 1)
+    return x_sorted.reshape(shape)
+
+
+def smoothabs(x: jax.Array, eps=1e-3):
+    return jnp.sqrt(x**2 + eps)
+
+
+def leaky_tanh(x: jax.Array, alpha=0.01):
+    return (1 - alpha) * jnp.tanh(x) + alpha * x
 
 
 activation_functions = {
@@ -1025,6 +1141,11 @@ activation_functions = {
     "hard_sigmoid": jax.nn.hard_sigmoid,
     "hard_swish": jax.nn.hard_swish,
     "softsign": jax.nn.soft_sign,
+    "abs": jnp.abs,
+    "smoothabs": smoothabs,
+    "sort": jnp.sort,
+    "groupsort": groupsort,
+    "leaky_tanh": leaky_tanh,
 }
 
 
@@ -1034,16 +1155,40 @@ def _activation_layer(
     shmap,
     shmap_kwargs,
     activation: str,
+    **activation_kwargs,
 ):
     func = activation_functions.get(activation)
 
     if func is None:
         return x
 
-    return x.replace(cv=func(x.cv))
+    return x.replace(
+        cv=func(
+            x.cv,
+            **activation_kwargs,
+        )
+    )
 
 
-def get_activation_trans(name: str):
+def _bias_layer(
+    x: CV,
+    _nl,
+    shmap,
+    shmap_kwargs,
+    bias: jax.Array,
+):
+    return x.replace(cv=x.cv + bias)
+
+
+def bias_layer(bias: jax.Array) -> CvTrans:
+    return CvTrans.from_cv_function(
+        _bias_layer,
+        bias=bias,
+        learnable_argnames=("bias",),
+    )
+
+
+def get_activation_trans(name: str, **activation_kwargs) -> CvTrans:
     name = name.lower()
     assert name in activation_functions, (
         f"activation {name} not recognized. Available: {list(activation_functions.keys())}"
@@ -1051,8 +1196,9 @@ def get_activation_trans(name: str):
 
     return CvTrans.from_cv_function(
         _activation_layer,
-        static_argnames=["activation"],
+        static_argnames=["activation", *activation_kwargs.keys()],
         activation=name,
+        **activation_kwargs,
     )
 
 

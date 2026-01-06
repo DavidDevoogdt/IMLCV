@@ -463,6 +463,8 @@ class TransformerMAF(Transformer):
     max_features: int = 500
     max_features_pre: int = 500
 
+    epochs: int = 2000
+
     sym: bool = True
     use_w: bool = True
 
@@ -478,7 +480,7 @@ class TransformerMAF(Transformer):
     disciminating_CVs: CV | None = None
 
     generator: bool = False
-
+    entropy_reg: float = 0.0
     shrink: bool = True
 
     @staticmethod
@@ -585,6 +587,7 @@ class TransformerMAF(Transformer):
                 trans_tot *= self.trans
 
         if self.generator:
+            raise
             km = dlo.koopman_model(
                 cv_0=x,
                 cv_t=x_t,
@@ -608,6 +611,8 @@ class TransformerMAF(Transformer):
                 shrink=True,
                 generator=True,
                 periodicities=self.periodicities,
+                epochs=self.epochs,
+                entropy_reg=self.entropy_reg,
                 # shrinkage_method="BC",
             )
 
@@ -634,6 +639,8 @@ class TransformerMAF(Transformer):
                 T_scale=self.T_scale,
                 shrink=False,
                 periodicities=self.periodicities,
+                epochs=self.epochs,
+                entropy_reg=self.entropy_reg,
                 # shrinkage_method="BC",
             )
 

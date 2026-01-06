@@ -4852,7 +4852,7 @@ class DataLoaderOutput(MyPyTreeNode):
         if not jnp.all(mask_k):
             print(f"WARNING: some bins have no valid samples {jnp.argwhere(jnp.logical_not(mask_k))=}")
 
-        print(f"valid i: {jnp.any(mask_ik, axis=1)=} valid_k: {jnp.any(mask_ik, axis=0)=}")
+        # print(f"valid i: {jnp.any(mask_ik, axis=1)=} valid_k: {jnp.any(mask_ik, axis=0)=}")
 
         if compute_std:
             H_ik_mask = H_ik[mask_i, :][:, mask_k]
@@ -5889,6 +5889,7 @@ class DataLoaderOutput(MyPyTreeNode):
         epochs: int = 2000,
         batch_size: int = 10000,
         init_learnable_params=True,
+        entropy_reg: float = 0.0,
     ) -> "KoopmanModel":
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
 
@@ -6006,6 +6007,7 @@ class DataLoaderOutput(MyPyTreeNode):
             epochs=epochs,
             batch_size=batch_size,
             init_learnable_params=init_learnable_params,
+            entropy_reg=entropy_reg,
         )
 
     def filter_nans(
@@ -6984,6 +6986,7 @@ class KoopmanModel(MyPyTreeNode):
     trans: CvTrans | CvTrans | None = None
 
     constant_threshold: float = 1e-14
+    entropy_reg: float = 0.0
 
     @staticmethod
     def create(
@@ -7036,6 +7039,7 @@ class KoopmanModel(MyPyTreeNode):
         batch_size=10000,
         init_learnable_params=True,
         min_std=1e-2,  # prevents collapse into singularities
+        entropy_reg=0.0,
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
@@ -7326,15 +7330,20 @@ class KoopmanModel(MyPyTreeNode):
 
                 _trans = trans.apply_learnable_params(learnable_params)
 
+                print(f"{x_0=} {x_t=} ")
+
+                y_0, _ = _trans.compute_cv(x_0, nl)
+                y_t, _ = _trans.compute_cv(x_t, nl_t) if x_t is not None else (None, None)
+
                 cov = Covariances.create(
-                    cv_0=[x_0],
-                    cv_1=[x_t],
+                    cv_0=[y_0],
+                    cv_1=[y_t] if y_t is not None else None,
                     nl=nl,
                     nl_t=nl_t,
                     w=[w],
                     w_t=[w] if x_t is not None else None,
-                    trans_f=_trans,
-                    trans_g=_trans,
+                    trans_f=None,
+                    trans_g=None,
                     shrink=False,
                     calc_pi=True,
                     get_diff=False,
@@ -7363,6 +7372,94 @@ class KoopmanModel(MyPyTreeNode):
                 K = W0 @ cov.rho_01 @ W1.T
 
                 loss = -jnp.sum(K**2)  # vamp-2 score
+
+                if entropy_reg > 0.0:
+                    print("computing entropy regularization")
+
+                    # z_0 = y_0.cv @ cov.sigma_0_inv @ W0.T
+
+                    print(f"{y_0.cv.shape=} {cov.pi_0.shape=} {cov.sigma_0_inv.shape=} {W0.T.shape=}")
+
+                    z_0 = jnp.einsum("ni,i,ik->nk", y_0.cv - cov.pi_0, cov.sigma_0_inv, W0.T)
+
+                    jax.debug.print("z mean {} std {}", jnp.mean(z_0, axis=0), jnp.std(z_0, axis=0))
+
+                    if add_1:
+                        z_0 = z_0[:, :-1]  # remove constant basis
+
+                    # silverman rule
+                    c_inv = (4 / (z_0.shape[0] * (z_0.shape[1] + 2))) ** (-2 / (z_0.shape[1] + 4))
+
+                    # print(f"{H_inv.shape=}")
+
+                    def soft_binning_entropy_stable(z_0, w, grid_size=20, range_limit=4.0):
+                        n_frames, d = z_0.shape
+
+                        # 1. Setup Grid
+                        grid_axis = jnp.linspace(-range_limit, range_limit, grid_size)
+                        grid_coords = jnp.meshgrid(*(grid_axis for _ in range(d)))
+                        grid_points = jnp.stack([g.ravel() for g in grid_coords], axis=-1)  # (G^d, d)
+
+                        # 2. Kernel parameters
+                        # Whitening is done, so h^2 = 1 / c_inv
+                        h_sq = 1.0 / c_inv
+
+                        # 3. Compute Log-Memberships
+                        # Instead of exp(-0.5 * dist^2 / h_sq), we stay in log space
+                        @jax.vmap
+                        def compute_log_unnormalized_density(grid_p):
+                            print(f"{z_0.shape=} {grid_p.shape=} ")
+
+                            # Distance from one grid point to all CV points
+                            sq_dist = jnp.sum((z_0 - grid_p) ** 2, axis=-1)
+                            log_kernels = -0.5 * sq_dist / h_sq
+
+                            # We need to account for weights: log(sum(w * exp(log_kernels)))
+                            # This is exactly what jax.nn.logsumexp supports with the 'b' (weights) argument
+                            return jax.nn.logsumexp(log_kernels, b=w)
+
+                        # log_p_bins: (grid_size**d,)
+                        log_p_bins = compute_log_unnormalized_density(grid_points)
+
+                        # 4. Normalize the Log-Distribution
+                        # We want p_i = exp(log_p_i) / sum(exp(log_p_j))
+                        # So log(p_i) = log_p_i - logsumexp(log_p_all)
+                        log_p_normalized = log_p_bins - jax.nn.logsumexp(log_p_bins)
+
+                        # 5. Shannon Entropy: H = -sum(p * log(p))
+                        # Since we have log(p), this is -sum(exp(log_p) * log_p)
+                        p_normalized = jnp.exp(log_p_normalized)
+                        entropy = -jnp.sum(p_normalized * log_p_normalized)
+
+                        return -entropy  # Return negative entropy to minimize
+
+                    # Integration into your loss
+                    loss_entropy = soft_binning_entropy_stable(z_0, w)
+
+                    jax.debug.print("Entropy loss: {le}", le=loss_entropy)
+                    jax.debug.print("Current total loss before entropy: {l}", l=loss)
+
+                    loss += entropy_reg * loss_entropy
+
+                    # # @jax.vmap
+                    # def _entropy(z):
+                    #     p, wp = z
+
+                    #     @jax.vmap
+                    #     def _inner(q, wq):
+                    #         s = q - p
+
+                    #         print(f"{s=}")
+                    #         print(f"{H_inv=} {s.shape=}{wq=}{wp=} ")
+
+                    #         kernel = jnp.exp(-0.5 * s @ H_inv @ s)
+                    #         return wq * kernel
+
+                    #     return -wp * jnp.log(jnp.sum(_inner(y_0.cv, w) + 1e-10))
+
+                    # entropy = jnp.sum(jax.lax.map(_entropy, (y_0.cv, w)))
+
+                    # loss -= entropy_reg * entropy
 
                 # # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
                 # # dl, _ = jnp.linalg.eigh(dK)
@@ -7399,7 +7496,7 @@ class KoopmanModel(MyPyTreeNode):
 
                 return loss, (None)
 
-            optimizer = optax.adamw(learning_rate=1e-3, weight_decay=1e-4)
+            optimizer = optax.adamw(learning_rate=1e-4, weight_decay=1e-5)
 
             cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0])
             # lambdas = jnp.zeros((cv_out_shape.cv.shape[1],))
@@ -7674,6 +7771,7 @@ class KoopmanModel(MyPyTreeNode):
             generator=generator,
             # periodicities=periodicities,
             argmask_s=argmask_s if only_diag else None,
+            entropy_reg=entropy_reg,
         )
 
         return km
@@ -8098,6 +8196,7 @@ class KoopmanModel(MyPyTreeNode):
             eps_shrink=self.eps_shrink,
             use_w=self.use_w,
             generator=self.generator,
+            entropy_reg=self.entropy_reg,
             # periodicities=self.periodicities,
             # argmask_s=self.argmask_s,
         )

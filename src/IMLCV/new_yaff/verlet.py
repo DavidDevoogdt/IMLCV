@@ -203,7 +203,7 @@ class VerletIntegrator(MyPyTreeNode):
     e_bias: jax.Array
 
     # conserved quantity
-    _cons_err_tracker: ConsErrTracker
+    _cons_err_tracker: ConsErrTracker | None
     econs: jax.Array
     cons_err: jax.Array
 
@@ -355,10 +355,7 @@ class VerletIntegrator(MyPyTreeNode):
             e_bias=e_bias,
             vtens=vtens,
             other_hooks=other_hooks,
-            _cons_err_tracker=ConsErrTracker(
-                ekin_mean=jnp.array(0.0),
-                econs_mean=jnp.array(0.0),
-            ),
+            _cons_err_tracker=None,
         )
 
         verlet_hook = vh

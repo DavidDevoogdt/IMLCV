@@ -39,7 +39,7 @@ module list
 # echo $SLURM_MEM_PER_NODE
 
 # Unset memory-related SLURM environment variables to avoid conflicts
-# unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 
 
 srun  --nodes=1  -l {overrides} singularity run -B {ROOT_DIR}/src/:/app/src/ {image} {command}

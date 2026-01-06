@@ -1976,6 +1976,14 @@ class SystemParams(MyPyTreeNode):
     def min_distance(self, index_1, index_2):
         assert self.batched is False
 
+        def norm_safe(x):
+            n_sq = jnp.dot(x, x)
+            n_sq_safe = jnp.where(n_sq < 1e-12, 1e-12, n_sq)
+            return jnp.where(n_sq < 1e-12, 0.0, jnp.sqrt(n_sq_safe))
+
+        if self.cell is None:
+            return norm_safe(self.coordinates[index_1] - self.coordinates[index_2])
+
         assert self.cell is not None
 
         sp, _ = self.canonicalize()  # necessary if cell is skewed
@@ -1989,7 +1997,7 @@ class SystemParams(MyPyTreeNode):
         def dist(n0, n1, n2):
             assert sp.cell is not None
 
-            return jnp.linalg.norm(
+            return norm_safe(
                 coor2 - coor1 + n0 * sp.cell[0, :] + n1 * sp.cell[1, :] + n2 * sp.cell[2, :],
             )
 
@@ -2056,8 +2064,8 @@ class SystemParams(MyPyTreeNode):
 
 class NeighbourListInfo(MyPyTreeNode):
     # esssential information to create a neighbour list
-    r_cut: float
-    r_skin: float
+    r_cut: float = field(pytree_node=False)
+    r_skin: float = field(pytree_node=False)
 
     z_array: tuple[int, ...] = field(pytree_node=False)
     z_unique: tuple[int, ...] = field(pytree_node=False)
@@ -3969,6 +3977,7 @@ class CvFunBase(ABC, MyPyTreeNode):
 
         kwargs = {}
 
+        # print(f"{self.learnable_kwargs=}")
         for k in self.learnable_kwargs:
             v = self.kwargs[k]
 
@@ -3978,8 +3987,15 @@ class CvFunBase(ABC, MyPyTreeNode):
             key, subkey = jax.random.split(key)
 
             try:
-                kwargs[k] = initializer(subkey, v.shape, v.dtype)
+                if v.ndim == 0:
+                    kwargs[k] = initializer(subkey, (1, 1), v.dtype)[0, 0]
+                elif v.ndim == 1:
+                    kwargs[k] = initializer(subkey, (v.shape[0], 1), v.dtype)[:, 0]
+                else:
+                    kwargs[k] = initializer(subkey, v.shape, v.dtype)
             except Exception as e:
+                print(f"Error initializing parameter {k} with shape {v.shape} and dtype {v.dtype}: {e}")
+
                 kwargs[k] = jnp.zeros_like(v)
 
         if self.apply_rule is not None:
@@ -3993,6 +4009,7 @@ class CvFunBase(ABC, MyPyTreeNode):
 
         kwargs = {}
 
+        # print(f"{self.learnable_kwargs=}")
         for k in self.learnable_kwargs:
             v = self.kwargs[k]
             kwargs[k] = v
@@ -4310,6 +4327,25 @@ class CvTrans(MyPyTreeNode):
             dy = None
 
         return y, dy
+
+    def compute_cv_eval(
+        self,
+        x: X,
+        nl: NeighbourList | None = None,
+        chunk_size=None,
+        reverse=False,
+        shmap=False,
+        shmap_kwargs=ShmapKwargs.create(),
+    ) -> CV:
+        return jax.eval_shape(
+            self.compute_cv,
+            x,
+            nl,
+            chunk_size=chunk_size,
+            reverse=reverse,
+            shmap=shmap,
+            shmap_kwargs=shmap_kwargs,
+        )
 
     def __getstate__(self):
         return self.__dict__

@@ -130,10 +130,10 @@ class AseEnergy(Energy):
 
         if self.calculator is None:
             print("ASE calculator is None, recreating")
-            sp_save = self.sp
-            assert sp_save is not None
+            # sp_save = self.sp
+            # assert sp_save is not None
             self.calculator = self._calculator()
-            self.sp = sp_save
+            # self.sp = sp_save
 
         try:
             energy = self.atoms.get_potential_energy() * electronvolt
