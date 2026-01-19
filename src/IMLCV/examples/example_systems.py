@@ -275,7 +275,10 @@ def butane(save_step=50, CV=True):
 
     sps = sp_gauche_1 + sp_gauche_2 + sp_chair
 
-    _, atomic_numbers = energy.get_info()
+    atomic_numbers = jnp.array([a.element.atomic_number for a in topo.atoms()], dtype=int)
+    print(atomic_numbers)
+
+    # _, atomic_numbers = energy.get_info()
 
     if CV:
         cv0 = CollectiveVariable(
@@ -372,35 +375,27 @@ ring_distance = CvTrans.from_cv_function(_ring_distance, idx=jnp.array([0, 1, 2,
 
 
 def cyclohexane(CV=True, save_step=50):
-    from openff.toolkit.topology import Molecule
-    from openmm.app import ForceField, PDBFile
-    from openmmforcefields.generators import GAFFTemplateGenerator
+    from openmm import System, XmlSerializer
+    # from openmm.unit import kelvin
 
-    # Load your molecule (from SMILES or SDF, not PDB)
-    mol = Molecule.from_smiles("C1CCCCC1")  # cyclohexane
-    mol.generate_conformers(n_conformers=1)
+    # 1. Load the geometry (The PDB you generated)
+    # pdb = PDBFile("cyclohexane_geometry.pdb")
 
-    # Write to PDB if needed
-    mol.to_file("cyclohexane.sdf", file_format="SDF")
+    # 2. Load the physics (The XML System you generated)
+    with open(DATA_ROOT / "cyclohexane" / "cyclohexane_system.xml", "r") as f:
+        system = XmlSerializer.deserialize(f.read())
 
-    # Set up GAFF generator
-    gaff = GAFFTemplateGenerator(molecules=mol)
-    forcefield = ForceField("amber14/protein.ff14SB.xml", "amber14/tip3p.xml")
-    forcefield.registerTemplateGenerator(gaff.generator)
+    assert isinstance(system, System)
 
-    # Load topology from OpenFF molecule, not from PDB!
-    top = mol.to_topology().to_openmm()
-    system = forcefield.createSystem(top)
     energy = OpenMmEnergy.create(
-        # topo=top,
         system=system,
     )
 
-    boat_at: ase.Atoms = ase.io.read(ROOT_DIR / "data" / "cyclohexane" / "boat.xyz")  # type: ignore
-    chair_at: ase.Atoms = ase.io.read(ROOT_DIR / "data" / "cyclohexane" / "chair.xyz")  # type: ignore
+    # boat_at: ase.Atoms = ase.io.read(ROOT_DIR / "data" / "cyclohexane" / "boat.xyz")  # type: ignore
+    # chair_at: ase.Atoms = ase.io.read(ROOT_DIR / "data" / "cyclohexane" / "chair.xyz")  # type: ignore
 
-    boat_arr = jnp.array(boat_at.arrays["positions"]) * angstrom
-    chair_arr = jnp.array(chair_at.arrays["positions"]) * angstrom
+    # boat_arr = jnp.array(boat_at.arrays["positions"]) * angstrom
+    # chair_arr = jnp.array(chair_at.arrays["positions"]) * angstrom
 
     sp_chair_1 = SystemParams(
         coordinates=jnp.array(
@@ -481,21 +476,46 @@ def cyclohexane(CV=True, save_step=50):
     sps = sp_chair_1 + sp_chair_2 + sp_boat_1
     # sps = sp_chair + sp_boat_chair_flip
 
-    _, atomic_numbers = energy.get_info()
+    atomic_numbers = jnp.array([*[6] * 6, *[1] * 12])
+    # _, atomic_numbers = energy.get_info()
 
     cv0, _ = ring_distance.compute_cv(sps)
 
-    b = jnp.array([[jnp.min(cv0.cv), jnp.max(cv0.cv)]])
-    s = b[0, 1] - b[0, 0]
-    b = b + jnp.array([-0.1 * s, 0.1 * s])
+    import openmm as mm
 
-    # colvar = CollectiveVariable(
-    #     f=ring_distance,
-    #     metric=CvMetric.create(
-    #         periodicities=[False],
-    #         bounding_box=b,
-    #     ),
-    # )
+    for force in system.getForces():
+        print(f"{type(force)}")
+
+        if isinstance(force, mm.HarmonicBondForce):
+            for i in range(force.getNumBonds()):
+                p1, p2, length, k = force.getBondParameters(i)
+
+                z1 = int(atomic_numbers[p1])
+                z2 = int(atomic_numbers[p2])
+
+                # expected bond lengths in nm
+                expected_nm = None
+                if (z1 == 6 and z2 == 1) or (z1 == 1 and z2 == 6):  # C-H
+                    expected_nm = 0.11
+                elif z1 == 6 and z2 == 6:  # C-C
+                    expected_nm = 0.15
+
+                # margin in nm
+                margin_nm = 0.02
+
+                if expected_nm is not None:
+                    l_nm = (
+                        jnp.linalg.norm(
+                            sps.coordinates[:, p1, :] - sps.coordinates[:, p2, :],
+                            axis=-1,
+                        )
+                        / angstrom
+                        / 10
+                    )  # convert to nm (per-frame)
+                    within = jnp.all(jnp.abs(l_nm - expected_nm) <= margin_nm).item()
+                    assert within, (
+                        f"Bond {p1}-{p2} (Z={z1}-{z2}) length {l_nm} nm not within {expected_nm}±{margin_nm} nm"
+                    )
 
     if not CV:
         colvar = NoneCV()

@@ -760,7 +760,7 @@ class Bias(ABC, MyPyTreeNode):
         symmetric=True,
         margin=0.2,
         sign=1.0,
-        n=50,
+        n=100,
         macro_chunk_size=1000,
     ):
         assert self.collective_variable is not None
@@ -770,7 +770,7 @@ class Bias(ABC, MyPyTreeNode):
             sign
             * self.apply(
                 [cvs],
-                macro_chunk_size=1000,
+                macro_chunk_size=macro_chunk_size,
             )[0]
             / (T * boltzmann)
         )
@@ -783,7 +783,7 @@ class Bias(ABC, MyPyTreeNode):
             sign
             * other.apply(
                 [cvs],
-                macro_chunk_size=1000,
+                macro_chunk_size=macro_chunk_size,
             )[0]
             / (T * boltzmann)
         )

@@ -110,6 +110,7 @@ class Transformer(MyPyTreeNode):
         vmax=100 * kjmol,
         macro_chunk=1000,
         shmap_kwargs=ShmapKwargs.create(),
+        n_max_lin: int = 100,
         **kwargs,
     ) -> tuple[list[CV], CollectiveVariable, Bias, list[jax.Array]]:
         if plot:
@@ -138,6 +139,7 @@ class Transformer(MyPyTreeNode):
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
                 n_max=n_max,
+                n_max_lin=n_max_lin,
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
@@ -190,6 +192,7 @@ class Transformer(MyPyTreeNode):
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
                 n_max=n_max,
+                n_max_lin=n_max_lin,
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
@@ -351,11 +354,13 @@ class Transformer(MyPyTreeNode):
                 samples_per_bin=samples_per_bin,
                 min_samples_per_bin=min_samples_per_bin,
                 n_max=n_max,
+                n_max_lin=n_max_lin,
                 max_bias=max_fes_bias,
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 # recalc_bounds=True,
                 bounds=bounds,
+                smoothing=None,
             )
 
             if plot:
@@ -447,10 +452,10 @@ class Transformer(MyPyTreeNode):
         plot_std: bool = False,
         # indicate_cv_data=True,
         macro_chunk=10000,
-        cmap="jet",
+        cmap="viridis",
         offset=True,
         bar_label="FES [kJ/mol]",
-        title="Collective Variables",
+        title="",
     ):
         """Plot the app for the CV discovery. all 1d and 2d plots are plotted directly, 3d or higher are plotted as 2d slices."""
 
@@ -2112,7 +2117,7 @@ class Transformer(MyPyTreeNode):
         T=None,
         vmin=0,
         vmax=100 * kjmol,
-        cmap=plt.get_cmap("jet"),
+        cmap=plt.get_cmap("viridis"),
         print_labels=True,
         show_1d_marginals=True,
         fontsize=None,
@@ -2130,6 +2135,7 @@ class Transformer(MyPyTreeNode):
             hspace=0.1,
         )
 
+        # data in main square, FES/ histogram on top
         if data is None:
             ax_histx = fig.add_subplot(gs[1, 1])
         else:
@@ -2286,7 +2292,12 @@ class Transformer(MyPyTreeNode):
         ax_histx.set_xticks([x_l[0], (x_l[0] + x_l[1]) / 2, x_l[1]])
 
         if print_labels and indices is not None and labels is not None:
-            ax_histx.set_xlabel(labels[indices[0]], labelpad=-1, fontsize=fontsize)
+            if data is not None:
+                ax.set_xlabel(labels[indices[0]], fontsize=fontsize)
+            else:
+                ax_histx.set_xlabel(labels[indices[0]], labelpad=-1, fontsize=fontsize)
+
+        # ax.set_ylabel("FES [kJ/mol]", fontsize=fontsize)
 
         if data is not None:
             if margin is not None:
@@ -2307,7 +2318,7 @@ class Transformer(MyPyTreeNode):
         vmax=100 * kjmol,
         T=None,
         print_labels=True,
-        cmap=plt.get_cmap("jet"),
+        cmap=plt.get_cmap("viridis"),
         plot_y=True,
         show_1d_marginals=True,
         fontsize=None,
@@ -2565,7 +2576,7 @@ class Transformer(MyPyTreeNode):
         vmax=100 * kjmol,
         T=None,
         print_labels=True,
-        cmap=plt.get_cmap("jet"),
+        cmap=plt.get_cmap("viridis"),
         plot_std=False,
         **scatter_kwargs,
     ):

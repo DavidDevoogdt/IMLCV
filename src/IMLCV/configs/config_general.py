@@ -67,6 +67,7 @@ def config(
     work_queue_local=True,
     max_threads_local=10,
     gpu_kind: GpuKind = GpuKind.nvidia,
+    apptainer: bool = True,
 ):
     print(f"{reference_blocks=}")
 
@@ -108,6 +109,7 @@ def config(
             training_on_gpu=training_on_gpu,
             reference_on_gpu=reference_on_gpu,
             gpu_kind=gpu_kind,
+            apptainer=apptainer,
         )
 
     config = Config(

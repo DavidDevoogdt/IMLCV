@@ -102,7 +102,7 @@ class Scheme:
         only_finished=False,
         chunk_size=None,
         # T_scale=10,
-        use_common_bias=True,
+        # use_common_bias=True,
         max_grad=100 * kjmol,
         max_b=100 * kjmol,
         dT=0.0,
@@ -172,7 +172,7 @@ class Scheme:
             sp0=sp0,
             chunk_size=chunk_size,
             # T_scale=T_scale,
-            use_common_bias=use_common_bias,
+            # use_common_bias=use_common_bias,
             dT=dT,
         )
 
@@ -269,9 +269,9 @@ class Scheme:
             print(f"running round {i=} with {steps} steps")
 
             without_bias = first_round_without_bias and i == 1
-            without_ground_bias = (first_round_without_ground_bias and i == 1) or not use_common_bias
+            # without_ground_bias = (first_round_without_ground_bias and i == 1) or not use_common_bias
 
-            print(f"{without_bias=}  {without_ground_bias=}")
+            # print(f"{without_bias=}  {without_ground_bias=}")
 
             if without_bias:
                 print("running first round wihtout biases")
@@ -291,7 +291,7 @@ class Scheme:
                 chunk_size=chunk_size,
                 # T_scale=T_scale,
                 max_grad=max_grad,
-                use_common_bias=not without_ground_bias,
+                # use_common_bias=not without_ground_bias,
                 dT=dT,
                 max_b=max_b,
             )
@@ -339,6 +339,7 @@ class Scheme:
             print(f"{kl_div/kjmol=}")
 
             if kl_div < convergence_kl:
+                print(f"converged {kl_div/kjmol=}")
                 break
         print("done")
 
@@ -369,6 +370,7 @@ class Scheme:
         verbose=False,
         koopman=True,
         equilibration_time=2 * picosecond,
+        n_max_lin=100,
     ):
         self.rounds.update_CV(
             transformer=transformer,
@@ -396,6 +398,7 @@ class Scheme:
             verbose=verbose,
             koopman=koopman,
             equilibration_time=equilibration_time,
+            n_max_lin=n_max_lin,
         )
 
     def transform_CV(

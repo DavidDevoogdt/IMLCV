@@ -52,7 +52,6 @@ dependencies = [ "cloudpickle",
     "umap-learn",
     "work-queue",
     "mace-torch",
-   "openmmforcefields@git+https://github.com/openmm/openmmforcefields.git", "memory-profiler>=0.61.0,<0.62",
 ]
 
 
@@ -145,9 +144,9 @@ cuda12    = { features = ["cuda12"] }
 [tool.pixi.tasks]
 
 [tool.pixi.dependencies]
-python = "3.12.*"
-ruff = ">=0.14.5,<0.15"
-jupyter = ">=1.1.1,<2"
-pre-commit = ">=4.4.0,<5"
-ndcctools = ">=7.15.14,<8"
-pytest = ">=9.0.1,<10"
+python = ">=3.10"
+ruff = "*"
+jupyter = "*"
+pre-commit = "*"
+ndcctools = "*"
+pytest = "*"

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class SlurmLauncher(Launcher):
-    def __init__(self, debug: bool = True, overrides: str = "", image="image.sif"):
+    def __init__(self, debug: bool = True, overrides: str = "", image=None):
         super().__init__(debug=debug)
         self.overrides = overrides
         self.image = image
@@ -42,7 +42,7 @@ module list
 unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 
 
-srun  --nodes=1  -l {overrides} singularity run -B {ROOT_DIR}/src/:/app/src/ {image} {command}
+srun  --nodes=1  -l {overrides} {app} {command}
 
 
 
@@ -50,8 +50,8 @@ srun  --nodes=1  -l {overrides} singularity run -B {ROOT_DIR}/src/:/app/src/ {im
             nodes_per_block=nodes_per_block,
             command=command,
             overrides=self.overrides,
-            image=self.image,
             ROOT_DIR=ROOT_DIR,
+            app=f"singularity run -B {ROOT_DIR}/src/:/app/src/ {self.image}" if self.image is not None else "",
         )
         return x
 
@@ -102,41 +102,42 @@ def get_slurm_provider(
     py_env=None,
     provider="slurm",
     load_cp2k=False,
+    apptainer=True,
 ):
     if py_env is None:
         # if env == "hortense":
 
+        if apptainer:
+            print("setting python env for hortense")
+            py_env = f"""
+cd {ROOT_DIR}
+            """
+    else:
         environment = ("cuda13" if gpu_kind.value == "nvidia" else "rocm") if gpu else "cpu"
 
-        print("setting python env for hortense")
         py_env = f"""
-# echo "init pixi"
+echo "init pixi"
 cd {ROOT_DIR}
 # pwd
-# set -e
-# export PIXI_CACHE_DIR="./.pixi_cache"
-# export PATH="~/.pixi/bin:$PATH"
-# which pixi
+set -e
+export PIXI_CACHE_DIR="./.pixi_cache"
+export PATH="~/.pixi/bin:$PATH"
+which pixi
 
 
-# eval  "$(pixi shell-hook -e {environment} --as-is )"
-# echo "after pixi"
-# which work_queue_worker
-            """
-    # else:
-    #     raise ValueError
+eval  "$(pixi shell-hook -e {environment} --as-is )"
+echo "after pixi"
+which work_queue_worker
+                """
 
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
-
-    # assert threads_per_core is None, "threads_per_core is not tested yet"
 
     worker_init = f"{py_env}\n"
 
     if load_cp2k:
         raise ValueError()
 
-    # only submit 1/ parsl_tasks_per_block blocks at a time
     parallelism = 1 / parsl_tasks_per_block
 
     if threads_per_core is None:
@@ -196,7 +197,7 @@ sleep 1
         "worker_init": worker_init,
         "launcher": SlurmLauncher(
             overrides=overrides,
-            image="image.sif" if not gpu else "image_rocm.sif",
+            image=("image.sif" if not gpu else "image_rocm.sif") if apptainer else None,
         ),
     }
 
@@ -223,7 +224,6 @@ sleep 1
         sheduler_options = f"""
 #SBATCH --cpus-per-task={threads_per_core}
 #SBATCH -v
-
 
  """
 
@@ -327,6 +327,7 @@ def config(
     load_cp2k=False,
     training_on_gpu=False,
     reference_on_gpu=False,
+    apptainer: bool = True,
 ):
     kw = {
         "cpu_cluster": cpu_cluster,
@@ -341,6 +342,7 @@ def config(
     kw["py_env"] = py_env
     kw["executor"] = executor
     kw["account"] = account
+    kw["apptainer"] = apptainer
 
     if not isinstance(cpu_cluster, list) and cpu_cluster is not None:
         cpu_cluster = [cpu_cluster]

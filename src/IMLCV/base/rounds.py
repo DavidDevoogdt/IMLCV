@@ -458,8 +458,8 @@ class Rounds:
         start: int,
         end: int,
         additional_collective_variables: list[CollectiveVariable] | None = None,
-        additional_collective_variable_names: list[str] | None = None,
-        additional_collective_variable_titles: list[str] | None = None,
+        # additional_collective_variable_names: list[str] | None = None,
+        # additional_collective_variable_titles: list[str] | None = None,
         plot_biases=True,
         # folder=".",
         ignore_invalid=True,
@@ -487,12 +487,16 @@ class Rounds:
             additional_collective_variable_titles = []
 
         else:
-            assert additional_collective_variable_names is not None
-            assert additional_collective_variable_titles is not None
+            additional_collective_variable_names = [colvar.cvs_name for colvar in additional_collective_variables]
+            additional_collective_variable_titles = [colvar.name for colvar in additional_collective_variables]
+
+            # assert additional_collective_variable_names is not None
+            # assert additional_collective_variable_titles is not None
 
             ncv_add = len(additional_collective_variables)
-            assert len(additional_collective_variable_names) == ncv_add
-            assert len(additional_collective_variable_titles) == ncv_add
+            # assert len(additional_collective_variable_names) == ncv_add
+            # assert len(additional_collective_variable_titles) == ncv_add
+        print(f"{ncv=} {ncv_add=}")
 
         bias_matrix = []
         data_matrix = []
@@ -555,7 +559,7 @@ class Rounds:
             else:
                 assert _r.tic.T == T
 
-            assert _r.valid or ignore_invalid
+            assert not _r.tic.invalid or ignore_invalid
 
             rn = _r.num_vals
 
@@ -568,10 +572,10 @@ class Rounds:
                     print(f"could not load {c=} {r0=} {i=} {e=}, skipping")
                     continue
 
-                if not _r_i.valid and not ignore_invalid:
+                if _r_i.ti.invalid and not ignore_invalid:
                     continue
 
-                if (not _r_i.finished) and only_finished:
+                if (not _r_i.ti.finished) and only_finished:
                     continue
                 # no points in collection
                 if _r_i.ti.size <= 0:
@@ -1118,6 +1122,7 @@ class Rounds:
         n_skip: int = 0,
         load_sp=True,
         equilibration_time: float | None = 0,
+        use_energies_bincounts: bool = False,
     ) -> DataLoaderOutput:
         if cv is None:
             c = self.cv
@@ -1507,6 +1512,7 @@ class Rounds:
                         recalc_bounds=recalc_bounds,
                         n_hist=n_hist,
                         n_max_lin=n_max_lin,
+                        use_energies=use_energies_bincounts,
                         # return_bias=output_FES_bias,
                     )
                 else:
@@ -2354,6 +2360,11 @@ class Rounds:
 
         return dlo
 
+    def data_loader_cv(self, c: int):
+        from IMLCV.data.DataLoader import DataLoader
+
+        pass
+
     def iter_ase_atoms(
         self,
         r: int | None = None,
@@ -2824,7 +2835,7 @@ class Rounds:
         # T_scale=10,
         macro_chunk=2000,
         lag_n=20,
-        use_common_bias=True,
+        # use_common_bias=True,
         dT=0 * kelvin,
     ):
         if cv_round is None:
@@ -2832,12 +2843,12 @@ class Rounds:
 
         r = self.get_round(c=cv_round)
 
-        if use_common_bias:
-            common_bias_name = self._name_bias(c=cv_round, r=r)
-            assert common_bias_name is not None
-            common_bias_name = self.full_path(common_bias_name)
-        else:
-            common_bias_name = None
+        # if use_common_bias:
+        #     common_bias_name = self._name_bias(c=cv_round, r=r)
+        #     assert common_bias_name is not None
+        #     common_bias_name = self.full_path(common_bias_name)
+        # else:
+        #     common_bias_name = None
 
         common_md_name = self._name_md(c=cv_round, r=r)
         assert common_md_name is not None
@@ -2864,11 +2875,12 @@ class Rounds:
             cv_round=cv_round,
             biases=biases,
             sp0=sp0,
-            common_bias_name=common_bias_name,
+            # common_bias_name=common_bias_name,
             r=r,
             macro_chunk=macro_chunk,
             lag_n=lag_n,
             dT=dT,
+            use_energies=True,
         ).result()
 
         # from parsl.dataflow.dflow import AppFuture
@@ -3111,7 +3123,7 @@ class Rounds:
     def _get_init(
         rounds: Rounds,
         KEY: jax.Array | int,
-        common_bias_name: str | None,
+        # common_bias_name: str | None,
         biases: Sequence[Bias],
         ignore_invalid: bool = False,
         only_finished: bool = True,
@@ -3126,7 +3138,7 @@ class Rounds:
         macro_chunk: int | None = 1000,
         lag_n: int = 20,
         out: int = 20000,
-        use_energies: bool = False,
+        use_energies: bool = True,
         dT=50 * kelvin,
         # divide_by_histogram=True,
     ):
@@ -3139,13 +3151,13 @@ class Rounds:
 
         sp0_provided = sp0 is not None
 
-        common_bias = rounds.get_bias(c=cv_round, r=r)
+        # common_bias = rounds.get_bias(c=cv_round, r=r)
         wall_bias = rounds.get_permanent_bias()
 
         if wall_bias is not None:
             print("using wall bias to get inital points")
 
-        print(f"{common_bias.collective_variable=}")
+        # print(f"{common_bias.collective_variable=}")
 
         if not sp0_provided:
             dlo_data = rounds.data_loader(
@@ -3162,6 +3174,7 @@ class Rounds:
                 only_finished=only_finished,
                 weight=True,
                 weighing_method="BC",
+                use_energies_bincounts=use_energies,  # select according to e^{-beta E_pot} and uniform accross CV space
                 n_max=1e3,
                 # T_scale=T_scale,
                 time_series=False,
@@ -3193,19 +3206,19 @@ class Rounds:
 
             cv_stack = CV.stack(*dlo_data.cv)
 
-            if use_energies:
-                try:
-                    assert dlo_data.ti is not None, "trajectory information is None"
-                    ener_stack = jnp.hstack([x.e_pot for x in dlo_data.ti])  # type: ignore
+            # if use_energies:
+            #     try:
+            #         assert dlo_data.ti is not None, "trajectory information is None"
+            #         ener_stack = jnp.hstack([x.e_pot for x in dlo_data.ti])  # type: ignore
 
-                    if dlo_data.sti.P is not None:
-                        ener_stack += jnp.hstack([x.sp.volume() for x in dlo_data.ti]) * dlo_data.sti.P  # type: ignore
+            #         if dlo_data.sti.P is not None:
+            #             ener_stack += jnp.hstack([x.sp.volume() for x in dlo_data.ti]) * dlo_data.sti.P  # type: ignore
 
-                    print("using energies")
+            #         print("using energies")
 
-                except Exception as e:
-                    print(f"{e=}")
-                    ener_stack = None
+            #     except Exception as e:
+            #         print(f"{e=}")
+            #         ener_stack = None
 
             # get  weights, and correct for ground state bias.
             # this corrects for the fact that the samples are not uniformly distributed
@@ -3215,7 +3228,7 @@ class Rounds:
                 f"The number of initials cvs provided {sp0.shape[0]} does not correspond to the number of biases {len(biases)}"
             )
 
-            ener_stack = None
+            # ener_stack = None
 
             T = rounds.static_trajectory_information().T
 
@@ -3256,10 +3269,10 @@ class Rounds:
 
                 ener = bias.compute_from_cv(cvs=cv_stack, chunk_size=chunk_size)[0]
 
-                if use_energies:
-                    if ener_stack is not None:
-                        # print(f"using energies")
-                        ener += ener_stack
+                # if use_energies:
+                #     if ener_stack is not None:
+                #         # print(f"using energies")
+                #         ener += ener_stack
 
                 ener += e_wall
 
@@ -3401,6 +3414,7 @@ class Rounds:
         koopman: bool = True,
         output_FES_bias=False,
         equilibration_time=5 * picosecond,
+        n_max_lin: int = 100,
     ):
         if cv_round_from is None:
             cv_round_from = self.cv
@@ -3463,6 +3477,7 @@ class Rounds:
             output_FES_bias=output_FES_bias,
             new_r_skin=new_r_skin,
             equilibration_time=equilibration_time,
+            n_max_lin=n_max_lin,
         )
 
         if use_executor:
@@ -3507,6 +3522,7 @@ class Rounds:
         koopman=True,
         output_FES_bias=False,
         equilibration_time=5 * picosecond,
+        n_max_lin: int = 100,
     ):
         if dlo is None:
             # plot_folder = rounds.path(c=cv_round_to)
@@ -3557,6 +3573,7 @@ class Rounds:
             macro_chunk=macro_chunk,
             verbose=verbose,
             koopman=koopman,
+            n_max_lin=n_max_lin,
         )
 
         # update state
@@ -3823,6 +3840,10 @@ class DataLoaderOutput(MyPyTreeNode):
     @property
     def _weights_t(self) -> list[Array] | None:
         return [ti.w_t for ti in self.ti] if self.ti[0].w_t is not None else None
+
+    @property
+    def e_pot(self) -> list[Array] | None:
+        return [ti.e_pot for ti in self.ti] if self.ti[0].e_pot is not None else None
 
     @staticmethod
     def get_histo(
@@ -4669,6 +4690,7 @@ class DataLoaderOutput(MyPyTreeNode):
             _,
             bounds,
             tau_i,
+            _,
         ) = self.get_bincount(
             cv_0,
             n_max=n_max,
@@ -5232,6 +5254,7 @@ class DataLoaderOutput(MyPyTreeNode):
         min_samples: int = 3,
         recalc_bounds=True,
         compute_labels=False,
+        use_energies: bool = False,
     ) -> WeightOutput:
         if cv_0 is None:
             cv_0 = self.cv
@@ -5277,21 +5300,34 @@ class DataLoaderOutput(MyPyTreeNode):
 
         # print(f"capped")
 
-        frac_full, labels, x_labels, num_labels, grid_nums_mask, get_histo, bins, cv_mid, hist_mask, n_hist, _, corr = (
-            self.get_bincount(
-                cv_0,
-                n_max=n_max,
-                n_hist=n_hist,
-                n_max_lin=n_max_lin,
-                margin=margin,
-                chunk_size=chunk_size,
-                samples_per_bin=samples_per_bin,
-                min_samples_per_bin=min_samples,
-                macro_chunk=macro_chunk,
-                verbose=verbose,
-                recalc_bounds=recalc_bounds,
-                compute_labels=compute_labels,
-            )
+        (
+            frac_full,
+            labels,
+            x_labels,
+            num_labels,
+            grid_nums_mask,
+            get_histo,
+            bins,
+            cv_mid,
+            hist_mask,
+            n_hist,
+            _,
+            corr,
+            _log_w,
+        ) = self.get_bincount(
+            cv_0,
+            n_max=n_max,
+            n_hist=n_hist,
+            n_max_lin=n_max_lin,
+            margin=margin,
+            chunk_size=chunk_size,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
+            recalc_bounds=recalc_bounds,
+            compute_labels=compute_labels,
+            use_energies=use_energies,
         )
 
         w_out = []
@@ -5324,7 +5360,7 @@ class DataLoaderOutput(MyPyTreeNode):
             n_b = n_hist[gi]
 
             w = jnp.ones_like(n_b)
-            ps = jnp.ones_like(n_b)
+            ps = jnp.exp(_log_w[i])
             dens = n_b
             n_bin = n_b
 
@@ -5536,6 +5572,9 @@ class DataLoaderOutput(MyPyTreeNode):
     def get_bincount(
         self,
         cv_0: list[CV] | None = None,
+        energies: list[jax.Array] | None = None,
+        temp_energies=None,
+        use_energies=False,
         n_max=1e5,
         n_max_lin: int | None = 150,
         margin=0.0,
@@ -5559,6 +5598,12 @@ class DataLoaderOutput(MyPyTreeNode):
         if bounds is None:
             bounds = self.bounds
 
+        if use_energies:
+            if energies is None:
+                energies = self.e_pot
+            if temp_energies is None:
+                temp_energies = self.sti.T
+
         return DataLoaderOutput._get_bincount(
             cv_0=cv_0,
             n_max=n_max,
@@ -5575,12 +5620,18 @@ class DataLoaderOutput(MyPyTreeNode):
             bounds=bounds,
             correlation_method=correlation_method,
             n_max_lin=n_max_lin,
+            use_energies=use_energies,
+            energies=energies,
+            temp_energies=temp_energies,
         )
 
     @staticmethod
     def _get_bincount(
         cv_0: list[CV],
         metric: CvMetric,
+        use_energies=False,
+        energies: list[jax.Array] | None = None,
+        temp_energies=300 * kelvin,
         n_max=1e5,
         n_hist: int | None = None,
         n_max_lin: int | None = None,
@@ -5679,9 +5730,26 @@ class DataLoaderOutput(MyPyTreeNode):
             if verbose:
                 print("getting histo")
 
+            _log_w = [jnp.full(c.shape[0], 0) for c in cv_0]
+
+            if correlation_method is not None:
+                print(f"using correlation times {tau_i} to rescale histo")
+                _log_w = [_lwi - jnp.log(tau_i) for t, _lwi in zip(tau_i, _log_w)]
+
+            if use_energies:
+                assert energies is not None, "energies must be provided when use_energies is True"
+                assert temp_energies is not None, "temp_energies must be provided when use_energies is True"
+
+                print(f"using provided energies to rescale histo")
+                beta = 1 / (temp_energies * boltzmann)  # temp does not matter
+                _log_w = [_lwi - beta * e for e, _lwi in zip(energies, _log_w)]
+
+                _log_w_max = jnp.max(jnp.hstack(_log_w))
+                _log_w = [_lwi - _log_w_max for _lwi in _log_w]
+
             log_hist = get_histo(
                 grid_nums,
-                [jnp.full(c.shape[0], -jnp.log(t)) for t, c in zip(tau_i, cv_0)] if correlation_method else None,
+                _log_w,
                 log_w=True,
                 macro_chunk=macro_chunk,
                 verbose=verbose,
@@ -5690,11 +5758,12 @@ class DataLoaderOutput(MyPyTreeNode):
             print(f"{min_samples_per_bin=}")
 
             # print(f"{jnp.exp(hist)=}")
-            hist_mask = log_hist >= jnp.log(min_samples_per_bin)  # at least 1 sample
+            # hist_mask = log_hist >= jnp.log(min_samples_per_bin)  # at least 1 sample
+            hist_mask = log_hist > -jnp.inf
 
             print(f"{jnp.sum(hist_mask)=}")
 
-            return cv_mid, nums, bins, closest, get_histo, grid_nums, jnp.exp(log_hist[hist_mask]), hist_mask
+            return cv_mid, nums, bins, closest, get_histo, grid_nums, jnp.exp(log_hist[hist_mask]), hist_mask, _log_w
 
         if n_hist is None:
             if frac_full is None:
@@ -5733,9 +5802,11 @@ class DataLoaderOutput(MyPyTreeNode):
                 print(f"capping n_hist from {n_hist} to {n_max_lin}")
                 n_hist = n_max_lin
 
-        cv_mid, nums, bins, closest, get_histo, grid_nums, _n_hist_mask, hist_mask = get_hist(n_hist)
+        cv_mid, nums, bins, closest, get_histo, grid_nums, _n_hist_mask, hist_mask, _log_w = get_hist(n_hist)
 
         frac_full = jnp.sum(hist_mask) / hist_mask.shape[0]
+
+        print(f"{_n_hist_mask=}")
 
         idx_inv = jnp.full(hist_mask.shape[0], -1)
         idx_inv = idx_inv.at[hist_mask].set(jnp.arange(jnp.sum(hist_mask)))
@@ -5809,6 +5880,7 @@ class DataLoaderOutput(MyPyTreeNode):
             _n_hist_mask,
             grid_bounds,
             tau_i if correlation_method else jnp.ones((len(cv_0),)),
+            _log_w,
         )
 
     @staticmethod
@@ -5890,6 +5962,8 @@ class DataLoaderOutput(MyPyTreeNode):
         batch_size: int = 10000,
         init_learnable_params=True,
         entropy_reg: float = 0.0,
+        target_smoothness: float | None = None,
+        alpha_smooth: float = 0.0,
     ) -> "KoopmanModel":
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
 
@@ -6008,6 +6082,8 @@ class DataLoaderOutput(MyPyTreeNode):
             batch_size=batch_size,
             init_learnable_params=init_learnable_params,
             entropy_reg=entropy_reg,
+            target_smoothness=target_smoothness,
+            alpha_smooth=alpha_smooth,
         )
 
     def filter_nans(
@@ -6368,7 +6444,7 @@ class DataLoaderOutput(MyPyTreeNode):
     ) -> tuple[Bias, StdBias | None, Bias | None, dict]:
         beta = 1 / (T * boltzmann)
 
-        _, _, _, _, grid_nums_mask, get_histo, bins, cv_mid, hist_mask, n_hist_mask, bounds, _ = (
+        _, _, _, _, grid_nums_mask, get_histo, bins, cv_mid, hist_mask, n_hist_mask, bounds, _, _log_w = (
             DataLoaderOutput._get_bincount(
                 cv,
                 metric=collective_variable.metric,
@@ -6987,6 +7063,8 @@ class KoopmanModel(MyPyTreeNode):
 
     constant_threshold: float = 1e-14
     entropy_reg: float = 0.0
+    target_smoothness: float = 20 * kjmol / (boltzmann * 300)
+    alpha_smooth: float = 0.5
 
     @staticmethod
     def create(
@@ -7040,6 +7118,8 @@ class KoopmanModel(MyPyTreeNode):
         init_learnable_params=True,
         min_std=1e-2,  # prevents collapse into singularities
         entropy_reg=0.0,
+        target_smoothness=20 * kjmol / (boltzmann * 300),
+        alpha_smooth=0.5,
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
@@ -7321,8 +7401,16 @@ class KoopmanModel(MyPyTreeNode):
 
             tau = tau if tau is not None else 1.0
 
-            @jax.jit
-            def objective_fn(params, x_0, x_t, w):
+            cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0])
+            dim = cv_out_shape.cv.shape[1]
+
+            print(f"{cv_out_shape.cv.shape=}")
+
+            grid_size = int(1000 ** (1 / dim))
+            print(f"entropy grid size per dim: {grid_size}")
+
+            @partial(jax.jit, static_argnames=["entropy_reg"])
+            def objective_fn(params, x_0, x_t, w, entropy_reg):
                 if generator:
                     learnable_params = params
                 else:
@@ -7372,6 +7460,7 @@ class KoopmanModel(MyPyTreeNode):
                 K = W0 @ cov.rho_01 @ W1.T
 
                 loss = -jnp.sum(K**2)  # vamp-2 score
+                loss_vamp = loss
 
                 if entropy_reg > 0.0:
                     print("computing entropy regularization")
@@ -7382,64 +7471,292 @@ class KoopmanModel(MyPyTreeNode):
 
                     z_0 = jnp.einsum("ni,i,ik->nk", y_0.cv - cov.pi_0, cov.sigma_0_inv, W0.T)
 
-                    jax.debug.print("z mean {} std {}", jnp.mean(z_0, axis=0), jnp.std(z_0, axis=0))
+                    # mean = jnp.einsum("n,nk->k", w, z_0)
+                    # std = jnp.einsum("n,nk,nl->kl", w, (z_0 - mean), (z_0 - mean))
+                    # jax.debug.print("z mean {} std {}", mean, std)
 
                     if add_1:
                         z_0 = z_0[:, :-1]  # remove constant basis
 
-                    # silverman rule
-                    c_inv = (4 / (z_0.shape[0] * (z_0.shape[1] + 2))) ** (-2 / (z_0.shape[1] + 4))
+                    # n_eff = cov.n_eff
+
+                    #  scott rule
+                    # sigma = z_0.shape[0] ** (-1 / (z_0.shape[1] + 4))
+
+                    # jax.debug.print("bandwidth sigma= {}", sigma)
 
                     # print(f"{H_inv.shape=}")
 
-                    def soft_binning_entropy_stable(z_0, w, grid_size=20, range_limit=4.0):
+                    def soft_grad_loss(z_0, w):
                         n_frames, d = z_0.shape
 
-                        # 1. Setup Grid
-                        grid_axis = jnp.linspace(-range_limit, range_limit, grid_size)
-                        grid_coords = jnp.meshgrid(*(grid_axis for _ in range(d)))
-                        grid_points = jnp.stack([g.ravel() for g in grid_coords], axis=-1)  # (G^d, d)
+                        # 1. Anisotropic Scott's Rule (JIT-safe)
+                        # Use jnp.std to get marginal widths for each dimension
+                        # marginal_stds = jnp.std(z_0, axis=0) #std along each dim is 1
+                        # Scott's factor: n^(-1/(d+4))
+                        scott_factor = n_frames ** (-1.0 / (d + 4.0))
+                        sigmas = scott_factor
 
-                        # 2. Kernel parameters
-                        # Whitening is done, so h^2 = 1 / c_inv
-                        h_sq = 1.0 / c_inv
+                        # 2. Determine Bounds (Percentile-based)
+                        # We use jnp.nanpercentile or a simple min/max with padding for speed
+                        # Padding by 3*sigma ensures the Gaussian tails are captured
+                        # compute weighted extreme quantiles (99.9999% interval by default)
+                        # z_0: (n_frames, d), w: (n_frames,)
 
-                        # 3. Compute Log-Memberships
-                        # Instead of exp(-0.5 * dist^2 / h_sq), we stay in log space
+                        q_low_target = 1e-4
+                        q_high_target = 1e4
+
+                        @partial(jax.vmap, in_axes=(1,))
+                        def _wq(x_row):
+                            # x_row: (n,), w: (n,)
+                            # sort values
+                            idx = jnp.argsort(x_row)
+                            xs = x_row[idx]
+                            ws = w[idx]
+
+                            # if all weights zero or sum very small, fallback to min/max
+
+                            c = jnp.cumsum(ws)
+                            c = c / c[-1]
+                            # jnp.interp supports scalar x on jax
+                            low = jnp.interp(q_low_target, c, xs)
+                            high = jnp.interp(q_high_target, c, xs)
+                            return low, high
+
+                        q_low, q_high = _wq(z_0)  # shape (d, 2)
+
+                        # q_low = jnp.min(z_0, axis=0) - 3.0 * sigmas
+                        # q_high = jnp.max(z_0, axis=0) + 3.0 * sigmas
+                        ranges = q_high - q_low
+
+                        # 3. Setup Grid Spacing (Static grid_size, dynamic dx)
+                        dxs = ranges / (grid_size - 1.0)
+                        dv = jnp.prod(dxs)
+
+                        # Create normalized grid coordinates [0, 1] and scale to [q_low, q_high]
+                        linspaces = jnp.linspace(0, 1, grid_size)
+                        # Use jnp.stack + meshgrid for a d-dimensional coordinate tensor
+                        grid_coords = jnp.meshgrid(*[linspaces] * d, indexing="ij")
+                        # Rescale meshgrid to physical units
+                        grid_points = jnp.stack([q_low[i] + g * ranges[i] for i, g in enumerate(grid_coords)], axis=-1)
+                        flat_grid = grid_points.reshape(-1, d)
+
+                        # 4. Density Computation (Vectorized)
                         @jax.vmap
-                        def compute_log_unnormalized_density(grid_p):
-                            print(f"{z_0.shape=} {grid_p.shape=} ")
+                        def compute_log_p(grid_p):
+                            # Mahalanobis-like distance for anisotropic kernels
+                            # sq_dist = sum( ((z - p) / sigma)^2 )
+                            normalized_dist_sq = jnp.sum(jnp.square((z_0 - grid_p) / sigmas), axis=-1)
+                            return jax.nn.logsumexp(-0.5 * normalized_dist_sq, b=w)
 
-                            # Distance from one grid point to all CV points
-                            sq_dist = jnp.sum((z_0 - grid_p) ** 2, axis=-1)
-                            log_kernels = -0.5 * sq_dist / h_sq
+                        log_p_flat = compute_log_p(flat_grid)
 
-                            # We need to account for weights: log(sum(w * exp(log_kernels)))
-                            # This is exactly what jax.nn.logsumexp supports with the 'b' (weights) argument
-                            return jax.nn.logsumexp(log_kernels, b=w)
+                        # Normalize such that integral P dV = 1
+                        # log(P_norm) = log(P_unnorm) - logsumexp(log_p_unnorm) - log(dV)
+                        log_p_normalized = log_p_flat - jax.nn.logsumexp(log_p_flat) - jnp.log(dv)
 
-                        # log_p_bins: (grid_size**d,)
-                        log_p_bins = compute_log_unnormalized_density(grid_points)
+                        # Reshape for gradient calculation
+                        log_p_grid = log_p_normalized.reshape(*([grid_size] * d))
+                        sqrt_p_grid = jnp.exp((alpha_smooth / 2) * log_p_grid)
 
-                        # 4. Normalize the Log-Distribution
-                        # We want p_i = exp(log_p_i) / sum(exp(log_p_j))
-                        # So log(p_i) = log_p_i - logsumexp(log_p_all)
-                        log_p_normalized = log_p_bins - jax.nn.logsumexp(log_p_bins)
+                        # 5. Gradient Calculation
+                        # jnp.gradient works on the full tensor. We pass the scalar dx for each axis
+                        # 4* | grad sqrt(P) |^2 = P * (grad log P)^2
+                        # Note: jnp.gradient returns a list. We sum the squares of each component.
+                        grads = jnp.gradient(sqrt_p_grid, *[dxs[i] for i in range(d)])
 
-                        # 5. Shannon Entropy: H = -sum(p * log(p))
-                        # Since we have log(p), this is -sum(exp(log_p) * log_p)
-                        p_normalized = jnp.exp(log_p_normalized)
-                        entropy = -jnp.sum(p_normalized * log_p_normalized)
+                        # Fisher Information = 4 * integral ||grad sqrt(P)||^2 dV
+                        sum_grad_sq = (2.0 / alpha_smooth) ** 2 * sum(jnp.sum(jnp.square(g)) for g in grads) * dv
 
-                        return -entropy  # Return negative entropy to minimize
+                        sum_p = jnp.sum(jnp.exp(log_p_normalized * alpha_smooth)) * dv
 
-                    # Integration into your loss
-                    loss_entropy = soft_binning_entropy_stable(z_0, w)
+                        smoothness = sum_grad_sq / sum_p
 
-                    jax.debug.print("Entropy loss: {le}", le=loss_entropy)
-                    jax.debug.print("Current total loss before entropy: {l}", l=loss)
+                        return smoothness
 
-                    loss += entropy_reg * loss_entropy
+                    # # 4. Normalize the Log-Distribution
+                    # # We want p_i = exp(log_p_i) / sum(exp(log_p_j))
+                    # # So log(p_i) = log_p_i - logsumexp(log_p_all)
+                    # log_p_normalized = log_p_bins - jax.nn.logsumexp(log_p_bins)
+
+                    # # 5. Shannon Entropy: H = -sum(p * log(p))
+                    # # Since we have log(p), this is -sum(exp(log_p) * log_p)
+                    # p_normalized = jnp.exp(log_p_normalized)
+                    # entropy = -jnp.sum(p_normalized * log_p_normalized)
+
+                    # return entropy + log_dV
+                    def soft_binning_integral_regularizer(z_0, w, alpha=0.15, grid_size=32, radius=1.5):
+                        n_frames, d = z_0.shape
+
+                        # # 1. Setup Grid (3 std devs around mean)
+                        # q_low = -3.0
+                        # q_high = 3.0
+                        # ranges = q_high - q_low
+                        # dxs = ranges / (grid_size - 1)
+
+                        # def wider_soft_binning(z_0, w, grid_size=32, radius=1.5):
+                        #     n_frames, d = z_0.shape
+
+                        # 1. Fixed Grid (Assuming normalized data)
+                        # q_low, q_high = jnp.full((d,), -3.5), jnp.full((d,), 3.5)
+
+                        # q_low_target = 1e-3
+                        # q_high_target = 1 - q_low_target
+
+                        # @partial(jax.vmap, in_axes=(1,))
+                        # def _wq(x_row):
+                        #     # 1. Get the sort order for the CV values
+                        #     idx = jnp.argsort(x_row)
+
+                        #     # 2. Sort BOTH the values and the weights using that index
+                        #     xs = x_row[idx]
+                        #     ws = w[idx]  # <--- CRITICAL: must match the sort of x_row
+
+                        #     # 3. Calculate the CDF
+                        #     c = jnp.cumsum(ws)
+                        #     total_w = c[-1]
+
+                        #     # Safety check for zero-weight batches
+                        #     c = jnp.where(total_w > 1e-10, c / total_w, jnp.linspace(0, 1, len(c)))
+
+                        #     # 4. Interpolate to find the quantiles
+                        #     low = jnp.interp(q_low_target, c, xs)
+                        #     high = jnp.interp(q_high_target, c, xs)
+
+                        #     return low, high
+
+                        # q_low, q_high = _wq(z_0)
+
+                        # # q_low = jnp.minimum(q_low, -3.0)
+                        # # q_high = jnp.maximum(q_high, 3.0)
+
+                        # jax.debug.print("min {} max {}", q_low, q_high)
+
+                        # 3std in each dim
+                        q_low = jnp.full((d,), -3.0)
+                        q_high = jnp.full((d,), 3.0)
+
+                        ranges = jax.lax.stop_gradient(q_high - q_low)
+                        dxs = ranges / (grid_size - 1)
+                        dv = jnp.prod(dxs)
+
+                        # 2. Map coordinates to grid-index space
+                        # u is the position in floating-point index units
+                        u = (z_0 - q_low) / (q_high - q_low) * (grid_size - 1)
+
+                        grid_indices = jnp.arange(grid_size)
+
+                        # 3. Calculate distances to all indices
+                        # shape: (n_frames, grid_size, d)
+                        dists = jnp.abs(u[:, None, :] - grid_indices[None, :, None])
+
+                        # 4. Quartic/Biweight Kernel (Softer than Triangular)
+                        # Scaled by 'radius' to ensure points are spread over more bins
+                        # normalized_dists = dists / radius
+
+                        # Kernel = (1 - d^2)^2
+                        weights_bins = jnp.maximum(0.0, 1.0 - dists)
+                        # weights_bins = jnp.where(normalized_dists < 1.0, (1.0 - normalized_dists**2) ** 2, 0.0)
+
+                        # Normalize weights so each point sums to 1.0 per dimension
+                        weights_bins = weights_bins / (jnp.sum(weights_bins, axis=1, keepdims=True) + 1e-10)
+
+                        # # 2. Soft Binning (Triangular/Linear)
+                        # # We project points onto the grid indices
+                        # u = (z_0 - q_low) / ranges * (grid_size - 1)
+                        # grid_axis = jnp.linspace(0, grid_size - 1, grid_size)
+
+                        # # Distance to all bin centers per dimension: (n_frames, grid_size, d)
+                        # dists = jnp.abs(u[:, None, :] - grid_axis[None, :, None])
+                        # # Triangular weights (local binning)
+                        # weights_bins = jnp.maximum(0.0, 1.0 - dists)
+
+                        w = w**alpha
+
+                        # Construct d-dimensional histogram
+                        if d == 2:
+                            p_grid = jnp.einsum("ni,nj,n->ij", weights_bins[:, :, 0], weights_bins[:, :, 1], w)
+                        elif d == 3:
+                            p_grid = jnp.einsum(
+                                "ni,nj,nk,n->ijk",
+                                weights_bins[:, :, 0],
+                                weights_bins[:, :, 1],
+                                weights_bins[:, :, 2],
+                                w,
+                            )
+                        else:
+                            # Fallback for higher d
+                            p_grid = weights_bins[:, :, 0]
+                            for i in range(1, d):
+                                p_grid = p_grid[:, :, None] * weights_bins[:, None, :, i]
+                            p_grid = jnp.sum(p_grid * w[:, None, ...], axis=0)
+
+                        # 3. Stabilize and Normalize
+                        # epsilon = 1e-10
+                        # p_grid = (p_grid + epsilon) / (jnp.sum(p_grid + epsilon) * dv)
+
+                        # psi = jnp.pow(p_grid, alpha)
+                        # psi /= jnp.sum(psi)
+
+                        p_grid /= jnp.sum(p_grid) * dv
+                        p_grid_safe = jnp.where(p_grid == 0, 1.0, p_grid)
+
+                        # compute entropy
+                        return -jnp.sum(jnp.where(p_grid == 0, 0, p_grid_safe * jnp.log(p_grid_safe))) * dv
+
+                        # 2. power trick p^alpha
+
+                        # # 3. Compute Gradients of the transformed density
+                        # # jnp.gradient uses central differences
+                        # grads_psi = jnp.gradient(psi, *[dxs[i] for i in range(d)])
+
+                        # # 4. The Integrated Square Gradient
+                        # # This is the 'proper integral' (sum of grad^2 * dV)
+                        # total_grad_sq = sum(jnp.sum(jnp.square(g)) for g in grads_psi) * dv
+
+                        # # 5. Scaling to return to Fisher Information units
+                        # scaling = (2.0 / alpha) ** 2
+                        # # Renormalize by the 'Mass' of the weighting
+                        # total_power_mass = jnp.sum(jnp.square(psi)) * dv
+
+                        # total_smoothness = scaling * total_grad_sq / total_power_mass
+                        # return total_smoothness / dim
+
+                    # total_smoothness = soft_binning_integral_regularizer(
+                    #     z_0, w, grid_size=grid_size, alpha=alpha_smooth
+                    # )
+
+                    # entropy scales as dim, divide by dim
+
+                    entropy = soft_binning_integral_regularizer(z_0, w, grid_size=grid_size, alpha=alpha_smooth)
+                    # entropy of gaussian with unit variance, scaled by alpha_smooth (p->p^alpha)
+                    entropy_gauss = (dim / 2) * jnp.log(2 * jnp.pi * jnp.exp(1)) - dim / 2 * jnp.log(alpha_smooth)
+
+                    # we want to scale this loss with dim, such that entropy_reg ~ 0.1 works well
+                    total_entropy = entropy / entropy_gauss
+
+                    # jax.debug.print("vamp: {}  entropy {} ", loss, total_entropy)
+
+                    # # Integration into your loss
+                    # total_smoothness = soft_grad_loss(z_0, w)
+
+                    # total_smoothness = 1.0 / (total_entropy + 1e-10)
+
+                    # _target_smoothness = target_smoothness**2
+
+                    # loss_smooth = jnp.maximum(0, total_smoothness / _target_smoothness - 1) ** 2
+
+                    # jax.debug.print(
+                    #     "vamp: {}  sqrt(< ||grad F ||^2 >)  {} kj/mol loss {} ",
+                    #     loss,
+                    #     jnp.sqrt(total_smoothness) * ((boltzmann * 300) / kjmol),
+                    #     loss_smooth,
+                    # )
+                    # jax.debug.print("Current total loss before entropy: {l}", l=loss)
+
+                    # vamp scales as d, entropy_reg should be arround 0.1
+                    # max entropy
+                    loss -= dim * entropy_reg * total_entropy
 
                     # # @jax.vmap
                     # def _entropy(z):
@@ -7460,6 +7777,8 @@ class KoopmanModel(MyPyTreeNode):
                     # entropy = jnp.sum(jax.lax.map(_entropy, (y_0.cv, w)))
 
                     # loss -= entropy_reg * entropy
+                else:
+                    total_entropy = jnp.array(0.0)
 
                 # # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
                 # # dl, _ = jnp.linalg.eigh(dK)
@@ -7494,27 +7813,46 @@ class KoopmanModel(MyPyTreeNode):
 
                 # loss = -jnp.sum(K**2)
 
-                return loss, (None)
+                return loss, (
+                    loss_vamp,
+                    total_entropy,
+                )
 
-            optimizer = optax.adamw(learning_rate=1e-4, weight_decay=1e-5)
+            # optimizer = optax.adamw(learning_rate=1e-4, weight_decay=1e-2)
+            optimizer = optax.lbfgs()
 
-            cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0])
             # lambdas = jnp.zeros((cv_out_shape.cv.shape[1],))
 
             # # Initialize the optimizer state
             opt_state = optimizer.init(learable_params)
 
-            @jax.jit
-            def _body_fun(opt_state, params, x0, xt, w):
-                (loss_val, _), grads = jax.value_and_grad(objective_fn, has_aux=True)(params, x0, xt, w)
+            @partial(jax.jit, static_argnames=["entropy_reg"])
+            def _body_fun(opt_state, params, x0, xt, w, entropy_reg):
+                (
+                    (
+                        loss_val,
+                        (
+                            loss_vamp,
+                            total_entropy,
+                        ),
+                    ),
+                    grads,
+                ) = jax.value_and_grad(objective_fn, has_aux=True)(params, x0, xt, w, entropy_reg)
                 print(f"loss_val {loss_val} {grads=}")
 
-                updates, opt_state = optimizer.update(grads, opt_state, params)
+                updates, opt_state = optimizer.update(
+                    grads,
+                    opt_state,
+                    params,
+                    value=loss_val,
+                    grad=grads,
+                    value_fn=lambda p: objective_fn(p, x0, xt, w, entropy_reg)[0],
+                )
 
                 print(f"{updates=}")
                 params = optax.apply_updates(params, updates)
 
-                return opt_state, params, loss_val, _
+                return opt_state, params, loss_val, loss_vamp, total_entropy
 
             x_0_stack = CV.stack(*cv_0) if isinstance(cv_0[0], CV) else SystemParams.stack(*cv_0)
             x_t_stack = (
@@ -7524,15 +7862,57 @@ class KoopmanModel(MyPyTreeNode):
             )
             w_tot_stack = jnp.hstack(w_tot)
 
+            # # first do a rough optimization without entropy
+            # print("Starting pre-optimization without entropy regularization")
+            # for epoch in range(epochs // 5):
+            #     opt_state, learable_params, loss_train, loss_vamp, total_smoothness = _body_fun(
+            #         opt_state, learable_params, x_0_stack, x_t_stack, w_tot_stack, 0.0
+            #     )
+
+            #     if epoch % print_nonlin_every == 0:
+            #         print(
+            #             f"{epoch=} loss vamp {loss_vamp=} smoothness {jnp.sqrt(total_smoothness) * (boltzmann * 300 / (kjmol))} kJ/mol"
+            #         )
+
+            # print("Starting main optimization with entropy regularization")
+
             for epoch in range(epochs):
-                opt_state, learable_params, loss_train, _ = _body_fun(
-                    opt_state, learable_params, x_0_stack, x_t_stack, w_tot_stack
+                opt_state, learable_params, loss_train, loss_vamp, total_entropy = _body_fun(
+                    opt_state, learable_params, x_0_stack, x_t_stack, w_tot_stack, entropy_reg
                 )
 
-                # # compute validation loss
-                # loss_val, _ = objective_fn(learable_params, x_0_val, x_t_val, w_val)
+                patience = 20
+                min_delta = 1e-5
 
-                print(f"{epoch=}  {loss_train=}   ")
+                if epoch == 0:
+                    best_loss = loss_train
+                    best_params = learable_params
+                    no_improve = 0
+                else:
+                    # stop on NaN / Inf
+                    if not jnp.isfinite(loss_train):
+                        print("Loss became non-finite, restoring best params and stopping early")
+                        learable_params = best_params
+                        break
+
+                    # improvement check
+                    if loss_train < best_loss - min_delta:
+                        best_loss = loss_train
+                        best_params = learable_params
+                        no_improve = 0
+                    else:
+                        no_improve += 1
+
+                    # patience reached -> stop
+                    if no_improve >= patience:
+                        print(
+                            f"Early stopping at epoch {epoch} (no improvement for {patience} epochs). Best loss={float(best_loss):.6e}"
+                        )
+                        learable_params = best_params
+                        break
+
+                if epoch % print_nonlin_every == 0:
+                    print(f"{epoch=} loss vamp {loss_vamp=} entropy {total_entropy} ")
 
             # create random K-folds splits and pick one validation fold
 
@@ -7772,6 +8152,8 @@ class KoopmanModel(MyPyTreeNode):
             # periodicities=periodicities,
             argmask_s=argmask_s if only_diag else None,
             entropy_reg=entropy_reg,
+            target_smoothness=target_smoothness,
+            alpha_smooth=alpha_smooth,
         )
 
         return km
@@ -8197,6 +8579,8 @@ class KoopmanModel(MyPyTreeNode):
             use_w=self.use_w,
             generator=self.generator,
             entropy_reg=self.entropy_reg,
+            target_smoothness=self.target_smoothness,
+            alpha_smooth=self.alpha_smooth,
             # periodicities=self.periodicities,
             # argmask_s=self.argmask_s,
         )

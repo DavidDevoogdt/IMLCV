@@ -281,6 +281,14 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         self.cv_orig = value.cv
 
     @property
+    def cv_orig(self) -> Array | None:
+        return self._get("_cv_orig")
+
+    @cv_orig.setter
+    def cv_orig(self, value: Array):
+        self._set("_cv_orig", value)
+
+    @property
     def positions(self) -> Array | None:
         return self._get("_positions")
 

@@ -10,7 +10,7 @@ from IMLCV.base.CV import CV, CvMetric, CvTrans, NeighbourList, SystemParams
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
 from IMLCV.base.rounds import Covariances, DataLoaderOutput
-from IMLCV.base.UnitsConstants import nanosecond
+from IMLCV.base.UnitsConstants import boltzmann, kjmol, nanosecond, picosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize
 
 
@@ -482,6 +482,8 @@ class TransformerMAF(Transformer):
     generator: bool = False
     entropy_reg: float = 0.0
     shrink: bool = True
+    target_smoothness: float = 20 * kjmol / (boltzmann * 300)
+    alpha_smooth: float = 0.1  # barrier of 10 kT
 
     @staticmethod
     def _transform(
@@ -641,6 +643,8 @@ class TransformerMAF(Transformer):
                 periodicities=self.periodicities,
                 epochs=self.epochs,
                 entropy_reg=self.entropy_reg,
+                target_smoothness=self.target_smoothness,
+                alpha_smooth=self.alpha_smooth,
                 # shrinkage_method="BC",
             )
 

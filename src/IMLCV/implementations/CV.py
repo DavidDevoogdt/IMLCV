@@ -1090,6 +1090,8 @@ def linear_layer(
         # assert M >= N, "for ortho linear layer, M must be >= N"
         K = max(M, N)
         _weights = jnp.ones((K * (K - 1) // 2))
+    else:
+        raise ValueError(f"kind {kind} not recognized in linear layer")
 
     return CvTrans.from_cv_function(
         _linear_layer,
@@ -1282,6 +1284,45 @@ def scale_cv_trans(array: CV, lower: float = 0.0, upper: float = 1.0, periodic: 
     print(f"{mini=}, {maxi=}, {diff=} {upper=} {lower=} ")
 
     return CvTrans.from_cv_function(_scale_cv_trans, upper=upper, lower=lower, mini=mini, diff=diff)
+
+
+def _apply_learnable_scale(
+    kwargs,
+    static_kwargs,
+):
+    print(f"apply rule learnable scale")
+
+    scale = kwargs["_scale"]
+
+    kwargs["scale"] = jnp.exp(scale)
+
+    print(f"{kwargs=}")
+
+    return kwargs
+
+
+def _learnable_scale_cv_trans(
+    x,
+    nl,
+    shmap,
+    shmap_kwargs,
+    scale: jax.Array,
+    _scale: jax.Array | None = None,
+):
+    return x.replace(cv=x.cv * scale)
+
+
+def learnable_scale_cv_trans(initial_scale: jax.Array) -> CvTrans:
+    return CvTrans.from_cv_function(
+        _learnable_scale_cv_trans,
+        _scale=initial_scale,
+        scale=_apply_learnable_scale(
+            kwargs={"_scale": initial_scale},
+            static_kwargs={},
+        )["scale"],
+        learnable_argnames=("_scale",),
+        apply_rule=_apply_learnable_scale,
+    )
 
 
 def _trunc_svd(x: CV, nl: NeighbourList | None, shmap, shmap_kwargs, m_atomic, v, cvi_shape):
