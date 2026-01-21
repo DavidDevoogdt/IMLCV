@@ -1896,7 +1896,17 @@ class Rounds:
 
                 print("new choice")
 
-                ps_stack = jnp.where(jnp.hstack(nb) != 0, jnp.hstack(ps) / jnp.hstack(nb), 0) * jnp.hstack(weight_wall)
+                ps_stack = jnp.where(
+                    jnp.logical_and(
+                        jnp.logical_and(
+                            jnp.hstack(nb) != 0,
+                            jnp.isfinite(jnp.hstack(nb)),
+                        ),
+                        jnp.isfinite(jnp.hstack(ps)),
+                    ),
+                    jnp.hstack(ps) / jnp.hstack(nb),
+                    0,
+                ) * jnp.hstack(weight_wall)
                 # ps_stack = jnp.hstack(ps)
 
                 assert jnp.isfinite(ps_stack).all(), "rho_stack contains non-finite values"
@@ -3176,6 +3186,7 @@ class Rounds:
                 weighing_method="BC",
                 use_energies_bincounts=use_energies,  # select according to e^{-beta E_pot} and uniform accross CV space
                 n_max=1e3,
+                n_max_lin=20,
                 # T_scale=T_scale,
                 time_series=False,
                 chunk_size=chunk_size,
@@ -3205,6 +3216,8 @@ class Rounds:
                 e_wall = 0.0
 
             cv_stack = CV.stack(*dlo_data.cv)
+
+            # w = jnp.hstack(dlo_data._weights) * jnp.exp(-e_wall * beta) * jnp.hstack(dlo_data._rho)
 
             # if use_energies:
             #     try:
@@ -5243,7 +5256,7 @@ class DataLoaderOutput(MyPyTreeNode):
         self,
         samples_per_bin: int = 10,
         n_max: float | int = 1e5,
-        n_max_lin: float | int = 150,
+        n_max_lin: float | int = 50,
         n_hist: int | None = None,
         chunk_size: int | None = None,
         cv_0: list[CV] | None = None,
@@ -5300,6 +5313,21 @@ class DataLoaderOutput(MyPyTreeNode):
 
         # print(f"capped")
 
+        # frac_full,
+        # labels,
+        # x_labels,
+        # num_labels,
+        # grid_nums_mask,
+        # get_histo,
+        # bins,
+        # cv_mid,
+        # hist_mask,
+        # _n_hist_mask,
+        # w_hist_mask,
+        # grid_bounds,
+        # tau_i if correlation_method else jnp.ones((len(cv_0),)),
+        # _log_w,
+
         (
             frac_full,
             labels,
@@ -5311,6 +5339,7 @@ class DataLoaderOutput(MyPyTreeNode):
             cv_mid,
             hist_mask,
             n_hist,
+            # w_hist,
             _,
             corr,
             _log_w,
@@ -5329,6 +5358,8 @@ class DataLoaderOutput(MyPyTreeNode):
             compute_labels=compute_labels,
             use_energies=use_energies,
         )
+
+        # print(f"{n_hist=} {w_hist=}")
 
         w_out = []
         ps_out = []
@@ -5361,7 +5392,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
             w = jnp.ones_like(n_b)
             ps = jnp.exp(_log_w[i])
-            dens = n_b
+
+            dens = jnp.ones_like(n_b)
             n_bin = n_b
 
             w_out.append(w)
@@ -5730,11 +5762,21 @@ class DataLoaderOutput(MyPyTreeNode):
             if verbose:
                 print("getting histo")
 
-            _log_w = [jnp.full(c.shape[0], 0) for c in cv_0]
+            _log_n = [jnp.full(c.shape[0], 0) for c in cv_0]
 
             if correlation_method is not None:
                 print(f"using correlation times {tau_i} to rescale histo")
-                _log_w = [_lwi - jnp.log(tau_i) for t, _lwi in zip(tau_i, _log_w)]
+                _log_n = [_lwi - jnp.log(tau_i) for t, _lwi in zip(tau_i, _log_n)]
+
+            log_hist_k = get_histo(
+                grid_nums,
+                _log_n,
+                log_w=True,
+                macro_chunk=macro_chunk,
+                verbose=verbose,
+            )
+
+            # print(f"{log_hist_k=}")
 
             if use_energies:
                 assert energies is not None, "energies must be provided when use_energies is True"
@@ -5742,28 +5784,63 @@ class DataLoaderOutput(MyPyTreeNode):
 
                 print(f"using provided energies to rescale histo")
                 beta = 1 / (temp_energies * boltzmann)  # temp does not matter
-                _log_w = [_lwi - beta * e for e, _lwi in zip(energies, _log_w)]
+                _log_w = [-beta * e for e in energies]
 
-                _log_w_max = jnp.max(jnp.hstack(_log_w))
-                _log_w = [_lwi - _log_w_max for _lwi in _log_w]
+                log_e_pot_ik = jnp.zeros((len(cv_0), log_hist_k.shape[0]))
+                log_hist_ik = jnp.zeros((len(cv_0), log_hist_k.shape[0]))
 
-            log_hist = get_histo(
-                grid_nums,
-                _log_w,
-                log_w=True,
-                macro_chunk=macro_chunk,
-                verbose=verbose,
-            )
+                for i, (_log_wi, gi) in enumerate(zip(_log_w, grid_nums)):
+                    _log_hist_w_ik = get_histo(
+                        [gi],
+                        [_log_wi],
+                        log_w=True,
+                        macro_chunk=macro_chunk,
+                        verbose=False,
+                    )
+
+                    log_e_pot_ik = log_e_pot_ik.at[i, :].set(_log_hist_w_ik)
+
+                    print(".", end="", flush=True)
+                    if (i + 1) % 100 == 0:
+                        print("")
+
+                print("done")
+
+                x_max_k = jnp.max(log_e_pot_ik, axis=0, keepdims=True)
+
+                log_e_pot_k = jnp.log(jnp.sum(jnp.exp(log_e_pot_ik - x_max_k), axis=0)) + x_max_k.reshape(-1)
+
+                log_w_ik = log_e_pot_ik - log_e_pot_k.reshape(1, -1)  # + log_hist_ik
+
+                _log_w = [log_w_ik[i, gi.cv.reshape((-1,))] for i, gi in enumerate(grid_nums)]
+
+            else:
+                _log_w = [jnp.zeros_like(c.cv.reshape(-1)) for c in cv_0]
+
+            # print(f"{grid_nums=}")
+
+            # this is chosen such that if you sampling according to w/nb, you get weight 1 per bin on average.
 
             print(f"{min_samples_per_bin=}")
 
             # print(f"{jnp.exp(hist)=}")
             # hist_mask = log_hist >= jnp.log(min_samples_per_bin)  # at least 1 sample
-            hist_mask = log_hist > -jnp.inf
+            hist_mask = log_hist_k > -jnp.inf
 
             print(f"{jnp.sum(hist_mask)=}")
 
-            return cv_mid, nums, bins, closest, get_histo, grid_nums, jnp.exp(log_hist[hist_mask]), hist_mask, _log_w
+            return (
+                cv_mid,
+                nums,
+                bins,
+                closest,
+                get_histo,
+                grid_nums,
+                jnp.exp(log_hist_k[hist_mask]),
+                # jnp.exp(log_hist_w[hist_mask]),
+                hist_mask,
+                _log_w,
+            )
 
         if n_hist is None:
             if frac_full is None:
@@ -5778,7 +5855,7 @@ class DataLoaderOutput(MyPyTreeNode):
                     )
 
                     # pre test to get empty fraction
-                    cv_mid, nums, bins, closest, get_histo, grid_nums, _n_hist_mask, hist_mask = get_hist(n_hist)
+                    cv_mid, nums, bins, closest, get_histo, grid_nums, _n_hist_mask, hist_mask, _ = get_hist(n_hist)
 
                     frac_full = jnp.sum(hist_mask) / hist_mask.shape[0]
 
@@ -5878,6 +5955,7 @@ class DataLoaderOutput(MyPyTreeNode):
             cv_mid,
             hist_mask,
             _n_hist_mask,
+            # w_hist_mask,
             grid_bounds,
             tau_i if correlation_method else jnp.ones((len(cv_0),)),
             _log_w,
@@ -7395,8 +7473,6 @@ class KoopmanModel(MyPyTreeNode):
 
             import optax
 
-            eta = 0.1
-
             assert not generator
 
             tau = tau if tau is not None else 1.0
@@ -7404,9 +7480,9 @@ class KoopmanModel(MyPyTreeNode):
             cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0])
             dim = cv_out_shape.cv.shape[1]
 
-            print(f"{cv_out_shape.cv.shape=}")
+            print(f"{cv_out_shape.cv.shape=} {alpha_smooth=} {entropy_reg=} ")
 
-            grid_size = int(1000 ** (1 / dim))
+            grid_size = int(2000 ** (1 / dim))
             print(f"entropy grid size per dim: {grid_size}")
 
             @partial(jax.jit, static_argnames=["entropy_reg"])
@@ -7627,14 +7703,14 @@ class KoopmanModel(MyPyTreeNode):
 
                         # q_low, q_high = _wq(z_0)
 
-                        # # q_low = jnp.minimum(q_low, -3.0)
-                        # # q_high = jnp.maximum(q_high, 3.0)
+                        q_low = jnp.min(z_0, axis=0)
+                        q_high = jnp.max(z_0, axis=0)
 
                         # jax.debug.print("min {} max {}", q_low, q_high)
 
                         # 3std in each dim
-                        q_low = jnp.full((d,), -3.0)
-                        q_high = jnp.full((d,), 3.0)
+                        # q_low = jnp.full((d,), -3.0)
+                        # q_high = jnp.full((d,), 3.0)
 
                         ranges = jax.lax.stop_gradient(q_high - q_low)
                         dxs = ranges / (grid_size - 1)
@@ -7876,40 +7952,38 @@ class KoopmanModel(MyPyTreeNode):
 
             # print("Starting main optimization with entropy regularization")
 
+            best_loss = jnp.inf
+            best_params = learable_params
+            no_improve = 0
+            patience = 50
+            min_delta = 1e-6
+
             for epoch in range(epochs):
                 opt_state, learable_params, loss_train, loss_vamp, total_entropy = _body_fun(
                     opt_state, learable_params, x_0_stack, x_t_stack, w_tot_stack, entropy_reg
                 )
 
-                patience = 20
-                min_delta = 1e-5
+                # stop on NaN / Inf
+                if not jnp.isfinite(loss_train):
+                    print("Loss became non-finite, restoring best params and stopping early")
+                    learable_params = best_params
+                    break
 
-                if epoch == 0:
+                # improvement check
+                if loss_train < best_loss - min_delta:
                     best_loss = loss_train
                     best_params = learable_params
                     no_improve = 0
                 else:
-                    # stop on NaN / Inf
-                    if not jnp.isfinite(loss_train):
-                        print("Loss became non-finite, restoring best params and stopping early")
-                        learable_params = best_params
-                        break
+                    no_improve += 1
 
-                    # improvement check
-                    if loss_train < best_loss - min_delta:
-                        best_loss = loss_train
-                        best_params = learable_params
-                        no_improve = 0
-                    else:
-                        no_improve += 1
-
-                    # patience reached -> stop
-                    if no_improve >= patience:
-                        print(
-                            f"Early stopping at epoch {epoch} (no improvement for {patience} epochs). Best loss={float(best_loss):.6e}"
-                        )
-                        learable_params = best_params
-                        break
+                # patience reached -> stop
+                if no_improve >= patience:
+                    print(
+                        f"Early stopping at epoch {epoch} (no improvement for {patience} epochs). Best loss={float(best_loss):.6e}"
+                    )
+                    learable_params = best_params
+                    break
 
                 if epoch % print_nonlin_every == 0:
                     print(f"{epoch=} loss vamp {loss_vamp=} entropy {total_entropy} ")
