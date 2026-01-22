@@ -7190,7 +7190,7 @@ class KoopmanModel(MyPyTreeNode):
         exp_period=True,
         vamp_r=2,
         iters_nonlin=int(1e4),
-        print_nonlin_every=10,
+        print_nonlin_every=1,
         epochs=2000,
         batch_size=10000,
         init_learnable_params=True,
@@ -7703,14 +7703,14 @@ class KoopmanModel(MyPyTreeNode):
 
                         # q_low, q_high = _wq(z_0)
 
-                        q_low = jnp.min(z_0, axis=0)
-                        q_high = jnp.max(z_0, axis=0)
+                        # q_low = jnp.min(z_0, axis=0)
+                        # q_high = jnp.max(z_0, axis=0)
 
-                        # jax.debug.print("min {} max {}", q_low, q_high)
+                        jax.debug.print("min {} max {}", jnp.min(z_0, axis=0), jnp.max(z_0, axis=0))
 
                         # 3std in each dim
-                        # q_low = jnp.full((d,), -3.0)
-                        # q_high = jnp.full((d,), 3.0)
+                        q_low = jnp.full((d,), -5.0)
+                        q_high = jnp.full((d,), 5.0)
 
                         ranges = jax.lax.stop_gradient(q_high - q_low)
                         dxs = ranges / (grid_size - 1)
@@ -7955,8 +7955,8 @@ class KoopmanModel(MyPyTreeNode):
             best_loss = jnp.inf
             best_params = learable_params
             no_improve = 0
-            patience = 50
-            min_delta = 1e-6
+            patience = 20
+            min_delta = 1e-4
 
             for epoch in range(epochs):
                 opt_state, learable_params, loss_train, loss_vamp, total_entropy = _body_fun(
