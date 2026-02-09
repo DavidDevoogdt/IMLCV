@@ -103,7 +103,7 @@ class Transformer(MyPyTreeNode):
         koopman=True,
         max_fes_bias: float | None = None,
         n_max=1e5,
-        samples_per_bin=5,
+        samples_per_bin=20,
         min_samples_per_bin=1,
         verbose=True,
         cv_titles: list[str] | bool = True,
@@ -3165,44 +3165,44 @@ class CombineTransformer(Transformer):
 
         # periods = []
 
-        pass_trans = None
+        # pass_trans = None
 
         for i, t in enumerate(self.transformers):
             print(f"fitting transformer {i + 1}/{len(self.transformers)}")
 
-            if t.pass_trans:
-                _, _, trans_t, _, _, _ = t._fit(
-                    x,
-                    x_t,
-                    w,
-                    dlo,
-                    chunk_size=chunk_size,
-                    verbose=verbose,
-                    macro_chunk=macro_chunk,
-                )
+            # if t.pass_trans:
+            #     _, _, trans_t, _, _, _ = t._fit(
+            #         x,
+            #         x_t,
+            #         w,
+            #         dlo,
+            #         chunk_size=chunk_size,
+            #         verbose=verbose,
+            #         macro_chunk=macro_chunk,
+            #     )
 
-                if pass_trans is None:
-                    pass_trans = trans_t
-                else:
-                    pass_trans *= trans
+            #     if pass_trans is None:
+            #         pass_trans = trans_t
+            #     else:
+            #         pass_trans *= trans
 
+            # else:
+            x, x_t, trans_t, w, _, _ = t._fit(
+                x,
+                x_t,
+                w,
+                dlo,
+                chunk_size=chunk_size,
+                verbose=verbose,
+                macro_chunk=macro_chunk,
+                # trans=pass_trans,
+            )
+            # pass_trans = None
+
+            if trans is None:
+                trans = trans_t
             else:
-                x, x_t, trans_t, w, _, _ = t._fit(
-                    x,
-                    x_t,
-                    w,
-                    dlo,
-                    chunk_size=chunk_size,
-                    verbose=verbose,
-                    macro_chunk=macro_chunk,
-                    trans=pass_trans,
-                )
-                pass_trans = None
-
-                if trans is None:
-                    trans = trans_t
-                else:
-                    trans *= trans_t
+                trans *= trans_t
 
             # periods = [per]
 

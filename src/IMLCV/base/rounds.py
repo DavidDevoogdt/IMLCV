@@ -15,6 +15,7 @@ from typing import Callable, Sequence, TypeVar, cast
 import h5py
 import jax
 import jax.numpy as jnp
+import jax.scipy.special as jsp
 from jax import Array
 from jax.random import PRNGKey, choice, split
 
@@ -1134,6 +1135,8 @@ class Rounds:
         if new_r_cut == -1:
             new_r_cut = sti.r_cut
 
+        print(f"{new_r_cut/angstrom=}")
+
         if not time_series:
             lag_n = 0
 
@@ -1741,11 +1744,17 @@ class Rounds:
             timestep = sti_c.timestep * sti_c.save_step
 
             @jit_decorator
-            @partial(vmap_decorator, in_axes=(0, 0, None, None))
-            def get_lag_idx(n, w0, dw: Array, dt):
+            @partial(vmap_decorator, in_axes=(0, 0, None, None, None))
+            def get_lag_idx(n, w0, w, dw: Array, dt):
                 tau = lag_n * timestep
 
-                integral = dw / w0 * dt
+                beta_du_half = jnp.log(dw) / 2
+
+                def sinhc(x):
+                    return jnp.where(x < 1e-10, 1, jnp.sinh(x) / x)
+
+                integral = (w[:-1] / w0) * jnp.exp(beta_du_half) * sinhc(beta_du_half) * dt
+
                 integral = jnp.where(jnp.arange(integral.shape[0]) <= n, 0, integral)
                 integral = jnp.cumsum(integral)  # sum e^(beta U)
 
@@ -1780,32 +1789,18 @@ class Rounds:
 
                         scales = scales
 
-                        def sinhc(x):
-                            return jnp.where(x < 1e-10, 1, jnp.sinh(x) / x)
-
-                        # diffusion = True
-
-                        # if diffusion:
-                        #     dw = jnp.exp(-(jnp.log(scales[1:]) - jnp.log(scales[:-1])) / 2) * sinhc(
-                        #         (jnp.log(scales[1:]) - jnp.log(scales[:-1])) / 2
-                        #     )
-
-                        # else:
-                        dw = (scales[1:] + jnp.log(scales[:-1])) / 2
+                        scales_half = scales[1:] / scales[:-1]
 
                         assert ti_i.t is not None
                         dt = ti_i.t[1:] - ti_i.t[:-1]
 
                         from IMLCV.base.UnitsConstants import femtosecond
 
-                        # print(f"{dt[0] / femtosecond}   {lag_n * timestep/ femtosecond=}")
-                        # integral = jnp.zeros((scales.shape[0]))
-                        # integral = integral.at[1:].set(scales)
-
                         lag_indices_max, lag_indices_max2, bools, p = get_lag_idx(
                             jnp.arange(scales.shape[0]),
                             scales,
-                            dw,
+                            scales,
+                            scales_half,
                             dt,
                         )
 
@@ -2263,6 +2258,8 @@ class Rounds:
             )
         else:
             out_nl = None
+
+        print(f"{out_nl.info=}")
 
         if time_series:
             out_nl_t = out_nl
@@ -7193,7 +7190,7 @@ class KoopmanModel(MyPyTreeNode):
         print_nonlin_every=1,
         epochs=2000,
         batch_size=10000,
-        init_learnable_params=True,
+        init_learnable_params=False,
         min_std=1e-2,  # prevents collapse into singularities
         entropy_reg=0.0,
         target_smoothness=20 * kjmol / (boltzmann * 300),
@@ -7205,6 +7202,9 @@ class KoopmanModel(MyPyTreeNode):
 
         print(f"{out_dim=} {eps=} {eps_pre=}")
         print(f"{calc_pi=} {add_1=}   ")
+
+        if nl is not None:
+            print(f"using neighbour lists in koopman model {nl=}")
 
         print(f"new tot w")
 
@@ -7458,6 +7458,8 @@ class KoopmanModel(MyPyTreeNode):
             # batch_size = 1e4
             # epochs = 50
 
+            key = jax.random.PRNGKey(42)
+
             assert trans is not None
             print(f"using variational approach {trans.num_learnable_params=} ")
 
@@ -7465,7 +7467,8 @@ class KoopmanModel(MyPyTreeNode):
 
             if init_learnable_params:
                 print("initializing learnable params")
-                learable_params = trans.init_learnable_params(jax.random.PRNGKey(42))
+                key, subkey = jax.random.split(key)
+                learable_params = trans.init_learnable_params(subkey)
             # trans = trans.apply_learnable_params(learable_params)
             else:
                 print("using default learnable params")
@@ -7477,8 +7480,13 @@ class KoopmanModel(MyPyTreeNode):
 
             tau = tau if tau is not None else 1.0
 
-            cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0])
+            cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0], nl)
             dim = cv_out_shape.cv.shape[1]
+
+            N = cv_out_shape.cv.shape[0]
+            sigma_silverman = (4 / (N * (dim + 2))) ** (1 / (dim + 4))
+
+            print(f"{N=} {dim=} {sigma_silverman=}")
 
             print(f"{cv_out_shape.cv.shape=} {alpha_smooth=} {entropy_reg=} ")
 
@@ -7496,8 +7504,14 @@ class KoopmanModel(MyPyTreeNode):
 
                 print(f"{x_0=} {x_t=} ")
 
+                print(f"inside {nl=}")
+
                 y_0, _ = _trans.compute_cv(x_0, nl)
                 y_t, _ = _trans.compute_cv(x_t, nl_t) if x_t is not None else (None, None)
+
+                print(f"{y_0.cv.shape=} {y_t.cv.shape if y_t is not None else None} ")
+
+                # jax.debug.print("min {} max {}", jnp.min(y_0.cv, axis=0), jnp.max(y_0.cv, axis=0))
 
                 cov = Covariances.create(
                     cv_0=[y_0],
@@ -7518,6 +7532,8 @@ class KoopmanModel(MyPyTreeNode):
                     macro_chunk=None,
                 )
 
+                # jax.debug.print("cov  {}", jnp.linalg.eigh(cov.C00))
+
                 W0 = cov.whiten_rho("rho_00", apply_mask=False, epsilon=1e-12, cholesky=False)
 
                 if symmetric:
@@ -7535,24 +7551,24 @@ class KoopmanModel(MyPyTreeNode):
                 # else:
                 K = W0 @ cov.rho_01 @ W1.T
 
-                loss = -jnp.sum(K**2)  # vamp-2 score
+                loss = -jnp.sum(K**2)  # vamp-2 score (frobenius norm squared)
                 loss_vamp = loss
+
+                z_0 = jnp.einsum("ni,i,ik->nk", y_0.cv - cov.pi_0, cov.sigma_0_inv, W0.T)
+
+                if add_1:
+                    z_0 = z_0[:, :-1]  # remove constant basis
 
                 if entropy_reg > 0.0:
                     print("computing entropy regularization")
 
                     # z_0 = y_0.cv @ cov.sigma_0_inv @ W0.T
 
-                    print(f"{y_0.cv.shape=} {cov.pi_0.shape=} {cov.sigma_0_inv.shape=} {W0.T.shape=}")
-
-                    z_0 = jnp.einsum("ni,i,ik->nk", y_0.cv - cov.pi_0, cov.sigma_0_inv, W0.T)
+                    # print(f"{y_0.cv.shape=} {cov.pi_0.shape=} {cov.sigma_0_inv.shape=} {W0.T.shape=}")
 
                     # mean = jnp.einsum("n,nk->k", w, z_0)
                     # std = jnp.einsum("n,nk,nl->kl", w, (z_0 - mean), (z_0 - mean))
                     # jax.debug.print("z mean {} std {}", mean, std)
-
-                    if add_1:
-                        z_0 = z_0[:, :-1]  # remove constant basis
 
                     # n_eff = cov.n_eff
 
@@ -7703,82 +7719,107 @@ class KoopmanModel(MyPyTreeNode):
 
                         # q_low, q_high = _wq(z_0)
 
-                        # q_low = jnp.min(z_0, axis=0)
-                        # q_high = jnp.max(z_0, axis=0)
+                        q_low = jnp.min(z_0, axis=0)
+                        q_high = jnp.max(z_0, axis=0)
 
-                        jax.debug.print("min {} max {}", jnp.min(z_0, axis=0), jnp.max(z_0, axis=0))
+                        # jax.debug.print("min {} max {}", jnp.min(z_0, axis=0), jnp.max(z_0, axis=0))
 
                         # 3std in each dim
-                        q_low = jnp.full((d,), -5.0)
-                        q_high = jnp.full((d,), 5.0)
+                        # q_low = jnp.full((d,), -4.0)
+                        # q_high = jnp.full((d,), 4.0)
 
-                        ranges = jax.lax.stop_gradient(q_high - q_low)
+                        # q_high = jax.lax.stop_gradient(q_high)
+                        # q_low = jax.lax.stop_gradient(q_low)
+
+                        ranges = q_high - q_low
                         dxs = ranges / (grid_size - 1)
                         dv = jnp.prod(dxs)
 
-                        # 2. Map coordinates to grid-index space
-                        # u is the position in floating-point index units
-                        u = (z_0 - q_low) / (q_high - q_low) * (grid_size - 1)
+                        u = jnp.stack(
+                            jnp.meshgrid(*[jnp.linspace(l, h, grid_size) for l, h in zip(q_low, q_high)], indexing="ij")
+                        )
 
-                        grid_indices = jnp.arange(grid_size)
+                        print(f"{u.shape=}")
 
-                        # 3. Calculate distances to all indices
-                        # shape: (n_frames, grid_size, d)
-                        dists = jnp.abs(u[:, None, :] - grid_indices[None, :, None])
+                        u_flat = u.reshape(d, -1).T  # shape (grid_size**d, d)
 
-                        # 4. Quartic/Biweight Kernel (Softer than Triangular)
-                        # Scaled by 'radius' to ensure points are spread over more bins
-                        # normalized_dists = dists / radius
+                        # @jax.vmap
+                        # def compute_p(grid_p):
+                        #     @jax.vmap
+                        #     def inner(z, w):
+                        #         distances = jnp.abs(z - grid_p) / dxs  # shape (d,)
+                        #         # Quartic/Biweight Kernel
+                        #         weights = jnp.maximum(0.0, 1.0 - (distances / radius) ** 2) ** 2  # shape (d,)
 
-                        # Kernel = (1 - d^2)^2
-                        weights_bins = jnp.maximum(0.0, 1.0 - dists)
-                        # weights_bins = jnp.where(normalized_dists < 1.0, (1.0 - normalized_dists**2) ** 2, 0.0)
+                        #         return jnp.prod(weights) * w  # scalar
 
-                        # Normalize weights so each point sums to 1.0 per dimension
-                        weights_bins = weights_bins / (jnp.sum(weights_bins, axis=1, keepdims=True) + 1e-10)
+                        #     return jnp.sum(inner(z_0, w))
 
-                        # # 2. Soft Binning (Triangular/Linear)
-                        # # We project points onto the grid indices
-                        # u = (z_0 - q_low) / ranges * (grid_size - 1)
-                        # grid_axis = jnp.linspace(0, grid_size - 1, grid_size)
+                        # p_grid = compute_p(u)
 
-                        # # Distance to all bin centers per dimension: (n_frames, grid_size, d)
-                        # dists = jnp.abs(u[:, None, :] - grid_axis[None, :, None])
-                        # # Triangular weights (local binning)
-                        # weights_bins = jnp.maximum(0.0, 1.0 - dists)
+                        @jax.vmap
+                        def get_normalized_weights(single_z, single_w):
+                            # Calculate distances from this particle to ALL grid points
+                            # Shape: (grid_size**d, d)
+                            distances_nj = (u_flat - single_z) / dxs
+                            dist_sq_n = jnp.sum((distances_nj / radius) ** 2, axis=-1)
 
-                        w = w**alpha
+                            # Biweight/Quartic Kernel: (1 - r^2)^2
+                            # Shape: (grid_size**d, d)
+                            kernel_val_n = jnp.maximum(0.0, 1.0 - dist_sq_n) ** 2
+                            # kernel_val_n = jnp.exp(-0.5 * dist_sq_n)
 
-                        # Construct d-dimensional histogram
-                        if d == 2:
-                            p_grid = jnp.einsum("ni,nj,n->ij", weights_bins[:, :, 0], weights_bins[:, :, 1], w)
-                        elif d == 3:
-                            p_grid = jnp.einsum(
-                                "ni,nj,nk,n->ijk",
-                                weights_bins[:, :, 0],
-                                weights_bins[:, :, 1],
-                                weights_bins[:, :, 2],
-                                w,
+                            # --- Normalization ---
+                            # Sum all the kernel mass this particle would deposit on the grid
+                            total_kernel_sum = jnp.sum(kernel_val_n)
+
+                            # Avoid division by zero if a particle is outside the grid/radius
+                            safe_sum = jnp.where(total_kernel_sum > 1e-10, total_kernel_sum, 1.0)
+
+                            # Normalize so the sum of weights for THIS particle equals its weight 'w'
+                            normalized_weights = (
+                                jnp.where(total_kernel_sum > 1e-10, kernel_val_n / safe_sum, 0.0) * single_w
                             )
-                        else:
-                            # Fallback for higher d
-                            p_grid = weights_bins[:, :, 0]
-                            for i in range(1, d):
-                                p_grid = p_grid[:, :, None] * weights_bins[:, None, :, i]
-                            p_grid = jnp.sum(p_grid * w[:, None, ...], axis=0)
+                            return normalized_weights
 
-                        # 3. Stabilize and Normalize
-                        # epsilon = 1e-10
-                        # p_grid = (p_grid + epsilon) / (jnp.sum(p_grid + epsilon) * dv)
+                        # 2. Compute weights for all particles: Shape (num_particles, grid_size**d)
+                        all_weights = get_normalized_weights(z_0, w)
 
-                        # psi = jnp.pow(p_grid, alpha)
-                        # psi /= jnp.sum(psi)
+                        # 3. Sum across particles to get the final grid: Shape (grid_size**d,)
+                        p_grid = jnp.sum(all_weights, axis=0)
 
                         p_grid /= jnp.sum(p_grid) * dv
-                        p_grid_safe = jnp.where(p_grid == 0, 1.0, p_grid)
 
-                        # compute entropy
-                        return -jnp.sum(jnp.where(p_grid == 0, 0, p_grid_safe * jnp.log(p_grid_safe))) * dv
+                        # 2. Add stability clipping
+                        p_safe = jnp.clip(p_grid, 1e-12)
+                        # q_safe = jnp.ones_like(p_grid)
+                        # q_safe /= jnp.sum(q_safe) * dv  # uniform distribution
+
+                        if alpha == 1.0:
+                            print("computing shannon entropy")
+                            return (-jnp.sum(p_safe * jnp.log(p_safe)) * dv) / (jnp.sum(jnp.log(ranges)))
+
+                        # 3. Sum of p^alpha * dv
+                        # Note: We must multiply by dv here to represent the integral
+                        sum_p_alpha = jnp.sum(jnp.power(p_safe, alpha)) * dv
+
+                        return (1.0 / (1.0 - alpha)) * jnp.log(sum_p_alpha) / (jnp.sum(jnp.log(ranges)))
+
+                        # p_grid = jnp.where(p_grid < 1e-20, 0.0, p_grid)
+
+                        # if alpha != 1.0:
+                        #     p_grid = p_grid**alpha
+
+                        # p_grid /= jnp.sum(p_grid) * dv
+                        # p_grid_safe = jnp.where(p_grid < 1e-10, 1.0, p_grid)
+
+                        # if alpha == 1.0:
+                        #     pre_factor = 1.0
+                        # else:
+                        #     pre_factor = (1.0 / (1.0 - alpha))
+
+                        # # compute entropy
+                        # return -jnp.sum(jnp.where(p_grid < 1e-10, 0, p_grid_safe * jnp.log(p_grid_safe + 1e-10))) * dv
 
                         # 2. power trick p^alpha
 
@@ -7804,35 +7845,58 @@ class KoopmanModel(MyPyTreeNode):
 
                     # entropy scales as dim, divide by dim
 
-                    entropy = soft_binning_integral_regularizer(z_0, w, grid_size=grid_size, alpha=alpha_smooth)
+                    def get_max_renyi_target(alpha, d=1):
+                        # Gaussian part
+                        h_gauss = (d / 2) * (jnp.log(2 * jnp.pi) + 1)
+
+                        if alpha != 1.0:
+                            h_gauss += (d * jnp.log(alpha)) / (2 * (alpha - 1))
+                        #     # Non-Gaussian correction C(alpha, d) for alpha < 1
+                        #     term1 = jsp.gammaln(alpha / (1 - alpha))
+                        #     term2 = jsp.gammaln(alpha / (1 - alpha) - d / 2)
+                        #     term3 = (d / 2) * jnp.log((1 - alpha) / (2 * alpha - d * (1 - alpha)))
+
+                        #     # jax.debug.print(
+                        #     #     "t123 {} {} {} {}", term1, term2, term3, (1 - alpha) / (2 * alpha - d * (1 - alpha))
+                        #     # )
+
+                        #     c_alpha = (1 / (1 - alpha)) * (term1 - term2 + term3)
+                        #     h_gauss += c_alpha
+
+                        return h_gauss
+
+                    entropy_gaussian = get_max_renyi_target(alpha_smooth, d=dim)
+                    entropy = (
+                        soft_binning_integral_regularizer(z_0, w, grid_size=grid_size, alpha=alpha_smooth)
+                        / entropy_gaussian
+                    )
+
+                    # jax.debug.print("entropy smoothness: {}", entropy)
+
                     # entropy of gaussian with unit variance, scaled by alpha_smooth (p->p^alpha)
-                    entropy_gauss = (dim / 2) * jnp.log(2 * jnp.pi * jnp.exp(1)) - dim / 2 * jnp.log(alpha_smooth)
+                    # # jax.debug.print("as {}", alpha_smooth)
 
+                    # entropy_max = get_max_renyi_target(alpha_smooth, d=dim)
+                    # hypervolume of the box
+                    # entropy_max = dim * jnp.log(2)
+
+                    # jax.debug.print("e {} em {}", entropy, entropy_max)
                     # we want to scale this loss with dim, such that entropy_reg ~ 0.1 works well
-                    total_entropy = entropy / entropy_gauss
+                    # total_entropy = entropy  # / entropy_max
 
-                    # jax.debug.print("vamp: {}  entropy {} ", loss, total_entropy)
+                    # example: entropy 0.2,target 0.3
+                    # loss: lambda* min(0.2-0.3,0)**2
 
-                    # # Integration into your loss
-                    # total_smoothness = soft_grad_loss(z_0, w)
+                    entropy_loss = jax.nn.softplus(-(entropy - target_smoothness) / 0.1) * 0.1
 
-                    # total_smoothness = 1.0 / (total_entropy + 1e-10)
+                    # excess = entropy - get_max_renyi_target(alpha_smooth, d=1) / entropy_gaussian
+                    # jax.debug.print("aen {} g {}", entropy, get_max_renyi_target(alpha_smooth, d=1))
 
-                    # _target_smoothness = target_smoothness**2
-
-                    # loss_smooth = jnp.maximum(0, total_smoothness / _target_smoothness - 1) ** 2
-
-                    # jax.debug.print(
-                    #     "vamp: {}  sqrt(< ||grad F ||^2 >)  {} kj/mol loss {} ",
-                    #     loss,
-                    #     jnp.sqrt(total_smoothness) * ((boltzmann * 300) / kjmol),
-                    #     loss_smooth,
-                    # )
-                    # jax.debug.print("Current total loss before entropy: {l}", l=loss)
+                    # excess = jnp.minimum(0.0, (total_entropy - target_smoothness)) ** 2
 
                     # vamp scales as d, entropy_reg should be arround 0.1
                     # max entropy
-                    loss -= dim * entropy_reg * total_entropy
+                    loss += entropy_reg * entropy_loss
 
                     # # @jax.vmap
                     # def _entropy(z):
@@ -7854,7 +7918,19 @@ class KoopmanModel(MyPyTreeNode):
 
                     # loss -= entropy_reg * entropy
                 else:
-                    total_entropy = jnp.array(0.0)
+                    entropy = jnp.array(0.0)
+
+                max_kurt = dim * (dim + 2)
+
+                kurt = jnp.sum(jnp.sum(z_0**2, axis=1) ** 2 * w) / max_kurt
+
+                # z_0: (n_frames, dim)
+                # w: (n_frames,)
+                loss_border = jax.nn.softplus((kurt - 1.5) / 0.1) * 0.1  # not much higher than 1
+
+                # jax.debug.print("border loss {}", loss_border)
+
+                loss += 0.0 * loss_border
 
                 # # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
                 # # dl, _ = jnp.linalg.eigh(dK)
@@ -7889,13 +7965,16 @@ class KoopmanModel(MyPyTreeNode):
 
                 # loss = -jnp.sum(K**2)
 
-                return loss, (
+                return jnp.log10(loss + dim), (
                     loss_vamp,
-                    total_entropy,
+                    entropy,
+                    kurt,
                 )
 
-            # optimizer = optax.adamw(learning_rate=1e-4, weight_decay=1e-2)
-            optimizer = optax.lbfgs()
+            optimizer = optax.adamw(learning_rate=1e-3, weight_decay=1e-3)
+            # print(f"{optimizer=}")
+
+            # optimizer = optax.lbfgs()
 
             # lambdas = jnp.zeros((cv_out_shape.cv.shape[1],))
 
@@ -7904,13 +7983,12 @@ class KoopmanModel(MyPyTreeNode):
 
             @partial(jax.jit, static_argnames=["entropy_reg"])
             def _body_fun(opt_state, params, x0, xt, w, entropy_reg):
+                w /= jnp.sum(w)
+
                 (
                     (
                         loss_val,
-                        (
-                            loss_vamp,
-                            total_entropy,
-                        ),
+                        losses,
                     ),
                     grads,
                 ) = jax.value_and_grad(objective_fn, has_aux=True)(params, x0, xt, w, entropy_reg)
@@ -7920,15 +7998,21 @@ class KoopmanModel(MyPyTreeNode):
                     grads,
                     opt_state,
                     params,
-                    value=loss_val,
-                    grad=grads,
-                    value_fn=lambda p: objective_fn(p, x0, xt, w, entropy_reg)[0],
                 )
+
+                # updates, opt_state = optimizer.update(
+                #     grads,
+                #     opt_state,
+                #     params,
+                #     value=loss_val,
+                #     grad=grads,
+                #     value_fn=lambda p: objective_fn(p, x0, xt, w, entropy_reg)[0],
+                # )
 
                 print(f"{updates=}")
                 params = optax.apply_updates(params, updates)
 
-                return opt_state, params, loss_val, loss_vamp, total_entropy
+                return opt_state, params, loss_val, losses
 
             x_0_stack = CV.stack(*cv_0) if isinstance(cv_0[0], CV) else SystemParams.stack(*cv_0)
             x_t_stack = (
@@ -7937,6 +8021,8 @@ class KoopmanModel(MyPyTreeNode):
                 else None
             )
             w_tot_stack = jnp.hstack(w_tot)
+
+            print(f"{x_0_stack.shape=} {x_t_stack.shape if x_t_stack is not None else None} {w_tot_stack.shape=} ")
 
             # # first do a rough optimization without entropy
             # print("Starting pre-optimization without entropy regularization")
@@ -7952,41 +8038,98 @@ class KoopmanModel(MyPyTreeNode):
 
             # print("Starting main optimization with entropy regularization")
 
-            best_loss = jnp.inf
+            best_loss = None
             best_params = learable_params
             no_improve = 0
-            patience = 20
-            min_delta = 1e-4
+            patience = 500
+
+            min_delta = 1e-3  # 0.1% improvement per 10 steps
+
+            entropy_start = 50
+            init_steps = 100
+
+            batch_size = 128
+
+            from queue import Queue
+            from threading import Thread
+
+            def prefetch_worker(queue, key, w_tot_stack, x_0_stack, x_t_stack):
+                while True:
+                    key, subkey = jax.random.split(key)
+                    indices = jax.random.choice(
+                        subkey,
+                        w_tot_stack.shape[0],
+                        (batch_size,),
+                        p=w_tot_stack,
+                    )
+
+                    batch = (
+                        x_0_stack[indices],
+                        x_t_stack[indices] if x_t_stack is not None else None,
+                        w_tot_stack[indices],
+                    )
+
+                    queue.put(batch)
+
+            # Setup queue and thread
+            batch_queue = Queue(maxsize=4)  # Prefetch 4 batches ahead
+            thread = Thread(
+                target=prefetch_worker,
+                args=(
+                    batch_queue,
+                    key,
+                    w_tot_stack,
+                    x_0_stack,
+                    x_t_stack,
+                ),
+            )
+            thread.daemon = True
+            thread.start()
 
             for epoch in range(epochs):
-                opt_state, learable_params, loss_train, loss_vamp, total_entropy = _body_fun(
-                    opt_state, learable_params, x_0_stack, x_t_stack, w_tot_stack, entropy_reg
+                x0_batch, xt_batch, w_tot_batch = batch_queue.get()
+
+                opt_state, learable_params, loss_train, (loss_vamp, total_entropy, loss_border) = _body_fun(
+                    opt_state,
+                    learable_params,
+                    x0_batch,
+                    xt_batch if x_t_stack is not None else None,
+                    jnp.ones_like(w_tot_batch),
+                    entropy_reg=0 if epoch < entropy_start else entropy_reg,
                 )
 
-                # stop on NaN / Inf
                 if not jnp.isfinite(loss_train):
                     print("Loss became non-finite, restoring best params and stopping early")
                     learable_params = best_params
                     break
 
-                # improvement check
-                if loss_train < best_loss - min_delta:
-                    best_loss = loss_train
+                loss = loss_train
+
+                if best_loss is None:
+                    best_loss = loss
+
+                if best_loss - loss > min_delta:
+                    best_loss = loss
                     best_params = learable_params
                     no_improve = 0
                 else:
                     no_improve += 1
 
-                # patience reached -> stop
-                if no_improve >= patience:
-                    print(
-                        f"Early stopping at epoch {epoch} (no improvement for {patience} epochs). Best loss={float(best_loss):.6e}"
-                    )
-                    learable_params = best_params
-                    break
+                if epoch > init_steps:
+                    # patience reached -> stop
+                    if no_improve >= patience:
+                        print(
+                            f"Early stopping at epoch {epoch} (no improvement for {patience} epochs). Best loss={float(best_loss):.6e}"
+                        )
+                        learable_params = best_params
+                        break
 
                 if epoch % print_nonlin_every == 0:
-                    print(f"{epoch=} loss vamp {loss_vamp=} entropy {total_entropy} ")
+                    print(
+                        f"{epoch=} loss train {10 ** float(loss):.3E} loss vamp {float(loss_vamp):.6f} entropy {float(total_entropy):.6f} border {float(loss_border):.6f} "
+                    )
+
+            thread.join(timeout=0)
 
             # create random K-folds splits and pick one validation fold
 
@@ -8044,7 +8187,21 @@ class KoopmanModel(MyPyTreeNode):
             #         x_t_i = _x_t_train[i * base : (i + 1) * base] if x_t_train is not None else None
             #         w_i = _w_train[i * base : (i + 1) * base]
 
-            #         opt_state, learable_params, loss_train, _ = _body_fun(opt_state, learable_params, x_i, x_t_i, w_i)
+            #         # opt_state, learable_params, loss_train, _ = _body_fun(opt_state, learable_params, x_i, x_t_i, w_i)
+
+            #         opt_state, learable_params, loss_train, (loss_vamp, total_entropy, loss_border) = _body_fun(
+            #             opt_state,
+            #             learable_params,
+            #             x_0_stack,
+            #             x_t_stack,
+            #             w_tot_stack,
+            #             entropy_reg=0 if epoch < entropy_start else entropy_reg,
+            #         )
+
+            #         if epoch % print_nonlin_every == 0:
+            #             print(
+            #                 f"{epoch=} loss train {10 ** float(loss):.3E} loss vamp {float(loss_vamp):.6f} entropy {float(total_entropy):.6f} border {float(loss_border):.6f} "
+            #             )
 
             #     # opt_state, learable_params, loss_train, _ = _body_fun(
             #     #     opt_state, learable_params, x_0_train, x_t_train, w_train

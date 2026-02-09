@@ -1351,11 +1351,12 @@ def _system_2_walls(
 ):
     print(f"computing wall")
     dist_cv = jnp.abs(cv.cv[0])
+    r_sq_cv = cv.cv[1]
     d0 = 9.0 * angstrom
-    d1 = 23.0 * angstrom**2
+    d1_sq = 23.0 * angstrom**2
 
     w1 = jnp.where(dist_cv < d0, 0.0, 3000 * kjmol * (dist_cv - d0) ** 2)
-    w2 = jnp.where(cv.cv[1] < d1, 0.0, 3000 * kjmol * (cv.cv[1] - d1) ** 2)
+    w2 = jnp.where(cv.cv[1] < d1_sq, 0.0, 3000 * kjmol * (r_sq_cv - d1_sq) ** 2)
 
     return w1 + w2
 

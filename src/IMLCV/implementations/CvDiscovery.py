@@ -946,3 +946,91 @@ class IndicatorSplitterTransformer(Transformer):
         print(f"{x[0]=}")
 
         return x, x_t, f_trans, w, None, None
+
+
+class StandardiseTransformer(Transformer):
+    sigma: bool = True
+    global_sigma: bool = False
+    remove_constant: bool = True
+
+    def _fit(
+        self,
+        x: list[CV] | list[SystemParams],
+        x_t: list[CV] | list[SystemParams] | None,
+        w: list[jax.Array],
+        dlo: DataLoaderOutput,
+        chunk_size: int | None = None,
+        verbose=True,
+        macro_chunk=1000,
+    ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None, jax.Array | None]:
+        from IMLCV.base.rounds import Covariances
+        from IMLCV.implementations.CV import _standerdize
+
+        cov = Covariances.create(
+            cv_0=x,  # type: ignore
+            cv_1=x,  # type: ignore
+            nl=dlo.nl,
+            w=w,
+            calc_pi=True,
+            symmetric=False,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            only_diag=True,
+        )
+
+        mu = cov.pi_0
+
+        print(f"StandardiseTransformer: mean {cov.pi_0}, std  {cov.sigma_0}")
+        if self.sigma:
+            if self.global_sigma:
+                sigma_0_inv = 1 / jnp.sqrt(jnp.mean(cov.sigma_0**2))
+
+                print(f"Using global sigma: {sigma_0_inv=}")
+            else:
+                sigma_0_inv = cov.sigma_0_inv if self.sigma else None
+        else:
+            sigma_0_inv = None
+
+        if self.remove_constant:
+            const_mask = cov.sigma_0 < 1e-8
+            if jnp.any(const_mask):
+                print(f"StandardiseTransformer: removing constant dimensions {jnp.sum(const_mask)}")
+            sigma_0_inv = sigma_0_inv[~const_mask] if sigma_0_inv is not None else None
+            mu = mu[~const_mask]
+
+        else:
+            const_mask = None
+
+        # create CvTrans from forward
+        f_trans = CvTrans.from_cv_function(
+            f=_standerdize,
+            mean=mu,
+            std_inv=sigma_0_inv,
+            mask=const_mask,
+        )
+
+        x, x_t = dlo.apply_cv(
+            x=x,
+            x_t=x_t,
+            f=f_trans,
+            verbose=verbose,
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            shmap=False,
+        )
+
+        # cov_after = Covariances.create(
+        #     cv_0=x,  # type: ignore
+        #     cv_1=x,  # type: ignore
+        #     nl=dlo.nl,
+        #     w=w,
+        #     calc_pi=True,
+        #     symmetric=False,
+        #     chunk_size=chunk_size,
+        #     macro_chunk=macro_chunk,
+        #     only_diag=True,
+        # )
+
+        # print(f"StandardiseTransformer after: mean {cov_after.pi_0}, std inv {cov_after.sigma_0_inv}")
+
+        return x, x_t, f_trans, w, None, None

@@ -96,6 +96,9 @@ class StaticMdInfo(MyPyTreeNode):
         if r_skin is None:
             r_skin = self.r_skin
 
+        if r_skin is None:
+            r_skin = 2 * angstrom
+
         return NeighbourListInfo.create(
             r_cut=r_cut,
             z_array=self.atomic_numbers,

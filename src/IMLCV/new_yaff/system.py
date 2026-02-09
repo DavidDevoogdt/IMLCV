@@ -53,6 +53,7 @@ class YaffSys(MyPyTreeNode):
             pos=sp.coordinates,
             cell=YaffCell.create(sp),
             tic=tic,
+            nl=nl,
         )
 
     @property

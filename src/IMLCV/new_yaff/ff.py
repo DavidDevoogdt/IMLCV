@@ -33,6 +33,7 @@ class YaffFF(MyPyTreeNode):
         permanent_bias: Bias | None,
         sp: SystemParams,
         tic: StaticMdInfo,
+        nl: NeighbourList | None = None,
     ):
         yaff_ff = YaffFF(
             energy=energy,
@@ -41,6 +42,7 @@ class YaffFF(MyPyTreeNode):
             system=YaffSys.create(
                 sp=sp,
                 tic=tic,
+                nl=nl,
             ),
         )
 

@@ -342,12 +342,17 @@ class NewYaffEngine(MDEngine):
 
         from IMLCV.new_yaff.ff import YaffFF
 
-        self._yaff_ener = YaffFF.create(
+        self.update_nl()
+
+        # print(f"{self.nl=}")
+
+        self._yaff_ener: YaffFF = YaffFF.create(
             energy=self.energy,
             bias=self.bias,
             permanent_bias=self.permanent_bias,
             sp=self.sp,
             tic=self.static_trajectory_info,
+            nl=self.nl,
         )
 
         self._yaff_ener.system.update_nl()

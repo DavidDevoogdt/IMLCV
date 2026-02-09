@@ -40,7 +40,7 @@ module list
 
 # Unset memory-related SLURM environment variables to avoid conflicts
 unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
-
+unset SLURM_CPU_BIND
 
 srun  --nodes=1  -l {overrides} {app} {command}
 

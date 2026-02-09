@@ -2061,6 +2061,27 @@ class SystemParams(MyPyTreeNode):
             pbc=self.cell is not None,
         )
 
+    def equivariant_displace(self, key=jax.random.PRNGKey(0)):
+        if self.batched:
+            return vmap_decorator(SystemParams.equivariant_displace, key=key)(self)
+
+        key, subkey = jax.random.split(key)  # type: ignore
+
+        displacement = jax.random.normal(key, shape=(3,))
+
+        M = jax.random.normal(subkey, shape=(3, 3))  # type: ignore
+        Q, R = jnp.linalg.qr(M)
+
+        print(f"{displacement=} {Q=}")
+
+        @vmap_decorator
+        def _apply(x):
+            return (x + displacement) @ Q
+
+        return (Q, displacement), self.replace(
+            coordinates=_apply(self.coordinates), cell=self.cell @ Q if self.cell is not None else None
+        )
+
 
 class NeighbourListInfo(MyPyTreeNode):
     # esssential information to create a neighbour list
@@ -3824,11 +3845,26 @@ class CvMetric(MyPyTreeNode):
 ######################################
 
 
+INITIALIZERS = {
+    "lecun_normal": jax.nn.initializers.lecun_normal,
+    "lecun_uniform": jax.nn.initializers.lecun_uniform,
+    "glorot_normal": jax.nn.initializers.glorot_normal,
+    "glorot_uniform": jax.nn.initializers.glorot_uniform,
+    "he_normal": jax.nn.initializers.he_normal,
+    "he_uniform": jax.nn.initializers.he_uniform,
+    "normal": jax.nn.initializers.normal,
+    "uniform": jax.nn.initializers.uniform,
+    "zeros": lambda: jax.nn.initializers.zeros,
+    "ones": lambda: jax.nn.initializers.ones,
+}
+
+
 class CvFunBase(ABC, MyPyTreeNode):
     kwargs: dict = field(pytree_node=True, default_factory=dict)
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
     learnable_kwargs: tuple[str] | None = field(pytree_node=False, default=None)
     apply_rule: Callable[[dict, dict], dict] | None = field(pytree_node=False, default=None)
+    initializers: dict[str, str | tuple[str, dict]] | None = field(pytree_node=False, default=None)
 
     @partial(
         jit_decorator,
@@ -3932,7 +3968,10 @@ class CvFunBase(ABC, MyPyTreeNode):
         for k in self.learnable_kwargs:
             v = self.kwargs[k]
 
-            out[k] = v.shape if isinstance(v, jax.Array) else None
+            if isinstance(v, jax.Array):
+                out[k] = v.shape
+            else:
+                out[k] = jax.tree_util.tree_map(lambda x: x.shape, v)
 
         return out
 
@@ -3971,7 +4010,7 @@ class CvFunBase(ABC, MyPyTreeNode):
 
         return self.replace(kwargs=kw)
 
-    def init_learnable_params(self, key: jax.random.KeyArray, initializer=jax.nn.initializers.lecun_normal()):
+    def init_learnable_params(self, key=jax.random.PRNGKey(0), initializer=jax.nn.initializers.lecun_normal()):
         if self.learnable_kwargs is None:
             return None
 
@@ -3981,22 +4020,58 @@ class CvFunBase(ABC, MyPyTreeNode):
         for k in self.learnable_kwargs:
             v = self.kwargs[k]
 
-            if not isinstance(v, jax.Array):
-                continue
-
             key, subkey = jax.random.split(key)
 
-            try:
-                if v.ndim == 0:
-                    kwargs[k] = initializer(subkey, (1, 1), v.dtype)[0, 0]
-                elif v.ndim == 1:
-                    kwargs[k] = initializer(subkey, (v.shape[0], 1), v.dtype)[:, 0]
-                else:
-                    kwargs[k] = initializer(subkey, v.shape, v.dtype)
-            except Exception as e:
-                print(f"Error initializing parameter {k} with shape {v.shape} and dtype {v.dtype}: {e}")
+            def do_init(v):
+                _initializer = None
 
-                kwargs[k] = jnp.zeros_like(v)
+                if self.initializers is not None:
+                    if k in self.initializers:
+                        _initializer = self.initializers[k]
+
+                        if isinstance(_initializer, str):
+                            name = _initializer.lower()
+                            kwargs = {}
+                            print(f"initializer for {k} is {name}")
+                        elif isinstance(_initializer, tuple):
+                            name, kwargs = _initializer
+                            name = name.lower()
+
+                            print(f"initializer for {k} is {name} with kwargs {kwargs}")
+
+                        else:
+                            raise ValueError(
+                                f"Initializer for {k} must be either a string or a tuple of (string, dict). Got {self.initializers[k]}"
+                            )
+
+                        if name in INITIALIZERS:
+                            _initializer = INITIALIZERS[name](**kwargs)
+                        else:
+                            raise ValueError(f"Initializer {name} not recognized.")
+
+                if _initializer is None:
+                    if v.ndim <= 1:
+                        _initializer = INITIALIZERS["zeros"]()
+                    else:
+                        _initializer = initializer
+
+                try:
+                    # print(f"{k=} {v.shape=} {_initializer=}")
+
+                    v_out = _initializer(subkey, v.shape, v.dtype)
+                except Exception as e:
+                    print(f"Error initializing parameter {k} with shape {v.shape} and dtype {v.dtype}: {e}")
+
+                    v_out = jnp.zeros_like(v)
+
+                return v_out
+
+            if not isinstance(v, jax.Array):
+                v_out = jax.tree_util.tree_map(do_init, v)
+            else:
+                v_out = do_init(v)
+
+            kwargs[k] = v_out
 
         if self.apply_rule is not None:
             kwargs = self.apply_rule(kwargs, self.static_kwargs)
@@ -4227,8 +4302,9 @@ class CvTrans(MyPyTreeNode):
         # jacfun: Callable = None,
         static_argnames=None,
         check_input: bool = True,
-        learnable_argnames: tuple[str] | None = None,
+        learnable_argnames: tuple[str, ...] | None = None,
         apply_rule: Callable[[dict, dict], dict] | None = None,
+        initializers: dict[str, str] | None = None,
         **kwargs,
     ) -> CvTrans:
         static_kwargs = {}
@@ -4243,6 +4319,7 @@ class CvTrans(MyPyTreeNode):
             static_kwargs=static_kwargs,
             learnable_kwargs=learnable_argnames,
             apply_rule=apply_rule,
+            initializers=initializers,
         )
 
         if check_input:
@@ -4275,6 +4352,18 @@ class CvTrans(MyPyTreeNode):
                         f"Error: {k} of type {type(v)} is not hashable, consider to make it hashable or not a static argument. exception: {e}"
                     )
                     raise
+
+            if initializers is not None:
+                for k in initializers.keys():
+                    assert k in kw["kwargs"], f"initializer arg {k} not in kwargs"
+
+                    p = initializers[k]
+                    if isinstance(p, str):
+                        p = p.lower()
+                    elif isinstance(p, tuple):
+                        p = p[0].lower()
+
+                    assert p in INITIALIZERS, f"initializer {initializers[k]} not recognized."
 
         return CvTrans(trans=_SerialCvTrans(trans=(CvFun(**kw),)))  # type: ignore
 

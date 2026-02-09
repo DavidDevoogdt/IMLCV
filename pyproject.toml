@@ -51,7 +51,9 @@ dependencies = [ "cloudpickle",
     "parsl",
     "umap-learn",
     "work-queue",
-    "mace-torch",
+    "mace-torch", 
+    "grain", 
+    "e3nn-jax>=0.20.8,<0.21",
 ]
 
 

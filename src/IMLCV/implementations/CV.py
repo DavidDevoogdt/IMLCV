@@ -121,6 +121,11 @@ def _distance(
     idx: Array | None = None,
     idx2: Array | None = None,
     distances: Array | None = None,
+    periodic: bool = True,
+    scale: float = 1.0 * angstrom,
+    inverse: bool = False,
+    log: bool = False,
+    eps: float = 1.0,
 ):
     if idx is None:
         idx = jnp.arange(x.shape[0])
@@ -131,9 +136,22 @@ def _distance(
     else:
         same = False
 
+    if periodic:
+        _f = x.min_distance
+    else:
+
+        def _f(index_1, index_2):
+            xi = x.coordinates[index_1]
+            xj = x.coordinates[index_2]
+
+            r2 = jnp.sum((xi - xj) ** 2)
+            r2_safe = jnp.where(r2 == 0, 1.0, r2)
+            r = jnp.where(r2 == 0, 0.0, jnp.sqrt(r2_safe))
+            return r
+
     dist = vmap_decorator(
         vmap_decorator(
-            x.min_distance,
+            _f,
             in_axes=(0, None),
         ),
         in_axes=(None, 0),
@@ -147,17 +165,39 @@ def _distance(
     else:
         dist = dist.flatten()
 
-    return CV(cv=dist / angstrom)
+    dist /= scale
+
+    if inverse or log:
+        dist = dist + eps
+
+    if inverse:
+        dist = 1 / dist
+
+    if log:
+        dist = jnp.log(dist)
+
+    return CV(cv=dist)
 
 
 def distance_descriptor(
     idx: Array | None = None,
     idx2: Array | None = None,
+    periodic: bool = True,
+    scale: float = 1.0 * angstrom,
+    inverse: bool = False,
+    log: bool = False,
+    eps: float = 1.0,
 ):
     return CvTrans.from_cv_function(
         _distance,
         idx=idx,
         idx2=idx2,
+        periodic=periodic,
+        scale=scale,
+        static_argnames=["periodic", "inverse", "log"],
+        inverse=inverse,
+        log=log,
+        eps=eps,
     )
 
 
@@ -1002,10 +1042,36 @@ def _linear_layer_apply_rule(
 
     if kind == "spectral_norm":
         print(f"spectral norm linear layer")
-        weights = kwargs["_weights"]
-        sigma = jnp.linalg.norm(weights, ord=2)
 
-        kwargs["weights"] = weights / sigma
+        if "_v" in kwargs:
+            v = kwargs["_v"]
+        else:
+            v = jnp.ones((kwargs["_weights"].shape[1],))
+
+        W = kwargs["_weights"]
+
+        # print(f"{W.shape=}, {v.shape=}")
+
+        def power(v, W):
+            # 2. Project to output space to get u
+            u_prod = W @ v
+            u_new = u_prod / (jnp.linalg.norm(u_prod) + 1e-12)
+
+            # 3. Project BACK to input space to update v for next time
+            v_prod = W.T @ u_new
+            v_new = v_prod / (jnp.linalg.norm(v_prod) + 1e-12)
+
+            # 4. Calculate Spectral Norm (sigma)
+            # sigma = u^T W v
+            sigma = jnp.einsum("i,ij,j->", u_new, W, v_new)
+
+            return v_new, sigma
+
+        for _ in range(5):
+            v, sigma = power(v, W)
+
+        kwargs["weights"] = W / sigma
+        kwargs["_v"] = v
     elif kind == "dense":
         kwargs["weights"] = kwargs["_weights"]
     elif kind == "ortho":
@@ -1058,13 +1124,14 @@ def _linear_layer(
     shmap,
     shmap_kwargs,
     weights: jnp.ndarray,
-    _weights: jnp.ndarray | None,
     biases: jnp.ndarray | None,
     M: int | None = None,
     N: int | None = None,
+    _weights: jnp.ndarray | None = None,
+    _v: jnp.ndarray | None = None,
     kind: str = "dense",
 ):
-    y = weights @ x.cv
+    y = x.cv @ weights
     if biases is not None:
         y += biases
 
@@ -1076,11 +1143,12 @@ def linear_layer(
     M: int | None = None,
     N: int | None = None,
     biases: bool = True,
+    initializer: str = "glorot_normal",
 ) -> CvTrans:
-    """Ax+b linear layer, with A matrix of shape (M,N)"""
+    """A.Tx+b linear layer, with A matrix of shape (M,N)"""
 
     if biases:
-        biases = jnp.zeros((M,))
+        biases = jnp.zeros((N,))
     else:
         biases = None
 
@@ -1107,6 +1175,341 @@ def linear_layer(
         apply_rule=_linear_layer_apply_rule,
         M=M,
         N=N,
+        initializers={
+            "_weights": initializer,
+            "biases": "zeros",
+        }
+        if biases is not None
+        else {"_weights": initializer},
+    )
+
+
+import e3nn_jax as e3nn
+import jax
+import jax.numpy as jnp
+
+# def _r_neigh_descriptor(
+#     sp: SystemParams,
+#     nl: NeighbourList,
+#     shmap,
+#     shmap_kwargs,
+# ):
+#     def dist(r, i):
+#         return r
+
+#     b0, d0 = nl.apply_fun_neighbour(
+#         sp=sp,
+#         func_single=dist,
+#         reduce="none",
+#         exclude_self=True,
+#     )
+
+#     print(f"r_neigh_descriptor {d0.shape=}")
+
+#     return CV(cv=d0.reshape((-1,)))
+
+
+# r_neigh_descriptor = CvTrans.from_cv_function(
+#     _r_neigh_descriptor,
+# )
+
+
+def _graph_neural_network(
+    # cv: CV,
+    sp: SystemParams,
+    nl: NeighbourList,
+    shmap,
+    shmap_kwargs,
+    radial_w: tuple[Array],
+    # w_skip: tuple[Array],
+    w_lin: tuple[Array],
+    linear_in,
+    biases,
+    hidden_irreps,
+    sh_irreps,
+    avg_neighbors=1.0,
+    r_cut=5.0,
+):
+    cutoff = r_cut
+    num_classes = len(nl.info.z_unique)
+    # assert nl.atom_indices is not None, "neighbourlist must have atom_indices for graph neural network"
+
+    # linear_in = params["linear_in"]
+    # radial_w = params["radial_w"]
+    # w1 = params["w1"]
+    # b1 = params["b1"]
+    # w2 = params["w2"]
+    # b2 = params["b2"]
+
+    def mace_envelope(r, p=3):
+        """
+        Polynomial envelope function that goes to zero at the cutoff.
+        Ensures smooth forces and second derivatives.
+        """
+        # Normalize distance to [0, 1]
+        x = r
+
+        # MACE/NequIP Polynomial formula:
+        # f(x) = 1 - [(p+1)(p+2)/2]x^p + [p(p+2)]x^{p+1} - [p(p+1)/2]x^{p+2}
+
+        term1 = ((p + 1) * (p + 2) / 2) * jnp.power(x, p)
+        term2 = (p * (p + 2)) * jnp.power(x, p + 1)
+        term3 = (p * (p + 1) / 2) * jnp.power(x, p + 2)
+
+        f_cut = 1 - term1 + term2 - term3
+
+        # Ensure it is strictly 0.0 beyond the cutoff and handles r=0
+        return jnp.where(x < 1.0, f_cut, 0.0)
+
+    def bessel_radial_basis(r_vecs, mask, num_basis=8, cutoff=5.0):
+        # 1. Calculate distances
+        dist = jnp.linalg.norm(r_vecs, axis=-1, keepdims=True)
+
+        # 2. Normalize distance to [0, 1]
+        d_norm = dist / cutoff
+
+        # jax.debug.print("Distances: {d_norm}", d_norm=d_norm)
+
+        # 3. Setup frequencies
+        n = jnp.arange(1, num_basis + 1)
+
+        # 4. Compute Basis: sin(n * pi * d_norm) / d_norm
+        # We add a small eps to dist to avoid div by zero NaN in the forward pass
+        eps = 1e-8
+        basis = jnp.sin(n * jnp.pi * d_norm) / (d_norm + eps)
+
+        # 5. Normalization Constant
+        # This ensures the basis functions have a similar variance
+        # Mathematically: sqrt(2/rc)
+        norm = jnp.sqrt(2.0 * cutoff)
+        basis = basis * norm * mace_envelope(d_norm)
+
+        return jnp.where(mask[..., None], basis, 0.0)
+
+    def equivariant_model(atomic_numbers, r_vecs, mask, atom_indices_ij):
+        """
+        Pure JAX Equivariant Model
+        atomic_numbers: (N,)
+        r_vecs: (N, D, 3)
+        mask: (N, D)
+        """
+
+        # meaning of indices:
+        # i: central atom index (0 to N-1)
+        # j: neighbor index (0 to D-1)
+        # l: irreps index
+        # p: radial basis index
+
+        # 1. one hot embedding and linear transform to hidden_irreps space
+        idx = jax.vmap(lambda x: jnp.argwhere(x == jnp.array(nl.info.z_unique), size=1).reshape(()))(atomic_numbers)
+        node_feats_pre = e3nn.IrrepsArray(f"{num_classes}x0e", jax.nn.one_hot(idx, num_classes=num_classes))
+        channels = linear_in.shape[1]
+
+        node_feats_il = jax.vmap(
+            e3nn.FunctionalLinear(
+                node_feats_pre.irreps,
+                f"{channels}x0e",
+                # path_normalization="path",
+                # gradient_normalization="elementwise",
+            ),
+            in_axes=(None, 0),
+        )(linear_in, node_feats_pre)
+
+        # Initial padding to get into the hidden_irreps space
+        old_dim = node_feats_il.irreps.dim
+        node_feats_il = node_feats_il.extend_with_zeros(hidden_irreps)
+        new_dim = node_feats_il.irreps.dim
+
+        node_feats_il = node_feats_il * jnp.sqrt(new_dim / old_dim)  # Normalize to keep variance stable
+
+        # 2. Geometry: Spherical Harmonics of relative vectors
+        # We use vmap twice to handle (Atoms, Neighbors)
+        # sh_irreps = e3nn.Irreps.spherical_harmonics(lmax=2)
+        edge_sh_ijl = e3nn.vmap(
+            e3nn.vmap(
+                e3nn.spherical_harmonics,
+                in_axes=(None, 0, None),
+            ),
+            in_axes=(None, 0, None),
+        )(sh_irreps, r_vecs, True)
+
+        # 3. Radial Basis for distances
+
+        edge_dist_ijp = bessel_radial_basis(r_vecs, mask, cutoff=cutoff)
+
+        @partial(jax.vmap, in_axes=(0, 0, 0, None, None))  # Map over atoms i
+        @partial(jax.vmap, in_axes=(0, 0, 0, None, None))  # Map over neighbors j
+        def atom_interaction(feat_l, edge_sh_l, e_dist_p, w_radial_pk, w_lin_kl):
+            # 1. Compute the Tensor Product first
+            # This creates messages with the same number of channels as n_feat
+            messages_l = e3nn.tensor_product(
+                feat_l,
+                edge_sh_l,
+                filter_ir_out=hidden_irreps,
+            )  # Keep only the hidden_irreps components
+
+            # 2. Compute the radial weights (shape: (16,))
+            radial_weights_k = jnp.dot(e_dist_p, w_radial_pk)
+            w_lin_kl = [a * b for a, b in zip(w_lin_kl, radial_weights_k)]
+
+            # 3. Mix the channels with a linear layer that depends on the radial weights
+            messages_k = e3nn.FunctionalLinear(
+                messages_l.irreps,
+                hidden_irreps,
+            )(w_lin_kl, messages_l)  # Apply a linear layer to mix the channels
+
+            return messages_k
+
+        print(f"start {node_feats_il=}")
+
+        for i, (radial_w_n, w_lin_n, b_n) in enumerate(zip(radial_w, w_lin, biases)):
+            # --- A. Interaction ---
+            # We pass the weights specific to this layer:
+
+            feat_ijl = node_feats_il[atom_indices_ij]
+            messages_ijl = atom_interaction(feat_ijl, edge_sh_ijl, edge_dist_ijp, radial_w_n, w_lin_n)
+
+            # --- B. Aggregation ---
+            # Sum over neighbors (axis 1) and apply mask. We also normalize by sqrt of average neighbors to keep the variance stable.
+            update_il = e3nn.sum(messages_ijl * mask[..., None], axis=1) / jnp.sqrt(avg_neighbors)
+
+            # --- C. Skip Connection ---
+            # 1/sqrt(2) is needed to keep unit variance
+            node_feats_il = (node_feats_il + update_il.filtered(hidden_irreps)) / jnp.sqrt(2)
+
+            # --- D. Nonlinearity ---
+            # Split features into scalars and geometric parts
+            scalars = node_feats_il.filter(keep="0e")
+            geometry = node_feats_il.filter(drop="0e")
+
+            # Activate only the scalars
+            activated_scalars = e3nn.IrrepsArray(scalars.irreps, jax.nn.gelu(scalars.array + b_n))
+
+            # Re-combine
+            node_feats_il = e3nn.concatenate([activated_scalars, geometry])
+
+        scalars = node_feats_il.filter(keep="0e").array  # (N, 16)
+
+        print(f"Final scalars shape: {scalars.shape=}")
+
+        # reduce over atoms with same value of z
+
+        @partial(jax.vmap, in_axes=(None, None, 0))  # Map over unique atomic numbers z
+        def red(scalars, atomic_numbers, z):
+            mask = atomic_numbers == z
+            return jnp.sum(scalars * mask[:, None], axis=0) / jnp.sum(mask)
+
+        scalars_pd = red(scalars, atomic_numbers, jnp.array(nl.info.z_unique))
+
+        return scalars_pd.reshape((-1,))
+
+    def dist(r, i):
+        return r
+
+    if nl.needs_calculation:
+        _, nl = nl.update_nl(sp)
+
+    b0, r0 = nl.apply_fun_neighbour(
+        sp=sp,
+        func_single=dist,
+        reduce="none",
+        exclude_self=True,
+    )
+
+    # r0 = cv.cv
+    # r0 = r0.reshape((-1, nl.update.num_neighs, 3))
+
+    n_sq = jnp.sum(r0**2, axis=-1)
+    b0 = jnp.logical_and(n_sq < cutoff**2, n_sq > 0)
+
+    out = equivariant_model(
+        jnp.array(nl.info.z_array),
+        r0,
+        b0,
+        nl.atom_indices,
+    )
+
+    print(f"graph neural network output {out.shape=}")
+
+    return CV(cv=out)
+
+
+def graph_neural_network(
+    sp,
+    nl: NeighbourList,
+    num_basis=8,
+    n_layer=3,
+    channels=16,
+    key=jax.random.PRNGKey(0),
+    l_max=1,
+    r_cut=None,
+):
+    if r_cut is None:
+        r_cut = nl.info.r_cut
+
+    avg_neighbors = jnp.mean(nl.nneighs(sp))
+    print(f"Average neighbors: {avg_neighbors}")
+
+    num_classes = len(nl.info.z_unique)
+
+    k1, k2, k3, k4, key = jax.random.split(key, 5)
+
+    learnable_params = {
+        "linear_in": jax.random.normal(k1, (num_classes, channels)),  # 10 species -> 16 channels
+        "radial_w": jax.random.normal(k2, (num_basis, 1)),  # 8 basis functions
+    }
+
+    radial_w = []
+    biases = []
+    w_lin = []
+
+    l_irrep = e3nn.Irreps.spherical_harmonics(l_max)
+    node_feat_irreps = e3nn.tensor_product(
+        l_irrep,
+        f"{channels}x0e",
+    )
+
+    messages_irrep = e3nn.tensor_product(
+        node_feat_irreps,
+        l_irrep,
+        filter_ir_out=node_feat_irreps,
+    )
+
+    for n in range(n_layer):
+        key, k1 = jax.random.split(key, 2)
+        radial_w.append(jax.random.normal(k1, (num_basis, channels)))
+        key, k1 = jax.random.split(key, 2)
+
+        w_lin_i = []
+        for x in messages_irrep:
+            key, k1 = jax.random.split(key, 2)
+            w_lin_i.append(jax.random.normal(k1, (x.mul, channels)))
+
+        w_lin.append(w_lin_i)
+
+        key, k1 = jax.random.split(key, 2)
+        biases.append(jax.random.normal(k1, (channels,)))
+
+    learnable_params["radial_w"] = tuple(radial_w)
+    learnable_params["w_lin"] = tuple(w_lin)
+    learnable_params["biases"] = tuple(biases)
+
+    initializers = dict(
+        linear_in=("normal", dict(stddev=1.0)),  # one hot -> every entry is normal
+        w_lin="glorot_normal",  # unit variance to unit variance
+        radial_w="glorot_normal",  # unit variance to unit variance
+        biases="zeros",  # zeros is usually best for biases
+    )
+
+    return CvTrans.from_cv_function(
+        _graph_neural_network,
+        learnable_argnames=tuple(learnable_params.keys()),
+        hidden_irreps=node_feat_irreps,
+        sh_irreps=l_irrep,
+        avg_neighbors=avg_neighbors,
+        r_cut=r_cut,
+        initializers=initializers,
+        **learnable_params,
     )
 
 
@@ -1284,6 +1687,22 @@ def scale_cv_trans(array: CV, lower: float = 0.0, upper: float = 1.0, periodic: 
     print(f"{mini=}, {maxi=}, {diff=} {upper=} {lower=} ")
 
     return CvTrans.from_cv_function(_scale_cv_trans, upper=upper, lower=lower, mini=mini, diff=diff)
+
+
+def _offset_cv_trans(x, nl, shmap, shmap_kwargs, offset, sigma=None):
+    u = x.cv + offset
+    if sigma is not None:
+        u = u / sigma
+
+    return x.replace(cv=u)
+
+
+def offset_cv_trans(offset: jax.Array, sigma: jax.Array | None = None) -> CvTrans:
+    return CvTrans.from_cv_function(
+        _offset_cv_trans,
+        offset=offset,
+        sigma=sigma,
+    )
 
 
 def _apply_learnable_scale(
@@ -1883,6 +2302,29 @@ def get_remove_mean_trans(c: CV, range=Ellipsis):
     trans = CvTrans.from_cv_function(_remove_mean, mean=mean)
 
     return trans.compute_cv(c)[0], trans
+
+
+def _standerdize(
+    cv: CV,
+    nl: NeighbourList | None,
+    shmap,
+    shmap_kwargs,
+    mean: Array | None = None,
+    std_inv: Array | None = None,
+    mask: Array | None = None,
+):
+    x = cv.cv
+
+    if mask is not None:
+        x = x[mask]
+
+    if mean is not None:
+        x = x - mean
+
+    if std_inv is not None:
+        x = x * std_inv
+
+    return cv.replace(cv=x)
 
 
 def _normalize(cv: CV, nl: NeighbourList | None, shmap, shmap_kwargs, mu, std_inv):
