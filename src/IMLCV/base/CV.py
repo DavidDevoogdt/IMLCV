@@ -437,6 +437,7 @@ def padded_vmap(
     axis=0,
     out_axes: int = 0,
     vmap=True,
+    shmap=False,
     verbose=False,
 ):
     axis = axis
@@ -464,75 +465,179 @@ def padded_vmap(
 
             return _function(*args, **kwargs)
 
-        in_tree_flat, tree_def = tree_flatten(args)
-        shape = int(in_tree_flat[0].shape[axis])
+        if axis != 0:
+            raise NotImplementedError("padded_vmap only supports axis=0 for now")
+        if out_axes != 0:
+            raise NotImplementedError("padded_vmap only supports out_axes=0 for now")
 
-        if shape < chunk_size:
-            if vmap:
-                _function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
-            else:
-                _function = function
+        # print("WARNING: padded_vmap is not reimplemented")
 
-            return _function(*args, **kwargs)
+        in_tree_flat, tree_def = tree_flatten((args, kwargs))
 
-        rem = shape % chunk_size
+        def _apply_fn(args_flat, not_shmap=False):
+            _args, _kwargs = tree_unflatten(tree_def, args_flat)
 
-        if rem != 0:
-            p = chunk_size - rem
+            if shmap and not not_shmap:
+                print("WARNING: pmap is not implemented, using vmap instead")
+                print(f"{_args[0].shape}")
+
+                return jax.pmap(function)(*_args, **_kwargs)
+
+                # devices = jax.devices("cpu")
+
+                # print(f"devices: {devices}")
+
+                # assert len(devices) >= chunk_size, f"not enough devices for shmap: {len(devices)} < {chunk_size}"
+
+                # n = args_flat[0].shape[axis]
+                # print(f"n: {n}, chunk_size: {chunk_size}")
+
+                # # devices = devices[:n]
+
+                # mesh = Mesh(devices[:n], (f"i{n}",))
+
+                # _, _, specs_in = _shard(
+                #     args_flat,
+                #     0,
+                #     f"i{n}",
+                #     mesh,
+                #     put=False,
+                # )
+
+                # def __apply_fn(*args_flat):
+                #     args, kwargs = tree_unflatten(tree_def, args_flat)
+
+                #     print(f"innermose {args=} {kwargs=}")
+
+                #     # vmap over single point
+                #     out = jax.vmap(function)(*args, **kwargs)
+
+                #     return tuple(tree_flatten(out)[0])
+
+                # _test_args, _test_kwargs = tree_unflatten(tree_def, args_flat)
+
+                # out_eval = jax.eval_shape(jax.vmap(function), *_test_args, **_test_kwargs)
+                # out_tree_eval, out_tree_def = tree_flatten(out_eval)
+                # print(f"out_tree_eval: {out_tree_eval}")
+
+                # _, specs_out, _ = _shard_out(
+                #     out_tree_eval,
+                #     0,
+                #     f"i{n}",
+                #     mesh,
+                #     put=False,
+                # )
+
+                # print(f"sharding  {specs_in=} {specs_out=}")
+
+                # out_flat = jax.shard_map(__apply_fn, in_specs=tuple(specs_in), out_specs=tuple(specs_out), mesh=mesh)(
+                #     *args_flat
+                # )
+
+                # out = tree_unflatten(out_tree_def, out_flat)
+
+                # print(f"done shmap {out=}")
+
+                # return out
+
+            return jax.vmap(function)(*_args, **_kwargs)
+
+        from jax._src.lax.control_flow.loops import _batch_and_remainder
+
+        scan_xs, remainder_xs = _batch_and_remainder(in_tree_flat, chunk_size)
+
+        def g(_, x):
+            return ((), _apply_fn(x))
+
+        if scan_xs is not None:
+            _, scan_ys = jax.lax.scan(g, (), scan_xs)
         else:
-            p = 0
+            scan_ys = None
 
-        @jit_decorator
-        def pad_tree(args):
-            return jax.tree.map(
-                Partial_decorator(
-                    _n_pad,
-                    axis=axis,
-                    p=p,
-                    chunk_size=chunk_size,
-                    reshape=True,
-                    move_axis=True,
-                    n_chunk_move=True,
-                ),
-                args,
+        def flatten(x):
+            return x.reshape(-1, *x.shape[2:])
+
+        if scan_ys is None:
+            ys = _apply_fn(remainder_xs, not_shmap=True)
+        elif remainder_xs is not None:
+            remainder_ys = _apply_fn(remainder_xs, not_shmap=True)
+            ys = jax.tree_util.tree_map(
+                lambda x, y: jax.lax.concatenate([flatten(x), y], dimension=0), scan_ys, remainder_ys
             )
+        else:
+            ys = jax.tree_util.tree_map(flatten, scan_ys)
 
-        in_tree_padded = pad_tree(args)
+        return ys
 
-        # print(f"chunked into {in_tree_padded[0].shape[0]} pieces")
+        # in_tree_flat, tree_def = tree_flatten(args)
+        # shape = int(in_tree_flat[0].shape[axis])
 
-        if verbose:
-            print(
-                f"padded_vmap: shape divided in {in_tree_padded[0].shape[0]} pieces of size {chunk_size} + {p}, calling function {function}"
-            )
+        # if shape < chunk_size:
+        #     if vmap:
+        #         _function = vmap_decorator(function, in_axes=axis, out_axes=out_axes)
+        #     else:
+        #         _function = function
 
-        def _apply_fn(args):
-            if verbose:
-                print(f"inside: {args[0].shape[0]=}, vmap_decorator over axis 0")
-            return vmap_decorator(function, in_axes=0)(*args, **kwargs)
+        #     return _function(*args, **kwargs)
 
-        out = jax.lax.map(
-            _apply_fn,
-            in_tree_padded,
-        )
+        # rem = shape % chunk_size
 
-        @jit_decorator
-        def unpad_tree(out):
-            return jax.tree.map(
-                Partial_decorator(
-                    _n_unpad,
-                    shape=shape,
-                    reshape=True,
-                    axis=axis,
-                    move_axis=True,
-                    n_chunk_move=True,
-                ),
-                out,
-            )
+        # if rem != 0:
+        #     p = chunk_size - rem
+        # else:
+        #     p = 0
 
-        out_reshaped = unpad_tree(out)
-        print("padded_vmap done")
-        return out_reshaped
+        # @jit_decorator
+        # def pad_tree(args):
+        #     return jax.tree.map(
+        #         Partial_decorator(
+        #             _n_pad,
+        #             axis=axis,
+        #             p=p,
+        #             chunk_size=chunk_size,
+        #             reshape=True,
+        #             move_axis=True,
+        #             n_chunk_move=True,
+        #         ),
+        #         args,
+        #     )
+
+        # in_tree_padded = pad_tree(args)
+
+        # # print(f"chunked into {in_tree_padded[0].shape[0]} pieces")
+
+        # if verbose:
+        #     print(
+        #         f"padded_vmap: shape divided in {in_tree_padded[0].shape[0]} pieces of size {chunk_size} + {p}, calling function {function}"
+        #     )
+
+        # def _apply_fn(args):
+        #     if verbose:
+        #         print(f"inside: {args[0].shape[0]=}, vmap_decorator over axis 0")
+        #     return vmap_decorator(function, in_axes=0)(*args, **kwargs)
+
+        # out = jax.lax.map(
+        #     _apply_fn,
+        #     in_tree_padded,
+        # )
+
+        # @jit_decorator
+        # def unpad_tree(out):
+        #     return jax.tree.map(
+        #         Partial_decorator(
+        #             _n_unpad,
+        #             shape=shape,
+        #             reshape=True,
+        #             axis=axis,
+        #             move_axis=True,
+        #             n_chunk_move=True,
+        #         ),
+        #         out,
+        #     )
+
+        # out_reshaped = unpad_tree(out)
+        # print("padded_vmap done")
+        # return out_reshaped
 
     return apply_vmap_fn
 
@@ -558,6 +663,7 @@ def macro_chunk_map_fun(
     d_w: list[Array] | None = None,
     print_every=10,
     jit_f=True,
+    debug_print=False,
 ) -> T:
     if w_t is None and y_t is not None:
         w_t = w
@@ -578,6 +684,7 @@ def macro_chunk_map_fun(
         d_w=d_w,
         print_every=print_every,
         jit_f=jit_f,
+        debug_print=debug_print,
     )  # type: ignore
 
 
@@ -592,6 +699,7 @@ def macro_chunk_map(
     verbose=False,
     print_every=10,
     jit_f=True,
+    debug_print=False,
 ) -> list[X2] | tuple[list[X2], list[X2] | None]:
     return _macro_chunk_map(
         f=f,
@@ -604,6 +712,7 @@ def macro_chunk_map(
         verbose=verbose,
         print_every=print_every,
         jit_f=jit_f,
+        debug_print=debug_print,
     )  # type: ignore
 
 
@@ -623,6 +732,7 @@ def _macro_chunk_map(
     d_w: list[Array] | None = None,
     print_every=10,
     jit_f=True,
+    debug_print=False,
 ):
     # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
 
@@ -908,7 +1018,10 @@ def _macro_chunk_map(
                 )
 
             if verbose:
-                print(".", end="", flush=True)
+                if debug_print:
+                    jax.debug.print(".")  # no idea how to not print a newline with jax.debug.print
+                else:
+                    print(".", end="", flush=True)
 
                 n_iter += 1
                 if n_iter % print_every == 0:
@@ -920,12 +1033,14 @@ def _macro_chunk_map(
 
                     dte = dt0 + (dt - dt0) / (n_iter) * (n_chunks + (rem != 0))
 
-                    print(
-                        f"\ntime: {dt:%H:%M:%S}.{dt.microsecond // 1000:03d}, estimated end time {dte:%H:%M:%S}.{dte.microsecond // 1000:03d}:, {n_iter:>3}/{n_chunks + (rem != 0)}:",  # type: ignore
-                        end="",
-                        flush=True,
-                    )
-
+                    if debug_print:
+                        jax.debug.print("debug print: {a}/{b}", a=n_iter, b=n_chunks + (rem != 0))
+                    else:
+                        print(
+                            f"\ntime: {dt:%H:%M:%S}.{dt.microsecond // 1000:03d}, estimated end time {dte:%H:%M:%S}.{dte.microsecond // 1000:03d}:, {n_iter:>3}/{n_chunks + (rem != 0)}:",  # type: ignore
+                            end="",
+                            flush=True,
+                        )
             # keep track of recompilation cache. Frequent recompilation indicates a problem
             if jit_f:
                 if (cs := f._cache_size()) != f_cache:  # type: ignore
@@ -1124,6 +1239,66 @@ def _macro_chunk_map(
         return z
 
     return chunk_func_init_args
+
+
+def chunk_selector(
+    data_list: list[list[SystemParams | CV | Array]],
+    target_size,
+    key,
+    keep_stack_info=False,
+    weight_list: list[Array] | None = None,
+):
+    # 1. Calculate the size of each Pytree in the list
+    # We look at the first leaf of each Pytree to get its row count
+    sizes = jnp.array([p.shape[0] for p in data_list[0]])
+    offsets = jnp.cumsum(jnp.concatenate([jnp.array([0]), sizes[:-1]]))
+    total_size = jnp.sum(sizes)
+
+    # 2. Pick global random indices
+    global_indices = jax.random.choice(
+        key=key,
+        a=total_size,
+        shape=(target_size,),
+        p=jnp.hstack(weight_list) if weight_list is not None else None,
+        replace=True,
+    )
+
+    # 3. Determine which Pytree and which local index each global index refers to
+    # searchsorted tells us which "bucket" the index falls into
+    pytree_indices = jnp.searchsorted(offsets, global_indices, side="right") - 1
+    local_indices = global_indices - offsets[pytree_indices]
+
+    # 4. Extract only the required slices from each Pytree
+    out = []
+    for p in data_list:
+        extracted = []
+
+        for j, k in enumerate(p):
+            # Find which of our random picks belong to the i-th Pytree
+            mask = pytree_indices == j
+
+            # Using jnp.any because inside a loop this might be empty for some Pytrees
+            if jnp.any(mask):
+                idx_to_pull = local_indices[mask]
+                # Pull only the required rows from this specific Pytree
+                extracted.append(jax.tree.map(lambda x: x[idx_to_pull], k))
+
+        x = extracted[0]  # Start with the first extracted part
+
+        if isinstance(x, CV):
+            stack = x.stack(*extracted)
+            if not keep_stack_info:
+                stack.stack_dims = None
+            out.append(stack)
+
+        elif isinstance(x, SystemParams):
+            stack = SystemParams.stack(*extracted)
+
+            out.append(stack)
+        else:
+            out.append(jnp.concatenate(extracted, axis=0))
+
+    return out
 
 
 class SystemParams(MyPyTreeNode):
@@ -2739,8 +2914,11 @@ class NeighbourList(MyPyTreeNode):
             return nl
 
         print(f"slow update_nl")
+        old_update = self.update
 
         self = sp.get_neighbour_list(self.info)
+
+        print(f"{self.update=}, {old_update=}")
 
         return self
 
@@ -2798,15 +2976,18 @@ class NeighbourList(MyPyTreeNode):
 
         # assert m is not None
 
-        r_cut = jnp.max(jnp.array([nli.info.r_cut for nli in nls]))
+        r_cut = max([nli.info.r_cut for nli in nls])
 
         def c(a, b):
+            # print(f"{a=} {b=}")
+
             if a is None:
                 assert b is None
             else:
-                assert jnp.all(a == b)
+                for ai, bi in zip(a, b):
+                    assert ai == bi
 
-        _stack_dims = []
+        _stack_dims: list[int] = []
 
         # consistency checks
         for nl_i in nls:
@@ -2831,17 +3012,14 @@ class NeighbourList(MyPyTreeNode):
                 assert nl_i.update.nxyz is not None
                 nxyz = [max(a, b) for a, b in zip(nxyz, nl_i.update.nxyz)]
 
-            m = jnp.max(
-                jnp.array([m, nl_i.update.num_neighs]),
-            )
+            print(f"{nl_i.update.num_neighs=}")
 
-        m = int(m)
+            m = max(m, nl_i.update.num_neighs)
 
-        r_skin = jnp.min(jnp.array([nli.info.r_cut + nli.info.r_skin - r_cut for nli in nls]))
+        r_skin = min([nli.info.r_cut + nli.info.r_skin - r_cut for nli in nls])
 
         @partial(vmap_decorator, in_axes=(0, None))
         def _p(a: jax.Array, constant_value=None):
-            # pad to size of largest neighbourlist
             n = m - a.shape[-1]
 
             return jnp.pad(
@@ -2885,17 +3063,23 @@ class NeighbourList(MyPyTreeNode):
         else:
             sp_orig = None
 
+        info = info = NeighbourListInfo(
+            r_cut=r_cut,  # type: ignore
+            z_array=z_array,
+            z_unique=z_unique,
+            num_z_unique=num_z_unique,
+            r_skin=r_skin,
+        )
+
+        update = NeighbourListUpdate(
+            nxyz=nxyz,
+            stack_dims=tuple(_stack_dims),
+            num_neighs=m,
+        )
+
         return NeighbourList(
-            info=NeighbourListInfo.create(
-                r_cut,  # type: ignore
-                z_array,
-                r_skin=r_skin,
-            ),
-            update=NeighbourListUpdate.create(
-                stack_dims=_stack_dims,
-                nxyz=nxyz,
-                num_neighs=m,
-            ),
+            info=info,
+            update=update,
             atom_indices=jnp.vstack(atom_indices) if not atom_indices_none else None,  # type: ignore
             sp_orig=sp_orig,
             ijk_indices=jnp.vstack(ijk_indices) if not ijk_indices_none else None,  # type: ignore
@@ -3901,10 +4085,11 @@ class CvFunBase(ABC, MyPyTreeNode):
                     learnable_kwargs=learnable_kwargs,
                 ),
                 chunk_size=chunk_size,
+                shmap=shmap,
             )
 
-            if shmap:
-                _f = padded_shard_map(_f, shmap_kwargs)
+            # if shmap:
+            #     _f = padded_shard_map(_f, shmap_kwargs)
 
             return _f(x, nl)
 
@@ -4397,10 +4582,11 @@ class CvTrans(MyPyTreeNode):
                     reverse=reverse,
                 ),
                 chunk_size=chunk_size,
+                shmap=shmap,
             )
 
-            if shmap:
-                _f = padded_shard_map(_f, shmap_kwargs)
+            # if shmap:
+            #     _f = padded_shard_map(_f, shmap_kwargs)
 
             return _f(x, nl)
 

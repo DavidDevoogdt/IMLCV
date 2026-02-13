@@ -1148,9 +1148,9 @@ def linear_layer(
     """A.Tx+b linear layer, with A matrix of shape (M,N)"""
 
     if biases:
-        biases = jnp.zeros((N,))
+        _biases = jnp.zeros((N,))
     else:
-        biases = None
+        _biases = None
 
     if kind in ["dense", "spectral_norm"]:
         _weights = jnp.ones((M, N))
@@ -1163,14 +1163,14 @@ def linear_layer(
 
     return CvTrans.from_cv_function(
         _linear_layer,
-        learnable_argnames=["_weights", "biases"] if biases is not None else ["_weights"],
+        learnable_argnames=["_weights", "biases"] if _biases is not None else ["_weights"],
         static_argnames=["kind", "M", "N"],
         _weights=_weights,
         weights=_linear_layer_apply_rule(
             {"_weights": _weights},
             {"kind": kind, "M": M, "N": N},
         )["weights"],
-        biases=biases,
+        biases=_biases,
         kind=kind,
         apply_rule=_linear_layer_apply_rule,
         M=M,
@@ -1179,7 +1179,7 @@ def linear_layer(
             "_weights": initializer,
             "biases": "zeros",
         }
-        if biases is not None
+        if _biases is not None
         else {"_weights": initializer},
     )
 
@@ -1229,8 +1229,10 @@ def _graph_neural_network(
     sh_irreps,
     avg_neighbors=1.0,
     r_cut=5.0,
+    num_basis=8,
 ):
-    cutoff = r_cut
+    assert nl is not None, "provide neighbourlist for graph neural network descriptor"
+    # cutoff = r_cut
     num_classes = len(nl.info.z_unique)
     # assert nl.atom_indices is not None, "neighbourlist must have atom_indices for graph neural network"
 
@@ -1241,7 +1243,7 @@ def _graph_neural_network(
     # w2 = params["w2"]
     # b2 = params["b2"]
 
-    def mace_envelope(r, p=3):
+    def mace_envelope(r, p=6):
         """
         Polynomial envelope function that goes to zero at the cutoff.
         Ensures smooth forces and second derivatives.
@@ -1261,12 +1263,15 @@ def _graph_neural_network(
         # Ensure it is strictly 0.0 beyond the cutoff and handles r=0
         return jnp.where(x < 1.0, f_cut, 0.0)
 
-    def bessel_radial_basis(r_vecs, mask, num_basis=8, cutoff=5.0):
+    @partial(jax.vmap, in_axes=(0, 0))  # Map over atoms i
+    @partial(jax.vmap, in_axes=(0, 0))  # Map over neighbors j
+    def bessel_radial_basis(r_vecs, mask):
         # 1. Calculate distances
-        dist = jnp.linalg.norm(r_vecs, axis=-1, keepdims=True)
+        print(f"inside bbessel {r_vecs=} {mask=}")
+        dist = jnp.linalg.norm(r_vecs)
 
-        # 2. Normalize distance to [0, 1]
-        d_norm = dist / cutoff
+        # # 2. Normalize distance to [0, 1]
+        # d_norm = dist
 
         # jax.debug.print("Distances: {d_norm}", d_norm=d_norm)
 
@@ -1276,15 +1281,17 @@ def _graph_neural_network(
         # 4. Compute Basis: sin(n * pi * d_norm) / d_norm
         # We add a small eps to dist to avoid div by zero NaN in the forward pass
         eps = 1e-8
-        basis = jnp.sin(n * jnp.pi * d_norm) / (d_norm + eps)
+        basis = jnp.sin(n * jnp.pi * dist / r_cut) / (dist + eps)
 
         # 5. Normalization Constant
         # This ensures the basis functions have a similar variance
         # Mathematically: sqrt(2/rc)
-        norm = jnp.sqrt(2.0 * cutoff)
-        basis = basis * norm * mace_envelope(d_norm)
+        norm = jnp.sqrt(2.0 / r_cut)
+        basis = basis * norm * mace_envelope(dist / r_cut)
 
-        return jnp.where(mask[..., None], basis, 0.0)
+        print(f"radial basis {basis.shape=}")
+
+        return jnp.where(mask, basis, 0.0)
 
     def equivariant_model(atomic_numbers, r_vecs, mask, atom_indices_ij):
         """
@@ -1335,11 +1342,13 @@ def _graph_neural_network(
 
         # 3. Radial Basis for distances
 
-        edge_dist_ijp = bessel_radial_basis(r_vecs, mask, cutoff=cutoff)
+        edge_dist_ijp = bessel_radial_basis(r_vecs, mask)
 
-        @partial(jax.vmap, in_axes=(0, 0, 0, None, None))  # Map over atoms i
-        @partial(jax.vmap, in_axes=(0, 0, 0, None, None))  # Map over neighbors j
-        def atom_interaction(feat_l, edge_sh_l, e_dist_p, w_radial_pk, w_lin_kl):
+        @partial(jax.vmap, in_axes=(0, None, 0, 0, None, None))  # Map over atoms i
+        @partial(jax.vmap, in_axes=(0, None, 0, 0, None, None))  # Map over neighbors j
+        def atom_interaction(atom_index, feat_il, edge_sh_l, e_dist_p, w_radial_pk, w_lin_kl):
+            feat_l = feat_il[atom_index]  # (D, hidden_irreps)
+
             # 1. Compute the Tensor Product first
             # This creates messages with the same number of channels as n_feat
             messages_l = e3nn.tensor_product(
@@ -1360,14 +1369,18 @@ def _graph_neural_network(
 
             return messages_k
 
-        print(f"start {node_feats_il=}")
+        def full_message_passing(node_feats_il, x):
+            radial_w_n, w_lin_n, b_n = x
+            # print(f"start {node_feats_il=}")
 
-        for i, (radial_w_n, w_lin_n, b_n) in enumerate(zip(radial_w, w_lin, biases)):
+            # for i, (radial_w_n, w_lin_n, b_n) in enumerate(zip(radial_w, w_lin, biases)):
             # --- A. Interaction ---
             # We pass the weights specific to this layer:
 
-            feat_ijl = node_feats_il[atom_indices_ij]
-            messages_ijl = atom_interaction(feat_ijl, edge_sh_ijl, edge_dist_ijp, radial_w_n, w_lin_n)
+            # feat_ijl = node_feats_il[atom_indices_ij]
+            messages_ijl = atom_interaction(
+                atom_indices_ij, node_feats_il, edge_sh_ijl, edge_dist_ijp, radial_w_n, w_lin_n
+            )
 
             # --- B. Aggregation ---
             # Sum over neighbors (axis 1) and apply mask. We also normalize by sqrt of average neighbors to keep the variance stable.
@@ -1388,16 +1401,24 @@ def _graph_neural_network(
             # Re-combine
             node_feats_il = e3nn.concatenate([activated_scalars, geometry])
 
+            return node_feats_il, None
+
+        node_feats_il, _ = jax.lax.scan(
+            full_message_passing,
+            node_feats_il,
+            jax.tree_util.tree_map(lambda *args: jnp.stack(args), *zip(radial_w, w_lin, biases)),
+        )
+
         scalars = node_feats_il.filter(keep="0e").array  # (N, 16)
 
-        print(f"Final scalars shape: {scalars.shape=}")
-
-        # reduce over atoms with same value of z
+        # TODO: just use nl.nl_split_z
 
         @partial(jax.vmap, in_axes=(None, None, 0))  # Map over unique atomic numbers z
         def red(scalars, atomic_numbers, z):
             mask = atomic_numbers == z
-            return jnp.sum(scalars * mask[:, None], axis=0) / jnp.sum(mask)
+            return jnp.sum(scalars * mask[:, None], axis=0) / jnp.sqrt(
+                jnp.sum(mask)
+            )  # keep unit variance by dividing by sqrt of number of atoms of that type
 
         scalars_pd = red(scalars, atomic_numbers, jnp.array(nl.info.z_unique))
 
@@ -1414,13 +1435,8 @@ def _graph_neural_network(
         func_single=dist,
         reduce="none",
         exclude_self=True,
+        r_cut=r_cut,
     )
-
-    # r0 = cv.cv
-    # r0 = r0.reshape((-1, nl.update.num_neighs, 3))
-
-    n_sq = jnp.sum(r0**2, axis=-1)
-    b0 = jnp.logical_and(n_sq < cutoff**2, n_sq > 0)
 
     out = equivariant_model(
         jnp.array(nl.info.z_array),
@@ -1428,6 +1444,8 @@ def _graph_neural_network(
         b0,
         nl.atom_indices,
     )
+
+    # nl.nl_split_z()
 
     print(f"graph neural network output {out.shape=}")
 
@@ -1443,6 +1461,7 @@ def graph_neural_network(
     key=jax.random.PRNGKey(0),
     l_max=1,
     r_cut=None,
+    parity=False,
 ):
     if r_cut is None:
         r_cut = nl.info.r_cut
@@ -1463,17 +1482,28 @@ def graph_neural_network(
     biases = []
     w_lin = []
 
-    l_irrep = e3nn.Irreps.spherical_harmonics(l_max)
+    # edge irrep
+    sh_irrep = e3nn.Irreps.spherical_harmonics(l_max)
+
+    parities = [1, -1] if parity else [1]
+    message_irrep = e3nn.Irreps([(1, (l, p)) for l in range(l_max + 1) for p in parities])
+
     node_feat_irreps = e3nn.tensor_product(
-        l_irrep,
+        message_irrep,
         f"{channels}x0e",
     )
 
-    messages_irrep = e3nn.tensor_product(
+    large_irrep = e3nn.tensor_product(
         node_feat_irreps,
-        l_irrep,
-        filter_ir_out=node_feat_irreps,
+        sh_irrep,
+        filter_ir_out=message_irrep,
     )
+
+    print(f"message_irrep {message_irrep=} {large_irrep=} {node_feat_irreps=}")
+
+    # print(f"node_feat_irreps  {l_irrep=}  {node_feat_irreps=}{messages_irrep=} ")
+
+    # print(f"messages_irrep {messages_irrep=}")
 
     for n in range(n_layer):
         key, k1 = jax.random.split(key, 2)
@@ -1481,7 +1511,7 @@ def graph_neural_network(
         key, k1 = jax.random.split(key, 2)
 
         w_lin_i = []
-        for x in messages_irrep:
+        for x in large_irrep:
             key, k1 = jax.random.split(key, 2)
             w_lin_i.append(jax.random.normal(k1, (x.mul, channels)))
 
@@ -1503,12 +1533,14 @@ def graph_neural_network(
 
     return CvTrans.from_cv_function(
         _graph_neural_network,
+        static_argnames=["num_basis"],
         learnable_argnames=tuple(learnable_params.keys()),
         hidden_irreps=node_feat_irreps,
-        sh_irreps=l_irrep,
+        sh_irreps=sh_irrep,
         avg_neighbors=avg_neighbors,
         r_cut=r_cut,
         initializers=initializers,
+        num_basis=num_basis,
         **learnable_params,
     )
 

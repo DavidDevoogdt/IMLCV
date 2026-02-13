@@ -352,9 +352,9 @@ if __name__ == "__main__":
 
         file_in = Path(args.file_in)
 
-        from IMLCV import unpickler
-
         if file_in.suffix == ".json":
+            from IMLCV import unpickler
+
             with open(file_in) as f1:
                 func, fargs, fkwargs, ref_com = jsonpickle.decode(f1.read(), context=unpickler)  # type: ignore
         else:
@@ -397,18 +397,25 @@ if __name__ == "__main__":
 
     REFERENCE_COMMANDS.update(ref_com)  # type: ignore
 
-    if args.profile:
-        import cProfile
-        import pstats
+    try:
+        if args.profile:
+            import cProfile
+            import pstats
 
-        with cProfile.Profile() as pr:
+            with cProfile.Profile() as pr:
+                a = func(*fargs, **fkwargs)  # type: ignore
+
+            ps = pstats.Stats(pr)
+            ps.sort_stats(pstats.SortKey.CUMULATIVE).print_stats()
+
+        else:
             a = func(*fargs, **fkwargs)  # type: ignore
+    except Exception as e:
+        print(f"error in rank {rank}: {e}")
 
-        ps = pstats.Stats(pr)
-        ps.sort_stats(pstats.SortKey.CUMULATIVE).print_stats()
+        print(f"got input {func=} {fargs=} {fkwargs=}")
 
-    else:
-        a = func(*fargs, **fkwargs)  # type: ignore
+        raise e
 
     if args.uses_mpi:
         a = comm.gather(a, root=0)

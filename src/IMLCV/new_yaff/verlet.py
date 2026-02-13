@@ -470,6 +470,9 @@ class VerletIntegrator(MyPyTreeNode):
             if jnp.any(jnp.isnan(self.rvecs)):
                 raise ValueError(f"sp containes nans: {self.rvecs=}")
 
+            # update the neighbour list if needed
+            self.yaff_ff.system.update_nl()
+
         for hook in [verlet_hook, *self.other_hooks]:
             hook: Hook
             if hook.expects_call(self.counter):

@@ -485,6 +485,9 @@ class TransformerMAF(Transformer):
     target_smoothness: float = 20 * kjmol / (boltzmann * 300)
     alpha_smooth: float = 0.1  # barrier of 10 kT
 
+    batch_size: int = 1024
+    batch_chunk_size: int = 16
+
     @staticmethod
     def _transform(
         cv,
@@ -645,6 +648,8 @@ class TransformerMAF(Transformer):
                 entropy_reg=self.entropy_reg,
                 target_smoothness=self.target_smoothness,
                 alpha_smooth=self.alpha_smooth,
+                batch_size=self.batch_size,
+                batch_chunk_size=self.batch_chunk_size,
                 # shrinkage_method="BC",
             )
 

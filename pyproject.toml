@@ -51,8 +51,8 @@ dependencies = [ "cloudpickle",
     "parsl",
     "umap-learn",
     "work-queue",
-    "mace-torch", 
-    "grain", 
+    "mace-torch",
+    "grain",
     "e3nn-jax>=0.20.8,<0.21",
 ]
 
@@ -98,9 +98,11 @@ torch = "*"
 IMLCV = { path = ".", editable = true }
 
 [tool.pixi.pypi-options]
-extra-index-urls = ["https://download.pytorch.org/whl/cpu"]
+extra-index-urls = [
+    "https://download.pytorch.org/whl/cpu",
+    ]
 
-
+#find-links = [{url = "https://storage.googleapis.com/jax-releases/jax_rocm_releases.html"}]
 [tool.pixi.feature.rocm.pypi-options]
 extra-index-urls = ["https://download.pytorch.org/whl/rocm6.4"]
 
@@ -115,10 +117,17 @@ extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
 
 # https://github.com/ROCm/jax/releases/download/rocm-jax-v0.7.1/jaxlib-0.7.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
 
+#jax = { version = "*" }
+#jax-rocm7-pjrt  = {version = "*"}
+#jax-rocm7-plugin = {version = "*"}
+#jaxlib = {version = "*"}
+
+
+
 jax = "==0.7.1"
-jax-rocm7-pjrt  = "==0.7.1"
+jaxlib = "==0.7.1"
+jax-rocm7-pjrt = "==0.7.1"
 jax-rocm7-plugin = "==0.7.1"
-jaxlib = { url = "https://github.com/ROCm/jax/releases/download/rocm-jax-v0.7.1/jaxlib-0.7.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" }
 
 [tool.pixi.feature.cuda13.pypi-dependencies]
 
@@ -152,3 +161,4 @@ jupyter = "*"
 pre-commit = "*"
 ndcctools = "*"
 pytest = "*"
+
