@@ -488,6 +488,8 @@ class TransformerMAF(Transformer):
     batch_size: int = 1024
     batch_chunk_size: int = 16
 
+    re_init: bool = True
+
     @staticmethod
     def _transform(
         cv,
@@ -650,6 +652,7 @@ class TransformerMAF(Transformer):
                 alpha_smooth=self.alpha_smooth,
                 batch_size=self.batch_size,
                 batch_chunk_size=self.batch_chunk_size,
+                init_learnable_params=self.re_init,
                 # shrinkage_method="BC",
             )
 

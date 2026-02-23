@@ -53,7 +53,7 @@ dependencies = [ "cloudpickle",
     "work-queue",
     "mace-torch",
     "grain",
-    "e3nn-jax>=0.20.8,<0.21",
+    "e3nn-jax>=0.20.8,<0.21", 
 ]
 
 
@@ -96,6 +96,7 @@ jaxlib = "*"
 torch = "*"
 
 IMLCV = { path = ".", editable = true }
+mace_jax = { path = "external/mace-jax", editable = true }
 
 [tool.pixi.pypi-options]
 extra-index-urls = [

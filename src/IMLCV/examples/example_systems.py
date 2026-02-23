@@ -560,7 +560,10 @@ def cyclohexane(CV=True, save_step=50):
     return engine, sps
 
 
-def CsPbI3_MACE(unit_cells=[2]):
+def CsPbI3_MACE(
+    unit_cells=[2],
+    r_cut=6 * angstrom,
+):
     assert isinstance(unit_cells, list)
 
     if len(unit_cells) == 3:
@@ -581,8 +584,6 @@ def CsPbI3_MACE(unit_cells=[2]):
         atoms=atoms[0],
     )
 
-    r_cut = 6 * angstrom
-
     tic = StaticMdInfo(
         write_step=50,
         T=300 * kelvin,
@@ -593,6 +594,7 @@ def CsPbI3_MACE(unit_cells=[2]):
         atomic_numbers=z_array,
         equilibration=0 * femtosecond,
         screen_log=50,
+        save_step=50,
         r_cut=r_cut,
     )
 
@@ -603,9 +605,10 @@ def CsPbI3_MACE(unit_cells=[2]):
         energy=energy,
         bias=bias,
         static_trajectory_info=tic,
+        sp=refs[0],
     )
 
-    return yaffmd
+    return yaffmd, refs
 
 
 def CsPbI3_MACE_lattice(unit_cells=[2], save_step=1):

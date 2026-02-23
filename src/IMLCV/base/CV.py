@@ -4040,6 +4040,7 @@ INITIALIZERS = {
     "uniform": jax.nn.initializers.uniform,
     "zeros": lambda: jax.nn.initializers.zeros,
     "ones": lambda: jax.nn.initializers.ones,
+    "orthogonal": jax.nn.initializers.orthogonal,
 }
 
 
@@ -4048,7 +4049,11 @@ class CvFunBase(ABC, MyPyTreeNode):
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
     learnable_kwargs: tuple[str] | None = field(pytree_node=False, default=None)
     apply_rule: Callable[[dict, dict], dict] | None = field(pytree_node=False, default=None)
-    initializers: dict[str, str | tuple[str, dict]] | None = field(pytree_node=False, default=None)
+    custom_getstate: Callable[[], dict] | None = field(pytree_node=False, default=None)
+    custom_setstate: Callable[[dict], CvFunBase] | None = field(pytree_node=False, default=None)
+    initializers: dict[str, str | tuple[str, dict]] | Callable[[...], dict] | None = field(
+        pytree_node=False, default=None
+    )
 
     @partial(
         jit_decorator,
@@ -4133,9 +4138,21 @@ class CvFunBase(ABC, MyPyTreeNode):
         raise
 
     def __getstate__(self):
+        print(f"{self.custom_getstate=}")
+        if self.custom_getstate is not None:
+            _d = self.custom_getstate()
+
+            print(f"custom getstate returned {_d=}")
+            return _d
+
         return self.__dict__
 
     def __setstate__(self, statedict: dict):
+        print(f"{self.custom_setstate=}")
+        if self.custom_setstate is not None:
+            statedict = self.custom_setstate(statedict)
+            print(f"after custom setstate {statedict=}")
+
         if "static_kwarg_names" in statedict:
             statedict["static_kwargs"] = {k: statedict.pop(k) for k in statedict["static_kwarg_names"]}
 
@@ -4198,6 +4215,15 @@ class CvFunBase(ABC, MyPyTreeNode):
     def init_learnable_params(self, key=jax.random.PRNGKey(0), initializer=jax.nn.initializers.lecun_normal()):
         if self.learnable_kwargs is None:
             return None
+
+        if isinstance(self.initializers, Callable):
+            print(f"initializing learnable params with {self.initializers=}")
+            return self.initializers(
+                key,
+                self.kwargs,
+                self.static_kwargs,
+                self.learnable_kwargs,
+            )
 
         kwargs = {}
 
@@ -4489,7 +4515,9 @@ class CvTrans(MyPyTreeNode):
         check_input: bool = True,
         learnable_argnames: tuple[str, ...] | None = None,
         apply_rule: Callable[[dict, dict], dict] | None = None,
-        initializers: dict[str, str] | None = None,
+        initializers: dict[str, str] | Callable | None = None,
+        custom_getstate: Callable[[], dict] | None = None,
+        custom_setstate: Callable[[dict], None] | None = None,
         **kwargs,
     ) -> CvTrans:
         static_kwargs = {}
@@ -4505,6 +4533,8 @@ class CvTrans(MyPyTreeNode):
             learnable_kwargs=learnable_argnames,
             apply_rule=apply_rule,
             initializers=initializers,
+            custom_getstate=custom_getstate,
+            custom_setstate=custom_setstate,
         )
 
         if check_input:
@@ -4539,16 +4569,22 @@ class CvTrans(MyPyTreeNode):
                     raise
 
             if initializers is not None:
-                for k in initializers.keys():
-                    assert k in kw["kwargs"], f"initializer arg {k} not in kwargs"
+                if isinstance(initializers, Callable):
+                    pass
 
-                    p = initializers[k]
-                    if isinstance(p, str):
-                        p = p.lower()
-                    elif isinstance(p, tuple):
-                        p = p[0].lower()
+                elif isinstance(initializers, dict):
+                    for k in initializers.keys():
+                        assert k in kw["kwargs"], f"initializer arg {k} not in kwargs"
 
-                    assert p in INITIALIZERS, f"initializer {initializers[k]} not recognized."
+                        p = initializers[k]
+                        if isinstance(p, str):
+                            p = p.lower()
+                        elif isinstance(p, tuple):
+                            p = p[0].lower()
+
+                        assert p in INITIALIZERS, f"initializer {initializers[k]} not recognized."
+                else:
+                    raise ValueError("initializers must be either a dict or a callable")
 
         return CvTrans(trans=_SerialCvTrans(trans=(CvFun(**kw),)))  # type: ignore
 

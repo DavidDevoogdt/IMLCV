@@ -17,7 +17,7 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.base.UnitsConstants import angstrom
-
+from flax import nnx
 ######################################
 #       CV transformations           #
 ######################################
@@ -1214,335 +1214,612 @@ import jax.numpy as jnp
 # )
 
 
-def _graph_neural_network(
-    # cv: CV,
+def _graph_neural_network_model(model_kwargs, key=0):
+    from mace_jax.modules import (
+        LinearNodeEmbeddingBlock,
+        RadialEmbeddingBlock,
+        InteractionBlock,
+        EquivariantProductBasisBlock,
+        NonLinearReadoutBlock,
+        RealAgnosticInteractionBlock,
+    )
+    from mace_jax.modules.models import MACE
+
+    import e3nn_jax as e3nn
+    from e3nn_jax import Irreps, Irrep
+
+    print(f"creating graph neural network model with {model_kwargs=}")
+
+    model_kwargs["hidden_irreps"] = Irreps(model_kwargs["hidden_irreps"])
+    model_kwargs["MLP_irreps"] = Irreps(model_kwargs["MLP_irreps"])
+
+    m = MACE(
+        interaction_cls=RealAgnosticInteractionBlock,
+        interaction_cls_first=RealAgnosticInteractionBlock,
+        readout_cls=NonLinearReadoutBlock,
+        rngs=nnx.Rngs(key),
+        atomic_energies=jnp.zeros(model_kwargs["num_elements"]),
+        **model_kwargs,
+    )
+
+    graphdef, params, rest = nnx.split(
+        m,
+        lambda path, v: isinstance(v, nnx.Param) and getattr(v, "is_mutable", True),
+        ...,
+    )
+
+    return m, graphdef, params, rest
+
+
+def _custom_getstate(self):
+    print(f"getting state of graph neural network model")
+
+    state = self.__dict__.copy()
+    if "m" in state:
+        del state["m"]
+    return state
+
+
+def _custom_setstate(self, state):
+    print(f"setting state of graph neural network model")
+
+    # self.__dict__.update(state)
+
+    state.m, _, _, _ = _graph_neural_network_model(state["model_kwargs"], key=jax.random.PRNGKey(0))
+
+    print(f"model state set with {state.keys()}")
+
+    return state
+
+
+def _initialize_graph_neural_network_model(
+    key,
+    kwargs,
+    static_kwargs,
+    learnable_kwargs,
+):
+    print(f"initializing graph neural network model with {static_kwargs=}")
+
+    model_kwargs = static_kwargs
+    del model_kwargs["reduce_z"]
+
+    print(f"{key=}")
+
+    m, graphdef, params, rest = _graph_neural_network_model(model_kwargs, key=key)
+
+    print(f"{kwargs.keys()=}")
+
+    # kwargs.update(params)
+    # kwargs["params"] = params
+
+    return dict(
+        params=params,
+    )
+
+
+def _graph_neural_network_model_apply(
     sp: SystemParams,
     nl: NeighbourList,
     shmap,
     shmap_kwargs,
-    radial_w: tuple[Array],
-    # w_skip: tuple[Array],
-    w_lin: tuple[Array],
-    linear_in,
-    biases,
-    hidden_irreps,
-    sh_irreps,
-    avg_neighbors=1.0,
-    r_cut=5.0,
-    num_basis=8,
+    m,
+    params,
+    reduce_z=True,
+    **model_kwargs,
 ):
-    assert nl is not None, "provide neighbourlist for graph neural network descriptor"
-    # cutoff = r_cut
-    num_classes = len(nl.info.z_unique)
-    # assert nl.atom_indices is not None, "neighbourlist must have atom_indices for graph neural network"
-
-    # linear_in = params["linear_in"]
-    # radial_w = params["radial_w"]
-    # w1 = params["w1"]
-    # b1 = params["b1"]
-    # w2 = params["w2"]
-    # b2 = params["b2"]
-
-    def mace_envelope(r, p=6):
-        """
-        Polynomial envelope function that goes to zero at the cutoff.
-        Ensures smooth forces and second derivatives.
-        """
-        # Normalize distance to [0, 1]
-        x = r
-
-        # MACE/NequIP Polynomial formula:
-        # f(x) = 1 - [(p+1)(p+2)/2]x^p + [p(p+2)]x^{p+1} - [p(p+1)/2]x^{p+2}
-
-        term1 = ((p + 1) * (p + 2) / 2) * jnp.power(x, p)
-        term2 = (p * (p + 2)) * jnp.power(x, p + 1)
-        term3 = (p * (p + 1) / 2) * jnp.power(x, p + 2)
-
-        f_cut = 1 - term1 + term2 - term3
-
-        # Ensure it is strictly 0.0 beyond the cutoff and handles r=0
-        return jnp.where(x < 1.0, f_cut, 0.0)
-
-    @partial(jax.vmap, in_axes=(0, 0))  # Map over atoms i
-    @partial(jax.vmap, in_axes=(0, 0))  # Map over neighbors j
-    def bessel_radial_basis(r_vecs, mask):
-        # 1. Calculate distances
-        print(f"inside bbessel {r_vecs=} {mask=}")
-        dist = jnp.linalg.norm(r_vecs)
-
-        # # 2. Normalize distance to [0, 1]
-        # d_norm = dist
-
-        # jax.debug.print("Distances: {d_norm}", d_norm=d_norm)
-
-        # 3. Setup frequencies
-        n = jnp.arange(1, num_basis + 1)
-
-        # 4. Compute Basis: sin(n * pi * d_norm) / d_norm
-        # We add a small eps to dist to avoid div by zero NaN in the forward pass
-        eps = 1e-8
-        basis = jnp.sin(n * jnp.pi * dist / r_cut) / (dist + eps)
-
-        # 5. Normalization Constant
-        # This ensures the basis functions have a similar variance
-        # Mathematically: sqrt(2/rc)
-        norm = jnp.sqrt(2.0 / r_cut)
-        basis = basis * norm * mace_envelope(dist / r_cut)
-
-        print(f"radial basis {basis.shape=}")
-
-        return jnp.where(mask, basis, 0.0)
-
-    def equivariant_model(atomic_numbers, r_vecs, mask, atom_indices_ij):
-        """
-        Pure JAX Equivariant Model
-        atomic_numbers: (N,)
-        r_vecs: (N, D, 3)
-        mask: (N, D)
-        """
-
-        # meaning of indices:
-        # i: central atom index (0 to N-1)
-        # j: neighbor index (0 to D-1)
-        # l: irreps index
-        # p: radial basis index
-
-        # 1. one hot embedding and linear transform to hidden_irreps space
-        idx = jax.vmap(lambda x: jnp.argwhere(x == jnp.array(nl.info.z_unique), size=1).reshape(()))(atomic_numbers)
-        node_feats_pre = e3nn.IrrepsArray(f"{num_classes}x0e", jax.nn.one_hot(idx, num_classes=num_classes))
-        channels = linear_in.shape[1]
-
-        node_feats_il = jax.vmap(
-            e3nn.FunctionalLinear(
-                node_feats_pre.irreps,
-                f"{channels}x0e",
-                # path_normalization="path",
-                # gradient_normalization="elementwise",
-            ),
-            in_axes=(None, 0),
-        )(linear_in, node_feats_pre)
-
-        # Initial padding to get into the hidden_irreps space
-        old_dim = node_feats_il.irreps.dim
-        node_feats_il = node_feats_il.extend_with_zeros(hidden_irreps)
-        new_dim = node_feats_il.irreps.dim
-
-        node_feats_il = node_feats_il * jnp.sqrt(new_dim / old_dim)  # Normalize to keep variance stable
-
-        # 2. Geometry: Spherical Harmonics of relative vectors
-        # We use vmap twice to handle (Atoms, Neighbors)
-        # sh_irreps = e3nn.Irreps.spherical_harmonics(lmax=2)
-        edge_sh_ijl = e3nn.vmap(
-            e3nn.vmap(
-                e3nn.spherical_harmonics,
-                in_axes=(None, 0, None),
-            ),
-            in_axes=(None, 0, None),
-        )(sh_irreps, r_vecs, True)
-
-        # 3. Radial Basis for distances
-
-        edge_dist_ijp = bessel_radial_basis(r_vecs, mask)
-
-        @partial(jax.vmap, in_axes=(0, None, 0, 0, None, None))  # Map over atoms i
-        @partial(jax.vmap, in_axes=(0, None, 0, 0, None, None))  # Map over neighbors j
-        def atom_interaction(atom_index, feat_il, edge_sh_l, e_dist_p, w_radial_pk, w_lin_kl):
-            feat_l = feat_il[atom_index]  # (D, hidden_irreps)
-
-            # 1. Compute the Tensor Product first
-            # This creates messages with the same number of channels as n_feat
-            messages_l = e3nn.tensor_product(
-                feat_l,
-                edge_sh_l,
-                filter_ir_out=hidden_irreps,
-            )  # Keep only the hidden_irreps components
-
-            # 2. Compute the radial weights (shape: (16,))
-            radial_weights_k = jnp.dot(e_dist_p, w_radial_pk)
-            w_lin_kl = [a * b for a, b in zip(w_lin_kl, radial_weights_k)]
-
-            # 3. Mix the channels with a linear layer that depends on the radial weights
-            messages_k = e3nn.FunctionalLinear(
-                messages_l.irreps,
-                hidden_irreps,
-            )(w_lin_kl, messages_l)  # Apply a linear layer to mix the channels
-
-            return messages_k
-
-        def full_message_passing(node_feats_il, x):
-            radial_w_n, w_lin_n, b_n = x
-            # print(f"start {node_feats_il=}")
-
-            # for i, (radial_w_n, w_lin_n, b_n) in enumerate(zip(radial_w, w_lin, biases)):
-            # --- A. Interaction ---
-            # We pass the weights specific to this layer:
-
-            # feat_ijl = node_feats_il[atom_indices_ij]
-            messages_ijl = atom_interaction(
-                atom_indices_ij, node_feats_il, edge_sh_ijl, edge_dist_ijp, radial_w_n, w_lin_n
-            )
-
-            # --- B. Aggregation ---
-            # Sum over neighbors (axis 1) and apply mask. We also normalize by sqrt of average neighbors to keep the variance stable.
-            update_il = e3nn.sum(messages_ijl * mask[..., None], axis=1) / jnp.sqrt(avg_neighbors)
-
-            # --- C. Skip Connection ---
-            # 1/sqrt(2) is needed to keep unit variance
-            node_feats_il = (node_feats_il + update_il.filtered(hidden_irreps)) / jnp.sqrt(2)
-
-            # --- D. Nonlinearity ---
-            # Split features into scalars and geometric parts
-            scalars = node_feats_il.filter(keep="0e")
-            geometry = node_feats_il.filter(drop="0e")
-
-            # Activate only the scalars
-            activated_scalars = e3nn.IrrepsArray(scalars.irreps, jax.nn.gelu(scalars.array + b_n))
-
-            # Re-combine
-            node_feats_il = e3nn.concatenate([activated_scalars, geometry])
-
-            return node_feats_il, None
-
-        node_feats_il, _ = jax.lax.scan(
-            full_message_passing,
-            node_feats_il,
-            jax.tree_util.tree_map(lambda *args: jnp.stack(args), *zip(radial_w, w_lin, biases)),
-        )
-
-        scalars = node_feats_il.filter(keep="0e").array  # (N, 16)
-
-        # TODO: just use nl.nl_split_z
-
-        @partial(jax.vmap, in_axes=(None, None, 0))  # Map over unique atomic numbers z
-        def red(scalars, atomic_numbers, z):
-            mask = atomic_numbers == z
-            return jnp.sum(scalars * mask[:, None], axis=0) / jnp.sqrt(
-                jnp.sum(mask)
-            )  # keep unit variance by dividing by sqrt of number of atoms of that type
-
-        scalars_pd = red(scalars, atomic_numbers, jnp.array(nl.info.z_unique))
-
-        return scalars_pd.reshape((-1,))
-
-    def dist(r, i):
-        return r
-
     if nl.needs_calculation:
         _, nl = nl.update_nl(sp)
 
-    b0, r0 = nl.apply_fun_neighbour(
-        sp=sp,
-        func_single=dist,
-        reduce="none",
-        exclude_self=True,
-        r_cut=r_cut,
+    # m, graphdef, _, rest = _graph_neural_network_model(model_kwargs=model_kwargs)
+
+    # b_, r = nl.apply_fun_neighbour(
+    #     sp=sp,
+    #     func_single=lambda r, i: r,
+    #     reduce="none",
+    # )
+
+    graphdef, _, rest = nnx.split(
+        m,
+        lambda path, v: isinstance(v, nnx.Param) and getattr(v, "is_mutable", True),
+        ...,
     )
 
-    out = equivariant_model(
-        jnp.array(nl.info.z_array),
-        r0,
-        b0,
-        nl.atom_indices,
-    )
+    m = nnx.merge(graphdef, params, rest)
 
-    # nl.nl_split_z()
+    def convert_to_coo(adj_matrix):
+        num_atoms, max_neighbors = adj_matrix.shape
 
-    print(f"graph neural network output {out.shape=}")
+        idx_i_full = jnp.repeat(jnp.arange(num_atoms), max_neighbors)
+        idx_j_full = adj_matrix.reshape(-1)
 
-    return CV(cv=out)
+        return idx_i_full, idx_j_full
+
+    # nneighs = nl.neighbour_pos(sp)
+    idx_i, idx_j = convert_to_coo(nl.atom_indices[:, 1:])
+    # nneighs_e = nneighs[:, 1:].reshape(-1, 3)
+
+    num_atoms = sp.shape[0]
+    num_edges = idx_i.shape[0]
+    # num_elements = len(nl.info.z_unique)
+    z_array = jnp.array(nl.info.z_array)
+
+    one_hot = jax.vmap(lambda x: jnp.where(x == jnp.array(nl.info.z_unique), 1.0, 0.0))(z_array)
+
+    batch = {
+        "positions": sp.coordinates,  # (N, 3)
+        "atomic_numbers": z_array,  # (N,) - Carbon dimer
+        "shifts": jnp.zeros((num_edges, 3)),  # (E, 3) - No PBC shifts
+        "cell": sp.cell if sp.cell is not None else jnp.eye(3),  # (3, 3) - Large box
+        "batch": jnp.zeros(num_atoms, dtype=jnp.int32),
+        "edge_index": jnp.stack([idx_i, idx_j], axis=0),  # (2, E)
+        "ptr": jnp.array([0, num_atoms], dtype=jnp.int32),
+        "edge_ptr": jnp.array([0, num_edges], dtype=jnp.int32),
+        "idx_i": idx_i,
+        "idx_j": idx_j,
+        "node_attrs": one_hot,
+        "unit_shifts": jnp.zeros((num_edges, 3), dtype=jnp.int32),
+    }
+
+    n_channel = m._hidden_irreps[0].mul
+    print(f"n_channel {n_channel=}")
+
+    out = m(batch, compute_force=False, compute_stress=False)
+
+    # jax.debug.print("model output {out}", out=out)
+
+    node_feats = out["node_feats"][:, -n_channel:]
+
+    if reduce_z:
+        # print(f"reducing over z")
+
+        @jax.vmap
+        def _select(feat, z):
+            return jnp.where(z == jnp.array(nl.info.z_unique), feat[:, None], jnp.zeros_like(feat[:, None]))
+
+        node_feats = _select(node_feats, z_array).sum(axis=0)
+
+        print(f"reduced node_feats {node_feats.shape=}")
+
+    return CV(cv=node_feats.flatten())
 
 
 def graph_neural_network(
     sp,
     nl: NeighbourList,
     num_basis=8,
-    n_layer=3,
+    num_interactions=3,
     channels=16,
-    key=jax.random.PRNGKey(0),
-    l_max=1,
+    correlation=2,
+    max_ell=3,  # dimension of spehrical harmonics and A matrices
+    L=2,  # size of message passing (hidden irrep)
     r_cut=None,
-    parity=False,
+    use_so3=False,
+    reduce_z=True,
 ):
     if r_cut is None:
         r_cut = nl.info.r_cut
 
-    avg_neighbors = jnp.mean(nl.nneighs(sp))
+    avg_neighbors = float(jnp.mean(nl.nneighs(sp)))
     print(f"Average neighbors: {avg_neighbors}")
 
-    num_classes = len(nl.info.z_unique)
+    num_elements = len(nl.info.z_unique)
 
-    k1, k2, k3, k4, key = jax.random.split(key, 5)
+    hidden_irreps = ""
+    for l in range(L + 1):
+        hidden_irreps += f"{channels}x{l}{'o' if l % 2 else 'e'} + "
+    hidden_irreps = hidden_irreps[:-3]  # Remove trailing " +
 
-    learnable_params = {
-        "linear_in": jax.random.normal(k1, (num_classes, channels)),  # 10 species -> 16 channels
-        "radial_w": jax.random.normal(k2, (num_basis, 1)),  # 8 basis functions
-    }
+    print(f"hidden_irreps: {hidden_irreps}")
 
-    radial_w = []
-    biases = []
-    w_lin = []
-
-    # edge irrep
-    sh_irrep = e3nn.Irreps.spherical_harmonics(l_max)
-
-    parities = [1, -1] if parity else [1]
-    message_irrep = e3nn.Irreps([(1, (l, p)) for l in range(l_max + 1) for p in parities])
-
-    node_feat_irreps = e3nn.tensor_product(
-        message_irrep,
-        f"{channels}x0e",
+    model_kwargs = dict(
+        r_max=r_cut,
+        num_bessel=num_basis,
+        num_polynomial_cutoff=6,
+        max_ell=max_ell,
+        atomic_numbers=nl.info.z_array,
+        num_interactions=num_interactions,
+        num_elements=num_elements,
+        hidden_irreps=hidden_irreps,
+        MLP_irreps="1x0e",
+        avg_num_neighbors=avg_neighbors,
+        correlation=correlation,
+        gate=None,
+        use_so3=use_so3,
+        distance_transform="None",
+        radial_type="bessel",
     )
 
-    large_irrep = e3nn.tensor_product(
-        node_feat_irreps,
-        sh_irrep,
-        filter_ir_out=message_irrep,
-    )
+    _, graphdef, params, rest = _graph_neural_network_model(model_kwargs=model_kwargs)
 
-    print(f"message_irrep {message_irrep=} {large_irrep=} {node_feat_irreps=}")
+    m_safe = nnx.merge(graphdef, jax.tree.map(lambda x: x.shape, params), rest)
+    # print(f"{m_safe=}")
 
-    # print(f"node_feat_irreps  {l_irrep=}  {node_feat_irreps=}{messages_irrep=} ")
-
-    # print(f"messages_irrep {messages_irrep=}")
-
-    for n in range(n_layer):
-        key, k1 = jax.random.split(key, 2)
-        radial_w.append(jax.random.normal(k1, (num_basis, channels)))
-        key, k1 = jax.random.split(key, 2)
-
-        w_lin_i = []
-        for x in large_irrep:
-            key, k1 = jax.random.split(key, 2)
-            w_lin_i.append(jax.random.normal(k1, (x.mul, channels)))
-
-        w_lin.append(w_lin_i)
-
-        key, k1 = jax.random.split(key, 2)
-        biases.append(jax.random.normal(k1, (channels,)))
-
-    learnable_params["radial_w"] = tuple(radial_w)
-    learnable_params["w_lin"] = tuple(w_lin)
-    learnable_params["biases"] = tuple(biases)
-
-    initializers = dict(
-        linear_in=("normal", dict(stddev=1.0)),  # one hot -> every entry is normal
-        w_lin="glorot_normal",  # unit variance to unit variance
-        radial_w="glorot_normal",  # unit variance to unit variance
-        biases="zeros",  # zeros is usually best for biases
-    )
+    # print(f"{params=}")
 
     return CvTrans.from_cv_function(
-        _graph_neural_network,
-        static_argnames=["num_basis"],
-        learnable_argnames=tuple(learnable_params.keys()),
-        hidden_irreps=node_feat_irreps,
-        sh_irreps=sh_irrep,
-        avg_neighbors=avg_neighbors,
-        r_cut=r_cut,
-        initializers=initializers,
-        num_basis=num_basis,
-        **learnable_params,
+        _graph_neural_network_model_apply,
+        static_argnames=["reduce_z", *model_kwargs.keys()],
+        learnable_argnames=("params",),
+        params=params,
+        reduce_z=reduce_z,
+        m=m_safe,
+        initializers=_initialize_graph_neural_network_model,
+        custom_getstate=_custom_getstate,
+        custom_setstate=_custom_setstate,
+        **model_kwargs,
     )
+
+
+# def _graph_neural_network(
+#     # cv: CV,
+#     sp: SystemParams,
+#     nl: NeighbourList,
+#     shmap,
+#     shmap_kwargs,
+#     radial_w: tuple[Array],
+#     # w_skip: tuple[Array],
+#     w_lin: tuple[tuple[Array]],
+#     linear_in: Array,
+#     biases: tuple[Array],
+#     hidden_irreps,
+#     sh_irreps,
+#     avg_neighbors=1.0,
+#     r_cut=5.0,
+#     num_basis=8,
+# ):
+#     assert nl is not None, "provide neighbourlist for graph neural network descriptor"
+#     # cutoff = r_cut
+#     num_classes = len(nl.info.z_unique)
+#     # assert nl.atom_indices is not None, "neighbourlist must have atom_indices for graph neural network"
+
+#     per_atom = len(radial_w[0].shape) == 3
+
+#     # linear_in = params["linear_in"]
+#     # radial_w = params["radial_w"]
+#     # w1 = params["w1"]
+#     # b1 = params["b1"]
+#     # w2 = params["w2"]
+#     # b2 = params["b2"]
+
+#     def mace_envelope(r, p=6):
+#         """
+#         Polynomial envelope function that goes to zero at the cutoff.
+#         Ensures smooth forces and second derivatives.
+#         """
+#         # Normalize distance to [0, 1]
+#         x = r
+
+#         # MACE/NequIP Polynomial formula:
+#         # f(x) = 1 - [(p+1)(p+2)/2]x^p + [p(p+2)]x^{p+1} - [p(p+1)/2]x^{p+2}
+
+#         term1 = ((p + 1) * (p + 2) / 2) * jnp.power(x, p)
+#         term2 = (p * (p + 2)) * jnp.power(x, p + 1)
+#         term3 = (p * (p + 1) / 2) * jnp.power(x, p + 2)
+
+#         f_cut = 1 - term1 + term2 - term3
+
+#         # Ensure it is strictly 0.0 beyond the cutoff and handles r=0
+#         return jnp.where(x < 1.0, f_cut, 0.0)
+
+#     @partial(jax.vmap, in_axes=(0, 0))  # Map over atoms i
+#     @partial(jax.vmap, in_axes=(0, 0))  # Map over neighbors j
+#     def bessel_radial_basis(r_vecs, mask):
+#         # 1. Calculate distances
+#         print(f"inside bbessel {r_vecs=} {mask=}")
+#         dist = jnp.linalg.norm(r_vecs)
+
+#         # # 2. Normalize distance to [0, 1]
+#         # d_norm = dist
+
+#         # jax.debug.print("Distances: {d_norm}", d_norm=d_norm)
+
+#         # 3. Setup frequencies
+#         n = jnp.arange(1, num_basis + 1)
+
+#         # 4. Compute Basis: sin(n * pi * d_norm) / d_norm
+#         # We add a small eps to dist to avoid div by zero NaN in the forward pass
+#         eps = 1e-8
+#         basis = jnp.sin(n * jnp.pi * dist / r_cut) / (dist + eps)
+
+#         # 5. Normalization Constant
+#         # This ensures the basis functions have a similar variance
+#         # Mathematically: sqrt(2/rc)
+#         norm = jnp.sqrt(2.0 / r_cut)
+#         basis = basis * norm * mace_envelope(dist / r_cut)
+
+#         print(f"radial basis {basis.shape=}")
+
+#         return jnp.where(mask, basis, 0.0)
+
+#     def equivariant_model(atomic_numbers, r_vecs, mask, atom_indices_ij):
+#         """
+#         Pure JAX Equivariant Model
+#         atomic_numbers: (N,)
+#         r_vecs: (N, D, 3)
+#         mask: (N, D)
+#         """
+
+#         # meaning of indices:
+#         # i: central atom index (0 to N-1)
+#         # j: neighbor index (0 to D-1)
+#         # l: irreps index
+#         # p: radial basis index
+
+#         # 1. one hot embedding and linear transform to hidden_irreps space
+#         z_arr = jnp.array(nl.info.z_array)
+
+#         idx = jax.vmap(lambda x: jnp.argwhere(x == jnp.array(nl.info.z_unique), size=1).reshape(()))(atomic_numbers)
+#         node_feats_pre = e3nn.IrrepsArray(f"{num_classes}x0e", jax.nn.one_hot(idx, num_classes=num_classes))
+#         channels = linear_in.shape[1]
+
+#         node_feats_il = jax.vmap(
+#             e3nn.FunctionalLinear(
+#                 node_feats_pre.irreps,
+#                 f"{channels}x0e",
+#                 # path_normalization="path",
+#                 # gradient_normalization="elementwise",
+#             ),
+#             in_axes=(None, 0),
+#         )(linear_in, node_feats_pre)
+
+#         # Initial padding to get into the hidden_irreps space
+#         old_dim = node_feats_il.irreps.dim
+#         node_feats_il = node_feats_il.extend_with_zeros(hidden_irreps)
+#         new_dim = node_feats_il.irreps.dim
+
+#         node_feats_il = node_feats_il * jnp.sqrt(new_dim / old_dim)  # Normalize to keep variance stable
+
+#         # 2. Geometry: Spherical Harmonics of relative vectors
+#         # We use vmap twice to handle (Atoms, Neighbors)
+#         # sh_irreps = e3nn.Irreps.spherical_harmonics(lmax=2)
+#         edge_sh_ijl = e3nn.vmap(
+#             e3nn.vmap(
+#                 e3nn.spherical_harmonics,
+#                 in_axes=(None, 0, None),
+#             ),
+#             in_axes=(None, 0, None),
+#         )(sh_irreps, r_vecs, True)
+
+#         # 3. Radial Basis for distances
+
+#         edge_dist_ijp = bessel_radial_basis(r_vecs, mask)
+
+#         @partial(jax.vmap, in_axes=(0, None, 0, 0, None, None, 0))  # Map over atoms i
+#         @partial(jax.vmap, in_axes=(0, None, 0, 0, None, None, None))  # Map over neighbors j
+#         def compute_a_basis(index_j, feat_il, edge_sh_l, e_dist_p, w_radial_pk, w_lin_kl, z_i):
+#             feat_l = feat_il[index_j]  # (D, hidden_irreps)
+
+#             if per_atom:
+#                 z_j = z_arr[index_j]
+
+#                 w_radial_pk = w_radial_pk[:, :, z_j]
+#                 w_lin_kl = [w[:, :, z_i] for w in w_lin_kl]
+
+#             # 1. Compute the Tensor Product first
+#             # This creates messages with the same number of channels as n_feat
+#             messages_l = e3nn.tensor_product(
+#                 feat_l,
+#                 edge_sh_l,
+#                 filter_ir_out=hidden_irreps,
+#                 irrep_normalization="component",  # similar to
+#             )  # Keep only the hidden_irreps components
+
+#             # 2. Compute the radial weights (shape: (16,))
+#             radial_weights_k = jnp.dot(e_dist_p, w_radial_pk)
+#             w_lin_kl = [a * b for a, b in zip(w_lin_kl, radial_weights_k)]
+
+#             # 3. Mix the channels with a linear layer that depends on the radial weights
+#             messages_k = e3nn.FunctionalLinear(
+#                 messages_l.irreps,
+#                 hidden_irreps,
+#                 path_normalization="path",
+#             )(w_lin_kl, messages_l)  # Apply a linear layer to mix the channels
+
+#             return messages_k
+
+#         def full_message_passing(node_feats_il, x: tuple[Array, tuple[Array], tuple[Array]]):
+#             radial_w_n, w_lin_n, b_n = x
+#             # print(f"start {node_feats_il=}")
+
+#             # for i, (radial_w_n, w_lin_n, b_n) in enumerate(zip(radial_w, w_lin, biases)):
+#             # --- A. Interaction ---
+#             # We pass the weights specific to this layer:
+
+#             # feat_ijl = node_feats_il[atom_indices_ij]
+#             messages_ijl = compute_a_basis(
+#                 atom_indices_ij,
+#                 node_feats_il,
+#                 edge_sh_ijl,
+#                 edge_dist_ijp,
+#                 radial_w_n,
+#                 w_lin_n,
+#                 z_arr,
+#             )
+
+#             # --- B. Aggregation ---
+#             # Sum over neighbors (axis 1) and apply mask. We also normalize by sqrt of average neighbors to keep the variance stable.
+#             update_il = e3nn.sum(messages_ijl * mask[..., None], axis=1) / jnp.sqrt(avg_neighbors)
+
+#             # --- C. Skip Connection ---
+#             # update_il averages to 0, so we can just add it without worrying about scaling issues. We also filter to keep only the hidden_irreps components.
+#             node_feats_il = node_feats_il + update_il.filtered(hidden_irreps)
+
+#             # --- D. Nonlinearity ---
+#             # Split features into scalars and geometric parts
+#             scalars = node_feats_il.filter(keep="0e")
+#             geometry = node_feats_il.filter(drop="0e")
+
+#             if b_n is not None:
+#                 print(f"before bias {scalars=} {b_n=}")
+#                 if per_atom:
+#                     b_n = b_n[:, z_arr].T
+
+#                 scalars = scalars + b_n
+
+#             # Activate only the scalars
+#             activated_scalars = e3nn.IrrepsArray(scalars.irreps, jax.nn.gelu(scalars.array))
+
+#             # Re-combine
+#             node_feats_il = e3nn.concatenate([activated_scalars, geometry])
+
+#             return node_feats_il, None
+
+#         node_feats_il, _ = jax.lax.scan(
+#             full_message_passing,
+#             node_feats_il,
+#             jax.tree_util.tree_map(lambda *args: jnp.stack(args), *zip(radial_w, w_lin, biases)),
+#         )
+
+#         scalars = node_feats_il.filter(keep="0e").array  # (N, 16)
+
+#         # TODO: just use nl.nl_split_z
+
+#         @partial(jax.vmap, in_axes=(None, None, 0))  # Map over unique atomic numbers z
+#         def red(scalars, atomic_numbers, z):
+#             mask = atomic_numbers == z
+#             return jnp.sum(scalars * mask[:, None], axis=0) / jnp.sqrt(
+#                 jnp.sum(mask)
+#             )  # keep unit variance by dividing by sqrt of number of atoms of that type
+
+#         scalars_pd = red(scalars, atomic_numbers, jnp.array(nl.info.z_unique))
+
+#         return scalars_pd.reshape((-1,))
+
+#     def dist(r, i):
+#         return r
+
+#     if nl.needs_calculation:
+#         _, nl = nl.update_nl(sp)
+
+#     b0, r0 = nl.apply_fun_neighbour(
+#         sp=sp,
+#         func_single=dist,
+#         reduce="none",
+#         exclude_self=True,
+#         r_cut=r_cut,
+#     )
+
+#     out = equivariant_model(
+#         jnp.array(nl.info.z_array),
+#         r0,
+#         b0,
+#         nl.atom_indices,
+#     )
+
+#     # nl.nl_split_z()
+
+#     print(f"graph neural network output {out.shape=}")
+
+#     return CV(cv=out)
+
+
+# def graph_neural_network(
+#     sp,
+#     nl: NeighbourList,
+#     num_basis=8,
+#     n_layer=3,
+#     channels=16,
+#     key=jax.random.PRNGKey(0),
+#     correlation=1,
+#     l_max=3,
+#     r_cut=None,
+#     parity=False,
+#     per_atomic_kind_matrices=True,
+# ):
+#     if r_cut is None:
+#         r_cut = nl.info.r_cut
+
+#     avg_neighbors = jnp.mean(nl.nneighs(sp))
+#     print(f"Average neighbors: {avg_neighbors}")
+
+#     num_classes = len(nl.info.z_unique)
+
+#     k1, k2, k3, k4, key = jax.random.split(key, 5)
+
+#     learnable_params = {
+#         "linear_in": jax.random.normal(k1, (num_classes, channels)),  # 10 species -> 16 channels
+#         "radial_w": jax.random.normal(k2, (num_basis, 1)),  # 8 basis functions
+#     }
+
+#     radial_w = []
+#     biases = []
+#     w_lin = []
+
+#     assert l_max > 0, "l_max must be non-negative"
+
+#     # edge irrep
+#     sh_irrep = e3nn.Irreps.spherical_harmonics(l_max)[1:]
+
+#     parities = [1, -1] if parity else [1]
+#     message_irrep = e3nn.Irreps([(1, (l, p)) for l in range(correlation + 1) for p in parities])
+
+#     node_feat_irreps = e3nn.tensor_product(
+#         message_irrep,
+#         f"{channels}x0e",
+#     )
+
+#     large_irrep = e3nn.tensor_product(
+#         node_feat_irreps,
+#         sh_irrep,
+#         filter_ir_out=message_irrep,
+#     )
+
+#     print(f"message_irrep {message_irrep=} {large_irrep=} {node_feat_irreps=}")
+
+#     # print(f"node_feat_irreps  {l_irrep=}  {node_feat_irreps=}{messages_irrep=} ")
+
+#     # print(f"messages_irrep {messages_irrep=}")
+
+#     for n in range(n_layer):
+#         key, k1 = jax.random.split(key, 2)
+#         if per_atomic_kind_matrices:
+#             radial_w.append(jax.random.normal(k1, (num_basis, channels, num_classes)))
+#         else:
+#             radial_w.append(jax.random.normal(k1, (num_basis, channels)))
+#         key, k1 = jax.random.split(key, 2)
+
+#         w_lin_i = []
+#         for x in large_irrep:
+#             key, k1 = jax.random.split(key, 2)
+
+#             if per_atomic_kind_matrices:
+#                 w_lin_i.append(jax.random.normal(k1, (x.mul, channels, num_classes)))
+#             else:
+#                 w_lin_i.append(jax.random.normal(k1, (x.mul, channels)))
+
+#         w_lin.append(w_lin_i)
+
+#         key, k1 = jax.random.split(key, 2)
+#         if per_atomic_kind_matrices:
+#             biases.append(jax.random.normal(k1, (channels, num_classes)))
+#         else:
+#             biases.append(jax.random.normal(k1, (channels,)))
+
+#     learnable_params["radial_w"] = tuple(radial_w)
+#     learnable_params["w_lin"] = tuple(w_lin)
+#     learnable_params["biases"] = tuple(biases)
+
+#     initializers = dict(
+#         linear_in="orthogonal",  # one hot -> every entry is normal
+#         w_lin=("normal", dict(stddev=1.0)),  # unit variance to unit variance
+#         radial_w="glorot_normal"
+#         if not per_atomic_kind_matrices
+#         else ("glorot_normal", dict(batch_axis=-1)),  # unit variance to unit variance
+#         biases="zeros",  # zeros is usually best for biases
+#     )
+
+#     return CvTrans.from_cv_function(
+#         _graph_neural_network,
+#         static_argnames=["num_basis"],
+#         learnable_argnames=tuple(learnable_params.keys()),
+#         hidden_irreps=node_feat_irreps,
+#         sh_irreps=sh_irrep,
+#         avg_neighbors=avg_neighbors,
+#         r_cut=r_cut,
+#         initializers=initializers,
+#         num_basis=num_basis,
+#         **learnable_params,
+#     )
 
 
 def groupsort(x: jax.Array, axis=-1, group_size=2):

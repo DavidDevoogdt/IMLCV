@@ -2607,6 +2607,8 @@ class Rounds:
         else:
             i_list = [i]
 
+        print(f"finishing data for {c=} {r=} {i_list=}")
+
         for i in i_list:
             p = self.path(c=c, r=r, i=i) / "trajectory_info.h5"
 
@@ -7504,7 +7506,7 @@ class KoopmanModel(MyPyTreeNode):
 
             tau = tau if tau is not None else 1.0
 
-            init_steps = 20
+            init_steps = 100
 
             cv_out_shape, _ = jax.eval_shape(trans.compute_cv, cv_0[0], nl)
             dim = cv_out_shape.cv.shape[1]
@@ -7530,6 +7532,7 @@ class KoopmanModel(MyPyTreeNode):
                 cov_tot: Covariances | None,
                 entropy_reg,
                 chunk_size=None,
+                epoch: int = 0,
             ):
                 if generator:
                     learnable_params = params
@@ -7591,7 +7594,12 @@ class KoopmanModel(MyPyTreeNode):
                 print(f"{cov=} {cov_tot=}")
 
                 if cov_tot is not None:
-                    frac_old = 0.0  # slow change to stabilize training, can be increased later
+                    frac_old = 0.0
+                    # frac_old = jnp.min(
+                    #     jnp.array([0.5, 1 - 1 / (epoch + 1)])
+                    # )  # increase frac_old over time, starting from 0
+
+                    # frac_old =
 
                     cov_new = Covariances.add(cov_tot, cov, frac_old)
 
@@ -7602,12 +7610,38 @@ class KoopmanModel(MyPyTreeNode):
 
                 # jax.debug.print("cov  {}", jnp.linalg.eigh(cov.C00))
 
-                W0 = cov_new.whiten_rho("rho_00", apply_mask=False, epsilon=1e-12, cholesky=False)
+                W0 = cov_new.whiten_rho(
+                    "rho_00",
+                    apply_mask=False,
+                    epsilon=1e-12,
+                    cholesky=False,
+                    tikhonov=1e-6,
+                )
+
+                # variance loss to prevent collapse into singularities, encourages eigenvalues of rho_00 to be above a threshold
+                # gamma = 1e-3
+
+                # hinge loss on whitening matrix norm. encourages inverse eigenvalues of C_00 to be below a threshold, which prevents collapse into singularities
+                # more specifically, the eigenvalues of C00 can not be samller than 1e-3
+
+                target = 1e-4 ** (-2) * W0.shape[1]  # target frobenius norm squared of W0
+
+                w_sigma = W0 @ jnp.diag(cov_new.sigma_0_inv)
+
+                loss_ortho = jax.nn.softplus((jnp.trace(w_sigma.T @ w_sigma) / target - 1.0) / 0.1) * 0.1
+
+                loss = 0.1 * loss_ortho
 
                 if symmetric:
                     W1 = W0
                 else:
-                    W1 = cov_new.whiten_rho("rho_11", apply_mask=False, epsilon=1e-12, cholesky=False)
+                    W1 = cov_new.whiten_rho(
+                        "rho_11",
+                        apply_mask=False,
+                        epsilon=1e-12,
+                        cholesky=False,
+                        tikhonov=1e-2,
+                    )
 
                 # trim W to out_dim
                 if out_dim is not None and out_dim > 0:
@@ -7619,8 +7653,8 @@ class KoopmanModel(MyPyTreeNode):
                 # else:
                 K = W0 @ cov_new.rho_01 @ W1.T
 
-                loss = -jnp.sum(K**2)  # vamp-2 score (frobenius norm squared)
-                loss_vamp = loss
+                loss_vamp = -jnp.sum(K**2)
+                loss += loss_vamp  # vamp-2 score (frobenius norm squared)
 
                 z_0 = jnp.einsum("ni,i,ik->nk", CV.stack(*y_0).cv - cov_new.pi_0, cov_new.sigma_0_inv, W0.T)
 
@@ -7994,11 +8028,11 @@ class KoopmanModel(MyPyTreeNode):
 
                 # z_0: (n_frames, dim)
                 # w: (n_frames,)
-                loss_border = jax.nn.softplus((kurt - 1.5) / 0.1) * 0.1  # not much higher than 1
+                loss_border = jax.nn.softplus((kurt - 1.5) / 0.1) * 0.1  # not much higher than 1.5
 
                 # jax.debug.print("border loss {}", loss_border)
 
-                loss += 0.0 * loss_border
+                loss += 0.1 * loss_border
 
                 # # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
                 # # dl, _ = jnp.linalg.eigh(dK)
@@ -8033,11 +8067,14 @@ class KoopmanModel(MyPyTreeNode):
 
                 # loss = -jnp.sum(K**2)
 
-                return jnp.log10(loss + dim), (
+                # jax.debug.print("loss dim {out}", out=loss + dim)
+
+                return loss + dim, (
                     (
                         loss_vamp,
-                        entropy,
-                        kurt,
+                        entropy_loss,
+                        loss_border,
+                        loss_ortho,
                     ),
                     cov_new,
                 )
@@ -8057,8 +8094,9 @@ class KoopmanModel(MyPyTreeNode):
                     nl=nl,
                     nlt=nl,
                     entropy_reg=entropy_reg,
-                    chunk_size=chunk_size,
+                    chunk_size=batch_chunk_size,
                     cov_tot=cov,
+                    epoch=iter_num,
                 )
 
                 ((loss_val, (losses, cov_new)), grads) = jax.value_and_grad(_objective_fn, has_aux=True)(params)
@@ -8111,6 +8149,8 @@ class KoopmanModel(MyPyTreeNode):
 
                     steps = 0
 
+                # eps = optimizer.hyperparams.eps if hasattr(optimizer, "hyperparams") else 1e-8
+
                 params = optax.apply_updates(params, updates)
 
                 b = jnp.logical_and(
@@ -8121,28 +8161,30 @@ class KoopmanModel(MyPyTreeNode):
                     iter_num < epochs,
                 )
 
-                loss_vamp, total_entropy, loss_border = losses
+                loss_vamp, total_entropy, loss_border, loss_ortho = losses
 
                 if lbfgs:
                     jax.debug.print(
-                        "epoch={e} loss train {tl:.3E} loss vamp {v:.6f} entropy {en:.6f} border {b:.6f} gnorm {g:.6f} steps {s}",
+                        "epoch={e} loss train {tl:.3E} loss vamp {v:.6f} entropy {en:.6f} border {b:.6f} ortho {o:.6f} gnorm {g:.6f} steps {s}",
                         e=iter_num,
-                        tl=10 ** (loss_val),
+                        tl=loss_val,
                         v=loss_vamp,
                         en=total_entropy,
                         b=loss_border,
                         g=gnorm,
                         s=steps,
+                        o=loss_ortho,
                     )
                 else:
                     jax.debug.print(
-                        "epoch={e} loss train {tl:.3E} loss vamp {v:.6f} entropy {en:.6f} border {b:.6f} avg_nu {g:.6e}",
+                        "epoch={e} loss train {tl:.3E} loss vamp {v:.6f} entropy {en:.6f} border {b:.6f} ortho {o:.6f} avg_nu {g:.6e}",
                         e=iter_num,
-                        tl=10 ** (loss_val),
+                        tl=loss_val,
                         v=loss_vamp,
                         en=total_entropy,
                         b=loss_border,
                         g=avg_nu,
+                        o=loss_ortho,
                     )
 
                 # print(
@@ -8374,6 +8416,9 @@ class KoopmanModel(MyPyTreeNode):
                 if nl is not None:
                     if isinstance(x0_chunk, SystemParams):
                         nl_chunk = nl.slow_update_nl(x0_chunk) if nl is not None else None
+
+                        nl = nl.replace(update=nl_chunk.update)
+
                     else:
                         nl_chunk = nl
                 else:
@@ -8402,10 +8447,12 @@ class KoopmanModel(MyPyTreeNode):
 
                 print("Using AdamW optimizer for mini-batch optimization")
 
+                # from optax.schedules import cosine_decay_schedule
+
                 optimizer = optax.adamw(
+                    # learning_rate=cosine_decay_schedule(1e-2, decay_steps=epochs, alpha=1e-4),
                     learning_rate=1e-2,
                     weight_decay=1e-4,
-                    # eps=1e-5,
                 )
                 opt_state = optimizer.init(learable_params)
 
@@ -8437,6 +8484,7 @@ class KoopmanModel(MyPyTreeNode):
                     if nl is not None:
                         if isinstance(x0_chunk, SystemParams):
                             nl_chunk = nl.slow_update_nl(x0_chunk)
+                            nl = nl.replace(update=nl_chunk.update)
                         else:
                             nl_chunk = nl
 
@@ -8459,7 +8507,7 @@ class KoopmanModel(MyPyTreeNode):
                     ),
                 )
 
-                print(f"{cov.pi_0=} {cov.sigma_0=}")
+                # print(f"{cov.pi_0=} {cov.sigma_0=}")
 
                 # print(
                 #     f"Finished epoch {epoch} with loss {float(loss_train):.3E}, gnorm {float(gnorm):.6e}, steps {steps}"
@@ -10371,7 +10419,7 @@ class Covariances(MyPyTreeNode):
 
             theta_safe = jnp.where(mask, theta, 1)
 
-            theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta_safe + tikhonov), 0)
+            theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta_safe + tikhonov**2), 0)
 
             W = jnp.einsum(
                 "i,ji->ij",
