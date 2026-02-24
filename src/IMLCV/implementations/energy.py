@@ -13,11 +13,14 @@ from ase.calculators.calculator import Calculator
 from openmm import Context, State, System, Vec3
 from openmm.app import Simulation, Topology
 
+from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.bias import Energy, EnergyError, EnergyResult, EnergyFn
 from IMLCV.base.CV import NeighbourList, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import angstrom, electronvolt, kjmol, nanometer
 from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
+from flax import nnx
+import e3nn_jax
 
 
 class OpenMmEnergy(Energy):
@@ -384,17 +387,177 @@ class MACEASE(AseEnergy):
 
 
 class MACEJax(EnergyFn):
+    model_type: str = field(pytree_node=False, default="foundation_model")
     model: str | Path = field(pytree_node=False, default="medium")
-    dtype: str = field(pytree_node=False, default="float32")
+    dtype: str = field(pytree_node=False, default="float64")
 
-    def load(self):
-        from mace_jax import modules
+    @staticmethod
+    def create_foundation_model(
+        model: str = "medium",
+        source: str = "mp",
+        dtype: str = "float64",
+        **kwargs,
+    ):
+        return MACEJax._get_model(
+            model_type="foundation_model",
+            model=model,
+            dtype=dtype,
+            **kwargs,
+        )
 
-        # Load a foundation model (this handles downloading and JAX initialization)
-        # 'medium' refers to the standard MACE-MP-0-Medium checkpoint
-        model, params = modules.load_foundation_model(self.model, dtype=self.dtype)
+    @staticmethod
+    def create_from_pth(
+        pth_path: str | Path,
+        dtype: str = "float64",
+        **kwargs,
+    ):
+        return MACEJax._get_model(
+            model_type="pth",
+            model=pth_path,
+            dtype=dtype,
+            **kwargs,
+        )
 
-        print(f"loaded MACE model from {self.model} with dtype {self.dtype}")
+    @staticmethod
+    def _get_model(
+        model_type,
+        model,
+        dtype,
+        sp: SystemParams | None = None,
+        static_trajectory_info: StaticMdInfo | None = None,
+    ):
+        if model_type == "foundation_model":
+            from mace_jax.tools.foundation_models import load_foundation_torch_model
 
-    def f(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
-        raise NotImplementedError
+            torch_model = load_foundation_torch_model(
+                source="mp",
+                model=model,
+                default_dtype=dtype,
+            )
+        elif model_type == "pth":
+            import torch
+
+            torch_model = torch.load(model)
+        else:
+            raise ValueError(f"{model_type=} unknown")
+
+        from mace.tools.scripts_utils import extract_config_mace_model
+        from mace_jax.cli.mace_jax_from_torch import convert_model
+
+        config = extract_config_mace_model(torch_model)
+
+        graphdef, state, template_data = convert_model(torch_model=torch_model, config=config)
+        graphdef: nnx.GraphDef
+        state: nnx.State
+
+        # from flax import nnx
+
+        jax_model = nnx.merge(graphdef, state)
+
+        out_1 = jax_model(template_data)
+
+        if sp is not None and static_trajectory_info is not None:
+            print("sp and static_trajectory_info are not None, running test forward pass with sp and nl")
+
+            import torch
+
+            def to_torch_data(jax_data):
+                torch_data = {}
+                for k, v in jax_data.items():
+                    # Convert to numpy/jax array first
+                    arr = v.__array__()
+
+                    # If it's an integer type, cast to Long (int64)
+                    if jnp.issubdtype(arr.dtype, jnp.integer):
+                        torch_data[k] = torch.from_numpy(arr).to(torch.long)
+                    else:
+                        # For floats, use the existing dtype (likely float64 based on your config)
+                        torch_data[k] = torch.from_numpy(arr)
+
+                return torch_data
+
+            # template_data_torch = to_torch_data(template_data)
+
+            print(f"tconfig keys: {config.keys()}")
+
+            assert config["r_max"] <= static_trajectory_info.r_cut / angstrom, (
+                f"Model r_max {config['r_max']} angstrom is larger than static trajectory r_cut {static_trajectory_info.r_cut / angstrom} angstrom"
+            )
+
+            nl = sp.get_neighbour_list(
+                info=static_trajectory_info.neighbour_list_info(r_cut=config["r_max"] * angstrom),
+            )
+
+            data = nl.to_MACE_batch(sp, z_unique=jnp.array(config["atomic_numbers"]))
+
+            out_1 = jax_model(data)
+            out_2 = torch_model(to_torch_data(data))
+
+            for k in out_1.keys():
+                if k not in out_2:
+                    print(f"Key {k} not in torch model output")
+                    continue
+
+                if out_1[k] is None or out_2[k] is None:
+                    print(f"Key {k} has None value in one of the models: {out_1[k]=} {out_2[k]=}")
+                    continue
+
+                assert jnp.allclose(out_1[k].__array__(), out_2[k].detach().numpy(), atol=1e-5), (
+                    f"Mismatch in {k} {out_1[k]=} {out_2[k]=}"
+                )
+
+            print("All outputs match between JAX and PyTorch models")
+
+        return MACEJax(
+            kwargs=dict(
+                state=state,
+                z_unique=jnp.array(config["atomic_numbers"]),
+            ),
+            static_kwargs=dict(
+                graphdef=graphdef,
+            ),
+            f=MACEJax._f,
+            model_type=model_type,
+            model=model,
+            dtype=dtype,
+        )
+
+    @staticmethod
+    def _f(
+        sp: SystemParams, nl: NeighbourList, state: nnx.State, z_unique: jax.Array, graphdef: nnx.GraphDef
+    ) -> EnergyResult:
+        data = nl.to_MACE_batch(sp, z_unique=z_unique)
+
+        # nnx.State.from_pure_dict
+        model = nnx.merge(graphdef, nnx.State(state))
+        out = model(
+            data,
+            compute_node_feats=False,
+            compute_force=False,
+            compute_stress=False,
+        )
+
+        # agrees with manual force
+        # jax.debug.print("MACE force: {out}", out=out["forces"] * electronvolt / angstrom)
+
+        return out["energy"] * electronvolt
+
+    def __getstate__(self):
+        # print(f"pickling {self.__class__} with model {self.model} and dtype {self.dtype}")
+        return {
+            "model_type": self.model_type,
+            "model": self.model,
+            "dtype": self.dtype,
+        }
+
+    def __setstate__(self, state):
+        # print(f"unpickling {self.__class__} with state {state}")
+        new = self._get_model(
+            model_type=state["model_type"],
+            model=state["model"],
+            dtype=state["dtype"],
+        )
+
+        # print(f"recreated model during unpickling: {new}")
+
+        self.__init__(**new.__dict__)

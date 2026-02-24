@@ -185,9 +185,9 @@ class Energy(MyPyTreeNode, ABC):
     def compute_from_system_params(
         self,
         sp: SystemParams,
+        nl: NeighbourList | None = None,
         gpos=False,
         vir=False,
-        nl: NeighbourList | None = None,
         manual_vir=None,
         shmap=False,
         shmap_kwarg=ShmapKwargs.create(),
@@ -198,7 +198,6 @@ class Energy(MyPyTreeNode, ABC):
                     self.compute_from_system_params,
                     gpos=gpos,
                     vir=vir,
-                    nl=nl,
                     manual_vir=manual_vir,
                     shmap=False,
                     shmap_kwarg=None,
@@ -209,7 +208,7 @@ class Energy(MyPyTreeNode, ABC):
             if shmap:
                 _f = padded_shard_map(_f, shmap_kwarg)
 
-            return _f(sp)
+            return _f(sp, nl)
 
         if manual_vir is None:
             manual_vir = self.manual_vtens

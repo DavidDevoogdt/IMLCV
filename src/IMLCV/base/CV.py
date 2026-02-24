@@ -18,6 +18,7 @@ from typing_extensions import ParamSpec
 
 from IMLCV import unpickler
 from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.UnitsConstants import angstrom
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import StaticMdInfo
@@ -2337,7 +2338,6 @@ class NeighbourListInfo(MyPyTreeNode):
 
         self.__init__(**state)
 
-    @property
     def one_hot_z(self):
         z_array = jnp.array(self.z_array)
         one_hot = jax.vmap(lambda x: jnp.where(x == jnp.array(self.z_unique), 1.0, 0.0))(z_array)
@@ -3302,7 +3302,14 @@ class NeighbourList(MyPyTreeNode):
 
         return idx_i, idx_j
 
-    def to_MACE_batch(self, sp):
+    def to_MACE_batch(self, sp, z_unique=None):
+        if z_unique is None:
+            z_unique = jnp.array(self.info.z_unique)
+
+        z_array = jnp.array(self.info.z_array)
+
+        one_hot = jax.vmap(lambda x: jnp.where(x == jnp.array(z_unique), 1.0, 0.0))(z_array)
+
         # work in canonical frame, where ijk indices are calculated
         sp = self.canonicalized_sp(sp)
 
@@ -3311,15 +3318,15 @@ class NeighbourList(MyPyTreeNode):
         num_atoms = sp.shape[0]
         num_edges = idx_i.shape[0]
         # num_elements = len(nl.info.z_unique)
-        z_array = jnp.array(self.info.z_array)
+        # z_array = jnp.array(self.info.z_array)
 
-        one_hot = self.info.one_hot_z  # (N, num_elements)
+        # one_hot = self.info.one_hot_z  # (N, num_elements)
 
         batch = {
-            "positions": sp.coordinates,  # (N, 3)
+            "positions": sp.coordinates / angstrom,  # (N, 3)
             "atomic_numbers": z_array,  # (N,) - Carbon dimer
             "shifts": jnp.zeros((num_edges, 3)),  # (E, 3) - No PBC shifts
-            "cell": sp.cell if sp.cell is not None else jnp.eye(3),  # (3, 3) - Large box
+            "cell": sp.cell / angstrom if sp.cell is not None else jnp.eye(3),  # (3, 3) - Large box
             "batch": jnp.zeros(num_atoms, dtype=jnp.int32),
             "edge_index": jnp.stack([idx_i, idx_j], axis=0),  # (2, E)
             "ptr": jnp.array([0, num_atoms], dtype=jnp.int32),
@@ -4211,7 +4218,7 @@ class CvFunBase(ABC, MyPyTreeNode):
     def __setstate__(self, statedict: dict):
         # print(f"{statedict.keys()=}")
 
-        setstate_fun = statedict.pop("custom_setstate", None)
+        setstate_fun = statedict.get("custom_setstate", None)
 
         if setstate_fun is not None:
             # print(f"before custom setstate {statedict.keys()=}")
