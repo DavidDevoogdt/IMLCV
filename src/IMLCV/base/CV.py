@@ -2337,6 +2337,12 @@ class NeighbourListInfo(MyPyTreeNode):
 
         self.__init__(**state)
 
+    @property
+    def one_hot_z(self):
+        z_array = jnp.array(self.z_array)
+        one_hot = jax.vmap(lambda x: jnp.where(x == jnp.array(self.z_unique), 1.0, 0.0))(z_array)
+        return one_hot
+
 
 class NeighbourListUpdate(MyPyTreeNode):
     # system specific information to update a neighbour list
@@ -3274,6 +3280,58 @@ class NeighbourList(MyPyTreeNode):
     def stack_dims(self, value):
         self.update = self.update.replace(stack_dims=value)
 
+    def coo_format(self, remove_self=True):
+        # A sparse matrix in COOrdinate format.
+        # Also known as the ‘ijv’ or ‘triplet’ format.
+
+        assert self.atom_indices is not None
+
+        def convert_to_coo(adj_matrix):
+            num_atoms, max_neighbors = adj_matrix.shape
+
+            idx_i_full = jnp.repeat(jnp.arange(num_atoms), max_neighbors)
+            idx_j_full = adj_matrix.reshape(-1)
+
+            return idx_i_full, idx_j_full
+
+        x = self.atom_indices
+        if remove_self:
+            x = x[:, 1:]
+
+        idx_i, idx_j = convert_to_coo(x)
+
+        return idx_i, idx_j
+
+    def to_MACE_batch(self, sp):
+        # work in canonical frame, where ijk indices are calculated
+        sp = self.canonicalized_sp(sp)
+
+        idx_i, idx_j = self.coo_format()
+
+        num_atoms = sp.shape[0]
+        num_edges = idx_i.shape[0]
+        # num_elements = len(nl.info.z_unique)
+        z_array = jnp.array(self.info.z_array)
+
+        one_hot = self.info.one_hot_z  # (N, num_elements)
+
+        batch = {
+            "positions": sp.coordinates,  # (N, 3)
+            "atomic_numbers": z_array,  # (N,) - Carbon dimer
+            "shifts": jnp.zeros((num_edges, 3)),  # (E, 3) - No PBC shifts
+            "cell": sp.cell if sp.cell is not None else jnp.eye(3),  # (3, 3) - Large box
+            "batch": jnp.zeros(num_atoms, dtype=jnp.int32),
+            "edge_index": jnp.stack([idx_i, idx_j], axis=0),  # (2, E)
+            "ptr": jnp.array([0, num_atoms], dtype=jnp.int32),
+            "edge_ptr": jnp.array([0, num_edges], dtype=jnp.int32),
+            "idx_i": idx_i,
+            "idx_j": idx_j,
+            "node_attrs": one_hot,
+            "unit_shifts": self.ijk_indices if self.ijk_indices is not None else jnp.zeros((num_edges, 3)),
+        }
+
+        return batch
+
 
 class CV(MyPyTreeNode):
     cv: Array = field(pytree_node=True)
@@ -4049,8 +4107,8 @@ class CvFunBase(ABC, MyPyTreeNode):
     static_kwargs: dict = field(pytree_node=False, default_factory=dict)
     learnable_kwargs: tuple[str] | None = field(pytree_node=False, default=None)
     apply_rule: Callable[[dict, dict], dict] | None = field(pytree_node=False, default=None)
-    custom_getstate: Callable[[], dict] | None = field(pytree_node=False, default=None)
-    custom_setstate: Callable[[dict], CvFunBase] | None = field(pytree_node=False, default=None)
+    custom_getstate: Callable[[CvFunBase], dict] | None = field(pytree_node=False, default=None)
+    custom_setstate: Callable[[dict], dict] | None = field(pytree_node=False, default=None)
     initializers: dict[str, str | tuple[str, dict]] | Callable[[...], dict] | None = field(
         pytree_node=False, default=None
     )
@@ -4138,20 +4196,27 @@ class CvFunBase(ABC, MyPyTreeNode):
         raise
 
     def __getstate__(self):
-        print(f"{self.custom_getstate=}")
+        # print(f"{self.custom_getstate=}")
         if self.custom_getstate is not None:
-            _d = self.custom_getstate()
+            # print("using custom getstate")
+            _d = self.custom_getstate(self)
 
-            print(f"custom getstate returned {_d=}")
-            return _d
+        else:
+            _d = self.__dict__
 
-        return self.__dict__
+        # print(f"getstate dict keys: {_d.keys()}")
+
+        return _d
 
     def __setstate__(self, statedict: dict):
-        print(f"{self.custom_setstate=}")
-        if self.custom_setstate is not None:
-            statedict = self.custom_setstate(statedict)
-            print(f"after custom setstate {statedict=}")
+        # print(f"{statedict.keys()=}")
+
+        setstate_fun = statedict.pop("custom_setstate", None)
+
+        if setstate_fun is not None:
+            # print(f"before custom setstate {statedict.keys()=}")
+            statedict = setstate_fun(statedict)
+            # print(f"after custom setstate {statedict=}")
 
         if "static_kwarg_names" in statedict:
             statedict["static_kwargs"] = {k: statedict.pop(k) for k in statedict["static_kwarg_names"]}
@@ -4516,8 +4581,8 @@ class CvTrans(MyPyTreeNode):
         learnable_argnames: tuple[str, ...] | None = None,
         apply_rule: Callable[[dict, dict], dict] | None = None,
         initializers: dict[str, str] | Callable | None = None,
-        custom_getstate: Callable[[], dict] | None = None,
-        custom_setstate: Callable[[dict], None] | None = None,
+        custom_getstate: Callable[[CvFunBase], dict] | None = None,
+        custom_setstate: Callable[[dict], dict] | None = None,
         **kwargs,
     ) -> CvTrans:
         static_kwargs = {}

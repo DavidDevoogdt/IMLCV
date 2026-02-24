@@ -14,6 +14,7 @@ from IMLCV.base.CV import (
     NeighbourList,
     NeighbourListInfo,
     SystemParams,
+    CvFunBase,
 )
 from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.base.UnitsConstants import angstrom
@@ -1228,7 +1229,7 @@ def _graph_neural_network_model(model_kwargs, key=0):
     import e3nn_jax as e3nn
     from e3nn_jax import Irreps, Irrep
 
-    print(f"creating graph neural network model with {model_kwargs=}")
+    # print(f"creating graph neural network model with {model_kwargs=}")
 
     model_kwargs["hidden_irreps"] = Irreps(model_kwargs["hidden_irreps"])
     model_kwargs["MLP_irreps"] = Irreps(model_kwargs["MLP_irreps"])
@@ -1251,23 +1252,36 @@ def _graph_neural_network_model(model_kwargs, key=0):
     return m, graphdef, params, rest
 
 
-def _custom_getstate(self):
-    print(f"getting state of graph neural network model")
-
+def _custom_getstate(self: CvFunBase) -> dict:
     state = self.__dict__.copy()
-    if "m" in state:
-        del state["m"]
+    from flax import nnx
+
+    kwargs = state["kwargs"].copy()
+    params_sd = nnx.to_pure_dict(kwargs["params"])
+    kwargs["params_sd"] = params_sd
+
+    del kwargs["params"]
+    del kwargs["m"]
+
+    state["kwargs"] = kwargs
+
     return state
 
 
-def _custom_setstate(self, state):
-    print(f"setting state of graph neural network model")
+def _custom_setstate(state: dict) -> dict:
+    # recreate mode
+    model_kwargs = state["static_kwargs"].copy()
+    del model_kwargs["reduce_z"]
 
-    # self.__dict__.update(state)
+    kwargs = state["kwargs"]
 
-    state.m, _, _, _ = _graph_neural_network_model(state["model_kwargs"], key=jax.random.PRNGKey(0))
+    m, _, params, _ = _graph_neural_network_model(model_kwargs, key=jax.random.PRNGKey(0))
 
-    print(f"model state set with {state.keys()}")
+    params.replace_by_pure_dict(kwargs["params_sd"])
+
+    kwargs = dict(m=m, params=params)
+
+    state["kwargs"] = kwargs
 
     return state
 
@@ -1280,17 +1294,11 @@ def _initialize_graph_neural_network_model(
 ):
     print(f"initializing graph neural network model with {static_kwargs=}")
 
-    model_kwargs = static_kwargs
+    model_kwargs = static_kwargs.copy()
+
     del model_kwargs["reduce_z"]
 
-    print(f"{key=}")
-
     m, graphdef, params, rest = _graph_neural_network_model(model_kwargs, key=key)
-
-    print(f"{kwargs.keys()=}")
-
-    # kwargs.update(params)
-    # kwargs["params"] = params
 
     return dict(
         params=params,
@@ -1310,15 +1318,9 @@ def _graph_neural_network_model_apply(
     if nl.needs_calculation:
         _, nl = nl.update_nl(sp)
 
-    # m, graphdef, _, rest = _graph_neural_network_model(model_kwargs=model_kwargs)
+    assert nl.atom_indices is not None, "atom indices must be calculated in neighbour list"
 
-    # b_, r = nl.apply_fun_neighbour(
-    #     sp=sp,
-    #     func_single=lambda r, i: r,
-    #     reduce="none",
-    # )
-
-    graphdef, _, rest = nnx.split(
+    graphdef, params_old, rest = nnx.split(
         m,
         lambda path, v: isinstance(v, nnx.Param) and getattr(v, "is_mutable", True),
         ...,
@@ -1326,57 +1328,22 @@ def _graph_neural_network_model_apply(
 
     m = nnx.merge(graphdef, params, rest)
 
-    def convert_to_coo(adj_matrix):
-        num_atoms, max_neighbors = adj_matrix.shape
-
-        idx_i_full = jnp.repeat(jnp.arange(num_atoms), max_neighbors)
-        idx_j_full = adj_matrix.reshape(-1)
-
-        return idx_i_full, idx_j_full
-
-    # nneighs = nl.neighbour_pos(sp)
-    idx_i, idx_j = convert_to_coo(nl.atom_indices[:, 1:])
-    # nneighs_e = nneighs[:, 1:].reshape(-1, 3)
-
-    num_atoms = sp.shape[0]
-    num_edges = idx_i.shape[0]
-    # num_elements = len(nl.info.z_unique)
-    z_array = jnp.array(nl.info.z_array)
-
-    one_hot = jax.vmap(lambda x: jnp.where(x == jnp.array(nl.info.z_unique), 1.0, 0.0))(z_array)
-
-    batch = {
-        "positions": sp.coordinates,  # (N, 3)
-        "atomic_numbers": z_array,  # (N,) - Carbon dimer
-        "shifts": jnp.zeros((num_edges, 3)),  # (E, 3) - No PBC shifts
-        "cell": sp.cell if sp.cell is not None else jnp.eye(3),  # (3, 3) - Large box
-        "batch": jnp.zeros(num_atoms, dtype=jnp.int32),
-        "edge_index": jnp.stack([idx_i, idx_j], axis=0),  # (2, E)
-        "ptr": jnp.array([0, num_atoms], dtype=jnp.int32),
-        "edge_ptr": jnp.array([0, num_edges], dtype=jnp.int32),
-        "idx_i": idx_i,
-        "idx_j": idx_j,
-        "node_attrs": one_hot,
-        "unit_shifts": jnp.zeros((num_edges, 3), dtype=jnp.int32),
-    }
-
-    n_channel = m._hidden_irreps[0].mul
-    print(f"n_channel {n_channel=}")
+    batch = nl.to_MACE_batch(sp)
 
     out = m(batch, compute_force=False, compute_stress=False)
 
     # jax.debug.print("model output {out}", out=out)
 
+    n_channel = m._hidden_irreps[0].mul
     node_feats = out["node_feats"][:, -n_channel:]
 
     if reduce_z:
-        # print(f"reducing over z")
 
         @jax.vmap
         def _select(feat, z):
             return jnp.where(z == jnp.array(nl.info.z_unique), feat[:, None], jnp.zeros_like(feat[:, None]))
 
-        node_feats = _select(node_feats, z_array).sum(axis=0)
+        node_feats = jnp.sum(_select(node_feats, jnp.array(nl.info.z_array)), axis=0)
 
         print(f"reduced node_feats {node_feats.shape=}")
 
@@ -1434,7 +1401,7 @@ def graph_neural_network(
     m_safe = nnx.merge(graphdef, jax.tree.map(lambda x: x.shape, params), rest)
     # print(f"{m_safe=}")
 
-    # print(f"{params=}")
+    print(f"{params=}")
 
     return CvTrans.from_cv_function(
         _graph_neural_network_model_apply,

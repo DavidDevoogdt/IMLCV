@@ -13,7 +13,7 @@ from ase.calculators.calculator import Calculator
 from openmm import Context, State, System, Vec3
 from openmm.app import Simulation, Topology
 
-from IMLCV.base.bias import Energy, EnergyError, EnergyResult
+from IMLCV.base.bias import Energy, EnergyError, EnergyResult, EnergyFn
 from IMLCV.base.CV import NeighbourList, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import angstrom, electronvolt, kjmol, nanometer
@@ -381,3 +381,20 @@ class MACEASE(AseEnergy):
             self.atoms = state["atoms"]
         else:
             self.atoms = ase.Atoms.fromdict(state["atoms"])
+
+
+class MACEJax(EnergyFn):
+    model: str | Path = field(pytree_node=False, default="medium")
+    dtype: str = field(pytree_node=False, default="float32")
+
+    def load(self):
+        from mace_jax import modules
+
+        # Load a foundation model (this handles downloading and JAX initialization)
+        # 'medium' refers to the standard MACE-MP-0-Medium checkpoint
+        model, params = modules.load_foundation_model(self.model, dtype=self.dtype)
+
+        print(f"loaded MACE model from {self.model} with dtype {self.dtype}")
+
+    def f(self, sp: SystemParams, nl: NeighbourList, gpos=False, vir=False) -> EnergyResult:
+        raise NotImplementedError

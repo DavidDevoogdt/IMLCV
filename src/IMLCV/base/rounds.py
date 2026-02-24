@@ -43,7 +43,6 @@ from IMLCV.base.UnitsConstants import angstrom, atomic_masses, boltzmann, kelvin
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import DTBias, GridMaskBias, RbfBias, _clip
-from IMLCV.implementations.CV import _cv_slice, cv_trans_real
 
 
 @dataclass

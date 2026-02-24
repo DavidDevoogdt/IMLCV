@@ -1,0 +1,3 @@
+[submodule "external/mace_jax"]
+	path = external/mace_jax
+	url = https://github.com/ACEsuit/mace-jax.git

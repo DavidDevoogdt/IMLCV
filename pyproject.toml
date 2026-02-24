@@ -96,7 +96,11 @@ jaxlib = "*"
 torch = "*"
 
 IMLCV = { path = ".", editable = true }
-mace_jax = { path = "external/mace-jax", editable = true }
+
+# there is a problem with mace-jax, where the mace_jax.adapters subfolder is not included in the package, so we need to install it from git
+# this repo is added as a submodule in the external folder, so we can install it from there
+mace_jax = {path="./external/mace_jax", editable=true }
+
 
 [tool.pixi.pypi-options]
 extra-index-urls = [
