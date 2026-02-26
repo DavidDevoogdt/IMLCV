@@ -121,3 +121,8 @@ image.sif.sha256
 image_rocm.sif
 perovskites_lumi/*
 scripts_lumi/*
+image_rocm_v2.sif
+image_rocm_2.sif
+
+
+containers/*

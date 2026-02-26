@@ -42,7 +42,7 @@ module list
 unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 unset SLURM_CPU_BIND
 
-srun  --nodes=1  -l {overrides} {app} {command}
+srun  --nodes=1  -l {overrides} {app}  {command}
 
 
 
@@ -51,7 +51,7 @@ srun  --nodes=1  -l {overrides} {app} {command}
             command=command,
             overrides=self.overrides,
             ROOT_DIR=ROOT_DIR,
-            app=f"singularity run -B {ROOT_DIR}/src/:/app/src/ {self.image}" if self.image is not None else "",
+            app=f"singularity run --cleanenv -B {ROOT_DIR}/src:/app/src {self.image}" if self.image is not None else "",
         )
         return x
 
@@ -102,8 +102,11 @@ def get_slurm_provider(
     py_env=None,
     provider="slurm",
     load_cp2k=False,
-    apptainer=True,
+    # apptainer=True,
+    apptainer_image: str | None = None,
 ):
+    apptainer = apptainer_image is not None
+
     if py_env is None:
         # if env == "hortense":
 
@@ -133,7 +136,11 @@ which work_queue_worker
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
 
-    worker_init = f"{py_env}\n"
+    worker_init = "export PATH=/usr/local/bin:/usr/bin:/bin\n"
+
+    # /usr/bin:/bin:/usr/local/bin
+
+    worker_init += f"{py_env}\n"
 
     if load_cp2k:
         raise ValueError()
@@ -146,7 +153,9 @@ which work_queue_worker
     total_cores = parsl_tasks_per_block * threads_per_core
 
     # give all cores to xla
-    worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
+
+    if not gpu:
+        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
 
     if gpu:
         # dynamic memory allocation, both for jax and pytorch, for all blocks.
@@ -177,10 +186,17 @@ trap cleanup EXIT
 sleep 1
 """
             worker_init += "nvidia-smi\n"
+
+            # if apptainer_image is not None:
+            #     apptainer_image = f"--nv {apptainer_image}"
+
         elif gpu_kind.value == "rocm":
             worker_init += "rocm-smi\n"
 
-            worker_init += "export LLVM_PATH=/opt/rocm/llvm \n "
+            # if apptainer_image is not None:
+            #     apptainer_image = f"--rocm {apptainer_image}"
+
+            # worker_init += "export LLVM_PATH=/opt/rocm/llvm \n "
 
     overrides = f"--ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core}"
 
@@ -197,7 +213,7 @@ sleep 1
         "worker_init": worker_init,
         "launcher": SlurmLauncher(
             overrides=overrides,
-            image=("image.sif" if not gpu else "image_rocm.sif") if apptainer else None,
+            image=apptainer_image,
         ),
     }
 
@@ -265,7 +281,7 @@ sleep 1
     if executor == "work_queue":
         worker_options = [
             f"--cores={threads_per_core}",
-            # f"--gpus={0 if not gpu else 1}", #gpu is not for workqueue, but command launched inside workqueue
+            f"--gpus={0 if not gpu else 1}",  # gpu is not for workqueue, but command launched inside workqueue
         ]
 
         if wall_time_s is not None:
@@ -327,22 +343,24 @@ def config(
     load_cp2k=False,
     training_on_gpu=False,
     reference_on_gpu=False,
-    apptainer: bool = True,
+    # apptainer: bool = True,
+    apptainer_image_cpu: str | None = None,
+    apptainer_image_gpu: str | None = None,
 ):
-    kw = {
-        "cpu_cluster": cpu_cluster,
-        "gpu_cluster": gpu_cluster,
-        "cpu_part": cpu_part,
-        "gpu_part": gpu_part,
-        "path_internal": path_internal,
-        "gpu_kind": gpu_kind,
-    }
-
-    kw["env"] = env
-    kw["py_env"] = py_env
-    kw["executor"] = executor
-    kw["account"] = account
-    kw["apptainer"] = apptainer
+    kw = dict(
+        cpu_cluster=cpu_cluster,
+        gpu_cluster=gpu_cluster,
+        cpu_part=cpu_part,
+        gpu_part=gpu_part,
+        path_internal=path_internal,
+        gpu_kind=gpu_kind,
+        # apptainer_image=apptainer_image,
+        env=env,
+        py_env=py_env,
+        executor=executor,
+        account=account,
+        # apptainer=apptainer,
+    )
 
     if not isinstance(cpu_cluster, list) and cpu_cluster is not None:
         cpu_cluster = [cpu_cluster]
@@ -418,11 +436,12 @@ def config(
                     label=label,
                     init_blocks=0,
                     min_blocks=0,
-                    max_blocks=5,
+                    max_blocks=1,
                     # parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=training_cores,
                     wall_time=walltime_training,
+                    apptainer_image=apptainer_image_gpu,
                     **kw,
                 )
                 execs.append(gpu_part)
@@ -441,6 +460,7 @@ def config(
                     parsl_tasks_per_block=1,
                     threads_per_core=training_cores,
                     wall_time=walltime_training,
+                    apptainer_image=apptainer_image_cpu,
                     **kw,
                 )
                 execs.append(cpu_part)
@@ -459,6 +479,7 @@ def config(
                     init_blocks=0,
                     min_blocks=0,
                     max_blocks=256,
+                    apptainer_image=apptainer_image_gpu,
                     # parallelism=1,
                     parsl_tasks_per_block=reference_blocks,
                     threads_per_core=singlepoint_nodes,
@@ -490,6 +511,7 @@ def config(
                     threads_per_core=singlepoint_nodes,
                     wall_time=walltime_ref,
                     load_cp2k=load_cp2k,
+                    apptainer_image=apptainer_image_cpu,
                     **kw,
                 )
 
@@ -512,6 +534,7 @@ def config(
                     # parallelism=1,
                     parsl_tasks_per_block=1,
                     threads_per_core=default_threads,
+                    apptainer_image=apptainer_image_cpu,
                     wall_time=walltime_ref,
                     **kw,
                 )
