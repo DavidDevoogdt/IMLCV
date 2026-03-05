@@ -352,6 +352,22 @@ class MACEASE(AseEnergy):
     model: str | Path = field(pytree_node=False, default="medium")
     dtype: str = field(pytree_node=False, default="float32")
 
+    @staticmethod
+    def create(
+        atoms: ase.Atoms,
+        model: str | Path = "medium",
+        dtype: str = "float32",
+    ):
+        self = MACEASE(
+            atoms=atoms,
+            model=model,
+            dtype=dtype,
+        )
+
+        self.calculator = self._calculator()
+
+        return self
+
     def _calculator(self):
         import torch
         from mace.calculators import mace_mp
@@ -537,8 +553,11 @@ class MACEJax(EnergyFn):
             compute_stress=False,
         )
 
-        # agrees with manual force
+        # print(f"MACE output: {out} ")
+
+        # # agrees with manual force and manual virial calculation
         # jax.debug.print("MACE force: {out}", out=out["forces"] * electronvolt / angstrom)
+        # jax.debug.print("MACE vir: {out}", out=out["stress"] * electronvolt * (sp.volume() / angstrom**3))
 
         return out["energy"] * electronvolt
 

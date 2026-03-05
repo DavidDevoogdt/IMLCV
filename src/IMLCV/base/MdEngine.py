@@ -1163,6 +1163,7 @@ class MDEngine(MyPyTreeNode, ABC):
         gpos: bool = False,
         vtens: bool = False,
         manual_vir=None,
+        eps=1e-5,
     ) -> EnergyResult:
         return self.energy.compute_from_system_params(
             gpos=gpos,
@@ -1170,6 +1171,7 @@ class MDEngine(MyPyTreeNode, ABC):
             sp=sp,
             nl=nl,
             manual_vir=manual_vir,
+            eps=eps,
         )
 
     def get_bias(

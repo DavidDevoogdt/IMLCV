@@ -107,40 +107,28 @@ def get_slurm_provider(
 ):
     apptainer = apptainer_image is not None
 
-    if py_env is None:
-        # if env == "hortense":
-
-        if apptainer:
-            print("setting python env for hortense")
-            py_env = f"""
+    worker_init = f"""
 cd {ROOT_DIR}
-            """
-    else:
+"""
+
+    if not apptainer:
         environment = ("cuda13" if gpu_kind.value == "nvidia" else "rocm") if gpu else "cpu"
 
-        py_env = f"""
+        worker_init += f"""
 echo "init pixi"
 cd {ROOT_DIR}
 # pwd
 set -e
-export PIXI_CACHE_DIR="./.pixi_cache"
 export PATH="~/.pixi/bin:$PATH"
 which pixi
-
 
 eval  "$(pixi shell-hook -e {environment} --as-is )"
 echo "after pixi"
 which work_queue_worker
-                """
+"""
 
     if gpu_cluster is None:
         gpu_cluster = cpu_cluster
-
-    worker_init = "export PATH=/usr/local/bin:/usr/bin:/bin\n"
-
-    # /usr/bin:/bin:/usr/local/bin
-
-    worker_init += f"{py_env}\n"
 
     if load_cp2k:
         raise ValueError()

@@ -191,6 +191,7 @@ class Energy(MyPyTreeNode, ABC):
         manual_vir=None,
         shmap=False,
         shmap_kwarg=ShmapKwargs.create(),
+        eps=1e-5,
     ) -> EnergyResult:
         if sp.batched:
             _f = padded_vmap(
@@ -201,6 +202,7 @@ class Energy(MyPyTreeNode, ABC):
                     manual_vir=manual_vir,
                     shmap=False,
                     shmap_kwarg=None,
+                    eps=eps,
                 ),
                 chunk_size=None,
             )
@@ -218,6 +220,7 @@ class Energy(MyPyTreeNode, ABC):
                 sp,
                 nl,
                 gpos=gpos,
+                eps=eps,
             )
 
         # mock evaluation for pure callback
@@ -235,10 +238,12 @@ class Energy(MyPyTreeNode, ABC):
                 return EnergyResult(
                     energy=jnp.array(1.0),
                     gpos=None if not gpos else sp.coordinates,
-                    vtens=None if not vir else sp.cell,
+                    vtens=None if ((not vir) or (sp.cell is None)) else sp.cell,
                 )
 
             dtypes = jax.eval_shape(_mock_f, sp)
+
+            print(f"calling pure callback with dtypes {dtypes=}")
 
             out = jax.pure_callback(
                 f,
@@ -299,25 +304,33 @@ class EnergyFn(Energy, MyPyTreeNode):
         vir=False,
     ) -> EnergyResult:
         def _energy(sp, nl):
-            return self.f(sp, nl, **self.static_kwargs, **self.kwargs)
+            ener = self.f(sp, nl, **self.static_kwargs, **self.kwargs).reshape(())
 
-        # print(f"in energy {sp=} {nl=}")
+            # print(f"{ener=}")
 
-        e = _energy(sp, nl)
+            return ener
 
         e_gpos = None
         e_vir = None
 
         if gpos or vir:
-            dedsp: SystemParams = jax.jacrev(_energy)(sp, nl)
+            e, dedsp = jax.value_and_grad(_energy)(sp, nl)
+
+            # print(f"{dedsp=}")
 
             if gpos:
                 e_gpos = dedsp.coordinates
 
             if vir:
-                e_vir = jnp.einsum("ij,il->jl", sp.cell, dedsp.cell) + jnp.einsum(
-                    "ni,nl->il", sp.coordinates, dedsp.coordinates
-                )
+                e_vir_cell = jnp.einsum("ij,il->jl", sp.cell, dedsp.cell)
+                e_vir_coor = jnp.einsum("ni,nl->il", sp.coordinates, dedsp.coordinates)
+
+                e_vir = e_vir_cell + e_vir_coor
+
+                e_vir = 0.5 * (e_vir + e_vir.T)  # make sure virial is exactly symmetric
+
+        else:
+            e = _energy(sp, nl)
 
         res = EnergyResult(
             energy=e,

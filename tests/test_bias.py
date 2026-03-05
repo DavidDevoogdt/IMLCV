@@ -250,3 +250,37 @@ def test_reparametrize():
     b2 = new_bias.compute_from_cv(cv_grid)[0]
 
     assert jnp.allclose(b, b2)
+
+
+def test_mace(md):
+    # test if mace implementation in ase and jax give the same results
+    from IMLCV.implementations.energy import MACEASE, MACEJax
+
+    md = scheme0.md
+    sp = md.sp
+    md.update_nl()
+    nl = md.nl
+
+    sp.to_ase(static_trajectory_info=md.static_trajectory_info)
+
+    ener_ase = MACEASE.create(
+        model="medium",
+        dtype="float64",
+        atoms=sp.to_ase(static_trajectory_info=md.static_trajectory_info),
+    )
+    ener_jax = MACEJax.create_foundation_model(
+        model="medium",
+        dtype="float64",
+    )
+
+    gpos = True
+    vir = True
+
+    import jax.numpy as jnp
+    from jax.tree_util import Partial
+
+    jax.clear_caches()
+    ener_res_ase = ener_ase.compute_from_system_params(sp, nl, gpos=gpos, vir=vir)
+    ener_res_jax = ener_jax.compute_from_system_params(sp, nl, gpos=gpos, vir=vir)
+
+    jax.tree.map(Partial(jnp.allclose, rtol=1e-4, atol=1e-5), ener_res_ase, ener_res_jax)

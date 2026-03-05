@@ -75,10 +75,10 @@ class YaffFF(MyPyTreeNode):
                 f,
                 dtypes,
                 sp,
-                self,
+                nl,
             )
         else:
-            energy = f(sp, self)
+            energy = f(sp, nl)
 
         cv, bias = self.bias.compute_from_system_params(
             sp=sp,

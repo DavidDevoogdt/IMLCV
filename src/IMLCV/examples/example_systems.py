@@ -23,7 +23,7 @@ from IMLCV.implementations.CV import (
     dihedral,
     rotate_2d,
 )
-from IMLCV.implementations.energy import MACEASE, OpenMmEnergy
+from IMLCV.implementations.energy import MACEASE, OpenMmEnergy, MACEJax
 from IMLCV.implementations.MdEngine import NewYaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"
@@ -563,6 +563,7 @@ def cyclohexane(CV=True, save_step=50):
 def CsPbI3_MACE(
     unit_cells=[2],
     r_cut=6 * angstrom,
+    model="small",
 ):
     assert isinstance(unit_cells, list)
 
@@ -580,8 +581,15 @@ def CsPbI3_MACE(
 
     refs, z_array, atoms = CsPbI3_refs(x, y, z)
 
-    energy = MACEASE(
-        atoms=atoms[0],
+    # energy = MACEASE(
+    #     atoms=atoms[0],
+    # )
+
+    assert r_cut >= 6 * angstrom, "MACEJax model requires a cutoff of at least 6 angstrom"
+
+    energy = MACEJax.create_foundation_model(
+        model=model,
+        source="mp",
     )
 
     tic = StaticMdInfo(
@@ -594,8 +602,9 @@ def CsPbI3_MACE(
         atomic_numbers=z_array,
         equilibration=0 * femtosecond,
         screen_log=50,
-        save_step=50,
+        save_step=10,
         r_cut=r_cut,
+        r_skin=1.0 * angstrom,
     )
 
     cv = NoneCV()

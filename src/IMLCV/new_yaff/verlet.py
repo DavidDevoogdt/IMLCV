@@ -375,7 +375,7 @@ class VerletIntegrator(MyPyTreeNode):
         # Allow specialized hooks to modify the state before the regular verlet
         # step.
 
-        print(f"verlet jit compile {self.counter=}")
+        # print(f"verlet jit compile {self.counter=}")
 
         verlet_hook, self = jax.lax.cond(
             verlet_hook.expects_call(self.counter),

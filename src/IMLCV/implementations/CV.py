@@ -1232,7 +1232,7 @@ def _graph_neural_network_model(model_kwargs, key=0):
     # print(f"creating graph neural network model with {model_kwargs=}")
 
     model_kwargs["hidden_irreps"] = Irreps(model_kwargs["hidden_irreps"])
-    model_kwargs["MLP_irreps"] = Irreps(model_kwargs["MLP_irreps"])
+    # model_kwargs["MLP_irreps"] = Irreps(model_kwargs["MLP_irreps"])
 
     m = MACE(
         interaction_cls=RealAgnosticInteractionBlock,
@@ -1272,6 +1272,8 @@ def _custom_setstate(state: dict) -> dict:
     # recreate mode
     model_kwargs = state["static_kwargs"].copy()
     del model_kwargs["reduce_z"]
+    if "inversion" in model_kwargs:
+        del model_kwargs["inversion"]
 
     kwargs = state["kwargs"]
 
@@ -1297,6 +1299,8 @@ def _initialize_graph_neural_network_model(
     model_kwargs = static_kwargs.copy()
 
     del model_kwargs["reduce_z"]
+    if "inversion" in model_kwargs:
+        del model_kwargs["inversion"]
 
     m, graphdef, params, rest = _graph_neural_network_model(model_kwargs, key=key)
 
@@ -1313,6 +1317,7 @@ def _graph_neural_network_model_apply(
     m,
     params,
     reduce_z=True,
+    inversion=False,
     **model_kwargs,
 ):
     if nl.needs_calculation:
@@ -1330,22 +1335,76 @@ def _graph_neural_network_model_apply(
 
     batch = nl.to_MACE_batch(sp)
 
-    out = m(batch, compute_force=False, compute_stress=False)
+    out = m(
+        batch,
+        compute_force=False,
+        compute_stress=False,
+        compute_node_feats=True,
+    )
 
     # jax.debug.print("model output {out}", out=out)
 
-    n_channel = m._hidden_irreps[0].mul
-    node_feats = out["node_feats"][:, -n_channel:]
+    # print(f"model output {out=}")
+
+    import e3nn_jax as e3nn
+    from e3nn_jax import Irreps, Irrep
+
+    hidden_irreps = model_kwargs["hidden_irreps"]
+
+    # print(f"model hidden_irreps {hidden_irreps=}")
+
+    def get_features(out, irr):
+        out_irrep = e3nn.IrrepsArray(
+            irr,
+            out,
+        )
+
+        # print(f"out_irrep {out_irrep=}")
+
+        node_feats_out = out_irrep.filter(keep="0e").array
+
+        if inversion:
+            node_feats_out_odd = out_irrep.filter(keep="0o").array
+
+            node_feats_out = jnp.concatenate([node_feats_out, node_feats_out_odd], axis=-1)
+
+        return node_feats_out
+
+    counter = 0
+
+    feat = []
+
+    for idx in range(m.num_interactions):
+        if idx == m.num_interactions - 1:
+            hidden_irreps_out = Irreps(str(hidden_irreps[0]))
+        else:
+            hidden_irreps_out = hidden_irreps
+
+        # print(f"interaction {idx}/{m.num_interactions} with hidden_irreps out {hidden_irreps_out}")
+
+        n = hidden_irreps_out.dim
+
+        node_feat = jax.vmap(partial(get_features, irr=hidden_irreps_out))(out["node_feats"][:, counter : counter + n])
+
+        feat.append(node_feat)
+
+        counter += n
+
+    # print(f"feat {[f.shape for f in feat]}")
+
+    # node_feats = get_features(out["node_feats"][:, -hidden_irreps.dim :])
+
+    node_feats = jnp.concatenate(feat, axis=-1)
 
     if reduce_z:
 
         @jax.vmap
         def _select(feat, z):
-            return jnp.where(z == jnp.array(nl.info.z_unique), feat[:, None], jnp.zeros_like(feat[:, None]))
+            b = jnp.array(nl.info.z_unique) == z
+
+            return jnp.where(b, feat[:, None], jnp.zeros_like(feat[:, None]))
 
         node_feats = jnp.sum(_select(node_feats, jnp.array(nl.info.z_array)), axis=0)
-
-        print(f"reduced node_feats {node_feats.shape=}")
 
     return CV(cv=node_feats.flatten())
 
@@ -1360,8 +1419,9 @@ def graph_neural_network(
     max_ell=3,  # dimension of spehrical harmonics and A matrices
     L=2,  # size of message passing (hidden irrep)
     r_cut=None,
-    use_so3=False,
+    inversion=False,
     reduce_z=True,
+    radial_mlp: tuple[int, ...] = None,
 ):
     if r_cut is None:
         r_cut = nl.info.r_cut
@@ -1373,10 +1433,16 @@ def graph_neural_network(
 
     hidden_irreps = ""
     for l in range(L + 1):
-        hidden_irreps += f"{channels}x{l}{'o' if l % 2 else 'e'} + "
+        if inversion:
+            hidden_irreps += f"{channels}x{l}o + {channels}x{l}e + "
+        else:
+            hidden_irreps += f"{channels}x{l}{'o' if l % 2 else 'e'} + "
+
+    # print(f"hidden_irreps before trimming: {hidden_irreps}")
+
     hidden_irreps = hidden_irreps[:-3]  # Remove trailing " +
 
-    print(f"hidden_irreps: {hidden_irreps}")
+    # print(f"hidden_irreps: {hidden_irreps}")
 
     model_kwargs = dict(
         r_max=r_cut,
@@ -1387,13 +1453,14 @@ def graph_neural_network(
         num_interactions=num_interactions,
         num_elements=num_elements,
         hidden_irreps=hidden_irreps,
-        MLP_irreps="1x0e",
+        # MLP_irreps="10x0e",
         avg_num_neighbors=avg_neighbors,
         correlation=correlation,
         gate=None,
-        use_so3=use_so3,
+        use_so3=inversion,
         distance_transform="None",
         radial_type="bessel",
+        radial_MLP=radial_mlp,
     )
 
     _, graphdef, params, rest = _graph_neural_network_model(model_kwargs=model_kwargs)
@@ -1401,14 +1468,15 @@ def graph_neural_network(
     m_safe = nnx.merge(graphdef, jax.tree.map(lambda x: x.shape, params), rest)
     # print(f"{m_safe=}")
 
-    print(f"{params=}")
+    # print(f"{params=}")
 
     return CvTrans.from_cv_function(
         _graph_neural_network_model_apply,
-        static_argnames=["reduce_z", *model_kwargs.keys()],
+        static_argnames=["reduce_z", "inversion", *model_kwargs.keys()],
         learnable_argnames=("params",),
         params=params,
         reduce_z=reduce_z,
+        inversion=inversion,
         m=m_safe,
         initializers=_initialize_graph_neural_network_model,
         custom_getstate=_custom_getstate,

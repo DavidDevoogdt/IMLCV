@@ -7262,189 +7262,6 @@ class KoopmanModel(MyPyTreeNode):
         else:
             w_tot_t = None
 
-        # if periodicities is not None:
-        #     print(f"using periodicities in cv transform {periodicities=}")
-
-        #     idx_periodic = jnp.argwhere(periodicities).flatten()
-        #     idx_nonperiodic = jnp.argwhere(jnp.logical_not(periodicities)).flatten()
-
-        #     trans_periodic = CvTrans.from_cv_function(
-        #         _cv_slice,
-        #         indices=idx_periodic,
-        #     )
-
-        #     trans_nonperiodic = CvTrans.from_cv_function(
-        #         _cv_slice,
-        #         indices=idx_nonperiodic,
-        #     )
-
-        #     if exp_period:
-        #         if trans is not None:
-        #             cv_0, cv_t = DataLoaderOutput.apply_cv(
-        #                 trans,
-        #                 cv_0,
-        #                 cv_t,
-        #                 nl,
-        #                 nl_t,
-        #                 chunk_size=chunk_size,
-        #                 shmap=False,
-        #                 macro_chunk=macro_chunk,
-        #                 verbose=verbose,
-        #             )
-
-        #         cv_0_per, cv_t_per = DataLoaderOutput.apply_cv(
-        #             trans_periodic,
-        #             cv_0,
-        #             cv_t,
-        #             nl,
-        #             nl_t,
-        #             chunk_size=chunk_size,
-        #             shmap=False,
-        #             macro_chunk=macro_chunk,
-        #             verbose=verbose,
-        #         )
-
-        #         cv_0_nonper, cv_t_nonper = DataLoaderOutput.apply_cv(
-        #             trans_nonperiodic,
-        #             cv_0,
-        #             cv_t,
-        #             nl,
-        #             nl_t,
-        #             chunk_size=chunk_size,
-        #             shmap=False,
-        #             macro_chunk=macro_chunk,
-        #             verbose=verbose,
-        #         )
-
-        #         print(f"###########3 building nonper model ")
-
-        #         km_nonperiodic = KoopmanModel.create(
-        #             w=w,
-        #             rho=rho,
-        #             w_t=w_t,
-        #             rho_t=rho_t,
-        #             cv_0=cv_0_nonper,
-        #             cv_t=cv_t_nonper,
-        #             dynamic_weights=dynamic_weights,
-        #             nl=nl,
-        #             nl_t=nl_t,
-        #             add_1=add_1,
-        #             eps=eps,
-        #             eps_pre=eps_pre,
-        #             # method=method,
-        #             symmetric=symmetric,
-        #             out_dim=out_dim,
-        #             max_features=max_features,
-        #             max_features_pre=max_features_pre,
-        #             tau=tau,
-        #             macro_chunk=macro_chunk,
-        #             chunk_size=chunk_size,
-        #             verbose=verbose,
-        #             trans=None,
-        #             # T_scale=T_scale,
-        #             only_diag=only_diag,
-        #             calc_pi=calc_pi,
-        #             use_scipy=use_scipy,
-        #             auto_cov_threshold=auto_cov_threshold,
-        #             sparse=sparse,
-        #             scaled_tau=scaled_tau,
-        #             correlation_whiten=correlation_whiten,
-        #             constant_threshold=constant_threshold,
-        #             shrink=shrink,
-        #             shrinkage_method=shrinkage_method,
-        #             eps_shrink=eps_shrink,
-        #             glasso=glasso,
-        #             generator=generator,
-        #             use_w=use_w,
-        #             periodicities=None,
-        #         )
-
-        #         print(f"###########3 building per model ")
-
-        #         def _periodic(cv: CV, _nl, shmap, shmap_kwargs, periodicities=periodicities):
-        #             return cv.replace(cv=jnp.exp(1.0j * cv.cv))
-
-        #         _trans = CvTrans.from_cv_function(_periodic, periodicities=periodicities)
-
-        #         # cov = Covariances.create(
-        #         #     cv_0=cv_0_per,  # type: ignore
-        #         #     nl=nl,
-        #         #     w=w_tot if use_w else None,
-        #         #     calc_pi=True,
-        #         #     only_diag=only_diag,
-        #         #     symmetric=symmetric,
-        #         #     chunk_size=chunk_size,
-        #         #     macro_chunk=macro_chunk,
-        #         #     trans_f=CvTrans.from_cv_function(PeriodicKoopmanModel._exp_periodic),
-        #         #     verbose=verbose,
-        #         #     shrink=False,
-        #         #     shrinkage_method=shrinkage_method,
-        #         #     pi_argmask=jnp.array([-1]) if add_1 else None,
-        #         #     eps_shrink=eps_shrink,
-        #         #     generator=generator,
-        #         # )
-
-        #         # # print(f"{jnp.diag(cov.rho_00)=}")
-
-        #         # print(f"{jnp.angle(cov.pi_0)=}")
-
-        #         # _trans_periodic = CvTrans.from_cv_function(
-        #         #     PeriodicKoopmanModel._center_periodic,
-        #         #     periodicities=periodicities,
-        #         #     angles=jnp.angle(cov.pi_0),
-        #         # )
-
-        #         km_periodic = KoopmanModel.create(
-        #             w=w,
-        #             rho=rho,
-        #             w_t=w_t,
-        #             rho_t=rho_t,
-        #             cv_0=cv_0_per,
-        #             cv_t=cv_t_per,
-        #             dynamic_weights=dynamic_weights,
-        #             nl=nl,
-        #             nl_t=nl_t,
-        #             add_1=add_1,
-        #             eps=eps,
-        #             eps_pre=eps_pre,
-        #             # method=method,
-        #             symmetric=symmetric,
-        #             out_dim=out_dim,
-        #             max_features=max_features,
-        #             max_features_pre=max_features_pre,
-        #             tau=tau,
-        #             macro_chunk=macro_chunk,
-        #             chunk_size=chunk_size,
-        #             verbose=verbose,
-        #             trans=CvTrans.from_cv_function(PeriodicKoopmanModel._exp_periodic),
-        #             only_diag=True,
-        #             calc_pi=False,
-        #             use_scipy=use_scipy,
-        #             auto_cov_threshold=auto_cov_threshold,
-        #             sparse=sparse,
-        #             scaled_tau=scaled_tau,
-        #             correlation_whiten=correlation_whiten,
-        #             constant_threshold=constant_threshold,
-        #             shrink=shrink,
-        #             shrinkage_method=shrinkage_method,
-        #             eps_shrink=eps_shrink,
-        #             glasso=glasso,
-        #             generator=generator,
-        #             use_w=use_w,
-        #             periodicities=None,
-        #         )
-
-        #         print(f"##### done")
-
-        #         return PeriodicKoopmanModel(
-        #             km_periodic=km_periodic,
-        #             km_nonperiodic=km_nonperiodic,
-        #             periodicities=periodicities,
-        #             trans=trans,
-        #             trans_periodic=trans_periodic,
-        #             trans_nonperiodic=trans_nonperiodic,
-        #         )
-
         if periodicities is not None:
             _tr_per = CvTrans.from_cv_function(PeriodicKoopmanModel._exp_periodic, periodicities=periodicities)
 
@@ -7515,10 +7332,124 @@ class KoopmanModel(MyPyTreeNode):
 
             print(f"{N=} {dim=} {sigma_silverman=}")
 
-            print(f"{cv_out_shape.cv.shape=} {alpha_smooth=} {entropy_reg=} ")
+            print(f"{cv_out_shape.cv.shape=} {alpha_smooth=} {entropy_reg=} {target_smoothness=} ")
 
+            # if batch_size is None:
             grid_size = int(2000 ** (1 / dim))
+            # else:
+            #     grid_size = int(min(batch_size, 1000) ** (1 / dim))
             print(f"entropy grid size per dim: {grid_size}")
+
+            from optax._src.transform import ScaleByAdamState
+
+            print("Using AdamW optimizer for mini-batch optimization")
+
+            from optax.schedules import cosine_decay_schedule
+
+            optimizer = optax.adamw(
+                # learning_rate=cosine_decay_schedule(1e-2, decay_steps=epochs, alpha=1e-4),
+                learning_rate=1e-2,
+                # learning_rate=cosine_decay_schedule(1e-2, decay_steps=epochs, alpha=1e-4),
+                # learning_rate=1e-3,
+                weight_decay=1e-4,
+            )
+            opt_state = optimizer.init(learable_params)
+
+            if batch_size is None:
+                print("Using full-batch optimization")
+
+                if isinstance(cv_0[0], CV):
+                    x0_chunk = CV.stack(*cv_0)
+                else:
+                    x0_chunk = SystemParams.stack(*cv_0)
+
+                if cv_t is not None:
+                    if isinstance(cv_t[0], CV):
+                        xt_chunk = CV.stack(*cv_t)
+                    else:
+                        xt_chunk = SystemParams.stack(*cv_t)
+
+                w_chunk = jnp.hstack(w_tot)
+
+                if nl is not None:
+                    if isinstance(x0_chunk, SystemParams):
+                        nl_chunk = nl.slow_update_nl(x0_chunk) if nl is not None else None
+
+                        nl = nl.replace(update=nl_chunk.update)
+
+                    else:
+                        nl_chunk = nl
+                else:
+                    nl_chunk = None
+
+                lbfgs = True
+
+            else:
+                from queue import Queue
+                from threading import Thread
+
+                def prefetch_worker(
+                    queue,
+                    key,
+                    nl: NeighbourList | None = None,
+                ):
+                    # nl2 = nl
+
+                    # if nl2 is not None:
+                    #     nl2.info.r_skin = 0.0
+
+                    subsample = True
+
+                    while True:
+                        key, subkey = jax.random.split(key)
+
+                        if subsample:
+                            x0_chunk, xt_chunk = chunk_selector(
+                                [cv_0, cv_t],
+                                batch_size,
+                                subkey,
+                                weight_list=w_tot,
+                            )
+                            w_chunk = jnp.ones(batch_size) / batch_size
+                        else:
+                            x0_chunk, xt_chunk, w_chunk = chunk_selector(
+                                [cv_0, cv_t, w_tot],
+                                batch_size,
+                                subkey,
+                            )
+
+                        # if nl is not None:
+                        #     if isinstance(x0_chunk, SystemParams):
+                        #         nl_chunk = nl2.slow_update_nl(x0_chunk)
+                        #         nl2 = nl2.replace(update=nl_chunk.update)
+                        #     else:
+                        #         nl_chunk = nl2
+
+                        batch = dict(
+                            x0_i=x0_chunk,
+                            xt_i=xt_chunk if cv_t is not None else None,
+                            wt_i=w_chunk,
+                            # nl_i=nl_chunk,
+                        )
+
+                        print("-", end="", flush=True)
+
+                        queue.put(batch)
+
+                lbfgs = False
+
+                # Setup queue and thread
+                batch_queue = Queue(maxsize=4)  # Prefetch 4 batches ahead
+                thread = Thread(
+                    target=prefetch_worker,
+                    args=(
+                        batch_queue,
+                        key,
+                        nl,
+                    ),
+                )
+                thread.daemon = True
+                thread.start()
 
             @partial(jit_decorator, static_argnames=["entropy_reg", "chunk_size"])
             def objective_fn(
@@ -7527,7 +7458,6 @@ class KoopmanModel(MyPyTreeNode):
                 x_t: CV | SystemParams,
                 w: jax.Array | None,
                 nl: NeighbourList | None,
-                nlt: NeighbourList | None,
                 cov_tot: Covariances | None,
                 entropy_reg,
                 chunk_size=None,
@@ -7548,8 +7478,8 @@ class KoopmanModel(MyPyTreeNode):
                     _trans,
                     [x_0],
                     [x_t],
-                    [nl],
-                    [nlt],
+                    nl,
+                    nl,
                     chunk_size=chunk_size,
                     macro_chunk=None,
                     verbose=verbose,
@@ -8020,6 +7950,7 @@ class KoopmanModel(MyPyTreeNode):
                     # loss -= entropy_reg * entropy
                 else:
                     entropy = jnp.array(0.0)
+                    entropy_loss = jnp.array(0.0)
 
                 max_kurt = dim * (dim + 2)
 
@@ -8031,7 +7962,7 @@ class KoopmanModel(MyPyTreeNode):
 
                 # jax.debug.print("border loss {}", loss_border)
 
-                loss += 0.1 * loss_border
+                loss += 0.0 * loss_border
 
                 # # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
                 # # dl, _ = jnp.linalg.eigh(dK)
@@ -8091,7 +8022,6 @@ class KoopmanModel(MyPyTreeNode):
                     x_t=cv_t,
                     w=w,
                     nl=nl,
-                    nlt=nl,
                     entropy_reg=entropy_reg,
                     chunk_size=batch_chunk_size,
                     cov_tot=cov,
@@ -8200,294 +8130,49 @@ class KoopmanModel(MyPyTreeNode):
 
                 return b
 
-            # batch_size = 1024
-            # chunk_size = chunk_size
-
-            # if not lbfgs:
-            #     # x_0_stack = CV.stack(*cv_0) if isinstance(cv_0[0], CV) else SystemParams.stack(*cv_0)
-            #     # x_t_stack = (
-            #     #     (CV.stack(*cv_t) if isinstance(cv_0[0], CV) else SystemParams.stack(*cv_t))
-            #     #     if cv_t is not None
-            #     #     else None
-            #     # )
-            #     # w_tot_stack = jnp.hstack(w_tot)
-
-            #     # print(f"{x_0_stack.shape=} {x_t_stack.shape if x_t_stack is not None else None} {w_tot_stack.shape=} ")
-
-            #     # # first do a rough optimization without entropy
-            #     # print("Starting pre-optimization without entropy regularization")
-            #     # for epoch in range(epochs // 5):
-            #     #     opt_state, learable_params, loss_train, loss_vamp, total_smoothness = _body_fun(
-            #     #         opt_state, learable_params, x_0_stack, x_t_stack, w_tot_stack, 0.0
-            #     #     )
-
-            #     #     if epoch % print_nonlin_every == 0:
-            #     #         print(
-            #     #             f"{epoch=} loss vamp {loss_vamp=} smoothness {jnp.sqrt(total_smoothness) * (boltzmann * 300 / (kjmol))} kJ/mol"
-            #     #         )
-
-            #     # print("Starting main optimization with entropy regularization")
-
-            #     best_loss = None
-            #     best_params = learable_params
-            #     no_improve = 0
-            #     patience = 500
-
-            #     min_delta = 1e-3  # 0.1% improvement per 10 steps
-
-            #     entropy_start = 50
-            #     init_steps = 100
-
-            #     # batch_size = 256
-
-            #     # # if nl is not None:
-            #     # #     nl2 = nl
-            #     # #     nl2.info.r_skin = 0.0
-
-            #     # from queue import Queue
-            #     # from threading import Thread
-
-            #     # def prefetch_worker(queue, key, w_tot_stack, x_0_stack, x_t_stack):
-            #     #     nl2 = nl
-            #     #     nl2.info.r_skin = 0.0
-
-            #     #     while True:
-            #     #         key, subkey = jax.random.split(key)
-            #     #         indices = jax.random.choice(
-            #     #             subkey,
-            #     #             w_tot_stack.shape[0],
-            #     #             (batch_size,),
-            #     #             p=w_tot_stack,
-            #     #         )
-
-            #     #         batch = dict(
-            #     #             x0_i=x_0_stack[indices],
-            #     #             xt_i=x_t_stack[indices] if x_t_stack is not None else None,
-            #     #             wtot_i=w_tot_stack[indices],
-            #     #         )
-
-            #     #         # if isinstance(batch["x0_i"], SystemParams) and nl is not None:
-            #     #         #     # print("updating nl for batch")
-
-            #     #         #     sp = batch["x0_i"]
-
-            #     #         #     nl_stack = nl2.slow_update_nl(sp)
-
-            #     #         #     if nl_stack.update.num_neighs != nl2.update.num_neighs:
-            #     #         #         print(
-            #     #         #             "warning: batch nl num_neighs differs from original nl, this may cause issues if num_neighs is used in the CV computation"
-            #     #         #         )
-
-            #     #         #         nl2.update = nl_stack.update
-
-            #     #         #     # print(f"{nl_stack.sp.shape=}")
-
-            #     #         #     batch["nl_i"] = nl_stack
-
-            #     #         #     if batch["xt_i"] is not None:
-            #     #         #         sp_t = batch["xt_i"]
-
-            #     #         #         nl_t_stack = nl2.slow_update_nl(sp_t)
-
-            #     #         #         batch["nlt_i"] = nl_t_stack
-
-            #     #         queue.put(batch)
-
-            #     # # Setup queue and thread
-            #     # batch_queue = Queue(maxsize=4)  # Prefetch 4 batches ahead
-            #     # thread = Thread(
-            #     #     target=prefetch_worker,
-            #     #     args=(
-            #     #         batch_queue,
-            #     #         key,
-            #     #         w_tot_stack,
-            #     #         x_0_stack,
-            #     #         x_t_stack,
-            #     #     ),
-            #     # )
-            #     # thread.daemon = True
-            #     # thread.start()
-
-            #     # cov_new: Covariances | None = None
-            #     # w_tot_new: float | None = None
-
-            #     # print(f"{_body_fun.lower(opt_state, learable_params, 0.0,).cost_analysis()=}")
-
-            #     for epoch in range(epochs):
-            #         # batch_dict = batch_queue.get()
-
-            #         # x0_batch, xt_batch, w_tot_batch = batch_dict["x0_i"], batch_dict.get("xt_i", None), batch_dict["wtot_i"]
-            #         # nl_batch = batch_dict.get("nl_i", None)
-            #         # nl_t_batch = batch_dict.get("nlt_i", None)
-
-            #         # (
-            #         #     opt_state,
-            #         #     learable_params,
-            #         #     loss_train,
-            #         #     (loss_vamp, total_entropy, loss_border),
-            #         #     cov_new,
-            #         # ) = _body_fun(
-            #         #     opt_state,
-            #         #     learable_params,
-            #         #     x0_batch,
-            #         #     xt_batch if x_t_stack is not None else None,
-            #         #     jnp.ones_like(w_tot_batch),
-            #         #     nl_batch,
-            #         #     nl_t_batch,
-            #         #     0 if epoch < entropy_start else entropy_reg,
-            #         #     cov_new,
-            #         # )
-
-            #         (
-            #             opt_state,
-            #             learable_params,
-            #             loss_train,
-            #             (loss_vamp, total_entropy, loss_border),
-            #             gnorm,
-            #             # cov_new,
-            #         ) = _body_fun(
-            #             opt_state,
-            #             learable_params,
-            #             # cv_0,
-            #             # cv_t if cv_t is not None else None,
-            #             # # jnp.ones_like(w_tot_batch),
-            #             # w_tot,
-            #             # nl,
-            #             # nl_t,
-            #             0 if epoch < entropy_start else entropy_reg,
-            #             # cov_new,
-            #         )
-
-            #         # print(f"{cov_new=}")
-
-            #         # print(f"{cov_new.rho_00=} {cov_new.rho_11=} {cov_new.rho_01=}")
-
-            #         if not jnp.isfinite(loss_train):
-            #             print("Loss became non-finite, restoring best params and stopping early")
-            #             learable_params = best_params
-            #             break
-
-            #         loss = loss_train
-
-            #         if best_loss is None:
-            #             best_loss = loss
-
-            #         if best_loss - loss > min_delta:
-            #             best_loss = loss
-            #             best_params = learable_params
-            #             no_improve = 0
-            #         else:
-            #             no_improve += 1
-
-            #         if epoch > init_steps:
-            #             # patience reached -> stop
-            #             if no_improve >= patience:
-            #                 print(
-            #                     f"Early stopping at epoch {epoch} (no improvement for {patience} epochs). Best loss={float(best_loss):.6e}"
-            #                 )
-            #                 learable_params = best_params
-            #                 break
-
-            #         if epoch % print_nonlin_every == 0:
-            #             print(
-            #                 f"{epoch=} loss train {10 ** float(loss):.3E} loss vamp {float(loss_vamp):.6f} entropy {float(total_entropy):.6f} border {float(loss_border):.6f} "
-            #             )
-            # else:
-
-            lbfgs = False
-
-            if batch_size is None:
-                print("Using full-batch optimization")
-
-                if isinstance(cv_0[0], CV):
-                    x0_chunk = CV.stack(*cv_0)
-                else:
-                    x0_chunk = SystemParams.stack(*cv_0)
-
-                if cv_t is not None:
-                    if isinstance(cv_t[0], CV):
-                        xt_chunk = CV.stack(*cv_t)
-                    else:
-                        xt_chunk = SystemParams.stack(*cv_t)
-
-                w_chunk = jnp.hstack(w_tot)
-
-                if nl is not None:
-                    if isinstance(x0_chunk, SystemParams):
-                        nl_chunk = nl.slow_update_nl(x0_chunk) if nl is not None else None
-
-                        nl = nl.replace(update=nl_chunk.update)
-
-                    else:
-                        nl_chunk = nl
-                else:
-                    nl_chunk = None
-
-                lbfgs = True
-            else:
-                lbfgs = False
-
-            max_steps = 10
-
-            if lbfgs:
-                print("Using L-BFGS optimizer for full-batch optimization")
-                from optax._src.linesearch import scale_by_zoom_linesearch, ScaleByZoomLinesearchState
-
-                optimizer = optax.lbfgs(
-                    memory_size=5,
-                    linesearch=scale_by_zoom_linesearch(
-                        max_linesearch_steps=max_steps,
-                        initial_guess_strategy="one",
-                    ),
-                )
-                opt_state = optimizer.init(learable_params)
-            else:
-                from optax._src.transform import ScaleByAdamState
-
-                print("Using AdamW optimizer for mini-batch optimization")
-
-                # from optax.schedules import cosine_decay_schedule
-
-                optimizer = optax.adamw(
-                    # learning_rate=cosine_decay_schedule(1e-2, decay_steps=epochs, alpha=1e-4),
-                    learning_rate=1e-2,
-                    weight_decay=1e-4,
-                )
-                opt_state = optimizer.init(learable_params)
-
             cov: Covariances | None = None
 
             print(f"{init_steps=}, {epochs=}, {entropy_reg=}")
 
+            t0 = time.time()
+
+            # if nl is not None:
+            #     info = nl.info
+            #     update = nl.update
+
+            print(f"{nl=}")
+
             for epoch in range(epochs):
+                if (epoch % 10 == 0) and epoch > 0:
+                    t = time.time()
+
+                    end = t0 + (t - t0) / 10 * (epochs - epoch)
+
+                    print(
+                        f"Epoch {epoch} time {time.strftime('%H:%M:%S', time.localtime(t))} estimated end {time.strftime('%H:%M:%S', time.localtime(end))}"
+                    )
+
+                    t0 = t
+
                 if batch_size is not None:
-                    key, key0 = jax.random.split(key, 2)
+                    batch_dict = batch_queue.get()
+                    x0_chunk, xt_chunk, w_chunk = batch_dict["x0_i"], batch_dict.get("xt_i", None), batch_dict["wt_i"]
+                    # nl_chunk = batch_dict.get("nl_i", None)
 
-                    subsample = True
+                # if isinstance(x0_chunk, SystemParams):
+                #     (
+                #         b,
+                #         nn,
+                #         new_nxyz,
+                #         nl_chunk,
+                #     ) = jax.jit(x0_chunk._get_neighbour_list)(info=info, update=update)
 
-                    if subsample:
-                        x0_chunk, xt_chunk = chunk_selector(
-                            [cv_0, cv_t],
-                            batch_size,
-                            key0,
-                            weight_list=w_tot,
-                        )
-                        w_chunk = jnp.ones(batch_size) / batch_size
-                    else:
-                        x0_chunk, xt_chunk, w_chunk = chunk_selector(
-                            [cv_0, cv_t, w_tot],
-                            batch_size,
-                            key0,
-                        )
+                #     if not b:
+                #         print(f"updateing neighbour list at epoch {epoch} with {nn} neighbors")
+                #         update = NeighbourListUpdate.create(nxyz=new_nxyz, num_neighs=nn)
+                # else:
+                #     nl_chunk = None
 
-                    if nl is not None:
-                        if isinstance(x0_chunk, SystemParams):
-                            nl_chunk = nl.slow_update_nl(x0_chunk)
-                            nl = nl.replace(update=nl_chunk.update)
-                        else:
-                            nl_chunk = nl
-
-                #  opt_state, params, (cv, cv_t, w, nl), cov_new, loss_val, losses, gnorm, steps, iter_num + 1
                 (
                     opt_state,
                     learable_params,
@@ -8499,264 +8184,22 @@ class KoopmanModel(MyPyTreeNode):
                     (
                         opt_state,
                         learable_params,
-                        (x0_chunk, xt_chunk, w_chunk, nl_chunk),
+                        (x0_chunk, xt_chunk, w_chunk, nl),
                         cov,
                         True,
                         epoch,
                     ),
                 )
 
-                # print(f"{cov.pi_0=} {cov.sigma_0=}")
-
-                # print(
-                #     f"Finished epoch {epoch} with loss {float(loss_train):.3E}, gnorm {float(gnorm):.6e}, steps {steps}"
-                # )
-                # print(f"{cov=}")
-
                 if not b:
                     print(f"Convergence criteria met at epoch {epoch}, stopping optimization")
                     break
 
-                # (
-                #     opt_state,
-                #     learable_params,
-                #     loss_train,
-                #     _,
-                #     (loss_vamp, total_entropy, loss_border),
-                #     gnorm,
-                #     steps,
-                #     iters,
-                # ) = jax.lax.while_loop(
-                #     _cond_fun,
-                #     _body_fun_2,
-                #     # opt_state, params, (cv, cv_t, w), loss_val, losses, gnorm, steps, iter_num
-                #     (
-                #         opt_state,
-                #         learable_params,
-                #         (x0_chunk, xt_chunk, w_chunk, nl_chunk),
-                #         jnp.inf,
-                #         (jnp.inf, jnp.inf, jnp.inf),
-                #         jnp.inf,
-                #         0,
-                #         0,
-                #     ),
-                # )
-
-                # print(f"Optimization finished at iteration {iters}")
-
-            # for epoch in range(epochs):
-            #     key, key0 = jax.random.split(key, 2)
-
-            #     if batch_size is not None:
-            #         x0_chunk, xt_chunk, w_chunk = chunk_selector(
-            #             [cv_0, cv_t, w_tot],
-            #             batch_size,
-            #             key0,
-            #         )
-
-            # _objective_fn = Partial_decorator(
-            #     objective_fn,
-            #     x_0=x0_chunk,
-            #     x_t=xt_chunk,
-            #     w=w_chunk,
-            #     nl=nl,
-            #     nlt=nl,
-            #     entropy_reg=entropy_reg,
-            #     chunk_size=chunk_size,
-            # )
-
-            # print(f"{x0_chunk.shape=} {xt_chunk.shape if xt_chunk is not None else None} {w_chunk.shape=} ")
-
-            # (opt_state, learable_params, b) = _body_fun_2(
-            #     opt_state,
-            #     learable_params,
-            #     x0_chunk,
-            #     xt_chunk if cv_t is not None else None,
-            #     w_chunk,
-            #     epoch,
-            #     batch_chunk_size,
-            # )
-
-            # if not b:
-            #     print(f"Convergence criteria met at epoch {epoch}, stopping optimization")
-            #     break
-
-            # for epoch in range(epochs):
-            #     (opt_state, learable_params, loss_train, (loss_vamp, total_entropy, loss_border), gnorm, steps) = (
-            #         _body_fun(
-            #             opt_state,
-            #             learable_params,
-            #             # cv_0,
-            #             # cv_t if cv_t is not None else None,
-            #             # # jnp.ones_like(w_tot_batch),
-            #             # w_tot,
-            #             # nl,
-            #             # nl_t,
-            #             entropy_reg,
-            #         )
-            #     )
-
-            #     if gnorm < 1e-6:
-            #         print(f"Converged (gnorm {float(gnorm):.6e} < 1e-6) at epoch {epoch}")
-            #         break
-
-            #     if steps > max_steps:
-            #         print(f"Converged (linesearch steps {steps} > {max_steps}) at epoch {epoch}")
-            #         break
-
-            #     if epoch % print_nonlin_every == 0:
-            #         print(
-            #             f"{epoch=} loss train {10 ** float(loss_train):.3E} loss vamp {float(loss_vamp):.6f} entropy {float(total_entropy):.6f} border {float(loss_border):.6f} gnorm {float(gnorm):.6f} "
-            #         )
-
-            # thread.join(timeout=0)
-
-            # create random K-folds splits and pick one validation fold
-
-            # num_folds = 5  # change as needed
-            # N = x_0_stack.shape[0]
-
-            # if batch_size > N / 5:
-            #     print(f"adjusting batch size from {batch_size} to {N // 5} ")
-            #     batch_size = N // 5
-
-            # # deterministic key for fold generation (can be exposed/seeded)
-            # key = jax.random.PRNGKey(42)
-            # key_1, key = jax.random.split(key, 2)
-            # perm = jax.random.permutation(key_1, N)
-
-            # # compute fold sizes and split indices
-            # num_folds = N // batch_size
-            # # num_folds = 1
-
-            # base = N // num_folds
-            # extras = N % num_folds
-            # sizes = [base + (1 if i < extras else 0) for i in range(num_folds)]
-            # boundaries = jnp.cumsum(jnp.array(sizes))[:-1]
-            # folds_idx = list(jnp.split(perm, boundaries))
-
-            # print(f" {N=} {base=} ")
-
-            # # select a random validation fold
-            # key_1, key = jax.random.split(key, 2)
-            # val_fold = int(jax.random.randint(key_1, (), 0, num_folds))
-
-            # val_idx = folds_idx[val_fold]
-            # train_idx = jnp.concatenate([folds_idx[i] for i in range(num_folds) if i != val_fold], axis=0)
-
-            # # gather train/validation stacks for cv_0 and cv_t (works for structured CV dataclasses)
-            # x_0_val = x_0_stack[val_idx]  # validation set (rename if you prefer train/val swapped)
-            # x_0_train = x_0_stack[train_idx]
-            # w_val = w_tot_stack[val_idx]
-            # w_train = w_tot_stack[train_idx]
-
-            # x_t_train = x_t_stack[train_idx] if x_t_stack is not None else None
-            # x_t_val = x_t_stack[val_idx] if x_t_stack is not None else None
-
-            # for epoch in range(epochs):
-            #     # permute training data each epoch
-            #     key_1, key = jax.random.split(key, 2)
-            #     perm = jax.random.permutation(key_1, x_0_train.shape[0])
-            #     _x_0_train = x_0_train[perm]
-            #     _w_train = w_train[perm]
-            #     if x_t_train is not None:
-            #         _x_t_train = x_t_train[perm]
-
-            #     for i in range(num_folds - 1):
-            #         x_i = _x_0_train[i * base : (i + 1) * base]
-            #         x_t_i = _x_t_train[i * base : (i + 1) * base] if x_t_train is not None else None
-            #         w_i = _w_train[i * base : (i + 1) * base]
-
-            #         # opt_state, learable_params, loss_train, _ = _body_fun(opt_state, learable_params, x_i, x_t_i, w_i)
-
-            #         opt_state, learable_params, loss_train, (loss_vamp, total_entropy, loss_border) = _body_fun(
-            #             opt_state,
-            #             learable_params,
-            #             x_0_stack,
-            #             x_t_stack,
-            #             w_tot_stack,
-            #             entropy_reg=0 if epoch < entropy_start else entropy_reg,
-            #         )
-
-            #         if epoch % print_nonlin_every == 0:
-            #             print(
-            #                 f"{epoch=} loss train {10 ** float(loss):.3E} loss vamp {float(loss_vamp):.6f} entropy {float(total_entropy):.6f} border {float(loss_border):.6f} "
-            #             )
-
-            #     # opt_state, learable_params, loss_train, _ = _body_fun(
-            #     #     opt_state, learable_params, x_0_train, x_t_train, w_train
-            #     # )
-
-            #     # compute validation loss
-            #     loss_val, _ = objective_fn(learable_params, x_0_val, x_t_val, w_val)
-
-            #     print(f"{epoch=}  {loss_train=} {loss_val=}  ")
+            if batch_size is not None:
+                thread.join(timeout=0)
 
             trans = trans.apply_learnable_params(learable_params)
             print(f"optimized trans done ")
-
-            # cov = Covariances.create(
-            #     cv_0=cv_0,  # type: ignore
-            #     cv_1=cv_t,  # type: ignore
-            #     nl=nl,
-            #     nl_t=nl_t,
-            #     w=w_tot if use_w else None,
-            #     w_t=w_tot_t if use_w else None,
-            #     dynamic_weights=dynamic_weights,
-            #     calc_pi=calc_pi,
-            #     only_diag=only_diag,
-            #     symmetric=symmetric,
-            #     chunk_size=chunk_size,
-            #     macro_chunk=macro_chunk,
-            #     trans_f=trans,
-            #     trans_g=trans,
-            #     verbose=verbose,
-            #     shrink=False,
-            #     shrinkage_method=shrinkage_method,
-            #     pi_argmask=jnp.array([-1]) if add_1 else None,
-            #     eps_shrink=eps_shrink,
-            #     generator=generator,
-            # )
-
-            # return KoopmanModel(
-            #     cov=cov,
-            #     W0=U,
-            #     W1=U,
-            #     s=jnp.exp(-l_train),
-            #     cv_0=cv_0,
-            #     cv_t=cv_t,
-            #     nl=nl,
-            #     nl_t=nl_t,
-            #     w=w,
-            #     w_t=w_t,
-            #     rho=rho,
-            #     rho_t=rho_t,
-            #     dynamic_weights=dynamic_weights,
-            #     add_1=add_1,
-            #     max_features=max_features,
-            #     max_features_pre=max_features_pre,
-            #     out_dim=out_dim,
-            #     # method=method,
-            #     calc_pi=calc_pi,
-            #     tau=tau,
-            #     trans=trans,
-            #     argmask=None,
-            #     only_diag=only_diag,
-            #     eps=eps,
-            #     eps_pre=eps_pre,
-            #     shape=cov.rho_00.shape[0],
-            #     scaled_tau=scaled_tau,
-            #     correlation_whiten=correlation_whiten,
-            #     constant_threshold=constant_threshold,
-            #     verbose=verbose,
-            #     shrink=shrink,
-            #     shrinkage_method=shrinkage_method,
-            #     eps_shrink=eps_shrink,
-            #     # use_w=use_w,
-            #     generator=generator,
-            #     # periodicities=periodicities,
-            #     argmask_s=None,
-            # )
 
         print(f"{nl=}")
 

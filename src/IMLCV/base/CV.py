@@ -66,7 +66,7 @@ class ShmapKwargs(MyPyTreeNode):
         mesh=None,
     ):
         if devices is None:
-            devices = tuple(jax.devices("cpu"))
+            devices = tuple(jax.devices())
 
         if mesh is None:
             mesh = Mesh(devices, axis_names=(axis_name,))
@@ -1242,6 +1242,7 @@ def _macro_chunk_map(
     return chunk_func_init_args
 
 
+# @partial(jit_decorator, static_argnames=["target_size", "keep_stack_info"])
 def chunk_selector(
     data_list: list[list[SystemParams | CV | Array]],
     target_size,
@@ -1401,6 +1402,8 @@ class SystemParams(MyPyTreeNode):
         if info.r_cut is None:
             return False, None, None, None
 
+        r_comb = info.r_cut + info.r_skin
+
         if verbose:
             print("canonicalize")
 
@@ -1413,26 +1416,22 @@ class SystemParams(MyPyTreeNode):
         else:
             nxyz, num_neighs = None, None
 
-        def _get_num_per_images(cell, r_cut):
-            # orthogonal distance for number of blocks
-            v1, v2, v3 = cell[0, :], cell[1, :], cell[2, :]
+        def _get_num_per_images(cell, r_comb):
+            # print(f"new get num!")
 
-            # sorted from short to long
-            e3 = v3 / jnp.linalg.norm(v3)
-            e1 = jnp.cross(v2, e3)
-            e1 /= jnp.linalg.norm(e1)
-            e2 = jnp.cross(e3, e1)
+            # cell rows are lattice vectors v1, v2, v3
+            # The inverse transpose gives us the reciprocal lattice vectors
+            # which are perpendicular to the faces.
+            reciprocal_lattice = jnp.linalg.inv(cell).T
 
-            proj = vmap_decorator(vmap_decorator(jnp.dot, in_axes=(0, None)), in_axes=(None, 0))(
-                jnp.array([e1, e2, e3]),
-                jnp.array([v1, v2, v3]),
-            )
+            # The L2 norm of each reciprocal vector tells us 1/height
+            # of the cell in that direction.
+            reciprocal_norms = jnp.linalg.norm(reciprocal_lattice, axis=1)
 
-            bounds = jnp.ceil(jnp.sum(jnp.abs(jnp.linalg.inv(proj)) * r_cut, axis=1))
+            # Number of images = cutoff * (1/height)
+            bounds = jnp.ceil(r_comb * reciprocal_norms)
 
-            bounds = jnp.nan_to_num(bounds)
-
-            return bounds
+            return jnp.nan_to_num(bounds).astype(jnp.int32)
 
         if verbose:
             print("num neighbour cells")
@@ -1442,13 +1441,13 @@ class SystemParams(MyPyTreeNode):
             if sp.batched:
                 new_nxyz = jnp.max(
                     vmap_decorator(
-                        lambda sp: _get_num_per_images(sp.cell, info.r_cut + info.r_skin),
+                        lambda sp: _get_num_per_images(sp.cell, r_comb),
                     )(sp),  # type: ignore
                     axis=0,
                 )
 
             else:
-                new_nxyz = _get_num_per_images(sp.cell, info.r_cut + info.r_skin)
+                new_nxyz = _get_num_per_images(sp.cell, r_comb)
 
             if nxyz is None:
                 nxyz = [int(i) for i in new_nxyz.tolist()]
@@ -1473,102 +1472,79 @@ class SystemParams(MyPyTreeNode):
             else:
                 sp_center = SystemParams(coordinates=sp.coordinates, cell=sp.cell)
 
-            sp_center, center_op = sp_center.wrap_positions(min=True)
-
             # only return the needed values
-            @jit_decorator
-            def func(r_ij, index, i, j, k):
+            @partial(vmap_decorator, in_axes=(0, 0, None))
+            def func(r_ij, index, ijk):
                 return (
-                    jnp.linalg.norm(r_ij),
+                    jnp.sum(r_ij**2),
                     jnp.array(index) if take_num != 0 else None,
-                    jnp.array([i, j, k]) if (sp_center.cell is not None and take_num != 0) else None,
+                    ijk if (sp_center.cell is not None and take_num != 0) else None,
                 )
 
             def _apply_g_inner(
                 sp: SystemParams,
-                func,
-                r_cut,
-                ijk=(None, None, None),
+                r_comb,
+                ijk: Array | None = None,
                 exclude_self=True,
             ):
-                i, j, k = ijk
-
-                if ijk != (None, None, None):
-                    assert sp.cell is not None
-                    pos = sp.coordinates + i * sp.cell[0, :] + j * sp.cell[1, :] + k * sp.cell[2, :]
-                else:
+                if ijk is None:
                     pos = sp.coordinates
+                else:
+                    assert sp.cell is not None
+                    pos = sp.coordinates + ijk @ sp.cell
 
-                norm2 = jnp.sum(pos**2, axis=1)
-                index_j = jnp.ones_like(norm2, dtype=jnp.int64).cumsum() - 1
+                # index_j = jnp.ones(norm2, dtype=jnp.int64).cumsum() - 1
+                index_j = jnp.arange(pos.shape[0])
 
-                bools = norm2 < r_cut**2
+                (dist_sq, indices, out_ijk) = func(pos, index_j, ijk)
 
-                if exclude_self:
-                    bools = jnp.logical_and(
-                        bools,
-                        jnp.logical_not(
-                            vmap_decorator(jnp.allclose, in_axes=(0, None))(pos, jnp.zeros((3,))),
-                        ),
-                    )
+                bools = dist_sq < r_comb**2
 
-                true_val = vmap_decorator(func, in_axes=(0, 0, None, None, None))(pos, index_j, i, j, k)
-                false_val = jax.tree.map(
-                    jnp.zeros_like,
-                    true_val,
-                )
-
-                val = vmap_decorator(
-                    lambda b, x, y: jax.tree.map(lambda t, f: jnp.where(b, t, f), x, y),
-                )(bools, true_val, false_val)
-
-                return bools, val
+                return bools, (dist_sq, indices, out_ijk)
 
             if sp_center.cell is None:
-                _, (r, atoms, indices) = _apply_g_inner(
+                b, (r_sq, atoms, indices) = _apply_g_inner(
                     sp=sp_center,
-                    func=func,
-                    r_cut=jnp.inf,
-                    exclude_self=False,
+                    r_comb=r_comb,
                 )
 
             else:
+                # compute number of offsets to get resulting vector close to center
+                sp_center, center_op = sp_center.wrap_positions(min=True)
 
-                @partial(padded_vmap, chunk_size=chunk_size_inner)
-                def __f(i, j, k):
-                    return _apply_g_inner(
+                @jax.vmap
+                def __f(ijk):
+                    b, (r_sq, idx, ijk) = _apply_g_inner(
                         sp=sp_center,
-                        func=func,
-                        r_cut=jnp.inf,
-                        ijk=(i, j, k),
-                        exclude_self=False,
+                        r_comb=r_comb,
+                        ijk=ijk,
                     )
 
-                grid_x, grid_y, grid_z = jnp.meshgrid(bx, by, bz, indexing="ij")  # type: ignore
+                    if ijk is not None:
+                        ijk += center_op
 
-                grid_x = jnp.reshape(grid_x, (-1,))
-                grid_y = jnp.reshape(grid_y, (-1,))
-                grid_z = jnp.reshape(grid_z, (-1,))
+                    return b, (r_sq, idx, ijk)
 
-                _, (r, atoms, indices) = __f(grid_x, grid_y, grid_z)
+                grid = jnp.stack(jnp.meshgrid(bx, by, bz, indexing="ij"), axis=3).reshape(-1, 3)  # type: ignore
 
-                r = jnp.reshape(r, (-1,))
+                b, (r_sq, atoms, indices) = __f(grid)
+
+                r_sq = jnp.reshape(r_sq, (-1,))
                 atoms = jnp.reshape(atoms, (-1)) if atoms is not None else None
                 indices = jnp.reshape(indices, (-1, 3)) if indices is not None else None
 
-            n = jnp.sum(r < info.r_cut + info.r_skin)
+            n = jnp.sum(b)
 
             if take_num == 0:
                 return n
 
-            idx = jnp.argsort(r)[0:take_num]
+            m_r_sq, idx = jax.lax.top_k(-r_sq, k=take_num)
 
             return (
                 n,
-                r[idx],
+                jnp.sqrt(-m_r_sq),
                 atoms[idx] if atoms is not None else None,
                 indices[idx, :] if indices is not None else None,
-                center_op,
             )
 
         @partial(jit_decorator, static_argnames=["take_num", "shmap"])
@@ -1585,10 +1561,10 @@ class SystemParams(MyPyTreeNode):
 
                 return num_neighs
 
-            n, r, a, ijk, center_op = _res(sp.coordinates)
+            n, r, a, ijk = _res(sp.coordinates)
             num_neighs = jnp.max(n)
 
-            return num_neighs, r, a, ijk, center_op
+            return num_neighs, r, a, ijk
 
         def get_f(
             take_num,
@@ -1624,7 +1600,7 @@ class SystemParams(MyPyTreeNode):
         if verbose:
             print(f"obtaining neighs {num_neighs=}")
 
-        nn, r, a, ijk, center_op = get_f(num_neighs)(sp)
+        nn, r, a, ijk = get_f(num_neighs)(sp)
 
         if sp.batched:
             nn = jnp.max(nn)
@@ -1653,8 +1629,6 @@ class SystemParams(MyPyTreeNode):
                 sp_orig=self,
                 op_cell=op_cell,
                 op_coor=op_coor,
-                op_center=center_op,
-                _inside_cut_bools=r < info.r_cut,
             ),
         )
 
@@ -2237,7 +2211,7 @@ class SystemParams(MyPyTreeNode):
             pbc=self.cell is not None,
         )
 
-    def equivariant_displace(self, key=jax.random.PRNGKey(0)):
+    def equivariant_displace(self, key=jax.random.PRNGKey(0)) -> tuple[tuple[Array, Array], SystemParams]:
         if self.batched:
             return vmap_decorator(SystemParams.equivariant_displace, key=key)(self)
 
@@ -2257,6 +2231,37 @@ class SystemParams(MyPyTreeNode):
         return (Q, displacement), self.replace(
             coordinates=_apply(self.coordinates), cell=self.cell @ Q if self.cell is not None else None
         )
+
+    def inversion_displace(self) -> SystemParams:
+        if self.batched:
+            return vmap_decorator(SystemParams.inversion_displace)(self)
+
+        return self.replace(coordinates=-self.coordinates, cell=-self.cell if self.cell is not None else None)
+
+    def random_permute(self, z_array: jax.Array, key=jax.random.PRNGKey(0)) -> tuple[Array, SystemParams]:
+        if self.batched:
+            return vmap_decorator(SystemParams.random_permute, z_array=z_array, key=key)(self)
+
+        def get_species_permutation(key, z):
+            """
+            Finds a random permutation that only swaps atoms with the same species z.
+            """
+
+            unique = jnp.unique(z)
+
+            perm = jnp.arange(len(z))
+
+            for u in unique:
+                indices = jnp.where(z == u)[0]
+                permuted_indices = jax.random.permutation(key, indices)
+                perm = perm.at[indices].set(permuted_indices)
+
+            return perm
+
+        # Get the permutation
+        perm = get_species_permutation(key, z_array)
+
+        return perm, self.replace(coordinates=self.coordinates[perm], cell=self.cell)
 
 
 class NeighbourListInfo(MyPyTreeNode):
@@ -2338,6 +2343,17 @@ class NeighbourListInfo(MyPyTreeNode):
 
         self.__init__(**state)
 
+    @property
+    def idx_array(self):
+        z_array = jnp.array(self.z_array)
+        z_unique = jnp.array(self.z_unique)
+
+        @vmap_decorator
+        def compare_to_unique(z):
+            return jnp.argwhere(z == z_unique, size=1).ravel()[0]
+
+        return compare_to_unique(z_array)
+
     def one_hot_z(self):
         z_array = jnp.array(self.z_array)
         one_hot = jax.vmap(lambda x: jnp.where(x == jnp.array(self.z_unique), 1.0, 0.0))(z_array)
@@ -2391,11 +2407,10 @@ class NeighbourList(MyPyTreeNode):
     atom_indices: Array | None = field(default=None)
     op_cell: Array | None = field(default=None)
     op_coor: Array | None = field(default=None)
-    op_center: Array | None = field(default=None)
+    # op_center: Array | None = field(default=None)
 
     ijk_indices: Array | None = field(default=None)
     _padding_bools: Array | None = field(default=None)
-    _inside_cut_bools: Array | None = field(default=None)
 
     @staticmethod
     def create(
@@ -2408,7 +2423,7 @@ class NeighbourList(MyPyTreeNode):
         nxyz=None,
         op_cell=None,
         op_coor=None,
-        op_center=None,
+        # op_center=None,
         stack_dims=None,
         num_neighs=None,
     ):
@@ -2430,7 +2445,7 @@ class NeighbourList(MyPyTreeNode):
             ijk_indices=ijk_indices,
             op_cell=op_cell,
             op_coor=op_coor,
-            op_center=op_center,
+            # op_center=op_center,
             sp_orig=sp_orig,
         )
 
@@ -2464,57 +2479,31 @@ class NeighbourList(MyPyTreeNode):
         return app_can(sp, (self.op_cell, self.op_coor, None))
 
     @jit_decorator
-    def neighbour_pos(self, sp_orig: SystemParams) -> jax.Array:
-        @partial(vmap_decorator, in_axes=(0, 0, None, None))
-        def neighbour_translate(
-            ijk: jax.Array | None, a: jax.Array, sp_centered_on_atom: jax.Array, cell: jax.Array | None
-        ):
-            # a: index of atom
-            out = sp_centered_on_atom[a]
-            if ijk is not None:
-                assert cell is not None
-                (i, j, k) = cast(tuple[int, int, int], ijk)
-                out = out + i * cell[0, :] + j * cell[1, :] + k * cell[2, :]
-            return out
+    def neighbour_pos(self, sp: SystemParams) -> jax.Array:
+        if self.batched:
+            assert sp.batched
+            return vmap_decorator(NeighbourList.neighbour_pos)(self, sp)
 
-        @partial(vmap_decorator, in_axes=(0, 0, 0, None, 0))
-        def vmap_atoms(
-            atom_center_coordinates: Array,
-            ijk_indices: Array | None,
-            atom_indices: Array,
-            canon_sp: SystemParams,
-            op_center: Array,
-        ):
-            # center on atom
+        can_sp = self.canonicalized_sp(sp)
 
-            sp_centered_on_atom = SystemParams(
-                coordinates=canon_sp.coordinates - atom_center_coordinates, cell=can_sp.cell
-            )
-            sp_centered_on_atom = SystemParams.apply_wrap(sp_centered_on_atom, op_center)
+        # vector from i to j, taking into account periodic images
+        @partial(vmap_decorator, in_axes=(0, 0, 0))
+        def f(pos_i, index_j, shift_j):
+            pos_j = can_sp.coordinates[index_j, :]
 
-            # transform centered neighbours
-            return neighbour_translate(
-                ijk_indices,
-                atom_indices,
-                sp_centered_on_atom.coordinates,
-                canon_sp.cell,
-            )
+            vec = pos_j - pos_i
 
-        if sp_orig.batched:
-            assert self.batched
-            vmap_atoms = vmap_decorator(vmap_atoms)
+            if can_sp.cell is not None:
+                vec = vec + shift_j @ can_sp.cell
 
-        can_sp = self.canonicalized_sp(sp_orig)
+            return vec
 
         assert self.atom_indices is not None
-        assert self.op_center is not None
 
-        return vmap_atoms(
+        return f(
             can_sp.coordinates,
-            self.ijk_indices,
             self.atom_indices,
-            can_sp,
-            self.op_center,
+            self.ijk_indices,
         )
 
     def apply_fun_neighbour(
@@ -2860,7 +2849,7 @@ class NeighbourList(MyPyTreeNode):
             ijk_indices=self.ijk_indices[slices, :, :] if self.ijk_indices is not None else None,
             op_cell=self.op_cell[slices, :, :] if self.op_cell is not None else None,
             op_coor=self.op_coor[slices, :, :] if self.op_coor is not None else None,
-            op_center=self.op_center[slices, :] if self.op_center is not None else None,
+            # op_center=self.op_center[slices, :] if self.op_center is not None else None,
             sp_orig=self.sp_orig[slices] if self.sp_orig is not None else None,
             _padding_bools=self._padding_bools[slices, :] if self._padding_bools is not None else None,
         )
@@ -2870,7 +2859,11 @@ class NeighbourList(MyPyTreeNode):
         if self.sp_orig is None:
             return True
 
+        # sp.min_distance()
+
         max_displacement = jnp.sum((sp.coordinates - self.sp_orig.coordinates) ** 2, axis=-1)
+
+        # jax.debug.print("{max_displacement} ang", max_displacement=jnp.sqrt(max_displacement) / angstrom)
 
         return jnp.any(max_displacement > self.info.r_skin**2 / 4)  # type:ignore
 
@@ -2893,7 +2886,7 @@ class NeighbourList(MyPyTreeNode):
         shmap_kwargs=ShmapKwargs.create(),
         verbose=False,
     ):
-        a, __, __, b = sp._get_neighbour_list(
+        b, __, __, nl = sp._get_neighbour_list(
             info=self.info,
             update=self.update,
             chunk_size=chunk_size,
@@ -2903,7 +2896,7 @@ class NeighbourList(MyPyTreeNode):
             verbose=verbose,
         )
 
-        return a, b
+        return b, nl
 
     def slow_update_nl(
         self,
@@ -2914,6 +2907,8 @@ class NeighbourList(MyPyTreeNode):
         if not b:
             return self
 
+        # print(f"needs update {self.info.r_skin=}")
+
         b, nl = self.update_nl(sp)
 
         if b:
@@ -2922,11 +2917,11 @@ class NeighbourList(MyPyTreeNode):
         print(f"slow update_nl")
         old_update = self.update
 
-        self = sp.get_neighbour_list(self.info)
+        nl = sp.get_neighbour_list(self.info)
 
         print(f"{self.update=}, {old_update=}")
 
-        return self
+        return nl
 
     def nl_split_z(self, p):
         f = self.info.nl_split_z
@@ -2945,7 +2940,7 @@ class NeighbourList(MyPyTreeNode):
             ijk_indices=jnp.expand_dims(self.ijk_indices, axis=0) if self.ijk_indices is not None else None,
             op_cell=jnp.expand_dims(self.op_cell, axis=0) if self.op_cell is not None else None,
             op_coor=jnp.expand_dims(self.op_coor, axis=0) if self.op_coor is not None else None,
-            op_center=jnp.expand_dims(self.op_center, axis=0) if self.op_center is not None else None,
+            # op_center=jnp.expand_dims(self.op_center, axis=0) if self.op_center is not None else None,
             _padding_bools=jnp.expand_dims(self._padding_bools, axis=0) if self._padding_bools is not None else None,
             info=self.info,
             update=self.update,
@@ -2972,7 +2967,7 @@ class NeighbourList(MyPyTreeNode):
         ijk_indices_none = nl_0.ijk_indices is None
         op_cell_none = nl_0.op_cell is None
         op_coor_none = nl_0.op_coor is None
-        op_center_none = nl_0.op_center is None
+        # op_center_none = nl_0.op_center is None
         atom_indices_none = nl_0.atom_indices is None
         sp_orig_none = nl_0.sp_orig is None
 
@@ -3006,7 +3001,7 @@ class NeighbourList(MyPyTreeNode):
             assert ijk_indices_none == (nl_i.ijk_indices is None)
             assert op_cell_none == (nl_i.op_cell is None)
             assert op_coor_none == (nl_i.op_coor is None)
-            assert op_center_none == (nl_i.op_center is None)
+            # assert op_center_none == (nl_i.op_center is None)
             assert atom_indices_none == (nl_i.atom_indices is None)
             assert sp_orig_none == (nl_i.sp_orig is None)
 
@@ -3036,7 +3031,7 @@ class NeighbourList(MyPyTreeNode):
 
         op_cell = None if atom_indices_none else []
         op_coor = None if op_coor_none else []
-        op_center = None if op_center_none else []
+        # op_center = None if op_center_none else []
         ijk_indices = None if ijk_indices_none else []
         atom_indices: list[jax.Array] | None = None if atom_indices_none else []
         padding_bools = None if atom_indices_none else []
@@ -3061,8 +3056,8 @@ class NeighbourList(MyPyTreeNode):
             if not op_coor_none:
                 op_coor.append(nl_i.op_coor)  # type: ignore
 
-            if not op_center_none:
-                op_center.append(nl_i.op_center)  # type: ignore
+            # if not op_center_none:
+            #     op_center.append(nl_i.op_center)  # type: ignore
 
         if not sp_orig_none:
             sp_orig = SystemParams.stack(*[nl_i.sp_orig for nl_i in nls])  # type:ignore
@@ -3091,7 +3086,7 @@ class NeighbourList(MyPyTreeNode):
             ijk_indices=jnp.vstack(ijk_indices) if not ijk_indices_none else None,  # type: ignore
             op_cell=jnp.vstack(op_cell) if not op_cell_none else None,  # type: ignore
             op_coor=jnp.vstack(op_coor) if not op_coor_none else None,  # type: ignore
-            op_center=jnp.vstack(op_center) if not op_center_none else None,  # type: ignore
+            # op_center=jnp.vstack(op_center) if not op_center_none else None,  # type: ignore
             _padding_bools=jnp.vstack(padding_bools) if not atom_indices_none else None,  # type: ignore
         )
 
@@ -3114,7 +3109,7 @@ class NeighbourList(MyPyTreeNode):
                     ijk_indices=self.ijk_indices[t : t + i, :, :] if self.ijk_indices is not None else None,
                     op_cell=self.op_cell[t : t + i, :, :] if self.op_cell is not None else None,
                     op_coor=self.op_coor[t : t + i, :, :] if self.op_coor is not None else None,
-                    op_center=self.op_center[t : t + i, :] if self.op_center is not None else None,
+                    # op_center=self.op_center[t : t + i, :] if self.op_center is not None else None,
                     sp_orig=self.sp_orig[t : t + i] if self.sp_orig is not None else None,
                     _padding_bools=self._padding_bools[t : t + i, :] if self._padding_bools is not None else None,
                 )
@@ -3317,24 +3312,32 @@ class NeighbourList(MyPyTreeNode):
 
         num_atoms = sp.shape[0]
         num_edges = idx_i.shape[0]
-        # num_elements = len(nl.info.z_unique)
-        # z_array = jnp.array(self.info.z_array)
 
-        # one_hot = self.info.one_hot_z  # (N, num_elements)
+        if self.ijk_indices is not None:
+            unit_shift = self.ijk_indices[:, 1:, :].reshape((-1, 3))
+        else:
+            unit_shift = jnp.zeros((num_edges, 3))
+
+        shifts = unit_shift
+        if sp.cell is not None:
+            # order is reverse. (i: central/ receiver, j neighbour/ sender)
+            # own impl: r_j-r_i + shift @ cell
+            # here: r_i-r_j + shift' @ cell
+            shifts = -unit_shift @ sp.cell
 
         batch = {
             "positions": sp.coordinates / angstrom,  # (N, 3)
             "atomic_numbers": z_array,  # (N,) - Carbon dimer
-            "shifts": jnp.zeros((num_edges, 3)),  # (E, 3) - No PBC shifts
+            "shifts": shifts / angstrom,  # (E, 3) - No PBC shifts
             "cell": sp.cell / angstrom if sp.cell is not None else jnp.eye(3),  # (3, 3) - Large box
             "batch": jnp.zeros(num_atoms, dtype=jnp.int32),
-            "edge_index": jnp.stack([idx_i, idx_j], axis=0),  # (2, E)
+            "edge_index": jnp.stack([idx_j, idx_i], axis=0),  # (2, E)
             "ptr": jnp.array([0, num_atoms], dtype=jnp.int32),
             "edge_ptr": jnp.array([0, num_edges], dtype=jnp.int32),
             "idx_i": idx_i,
             "idx_j": idx_j,
             "node_attrs": one_hot,
-            "unit_shifts": self.ijk_indices if self.ijk_indices is not None else jnp.zeros((num_edges, 3)),
+            "unit_shifts": unit_shift,
         }
 
         return batch
