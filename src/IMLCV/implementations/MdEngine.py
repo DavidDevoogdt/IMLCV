@@ -312,34 +312,6 @@ class NewYaffEngine(MDEngine):
     def _setup_verlet(self):
         print("Setting up YAFF verlet integrator")
 
-        hooks = []
-
-        class myHook(IMLCV.new_yaff.iterative.Hook):
-            md_engine: MDEngine = field(pytree_node=False)
-
-            def __call__(self, iterative: IMLCV.new_yaff.verlet.VerletIntegrator):
-                assert iterative.epot is not None, "Potential energy must be computed"
-                assert iterative.e_bias is not None, "e bias must be set"
-                assert iterative.temp is not None, "Temperature must be set"
-
-                kwargs = dict(
-                    t=iterative.time,
-                    T=iterative.temp,
-                    err=iterative.cons_err,
-                    cv=iterative.cv,
-                    e_bias=iterative.e_bias,
-                    e_pot=iterative.epot - iterative.e_bias,
-                    sp=iterative.sp,
-                )
-
-                if hasattr(iterative, "press"):
-                    kwargs["P"] = iterative.press
-
-                self.md_engine.save_step(**kwargs)  # type:ignore
-
-            def expects_call(self, counter):
-                return True
-
         from IMLCV.new_yaff.ff import YaffFF
 
         self.update_nl()
@@ -381,17 +353,12 @@ class NewYaffEngine(MDEngine):
                 anisotropic=True,
             )
 
-        hooks.append(
-            myHook(md_engine=self),
-        )
-
         from IMLCV.new_yaff.verlet import VerletIntegrator
 
         self._verlet, self._verlet_hook = VerletIntegrator.create(
             ff=self._yaff_ener,
             timestep=self.static_trajectory_info.timestep,
             temp0=self.static_trajectory_info.T,
-            other_hooks=hooks,
             thermostat=thermo,
             barostat=baro,
         )
@@ -409,4 +376,19 @@ class NewYaffEngine(MDEngine):
         return super().run(steps)
 
     def _step(self):
+        assert self._verlet is not None
+        assert self._verlet_hook is not None
+
         self._verlet, self._verlet_hook = self._verlet.step(self._verlet_hook)
+
+        # save step info
+        self.save_step(
+            T=self._verlet.temp,
+            P=self._verlet.press,
+            t=self._verlet.time,
+            err=self._verlet.cons_err,
+            cv=self._verlet.cv,
+            e_bias=self._verlet.e_bias,
+            e_pot=self._verlet.epot - self._verlet.e_bias,
+            sp=self._verlet.sp,
+        )

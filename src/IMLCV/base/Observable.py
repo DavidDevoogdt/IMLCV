@@ -244,7 +244,7 @@ class Observable:
         time_correlation_method=None,
         return_std_bias=False,
         n_hist=None,
-        equilibration_time=5 * picosecond,
+        equilibration_time=0 * picosecond,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -394,7 +394,7 @@ class Observable:
         direct_bias=False,
         time_correlation_method=None,
         return_std_bias=False,
-        equilibration_time=5 * picosecond,
+        equilibration_time=0 * picosecond,
     ):
         if cv is None:
             cv = rounds.cv
@@ -571,7 +571,7 @@ class Observable:
         time_correlation_method=None,
         return_std_bias=False,
         n_hist=None,
-        equilibration_time=5 * picosecond,
+        equilibration_time=0 * picosecond,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -657,7 +657,7 @@ class Observable:
         time_correlation_method=None,
         return_std_bias=False,
         n_hist=None,
-        equilibration_time=5 * picosecond,
+        equilibration_time=0 * picosecond,
     ):
         print(f"{n_max_lin=}")
 

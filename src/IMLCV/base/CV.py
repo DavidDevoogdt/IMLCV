@@ -1250,6 +1250,10 @@ def chunk_selector(
     keep_stack_info=False,
     weight_list: list[Array] | None = None,
 ):
+    # outer list: different Pytrees, eg list of CV, lsit of SP,...
+    # inner list: list with one type
+    assert isinstance(data_list, list)
+
     # 1. Calculate the size of each Pytree in the list
     # We look at the first leaf of each Pytree to get its row count
     sizes = jnp.array([p.shape[0] for p in data_list[0]])
@@ -1267,8 +1271,8 @@ def chunk_selector(
 
     # 3. Determine which Pytree and which local index each global index refers to
     # searchsorted tells us which "bucket" the index falls into
-    pytree_indices = jnp.searchsorted(offsets, global_indices, side="right") - 1
-    local_indices = global_indices - offsets[pytree_indices]
+    global_offsets = jnp.searchsorted(offsets, global_indices, side="right") - 1
+    local_indices = global_indices - offsets[global_offsets]
 
     # 4. Extract only the required slices from each Pytree
     out = []
@@ -1277,7 +1281,9 @@ def chunk_selector(
 
         for j, k in enumerate(p):
             # Find which of our random picks belong to the i-th Pytree
-            mask = pytree_indices == j
+            mask = global_offsets == j
+
+            # print(f"{mask=}")
 
             # Using jnp.any because inside a loop this might be empty for some Pytrees
             if jnp.any(mask):
@@ -1493,7 +1499,7 @@ class SystemParams(MyPyTreeNode):
                     assert sp.cell is not None
                     pos = sp.coordinates + ijk @ sp.cell
 
-                # index_j = jnp.ones(norm2, dtype=jnp.int64).cumsum() - 1
+                # index_j = jnp.ones(norm2, dtype=jnp.int_).cumsum() - 1
                 index_j = jnp.arange(pos.shape[0])
 
                 (dist_sq, indices, out_ijk) = func(pos, index_j, ijk)
@@ -1512,7 +1518,6 @@ class SystemParams(MyPyTreeNode):
                 # compute number of offsets to get resulting vector close to center
                 sp_center, center_op = sp_center.wrap_positions(min=True)
 
-                @jax.vmap
                 def __f(ijk):
                     b, (r_sq, idx, ijk) = _apply_g_inner(
                         sp=sp_center,
@@ -1527,7 +1532,9 @@ class SystemParams(MyPyTreeNode):
 
                 grid = jnp.stack(jnp.meshgrid(bx, by, bz, indexing="ij"), axis=3).reshape(-1, 3)  # type: ignore
 
-                b, (r_sq, atoms, indices) = __f(grid)
+                # do a simple lax map, to keep memory usage low.
+                # this makes it more predictable in size
+                b, (r_sq, atoms, indices) = jax.lax.map(__f, grid)
 
                 r_sq = jnp.reshape(r_sq, (-1,))
                 atoms = jnp.reshape(atoms, (-1)) if atoms is not None else None
@@ -1701,7 +1708,7 @@ class SystemParams(MyPyTreeNode):
             def body(vals):
                 u, v, hu, hv, visited, found, i = vals
 
-                x = jnp.array(jnp.round(jnp.dot(u, v) / jnp.dot(u, u)), dtype=jnp.int64)
+                x = jnp.array(jnp.round(jnp.dot(u, v) / jnp.dot(u, u)), dtype=jnp.int_)
                 hu, hv = hv - x * hu, hu
                 u = hu @ B
                 v = hv @ B
@@ -1754,7 +1761,7 @@ class SystemParams(MyPyTreeNode):
                 r = rs[index]
                 kopt = jnp.array(
                     jnp.round(-jnp.dot(t, r) / jnp.dot(r, r)),
-                    dtype=jnp.int64,
+                    dtype=jnp.int_,
                 )
                 a += kopt * cs[index]
                 t = t0 + a[0] * u + a[1] * v
@@ -1957,7 +1964,7 @@ class SystemParams(MyPyTreeNode):
         else:
             cell, op = minkowski_reduce(self.cell)
 
-        op = jnp.round(op).astype(jnp.int64)
+        op = jnp.round(op).astype(jnp.int_)
 
         return SystemParams(coordinates=self.coordinates, cell=cell), op
 
@@ -2048,7 +2055,7 @@ class SystemParams(MyPyTreeNode):
         coordinates = self.coordinates
 
         if cell is None:
-            return self, jnp.zeros_like(coordinates, dtype=jnp.int64)
+            return self, jnp.zeros_like(coordinates, dtype=jnp.int_)
 
         trans = vmap_decorator(vmap_decorator(jnp.dot, in_axes=(0, None)), in_axes=(None, 0))(
             vmap_decorator(lambda x: x / jnp.linalg.norm(x))(cell),
@@ -2075,7 +2082,7 @@ class SystemParams(MyPyTreeNode):
         op = a - x0
         # reduced = b
 
-        op = jnp.round(op).astype(jnp.int64)
+        op = jnp.round(op).astype(jnp.int_)
 
         return SystemParams(coordinates=coordinates + op @ cell, cell=cell), op
 
@@ -2588,7 +2595,7 @@ class NeighbourList(MyPyTreeNode):
 
                 @vmap_decorator
                 def _red(zj_ref: Array) -> tuple[Array, T]:
-                    a = jnp.array(zj_n == zj_ref, dtype=jnp.int64)
+                    a = jnp.array(zj_n == zj_ref, dtype=jnp.int_)
 
                     return jax.tree.map(lambda x: jnp.einsum("n,n...->...", a, x), out_tree_n)
 
@@ -2881,7 +2888,7 @@ class NeighbourList(MyPyTreeNode):
         self,
         sp: SystemParams,
         chunk_size: int | None = None,
-        chunk_size_inner: int | None = 10,
+        chunk_size_inner: int | None = None,
         shmap=False,
         shmap_kwargs=ShmapKwargs.create(),
         verbose=False,
@@ -3731,11 +3738,11 @@ class CvMetric(MyPyTreeNode):
         if bounding_box is None:
             assert periodicities is not None
 
-            bounding_box = jnp.zeros((len(periodicities), 2), dtype=jnp.float64)
+            bounding_box = jnp.zeros((len(periodicities), 2), dtype=jnp.float_)
             bounding_box = bounding_box.at[:, 1].set(1.0)
         else:
             if isinstance(bounding_box, list):
-                bounding_box = jnp.array(bounding_box, dtype=jnp.float64)
+                bounding_box = jnp.array(bounding_box, dtype=jnp.float_)
 
             if bounding_box.ndim == 1:
                 bounding_box = jnp.reshape(bounding_box, (1, 2))

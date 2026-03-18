@@ -166,9 +166,9 @@ class NVE(VerletHook):
         return self, iterative
 
 
-class NlUpdateHook(Hook):
-    def __call__(self, iterative: VerletIntegrator):
-        iterative.yaff_ff.system.update_nl()
+# class NlUpdateHook(Hook):
+#     def __call__(self, iterative: VerletIntegrator):
+#         iterative.yaff_ff.system.update_nl()
 
 
 class VerletIntegrator(MyPyTreeNode):
@@ -184,9 +184,9 @@ class VerletIntegrator(MyPyTreeNode):
     timestep: jax.Array
 
     # barostat quantities
-    ptens: jax.Array
-    rvecs: jax.Array
-    vtens: jax.Array
+    ptens: jax.Array | None
+    rvecs: jax.Array | None
+    vtens: jax.Array | None
 
     # verlet_hook: VerletHook
 
@@ -195,7 +195,7 @@ class VerletIntegrator(MyPyTreeNode):
     gpos_bias: jax.Array
 
     temp: jax.Array
-    press: jax.Array
+    press: jax.Array | None
 
     # ekin: jax.Array
     epot: jax.Array
@@ -209,7 +209,7 @@ class VerletIntegrator(MyPyTreeNode):
 
     cv: jax.Array
 
-    other_hooks: list[Hook] = field(default_factory=list)
+    # other_hooks: list[Hook] = field(default_factory=list)
 
     @property
     def sp(self) -> SystemParams:
@@ -221,7 +221,7 @@ class VerletIntegrator(MyPyTreeNode):
     @staticmethod
     def create(
         ff: YaffFF,
-        other_hooks: list[Hook],
+        # other_hooks: list[Hook],
         timestep: float,
         thermostat: ThermostatHook | None = None,
         barostat: BarostatHook | None = None,
@@ -326,10 +326,10 @@ class VerletIntegrator(MyPyTreeNode):
         if ndof is None:
             ndof = pos.size
 
-        if ff.system.nl is not None:
-            other_hooks.append(
-                NlUpdateHook(),
-            )
+        # if ff.system.nl is not None:
+        #     other_hooks.append(
+        #         NlUpdateHook(),
+        #     )
 
         self = VerletIntegrator(
             yaff_ff=ff,
@@ -345,8 +345,8 @@ class VerletIntegrator(MyPyTreeNode):
             etot=jnp.array(0.0),
             econs=jnp.array(0.0),
             cons_err=jnp.array(0.0),
-            ptens=ptens,
-            press=jnp.array(0.0),
+            ptens=ptens if barostat is not None else None,
+            press=jnp.array(0.0) if barostat is not None else None,
             counter=jnp.array(counter0 if counter0 is not None else 0),
             time=jnp.array(time0 if time0 is not None else 0.0),
             rvecs=ff.system.cell.rvecs,
@@ -354,7 +354,7 @@ class VerletIntegrator(MyPyTreeNode):
             cv=cv,
             e_bias=e_bias,
             vtens=vtens,
-            other_hooks=other_hooks,
+            # other_hooks=other_hooks,
             _cons_err_tracker=None,
         )
 
@@ -461,22 +461,18 @@ class VerletIntegrator(MyPyTreeNode):
         pass
 
     def call_hooks(self, verlet_hook: VerletHook):
-        # state_updated = False
-
         if jnp.any(jnp.isnan(self.pos)):
             raise ValueError(f"sp containes nans: {self.pos=}")
 
         if self.rvecs is not None:
             if jnp.any(jnp.isnan(self.rvecs)):
-                raise ValueError(f"sp containes nans: {self.rvecs=}")
+                raise ValueError(f"rvecs containes nans: {self.rvecs=}")
 
             # update the neighbour list if needed
             self.yaff_ff.system.update_nl()
 
-        for hook in [verlet_hook, *self.other_hooks]:
-            hook: Hook
-            if hook.expects_call(self.counter):
-                hook(self)
+        if verlet_hook.expects_call(self.counter):
+            verlet_hook(self)
 
     def step(self: VerletIntegrator, verlet_hook: VerletHook):
         self, verlet_hook = self.propagate(verlet_hook)
@@ -484,13 +480,13 @@ class VerletIntegrator(MyPyTreeNode):
 
         return self, verlet_hook
 
-    def run(self: VerletIntegrator, verlet_hook: VerletHook, nstep=None):
-        print(f"Starting MD run for {nstep} steps")
+    # def run(self: VerletIntegrator, verlet_hook: VerletHook, nstep=None):
+    #     print(f"Starting MD run for {nstep} steps")
 
-        if nstep is None:
-            while True:
-                self, verlet_hook = self.step(verlet_hook)
-        else:
-            for i in range(nstep):
-                self, verlet_hook = self.step(verlet_hook)
-        self.finalize()
+    #     if nstep is None:
+    #         while True:
+    #             self, verlet_hook = self.step(verlet_hook)
+    #     else:
+    #         for i in range(nstep):
+    #             self, verlet_hook = self.step(verlet_hook)
+    #     self.finalize()

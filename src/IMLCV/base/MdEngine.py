@@ -21,7 +21,7 @@ from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, field
-from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol
+from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol, kelvin
 
 ######################################
 #             Trajectory             #
@@ -42,6 +42,7 @@ _static_attr = [
     "max_grad",
     "frac_full",
     "invalid",
+    "bias_scale",
 ]
 
 _static_arr = [
@@ -72,6 +73,8 @@ class StaticMdInfo(MyPyTreeNode):
     max_grad: float | None = 200 * kjmol / angstrom
 
     frac_full: float = 1.0
+
+    bias_scale: float = 0.9  # scales underelying free energy bias. value < 1.0 means Free energy is not fully offset
 
     @property
     def masses(self):
@@ -152,6 +155,10 @@ class StaticMdInfo(MyPyTreeNode):
                 attrs_static[key] = val
             except Exception as e:
                 print(f"could not load {key=}")
+
+        if "bias_scale" not in attrs_static:
+            print("bias_scale not found in static md info, setting to 1.0")
+            attrs_static["bias_scale"] = 1.0
 
         return StaticMdInfo(**attrs_static, **props_static)
 
@@ -604,7 +611,7 @@ class FullTrajectoryInfo(TrajectoryInfo):
     def __getitem__(self, slices) -> FullTrajectoryInfo:
         "gets slice from indices. the output is truncated to the to include only items wihtin _size"
 
-        slz = (jnp.ones(self._capacity, dtype=jnp.int64).cumsum() - 1)[slices]
+        slz = (jnp.ones(self._capacity, dtype=jnp.int_).cumsum() - 1)[slices]
         slz = slz[slz <= self._size]
 
         new_dict = {}
@@ -637,12 +644,16 @@ class FullTrajectoryInfo(TrajectoryInfo):
 
             for key in _items_vec:
                 if self.__dict__[key] is not None:
-                    assert tii.__dict__[key] is not None
+                    assert tii.__dict__[key] is not None, (
+                        f"cannot stack trajectory info, property {key} is None in one of the trajectory infos"
+                    )
                     self.__dict__[key] = self.__dict__[key].at[index : index + _s, :].set(tii.__dict__[key][0:_s, :])
 
             for key in _items_scal:
                 if self.__dict__[key] is not None:
-                    assert tii.__dict__[key] is not None
+                    assert tii.__dict__[key] is not None, (
+                        f"cannot stack trajectory info, property {key} is None in one of the trajectory infos"
+                    )
                     self.__dict__[key] = self.__dict__[key].at[index : index + _s].set(tii.__dict__[key][0:_s])
 
             index += _s
@@ -1063,14 +1074,14 @@ class MDEngine(MyPyTreeNode, ABC):
 
     def save_step(
         self,
-        T=None,
-        P=None,
-        t=None,
-        err=None,
-        cv=None,
-        e_bias=None,
-        e_pot=None,
-        sp: SystemParams = None,
+        sp: SystemParams,
+        T: jax.Array | None = None,
+        P: jax.Array | None = None,
+        t: jax.Array | None = None,
+        err: jax.Array | None = None,
+        cv: jax.Array | None = None,
+        e_bias: jax.Array | None = None,
+        e_pot: jax.Array | None = None,
         canonicalize=False,
     ):
         screen_log = self.step % self.static_trajectory_info.screen_log == 0
@@ -1144,13 +1155,6 @@ class MDEngine(MyPyTreeNode, ABC):
                     self.trajectory_info.save(self.trajectory_file)  # type: ignore
 
             assert self.bias is not None
-
-            # print(f"{jax.tree_util.tree_map(lambda x: x.shape,self.trajectory_info)=}")
-            # print(
-            #     f"{self.trajectory_info.size=}  {self.trajectory_info.capacity=} {self.trajectory_info.positions.shape=}"
-            # )
-
-            # print(f"done")
 
         self.bias = self.bias.update_bias(self)
 

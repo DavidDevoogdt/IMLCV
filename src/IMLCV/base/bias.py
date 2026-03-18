@@ -223,20 +223,23 @@ class Energy(MyPyTreeNode, ABC):
                 eps=eps,
             )
 
-        # mock evaluation for pure callback
+        dtype = sp.coordinates.dtype
+
         def f(sp, nl):
-            return self._compute_coor(
+            res = self._compute_coor(
                 sp,
                 nl,
                 gpos=gpos,
                 vir=vir,
             )
 
+            return jax.tree_util.tree_map(lambda x: jnp.astype(x, dtype), res)
+
         if self.external_callback:
 
             def _mock_f(sp):
                 return EnergyResult(
-                    energy=jnp.array(1.0),
+                    energy=jnp.array(1.0, dtype=dtype),
                     gpos=None if not gpos else sp.coordinates,
                     vtens=None if ((not vir) or (sp.cell is None)) else sp.cell,
                 )
@@ -787,9 +790,7 @@ class Bias(ABC, MyPyTreeNode):
             / (T * boltzmann)
         )
         u0 -= jnp.max(u0)
-
-        p_self = jnp.exp(u0)
-        p_self /= jnp.sum(p_self)
+        u0 -= jnp.log(jnp.sum(jnp.exp(u0)))
 
         u1 = (
             sign
@@ -800,18 +801,24 @@ class Bias(ABC, MyPyTreeNode):
             / (T * boltzmann)
         )
         u1 -= jnp.max(u1)
-
-        p_other = jnp.exp(u1)
-        p_other /= jnp.sum(p_other)
+        u1 -= jnp.log(jnp.sum(jnp.exp(u1)))
 
         @vmap_decorator
         def f(x, y):
-            return jnp.where(x == 0, 0, x * jnp.log(x / y))
+            return jnp.where(
+                x == -jnp.inf,
+                0,
+                jnp.where(
+                    y == -jnp.inf,
+                    0,
+                    jnp.exp(x) * (x - y),
+                ),
+            )
 
-        kl = jnp.sum(f(p_self, p_other))  # type: ignore
+        kl = jnp.sum(f(u0, u1))  # type: ignore
 
         if symmetric:
-            kl += jnp.sum(f(p_other, p_self))  # type: ignore
+            kl += jnp.sum(f(u1, u0))  # type: ignore
             kl *= 0.5
 
         # express in kjmol
@@ -969,24 +976,41 @@ class CompositeBias(Bias):
 
 class RoundBias(Bias):
     bias_r: Bias
-    bias_i: Bias
+    bias_i: Bias | None = field(default=None)
+    bias_scale: float = field(pytree_node=False, default=1.0)
 
     @classmethod
-    def create(cls, bias_r: Bias, bias_i: Bias) -> RoundBias:
+    def create(
+        cls,
+        bias_r: Bias,
+        bias_i: Bias | None,
+        bias_scale: float = 1.0,
+    ) -> RoundBias:
         assert bias_r.collective_variable is not None
-        assert bias_i.collective_variable is not None
-        # assert bias_r.collective_variable == bias_i.collective_variable
+        if bias_i is not None:
+            assert bias_i.collective_variable is not None
+
+        # print(f"creating round bias with  {bias_scale=}")
+
+        f = bias_r.finalized
+        if bias_i is not None:
+            f = f and bias_i.finalized
+
         return RoundBias(
             bias_r=bias_r,
             bias_i=bias_i,
+            bias_scale=bias_scale,
             collective_variable=bias_r.collective_variable,
             start=0,
             step=1,
-            finalized=bias_r.finalized and bias_i.finalized,
+            finalized=f,
         )
 
     def _compute(self, cvs: CV):
-        r = self.bias_r._compute(cvs)
+        r = self.bias_r._compute(cvs) * self.bias_scale
+        if self.bias_i is None:
+            return r
+
         i = self.bias_i._compute(cvs)
         return r + i
 

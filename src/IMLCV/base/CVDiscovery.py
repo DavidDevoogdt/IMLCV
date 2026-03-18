@@ -360,7 +360,7 @@ class Transformer(MyPyTreeNode):
                 chunk_size=chunk_size,
                 # recalc_bounds=True,
                 bounds=bounds,
-                smoothing=None,
+                smoothing=-1,
             )
 
             if plot:

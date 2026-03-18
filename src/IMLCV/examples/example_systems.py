@@ -172,6 +172,7 @@ def alanine_dipeptide_openmm(
         screen_log=1000,
         equilibration=0 * femtosecond,
         r_cut=None,
+        bias_scale=0.8,
     )
 
     engine = NewYaffEngine(

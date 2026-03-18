@@ -19,6 +19,7 @@ import jax.scipy.special as jsp
 from jax import Array
 from jax.random import PRNGKey, choice, split
 
+
 from IMLCV.base.bias import Bias, BiasModify, CompositeBias, GridBias, RoundBias, StdBias
 from IMLCV.base.CV import (
     CV,
@@ -952,14 +953,17 @@ class Rounds:
 
         bias = Bias.load(p, collective_variable=cv)
 
-        if i is None:
-            return bias
+        if i is not None:
+            assert (p := self._name_bias(c=c, r=r, i=i)) is not None, f"cannot find individual bias for {c=} {r=} {i=}"
 
-        assert (p := self._name_bias(c=c, r=r, i=i)) is not None, f"cannot find individual bias for {c=} {r=} {i=}"
+            bias_i = Bias.load(self.folder / p, collective_variable=cv)
 
-        bias_i = Bias.load(self.folder / p, collective_variable=cv)
+        else:
+            bias_i = None
 
-        return RoundBias.create(bias_r=bias, bias_i=bias_i)
+        sti = self.get_static_trajectory_info(c=c, r=r)
+
+        return RoundBias.create(bias_r=bias, bias_i=bias_i, bias_scale=sti.bias_scale)
 
     def add_round(
         self,
@@ -1120,9 +1124,9 @@ class Rounds:
         reweight: bool = True,
         time_correlation_method=None,
         preselect_filter: int = 1,
-        n_skip: int = 0,
+        n_skip: int | None = None,
         load_sp=True,
-        equilibration_time: float | None = 0,
+        equilibration_time: float | None = None,
         use_energies_bincounts: bool = False,
     ) -> DataLoaderOutput:
         if cv is None:
@@ -1130,7 +1134,26 @@ class Rounds:
         else:
             c = cv
 
+        if equilibration_time is not None and n_skip is not None:
+            print("WARNING: both equilibration_time and n_skip are not None, setting n_skip to None")
+            n_skip = None
+
+        if equilibration_time:
+            print(f"{equilibration_time/picosecond=}")
+
+        if n_skip is not None:
+            print(f"{n_skip=}")
+
         sti = self._round_information(c=c).tic
+
+        if lag_tau is not None:
+            if lag_n is not None:
+                print(f"WARNING: both lag_tau and lag_n are not None, using lag_tau")
+
+            dt = sti.timestep * sti.save_step
+            n = int(lag_tau / dt)
+            print(f"converting lag_tau {lag_tau} to lag_n {n} with dt={dt}")
+            lag_n = n
 
         if new_r_cut == -1:
             new_r_cut = sti.r_cut
@@ -1150,11 +1173,6 @@ class Rounds:
 
         if get_bias_list:
             bias_list: list[Bias] = []
-
-        if lag_tau is not None:
-            print(f"using lag_tau instead of lag_n")
-
-        # out = int(out)
 
         cvrnds = []
 
@@ -1273,6 +1291,15 @@ class Rounds:
                 loaded_w = []
                 loaded_sigma = []
 
+            def _p(symb, n_tot):
+                print(symb, end="", flush=True)
+                n_tot += 1
+
+                if n_tot % 100 == 0:
+                    print("")
+
+                return n_tot
+
             for round_info, traj_info in self.iter(
                 start=start,
                 stop=stop,
@@ -1287,35 +1314,49 @@ class Rounds:
 
                 _ti = traj_info.ti
 
-                if get_bias_list:
-                    bias = traj_info.get_bias()
-                    if bias is None:
-                        print(f"could not load bias for {cvi=} {round_info.round=} {traj_info.num=}, skipping bias")
-                        continue
-                    bias_c.append(bias)
+                if min_traj_length is not None:
+                    if traj_info.ti.size < min_traj_length:
+                        # print(f"skipping trajectyory because it's not long enough ")
+                        n_tot = _p("x", n_tot)
+
+                    # else:
+                    # print("adding traweights=jectory")
 
                 if equilibration_time is not None:
                     if equilibration_n is None:
                         equilibration_n = int(equilibration_time / (sti_c.timestep * sti_c.save_step))
                         print(f"{equilibration_n=}")
 
-                    if _ti.size < equilibration_n:
-                        print("skipping trajectory, not equilibrated")
+                    if _ti.size <= equilibration_n:
+                        n_tot = _p("x", n_tot)
+
                         continue
 
                     _ti = _ti[equilibration_n:]
 
-                if min_traj_length is not None:
-                    if traj_info.ti.size < min_traj_length or traj_info.ti.size <= lag_n:
-                        # print(f"skipping trajectyory because it's not long enough {traj.ti.size}<{min_traj_length}")
+                elif n_skip is not None:
+                    if _ti.size <= n_skip:
+                        n_tot = _p("x", n_tot)
+
+                        continue
+                    _ti = _ti[n_skip:]
+
+                if lag_n is not None and lag_n > 0:
+                    if _ti.size <= lag_n:
+                        n_tot = _p("x", n_tot)
+
                         continue
                     # else:
                     # print("adding traweights=jectory")
 
-                if n_skip > 0:
-                    if _ti.size <= n_skip:
+                if get_bias_list:
+                    bias = traj_info.get_bias()
+                    if bias is None:
+                        # print(f"could not load bias for {cvi=} {round_info.round=} {traj_info.num=}, skipping bias")
+                        n_tot = _p("x", n_tot)
+
                         continue
-                    _ti = _ti[n_skip:]
+                    bias_c.append(bias)
 
                 ti_c.append(_ti)
 
@@ -1421,11 +1462,7 @@ class Rounds:
                                     nxyz=update_info.nxyz,
                                 )
 
-                print(".", end="", flush=True)
-                n_tot += 1
-
-                if n_tot % 100 == 0:
-                    print("")
+                n_tot = _p(".", n_tot)
 
                 # if cv0 is None:
                 #     raise
@@ -1714,7 +1751,6 @@ class Rounds:
                 density = d_new
                 n_bin = nb_new
                 n_eff_bin = neb_new
-
                 labels = labels_new
 
                 if grid_nums is not None:
@@ -1742,13 +1778,6 @@ class Rounds:
             percentage_list = [] if (weights is not None and scale_times) and (lag_n != 0) else None
 
             weights_lag = []
-
-            if lag_tau is not None:
-                assert sti_c is not None
-                dt = sti_c.timestep * sti_c.save_step
-                n = int(lag_tau / dt)
-                print(f"converting lag_tau {lag_tau} to lag_n {n} with dt={dt}")
-                lag_n = n
 
             if lag_n != 0 and verbose:
                 print(f"getting lag indices for {len(ti)} trajectories")
@@ -1836,9 +1865,17 @@ class Rounds:
 
                     else:
                         c = ti_i.size - lag_n
-                        lag_idx = jnp.arange(c) + lag_n
+                        if c <= 0:
+                            print(
+                                f"WARNING: lag_n {lag_n} for {n=} is larger than trajectory length {ti_i.size},  appending zeros"
+                            )
 
-                        weights_lag.append(jnp.where(lag_idx <= ti_i.size, weights[n][lag_idx], 0))
+                            weights_lag.append(jnp.zeros_like(weights[n]))
+                            lag_idx = jnp.arange(ti_i.size)  # append all indices, but they will be masked out later
+
+                        else:
+                            lag_idx = jnp.arange(c) + lag_n
+                            weights_lag.append(weights[n][lag_idx])
 
                     c_list.append(c)
                     lag_indices.append(lag_idx)
@@ -1901,81 +1938,87 @@ class Rounds:
                 grid_nums: list[Array] | None,
                 out: int,
             ):
-                key, key_return = split(key, 2)
+                try:
+                    key, key_return = split(key, 2)
 
-                print("new choice")
+                    print("new choice")
 
-                ps_stack = jnp.where(
-                    jnp.logical_and(
+                    ps_stack = jnp.where(
                         jnp.logical_and(
-                            jnp.hstack(nb) != 0,
-                            jnp.isfinite(jnp.hstack(nb)),
+                            jnp.logical_and(
+                                jnp.hstack(nb) != 0,
+                                jnp.isfinite(jnp.hstack(nb)),
+                            ),
+                            jnp.isfinite(jnp.hstack(ps)),
                         ),
-                        jnp.isfinite(jnp.hstack(ps)),
-                    ),
-                    jnp.hstack(ps) / jnp.hstack(nb),
-                    0,
-                ) * jnp.hstack(weight_wall)
-                # ps_stack = jnp.hstack(ps)
+                        jnp.hstack(ps) / jnp.hstack(nb),
+                        0,
+                    ) * jnp.hstack(weight_wall)
+                    # ps_stack = jnp.hstack(ps)
 
-                assert jnp.isfinite(ps_stack).all(), "rho_stack contains non-finite values"
+                    assert jnp.isfinite(ps_stack).all(), "rho_stack contains non-finite values"
 
-                mask = jnp.logical_and(
-                    ps_stack > 0.0,
-                    jnp.logical_and(
-                        jnp.hstack(weight) > 0.0,
-                        jnp.hstack(weight_lag) > 0.0,
-                    ),
-                )
-
-                if select_max_bias is not None:
-                    mask = jnp.logical_and(mask, jnp.hstack(F) < select_max_bias)
-
-                    ps_stack = ps_stack
-
-                # print(f"using new p_pair calculation")
-
-                ps_stack = ps_stack[mask]
-
-                nums = jnp.hstack(
-                    [jnp.vstack([jnp.full((x.shape[0],), i), jnp.arange(x.shape[0])]) for i, x in enumerate(weight)]
-                )
-
-                # n_eff_max = jnp.sum(ps_stack)
-
-                # print(f"effective number of data points {n_eff_max=} out of {total} ")
-
-                # if out >= n_eff_max:
-                #     out = int(n_eff_max)
-                #     print(f"reducing out to {out=} to match {n_eff_max=}")
-
-                # print(f"{nums.shape=}")
-
-                indices = jnp.argwhere(mask)[
-                    choice(
-                        key=key,
-                        a=ps_stack.shape[0],
-                        shape=(int(out),),
-                        p=ps_stack,
-                        replace=True,
+                    mask = jnp.logical_and(
+                        ps_stack > 0.0,
+                        jnp.logical_and(
+                            jnp.hstack(weight) > 0.0,
+                            jnp.hstack(weight_lag) > 0.0,
+                        ),
                     )
-                ].reshape((-1,))
 
-                _as = jnp.argsort(nums[0, indices]).reshape((-1,))
+                    if select_max_bias is not None:
+                        mask = jnp.logical_and(mask, jnp.hstack(F) < select_max_bias)
 
-                indices = indices[_as]
+                        ps_stack = ps_stack
 
-                weight_out = []
-                density_out = []
+                    # print(f"using new p_pair calculation")
 
-                for Fi, wi, di, nbi in zip(F, weight, density, nb):
-                    _vol = di
-                    _wi = wi
+                    ps_stack = ps_stack[mask]
 
-                    weight_out.append(_wi)
-                    density_out.append(_vol)
+                    nums = jnp.hstack(
+                        [jnp.vstack([jnp.full((x.shape[0],), i), jnp.arange(x.shape[0])]) for i, x in enumerate(weight)]
+                    )
 
-                return key_return, indices, weight_out, density_out, nums[:, indices], weight
+                    # n_eff_max = jnp.sum(ps_stack)
+
+                    # print(f"effective number of data points {n_eff_max=} out of {total} ")
+
+                    # if out >= n_eff_max:
+                    #     out = int(n_eff_max)
+                    #     print(f"reducing out to {out=} to match {n_eff_max=}")
+
+                    # print(f"{nums.shape=}")
+
+                    indices = jnp.argwhere(mask)[
+                        choice(
+                            key=key,
+                            a=ps_stack.shape[0],
+                            shape=(int(out),),
+                            p=ps_stack,
+                            replace=True,
+                        )
+                    ].reshape((-1,))
+
+                    _as = jnp.argsort(nums[0, indices]).reshape((-1,))
+
+                    indices = indices[_as]
+
+                    weight_out = []
+                    density_out = []
+
+                    for Fi, wi, di, nbi in zip(F, weight, density, nb):
+                        _vol = di
+                        _wi = wi
+
+                        weight_out.append(_wi)
+                        density_out.append(_vol)
+
+                    return key_return, indices, weight_out, density_out, nums[:, indices], weight
+                except Exception as e:
+                    for x in [weight, weight_wall, weight_lag, ps, F, nb, neb, density]:
+                        print(f"{[xi.shape for xi in x]=}")
+
+                    raise e
 
             def remove_lag(w, c):
                 w = w[:c]
@@ -1986,55 +2029,6 @@ class Rounds:
 
             n_list = []
 
-            # if split_data:
-            #     frac = out / total
-
-            #     out_reweights = []
-            #     out_dw = []
-            #     out_rhos = []
-
-            #     for n, (w_i, wl_i, ps_i, F_i, d_i, nb_i, neb_i, c_i, l_i) in enumerate(
-            #         zip(weights, weights_lag, p_select, F, density, n_bin, n_eff_bin, c_list, labels)
-            #     ):
-            #         # if w_i is not None:
-            #         w_i = remove_lag(w_i, c_i)
-            #         wl_i = remove_lag(wl_i, c_i)
-            #         ps_i = remove_lag(ps_i, c_i)
-            #         F_i = remove_lag(F_i, c_i)
-            #         d_i = remove_lag(d_i, c_i)
-            #         nb_i = remove_lag(nb_i, c_i)
-            #         neb_i = remove_lag(neb_i, c_i)
-
-            #         if grid_nums is not None:
-            #             gn_i = remove_lag(grid_nums[n], c_i)
-            #         else:
-            #             gn_i = None
-
-            #         ni = int(frac * c_i)
-
-            #         key, indices, reweight, rerho, _, dw = choose(
-            #             key=key,
-            #             weight=[w_i],
-            #             weight_lag=[wl_i],
-            #             ps=[ps_i],
-            #             F=[F_i],
-            #             nb=[nb_i],
-            #             neb=[neb_i],
-            #             density=[d_i],
-            #             grid_nums=[gn_i] if gn_i is not None else None,
-            #             out=ni,
-            #         )
-
-            #         out_indices.append(indices)
-
-            #         out_reweights.extend(reweight)
-            #         out_rhos.extend(rerho)
-            #         out_dw.extend(dw)
-
-            #         n_list.append(n)
-            #         out_labels.append(l_i)
-
-            # else:
             _w: list[Array] = []
             _ww: list[Array] = []
             _wl: list[Array] = []
@@ -2087,6 +2081,7 @@ class Rounds:
 
                 if len(index) == 0:
                     count += n_i
+                    # print(f"no data points selected for trajectory {n=}, skipping")
                     continue
 
                 out_labels.append(labels[n])
@@ -2101,22 +2096,11 @@ class Rounds:
             # storing data    #
             ###################
 
-            # out_sp: list[SystemParams] = []
-            # out_cv: list[CV] = []
             out_ti: list[TrajectoryInfo] = []
-            # out_weights: list[Array] = []
-            # out_rho: list[Array] = []
 
             out_weights_std: list[Array] | None = [] if calculate_std else None
 
             if time_series:
-                # out_sp_t: list[SystemParams] = []
-                # out_cv_t: list[CV] = []
-                # out_ti_t: list[TrajectoryInfo] = []
-
-                # out_weights_t: list[Array] = []
-                # out_rho_t: list[Array] = []
-
                 out_dynamic_weights: list[Array] = []
 
             if get_bias_list:
@@ -2578,21 +2562,47 @@ class Rounds:
             r = self.get_round(c=c)
 
         if i is None:
-            p = self.path(c=c, r=r, i=i) / "static_trajectory_info.h5"
+            i_list = self._i_vals(c=c, r=r)
         else:
+            i_list = [i]
+
+        for i in i_list:
             p = self.path(c=c, r=r, i=i) / "trajectory_info.h5"
 
+            if not p.exists():
+                print(f"cannot invalidate data for {c=} {r=} {i=} because traj file does not exist")
+                return
+
+            n = "_invalid"
+
+            try:
+                with h5py.File(p, "r+") as hf:
+                    hf.attrs[n] = False
+
+                print(f"validated {c=} {r=} {i=}")
+            except Exception:
+                print(f"could not validate {c=} {r=} {i=}, writing file")
+
+    def validate_round(self, c: int | None = None, r: int | None = None):
+        if c is None:
+            c = self.cv
+
+        if r is None:
+            r = self.get_round(c=c)
+
+        p = self.path(c=c, r=r) / "static_trajectory_info.h5"
+
         if not p.exists():
-            print(f"cannot invalidate data for {c=} {r=} {i=} because traj file does not exist")
+            print(f"cannot validate data for {c=} {r=}  because traj file does not exist")
             return
 
-        n = "invalid" if i is None else "_invalid"
+        n = "invalid"
 
         try:
             with h5py.File(p, "r+") as hf:
                 hf.attrs[n] = False
         except Exception:
-            print(f"could not invalidate {c=} {r=} {i=}, writing file")
+            print(f"could not validate {c=} {r=}, writing file")
 
     def finish_data(self, c: int | None = None, r: int | None = None, i: int | None = None):
         if c is None:
@@ -3174,6 +3184,37 @@ class Rounds:
 
         sp0_provided = sp0 is not None
 
+        # if len(rounds._i_vals(c=cv_round, r=r)) != 0:
+        #     print(f"round {r} of cv round {cv_round} already has trajectories, checking if they are valid")
+
+        #     for i in rounds._i_vals(c=cv_round, r=r):
+        #         pi = rounds.path(c=cv_round, r=r, i=i)
+
+        #         run_md_inp = list(pi.glob("run_md_*.inp.json"))
+
+        #         if len(run_md_inp) == 0:
+        #             print(f"no run_md_*.inp.json file found for trajectory {i}, round {r}, cv {cv_round}, skipping")
+        #             continue
+
+        #         if (pi / "trajectory_info.h5").exists():
+        #             with h5py.File(pi / "trajectory_info.h5", "r") as hf:
+        #                 if "_invalid" in hf.attrs:
+        #                     if hf.attrs["_invalid"]:
+        #                         print(f"trajectory {i}, round {r}, cv {cv_round} is marked as invalid, skipping")
+        #                         continue
+        #                 if "_finished" in hf.attrs:
+        #                     if hf.attrs["_finished"]:
+        #                         print(f"trajectory {i}, round {r}, cv {cv_round} is already finished, skipping")
+        #                         continue
+
+        #         if not (pi / "bias.json").exists():
+        #             print(f"no bias.json file found for trajectory {i}, round {r}, cv {cv_round}, skipping")
+        #             continue
+
+        #     spi, bi, traj_name, b_name, b_name_new, path_name =
+
+        # if rounds.path(c=cv_round, r=r,i=0).glob("run_md_*.inp.json").exists():
+
         # common_bias = rounds.get_bias(c=cv_round, r=r)
         wall_bias = rounds.get_permanent_bias()
 
@@ -3439,7 +3480,7 @@ class Rounds:
         verbose: bool = False,
         koopman: bool = True,
         output_FES_bias=False,
-        equilibration_time=5 * picosecond,
+        equilibration_time=None,
         n_max_lin: int = 100,
     ):
         if cv_round_from is None:
@@ -3547,7 +3588,7 @@ class Rounds:
         verbose=True,
         koopman=True,
         output_FES_bias=False,
-        equilibration_time=5 * picosecond,
+        equilibration_time=None,
         n_max_lin: int = 100,
     ):
         if dlo is None:
@@ -4737,6 +4778,8 @@ class DataLoaderOutput(MyPyTreeNode):
         log_U_ik = jnp.full((len_i, len_k), jnp.inf)
         H_ik = jnp.zeros((len_i, len_k))
 
+        print(f"{labels=}")
+
         label_i = []
 
         dx = jnp.array(
@@ -4757,6 +4800,8 @@ class DataLoaderOutput(MyPyTreeNode):
             m = jnp.max(u)
 
             return jnp.log(jnp.sum(jnp.exp(u - m))) + m - jnp.log(n_elem)
+
+        # labels_k = jnp.zeros((len_k,), dtype=int)
 
         for i in range(len_i):
             if verbose:
@@ -4805,8 +4850,16 @@ class DataLoaderOutput(MyPyTreeNode):
             log_U_ik = log_U_ik.at[i, :].set(t_log_U_ik)
 
             # assign label to trajectory
+
+            # labels_k = labels_k.at[grid_nums_mask[i]].set(labels[i])
+
+            # labels = jnp.sum(x_labels[:, grid_nums_mask[i].cv.reshape(-1)], axis=1)
+
+            # x_labels contains num label rows. each k sit in one of the rows
             labels_i = jnp.sum(x_labels[:, grid_nums_mask[i].cv.reshape(-1)], axis=1)
             label_i.append(jnp.argmax(labels_i))
+
+            # label_i = labels[i]
 
         # print(f"{jnp.sum(H_ik,axis=0 )=}")
         # print(f"{jnp.sum(H_ik,axis=1 )=}")
@@ -5112,12 +5165,19 @@ class DataLoaderOutput(MyPyTreeNode):
             #         jnp.where(mask, jnp.inf, sigma_Fk[k_arr] * jnp.einsum("i,ij->j", 1 / tau_i, H_ik[:, k_arr]) ** 0.5)
             #     )
 
-            s += jnp.sum(jnp.where(mask, 0.0, (w * dens) * ps / n_bin))
+            s += jnp.sum(jnp.where(mask, 0.0, jnp.exp(jnp.log(w) + jnp.log(dens) + jnp.log(ps) - jnp.log(n_bin))))
 
-            w_tot_k = w_tot_k.at[k_arr].add(w * dens / n_bin * ps)
-            w_tot_sq = w_tot_sq.at[k_arr].add((w * dens / n_bin * ps) ** 2)
+            # w_tot_k = w_tot_k.at[k_arr].add(w * dens / n_bin * ps)
+            # w_tot_sq = w_tot_sq.at[k_arr].add((w * dens / n_bin * ps) ** 2)
 
-            s_ps_k = s_ps_k.at[k_arr].add(ps / n_bin)
+            # s_ps_k = s_ps_k.at[k_arr].add(ps / n_bin)
+
+            w_tot_k = w_tot_k.at[k_arr].add(jnp.exp(jnp.log(w) + jnp.log(dens) - jnp.log(n_bin) + jnp.log(ps)))
+            w_tot_sq = w_tot_sq.at[k_arr].add(
+                jnp.exp(2 * jnp.log(w) + 2 * jnp.log(dens) - 2 * jnp.log(n_bin) + 2 * jnp.log(ps))
+            )
+
+            s_ps_k = s_ps_k.at[k_arr].add(jnp.exp(jnp.log(ps) - jnp.log(n_bin)))
 
         # print(f"{ jnp.linalg.norm(H_ik-H_ik_req[:,:-1])=}")
 
@@ -5151,10 +5211,18 @@ class DataLoaderOutput(MyPyTreeNode):
 
                 sigma_out.append(sigma)
                 simga_sq_k_test = simga_sq_k_test.at[k_arr].add(
-                    (w_out[i] * dens_out[i] * sigma * ps_out[i] / n_bin_out[i]) ** 2
+                    # (w_out[i] * dens_out[i] * sigma * ps_out[i] / n_bin_out[i]) ** 2
+                    jnp.exp(
+                        2 * jnp.log(sigma)
+                        + 2 * jnp.log(ps_out[i])
+                        - 2 * jnp.log(n_bin_out[i])
+                        + 2 * jnp.log(dens_out[i])
+                        + 2 * jnp.log(w_out[i])
+                    )
                 )
 
-            sigma_k_test = jnp.sqrt(simga_sq_k_test / w_tot_k**2)
+            # sigma_k_test = jnp.sqrt(simga_sq_k_test / w_tot_k**2)
+            sigma_k_test = jnp.exp(0.5 * jnp.log(simga_sq_k_test) - jnp.log(w_tot_k))
 
             print(f"{( jnp.linalg.norm(sigma_k_test[:-1] -sigma_Fk)/kjmol)=} {sigma_k_test/kjmol=}  ")
 
@@ -5844,13 +5912,12 @@ class DataLoaderOutput(MyPyTreeNode):
 
             return (
                 cv_mid,
-                nums,
+                # nums,
                 bins,
-                closest,
+                # closest,
                 get_histo,
                 grid_nums,
                 jnp.exp(log_hist_k[hist_mask]),
-                # jnp.exp(log_hist_w[hist_mask]),
                 hist_mask,
                 _log_w,
             )
@@ -5868,7 +5935,17 @@ class DataLoaderOutput(MyPyTreeNode):
                     )
 
                     # pre test to get empty fraction
-                    cv_mid, nums, bins, closest, get_histo, grid_nums, _n_hist_mask, hist_mask, _ = get_hist(n_hist)
+                    (
+                        cv_mid,
+                        # nums,
+                        bins,
+                        # closest,
+                        get_histo,
+                        grid_nums,
+                        _n_hist_mask,
+                        hist_mask,
+                        _,
+                    ) = get_hist(n_hist)
 
                     frac_full = jnp.sum(hist_mask) / hist_mask.shape[0]
 
@@ -5892,7 +5969,17 @@ class DataLoaderOutput(MyPyTreeNode):
                 print(f"capping n_hist from {n_hist} to {n_max_lin}")
                 n_hist = n_max_lin
 
-        cv_mid, nums, bins, closest, get_histo, grid_nums, _n_hist_mask, hist_mask, _log_w = get_hist(n_hist)
+        (
+            cv_mid,
+            # nums,
+            bins,
+            # closest,
+            get_histo,
+            grid_nums,
+            _n_hist_mask,
+            hist_mask,
+            _log_w,
+        ) = get_hist(n_hist)
 
         frac_full = jnp.sum(hist_mask) / hist_mask.shape[0]
 
@@ -5912,12 +5999,21 @@ class DataLoaderOutput(MyPyTreeNode):
         # print(f"{_n_hist_mask=}")
 
         if compute_labels:
+            # x start with False for each gridpoint
+            # rows are different regions, columns are grid points.
+            # either there is already one or more regions that includes one of the grid point
+            #  if so add new k to that region and merge regions if necessary
+            # add new row for remaining k if no region includes it
             x = jnp.full((0, n_hist_mask), False)
 
             for fni, gn in enumerate(grid_nums_mask):
                 b = jnp.full(n_hist_mask + 1, False)
                 b = b.at[gn.cv.reshape(-1)].set(True)
                 b = b[:-1]
+
+                if jnp.sum(b) == 0:
+                    # b doesn't include any grid point, continue. this either means that the trajectory is empty or that all points are in bins with insufficient points
+                    continue
 
                 in_rows, new_rows = vmap_decorator(
                     lambda u, v: (jnp.logical_and(u, v).any(), jnp.logical_or(u, v)), in_axes=(None, 0)
@@ -5937,21 +6033,31 @@ class DataLoaderOutput(MyPyTreeNode):
 
                         x = x.at[rr[0], :].set(new_row)
 
-                        x = jnp.delete(x, rr[1:], 0)
+                        print(f" merging {rr.shape[0]} rows into {rr[0]} {x.shape=}")
+                        x = jnp.delete(x, rr[1:], axis=0)
+                        print(f" after merging  {x.shape=}")
 
                 else:  # create row
                     x = jnp.vstack([x, b])
 
-            # print(f"{x=}")
+            print(f"{x.shape=}")
 
+            print(f"{jnp.sum(x, axis=1)=}")
+            print(f"{jnp.sum(x, axis=0)=}")
+
+            # remove rows that are completely false
+            x = x[jnp.any(x, axis=1), :]
+
+            # there is one row which is True, others should be false
             labels = vmap_decorator(lambda x: jnp.argwhere(x, size=1).reshape(()), in_axes=1)(x)
+            unique_vals, _ = jnp.unique(labels, return_inverse=True)
 
-            num_labels = jnp.unique(labels).shape[0]
+            print(f"{unique_vals=}")
+
+            num_labels = unique_vals.shape[0]
 
             if num_labels > 1:
                 print(f"found {num_labels} different regions {labels=}")
-
-            # print(f"{labels.shape=}")
 
             x_labels = jnp.hstack([x, jnp.full((x.shape[0], 1), False)])
         else:
@@ -6234,7 +6340,10 @@ class DataLoaderOutput(MyPyTreeNode):
         _f = f.compute_cv
 
         if x_t is not None:
-            assert isinstance(x_t[0], x[0].__class__), "x_t must be of the same type as x"
+            if not isinstance(x_t[0], x[0].__class__):
+                print(
+                    f"WARNING: x_t is of type {x_t[0].__class__}, but x is of type {x[0].__class__}, this may lead to errors"
+                )
 
         def __f(x: X, nl: NeighbourList | None) -> CV:
             return _f(
@@ -7161,7 +7270,7 @@ class KoopmanModel(MyPyTreeNode):
     constant_threshold: float = 1e-14
     entropy_reg: float = 0.0
     target_smoothness: float = 20 * kjmol / (boltzmann * 300)
-    alpha_smooth: float = 0.5
+    alpha_smooth: float = 1.0
 
     @staticmethod
     def create(
@@ -7217,7 +7326,8 @@ class KoopmanModel(MyPyTreeNode):
         min_std=1e-2,  # prevents collapse into singularities
         entropy_reg=0.0,
         target_smoothness=20 * kjmol / (boltzmann * 300),
-        alpha_smooth=0.5,
+        alpha_smooth=1.0,
+        T_mult=1.0,
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
@@ -7226,16 +7336,20 @@ class KoopmanModel(MyPyTreeNode):
         print(f"{out_dim=} {eps=} {eps_pre=}")
         print(f"{calc_pi=} {add_1=}   ")
 
+        print(f"{use_w=}")
+
         if nl is not None:
             print(f"using neighbour lists in koopman model {nl=}")
 
         print(f"new tot w")
 
+        print(f"using  {alpha_smooth=}")
+
         def tot_w(w, rho):
             # wi = exp(-beta U_bias)
             # reweighing:  exp(-beta' U_bias)
 
-            w_log = [jnp.log(wi) + jnp.log(rhoi) for wi, rhoi in zip(w, rho)]
+            w_log = [(jnp.log(wi) + jnp.log(rhoi)) * alpha_smooth for wi, rhoi in zip(w, rho)]
             z = jnp.hstack(w_log)
 
             z_max = jnp.max(z)
@@ -7332,7 +7446,7 @@ class KoopmanModel(MyPyTreeNode):
 
             print(f"{N=} {dim=} {sigma_silverman=}")
 
-            print(f"{cv_out_shape.cv.shape=} {alpha_smooth=} {entropy_reg=} {target_smoothness=} ")
+            print(f"{cv_out_shape.cv.shape=} {entropy_reg=} {target_smoothness=} ")
 
             # if batch_size is None:
             grid_size = int(2000 ** (1 / dim))
@@ -7347,13 +7461,12 @@ class KoopmanModel(MyPyTreeNode):
             from optax.schedules import cosine_decay_schedule
 
             optimizer = optax.adamw(
-                # learning_rate=cosine_decay_schedule(1e-2, decay_steps=epochs, alpha=1e-4),
-                learning_rate=1e-2,
-                # learning_rate=cosine_decay_schedule(1e-2, decay_steps=epochs, alpha=1e-4),
-                # learning_rate=1e-3,
+                learning_rate=0.01,
                 weight_decay=1e-4,
             )
             opt_state = optimizer.init(learable_params)
+
+            prefetch = False
 
             if batch_size is None:
                 print("Using full-batch optimization")
@@ -7369,7 +7482,7 @@ class KoopmanModel(MyPyTreeNode):
                     else:
                         xt_chunk = SystemParams.stack(*cv_t)
 
-                w_chunk = jnp.hstack(w_tot)
+                w_chunk = jnp.hstack(w_tot) if use_w else None
 
                 if nl is not None:
                     if isinstance(x0_chunk, SystemParams):
@@ -7385,71 +7498,93 @@ class KoopmanModel(MyPyTreeNode):
                 lbfgs = True
 
             else:
-                from queue import Queue
-                from threading import Thread
 
-                def prefetch_worker(
-                    queue,
-                    key,
-                    nl: NeighbourList | None = None,
-                ):
-                    # nl2 = nl
+                def _get_batch(key):
+                    subsample = False
 
-                    # if nl2 is not None:
-                    #     nl2.info.r_skin = 0.0
-
+                    # w_alpha = [wi**alpha_smooth for wi in w_tot] if use_w else None
                     subsample = True
+                    key, subkey = jax.random.split(key)
 
-                    while True:
-                        key, subkey = jax.random.split(key)
-
-                        if subsample:
-                            x0_chunk, xt_chunk = chunk_selector(
-                                [cv_0, cv_t],
-                                batch_size,
-                                subkey,
-                                weight_list=w_tot,
-                            )
-                            w_chunk = jnp.ones(batch_size) / batch_size
-                        else:
-                            x0_chunk, xt_chunk, w_chunk = chunk_selector(
-                                [cv_0, cv_t, w_tot],
-                                batch_size,
-                                subkey,
-                            )
-
-                        # if nl is not None:
-                        #     if isinstance(x0_chunk, SystemParams):
-                        #         nl_chunk = nl2.slow_update_nl(x0_chunk)
-                        #         nl2 = nl2.replace(update=nl_chunk.update)
-                        #     else:
-                        #         nl_chunk = nl2
-
-                        batch = dict(
-                            x0_i=x0_chunk,
-                            xt_i=xt_chunk if cv_t is not None else None,
-                            wt_i=w_chunk,
-                            # nl_i=nl_chunk,
+                    if subsample:
+                        x0_chunk, xt_chunk = chunk_selector(
+                            [cv_0, cv_t],
+                            batch_size,
+                            subkey,
+                            weight_list=w_tot if use_w else None,
+                        )
+                        w_chunk = jnp.ones(batch_size) / batch_size
+                    else:
+                        x0_chunk, xt_chunk, w_chunk = chunk_selector(
+                            [cv_0, cv_t, w_tot if use_w else None],
+                            batch_size,
+                            subkey,
                         )
 
-                        print("-", end="", flush=True)
+                        w_chunk /= jnp.sum(w_chunk)
 
-                        queue.put(batch)
+                    # if nl is not None:
+                    #     if isinstance(x0_chunk, SystemParams):
+                    #         nl_chunk = nl2.slow_update_nl(x0_chunk)
+                    #         nl2 = nl2.replace(update=nl_chunk.update)
+                    #     else:
+                    #         nl_chunk = nl2
 
-                lbfgs = False
+                    batch = dict(
+                        x0_i=x0_chunk,
+                        xt_i=xt_chunk,
+                        wt_i=w_chunk,
+                        # nl_i=nl_chunk,
+                    )
 
-                # Setup queue and thread
-                batch_queue = Queue(maxsize=4)  # Prefetch 4 batches ahead
-                thread = Thread(
-                    target=prefetch_worker,
-                    args=(
-                        batch_queue,
+                    return batch, key
+
+                if prefetch:
+                    from queue import Queue
+                    from threading import Thread
+
+                    def prefetch_worker(
+                        queue,
                         key,
-                        nl,
-                    ),
-                )
-                thread.daemon = True
-                thread.start()
+                    ):
+                        # nl2 = nl
+
+                        # if nl2 is not None:
+                        #     nl2.info.r_skin = 0.0
+
+                        # w_alpha = [wi**alpha_smooth for wi in w_tot] if use_w else None
+
+                        while True:
+                            batch, key = _get_batch(key)
+
+                            print("-", end="", flush=True)
+
+                            queue.put(batch)
+
+                    lbfgs = False
+
+                    # Setup queue and thread
+                    batch_queue = Queue(maxsize=4)  # Prefetch 4 batches ahead
+                    thread = Thread(
+                        target=prefetch_worker,
+                        args=(
+                            batch_queue,
+                            key,
+                        ),
+                    )
+                    thread.daemon = True
+                    thread.start()
+
+                    def get_batch():
+                        batch = batch_queue.get()
+                        return key, (batch["x0_i"], batch["xt_i"], batch["wt_i"])
+
+                else:
+                    lbfgs = False
+
+                    def get_batch(key):
+                        batch, key = _get_batch(key)
+                        return key, (batch["x0_i"], batch["xt_i"], batch["wt_i"])
 
             @partial(jit_decorator, static_argnames=["entropy_reg", "chunk_size"])
             def objective_fn(
@@ -7896,7 +8031,7 @@ class KoopmanModel(MyPyTreeNode):
 
                         return h_gauss
 
-                    entropy_gaussian = get_max_renyi_target(alpha_smooth, d=dim)
+                    entropy_gaussian = get_max_renyi_target(1.0, d=dim)
                     entropy = (
                         soft_binning_integral_regularizer(z_0, w, grid_size=grid_size, alpha=alpha_smooth)
                         / entropy_gaussian
@@ -8155,9 +8290,10 @@ class KoopmanModel(MyPyTreeNode):
                     t0 = t
 
                 if batch_size is not None:
-                    batch_dict = batch_queue.get()
-                    x0_chunk, xt_chunk, w_chunk = batch_dict["x0_i"], batch_dict.get("xt_i", None), batch_dict["wt_i"]
+                    key, (x0_chunk, xt_chunk, w_chunk) = get_batch(key)
                     # nl_chunk = batch_dict.get("nl_i", None)
+                    # if epoch == 0:
+                    #     print(f"received first batch with {x0_chunk=}  {xt_chunk=} {w_chunk.shape=}")
 
                 # if isinstance(x0_chunk, SystemParams):
                 #     (
@@ -8196,7 +8332,8 @@ class KoopmanModel(MyPyTreeNode):
                     break
 
             if batch_size is not None:
-                thread.join(timeout=0)
+                if prefetch:
+                    thread.join(timeout=0)
 
             trans = trans.apply_learnable_params(learable_params)
             print(f"optimized trans done ")
@@ -8214,8 +8351,8 @@ class KoopmanModel(MyPyTreeNode):
             calc_pi=calc_pi,
             only_diag=only_diag,
             symmetric=symmetric,
-            chunk_size=batch_chunk_size,
-            macro_chunk=batch_size,
+            # chunk_size=batch_chunk_size,
+            macro_chunk=macro_chunk,
             trans_f=trans,
             trans_g=trans,
             verbose=verbose,

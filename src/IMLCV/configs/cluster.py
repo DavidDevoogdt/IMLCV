@@ -8,7 +8,8 @@ from parsl import HighThroughputExecutor, WorkQueueExecutor
 
 # from parsl.channels import LocalChannel
 from parsl.executors.base import ParslExecutor
-from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig, TaskVineManagerConfig
+
+# from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig, TaskVineManagerConfig
 from parsl.executors.threads import ThreadPoolExecutor
 from parsl.launchers import SimpleLauncher, SingleNodeLauncher, SrunLauncher
 from parsl.launchers.launchers import Launcher
@@ -34,13 +35,14 @@ class SlurmLauncher(Launcher):
 
 module list
 
-# echo $SLURM_MEM_PER_CPU
-# echo $SLURM_MEM_PER_GPU
-# echo $SLURM_MEM_PER_NODE
+
+echo $SLURM_MEM_PER_CPU
+echo $SLURM_MEM_PER_GPU
+echo $SLURM_MEM_PER_NODE
 
 # Unset memory-related SLURM environment variables to avoid conflicts
-unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
-unset SLURM_CPU_BIND
+#unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+#unset SLURM_CPU_BIND
 
 srun  --nodes=1  -l {overrides} {app}  {command}
 
@@ -143,7 +145,12 @@ which work_queue_worker
     # give all cores to xla
 
     if not gpu:
-        worker_init += f"export XLA_FLAGS='--xla_force_host_platform_device_count={threads_per_core}'\n"
+        worker_init += f"export JAX_NUM_CPU_DEVICES=1\n"  # still has acces to all cores, but only one device, so it will use all cores for that device
+        worker_init += f"export OMP_NUM_THREADS={threads_per_core}\n"
+        worker_init += f"export MKL_NUM_THREADS={threads_per_core}\n"
+        # export XLA_PYTHON_CLIENT_PREALLOCATE=false
+        # worker_init += f"export XLA_PYTHON_CLIENT_PREALLOCATE=false\n"
+        # worker_init += f"export XLA_PYTHON_CLIENT_MEM_FRACTION={(1.0 - 0.1) / parsl_tasks_per_block:.2f}\n"
 
     if gpu:
         # dynamic memory allocation, both for jax and pytorch, for all blocks.
@@ -186,7 +193,21 @@ sleep 1
 
             # worker_init += "export LLVM_PATH=/opt/rocm/llvm \n "
 
-    overrides = f"--ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core}"
+    # JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS
+    # JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES
+
+    worker_init += f"export JAX_COMPILATION_CACHE_DIR={ROOT_DIR}/.jax_cache\n"
+    # worker_init += f"export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0\n"
+    # worker_init += f"export JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0\n"
+
+    # export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=$SLURM_CPUS_PER_TASK"
+    worker_init += (
+        f'export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads={threads_per_core}" \n'
+    )
+
+    overrides = (
+        f" --ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core} --cpu-bind=verbose,cores "
+    )
 
     # if gpu:
     #     overrides += " --gres=gpu:1"
@@ -353,8 +374,11 @@ def config(
     if not isinstance(cpu_cluster, list) and cpu_cluster is not None:
         cpu_cluster = [cpu_cluster]
 
-    if not isinstance(gpu_cluster, list) and gpu_cluster is not None:
-        gpu_cluster = [gpu_cluster]
+    if training_on_gpu or reference_on_gpu:
+        if not isinstance(gpu_cluster, list) and gpu_cluster is not None:
+            gpu_cluster = [gpu_cluster]
+    else:
+        gpu_cluster = None
 
     if training_on_gpu:
         assert gpu_cluster is not None, "gpu_cluster must be provided when training_on_gpu or reference_on_gpu is True"
@@ -516,7 +540,7 @@ def config(
 
                 default, pre_command, _ = get_slurm_provider(
                     label=label,
-                    init_blocks=1,
+                    init_blocks=0,
                     min_blocks=0,
                     max_blocks=2048,
                     # parallelism=1,

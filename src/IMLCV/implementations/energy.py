@@ -22,6 +22,8 @@ from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
 from flax import nnx
 import e3nn_jax
 
+import gc
+
 
 class OpenMmEnergy(Energy):
     system: System = field(
@@ -156,9 +158,9 @@ class AseEnergy(Energy):
             vtens_out = volume * stress * electronvolt
 
         return EnergyResult(
-            energy=jnp.asarray(energy, dtype=jnp.float64),
-            gpos=jnp.asarray(gpos_out, dtype=jnp.float64) if gpos else None,
-            vtens=jnp.asarray(vtens_out, dtype=jnp.float64) if vir else None,
+            energy=jnp.asarray(energy, dtype=jnp.float_),
+            gpos=jnp.asarray(gpos_out, dtype=jnp.float_) if gpos else None,
+            vtens=jnp.asarray(vtens_out, dtype=jnp.float_) if vir else None,
         )
 
     def _calculator(self):  # -> ase.calculators.calculator.Calculator:
@@ -524,6 +526,10 @@ class MACEJax(EnergyFn):
 
             print("All outputs match between JAX and PyTorch models")
 
+        del torch_model
+
+        gc.collect()
+
         return MACEJax(
             kwargs=dict(
                 state=state,
@@ -540,8 +546,14 @@ class MACEJax(EnergyFn):
 
     @staticmethod
     def _f(
-        sp: SystemParams, nl: NeighbourList, state: nnx.State, z_unique: jax.Array, graphdef: nnx.GraphDef
+        sp: SystemParams,
+        nl: NeighbourList,
+        state: nnx.State,
+        z_unique: jax.Array,
+        graphdef: nnx.GraphDef,
     ) -> EnergyResult:
+        print("Running MACEJax energy computation")
+
         data = nl.to_MACE_batch(sp, z_unique=z_unique)
 
         # nnx.State.from_pure_dict
@@ -552,12 +564,6 @@ class MACEJax(EnergyFn):
             compute_force=False,
             compute_stress=False,
         )
-
-        # print(f"MACE output: {out} ")
-
-        # # agrees with manual force and manual virial calculation
-        # jax.debug.print("MACE force: {out}", out=out["forces"] * electronvolt / angstrom)
-        # jax.debug.print("MACE vir: {out}", out=out["stress"] * electronvolt * (sp.volume() / angstrom**3))
 
         return out["energy"] * electronvolt
 

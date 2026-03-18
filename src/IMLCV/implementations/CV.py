@@ -1274,6 +1274,8 @@ def _custom_setstate(state: dict) -> dict:
     del model_kwargs["reduce_z"]
     if "inversion" in model_kwargs:
         del model_kwargs["inversion"]
+    if "normalize" in model_kwargs:
+        del model_kwargs["normalize"]
 
     kwargs = state["kwargs"]
 
@@ -1301,6 +1303,8 @@ def _initialize_graph_neural_network_model(
     del model_kwargs["reduce_z"]
     if "inversion" in model_kwargs:
         del model_kwargs["inversion"]
+    if "normalize" in model_kwargs:
+        del model_kwargs["normalize"]
 
     m, graphdef, params, rest = _graph_neural_network_model(model_kwargs, key=key)
 
@@ -1318,6 +1322,7 @@ def _graph_neural_network_model_apply(
     params,
     reduce_z=True,
     inversion=False,
+    normalize=False,
     **model_kwargs,
 ):
     if nl.needs_calculation:
@@ -1398,13 +1403,20 @@ def _graph_neural_network_model_apply(
 
     if reduce_z:
 
-        @jax.vmap
-        def _select(feat, z):
-            b = jnp.array(nl.info.z_unique) == z
+        @partial(jax.vmap, in_axes=(0, 0))
+        def _select(feat, idx):
+            x = jnp.zeros((len(nl.info.z_unique), *feat.shape))
 
-            return jnp.where(b, feat[:, None], jnp.zeros_like(feat[:, None]))
+            if normalize:
+                feat /= jnp.sqrt(jnp.array(nl.info.num_z_unique)[idx])
+            return x.at[idx, :].set(feat)
+            # 1/sqrt(num_z_unique) normalization  to keep variance of features independent of number of unique elements
 
-        node_feats = jnp.sum(_select(node_feats, jnp.array(nl.info.z_array)), axis=0)
+        idx = nl.info.idx_array
+        out = _select(node_feats, nl.info.idx_array)
+        print(f"out after select {out.shape=}")
+
+        node_feats = jnp.sum(out, axis=0)
 
     return CV(cv=node_feats.flatten())
 
@@ -1422,6 +1434,7 @@ def graph_neural_network(
     inversion=False,
     reduce_z=True,
     radial_mlp: tuple[int, ...] = None,
+    normalize=True,
 ):
     if r_cut is None:
         r_cut = nl.info.r_cut
@@ -1472,16 +1485,94 @@ def graph_neural_network(
 
     return CvTrans.from_cv_function(
         _graph_neural_network_model_apply,
-        static_argnames=["reduce_z", "inversion", *model_kwargs.keys()],
+        static_argnames=["reduce_z", "inversion", "normalize", *model_kwargs.keys()],
         learnable_argnames=("params",),
         params=params,
         reduce_z=reduce_z,
         inversion=inversion,
+        normalize=normalize,
         m=m_safe,
         initializers=_initialize_graph_neural_network_model,
         custom_getstate=_custom_getstate,
         custom_setstate=_custom_setstate,
         **model_kwargs,
+    )
+
+
+def _deepset(
+    cv: CV,
+    nl: NeighbourList,
+    shmap,
+    shmap_kwargs,
+    w_lin: tuple[Array],
+    biases: tuple[Array | None],
+    activation_fn: tuple[str | None],
+):
+    z_idx = nl.info.idx_array
+    num_classes = len(nl.info.z_unique)
+
+    assert cv.atomic, "CV must be atomic for deepset"
+
+    x = cv.cv
+
+    for wi, bi, act in zip(w_lin, biases, activation_fn):
+        wi = wi[z_idx, :, :]
+
+        x = jnp.einsum("nj,jkn->nk", x, wi)
+
+        if bi is not None:
+            x += bi[z_idx, :]
+
+        if act is not None:
+            x = activation_functions.get(act)(x)
+
+    y = jnp.zeros((num_classes, x.shape[1]))
+    y = y.at[z_idx, :].add(x)
+
+    return cv.replace(cv=y.flatten(), atomic=False)
+
+
+def deepset(
+    n_layers: int,
+    channels: int,
+    cv: CV,
+    info: NeighbourListInfo,
+    use_biases: bool = True,
+    activation_fn: str | None = "relu",
+    activation_fn_last: str | None = None,
+    initializer: str = "glorot_normal",
+) -> CvTrans:
+    w_lin = []
+    biases = []
+    activation_fns = []
+    n_atoms = len(info.z_unique)
+
+    assert cv.atomic, "CV must be atomic for deepset"
+    if cv.batched:
+        shape = cv.shape[2]
+    else:
+        shape = cv.shape[1]
+
+    for i in range(n_layers):
+        new_shape = channels
+        w_lin.append(jnp.ones((shape, new_shape, n_atoms)))
+        biases.append(jnp.zeros((new_shape, n_atoms)) if use_biases else None)
+        if i == n_layers - 1:
+            activation_fns.append(activation_fn_last)
+        else:
+            activation_fns.append(activation_fn)
+
+    return CvTrans.from_cv_function(
+        _deepset,
+        learnable_argnames=[f"w_lin", f"biases"],
+        static_argnames=[f"activation_fn"],
+        w_lin=tuple(w_lin),
+        biases=tuple(biases),
+        activation_fn=tuple(activation_fns),
+        initializers={
+            f"w_lin": initializer,
+            f"biases": "zeros",
+        },
     )
 
 

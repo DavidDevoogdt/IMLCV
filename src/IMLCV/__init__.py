@@ -45,7 +45,7 @@ if "mpi4py" in sys.modules:
 
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_enable_x64", True)
 
 
 logging.getLogger("absl").addFilter(

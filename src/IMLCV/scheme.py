@@ -221,7 +221,7 @@ class Scheme:
         first_round_no_fes_bias=False,
         dT=0,
         max_b=100 * kjmol,
-        equilibration_time=2 * picosecond,
+        equilibration_time=0 * picosecond,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -325,7 +325,7 @@ class Scheme:
                     direct_bias=direct_bias,
                     executors=executors,
                     n_max_lin=n_max_lin,
-                    equilibration_time=5 * picosecond,
+                    equilibration_time=equilibration_time,
                 )
 
             self.rounds.add_round(bias=new_bias, c=cv_round)
@@ -369,7 +369,7 @@ class Scheme:
         macro_chunk_nl=5000,
         verbose=False,
         koopman=True,
-        equilibration_time=2 * picosecond,
+        equilibration_time=None,
         n_max_lin=100,
     ):
         self.rounds.update_CV(

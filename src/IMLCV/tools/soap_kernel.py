@@ -272,7 +272,7 @@ def p_innl_soap(
                     _phi,
                     in_axes=(0, None, None, None),
                     out_axes=0,
-                )(jnp.arange(n_max + 1, dtype=jnp.int64), n_max, r_safe, r_cut)
+                )(jnp.arange(n_max + 1, dtype=jnp.int_), n_max, r_safe, r_cut)
 
                 c = (
                     r ** (3 / 2)
@@ -317,9 +317,9 @@ def p_innl_soap(
                 _phi,
                 in_axes=(0, None, None, None),
                 out_axes=0,
-            )(jnp.arange(n_max + 1, dtype=jnp.int64), n_max, r_ij, r_cut)
+            )(jnp.arange(n_max + 1, dtype=jnp.int_), n_max, r_ij, r_cut)
 
-            l = jnp.arange(l_max + 1, dtype=jnp.int64)
+            l = jnp.arange(l_max + 1, dtype=jnp.int_)
 
             # print(f"{phi_n.shape=} {l.shape=}")
             print(f" r**l")

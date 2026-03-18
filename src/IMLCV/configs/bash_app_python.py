@@ -321,12 +321,13 @@ if __name__ == "__main__":
 
     # os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={len(os.sched_getaffinity(0))}"
     import jax
+    import jax.numpy as jnp
 
     # jax.config.update("jax_platform_name", "cpu")
-    jax.config.update("jax_enable_x64", True)
+    # jax.config.update("jax_enable_x64", True)
     # jax.config.update("jax_pmap_no_rank_reduction", False)
 
-    import torch
+    # import torch
 
     import IMLCV  # noqa: F401
 
@@ -335,6 +336,8 @@ if __name__ == "__main__":
         import platform
 
         print(f"new version")
+
+        x = jnp.array([1.0])
 
         my_system = platform.uname()
         print(f"got input {sys.argv}")
@@ -346,9 +349,13 @@ if __name__ == "__main__":
         print(f"Version: {my_system.version}")
         print(f"Machine: {my_system.machine}")
         print(f"Processor: {my_system.processor}")
-        print(f"working with {jax.local_devices()=},   {jax.device_count()=}  {os.sched_getaffinity(0)=}")
-        print(f"{torch.get_num_threads()=}")
-        print(f"{torch.cuda.is_available()=}")
+        print(
+            f"working with {jax.local_devices()=},   {jax.device_count()=} {len(os.sched_getaffinity(0))=} {os.sched_getaffinity(0)=}"
+        )
+        print(f"jax is working: {x=}, {x.device}")
+
+        # print(f"{torch.get_num_threads()=}")
+        # print(f"{torch.cuda.is_available()=}")
 
         file_in = Path(args.file_in)
 
