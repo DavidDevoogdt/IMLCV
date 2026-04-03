@@ -52,6 +52,8 @@ class YaffFF(MyPyTreeNode):
         sp = self.system.sp
         nl = self.system.nl
 
+        dtype = sp.coordinates.dtype
+
         def f(sp, nl):
             return self.energy.compute_from_system_params(
                 gpos=gpos,
@@ -60,25 +62,25 @@ class YaffFF(MyPyTreeNode):
                 nl=nl,
             )
 
-        if self.energy.external_callback:
+        # if self.energy.external_callback:
 
-            def _mock_f(sp):
-                return EnergyResult(
-                    energy=jnp.array(1.0),
-                    gpos=None if not gpos else sp.coordinates,
-                    vtens=None if not vtens else sp.cell,
-                )
+        #     def _mock_f(sp):
+        #         return EnergyResult(
+        #             energy=jnp.array(1.0),
+        #             gpos=None if not gpos else sp.coordinates,
+        #             vtens=None if not vtens else sp.cell,
+        #         )
 
-            dtypes = jax.eval_shape(_mock_f, sp)
+        #     dtypes = jax.eval_shape(_mock_f, sp)
 
-            energy = jax.pure_callback(
-                f,
-                dtypes,
-                sp,
-                nl,
-            )
-        else:
-            energy = f(sp, nl)
+        #     energy = jax.pure_callback(
+        #         f,
+        #         dtypes,
+        #         sp,
+        #         nl,
+        #     )
+        # else:
+        energy = f(sp, nl)
 
         cv, bias = self.bias.compute_from_system_params(
             sp=sp,

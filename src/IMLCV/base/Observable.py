@@ -238,7 +238,7 @@ class Observable:
         only_finished=False,
         bounds_percentile=1,
         max_bias=None,
-        rbf_kernel="thin_plate_spline",
+        rbf_kernel="multiquadric",
         rbf_degree=None,
         executors=Executors.training,
         time_correlation_method=None,
@@ -327,7 +327,7 @@ class Observable:
             kernel=rbf_kernel,
             epsilon=eps,
             degree=rbf_degree,
-            smoothing=None,
+            smoothing=1.0,
         )
 
         if not return_std_bias:
@@ -386,7 +386,7 @@ class Observable:
         max_bias: float = 100 * kjmol,
         vmax: float = 100 * kjmol,
         vmax_std: float = 5 * kjmol,
-        smoothing=None,
+        smoothing=1.0,
         kooopman_wham=None,
         samples_per_bin=10,
         min_samples_per_bin=5,
@@ -433,6 +433,7 @@ class Observable:
             min_samples_per_bin=min_samples_per_bin,
             smoothing=smoothing,
             n_max_lin=n_max_lin,
+            std_bias=True,
         )
 
         if plot_selected_points:
@@ -536,6 +537,7 @@ class Observable:
                 margin=0.1,
                 vmax=vmax,
                 inverted=False,
+                plot_FES=False,
             )
 
         if return_std_bias:
@@ -630,7 +632,7 @@ class Observable:
         choice="rbf",
         num_rnds=8,
         start_r=1,
-        rbf_kernel="thin_plate_spline",
+        rbf_kernel="multiquadric",
         rbf_degree=None,
         samples_per_bin=5,
         min_samples_per_bin=1,

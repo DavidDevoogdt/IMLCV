@@ -144,7 +144,7 @@ class Transformer(MyPyTreeNode):
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 recalc_bounds=False,
-                smoothing=None,
+                smoothing=1.0,
             )
 
             Transformer.plot_app(
@@ -197,7 +197,7 @@ class Transformer(MyPyTreeNode):
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 recalc_bounds=False,
-                smoothing=None,
+                smoothing=1.0,
             )
 
             if plot:
@@ -360,7 +360,8 @@ class Transformer(MyPyTreeNode):
                 chunk_size=chunk_size,
                 # recalc_bounds=True,
                 bounds=bounds,
-                smoothing=-1,
+                smoothing=1.0,
+                weights_std=dlo._weights_std,
             )
 
             if plot:
@@ -886,7 +887,7 @@ class Transformer(MyPyTreeNode):
                     rbf_bias=rbf_bias,
                     observable=color,
                     grid_bias_order=grid_bias_order,
-                    smoothing=1,
+                    smoothing=1.0,
                 )
 
                 # print(f"{T=} {vmin/kjmol=} {vmax/kjmol=}")
@@ -1044,7 +1045,7 @@ class Transformer(MyPyTreeNode):
                     output_density_bias=False,
                     rbf_bias=rbf_bias,
                     grid_bias_order=grid_bias_order,
-                    smoothing=1,
+                    smoothing=1.0,
                 )
 
                 if len(indices) == 1:
@@ -1255,10 +1256,6 @@ class Transformer(MyPyTreeNode):
         collective_variable_projection: CollectiveVariable,
         collective_variables: list[CollectiveVariable],
         ti: list[list[TrajectoryInfo]],
-        # cv_data: list[list[CV]],
-        # sp_data: list[list[SystemParams]],
-        # weights: list[list[jax.Array]] | None = None,
-        # std: list[list[jax.Array]] | None = None,
         name: str | Path | None = None,
         timescales: list[list[float]] | None = None,
         projection_cv_title: str | None = None,
@@ -1268,12 +1265,13 @@ class Transformer(MyPyTreeNode):
         T=300 * kelvin,
         vmin=0,
         vmax=100 * kjmol,
+        vmax_std=5 * kjmol,
         dpi=300,
         n_max_bias=1e6,
         macro_chunk=1000,
         cmap_fes="viridis",
         cmap_dens="hot",
-        cmap_data="cividis",
+        cmap_std="viridis",
         vmax_dens=3,
         vmin_dens=-1,
         offset=True,
@@ -1284,22 +1282,64 @@ class Transformer(MyPyTreeNode):
         grid_bias_order=0,
         plot_density=True,
         rbf_bias=False,
-        smoothing=None,
+        smoothing=0.0,
         overlay_mask=True,
         extra_info_title: str | None = None,
         get_fes_bias_kwargs: dict = {},
-        plot_std=False,
+        plot_std=True,
+        plot_dens=True,
     ):
         # data_converted = []
 
         from IMLCV.base.rounds import DataLoaderOutput
         from IMLCV.implementations.CV import _cv_slice
 
-        if bar_label is None:
-            if plot_std:
-                bar_label = "Free Energy Std Dev [kJ/mol]"
+        if name is not None:
+            name = Path(name)
+
+        def clean_cmap(cmap_fes):
+            if isinstance(cmap_fes, str):
+                cmap_fes = plt.get_cmap(cmap_fes)
+
+            cmap_fes.set_over(alpha=0)
+            cmap_fes.set_under(alpha=0)
+            return cmap_fes
+
+        names = [name]
+        cmaps = [clean_cmap(cmap_fes)]
+        bar_scales = [[vmin, vmax]]
+
+        bar_labels = ["Free Energy [kJ/mol]"]
+        units = [kjmol]
+        exp = [False]
+
+        if plot_std:
+            bar_labels.append("Free Energy Std Dev [kJ/mol]")
+            if name is not None:
+                names.append(f"{name.stem}_std{name.suffix}")
             else:
-                bar_label = "Free Energy [kJ/mol]"
+                names.append(None)
+
+            cmaps.append(clean_cmap(cmap_std))
+
+            bar_scales.append([0, vmax_std])
+            units.append(kjmol)
+            exp.append(False)
+
+        if plot_dens:
+            bar_labels.append("Density")
+            if name is not None:
+                names.append(f"{name.stem}_dens{name.suffix}")
+            else:
+                names.append(None)
+
+            cmaps.append(clean_cmap(cmap_dens))
+
+            bar_scales.append([vmin_dens, vmax_dens])
+            units.append(1.0)
+            exp.append(True)
+
+        figs = []
 
         dim_map = [
             [(0,)],  # 1
@@ -1402,12 +1442,6 @@ class Transformer(MyPyTreeNode):
             ],  # 17
         ]
 
-        if isinstance(cmap_fes, str):
-            cmap_fes = plt.get_cmap(cmap_fes)
-
-        cmap_fes.set_over(alpha=0)
-        cmap_fes.set_under(alpha=0)
-
         collective_variables = [a.replace(cvs_name=[f"$q_{i}$" for i in range(a.n)]) for a in collective_variables]
         if collective_variable_projection.cvs_name is None:
             collective_variable_projection = collective_variable_projection.replace(
@@ -1455,28 +1489,48 @@ class Transformer(MyPyTreeNode):
         print(f"{height_rows=}, {width_cols=}")
 
         # make figure and gridspeciterator
-        fig = plt.figure(
-            figsize=(
-                sum(width_cols) + wspace * (len(width_cols)),
-                sum(height_rows) + hspace * (len(height_rows)),
+        figs.append(
+            plt.figure(
+                figsize=(
+                    sum(width_cols) + wspace * (len(width_cols)),
+                    sum(height_rows) + hspace * (len(height_rows)),
+                )
             )
         )
 
-        gs = gridspec.GridSpec(
-            nrows=nrows,
-            ncols=ncols,
-            figure=fig,
-            width_ratios=width_cols,
-            height_ratios=height_rows,
-            wspace=wspace,
-            hspace=hspace,
-        )
+        if plot_std:
+            figs.append(
+                plt.figure(
+                    figsize=(
+                        sum(width_cols) + wspace * (len(width_cols)),
+                        sum(height_rows) + hspace * (len(height_rows)),
+                    )
+                )
+            )
 
-        print(f"{gs[0, 0].get_position(fig)=} , {gs[0, 1].get_position(fig)=} {gs[1, 0].get_position(fig)=}")
+        if plot_dens:
+            figs.append(
+                plt.figure(
+                    figsize=(
+                        sum(width_cols) + wspace * (len(width_cols)),
+                        sum(height_rows) + hspace * (len(height_rows)),
+                    )
+                )
+            )
 
-        wspace = gs[0, 1].get_position(fig).x0 - gs[0, 0].get_position(fig).x1
-        hspace = gs[0, 0].get_position(fig).y0 - gs[1, 0].get_position(fig).y1
-        print(f"{wspace=}, {hspace=}")
+        for fig in figs:
+            gs = gridspec.GridSpec(
+                nrows=nrows,
+                ncols=ncols,
+                figure=fig,
+                width_ratios=width_cols,
+                height_ratios=height_rows,
+                wspace=wspace,
+                hspace=hspace,
+            )
+
+            wspace = gs[0, 1].get_position(fig).x0 - gs[0, 0].get_position(fig).x1
+            hspace = gs[0, 0].get_position(fig).y0 - gs[1, 0].get_position(fig).y1
 
         for i in range(len(collective_variables)):
             print(f"{i=}")
@@ -1539,7 +1593,7 @@ class Transformer(MyPyTreeNode):
                     macro_chunk=macro_chunk,
                     chunk_size=None,
                     recalc_bounds=False,
-                    output_density_bias=True,
+                    output_density_bias=plot_dens,
                     rbf_bias=rbf_bias,
                     grid_bias_order=grid_bias_order,
                     smoothing=smoothing,
@@ -1559,28 +1613,37 @@ class Transformer(MyPyTreeNode):
                 else:
                     plot_f = Transformer._plot_2d
 
-                if plot_std:
-                    f = std_bias
-                else:
-                    f = fes
+                # if plot_std:
+                #     f = std_bias
+                # else:
+                # f = fes
 
-                plot_f(
-                    fig=fig,
-                    grid=gs[
-                        1 + i * (dim_1 + 1) + start_row + j,
-                        0,
-                    ],  # type: ignore
-                    fesses=f.slice(T=T),
-                    indices=(0, 1),
-                    margin=margin,
-                    collective_variable=colvar_ab,
-                    labels=colvar_ab.cvs_name,
-                    print_labels=True,
-                    cmap=cmap_fes,
-                    fontsize=fontsize_small,
-                    vmax=vmax,
-                    vmin=vmin,
-                )
+                fl = [fes]
+
+                if plot_std:
+                    fl.append(std_bias)
+
+                if plot_dens:
+                    fl.append(dens)
+
+                for fig, f, s, cm in zip(figs, fl, bar_scales, cmaps):
+                    plot_f(
+                        fig=fig,
+                        grid=gs[
+                            1 + i * (dim_1 + 1) + start_row + j,
+                            0,
+                        ],  # type: ignore
+                        fesses=f.slice(T=T),
+                        indices=(0, 1),
+                        margin=margin,
+                        collective_variable=colvar_ab,
+                        labels=colvar_ab.cvs_name,
+                        print_labels=True,
+                        cmap=cm,
+                        fontsize=fontsize_small,
+                        vmax=s[1],
+                        vmin=s[0],
+                    )
 
             print(f"############################## FES plots for projection CV vs new CV")
             # FES plots for one CV refernce vs one CV new
@@ -1640,7 +1703,7 @@ class Transformer(MyPyTreeNode):
                     macro_chunk=macro_chunk,
                     chunk_size=None,
                     recalc_bounds=False,
-                    output_density_bias=True,
+                    output_density_bias=plot_dens,
                     rbf_bias=rbf_bias,
                     grid_bias_order=grid_bias_order,
                     smoothing=smoothing,
@@ -1656,27 +1719,32 @@ class Transformer(MyPyTreeNode):
 
                 plot_f = Transformer._plot_2d
 
+                fl = [fes]
+
                 if plot_std:
-                    f = std_bias
-                else:
-                    f = fes
-                plot_f(
-                    fig=fig,
-                    grid=gs[
-                        1 + i * (dim_1 + 1) + start_row + a,
-                        start_col + b,
-                    ],  # type: ignore
-                    fesses=f.slice(T=T),
-                    indices=(0, 1),
-                    margin=margin,
-                    collective_variable=colvar_ab,
-                    labels=colvar_ab.cvs_name,
-                    print_labels=True,
-                    cmap=cmap_fes,
-                    fontsize=fontsize_small,
-                    vmax=vmax,
-                    vmin=vmin,
-                )
+                    fl.append(std_bias)
+
+                if plot_dens:
+                    fl.append(dens)
+
+                for fig, f, s, cm in zip(figs, fl, bar_scales, cmaps):
+                    plot_f(
+                        fig=fig,
+                        grid=gs[
+                            1 + i * (dim_1 + 1) + start_row + a,
+                            start_col + b,
+                        ],  # type: ignore
+                        fesses=f.slice(T=T),
+                        indices=(0, 1),
+                        margin=margin,
+                        collective_variable=colvar_ab,
+                        labels=colvar_ab.cvs_name,
+                        print_labels=True,
+                        cmap=cm,
+                        fontsize=fontsize_small,
+                        vmax=s[1],
+                        vmin=s[0],
+                    )
 
             # FES plot for new CVs
             idx = jnp.array(jnp.meshgrid(jnp.arange(n_needed), jnp.arange(max_dim_2))).reshape(2, -1)
@@ -1710,7 +1778,7 @@ class Transformer(MyPyTreeNode):
                     macro_chunk=macro_chunk,
                     chunk_size=None,
                     recalc_bounds=False,
-                    output_density_bias=False,
+                    output_density_bias=plot_dens,
                     rbf_bias=rbf_bias,
                     grid_bias_order=grid_bias_order,
                     smoothing=smoothing,
@@ -1729,191 +1797,195 @@ class Transformer(MyPyTreeNode):
                 else:
                     plot_f = Transformer._plot_2d
 
+                fl = [fes]
+
                 if plot_std:
-                    f = std_bias
-                else:
-                    f = fes
+                    fl.append(std_bias)
 
-                plot_f(
-                    fig=fig,
-                    grid=gs[
-                        1 + start_row + (dim_1 + 1) * i + idx[1, j],
-                        start_col + max_dim_2 + idx[0, j],
-                    ],  # type: ignore
-                    fesses=f.slice(T=T),
-                    indices=(0, 1),
-                    margin=margin,
-                    collective_variable=colvar_i_slice,
-                    labels=colvar_i_slice.cvs_name,
-                    print_labels=True,
-                    cmap=cmap_fes,
-                    fontsize=fontsize_small,
-                    vmax=vmax,
-                    vmin=vmin,
-                )
+                if plot_dens:
+                    fl.append(dens)
 
-        def draw_hline(i, j1, j2):
-            left_cell = gs[i, j1].get_position(fig)
-            right_cell = gs[i, j2].get_position(fig)
-
-            x0 = left_cell.x0
-            x1 = right_cell.x1
-            y = left_cell.y1
-
-            fig.add_artist(
-                Line2D(
-                    xdata=[x0, x1],
-                    ydata=[y, y],
-                    color="black",
-                    linewidth=2,
-                )
-            )
-
-        # if dim_1 != 1:
-        for i in range(start_row, start_row + ncv * (dim_1 + 1) + 1, dim_1 + 1):
-            draw_hline(i, 0, ncols - 2)
-
-        draw_hline(start_row - 1, 0, ncols - 2)
-
-        def draw_vline(i1, i2, j):
-            left_cell_top = gs[i1, j].get_position(fig)
-            left_cell_bottom = gs[i2, j].get_position(fig)
-
-            x = left_cell_top.x1  # + wspace / 2.0
-            y0 = left_cell_bottom.y0
-            y1 = left_cell_top.y1
-
-            fig.add_artist(
-                Line2D(
-                    xdata=[x, x],
-                    ydata=[y0, y1],
-                    color="black",
-                    linewidth=2,
-                )
-            )
-
-        draw_vline(start_row, nrows - 1, 0)
-        draw_vline(start_row, nrows - 1, 1 + max_dim_2)
-
-        def set_text(i1, i2, j1, j2, t, rotate=False, fontsize=fontsize_large, **kwargs):
-            s = gs[i1, j1]
-            pos = s.get_position(fig)
-
-            s2 = gs[i2, j2]
-            pos2 = s2.get_position(fig)
-            fig.text(
-                (pos.x0 + pos2.x1) / 2 - wspace / 2,
-                (pos.y0 + pos2.y1) / 2 - hspace / 2,
-                s=t,
-                horizontalalignment="center",
-                verticalalignment="center",
-                rotation=90 if rotate else 0,
-                fontsize=fontsize,
-                **kwargs,
-            )
-
-        if projection_cv_title is None:
-            projection_cv_title = collective_variable_projection.name
-
-        set_text(1, 1, start_col - 1, start_col - 1, f"mode:", fontsize=fontsize_small)
-        for j in range(max_dim_2):
-            set_text(1, 1, start_col + j, start_col + j, f"$q_{j}$", fontsize=fontsize_small)
-
-        if cv_titles is None:
-            cv_titles = [colvar.name for colvar in collective_variables]
-
-        # label each block of rows on the left with the corresponding collective variable name
-        for i in range(len(collective_variables)):
-            set_text(
-                start_row + (dim_1 + 1) * i + 1,
-                start_row + (dim_1 + 1) * (i + 1) - 1,
-                start_col - 1,
-                start_col - 1,
-                f"CV {collective_variables[i].name}",
-                rotate=True,
-                # fontsize=20,
-                fontweight="bold",
-            )
-
-            if collective_variables[i].extra_info is not None:
-                if extra_info_title is not None:
-                    set_text(
-                        start_row + (dim_1 + 1) * i,
-                        start_row + (dim_1 + 1) * i,
-                        start_col - 1,
-                        start_col - 1,
-                        extra_info_title,
+                for fig, f, s, cm in zip(figs, fl, bar_scales, cmaps):
+                    plot_f(
+                        fig=fig,
+                        grid=gs[
+                            1 + start_row + (dim_1 + 1) * i + idx[1, j],
+                            start_col + max_dim_2 + idx[0, j],
+                        ],  # type: ignore
+                        fesses=f.slice(T=T),
+                        indices=(0, 1),
+                        margin=margin,
+                        collective_variable=colvar_i_slice,
+                        labels=colvar_i_slice.cvs_name,
+                        print_labels=True,
+                        cmap=cm,
                         fontsize=fontsize_small,
+                        vmax=s[1],
+                        vmin=s[0],
                     )
 
-                for j in range(collective_variables[i].n):
-                    set_text(
-                        start_row + (dim_1 + 1) * i,
-                        start_row + (dim_1 + 1) * i,
-                        start_col + j,
-                        start_col + j,
-                        collective_variables[i].extra_info[j],
-                        fontsize=fontsize_small,
+        for fig, bar_label, name, s, cm, u, _exp in zip(figs, bar_labels, names, bar_scales, cmaps, units, exp):
+
+            def draw_hline(i, j1, j2):
+                left_cell = gs[i, j1].get_position(fig)
+                right_cell = gs[i, j2].get_position(fig)
+
+                x0 = left_cell.x0
+                x1 = right_cell.x1
+                y = left_cell.y1
+
+                fig.add_artist(
+                    Line2D(
+                        xdata=[x0, x1],
+                        ydata=[y, y],
+                        color="black",
+                        linewidth=2,
+                    )
+                )
+
+            # if dim_1 != 1:
+            for i in range(start_row, start_row + ncv * (dim_1 + 1) + 1, dim_1 + 1):
+                draw_hline(i, 0, ncols - 2)
+
+            draw_hline(start_row - 1, 0, ncols - 2)
+
+            def draw_vline(i1, i2, j):
+                left_cell_top = gs[i1, j].get_position(fig)
+                left_cell_bottom = gs[i2, j].get_position(fig)
+
+                x = left_cell_top.x1  # + wspace / 2.0
+                y0 = left_cell_bottom.y0
+                y1 = left_cell_top.y1
+
+                fig.add_artist(
+                    Line2D(
+                        xdata=[x, x],
+                        ydata=[y0, y1],
+                        color="black",
+                        linewidth=2,
+                    )
+                )
+
+            draw_vline(start_row, nrows - 1, 0)
+            draw_vline(start_row, nrows - 1, 1 + max_dim_2)
+
+            def set_text(i1, i2, j1, j2, t, rotate=False, fontsize=fontsize_large, **kwargs):
+                s = gs[i1, j1]
+                pos = s.get_position(fig)
+
+                s2 = gs[i2, j2]
+                pos2 = s2.get_position(fig)
+                fig.text(
+                    (pos.x0 + pos2.x1) / 2 - wspace / 2,
+                    (pos.y0 + pos2.y1) / 2 - hspace / 2,
+                    s=t,
+                    horizontalalignment="center",
+                    verticalalignment="center",
+                    rotation=90 if rotate else 0,
+                    fontsize=fontsize,
+                    **kwargs,
+                )
+
+            if projection_cv_title is None:
+                projection_cv_title = collective_variable_projection.name
+
+            set_text(1, 1, start_col - 1, start_col - 1, f"mode:", fontsize=fontsize_small)
+            for j in range(max_dim_2):
+                set_text(1, 1, start_col + j, start_col + j, f"$q_{j}$", fontsize=fontsize_small)
+
+            if cv_titles is None:
+                cv_titles = [colvar.name for colvar in collective_variables]
+
+            # label each block of rows on the left with the corresponding collective variable name
+            for i in range(len(collective_variables)):
+                set_text(
+                    start_row + (dim_1 + 1) * i + 1,
+                    start_row + (dim_1 + 1) * (i + 1) - 1,
+                    start_col - 1,
+                    start_col - 1,
+                    f"CV {collective_variables[i].name}",
+                    rotate=True,
+                    # fontsize=20,
+                    fontweight="bold",
+                )
+
+                if collective_variables[i].extra_info is not None:
+                    if extra_info_title is not None:
+                        set_text(
+                            start_row + (dim_1 + 1) * i,
+                            start_row + (dim_1 + 1) * i,
+                            start_col - 1,
+                            start_col - 1,
+                            extra_info_title,
+                            fontsize=fontsize_small,
+                        )
+
+                    for j in range(collective_variables[i].n):
+                        set_text(
+                            start_row + (dim_1 + 1) * i,
+                            start_row + (dim_1 + 1) * i,
+                            start_col + j,
+                            start_col + j,
+                            collective_variables[i].extra_info[j],
+                            fontsize=fontsize_small,
+                        )
+
+            set_text(0, 0, 0, 0, "Reference CV", fontweight="bold")
+            set_text(0, 0, start_col - 1, start_col + max_dim_2 - 1, "Mixed CV", fontweight="bold")
+            set_text(0, 0, start_col + max_dim_2, start_col + max_dim_2 + n_needed - 1, "Learned CV", fontweight="bold")
+
+            def _add_vert_colorbar(col_idx: int, cmap, label, vmin, vmax, exp=_exp):
+                cb_width = 0.015
+                top_pos = gs[2, col_idx].get_position(fig)
+                bottom_pos = gs[nrows - 1, col_idx].get_position(fig)
+                y0 = bottom_pos.y0
+                y1 = top_pos.y1
+                height = y1 - y0
+                pos_width = top_pos.x1 - top_pos.x0
+                x = top_pos.x0 + (pos_width - cb_width) / 2.0
+
+                ax_cb = fig.add_axes((x, y0, cb_width, height))
+                norm = Normalize(vmin=vmin, vmax=vmax)
+                m = ScalarMappable(norm=norm, cmap=cmap)
+                m.set_array([])
+                cbar = fig.colorbar(
+                    m,
+                    cax=ax_cb,
+                    orientation="vertical",
+                    location="left",
+                )
+
+                if exp:
+                    ticks = jnp.arange(
+                        norm.vmin,
+                        norm.vmax + 1e-5,
+                    )
+                    cbar.set_ticks(ticks)
+                    cbar.set_ticklabels([f"$10^{{{int(-t)}}}$" for t in ticks])
+
+                cbar.ax.tick_params(labelsize=fontsize_small)
+
+                cbar.set_label(label, fontsize=fontsize_large)
+                return cbar
+
+            # add colorbars for FES (second-last column) and Density (last column)
+
+            _add_vert_colorbar(2 + max_dim_2 + n_needed, cm, bar_label, vmin=s[0] / u, vmax=s[1] / u)
+
+            if name is not None:
+                name = Path(name)
+
+                if (name.suffix != ".pdf") and (name.suffix != ".png"):
+                    print(f"{name.suffix} should be pdf or png, changing to pdf")
+
+                    name = Path(
+                        f"{name}.png",
                     )
 
-        set_text(0, 0, 0, 0, "Reference CV", fontweight="bold")
-        set_text(0, 0, start_col - 1, start_col + max_dim_2 - 1, "Mixed CV", fontweight="bold")
-        set_text(0, 0, start_col + max_dim_2, start_col + max_dim_2 + n_needed - 1, "Learned CV", fontweight="bold")
+                name.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(name, dpi=dpi)
 
-        def _add_vert_colorbar(col_idx: int, cmap, label, vmin, vmax, exp=False):
-            cb_width = 0.015
-            top_pos = gs[2, col_idx].get_position(fig)
-            bottom_pos = gs[nrows - 1, col_idx].get_position(fig)
-            y0 = bottom_pos.y0
-            y1 = top_pos.y1
-            height = y1 - y0
-            pos_width = top_pos.x1 - top_pos.x0
-            x = top_pos.x0 + (pos_width - cb_width) / 2.0
-
-            ax_cb = fig.add_axes((x, y0, cb_width, height))
-            norm = Normalize(vmin=vmin, vmax=vmax)
-            m = ScalarMappable(norm=norm, cmap=cmap)
-            m.set_array([])
-            cbar = fig.colorbar(
-                m,
-                cax=ax_cb,
-                orientation="vertical",
-                location="left",
-            )
-
-            if exp:
-                ticks = jnp.arange(
-                    norm.vmin,
-                    norm.vmax + 1e-5,
-                )
-                cbar.set_ticks(ticks)
-                cbar.set_ticklabels([f"$10^{{{int(-t)}}}$" for t in ticks])
-
-            cbar.ax.tick_params(labelsize=fontsize_small)
-
-            cbar.set_label(label, fontsize=fontsize_large)
-            return cbar
-
-        # add colorbars for FES (second-last column) and Density (last column)
-
-        _add_vert_colorbar(
-            2 + max_dim_2 + n_needed, plt.get_cmap(cmap_fes), bar_label, vmin=vmin / kjmol, vmax=vmax / kjmol
-        )
-
-        if name is None:
-            plt.show()
-        else:
-            name = Path(name)
-
-            if (name.suffix != ".pdf") and (name.suffix != ".png"):
-                print(f"{name.suffix} should be pdf or png, changing to pdf")
-
-                name = Path(
-                    f"{name}.png",
-                )
-
-            name.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(name, dpi=dpi)
+        return figs
 
     @staticmethod
     def _grid_spec_iterator(

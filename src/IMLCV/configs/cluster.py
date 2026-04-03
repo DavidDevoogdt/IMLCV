@@ -36,13 +36,10 @@ class SlurmLauncher(Launcher):
 module list
 
 
-echo $SLURM_MEM_PER_CPU
-echo $SLURM_MEM_PER_GPU
-echo $SLURM_MEM_PER_NODE
 
-# Unset memory-related SLURM environment variables to avoid conflicts
-#unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
-#unset SLURM_CPU_BIND
+#Unset memory-related SLURM environment variables to avoid conflicts
+unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+unset SLURM_CPU_BIND
 
 srun  --nodes=1  -l {overrides} {app}  {command}
 
@@ -148,9 +145,6 @@ which work_queue_worker
         worker_init += f"export JAX_NUM_CPU_DEVICES=1\n"  # still has acces to all cores, but only one device, so it will use all cores for that device
         worker_init += f"export OMP_NUM_THREADS={threads_per_core}\n"
         worker_init += f"export MKL_NUM_THREADS={threads_per_core}\n"
-        # export XLA_PYTHON_CLIENT_PREALLOCATE=false
-        # worker_init += f"export XLA_PYTHON_CLIENT_PREALLOCATE=false\n"
-        # worker_init += f"export XLA_PYTHON_CLIENT_MEM_FRACTION={(1.0 - 0.1) / parsl_tasks_per_block:.2f}\n"
 
     if gpu:
         # dynamic memory allocation, both for jax and pytorch, for all blocks.
@@ -193,24 +187,16 @@ sleep 1
 
             # worker_init += "export LLVM_PATH=/opt/rocm/llvm \n "
 
-    # JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS
-    # JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES
-
     worker_init += f"export JAX_COMPILATION_CACHE_DIR={ROOT_DIR}/.jax_cache\n"
-    # worker_init += f"export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0\n"
-    # worker_init += f"export JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0\n"
-
-    # export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=$SLURM_CPUS_PER_TASK"
     worker_init += (
         f'export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads={threads_per_core}" \n'
     )
 
-    overrides = (
-        f" --ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core} --cpu-bind=verbose,cores "
-    )
+    # overrides = (
+    #     f" -vv --ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core} --cpu-bind=verbose,cores "
+    # )
 
-    # if gpu:
-    #     overrides += " --gres=gpu:1"
+    overrides = f" -vv --cpu-bind=verbose "
 
     common_kwargs = {
         # "channel": channel,
@@ -228,11 +214,9 @@ sleep 1
 
     if provider == "slurm":
         if memory_per_core is not None:
-            if mem is None:
-                mem = total_cores * memory_per_core
-            else:
-                if mem < total_cores * memory_per_core:
-                    mem = total_cores * memory_per_core
+            mem = total_cores * memory_per_core
+
+            print(f"{total_cores=}, {memory_per_core=}, {mem=}")
 
         vsc_kwargs = {
             "clusters": cpu_cluster if not gpu else gpu_cluster,
@@ -240,7 +224,7 @@ sleep 1
             "account": account,
             "exclusive": False,
             # "cores_per_node": 1,#total_cores,
-            "mem_per_node": mem,
+            # "mem_per_node": int(mem) if mem is not None else None,
             "walltime": wall_time,
             "cmd_timeout": 60,
         }
@@ -248,9 +232,14 @@ sleep 1
         # no exports from submission env
         sheduler_options = f"""
 #SBATCH --cpus-per-task={threads_per_core}
+#SBATCH --threads-per-core=1
+#SBATCH --hint=nomultithread
 #SBATCH -v
 
  """
+
+        if memory_per_core is not None:
+            sheduler_options += f"\n#SBATCH --mem-per-cpu={memory_per_core}\n"
 
         if gpu:
             sheduler_options += f"\n#SBATCH --gres=gpu:1\n"
@@ -368,6 +357,8 @@ def config(
         py_env=py_env,
         executor=executor,
         account=account,
+        # mem_per_cpu=mem_per_cpu,
+        memory_per_core=memory_per_core,
         # apptainer=apptainer,
     )
 
@@ -486,8 +477,6 @@ def config(
                 reference, pre_command, ref_com = get_slurm_provider(
                     gpu=True,
                     label=label,
-                    memory_per_core=memory_per_core,
-                    mem=min_memery_per_node,
                     init_blocks=0,
                     min_blocks=0,
                     max_blocks=256,
@@ -513,8 +502,6 @@ def config(
 
                 reference, pre_command, ref_com = get_slurm_provider(
                     label=label,
-                    memory_per_core=memory_per_core,
-                    mem=min_memery_per_node,
                     init_blocks=0,
                     min_blocks=0,
                     max_blocks=2048,

@@ -272,9 +272,9 @@ class RbfBias(Bias):
         cv: CV,
         start=None,
         step=None,
-        kernel="thin_plate_spline",
+        kernel="multiquadric",
         epsilon=None,
-        smoothing: float | None = -1.0,
+        smoothing=1.0,
         degree=None,
         finalized=True,
         sigma: Array | None = None,
@@ -312,9 +312,9 @@ class RbfBias(Bias):
     def from_grid_bias(
         self,
         bias: GridBias,
-        kernel="thin_plate_spline",
+        kernel="multiquadric",
         epsilon=None,
-        smoothing: Array | float | None = -1.0,
+        smoothing=1.0,
         degree=None,
     ) -> RbfBias:
         Warning("this method is untested")

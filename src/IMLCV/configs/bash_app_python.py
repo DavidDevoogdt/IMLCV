@@ -324,7 +324,7 @@ if __name__ == "__main__":
     import jax.numpy as jnp
 
     # jax.config.update("jax_platform_name", "cpu")
-    # jax.config.update("jax_enable_x64", True)
+    jax.config.update("jax_enable_x64", True)
     # jax.config.update("jax_pmap_no_rank_reduction", False)
 
     # import torch

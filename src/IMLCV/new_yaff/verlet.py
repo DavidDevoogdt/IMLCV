@@ -377,12 +377,20 @@ class VerletIntegrator(MyPyTreeNode):
 
         # print(f"verlet jit compile {self.counter=}")
 
+        abstract_shape = jax.eval_shape(lambda v, s: v.pre(s), verlet_hook, self)
+
+        def identity_cast_pre(verlet_hook, self):
+            # Map the current values to the dtypes expected by the abstract output
+            return jax.tree_util.tree_map(
+                lambda val, target: jnp.asarray(val, dtype=target.dtype), (verlet_hook, self), abstract_shape
+            )
+
         verlet_hook, self = jax.lax.cond(
             verlet_hook.expects_call(self.counter),
-            lambda self, verlet_hook: verlet_hook.pre(self),
-            lambda self, verlet_hook: (verlet_hook, self),
-            self,
+            lambda verlet_hook, self: verlet_hook.pre(self),
+            identity_cast_pre,
             verlet_hook,
+            self,
         )
 
         # Regular verlet step
@@ -412,12 +420,20 @@ class VerletIntegrator(MyPyTreeNode):
 
         # Allow specialized verlet hooks to modify the state after the step
 
+        abstract_shape = jax.eval_shape(lambda v, s: v.post(s), verlet_hook, self)
+
+        def identity_cast_post(verlet_hook, self):
+            # Map the current values to the dtypes expected by the abstract output
+            return jax.tree_util.tree_map(
+                lambda val, target: jnp.asarray(val, dtype=target.dtype), (verlet_hook, self), abstract_shape
+            )
+
         verlet_hook, self = jax.lax.cond(
             verlet_hook.expects_call(self.counter),
-            lambda self, verlet_hook: verlet_hook.post(self),
-            lambda self, verlet_hook: (verlet_hook, self),
-            self,
+            lambda verlet_hook, self: verlet_hook.post(self),
+            identity_cast_post,
             verlet_hook,
+            self,
         )
 
         # Common post-processing of a single step

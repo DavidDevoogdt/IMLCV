@@ -6,10 +6,12 @@ from itertools import combinations_with_replacement
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.linalg import cho_factor, cho_solve
 from scipy.special import comb
 
 from IMLCV.base.CV import CV, CvMetric
 from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.tools._rbfinterp_pythran import (
     NAME_TO_FUNC,
     cv_vals,
@@ -203,10 +205,55 @@ def _build_and_solve_system(
     b = jnp.vstack([d, jnp.zeros((r, s))])
 
     if smoothing is not None:
-        print(f"adding smoothing={smoothing}")
-        K += smoothing**2 * jnp.diag(sigma**2) if sigma is not None else jnp.diag(smoothing**2)
+        # print(f"adding smoothing={smoothing}")
+        s = smoothing * jnp.diag(sigma**2) if sigma is not None else smoothing * jnp.eye(p)
+        print(f"added smoothing={jnp.diag(s)=}")
 
-    # print(f"{K=} {sigma=}")
+        K += s
+
+    # same equations are solved by:
+    # K w_0 = d
+    # K w_1 = P
+    # (P^T w_1) a = P^T w_0
+    # w = w_0 - w_1 a
+
+    # K is psd
+    def solve_saddle_schur(K, P, d):
+        """
+        K: (n, n) symmetric positive definite (with smoothing)
+        P: (n, r) polynomial matrix
+        d: (n, s) data values
+        """
+        # 1. Factorize the SPD part (K + sigma^2 I)
+        L, low = cho_factor(K, lower=True)
+
+        print(f"cho_factor done, {L=}, {K=}")
+
+        # 2. Solve Kw0 = d and Kw1 = P
+        # We solve them together for efficiency
+        rhs = jnp.concatenate([d, P], axis=1)
+        sol = cho_solve((L, low), rhs)
+
+        n_d = d.shape[1]
+        w0 = sol[:, :n_d]
+        w1 = sol[:, n_d:]
+
+        # 3. Form the Schur Complement: S = P^T * K^-1 * P
+        # This is a small (r, r) matrix (e.g., 3x3 or 6x6)
+        S = P.T @ w1
+
+        # 4. Solve the small system for polynomial coefficients 'a'
+        # S * a = P^T * w0
+        a = jnp.linalg.solve(S, P.T @ w0)
+
+        # 5. Compute the final RBF weights 'w'
+        w = w0 - w1 @ a
+
+        return jnp.concatenate([w, a], axis=0)
+
+    # not all kernels are psd, we need to classify
+    # coeffs = solve_saddle_schur(K, P, d)
+    # print(f"{coeffs=}")
 
     A = jnp.block(
         [
@@ -215,7 +262,7 @@ def _build_and_solve_system(
         ]
     )
 
-    coeffs = jax.scipy.linalg.solve(A, b)
+    coeffs = jax.scipy.linalg.solve(A, b, assume_a="her")
 
     # print(f"{coeffs=}")
 
@@ -249,7 +296,7 @@ class RBFInterpolator(MyPyTreeNode):
         metric: CvMetric,
         d: jax.Array,
         smoothing: float | None | jax.Array = -1,
-        kernel="thin_plate_spline",
+        kernel="multiquadric",
         epsilon=None,
         degree=None,
         smoothing_solver: str | None = "gml",
@@ -281,7 +328,7 @@ class RBFInterpolator(MyPyTreeNode):
             raise ValueError(f"`kernel` must be one of {_AVAILABLE}.")
 
         # if metric.periodicities.any():
-        #     if kernel in ["linear", "thin_plate_spline", "cubic", "quintic", "thin_plate_spline"]:
+        #     if kernel in ["linear", "thin_plate_spline", "multiquadric", "quintic", "thin_plate_spline"]:
         #         print(f"for periodic CV, choose decaying kernel. Switching from {kernel=} to inverse_quadratic ")
 
         #         kernel = "inverse_quadratic"
@@ -332,7 +379,7 @@ class RBFInterpolator(MyPyTreeNode):
                 loocv = True
 
         if sigma is None:
-            sigma = jnp.ones(ny)
+            sigma = 0.1 * jnp.ones(ny) * kjmol
 
         # sigma_inv_d = d / sigma
 

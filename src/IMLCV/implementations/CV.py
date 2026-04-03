@@ -3,22 +3,23 @@ from itertools import combinations, permutations
 
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from jax import Array
 from jaxopt.linear_solve import solve_normal_cg
 
 from IMLCV.base.CV import (
     CV,
     CollectiveVariable,
+    CvFunBase,
     CvMetric,
     CvTrans,
     NeighbourList,
     NeighbourListInfo,
     SystemParams,
-    CvFunBase,
 )
 from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.base.UnitsConstants import angstrom
-from flax import nnx
+
 ######################################
 #       CV transformations           #
 ######################################
@@ -1216,18 +1217,17 @@ import jax.numpy as jnp
 
 
 def _graph_neural_network_model(model_kwargs, key=0):
+    import e3nn_jax as e3nn
+    from e3nn_jax import Irrep, Irreps
     from mace_jax.modules import (
-        LinearNodeEmbeddingBlock,
-        RadialEmbeddingBlock,
-        InteractionBlock,
         EquivariantProductBasisBlock,
+        InteractionBlock,
+        LinearNodeEmbeddingBlock,
         NonLinearReadoutBlock,
+        RadialEmbeddingBlock,
         RealAgnosticInteractionBlock,
     )
     from mace_jax.modules.models import MACE
-
-    import e3nn_jax as e3nn
-    from e3nn_jax import Irreps, Irrep
 
     # print(f"creating graph neural network model with {model_kwargs=}")
 
@@ -1352,7 +1352,7 @@ def _graph_neural_network_model_apply(
     # print(f"model output {out=}")
 
     import e3nn_jax as e3nn
-    from e3nn_jax import Irreps, Irrep
+    from e3nn_jax import Irrep, Irreps
 
     hidden_irreps = model_kwargs["hidden_irreps"]
 
@@ -1446,10 +1446,10 @@ def graph_neural_network(
 
     hidden_irreps = ""
     for l in range(L + 1):
-        if inversion:
-            hidden_irreps += f"{channels}x{l}o + {channels}x{l}e + "
-        else:
-            hidden_irreps += f"{channels}x{l}{'o' if l % 2 else 'e'} + "
+        # if inversion:
+        #     hidden_irreps += f"{channels}x{l}o + {channels}x{l}e + "
+        # else:
+        hidden_irreps += f"{channels}x{l}{'o' if l % 2 else 'e'} + "
 
     # print(f"hidden_irreps before trimming: {hidden_irreps}")
 

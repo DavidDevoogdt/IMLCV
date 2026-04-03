@@ -133,10 +133,18 @@ class TBCombination(BarostatHook):
 
             return self, iterative
 
+        abstract_baro = jax.eval_shape(baro_call, self, iterative)
+
+        def identity_cast_baro(self, iterative):
+            # Map the current values to the dtypes expected by the abstract output
+            return jax.tree_util.tree_map(
+                lambda val, target: jnp.asarray(val, dtype=target.dtype), (self, iterative), abstract_baro
+            )
+
         self, iterative = jax.lax.cond(
             jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_baro == 0),
             baro_call,
-            lambda self, iterative: (self, iterative),
+            identity_cast_baro,
             self,
             iterative,
         )
@@ -153,10 +161,19 @@ class TBCombination(BarostatHook):
 
             return self, iterative
 
+        # 1. Get the abstract output of the thermo branch
+        abstract_thermo = jax.eval_shape(thermo_call, self, iterative)
+
+        def identity_cast_thermo(self, iterative):
+            # Map the current values to the dtypes expected by the abstract output
+            return jax.tree_util.tree_map(
+                lambda val, target: jnp.asarray(val, dtype=target.dtype), (self, iterative), abstract_thermo
+            )
+
         self, iterative = jax.lax.cond(
             jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_thermo == 0),
             thermo_call,
-            lambda self, iterative: (self, iterative),
+            identity_cast_thermo,
             self,
             iterative,
         )
@@ -176,10 +193,19 @@ class TBCombination(BarostatHook):
 
             return self, iterative
 
+        # 1. Get the abstract output of the thermo branch
+        abstract_thermo = jax.eval_shape(thermo_call, self, iterative)
+
+        def identity_cast_thermo(self, iterative):
+            # Map the current values to the dtypes expected by the abstract output
+            return jax.tree_util.tree_map(
+                lambda val, target: jnp.asarray(val, dtype=target.dtype), (self, iterative), abstract_thermo
+            )
+
         self, iterative = jax.lax.cond(
             jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_thermo == 0),
             thermo_call,
-            lambda self, iterative: (self, iterative),
+            identity_cast_thermo,
             self,
             iterative,
         )
@@ -199,10 +225,18 @@ class TBCombination(BarostatHook):
 
             return self, iterative
 
+        abstract_baro = jax.eval_shape(baro_call, self, iterative)
+
+        def identity_cast_baro(self, iterative):
+            # Map the current values to the dtypes expected by the abstract output
+            return jax.tree_util.tree_map(
+                lambda val, target: jnp.asarray(val, dtype=target.dtype), (self, iterative), abstract_baro
+            )
+
         self, iterative = jax.lax.cond(
             jnp.logical_and(iterative.counter >= self.start, (iterative.counter - self.start) % self.step_baro == 0),
             baro_call,
-            lambda self, iterative: (self, iterative),
+            identity_cast_baro,
             self,
             iterative,
         )
@@ -1497,30 +1531,3 @@ class TadmorBarostat(BarostatHook):
 
     def _compute_angular_tensor(self, pos, vel, masses):
         return jnp.dot(pos.T, masses.reshape(-1, 1) * vel)
-
-
-# class MTKAttributeStateItem(StateItem):
-#     key: str = "MTKattr"
-#     attr: str
-
-#     def get_value(self, iterative: VerletIntegrator):
-#         baro = None
-
-#         hook = iterative.verlet_hook
-#         if isinstance(hook, MTKBarostat):
-#             baro = hook
-
-#         elif isinstance(hook, TBCombination):
-#             if isinstance(hook.barostat, MTKBarostat):
-#                 baro = hook.barostat
-
-#         if baro is None:
-#             raise TypeError("Iterative does not contain an MTKBarostat hook.")
-#         if self.key.startswith("baro_chain_"):
-#             if baro.baro_thermo is not None:
-#                 key = self.key.split("_")[2]
-#                 return getattr(baro.baro_thermo.chain, key)
-#             else:
-#                 return 0
-#         else:
-#             return getattr(baro, self.attr)
