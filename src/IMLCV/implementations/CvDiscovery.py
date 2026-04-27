@@ -469,13 +469,16 @@ class TransformerMAF(Transformer):
     use_w: bool = True
 
     min_t_frac: float = 0.1
-    max_t_cutoff = 1 * nanosecond
+    max_t_cutoff: float = 0.01 * nanosecond
     periodicities: jax.Array | None = None
+    calc_pi: bool = True
 
     add_1: bool = True
 
     trans: CvTrans | None = None
     T_scale: float = 1.0
+
+    beta_timecon: float | None = None
 
     disciminating_CVs: CV | None = None
 
@@ -630,10 +633,12 @@ class TransformerMAF(Transformer):
                 nl=dlo.nl,
                 nl_t=dlo.nl_t,
                 w=w if self.use_w else [jnp.ones_like(x) for x in w],
+                w_t=dlo._weights_t if self.use_w else [jnp.ones_like(x) for x in w],
                 rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
+                rho_t=dlo._rho_t if self.use_w else [jnp.ones_like(x) for x in w],
                 chunk_size=chunk_size,
                 macro_chunk=macro_chunk,
-                calc_pi=True,
+                calc_pi=self.calc_pi,
                 add_1=self.add_1,
                 eps_pre=self.eps_pre,
                 eps=self.eps,
@@ -653,6 +658,7 @@ class TransformerMAF(Transformer):
                 batch_size=self.batch_size,
                 batch_chunk_size=self.batch_chunk_size,
                 init_learnable_params=self.re_init,
+                beta_timecon=self.beta_timecon,
                 # shrinkage_method="BC",
             )
 

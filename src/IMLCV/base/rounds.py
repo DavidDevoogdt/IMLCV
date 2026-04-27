@@ -39,7 +39,16 @@ from IMLCV.base.CV import (
 from IMLCV.base.CVDiscovery import Transformer
 from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, field, jit_decorator, vmap_decorator
 from IMLCV.base.MdEngine import EagerTrajectoryInfo, FullTrajectoryInfo, MDEngine, StaticMdInfo, TrajectoryInfo
-from IMLCV.base.UnitsConstants import angstrom, atomic_masses, boltzmann, kelvin, kjmol, nanosecond, picosecond
+from IMLCV.base.UnitsConstants import (
+    angstrom,
+    atomic_masses,
+    boltzmann,
+    kelvin,
+    kjmol,
+    nanosecond,
+    picosecond,
+    nanometer,
+)
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import DTBias, GridMaskBias, RbfBias, _clip
@@ -332,6 +341,9 @@ class Rounds:
         plot_points: bool = True,
         dlo_kwargs={},
     ):
+        if "equilibration_time" not in dlo_kwargs:
+            dlo_kwargs["equilibration_time"] = None
+
         if c is None:
             c = self.cv
 
@@ -394,6 +406,9 @@ class Rounds:
         plot_fes=True,
         cv_names: list[str] | None = None,
     ):
+        if "equilibration_time" not in dlo_kwargs:
+            dlo_kwargs["equilibration_time"] = None
+
         if c is None:
             c = self.cv
 
@@ -751,6 +766,7 @@ class Rounds:
                 verbose=True,
                 num=1,
                 load_weight=True,
+                equilibration_time=None,
             )
 
             if load_extra_info:
@@ -1124,7 +1140,7 @@ class Rounds:
         preselect_filter: int = 1,
         n_skip: int | None = None,
         load_sp=True,
-        equilibration_time: float | None = None,
+        equilibration_time: float | None = -1,
         use_energies_bincounts: bool = False,
     ) -> DataLoaderOutput:
         if cv is None:
@@ -1139,7 +1155,10 @@ class Rounds:
             n_skip = None
 
         if equilibration_time:
-            print(f"{equilibration_time/picosecond=}")
+            if equilibration_time == -1:
+                print("WARNING: equilibration_time is -1, computing from data")
+            else:
+                print(f"{equilibration_time/picosecond=}")
 
         if n_skip is not None:
             print(f"{n_skip=}")
@@ -1152,7 +1171,7 @@ class Rounds:
 
             dt = sti.timestep * sti.save_step
             n = int(lag_tau / dt)
-            print(f"converting lag_tau {lag_tau:.3f} ps to lag_n {n} with dt={dt}")
+            print(f"converting lag_tau {lag_tau / picosecond:.3f} ps to lag_n {n} with dt={dt / picosecond} ps")
             lag_n = n
 
         if new_r_cut == -1:
@@ -1301,6 +1320,9 @@ class Rounds:
 
                 return n_tot
 
+            if equilibration_time == -1:
+                eq_arr = []
+
             for round_info, traj_info in self.iter(
                 start=start,
                 stop=stop,
@@ -1324,16 +1346,32 @@ class Rounds:
                     # print("adding traweights=jectory")
 
                 if equilibration_time is not None:
-                    if equilibration_n is None:
+                    if equilibration_time == -1:
+                        [cutoff], _ = DataLoaderOutput._correlation_time(
+                            cv_0=[_ti.CV],
+                            find_cutoff=True,
+                            method=time_correlation_method,
+                        )
+
+                        eq_arr.append(cutoff)
+
+                        if _ti.size <= cutoff:
+                            n_tot = _p("x", n_tot)
+
+                            continue
+
+                        _ti = _ti[cutoff:]
+
+                    else:
                         equilibration_n = int(equilibration_time / (sti_c.timestep * sti_c.save_step))
-                        print(f"{equilibration_n=}")
+                        # print(f"{equilibration_n=}")
 
-                    if _ti.size <= equilibration_n:
-                        n_tot = _p("x", n_tot)
+                        if _ti.size <= equilibration_n:
+                            n_tot = _p("x", n_tot)
 
-                        continue
+                            continue
 
-                    _ti = _ti[equilibration_n:]
+                        _ti = _ti[equilibration_n:]
 
                 elif n_skip is not None:
                     if _ti.size <= n_skip:
@@ -1498,6 +1536,9 @@ class Rounds:
             if len(ti_c) == 0:
                 continue
 
+            if equilibration_time == -1:
+                print(f"{jnp.array(eq_arr)=}   {jnp.array(eq_arr)*(sti_c.timestep * sti_c.save_step)/picosecond=}")
+
             if load_weight:
                 w_c = loaded_w
                 d_c = loaded_rho
@@ -1537,6 +1578,8 @@ class Rounds:
                     # time_series=time_series,
                     ground_bias=ground_bias_c,
                 )
+
+                # dlo._correlation_time()
 
                 # select points according to free energy divided by histogram count
 
@@ -1809,9 +1852,15 @@ class Rounds:
                     x = jnp.abs(x)
                     # logsumexp trick
 
-                    return jnp.where(x < 1e-5, 0, jnp.log(1 - jnp.exp(-2 * x)) + x - jnp.log(x))
+                    x_safe = jnp.where(x < 1e-5, 1e-5, x)
 
-                log_dt = jnp.log(dt) + sum_u / 2 - u0 + log_sinhc(diff_u / 2)
+                    t1 = jnp.log(1 - jnp.exp(-2 * x_safe))
+                    t2 = x_safe
+                    t3 = -jnp.log(x_safe)
+
+                    return jnp.where(x < 1e-5, 0, t1 + t2 + t3)
+
+                log_dt = jnp.log(dt) - sum_u / 2 + u0 + log_sinhc(diff_u / 2)
 
                 log_dt = jnp.where(jnp.arange(log_dt.shape[0]) <= n, -jnp.inf, log_dt)
                 log_t = jax.lax.cumlogsumexp(log_dt)
@@ -1849,7 +1898,10 @@ class Rounds:
                     if scale_times:
                         scales = weights[n]
 
-                        _u = jnp.log(scales)
+                        # w = e^(-U)
+                        _u = -jnp.log(scales)
+
+                        _u = jnp.where(jnp.isfinite(_u), _u, 1e10)
 
                         _su = _u[1:] + _u[:-1]
                         _du = _u[1:] - _u[:-1]
@@ -1857,11 +1909,16 @@ class Rounds:
                         assert ti_i.t is not None
                         dt = ti_i.t[1:] - ti_i.t[:-1]
 
+                        dt = jnp.where(dt > 0, dt, timestep)  # replace non-finite dt with a small value
+
                         from IMLCV.base.UnitsConstants import femtosecond
 
-                        lag_indices_max, lag_indices_max2, bools, p = get_lag_idx(
-                            jnp.arange(scales.shape[0]), _u, _su, _du, dt
-                        )
+                        # print(f"{jnp.isnan(_u).any()=}, {jnp.isinf(_u).any()=}, {_u.shape=}")
+
+                        with jax.debug_nans():
+                            lag_indices_max, lag_indices_max2, bools, p = get_lag_idx(
+                                jnp.arange(scales.shape[0]), _u, _su, _du, dt
+                            )
 
                         c = jnp.sum(bools)
 
@@ -1968,6 +2025,11 @@ class Rounds:
 
                     print(f"new choice {out=}")
 
+                    nbstack = jnp.hstack(nb)
+                    psstack = jnp.hstack(ps)
+
+                    mask = jnp.isfinite(nbstack) | jnp.isfinite(psstack)
+
                     ps_stack = jnp.where(
                         jnp.logical_and(
                             jnp.logical_and(
@@ -2043,7 +2105,13 @@ class Rounds:
                     print(f"{len(F)=} {len(weight)=} {len(density)=} {len(nb)=}")
 
                     for i, (Fi, wi, di, nbi) in enumerate(zip(F, weight, density, nb)):
-                        density_out.append(jnp.exp(beta * Fi + jnp.log(wi) + jnp.log(di)))
+                        do = jnp.where(
+                            jnp.isfinite(Fi) & jnp.isfinite(wi) & jnp.isfinite(di) & (nbi != 0),
+                            jnp.exp(beta * Fi + jnp.log(wi) + jnp.log(di)),
+                            0.0,
+                        )
+
+                        density_out.append(do)
                         weight_out.append(jnp.exp(-beta * Fi))
 
                         if calculate_std:
@@ -3264,6 +3332,7 @@ class Rounds:
                 verbose=True,
                 # lag_n=lag_n,
                 recalc_bounds=False,
+                equilibration_time=None,
             )
 
             T = dlo_data.sti.T
@@ -3289,21 +3358,21 @@ class Rounds:
 
             # w = jnp.hstack(dlo_data._weights) * jnp.exp(-e_wall * beta) * jnp.hstack(dlo_data._rho)
 
-            if use_energies:
-                # ener_stack = (
-                #     f_scale
-                #     * common_bias.compute_from_cv(
-                #         cvs=cv_stack,
-                #         chunk_size=chunk_size,
-                #     )[0]
-                # )  # -F
+            # if use_energies:
+            #     # ener_stack = (
+            #     #     f_scale
+            #     #     * common_bias.compute_from_cv(
+            #     #         cvs=cv_stack,
+            #     #         chunk_size=chunk_size,
+            #     #     )[0]
+            #     # )  # -F
 
-                ener_stack = jnp.hstack([x.e_pot for x in dlo_data.ti])  # type: ignore
+            #     ener_stack = jnp.hstack([x.e_pot for x in dlo_data.ti])  # type: ignore
 
-                if dlo_data.sti.P is not None:
-                    ener_stack += jnp.hstack([x.sp.volume() for x in dlo_data.ti]) * dlo_data.sti.P  # type: ignore
+            #     if dlo_data.sti.P is not None:
+            #         ener_stack += jnp.hstack([x.sp.volume() for x in dlo_data.ti]) * dlo_data.sti.P  # type: ignore
 
-                    print("using energies")
+            #         print("using energies")
 
             # get  weights, and correct for ground state bias.
             # this corrects for the fact that the samples are not uniformly distributed
@@ -3338,10 +3407,10 @@ class Rounds:
 
                 ener = bias.compute_from_cv(cvs=cv_stack, chunk_size=chunk_size)[0]
 
-                if use_energies:
-                    if ener_stack is not None:
-                        # print(f"using energies")
-                        ener += ener_stack
+                # if use_energies:
+                #     if ener_stack is not None:
+                #         # print(f"using energies")
+                #         ener += ener_stack
 
                 ener += e_wall
 
@@ -3482,7 +3551,7 @@ class Rounds:
         verbose: bool = False,
         koopman: bool = True,
         output_FES_bias=False,
-        equilibration_time=None,
+        equilibration_time=-1,
         n_max_lin: int = 100,
     ):
         if cv_round_from is None:
@@ -3593,7 +3662,7 @@ class Rounds:
         verbose=True,
         koopman=True,
         output_FES_bias=False,
-        equilibration_time=None,
+        equilibration_time=-1,
         n_max_lin: int = 100,
     ):
         if dlo is None:
@@ -4011,7 +4080,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
             return (alpha_factors, h, obs_array)
 
-        alpha_factors, h, obs = macro_chunk_map_fun(
+        (alpha_factors, h, obs) = macro_chunk_map_fun(
             f=_f_func,
             # op=data_nums[0].stack,
             y=data_nums,
@@ -4455,8 +4524,8 @@ class DataLoaderOutput(MyPyTreeNode):
         return new_rho
 
     @staticmethod
-    def _solve_wham(log_U_ik_nl, H_ik_nl, tau_i_nl, verbose=False, compute_std=False):
-        print(f"{tau_i_nl=}")
+    def _solve_wham(log_U_ik_nl, H_ik_nl, verbose=False, compute_std=False):
+        # print(f"{tau_i_nl=}")
 
         def log_sum_exp_safe(*x: Array, min_val=None):
             _x: Array = jnp.nansum(jnp.stack(x, axis=0), axis=0)  # type:ignore
@@ -4471,7 +4540,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 print(f"using {min_val=}")
                 out: Array = jnp.where(out < min_val, min_val, out)  # type:ignore
 
-            return out
+            return out + 1e-10
 
         def get_N_H(mask_ik: jax.Array, H_ik: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
             # print(f"{mask_i.shape=}  {H_ik.shape=} ")
@@ -4483,8 +4552,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
             return _N_i, _H_k, _H_ik
 
-        def get_F_i(F_k: jax.Array, mask_ik: jax.Array, log_x: tuple[Array, Array, Array]):
-            log_U_ik, _, _ = log_x
+        def get_F_i(F_k: jax.Array, mask_ik: jax.Array, log_x: tuple[Array, Array]):
+            log_U_ik, _ = log_x
 
             log_U_ik = jnp.where(mask_ik, log_U_ik, jnp.inf)
 
@@ -4506,9 +4575,9 @@ class DataLoaderOutput(MyPyTreeNode):
         def get_F_k(
             F_i: Array,
             mask_ik: Array,
-            log_x: tuple[Array, Array, Array],
+            log_x: tuple[Array, Array],
         ):
-            log_U_ik, H_ik, tau_i_nl = log_x
+            log_U_ik, H_ik = log_x
 
             # mask_i = jnp.isfinite(F_i)
 
@@ -4521,18 +4590,16 @@ class DataLoaderOutput(MyPyTreeNode):
             log_ps_ik = vmap_decorator(
                 vmap_decorator(
                     _s,
-                    in_axes=(None, None, 0, None, 0),
+                    in_axes=(None, 0, None, 0),
                 ),  # k
-                in_axes=(0, 0, 0, 0, None),
+                in_axes=(0, 0, 0, None),
             )(
                 # -jnp.log(H_ik),
                 jnp.log(N_i),
-                -jnp.log(tau_i_nl),
                 -log_U_ik,
                 +F_i,
-                -vmap_decorator(log_sum_exp_safe, in_axes=(None, None, None, 1))(
+                -vmap_decorator(log_sum_exp_safe, in_axes=(None, None, 1))(
                     jnp.log(N_i),
-                    -jnp.log(tau_i_nl),
                     F_i,
                     -log_U_ik,
                 ),
@@ -4556,10 +4623,10 @@ class DataLoaderOutput(MyPyTreeNode):
                 -jnp.log(N_i),
             )
 
-            # mask_ik = jnp.logical_and(
-            #     jnp.logical_and(mask_ik, jnp.isfinite(log_w_ik)),
-            #     jnp.logical_and(jnp.isfinite(log_ps_ik), jnp.isfinite(log_w_ik)),
-            # )
+            mask_ik = jnp.logical_and(
+                mask_ik,
+                jnp.logical_and(jnp.isfinite(log_ps_ik), jnp.isfinite(log_w_ik)),
+            )
 
             # mask_ik = jnp.logical_and(
             #     mask_ik,
@@ -4569,9 +4636,9 @@ class DataLoaderOutput(MyPyTreeNode):
             #     ),
             # )
 
-            # log_ps_ik = jnp.where(mask_ik, log_ps_ik, -jnp.inf)
-            # log_w_ik = jnp.where(mask_ik, log_w_ik, -jnp.inf)
-            # log_dens_ik = jnp.where(mask_ik, log_dens_ik, -jnp.inf)
+            log_ps_ik = jnp.where(mask_ik, log_ps_ik, -jnp.inf)
+            log_w_ik = jnp.where(mask_ik, log_w_ik, -jnp.inf)
+            log_dens_ik = jnp.where(mask_ik, log_dens_ik, -jnp.inf)
 
             log_ps_ik = jnp.where(jnp.isfinite(log_ps_ik), log_ps_ik, -jnp.inf)
             log_w_ik = jnp.where(jnp.isfinite(log_w_ik), log_w_ik, -jnp.inf)
@@ -4583,13 +4650,13 @@ class DataLoaderOutput(MyPyTreeNode):
                 log_ps_ik,
             )  # sum over i
 
-            # F_k = jnp.where(jnp.isfinite(F_k), F_k, -jnp.inf)
+            F_k = jnp.where(jnp.isfinite(F_k), F_k, -jnp.inf)
 
             F_k = norm_F_k(F_k)
             return F_k, (mask_ik, log_dens_ik, log_w_ik, log_ps_ik)
 
         @jit_decorator
-        def T(x: tuple[Array, Array], log_x: tuple[Array, Array, Array]):
+        def T(x: tuple[Array, Array], log_x: tuple[Array, Array]):
             F_k, mask_ik = x
             mask_ik = jnp.where(mask_ik == 1.0, True, False)
             # F_k = -jnp.log(a_k)/
@@ -4600,7 +4667,7 @@ class DataLoaderOutput(MyPyTreeNode):
             return (F_k, jnp.where(mask_ik, 1.0, 0.0)), (F_i, log_w_ik, log_ps_ik, log_dens_ik)
 
         @jit_decorator
-        def norm(x: tuple[Array, Array], log_x: tuple[Array, Array, Array]):
+        def norm(x: tuple[Array, Array], log_x: tuple[Array, Array]):
             F_k, mask_ik = x
             (F_k_p, _), _ = T((F_k, mask_ik), log_x)
 
@@ -4624,7 +4691,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
         import jaxopt
 
-        log_x_mask = (log_U_ik_nl, H_ik_nl, tau_i_nl)
+        log_x_mask = (log_U_ik_nl, H_ik_nl)
 
         loss_f = True
 
@@ -4648,7 +4715,12 @@ class DataLoaderOutput(MyPyTreeNode):
             return -loss  # + reg
 
         if loss_f:
-            solver = jaxopt.LBFGS(fun=loss, maxiter=2000, tol=1e-10, verbose=True)
+            solver = jaxopt.LBFGS(
+                fun=loss,
+                maxiter=10000,
+                tol=1e-10,
+                verbose=True,
+            )
             out = solver.run(
                 jnp.zeros(N_i.shape, dtype=jnp.float_),
                 N_i=N_i,
@@ -4742,15 +4814,14 @@ class DataLoaderOutput(MyPyTreeNode):
 
             len_i, len_k = H_ik.shape
 
-            print(f"{H_ik} {tau_i_nl=}")
-            H_ik_tau = H_ik / tau_i_nl.reshape((-1, 1))
+            H_ik_tau = H_ik
 
             N_i_tau = jnp.sum(H_ik_tau, axis=1)
 
-            mask_i = jnp.any(mask_ik, axis=1)
-            mask_k = jnp.any(mask_ik, axis=0)
+            mask_i = jnp.any(mask_ik_nl, axis=1)
+            mask_k = jnp.any(mask_ik_nl, axis=0)
 
-            print(f"{mask_i=} {mask_k=}")
+            # print(f"{mask_i=} {mask_k=}")
 
             H_ik_mask = H_ik[mask_i, :][:, mask_k]
             log_U_ik_mask = log_U_ik_nl[mask_i, :][:, mask_k]
@@ -4761,7 +4832,7 @@ class DataLoaderOutput(MyPyTreeNode):
             H_ik_tau_mask = H_ik_tau[mask_i, :][:, mask_k]
 
             log_N_i_tau_mask = jnp.log(N_i_tau_mask)
-            print(f"{N_i_tau_mask=}")
+            # print(f"{N_i_tau_mask=}")
 
             log_N_tot_tau_mask = jnp.log(jnp.sum(H_ik_tau_mask))
 
@@ -5026,18 +5097,13 @@ class DataLoaderOutput(MyPyTreeNode):
             correlation_method=correlation_method,
         )
 
-        print(f"{tau_i=}")
+        if correlation_method is not None:
+            print(f"{tau_i=}")
 
         len_i = len(u_unstacked)
         len_k = jnp.sum(hist_mask)
         log_U_ik = jnp.full((len_i, len_k), jnp.inf)
         H_ik = jnp.zeros((len_i, len_k))
-
-        # H_ik_tau = H_ik / tau_i.reshape((-1, 1))
-
-        # N_i_tau = jnp.sum(H_ik_tau, axis=1)
-
-        # print(f"{labels=}")
 
         label_i = []
 
@@ -5169,8 +5235,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 sigma_Fk_nl,
             ) = self._solve_wham(
                 log_U_ik_nl,
-                H_ik_nl,
-                tau_i_nl,
+                H_ik_nl / tau_i_nl[:, None],
                 verbose=verbose,
                 compute_std=compute_std,
             )
@@ -5191,7 +5256,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 # sigma_Fi = sigma_Fi.at[arg_mi].set(sigma_Fi_nl)
 
         N_i_tau = jnp.sum(H_ik, axis=1) / tau_i
-        print(f"{N_i_tau=}")
+        # print(f"{N_i_tau=}")
 
         F_k /= beta
         # F_i /= beta
@@ -5244,6 +5309,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
             return out
 
+        # print(f"{w_ik=}")
+
         for i in range(len_i):
             k_arr = grid_nums_mask[i].cv.reshape(-1)
 
@@ -5266,6 +5333,9 @@ class DataLoaderOutput(MyPyTreeNode):
             # dw_maxs.append(jnp.max(dw))
 
             w = jnp.where(mask, 0.0, w_ik[i, k_arr]) * dw
+
+            # print(f"{w=} ")
+
             ps = jnp.where(mask, 0.0, ps_ik[i, k_arr])
             dens = jnp.where(mask, 0.0, dens_ik[i, k_arr]) * dw_inv
             n_bin = jnp.where(mask, 0.0, H_ik[i, k_arr])
@@ -5296,7 +5366,10 @@ class DataLoaderOutput(MyPyTreeNode):
 
             s_ps_k = s_ps_k.at[k_arr].add(jnp.exp(jnp.log(ps) - jnp.log(n_bin)))
 
-        print(f"{s_ps_k=} ")
+        assert jnp.allclose(s_ps_k[:-1], 1, rtol=1e-04, atol=1e-04), (
+            f"ps sum to {s_ps_k[:-1]} instead of 1, check your wham solution and histogram binning"
+        )
+
         print(f"{s=}")
 
         # if compute_std:
@@ -5334,13 +5407,13 @@ class DataLoaderOutput(MyPyTreeNode):
 
             sigma_k_test = jnp.exp(0.5 * log_simga_sq_k_test - log_w_tot_k)
 
-            print(f"{( jnp.linalg.norm(sigma_k_test[:-1] -sigma_Fk)/kjmol)=} {sigma_k_test/kjmol=}  ")
+            print(f"{( jnp.linalg.norm(sigma_k_test[:-1] -sigma_Fk)/kjmol)=}   ")
 
         mask_k = jnp.any(mask_ik, axis=0)
 
         # print(f"{E_k/kjmol=}")
 
-        print(f"{N_i_tau=}")
+        # print(f"{N_i_tau=}")
 
         output_weight_kwargs = {
             "weight": w_out,
@@ -5571,18 +5644,21 @@ class DataLoaderOutput(MyPyTreeNode):
 
     @staticmethod
     def _correlation_time(
-        cv_0: list[CV],
+        cv_0: list["CV"],
         verbose: bool = True,
-        method: str = None,
+        method: str = "acf",
         const_acf: float = 5.0,
         periodicities: jax.Array | None = None,
+        find_cutoff: bool = False,
+        cutoff_steps: int = 20,
     ):
         # https://juser.fz-juelich.de/record/152532/files/FZJ-2014-02136.pdf
         # block-averaging estimate of integrated correlation times for diagnostics
 
-        print(f"starting block-averaging estimation of integrated correlation times")
+        # print(f"starting block-averaging estimation of integrated correlation times")
 
-        tau_list: list[float] = []
+        g_list: list[float] = []
+        cutoff_list: list[int] = []  # NEW: Store calculated cutoff indices
         TE_list: list[float] = []
 
         if periodicities is not None:
@@ -5592,27 +5668,57 @@ class DataLoaderOutput(MyPyTreeNode):
                 cv_0,
             )
 
-            # print(f"{cv_0=}")
-
         @partial(jax.jit, static_argnames=["norm"])
-        def _acf(cv: CV, norm=True):
-            x = cv.cv
+        def _acf(x: jax.Array, idx_0=None, norm=True):
+            T = x.shape[0]
 
-            # https://emcee.readthedocs.io/en/stable/tutorials/autocorr/
+            if idx_0 is not None:
+                # Create mask
+                mask = jnp.arange(T)[:, None] >= idx_0
+                active_count = T - idx_0
+
+                # Calculate mean ONLY of the active part
+                # If we just use jnp.mean(x), the zeros drag the mean down!
+                sum_active = jnp.sum(jnp.where(mask, x, 0.0), axis=0)
+                mu_active = sum_active / active_count
+
+                # Center only the active data, leave zeros as zeros
+                x_centered = jnp.where(mask, x - mu_active, 0.0)
+            else:
+                x_centered = x - jnp.mean(x, axis=0)
+                active_count = T
 
             @partial(vmap_decorator, in_axes=1)
-            def f(x):
-                x = x - jnp.mean(x, axis=0)
+            def f(feat_x):
+                # 1. FFT-based correlation is much faster for JIT
+                n_fft = 2 * T
+                X_f = jnp.fft.fft(feat_x, n=n_fft)
 
-                corr = jax.scipy.signal.correlate(x, x, mode="full")
-                corr = corr[-x.shape[0] :]
-                corr /= jnp.arange(x.shape[0], 0, -1)
+                # ACF = IFFT( conj(X) * X )
+                # This gives the correlation: sum( conj(x[t]) * x[t+lag] )
+                corr_full = jnp.fft.ifft(jnp.conj(X_f) * X_f, n=n_fft)
+
+                # Extract lags and take the REAL part
+                # (The ACF of any signal at lag 0 is its variance, which is real)
+                corr = corr_full[:T].real
+                # Extract the valid lags
+                corr = corr_full[:T]
+
+                # 2. Correct normalization for zero-padded data
+                # We divide by the number of actual overlapping pairs
+                lags = jnp.arange(T, 0, -1)
+                if idx_0 is not None:
+                    # The number of pairs decreases as we move toward T
+                    # But it starts at 'active_count'
+                    lags = jnp.clip(lags - (T - active_count), a_min=1)
+
+                corr = corr / lags
 
                 if norm:
+                    # Normalize by variance (lag 0)
                     corr = jnp.where(corr[0] == 0, corr, corr / corr[0])
 
                 # integrated autocorrelation time (use lags 1..M)
-
                 def hilbert(x, N=None, axis=-1):
                     N = x.shape[axis]
 
@@ -5622,7 +5728,6 @@ class DataLoaderOutput(MyPyTreeNode):
                         h = h.at[0].set(1)
                         h = h.at[N // 2].set(1)
                         h = h.at[1 : N // 2].set(2)
-
                     else:
                         h = h.at[0].set(1)
                         h = h.at[1 : (N + 1) // 2].set(2)
@@ -5634,53 +5739,42 @@ class DataLoaderOutput(MyPyTreeNode):
                     x = jax.numpy.fft.ifft(Xf * h, axis=axis)
                     return x
 
-                # Compute the analytic signal using the Hilbert transform
+                # (Inside hilbert, ensure you use the active_count for the slice)
                 envelope = jnp.abs(hilbert(corr))
+                # Important: only fit the envelope up to active_count/2
+                valid_len = active_count // 2
 
-                print(f"envelope shape: {envelope.shape}")
-
-                envelope = envelope[: envelope.shape[0] // 2]
-
-                # Define the loss function
+                # Define loss on truncated envelope
                 def loss_fn(tau, y):
-                    x = jnp.arange(len(y))
+                    # y is the envelope
+                    # We must only compare the valid (non-zero) part of the envelope
+                    t_axis = jnp.arange(T)
+                    y_pred = jnp.exp(-t_axis / tau)
 
-                    y_pred = jnp.exp(-x / tau)
+                    # Mask the loss so we don't fit the zero-padded tail
+                    loss_mask = t_axis < valid_len
+                    res = jnp.where(loss_mask, (y - y_pred) ** 2, 0.0)
+                    return jnp.sum(res)
 
-                    res = jnp.sum((y - y_pred) ** 2)
-
-                    # print(f"{res=}")
-
-                    return res
-
-                # Initial guess for parameters
-
-                # Optimize the parameters
                 from jaxopt import GradientDescent
 
                 solver = GradientDescent(fun=loss_fn)
-
-                x0 = jnp.array([1.0])
-
-                result = solver.run(x0, envelope)
-
-                print(f"Fitted parameters: {result.params}")
+                result = solver.run(jnp.array([1.0]), envelope)
 
                 tau = result.params
-
-                # return tau
                 return (1 + jnp.exp(-1 / tau)) / (1 - jnp.exp(-1 / tau))
 
-            time_scales = f(x)
-
+            # We need to reshape/mask the final scales if the features were 0
+            time_scales = f(x_centered)
             return jnp.max(time_scales)
 
-        out = []
-
+        # REFACTORED: Now takes a jax.Array instead of CV object
         @jax.jit
-        def _blav(cv: CV):
-            # data = cv_trans.compute_cv(sp)[0].cv.reshape((sp.shape[0], -1))
-            data = cv.cv.reshape((cv.shape[0], -1))
+        def _blav(data: jax.Array, idx_0=None):
+            data = data.reshape((data.shape[0], -1))
+
+            if idx_0 is not None:
+                raise NotImplementedError("idx_0 slicing not implemented for block-averaging method yet")
 
             errors = []
             block_sizes = []
@@ -5695,64 +5789,75 @@ class DataLoaderOutput(MyPyTreeNode):
 
             errors = jnp.array(errors)
 
-            # try:
-            from jaxopt import GaussNewton, ScipyMinimize
+            from jaxopt import GaussNewton
 
             def fit_func(x, B, err):
                 t_int, TE = x
-
                 TE = jnp.exp(TE)
                 t_int = jnp.exp(t_int) + 1
-
                 return TE * jnp.sqrt(B / (B + t_int - 1)) - err
 
             @partial(jax.vmap, in_axes=(None, 1), out_axes=0)
             def solve(block_sizes, errors):
                 solver = GaussNewton(residual_fun=fit_func, tol=1e-6)
                 out = solver.run((0.0, errors[0]), block_sizes, errors)
-
                 log_t_int_est, log_TE_est = out.params
-
                 t_int_est = jnp.exp(log_t_int_est) + 1
                 TE_est = jnp.exp(log_TE_est)
-
                 return t_int_est, TE_est
 
             t_int, TE = solve(jnp.array(block_sizes), errors)
 
             t_int = jnp.where(jnp.isfinite(t_int), t_int, jnp.inf)
-
             t_int = jnp.where(t_int > data.shape[0] / 2, data.shape[0] / 2, t_int)
-
             t_int = jnp.where(t_int < 1.0, 1.0, t_int)
 
-            return t_int[i]
+            # Fix: Return max across features to decouple from the outer loop index 'i'
+            return jnp.max(t_int)
 
         from IMLCV.base.UnitsConstants import angstrom
 
+        if method == "blav":
+            _f = _blav
+        elif method == "acf":
+            _f = _acf
+        else:
+            raise ValueError(f"method {method=} unknown, choose from 'acf','blav'")
+
         for i, cv_i in enumerate(cv_0):
-            if verbose:
-                print(".", end="", flush=True)
-                if (i + 1) % 100 == 0:
-                    print("")
+            # if verbose:
+            #     print(".", end="", flush=True)
+            #     if (i + 1) % 100 == 0:
+            #         print("")
 
-            cv_data = cv_i
+            cv_data_array = cv_i.cv
+            T = cv_data_array.shape[0]
 
-            if method == "blav":
-                t_int_i = _blav(cv_data)
-            elif method == "acf":
-                t_int_i = _acf(cv_data)
+            if find_cutoff:
+                # g = _f(cv_data_array)
+
+                T = cv_data_array.shape[0]
+                t0_grid = jnp.linspace(0, T // 2, cutoff_steps, dtype=int)
+
+                g = jax.vmap(_f, in_axes=(None, 0))(cv_data_array, t0_grid)  # type: ignore
+
+                g_idx = jnp.argmax(g / (T - t0_grid))
+
+                g = g[g_idx]
+
+                cutoff_list.append(g_idx)
             else:
-                raise ValueError(f"mehod {method=} unknown, choose from 'acf','blav'")
+                g = _f(cv_data_array)
 
-            tau_list.append(t_int_i)
+            g_list.append(g)
 
-        tau_i = jnp.array(tau_list)
-        # TE_i = jnp.array(TE_list)
+        g_i = jnp.array(g_list)
 
-        print(f"Estimated integrated correlation times per trajectory: {tau_i} {tau_i.shape} ")
+        if find_cutoff:
+            cutoffs = jnp.array(cutoff_list)
+            return cutoffs, g_i
 
-        return tau_i
+        return g_i
 
     def get_bincount(
         self,
@@ -5773,6 +5878,7 @@ class DataLoaderOutput(MyPyTreeNode):
         n_hist: int | None = None,
         bounds: jax.Array | None = None,
         correlation_method: str | None = None,
+        tau_i: jax.Array | None = None,
     ):
         if cv_0 is None:
             cv_0 = self.cv
@@ -5808,6 +5914,7 @@ class DataLoaderOutput(MyPyTreeNode):
             use_energies=use_energies,
             energies=energies,
             temp_energies=temp_energies,
+            tau_i=tau_i,
         )
 
     @staticmethod
@@ -5831,6 +5938,7 @@ class DataLoaderOutput(MyPyTreeNode):
         frac_full: float | None = 1.0,
         recalc_bounds=True,
         correlation_method: str | None = None,
+        tau_i: jax.Array | None = None,
     ):
         # helper method
 
@@ -5871,17 +5979,23 @@ class DataLoaderOutput(MyPyTreeNode):
         print(f"{grid_bounds=}")
 
         if correlation_method is not None:
-            print("correlating data to get effective sample size")
-            tau_i = DataLoaderOutput._correlation_time(
-                cv_0,
-                verbose=verbose,
-                method=correlation_method,
-                periodicities=metric.periodicities,
-            )
+            if tau_i is not None:
+                print("using provided correlation times")
 
-            sd = [int(jnp.ceil(a.shape[0] / t)) for a, t in zip(cv_0, tau_i)]
-            tot_samples = sum(sd)
-            print(f"estimated effective sample size after correlation: {sd} {tot_samples=}")
+                assert tau_i.shape[0] == len(cv_0), "tau_i must have the same length as cv_0"
+
+            else:
+                print("correlating data to get effective sample size")
+                tau_i = DataLoaderOutput._correlation_time(
+                    cv_0,
+                    verbose=verbose,
+                    method=correlation_method,
+                    periodicities=metric.periodicities,
+                )
+
+                sd = [int(jnp.ceil(a.shape[0] / t)) for a, t in zip(cv_0, tau_i)]
+                tot_samples = sum(sd)
+                print(f"estimated effective sample size after correlation: {sd} {tot_samples=}")
 
         else:
             sd = [a.shape[0] for a in cv_0]
@@ -5926,7 +6040,9 @@ class DataLoaderOutput(MyPyTreeNode):
                 verbose=verbose,
             )
 
-            # print(f"{log_hist_k=}")
+            # print
+
+            print(f"{log_hist_k=}")
 
             if use_energies:
                 assert energies is not None, "energies must be provided when use_energies is True"
@@ -5974,7 +6090,7 @@ class DataLoaderOutput(MyPyTreeNode):
             print(f"{min_samples_per_bin=}")
 
             # print(f"{jnp.exp(hist)=}")
-            hist_mask = log_hist_k > jnp.log(min_samples_per_bin)  # at least 1 sample
+            hist_mask = log_hist_k >= jnp.log(min_samples_per_bin)  # at least 1 sample
             # hist_mask = log_hist_k > -jnp.inf
 
             print(f"{jnp.sum(hist_mask)=}")
@@ -6232,6 +6348,7 @@ class DataLoaderOutput(MyPyTreeNode):
         alpha_smooth: float = 0.0,
         batch_size: int = 1024,
         batch_chunk_size: int = 16,
+        beta_timecon: float | None = None,
     ) -> "KoopmanModel":
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
 
@@ -6353,6 +6470,7 @@ class DataLoaderOutput(MyPyTreeNode):
             target_smoothness=target_smoothness,
             alpha_smooth=alpha_smooth,
             batch_chunk_size=batch_chunk_size,
+            beta_timecon=beta_timecon,
         )
 
     def filter_nans(
@@ -6416,16 +6534,14 @@ class DataLoaderOutput(MyPyTreeNode):
                 )
 
         def __f(x: X, nl: NeighbourList | None) -> CV:
-            return _f(
+            r, _ = _f(
                 x,
                 nl,
                 chunk_size=chunk_size,
                 shmap=shmap,
-            )[0]
+            )
 
-        # if shmap:
-        #     __f = padded_shard_map(__f, kwargs=shmap_kwargs)
-        #     jit_f = False
+            return r
 
         out = DataLoaderOutput._apply(
             x=x,
@@ -6439,13 +6555,6 @@ class DataLoaderOutput(MyPyTreeNode):
             print_every=print_every,
             debug_print=debug_print,
         )
-
-        # if shmap:
-        #     print(f"putting out ")
-        #     jax.debug.inspect_array_sharding(out, callback=print)
-        #     out = jax.device_put(out, jax.devices()[0])
-
-        #     jax.debug.inspect_array_sharding(out, callback=print)
 
         return out
 
@@ -6524,9 +6633,6 @@ class DataLoaderOutput(MyPyTreeNode):
 
             return x.replace(cv=b.reshape((-1, 1)))
 
-        # if shmap:
-        #     f = padded_shard_map(f, kwargs=shmap_kwargs)  # (pmap=True))
-
         out, _ = DataLoaderOutput._apply(
             x=x,
             f=f,
@@ -6534,9 +6640,6 @@ class DataLoaderOutput(MyPyTreeNode):
             verbose=verbose,
             jit_f=jit_f,
         )
-
-        # if shmap:
-        #     out = jax.device_put(out, jax.devices()[0])
 
         return [a.cv[:, 0] for a in out]
 
@@ -7341,6 +7444,7 @@ class KoopmanModel(MyPyTreeNode):
     entropy_reg: float = 0.0
     target_smoothness: float = 20 * kjmol / (boltzmann * 300)
     alpha_smooth: float = 1.0
+    beta_timecon: float | None = None
 
     @staticmethod
     def create(
@@ -7398,6 +7502,7 @@ class KoopmanModel(MyPyTreeNode):
         target_smoothness=20 * kjmol / (boltzmann * 300),
         alpha_smooth=1.0,
         T_mult=1.0,
+        beta_timecon: float | None = None,
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
@@ -7407,6 +7512,10 @@ class KoopmanModel(MyPyTreeNode):
         print(f"{calc_pi=} {add_1=}   ")
 
         print(f"{use_w=}")
+
+        if w_t is not None:
+            assert len(w) == len(w_t)
+            assert len(rho) == len(rho_t)
 
         if nl is not None:
             print(f"using neighbour lists in koopman model {nl=}")
@@ -7422,14 +7531,14 @@ class KoopmanModel(MyPyTreeNode):
             w_log = [jnp.log(wi) * alpha_smooth + jnp.log(rhoi) for wi, rhoi in zip(w, rho)]
             z = jnp.hstack(w_log)
 
-            z_max = jnp.max(z)
-            norm = jnp.log(jnp.sum(jnp.exp(z - z_max))) + z_max
+            z_max = jnp.nanmax(z)
+            norm = jnp.log(jnp.nansum(jnp.exp(z - z_max))) + z_max
 
             w_tot = [jnp.exp(w_log_i - norm) for w_log_i in w_log]
 
             s = 0
             for wi in w_tot:
-                s += jnp.sum(wi)
+                s += jnp.nansum(wi)
 
             print(f"{s=}")
 
@@ -7437,14 +7546,12 @@ class KoopmanModel(MyPyTreeNode):
 
         w_tot = tot_w(w, rho)
 
-        if not generator:
-            assert cv_t is not None
-            assert w_t is not None
-            assert rho_t is not None
+        # if not generator:
+        assert cv_t is not None
+        assert w_t is not None
+        assert rho_t is not None
 
-            w_tot_t = tot_w(w_t, rho_t)
-        else:
-            w_tot_t = None
+        w_tot_t = tot_w(w_t, rho_t)
 
         if periodicities is not None:
             _tr_per = CvTrans.from_cv_function(PeriodicKoopmanModel._exp_periodic, periodicities=periodicities)
@@ -7529,11 +7636,37 @@ class KoopmanModel(MyPyTreeNode):
             print("Using AdamW optimizer for mini-batch optimization")
 
             from optax.schedules import cosine_decay_schedule
+            # 1. Define a Schedule: Warmup + Cosine Decay
+            # A CV needs to settle in before you hit it with high rates
+            # total_steps = 1000  # Adjust based on your total epochs/batches
+            # warmup_steps = max(epochs // 5, 100)  # Warmup for the first 20% of training or at least 100 steps
 
-            optimizer = optax.adamw(
-                learning_rate=0.01,
-                weight_decay=1e-4,
+            lr_schedule = cosine_decay_schedule(
+                init_value=1e-1,
+                decay_steps=epochs,
+                alpha=1e-2,
             )
+
+            lr_schedule = optax.warmup_cosine_decay_schedule(
+                init_value=1e-3,
+                peak_value=5e-2,
+                warmup_steps=10,
+                decay_steps=epochs,
+                end_value=1e-3,
+            )
+
+            # 2. Add Gradient Clipping
+            # This is the "shield" against those massive spikes in your plot
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(1.0),
+                optax.adamw(learning_rate=lr_schedule, weight_decay=1e-4),
+            )
+
+            optimizer = optax.apply_if_finite(
+                optimizer,
+                max_consecutive_errors=5,
+            )
+
             opt_state = optimizer.init(learable_params)
 
             prefetch = False
@@ -7574,21 +7707,36 @@ class KoopmanModel(MyPyTreeNode):
                     key, subkey = jax.random.split(key)
 
                     if subsample:
-                        x0_chunk, xt_chunk = chunk_selector(
-                            [cv_0, cv_t],
+                        x0_chunk, xt_chunk, w_chunk, wt_chunk = chunk_selector(
+                            [
+                                cv_0,
+                                cv_t,
+                                w_tot if use_w else None,
+                                w_tot_t if use_w else None,
+                            ],
                             batch_size,
                             subkey,
                             weight_list=w_tot if use_w else None,
                         )
-                        w_chunk = jnp.ones(batch_size) / batch_size
+
+                        wt_chunk /= wt_chunk
+                        w_chunk /= w_chunk
                     else:
-                        x0_chunk, xt_chunk, w_chunk = chunk_selector(
-                            [cv_0, cv_t, w_tot if use_w else None],
+                        x0_chunk, xt_chunk, w_chunk, wt_chunk = chunk_selector(
+                            [
+                                cv_0,
+                                cv_t,
+                                w_tot if use_w else None,
+                                w_tot_t if use_w else None,
+                            ],
                             batch_size,
                             subkey,
                         )
 
+                        # print(f"batch weights sum {jnp.sum(w_chunk)=} {jnp.sum(wt_chunk)=}")
+
                         w_chunk /= jnp.sum(w_chunk)
+                        wt_chunk /= jnp.sum(wt_chunk)
 
                     # if nl is not None:
                     #     if isinstance(x0_chunk, SystemParams):
@@ -7600,7 +7748,8 @@ class KoopmanModel(MyPyTreeNode):
                     batch = dict(
                         x0_i=x0_chunk,
                         xt_i=xt_chunk,
-                        wt_i=w_chunk,
+                        w_i=w_chunk,
+                        wt_i=wt_chunk,
                         # nl_i=nl_chunk,
                     )
 
@@ -7644,129 +7793,78 @@ class KoopmanModel(MyPyTreeNode):
 
                     def get_batch():
                         batch = batch_queue.get()
-                        return key, (batch["x0_i"], batch["xt_i"], batch["wt_i"])
+                        return key, (batch["x0_i"], batch["xt_i"], batch["w_i"], batch["wt_i"])
 
                 else:
                     lbfgs = False
 
                     def get_batch(key):
                         batch, key = _get_batch(key)
-                        return key, (batch["x0_i"], batch["xt_i"], batch["wt_i"])
+                        return key, (batch["x0_i"], batch["xt_i"], batch["w_i"], batch["wt_i"])
+
+            # compute effective diffusion
 
             @partial(jit_decorator, static_argnames=["entropy_reg", "chunk_size"])
             def objective_fn(
                 params,
+                log_beta_gamma,
                 x_0: CV | SystemParams,
                 x_t: CV | SystemParams,
                 w: jax.Array | None,
+                w_t: jax.Array | None,
                 nl: NeighbourList | None,
-                cov_tot: Covariances | None,
+                # cov_tot: Covariances | None,
                 entropy_reg,
                 chunk_size=None,
                 epoch: int = 0,
             ):
-                if generator:
-                    learnable_params = params
-                else:
-                    learnable_params = params
+                learnable_params = params
 
                 _trans = trans.apply_learnable_params(learnable_params)
 
-                # jax.debug.print("inside objective fn")
-
-                print(f"applying cv transform in objective fn with {x_0=} {x_t=} ")
-
-                y_0, y_t = DataLoaderOutput.apply_cv(
-                    _trans,
-                    [x_0],
-                    [x_t],
-                    nl,
-                    nl,
-                    chunk_size=chunk_size,
-                    macro_chunk=None,
-                    verbose=verbose,
-                    debug_print=True,
-                    shmap=False,
-                )
-
-                # jax.debug.print("after applying cv transform in objective fn")
-
-                print(f"{y_0=} {w=} ")
-
-                # y_0 = y_0[0]
-                # y_t = y_t[0] if y_t is not None else None
-
-                # y_0, _ = _trans.compute_cv(x_0, nl)
-                # y_t, _ = _trans.compute_cv(x_t, nl_t) if x_t is not None else (None, None)
-
-                # print(f"{y_0.cv.shape=} {y_t.cv.shape if y_t is not None else None} ")
-
-                # jax.debug.print("min {} max {}", jnp.min(y_0.cv, axis=0), jnp.max(y_0.cv, axis=0))
-
                 cov = Covariances.create(
-                    cv_0=y_0,
-                    cv_1=y_t,
-                    # nl=nl,
-                    # nl_t=nl,
+                    cv_0=x_0,
+                    cv_1=x_t,
+                    nl=nl,
+                    nl_t=nl,
                     w=[w],
-                    w_t=[w],
-                    trans_f=None,
-                    trans_g=None,
+                    w_t=[w_t],
+                    trans_f=_trans,
+                    trans_g=_trans,
                     shrink=False,
-                    calc_pi=True,
+                    calc_pi=calc_pi,
                     get_diff=False,
                     pi_argmask=jnp.array([-1]) if add_1 else None,
                     symmetric=symmetric,
-                    generator=False,
+                    generator=True,
                     chunk_size=None,
                     macro_chunk=None,
                 )
 
-                print(f"{cov=} {cov_tot=}")
+                # jax.lax.cond(epoch == 0, lambda: None, lambda: jax.debug.print("cov {cov}", cov=cov))
 
-                if cov_tot is not None:
-                    frac_old = 0.0
-                    # frac_old = jnp.min(
-                    #     jnp.array([0.5, 1 - 1 / (epoch + 1)])
-                    # )  # increase frac_old over time, starting from 0
+                cov_new = cov
 
-                    # frac_old =
-
-                    cov_new = Covariances.add(cov_tot, cov, frac_old)
-
-                else:
-                    cov_new = cov
-
-                # print(f"{cov_new=}")
-
-                # jax.debug.print("cov  {}", jnp.linalg.eigh(cov.C00))
-
-                W0 = cov_new.whiten_rho(
+                W0, lambda_i = cov_new.whiten_C(
                     "rho_00",
                     apply_mask=False,
                     epsilon=1e-12,
                     cholesky=False,
-                    tikhonov=1e-6,
+                    tikhonov=1e-2,
+                    return_eigh=True,
                 )
 
-                # variance loss to prevent collapse into singularities, encourages eigenvalues of rho_00 to be above a threshold
-                # gamma = 1e-3
+                loss_ortho = jnp.sum(lambda_i) - jnp.sum(jnp.log(lambda_i)) - lambda_i.shape[0]
 
-                # hinge loss on whitening matrix norm. encourages inverse eigenvalues of C_00 to be below a threshold, which prevents collapse into singularities
-                # more specifically, the eigenvalues of C00 can not be samller than 1e-3
-
-                target = 1e-4 ** (-2) * W0.shape[1]  # target frobenius norm squared of W0
-
-                w_sigma = W0 @ jnp.diag(cov_new.sigma_0_inv)
-
-                loss_ortho = jax.nn.softplus((jnp.trace(w_sigma.T @ w_sigma) / target - 1.0) / 0.1) * 0.1
-
-                loss = 0.1 * loss_ortho
+                loss = 1e-1 * loss_ortho
 
                 if symmetric:
                     W1 = W0
+
                 else:
-                    W1 = cov_new.whiten_rho(
+                    print(f"whitening C11 separately")
+
+                    W1 = cov_new.whiten_C(
                         "rho_11",
                         apply_mask=False,
                         epsilon=1e-12,
@@ -7774,466 +7872,127 @@ class KoopmanModel(MyPyTreeNode):
                         tikhonov=1e-2,
                     )
 
-                # trim W to out_dim
-                if out_dim is not None and out_dim > 0:
-                    W0 = W0[: out_dim + 1 :]
-                    W1 = W1[: out_dim + 1 :]
+                T = W1 @ cov_new.C01.T @ W0.T
 
-                # if generator:
-                #     K = W0 @ cov.rho_gen @ W1.T
-                # else:
-                K = W0 @ cov_new.rho_01 @ W1.T
+                # if not symmetric:
+                #     T = W0 @ cov_new.C11 @ W1.T @ T
 
-                loss_vamp = -jnp.sum(K**2)
-                loss += loss_vamp  # vamp-2 score (frobenius norm squared)
+                sigmas = jnp.linalg.svd(T, compute_uv=False)
+                loss_vamp = -jnp.sum(sigmas**vamp_r) + dim
 
-                z_0 = jnp.einsum("ni,i,ik->nk", CV.stack(*y_0).cv - cov_new.pi_0, cov_new.sigma_0_inv, W0.T)
+                timescales_vamp = -tau / jnp.log(sigmas)
 
-                if add_1:
-                    z_0 = z_0[:, :-1]  # remove constant basis
+                # https://proceedings.neurips.cc/paper_files/paper/2024/file/89edef87915d31de3437b6b2ac5f79e7-Paper-Conference.pdf
 
-                if entropy_reg > 0.0:
-                    print("computing entropy regularization")
+                dK = W0 @ cov_new.C_gen @ W0.T
 
-                    # z_0 = y_0.cv @ cov.sigma_0_inv @ W0.T
+                if beta_timecon is not None:
+                    dK /= beta_timecon
 
-                    # print(f"{y_0.cv.shape=} {cov.pi_0.shape=} {cov.sigma_0_inv.shape=} {W0.T.shape=}")
+                timescales_gen = 1 / (jnp.linalg.eigvalsh(dK))
 
-                    # mean = jnp.einsum("n,nk->k", w, z_0)
-                    # std = jnp.einsum("n,nk,nl->kl", w, (z_0 - mean), (z_0 - mean))
-                    # jax.debug.print("z mean {} std {}", mean, std)
-
-                    # n_eff = cov.n_eff
-
-                    #  scott rule
-                    # sigma = z_0.shape[0] ** (-1 / (z_0.shape[1] + 4))
-
-                    # jax.debug.print("bandwidth sigma= {}", sigma)
-
-                    # print(f"{H_inv.shape=}")
-
-                    def soft_grad_loss(z_0, w):
-                        n_frames, d = z_0.shape
-
-                        # 1. Anisotropic Scott's Rule (JIT-safe)
-                        # Use jnp.std to get marginal widths for each dimension
-                        # marginal_stds = jnp.std(z_0, axis=0) #std along each dim is 1
-                        # Scott's factor: n^(-1/(d+4))
-                        scott_factor = n_frames ** (-1.0 / (d + 4.0))
-                        sigmas = scott_factor
-
-                        # 2. Determine Bounds (Percentile-based)
-                        # We use jnp.nanpercentile or a simple min/max with padding for speed
-                        # Padding by 3*sigma ensures the Gaussian tails are captured
-                        # compute weighted extreme quantiles (99.9999% interval by default)
-                        # z_0: (n_frames, d), w: (n_frames,)
-
-                        q_low_target = 1e-4
-                        q_high_target = 1e4
-
-                        @partial(jax.vmap, in_axes=(1,))
-                        def _wq(x_row):
-                            # x_row: (n,), w: (n,)
-                            # sort values
-                            idx = jnp.argsort(x_row)
-                            xs = x_row[idx]
-                            ws = w[idx]
-
-                            # if all weights zero or sum very small, fallback to min/max
-
-                            c = jnp.cumsum(ws)
-                            c = c / c[-1]
-                            # jnp.interp supports scalar x on jax
-                            low = jnp.interp(q_low_target, c, xs)
-                            high = jnp.interp(q_high_target, c, xs)
-                            return low, high
-
-                        q_low, q_high = _wq(z_0)  # shape (d, 2)
-
-                        # q_low = jnp.min(z_0, axis=0) - 3.0 * sigmas
-                        # q_high = jnp.max(z_0, axis=0) + 3.0 * sigmas
-                        ranges = q_high - q_low
-
-                        # 3. Setup Grid Spacing (Static grid_size, dynamic dx)
-                        dxs = ranges / (grid_size - 1.0)
-                        dv = jnp.prod(dxs)
-
-                        # Create normalized grid coordinates [0, 1] and scale to [q_low, q_high]
-                        linspaces = jnp.linspace(0, 1, grid_size)
-                        # Use jnp.stack + meshgrid for a d-dimensional coordinate tensor
-                        grid_coords = jnp.meshgrid(*[linspaces] * d, indexing="ij")
-                        # Rescale meshgrid to physical units
-                        grid_points = jnp.stack([q_low[i] + g * ranges[i] for i, g in enumerate(grid_coords)], axis=-1)
-                        flat_grid = grid_points.reshape(-1, d)
-
-                        # 4. Density Computation (Vectorized)
-                        @jax.vmap
-                        def compute_log_p(grid_p):
-                            # Mahalanobis-like distance for anisotropic kernels
-                            # sq_dist = sum( ((z - p) / sigma)^2 )
-                            normalized_dist_sq = jnp.sum(jnp.square((z_0 - grid_p) / sigmas), axis=-1)
-                            return jax.nn.logsumexp(-0.5 * normalized_dist_sq, b=w)
-
-                        log_p_flat = compute_log_p(flat_grid)
-
-                        # Normalize such that integral P dV = 1
-                        # log(P_norm) = log(P_unnorm) - logsumexp(log_p_unnorm) - log(dV)
-                        log_p_normalized = log_p_flat - jax.nn.logsumexp(log_p_flat) - jnp.log(dv)
-
-                        # Reshape for gradient calculation
-                        log_p_grid = log_p_normalized.reshape(*([grid_size] * d))
-                        sqrt_p_grid = jnp.exp((1.0 / 2) * log_p_grid)
-
-                        # 5. Gradient Calculation
-                        # jnp.gradient works on the full tensor. We pass the scalar dx for each axis
-                        # 4* | grad sqrt(P) |^2 = P * (grad log P)^2
-                        # Note: jnp.gradient returns a list. We sum the squares of each component.
-                        grads = jnp.gradient(sqrt_p_grid, *[dxs[i] for i in range(d)])
-
-                        # Fisher Information = 4 * integral ||grad sqrt(P)||^2 dV
-                        sum_grad_sq = (2.0 / 1.0) ** 2 * sum(jnp.sum(jnp.square(g)) for g in grads) * dv
-
-                        sum_p = jnp.sum(jnp.exp(log_p_normalized * 1.0)) * dv
-
-                        smoothness = sum_grad_sq / sum_p
-
-                        return smoothness
-
-                    # # 4. Normalize the Log-Distribution
-                    # # We want p_i = exp(log_p_i) / sum(exp(log_p_j))
-                    # # So log(p_i) = log_p_i - logsumexp(log_p_all)
-                    # log_p_normalized = log_p_bins - jax.nn.logsumexp(log_p_bins)
-
-                    # # 5. Shannon Entropy: H = -sum(p * log(p))
-                    # # Since we have log(p), this is -sum(exp(log_p) * log_p)
-                    # p_normalized = jnp.exp(log_p_normalized)
-                    # entropy = -jnp.sum(p_normalized * log_p_normalized)
-
-                    # return entropy + log_dV
-                    def soft_binning_integral_regularizer(z_0, w, alpha=0.15, grid_size=32, radius=1.5):
-                        n_frames, d = z_0.shape
-
-                        # # 1. Setup Grid (3 std devs around mean)
-                        # q_low = -3.0
-                        # q_high = 3.0
-                        # ranges = q_high - q_low
-                        # dxs = ranges / (grid_size - 1)
-
-                        # def wider_soft_binning(z_0, w, grid_size=32, radius=1.5):
-                        #     n_frames, d = z_0.shape
-
-                        # 1. Fixed Grid (Assuming normalized data)
-                        # q_low, q_high = jnp.full((d,), -3.5), jnp.full((d,), 3.5)
-
-                        # q_low_target = 1e-3
-                        # q_high_target = 1 - q_low_target
-
-                        # @partial(jax.vmap, in_axes=(1,))
-                        # def _wq(x_row):
-                        #     # 1. Get the sort order for the CV values
-                        #     idx = jnp.argsort(x_row)
-
-                        #     # 2. Sort BOTH the values and the weights using that index
-                        #     xs = x_row[idx]
-                        #     ws = w[idx]  # <--- CRITICAL: must match the sort of x_row
-
-                        #     # 3. Calculate the CDF
-                        #     c = jnp.cumsum(ws)
-                        #     total_w = c[-1]
-
-                        #     # Safety check for zero-weight batches
-                        #     c = jnp.where(total_w > 1e-10, c / total_w, jnp.linspace(0, 1, len(c)))
-
-                        #     # 4. Interpolate to find the quantiles
-                        #     low = jnp.interp(q_low_target, c, xs)
-                        #     high = jnp.interp(q_high_target, c, xs)
-
-                        #     return low, high
-
-                        # q_low, q_high = _wq(z_0)
-
-                        q_low = jnp.min(z_0, axis=0)
-                        q_high = jnp.max(z_0, axis=0)
-
-                        # jax.debug.print("min {} max {}", jnp.min(z_0, axis=0), jnp.max(z_0, axis=0))
-
-                        # 3std in each dim
-                        # q_low = jnp.full((d,), -4.0)
-                        # q_high = jnp.full((d,), 4.0)
-
-                        # q_high = jax.lax.stop_gradient(q_high)
-                        # q_low = jax.lax.stop_gradient(q_low)
-
-                        ranges = q_high - q_low
-                        dxs = ranges / (grid_size - 1)
-                        dv = jnp.prod(dxs)
-
-                        u = jnp.stack(
-                            jnp.meshgrid(*[jnp.linspace(l, h, grid_size) for l, h in zip(q_low, q_high)], indexing="ij")
-                        )
-
-                        print(f"{u.shape=}")
-
-                        u_flat = u.reshape(d, -1).T  # shape (grid_size**d, d)
-
-                        # @jax.vmap
-                        # def compute_p(grid_p):
-                        #     @jax.vmap
-                        #     def inner(z, w):
-                        #         distances = jnp.abs(z - grid_p) / dxs  # shape (d,)
-                        #         # Quartic/Biweight Kernel
-                        #         weights = jnp.maximum(0.0, 1.0 - (distances / radius) ** 2) ** 2  # shape (d,)
-
-                        #         return jnp.prod(weights) * w  # scalar
-
-                        #     return jnp.sum(inner(z_0, w))
-
-                        # p_grid = compute_p(u)
-
-                        @jax.vmap
-                        def get_normalized_weights(single_z, single_w):
-                            # Calculate distances from this particle to ALL grid points
-                            # Shape: (grid_size**d, d)
-                            distances_nj = (u_flat - single_z) / dxs
-                            dist_sq_n = jnp.sum((distances_nj / radius) ** 2, axis=-1)
-
-                            # Biweight/Quartic Kernel: (1 - r^2)^2
-                            # Shape: (grid_size**d, d)
-                            kernel_val_n = jnp.maximum(0.0, 1.0 - dist_sq_n) ** 2
-                            # kernel_val_n = jnp.exp(-0.5 * dist_sq_n)
-
-                            # --- Normalization ---
-                            # Sum all the kernel mass this particle would deposit on the grid
-                            total_kernel_sum = jnp.sum(kernel_val_n)
-
-                            # Avoid division by zero if a particle is outside the grid/radius
-                            safe_sum = jnp.where(total_kernel_sum > 1e-10, total_kernel_sum, 1.0)
-
-                            # Normalize so the sum of weights for THIS particle equals its weight 'w'
-                            normalized_weights = (
-                                jnp.where(total_kernel_sum > 1e-10, kernel_val_n / safe_sum, 0.0) * single_w
-                            )
-                            return normalized_weights
-
-                        # 2. Compute weights for all particles: Shape (num_particles, grid_size**d)
-                        all_weights = get_normalized_weights(z_0, w)
-
-                        # 3. Sum across particles to get the final grid: Shape (grid_size**d,)
-                        p_grid = jnp.sum(all_weights, axis=0)
-
-                        p_grid /= jnp.sum(p_grid) * dv
-
-                        # 2. Add stability clipping
-                        p_safe = jnp.clip(p_grid, 1e-12)
-                        # q_safe = jnp.ones_like(p_grid)
-                        # q_safe /= jnp.sum(q_safe) * dv  # uniform distribution
-
-                        if alpha == 1.0:
-                            print("computing shannon entropy")
-                            return (-jnp.sum(p_safe * jnp.log(p_safe)) * dv) / (jnp.sum(jnp.log(ranges)))
-
-                        # 3. Sum of p^alpha * dv
-                        # Note: We must multiply by dv here to represent the integral
-                        sum_p_alpha = jnp.sum(jnp.power(p_safe, alpha)) * dv
-
-                        return (1.0 / (1.0 - alpha)) * jnp.log(sum_p_alpha) / (jnp.sum(jnp.log(ranges)))
-
-                        # p_grid = jnp.where(p_grid < 1e-20, 0.0, p_grid)
-
-                        # if alpha != 1.0:
-                        #     p_grid = p_grid**alpha
-
-                        # p_grid /= jnp.sum(p_grid) * dv
-                        # p_grid_safe = jnp.where(p_grid < 1e-10, 1.0, p_grid)
-
-                        # if alpha == 1.0:
-                        #     pre_factor = 1.0
-                        # else:
-                        #     pre_factor = (1.0 / (1.0 - alpha))
-
-                        # # compute entropy
-                        # return -jnp.sum(jnp.where(p_grid < 1e-10, 0, p_grid_safe * jnp.log(p_grid_safe + 1e-10))) * dv
-
-                        # 2. power trick p^alpha
-
-                        # # 3. Compute Gradients of the transformed density
-                        # # jnp.gradient uses central differences
-                        # grads_psi = jnp.gradient(psi, *[dxs[i] for i in range(d)])
-
-                        # # 4. The Integrated Square Gradient
-                        # # This is the 'proper integral' (sum of grad^2 * dV)
-                        # total_grad_sq = sum(jnp.sum(jnp.square(g)) for g in grads_psi) * dv
-
-                        # # 5. Scaling to return to Fisher Information units
-                        # scaling = (2.0 / alpha) ** 2
-                        # # Renormalize by the 'Mass' of the weighting
-                        # total_power_mass = jnp.sum(jnp.square(psi)) * dv
-
-                        # total_smoothness = scaling * total_grad_sq / total_power_mass
-                        # return total_smoothness / dim
-
-                    # total_smoothness = soft_binning_integral_regularizer(
-                    #     z_0, w, grid_size=grid_size, alpha=alpha_smooth
-                    # )
-
-                    # entropy scales as dim, divide by dim
-
-                    def get_max_renyi_target(alpha, d=1):
-                        # Gaussian part
-                        h_gauss = (d / 2) * (jnp.log(2 * jnp.pi) + 1)
-
-                        if alpha != 1.0:
-                            h_gauss += (d * jnp.log(alpha)) / (2 * (alpha - 1))
-                        #     # Non-Gaussian correction C(alpha, d) for alpha < 1
-                        #     term1 = jsp.gammaln(alpha / (1 - alpha))
-                        #     term2 = jsp.gammaln(alpha / (1 - alpha) - d / 2)
-                        #     term3 = (d / 2) * jnp.log((1 - alpha) / (2 * alpha - d * (1 - alpha)))
-
-                        #     # jax.debug.print(
-                        #     #     "t123 {} {} {} {}", term1, term2, term3, (1 - alpha) / (2 * alpha - d * (1 - alpha))
-                        #     # )
-
-                        #     c_alpha = (1 / (1 - alpha)) * (term1 - term2 + term3)
-                        #     h_gauss += c_alpha
-
-                        return h_gauss
-
-                    entropy_gaussian = get_max_renyi_target(1.0, d=dim)
-                    entropy = (
-                        soft_binning_integral_regularizer(z_0, w, grid_size=grid_size, alpha=1.0) / entropy_gaussian
-                    )
-
-                    # jax.debug.print("entropy smoothness: {}", entropy)
-
-                    # entropy of gaussian with unit variance, scaled by alpha_smooth (p->p^alpha)
-                    # # jax.debug.print("as {}", alpha_smooth)
-
-                    # entropy_max = get_max_renyi_target(alpha_smooth, d=dim)
-                    # hypervolume of the box
-                    # entropy_max = dim * jnp.log(2)
-
-                    # jax.debug.print("e {} em {}", entropy, entropy_max)
-                    # we want to scale this loss with dim, such that entropy_reg ~ 0.1 works well
-                    # total_entropy = entropy  # / entropy_max
-
-                    # example: entropy 0.2,target 0.3
-                    # loss: lambda* min(0.2-0.3,0)**2
-
-                    entropy_loss = jax.nn.softplus(-(entropy - target_smoothness) / 0.1) * 0.1
-
-                    # excess = entropy - get_max_renyi_target(alpha_smooth, d=1) / entropy_gaussian
-                    # jax.debug.print("aen {} g {}", entropy, get_max_renyi_target(alpha_smooth, d=1))
-
-                    # excess = jnp.minimum(0.0, (total_entropy - target_smoothness)) ** 2
-
-                    # vamp scales as d, entropy_reg should be arround 0.1
-                    # max entropy
-                    loss += entropy_reg * entropy_loss
-
-                    # # @jax.vmap
-                    # def _entropy(z):
-                    #     p, wp = z
-
-                    #     @jax.vmap
-                    #     def _inner(q, wq):
-                    #         s = q - p
-
-                    #         print(f"{s=}")
-                    #         print(f"{H_inv=} {s.shape=}{wq=}{wp=} ")
-
-                    #         kernel = jnp.exp(-0.5 * s @ H_inv @ s)
-                    #         return wq * kernel
-
-                    #     return -wp * jnp.log(jnp.sum(_inner(y_0.cv, w) + 1e-10))
-
-                    # entropy = jnp.sum(jax.lax.map(_entropy, (y_0.cv, w)))
-
-                    # loss -= entropy_reg * entropy
+                if calc_pi:
+                    log_beta_gamma_new = jnp.log(timescales_vamp[0] / timescales_gen[0])
                 else:
-                    entropy = jnp.array(0.0)
-                    entropy_loss = jnp.array(0.0)
+                    log_beta_gamma_new = jnp.log(timescales_vamp[1] / timescales_gen[1])
 
-                max_kurt = dim * (dim + 2)
+                # timescales_gen = jnp.exp(log_beta_gamma) * timescales_gen  # make it comparable to vamp timescales
 
-                kurt = jnp.sum(jnp.sum(z_0**2, axis=1) ** 2 * w) / max_kurt
+                loss_gen = -jnp.sum(jnp.exp(-vamp_r * tau / timescales_gen)) + dim
 
-                # z_0: (n_frames, dim)
-                # w: (n_frames,)
-                loss_border = jax.nn.softplus((kurt - 1.5) / 0.1) * 0.1  # not much higher than 1.5
+                # loss_gen = jnp.sum( 1/() )
 
-                # jax.debug.print("border loss {}", loss_border)
+                # dK *= (0.1 * nanometer) ** 2 / jnp.sum(atomic_masses[jnp.array(nl.info.z_array)] ** (-1))
 
-                loss += 0.0 * loss_border
+                # https://chemrxiv.org/doi/pdf/10.26434/chemrxiv-2024-8752d-v2?download=true&redirectToLatest=false
+                # scaling constant to make independed of thermostat
+                # loss_gen = jnp.diag(dK) / beta_timecon
+                # loss_gen = jnp.sum(dK**2)
 
-                # # dK = W0 @ cov.rho_gen @ W1.T / (300 * kelvin * boltzmann)
-                # # dl, _ = jnp.linalg.eigh(dK)
+                # loss -= loss_gen
 
-                # if symmetric:
-                #     l, u = jnp.linalg.eigh(K)
+                mix = 0.1
 
-                # else:
-                #     l, u = jnp.linalg.eig(K)
+                loss += (1 - mix) * loss_vamp + mix * loss_gen
 
-                #     # if not generator:
-                # l = -tau / jnp.log(l) / nanosecond
+                # loss_betagamma = jnp.mean((timescales_gen / timescales_vamp - 1) ** 2)
 
-                # remove the constant eigenvalue
-                # l = l[:-1]
-                # # l = l[1:]
-                # # dl = dl[1:]
-                # # dl = dl[::-1]
+                # loss += loss_betagamma
 
-                # # ts = -tau / jnp.log(l) / nanosecond
-                # # else:
-                # #     l = l
-                # # jax.debug.print("timescales: {l}", l=ts)
-                # # jax.debug.print("dK matrix: {dl}", dl=dl)
-                # # jax.debug.print("dK/ts  {}", dl / ts)
-                # # jax.debug.print("improved eigenvalues: {l}", l=l)
+                # if beta_timecon is not None:
+                #     # https://chemrxiv.org/doi/pdf/10.26434/chemrxiv-2024-8752d-v2?download=true&redirectToLatest=false
+                #     dK *= tau / beta_timecon
 
-                # print(f"{l=}")
+                # sigmas_gen = jnp.linalg.svd(dK, compute_uv=False)
 
-                # # miximize timescales
-                # loss = -jnp.sum(l)
+                # jax.debug.print("sigmas: {}", sigmas)
 
-                # loss = -jnp.sum(K**2)
+                # loss_gen = -jnp.sum(jnp.exp(-sigmas_gen * vamp_r))
 
-                # jax.debug.print("loss dim {out}", out=loss + dim)
-
-                return loss + dim, (
+                return loss, (
                     (
                         loss_vamp,
-                        entropy_loss,
-                        loss_border,
+                        loss_gen,
+                        # loss_betagamma,
+                        # norm_indep,
+                        # loss_border,
                         loss_ortho,
+                        timescales_vamp,
+                        timescales_gen,
                     ),
-                    cov_new,
+                    # cov_new,
+                    log_beta_gamma_new,
                 )
 
             # @jax.jit(static_argnames=["chunk_size"])
             @partial(jit_decorator)
             def _body_fun_2(x):
-                opt_state, params, (cv, cv_t, w, nl), cov, _, iter_num = x
+                (
+                    opt_state,
+                    params,
+                    log_beta_gamma,
+                    (cv, cv_t, w, w_t, nl),
+                    # cov,
+                    _,
+                    iter_num,
+                ) = x
 
                 w /= jnp.sum(w)
+                w_t /= jnp.sum(w_t)
 
                 _objective_fn = Partial_decorator(
                     objective_fn,
+                    log_beta_gamma=log_beta_gamma,
                     x_0=cv,
                     x_t=cv_t,
                     w=w,
+                    w_t=w_t,
                     nl=nl,
                     entropy_reg=entropy_reg,
                     chunk_size=batch_chunk_size,
-                    cov_tot=cov,
+                    # cov_tot=cov,
                     epoch=iter_num,
                 )
 
-                ((loss_val, (losses, cov_new)), grads) = jax.value_and_grad(_objective_fn, has_aux=True)(params)
+                (
+                    (
+                        loss_val,
+                        (
+                            losses,
+                            # cov_new,
+                            log_beta_gamma_new,
+                        ),
+                    ),
+                    grads,
+                ) = jax.value_and_grad(_objective_fn, has_aux=True)(params)
+
+                # print(f"computed gradients with {grads=}")
 
                 def without_aux(params):
                     loss_val, _ = _objective_fn(params)
                     return loss_val
+
+                gnorm = optax.tree.norm(grads, ord=2)
 
                 if lbfgs:
                     updates, opt_state = optimizer.update(
@@ -8248,7 +8007,6 @@ class KoopmanModel(MyPyTreeNode):
                     zoomstate: ScaleByZoomLinesearchState = opt_state[-1]
                     steps = zoomstate.info.num_linesearch_steps
 
-                    gnorm = optax.tree.norm(grads, ord=2)
                     crit = jnp.logical_and(
                         gnorm > 1e-3,
                         steps < max_steps,
@@ -8262,17 +8020,19 @@ class KoopmanModel(MyPyTreeNode):
                     )
 
                     # Adam state is usually the first element in the Optax state tuple
-                    adam_s: ScaleByAdamState = opt_state[0]
+                    # adam_s: ScaleByAdamState = opt_state[0]
 
                     # # 1. Step Count
                     # steps = adam_s.count
 
-                    # 2. Update Magnitude (Average of the second moment)
-                    # This tells you how much "energy" is left in the updates
-                    nu_leaves = jax.tree_util.tree_leaves(adam_s.nu)
-                    avg_nu = jnp.mean(jnp.array([jnp.mean(l) for l in nu_leaves]))
+                    # # 2. Update Magnitude (Average of the second moment)
+                    # # This tells you how much "energy" is left in the updates
+                    # nu_leaves = jax.tree_util.tree_leaves(adam_s.nu)
+                    # avg_nu = jnp.mean(jnp.array([jnp.mean(l) for l in nu_leaves]))
 
-                    crit = avg_nu > 1e-7
+                    # crit = avg_nu > 1e-7
+
+                    crit = True
 
                     # Inside your loop:
                     # health = get_optimizer_health(opt_state)
@@ -8291,43 +8051,45 @@ class KoopmanModel(MyPyTreeNode):
                     iter_num < epochs,
                 )
 
-                loss_vamp, total_entropy, loss_border, loss_ortho = losses
+                # loss_vamp, total_entropy, loss_border, loss_ortho = losses
+                (
+                    loss_vamp,
+                    loss_gen,
+                    loss_ortho,
+                    timescales_vamp,
+                    timescales_gen,
+                ) = losses
 
-                if lbfgs:
-                    jax.debug.print(
-                        "epoch={e} loss train {tl:.3E} loss vamp {v:.6f} entropy {en:.6f} border {b:.6f} ortho {o:.6f} gnorm {g:.6f} steps {s}",
-                        e=iter_num,
-                        tl=loss_val,
-                        v=loss_vamp,
-                        en=total_entropy,
-                        b=loss_border,
-                        g=gnorm,
-                        s=steps,
-                        o=loss_ortho,
-                    )
-                else:
-                    jax.debug.print(
-                        "epoch={e} loss train {tl:.3E} loss vamp {v:.6f} entropy {en:.6f} border {b:.6f} ortho {o:.6f} avg_nu {g:.6e}",
-                        e=iter_num,
-                        tl=loss_val,
-                        v=loss_vamp,
-                        en=total_entropy,
-                        b=loss_border,
-                        g=avg_nu,
-                        o=loss_ortho,
-                    )
+                if not calc_pi:
+                    timescales_vamp = timescales_vamp[1:]
+                    timescales_gen = timescales_gen[1:]
 
-                # print(
-                #     f"epoch={iter_num} loss train {10 ** (loss_val):.3E} loss vamp {loss_vamp:.6f} entropy {total_entropy:.6f} border {loss_border:.6f} gnorm {gnorm:.6f} steps {steps}"
-                # )
+                jax.debug.print(
+                    "epoch={e} loss train {tl:.3E} loss vamp {v:.3E} loss_gen {loss_gen:.3E} timescales_vamp {timescales_vamp} ns timescales_gen {timescales_gen} ns ortho {o:.3E} gnorm {g:.3E} scaling vamp gen {scaling:.3E} ",
+                    e=iter_num,
+                    tl=loss_val,
+                    v=loss_vamp,
+                    loss_gen=loss_gen,
+                    g=gnorm,
+                    o=loss_ortho,
+                    timescales_vamp=timescales_vamp / nanosecond,
+                    timescales_gen=timescales_gen / nanosecond,
+                    scaling=jnp.exp(log_beta_gamma),
+                )
 
-                # b = _cond_fun((opt_state, params, loss_val, losses, gnorm, steps, iter_num))
-
-                return opt_state, params, (cv, cv_t, w, nl), cov_new, b, iter_num + 1
+                return (
+                    opt_state,
+                    params,
+                    log_beta_gamma,
+                    # cov_new,
+                    b,
+                    iter_num + 1,
+                    log_beta_gamma_new,
+                )
 
             @jax.jit
             def _cond_fun(x):
-                opt_state, params, (cv, cv_t, w, nl), cov, b, iter_num = x
+                opt_state, params, cov, b, iter_num = x
 
                 return b
 
@@ -8337,11 +8099,9 @@ class KoopmanModel(MyPyTreeNode):
 
             t0 = time.time()
 
-            # if nl is not None:
-            #     info = nl.info
-            #     update = nl.update
-
             print(f"{nl=}")
+
+            log_beta_gamma = 0
 
             for epoch in range(epochs):
                 if (epoch % 10 == 0) and epoch > 0:
@@ -8356,42 +8116,29 @@ class KoopmanModel(MyPyTreeNode):
                     t0 = t
 
                 if batch_size is not None:
-                    key, (x0_chunk, xt_chunk, w_chunk) = get_batch(key)
-                    # nl_chunk = batch_dict.get("nl_i", None)
-                    # if epoch == 0:
-                    #     print(f"received first batch with {x0_chunk=}  {xt_chunk=} {w_chunk.shape=}")
-
-                # if isinstance(x0_chunk, SystemParams):
-                #     (
-                #         b,
-                #         nn,
-                #         new_nxyz,
-                #         nl_chunk,
-                #     ) = jax.jit(x0_chunk._get_neighbour_list)(info=info, update=update)
-
-                #     if not b:
-                #         print(f"updateing neighbour list at epoch {epoch} with {nn} neighbors")
-                #         update = NeighbourListUpdate.create(nxyz=new_nxyz, num_neighs=nn)
-                # else:
-                #     nl_chunk = None
+                    key, (x0_chunk, xt_chunk, w_chunk, wt_chunk) = get_batch(key)
 
                 (
                     opt_state,
                     learable_params,
-                    _,
-                    cov,
+                    log_beta_gamma,
+                    # cov,
                     b,
                     iters,
+                    log_beta_gamma_new,
                 ) = _body_fun_2(
                     (
                         opt_state,
                         learable_params,
-                        (x0_chunk, xt_chunk, w_chunk, nl),
-                        cov,
+                        log_beta_gamma,
+                        (x0_chunk, xt_chunk, w_chunk, wt_chunk, nl),
+                        # cov,
                         True,
                         epoch,
                     ),
                 )
+
+                log_beta_gamma = log_beta_gamma_new * 0.1 + log_beta_gamma * 0.9
 
                 if not b:
                     print(f"Convergence criteria met at epoch {epoch}, stopping optimization")
@@ -8412,7 +8159,7 @@ class KoopmanModel(MyPyTreeNode):
             nl=nl,
             nl_t=nl_t,
             w=w_tot if use_w else None,
-            w_t=w_tot_t if use_w else None,
+            w_t=w_tot if use_w else None,
             dynamic_weights=dynamic_weights,
             calc_pi=calc_pi,
             only_diag=only_diag,
@@ -8428,10 +8175,6 @@ class KoopmanModel(MyPyTreeNode):
             eps_shrink=eps_shrink,
             generator=generator,
         )
-
-        # print(f"{cov.pi_0=}")
-
-        # print(f"{cov=}")
 
         argmask = cov.mask(eps_pre, max_features_pre, auto_cov_threshold)
 
@@ -9323,12 +9066,6 @@ class Covariances(MyPyTreeNode):
         ):
             assert w is not None
 
-            w_t = w  # _t / (diff_w**2)
-
-            # print(f"{nl=}")
-
-            # print(f"{w=} {w_t=} {diff_w=}")
-
             (
                 rho_00_prev,
                 rho_01_prev,
@@ -9352,73 +9089,36 @@ class Covariances(MyPyTreeNode):
 
                 def phi(x):
                     # print(f"phi: {x=} ")
+
                     cv, _ = trans_f.compute_cv(x, nl, shmap=False)
                     return cv
-
-                # sp shape (macro_chunk, n_atoms, 3)
 
                 shape = cv_0.shape[1:]
                 n_shape = len(shape)
 
-                # print(f"{shape=} {n_shape=}")
+                # shape (n_batch, n_cv,n_atom ,3)
+                jac = jax.vmap(jax.jacrev(phi))(cv_0)
 
-                # print(f"{shape=} {n_shape=}")
+                print(f"{jac=}")
+                jac = jac.cv.coordinates
+                # inv_sqr_masses = 1 / jnp.sqrt(nl.info.masses)
 
-                # linearize instead of jvp, to avoid creating full jacobian
-                # works well for repeated function application
-                cv_0_trans, f_jvp = jax.linearize(phi, cv_0)
+                dL = jnp.einsum("nair,nbir,n,i->ab", jac, jac, w, 1 / nl.info.masses)
+
+                # print(f"{dL=} { sigma_0_inv=}")
 
                 if sigma_0_prev is not None:
                     sigma_0_inv = jnp.where(sigma_0_prev == 0, 1, 1 / sigma_0_prev)
 
-                def get(L, ni):
-                    print(f"outside {ni=}")
+                    dL = jnp.einsum("lk,l,k->lk", dL, sigma_0_inv, sigma_0_inv)
 
-                    @partial(jax.vmap, in_axes=0)
-                    def _get(ni):
-                        print(f"inside {ni=}")
+                cv_0 = jax.vmap(phi)(cv_0)
 
-                        u = jnp.zeros_like(cv_0.coordinates)
+                if cv_1 is not None:
+                    print(f"{cv_1.shape=}")
+                    cv_1 = jax.vmap(phi)(cv_1)
 
-                        u = u.at[:, *ni].set(1.0)
-
-                        x1 = cv_0.replace(coordinates=u)
-
-                        df = f_jvp(x1)
-
-                        # print(f"{df.shape=} {sigma_0_prev=}")
-
-                        if sigma_0_prev is not None:
-                            df = df * sigma_0_inv
-
-                        return jnp.einsum("nl,nk,n->lk", df.cv, df.cv, w)
-
-                    dL = jnp.sum(_get(ni), axis=0)
-
-                    print(f"{dL=}")
-
-                    # need to divide by mass
-                    dL /= atomic_masses[jnp.array(nl.info.z_array)[ni[0, 0]]]
-
-                    return L + dL, None
-
-                ni = jnp.stack(jnp.meshgrid(*[jnp.arange(n) for n in shape], indexing="ij"), axis=2)
-
-                # jax.debug.print("ni before scan {}", ni)
-
-                print(f"{ni=}")
-
-                print(f"{ni.shape=}")
-
-                dL, _ = jax.lax.scan(
-                    get,
-                    jnp.zeros((cv_0_trans.shape[1], cv_0_trans.shape[1])),
-                    ni,
-                )
-
-                print(f"{dL=}")
-
-                cv_0 = cv_0_trans
+                print(f"{cv_0.shape=}")
 
             assert not cv_0.atomic
 
@@ -9488,13 +9188,13 @@ class Covariances(MyPyTreeNode):
             if time_series:
                 pi_1_new, dpi_1, w_tot_t, dw_t = get_pi(x_1, w_t, pi_1_prev, w_prev_t, calc_pi)
 
-                # diff_w = jnp.sqrt(w * w_t)  # * w_dw
+                # # diff_w = jnp.sqrt(w * w_t)  # * w_dw
 
-                w0_dyn = w  # / diff_w
-                w1_dyn = w_t  # / diff_w
+                # w0_dyn = w  # / diff_w
+                # w1_dyn = w_t  # / diff_w
 
-                _, _, diff_tot_0, diff_dw_0 = get_pi(None, w0_dyn, None, diff_w_prev_0, False)
-                _, _, diff_tot_1, diff_dw_1 = get_pi(None, w1_dyn, None, diff_w_prev_1, False)
+                # _, _, diff_tot_0, diff_dw_0 = get_pi(None, w0_dyn, None, diff_w_prev_0, False)
+                # _, _, diff_tot_1, diff_dw_1 = get_pi(None, w1_dyn, None, diff_w_prev_1, False)
 
             def c(_x, _y, _w, _c_prev, _pi_x, _pi_y, _d_pi_x, _d_pi_y, _w_prev, _dw, dx=False):
                 if _d_pi_x is not None and not dx:
@@ -9534,15 +9234,14 @@ class Covariances(MyPyTreeNode):
                 assert w is not None
 
                 if calc_C01:
-                    rho_01 = c(
-                        x_0, x_1, w0_dyn, rho_01_prev, pi_0_new, pi_1_new, dpi_0, dpi_1, diff_w_prev_0, diff_dw_0
-                    )
+                    # Optimal Data-Driven Estimation of Generalized Markov State Models for Non-Equilibrium Dynamics
+                    # sampled under wt
+                    rho_01 = c(x_0, x_1, w, rho_01_prev, pi_0_new, pi_1_new, dpi_0, dpi_1, w_prev, dw)
 
                 if calc_C10:
                     # rho_10 = c(x_1, x_0, w, rho_10_prev, pi_1_new, pi_0_new, dpi_1, dpi_0, w_prev, dw)
-                    rho_10 = c(
-                        x_1, x_0, w1_dyn, rho_10_prev, pi_1_new, pi_0_new, dpi_1, dpi_0, diff_w_prev_1, diff_dw_1
-                    )
+                    # rho_10 = c(x_1, x_0, w, rho_10_prev, pi_1_new, pi_0_new, dpi_1, dpi_0, w_prev, dw)
+                    rho_10 = rho_01.T
 
                 if calc_C11:
                     rho_11 = c(x_1, x_1, w_t, rho_11_prev, pi_1_new, pi_1_new, dpi_1, dpi_1, w_prev_t, dw_t)
@@ -9577,13 +9276,13 @@ class Covariances(MyPyTreeNode):
 
             rho_00 = get_rho(rho_00, f0, f0)
 
+            if generator:
+                rho_gen = get_rho(rho_gen, f0, f0)
+
             if sigma_0_prev is None:
                 sigma_0 = d_sigma_0
             else:
                 sigma_0 = jnp.where(sigma_0_prev == 0, d_sigma_0, sigma_0_prev * d_sigma_0)
-
-            if generator:
-                rho_gen = get_rho(rho_gen, f0, f0)
 
             if time_series:
                 diag_rho_11 = jnp.diag(rho_11) if not only_diag else rho_11
@@ -9649,8 +9348,8 @@ class Covariances(MyPyTreeNode):
                 w_tot,
                 w_tot_t if time_series else None,
                 # None,
-                diff_tot_0 if time_series else None,
-                diff_tot_1 if time_series else None,
+                None,
+                None,
                 bc,
                 d_rho,
             )
@@ -9676,7 +9375,8 @@ class Covariances(MyPyTreeNode):
         if trans_g is not None:
 
             def g_func(x: X, nl: NeighbourList | None) -> CV:
-                x, _ = trans_g.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)
+                if not generator:
+                    x, _ = trans_g.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)
 
                 return x
 
@@ -9982,7 +9682,7 @@ class Covariances(MyPyTreeNode):
 
     #     return W
 
-    def whiten_rho(
+    def whiten_C(
         self,
         choice: str,
         epsilon: float = 1e-4,
@@ -9991,6 +9691,7 @@ class Covariances(MyPyTreeNode):
         cholesky=False,
         apply_mask: bool = True,
         tikhonov=1e-6,
+        return_eigh=False,
     ) -> Array:
         # returns W such that W C W.T = I and hence w.T W = C^-1
 
@@ -9998,17 +9699,17 @@ class Covariances(MyPyTreeNode):
 
         if choice == "rho_00":
             C = self.C00
-            sigma = self.sigma_0
+            # sigma = self.sigma_0
         elif choice == "rho_11":
             C = self.C11
-            sigma = self.sigma_1
+            # sigma = self.sigma_1
         else:
             raise ValueError(f"choice {choice} not known")
 
         assert C is not None
 
         if self.only_diag:
-            return 1 / jnp.sqrt(C) * sigma
+            return 1 / jnp.sqrt(C)
 
         C = C
 
@@ -10016,64 +9717,56 @@ class Covariances(MyPyTreeNode):
 
         print(f"{epsilon=}")
 
-        if cholesky:
-            print(f"cholesky")
+        # if cholesky:
+        #     print(f"cholesky")
 
-            import scipy
+        #     import scipy
 
-            # this is pivoted cholesky
+        #     # this is pivoted cholesky
 
-            if C.dtype == jnp.complex_:
-                cho = scipy.linalg.lapack.zpstrf
-                print("complex cholesky")
-            else:
-                cho = scipy.linalg.lapack.dpstrf
+        #     if C.dtype == jnp.complex_:
+        #         cho = scipy.linalg.lapack.zpstrf
+        #         print("complex cholesky")
+        #     else:
+        #         cho = scipy.linalg.lapack.dpstrf
 
-            X, P, r, info = cho(C, tol=epsilon**2, lower=True)
-            X = jnp.array(X)
+        #     X, P, r, info = cho(C, tol=epsilon**2, lower=True)
+        #     X = jnp.array(X)
 
-            # print(f"{X=}")
+        #     # print(f"{X=}")
 
-            pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
-            X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)  # set upper half to zero
-            X = X[:r, :][:, :r]
+        #     pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
+        #     X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)  # set upper half to zero
+        #     X = X[:r, :][:, :r]
 
-            err = jnp.linalg.norm(pi.T @ C @ pi - X @ jnp.conj(X).T)
+        #     err = jnp.linalg.norm(pi.T @ C @ pi - X @ jnp.conj(X).T)
 
-            print(f" rank reduced chol {err=} rank {r} ")
+        #     print(f" rank reduced chol {err=} rank {r} ")
 
-            # P_out = P[:r]
+        #     # P_out = P[:r]
 
-            X_inv = jax.scipy.linalg.solve_triangular(
-                X,
-                jnp.eye(*X.shape),  # type: ignore
-                lower=True,
-            )
+        #     X_inv = jax.scipy.linalg.solve_triangular(
+        #         X,
+        #         jnp.eye(*X.shape),  # type: ignore
+        #         lower=True,
+        #     )
 
-            W = X_inv @ pi.T
+        #     W = X_inv @ pi.T
 
-        else:
-            # else:
-            theta, G = jnp.linalg.eigh(C)
+        # else:
+        # else:
+        theta, G = jnp.linalg.eigh(C)
 
-            idx = jnp.argmax(theta)
-            mask = jnp.abs(theta / theta[idx]) > epsilon**2
+        theta += tikhonov**2
 
-            if verbose:
-                print(f"{jnp.sum(mask)=} ")
+        theta_inv = 1 / jnp.sqrt(theta)
 
-            theta_safe = jnp.where(mask, theta, 1)
-
-            theta_inv = jnp.where(mask, 1 / jnp.sqrt(theta_safe + tikhonov**2), 0)
-
-            W = jnp.einsum(
-                "i,ji->ij",
-                # V_inv,
-                theta_inv,
-                G,
-            )
-            if apply_mask:
-                W = W[mask, :]
+        W = jnp.einsum(
+            "i,ji->ij",
+            # V_inv,
+            theta_inv,
+            G,
+        )
 
         if apply_mask:
             if max_features is not None:
@@ -10083,10 +9776,8 @@ class Covariances(MyPyTreeNode):
 
         print(f"{jnp.linalg.norm(W @ C @ jnp.conj(W).T - jnp.eye(W.shape[0]))=}")
 
-        # if return_P:
-        #     return W, P_out
-
-        W = W @ jnp.diag(sigma)
+        if return_eigh:
+            return W, theta
 
         return W
 
@@ -10178,32 +9869,32 @@ class Covariances(MyPyTreeNode):
         # generator=True,
         # shrink=False,
     ):
-        W_0 = self.whiten_rho("rho_00", epsilon=eps, apply_mask=apply_mask)
+        W_0 = self.whiten_C("rho_00", epsilon=eps, apply_mask=apply_mask)
 
         print(f"{W_0.shape=}")
 
         if not self.symmetric:
-            W_1 = self.whiten_rho("rho_11", epsilon=eps, apply_mask=apply_mask)
+            W_1 = self.whiten_C("rho_11", epsilon=eps, apply_mask=apply_mask)
         else:
             W_1 = W_0
 
         if self.only_diag:
             if self.generator:
-                T_tilde = jnp.einsum("i,i,i->i", self.rho_gen, W_0, jnp.conj(W_0))
+                T_tilde = jnp.einsum("i,i,i->i", self.C_gen, W_0, jnp.conj(W_0))
             else:
                 assert self.rho_01 is not None
-                T_tilde = jnp.einsum("i,i,i->i", self.rho_01, W_1, jnp.conj(W_0))
+                T_tilde = jnp.einsum("i,i,i->i", self.C01, W_1, jnp.conj(W_0))
 
         else:
             if self.generator:
                 # T_tilde = W_1 @ (self.C10 - self.C00) @ W_0.T
                 # T_tilde = (W_0 @ (self.C01 - self.C00) @ W_1.T).T
 
-                T_tilde = (W_0 @ (self.rho_gen) @ jnp.conj(W_0).T).T
+                T_tilde = (W_0 @ (self.C_gen) @ jnp.conj(W_0).T).T
 
             else:
                 assert self.rho_01 is not None
-                T_tilde = (W_0 @ self.rho_01 @ jnp.conj(W_1).T).T
+                T_tilde = (W_0 @ self.C01 @ jnp.conj(W_1).T).T
 
         print(f"{T_tilde.shape=}")
 
@@ -10303,8 +9994,8 @@ class Covariances(MyPyTreeNode):
 
             print(f"{jnp.sum(m)=}")
 
-        W_0 = jnp.einsum("ij,j->ij", W_0, self.sigma_0_inv)
-        W_1 = jnp.einsum("ij,j->ij", W_1, self.sigma_1_inv if self.sigma_1_inv is not None else self.sigma_0_inv)
+        # W_0 = jnp.einsum("ij,j->ij", W_0, self.sigma_0_inv)
+        # W_1 = jnp.einsum("ij,j->ij", W_1, self.sigma_1_inv if self.sigma_1_inv is not None else self.sigma_0_inv)
 
         return W_0, W_1, s
 
@@ -10580,7 +10271,7 @@ class Covariances(MyPyTreeNode):
             _rho_10 = _rho_10 + get_outer(_pi_s_1, _pi_s_0) - get_outer(_pi_s, _pi_s)
 
         sym_rho_00 = (1 / 2) * (_rho_00 + _rho_11)
-        sym_rho_01 = (1 / 2) * (_rho_01 + _rho_10)
+        sym_rho_01 = (1 / 2) * (_rho_01 + _rho_10.T)
 
         d_sigma = jnp.sqrt(jnp.diag(sym_rho_00)) if not self.only_diag else jnp.sqrt(sym_rho_00)
         d_sigma_inv = jnp.where(d_sigma != 0, 1 / d_sigma, 0)

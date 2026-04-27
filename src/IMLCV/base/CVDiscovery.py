@@ -1627,6 +1627,9 @@ class Transformer(MyPyTreeNode):
                     fl.append(dens)
 
                 for fig, f, s, cm in zip(figs, fl, bar_scales, cmaps):
+                    if f is None:
+                        continue
+
                     plot_f(
                         fig=fig,
                         grid=gs[
@@ -1728,6 +1731,8 @@ class Transformer(MyPyTreeNode):
                     fl.append(dens)
 
                 for fig, f, s, cm in zip(figs, fl, bar_scales, cmaps):
+                    if f is None:
+                        continue
                     plot_f(
                         fig=fig,
                         grid=gs[
@@ -1806,6 +1811,9 @@ class Transformer(MyPyTreeNode):
                     fl.append(dens)
 
                 for fig, f, s, cm in zip(figs, fl, bar_scales, cmaps):
+                    if f is None:
+                        continue
+
                     plot_f(
                         fig=fig,
                         grid=gs[

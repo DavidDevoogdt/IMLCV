@@ -73,7 +73,7 @@ class Observable:
         chunk_size=None,
         shmap=False,
         rounds: Rounds | None = None,
-        time_correlation_method=None,
+        time_correlation_method="acf",
     ):
         print(f"{dlo_kwargs["cv"]=}")
 
@@ -241,10 +241,10 @@ class Observable:
         rbf_kernel="multiquadric",
         rbf_degree=None,
         executors=Executors.training,
-        time_correlation_method=None,
+        time_correlation_method="acf",
         return_std_bias=False,
         n_hist=None,
-        equilibration_time=0 * picosecond,
+        equilibration_time=-1,
     ):
         if temp is None:
             temp = self.rounds.T
@@ -392,9 +392,9 @@ class Observable:
         min_samples_per_bin=5,
         resample=False,
         direct_bias=False,
-        time_correlation_method=None,
+        time_correlation_method="acf",
         return_std_bias=False,
-        equilibration_time=0 * picosecond,
+        equilibration_time=-1,
     ):
         if cv is None:
             cv = rounds.cv
@@ -570,10 +570,10 @@ class Observable:
         min_samples_per_bin=1,
         executors=Executors.training,
         direct_bias=False,
-        time_correlation_method=None,
+        time_correlation_method="acf",
         return_std_bias=False,
         n_hist=None,
-        equilibration_time=0 * picosecond,
+        equilibration_time=-1,
     ):
         if cv_round is None:
             cv_round = self.cv_round
@@ -656,10 +656,10 @@ class Observable:
         executors=Executors.training,
         direct_bias=False,
         n_max_lin: int = 50,
-        time_correlation_method=None,
+        time_correlation_method="acf",
         return_std_bias=False,
         n_hist=None,
-        equilibration_time=0 * picosecond,
+        equilibration_time=-1,
     ):
         print(f"{n_max_lin=}")
 

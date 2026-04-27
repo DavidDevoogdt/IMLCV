@@ -198,7 +198,7 @@ class Scheme:
         plot_margin=0.1,
         enforce_min_traj_length=False,
         recalc_cv=False,
-        only_finished=False,
+        only_finished=True,
         plot_umbrella=False,
         max_bias=100 * kjmol,
         max_grad=100 * kjmol,
@@ -221,7 +221,7 @@ class Scheme:
         first_round_no_fes_bias=False,
         dT=0,
         max_b=100 * kjmol,
-        equilibration_time=0 * picosecond,
+        equilibration_time=-1,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -369,7 +369,7 @@ class Scheme:
         macro_chunk_nl=5000,
         verbose=False,
         koopman=True,
-        equilibration_time=None,
+        equilibration_time=-1,
         n_max_lin=100,
     ):
         self.rounds.update_CV(

@@ -18,7 +18,7 @@ from typing_extensions import ParamSpec
 
 from IMLCV import unpickler
 from IMLCV.base.datastructures import MyPyTreeNode, field
-from IMLCV.base.UnitsConstants import angstrom
+from IMLCV.base.UnitsConstants import angstrom, atomic_masses
 
 if TYPE_CHECKING:
     from IMLCV.base.MdEngine import StaticMdInfo
@@ -665,7 +665,8 @@ def macro_chunk_map_fun(
     print_every=10,
     jit_f=True,
     debug_print=False,
-) -> T:
+    return_z=False,
+) -> T | tuple[T, list[X2], list[X2] | None]:
     if w_t is None and y_t is not None:
         w_t = w
 
@@ -686,6 +687,7 @@ def macro_chunk_map_fun(
         print_every=print_every,
         jit_f=jit_f,
         debug_print=debug_print,
+        return_z=return_z,
     )  # type: ignore
 
 
@@ -734,8 +736,13 @@ def _macro_chunk_map(
     print_every=10,
     jit_f=True,
     debug_print=False,
+    return_z=False,
+    pass_dz=False,
 ):
     # helper method to apply a function to list of SystemParams or CVs, chunked in groups of macro_chunk
+
+    if chunk_func is None:
+        return_z = True
 
     compute_t = y_t is not None
 
@@ -812,7 +819,7 @@ def _macro_chunk_map(
         if compute_t and d_w is not None:
             dw_stack = jnp.hstack(d_w)
 
-        return chunk_func(
+        func_out = chunk_func(
             chunk_func_init_args,
             z,
             zt if compute_t else None,
@@ -820,6 +827,15 @@ def _macro_chunk_map(
             wt_stack,
             dw_stack if compute_t and d_w is not None else None,
         )
+
+        out = (func_out,)
+
+        if return_z:
+            out += (z,)
+            if compute_t:
+                out += (zt,)
+
+        return out if len(out) > 1 else out[0]
 
     if macro_chunk is None:
         return single_chunk()
@@ -839,6 +855,11 @@ def _macro_chunk_map(
     else:
         w_chunk = None
 
+    if compute_t:
+        if w_t is None:
+            w_t = w
+            print("WARNING: w_t is None, using w instead")
+
     tot_chunk = 0
     stack_dims_chunk = []
 
@@ -850,6 +871,7 @@ def _macro_chunk_map(
     tot_running = 0
 
     z = []
+
     last_z: X2 | None = None
 
     n_iter = 0
@@ -999,6 +1021,12 @@ def _macro_chunk_map(
                 nl_stack if isinstance(nl, list) else nl,
             )
 
+            if pass_dz:
+                _dz_chunk = jax.jacrev(f, argnums=0)(
+                    y_stack,
+                    nl_stack if isinstance(nl, list) else nl,
+                )
+
             _zt_chunk: None | X2 = None
 
             if compute_t:
@@ -1017,6 +1045,12 @@ def _macro_chunk_map(
                     yt_stack,
                     nlt_stack if isinstance(nl_t, list) else nl_t,
                 )
+
+                if pass_dz:
+                    _dzt_chunk = jax.jacrev(ft, argnums=0)(
+                        yt_stack,
+                        nlt_stack if isinstance(nl_t, list) else nl_t,
+                    )
 
             if verbose:
                 if debug_print:
@@ -1059,107 +1093,21 @@ def _macro_chunk_map(
 
             tot_running += tot_chunk
 
-            if chunk_func is None:
-                assert not isinstance(_z_chunk, SystemParams)
-                _z_chunk.stack_dims = tuple(stack_dims_chunk)
-                z_chunk = cast(list[X2], _z_chunk.unstack())
-
-                if compute_t:
-                    assert not isinstance(_zt_chunk, SystemParams)
-                    assert _zt_chunk is not None
-                    _zt_chunk.stack_dims = tuple(stack_dims_chunk)
-                    zt_chunk = cast(list[X2], _zt_chunk.unstack())
-
-                if last_z is not None:
-                    z_chunk[0] = last_z.stack(last_z, z_chunk[0])
-
-                    if isinstance(z_chunk[0], CV):
-                        z_chunk[0].stack_dims = None
-
-                    elif isinstance(z_chunk[0], NeighbourList):
-                        z_chunk[0].update.stack_dims = None
-
-                    if compute_t:
-                        assert last_zt is not None
-                        # last_zt = cast(CV, last_zt)
-                        assert zt_chunk is not None
-                        # zt_chunk = cast(list[CV], zt_chunk)
-
-                        zt_chunk[0] = last_zt.stack(last_zt, zt_chunk[0])
-                        if isinstance(zt_chunk[0], CV):
-                            zt_chunk[0].stack_dims = None
-
-                        elif isinstance(zt_chunk[0], NeighbourList):
-                            zt_chunk[0].update.stack_dims = None
-
-                if split_last:
-                    last_z = z_chunk[-1]
-                    z_chunk = z_chunk[:-1]
-
-                    last_chunk_y = cast(X, last_chunk_y)
-
-                    y_chunk = [last_chunk_y]
-
-                    if last_chunk_nl is not None:
-                        nl_chunk = [last_chunk_nl]
-
-                    if compute_t:
-                        assert zt_chunk is not None
-
-                        last_zt = zt_chunk[-1]
-                        zt_chunk = zt_chunk[:-1]
-
-                        last_chunk_yt = cast(X, last_chunk_yt)
-                        yt_chunk = [last_chunk_yt]
-
-                        if last_chunk_nlt is not None:
-                            nlt_chunk = [last_chunk_nlt]
-
-                    tot_chunk = last_chunk_y.shape[0]
-                    stack_dims_chunk = [tot_chunk]
-
-                    # n_prev = n
-
-                else:
-                    last_z = None
-                    y_chunk = []
-                    nl_chunk = [] if isinstance(nl, list) else None
-
-                    tot_chunk = 0
-                    stack_dims_chunk = []
-
-                    last_chunk_y = None
-                    last_chunk_nl = None
-
-                    if compute_t:
-                        last_zt = None
-                        yt_chunk = []
-                        nlt_chunk = [] if isinstance(nl_t, list) else None
-
-                        last_chunk_yt = None
-                        last_chunk_nlt = None
-
-                    # n_prev = n + 1
-
-                w_chunk = [] if w is not None else None
-
-                z.extend(z_chunk)
-                if compute_t:
-                    zt.extend(zt_chunk)  # type: ignore
-                    wt_chunk = [] if w_t is not None else None
-                    dw_chunk = [] if d_w is not None else None
-
-                # print("exiting")
-            else:
-                # assert w_stack is not None
-
-                chunk_func_init_args = chunk_func(
+            if chunk_func is not None:
+                args = (
                     chunk_func_init_args,
                     _z_chunk,
                     _zt_chunk if compute_t else None,
                     w_stack,
                     wt_stack if compute_t else None,
                     dw_stack if compute_t and d_w is not None else None,
+                )
+
+                if pass_dz:
+                    args += (_dz_chunk, _dzt_chunk if compute_t else None)
+
+                chunk_func_init_args = chunk_func(
+                    *args,
                 )
 
                 if jit_f:
@@ -1175,55 +1123,111 @@ def _macro_chunk_map(
 
                         cf_cache = cs
 
-                if split_last:
-                    assert last_chunk_y is not None
-                    last_chunk_y = cast(X, last_chunk_y)
+            # if chunk_func is None:
+            assert not isinstance(_z_chunk, SystemParams)
+            _z_chunk.stack_dims = tuple(stack_dims_chunk)
+            z_chunk = cast(list[X2], _z_chunk.unstack())
 
-                    y_chunk = [last_chunk_y]
-                    nl_chunk = [last_chunk_nl] if last_chunk_nl is not None else None
-                    if w is not None:
-                        assert last_chunk_w is not None
-                        w_chunk = [last_chunk_w]
+            if compute_t:
+                assert not isinstance(_zt_chunk, SystemParams)
+                assert _zt_chunk is not None
+                _zt_chunk.stack_dims = tuple(stack_dims_chunk)
+                zt_chunk = cast(list[X2], _zt_chunk.unstack())
 
-                    if compute_t:
-                        assert last_chunk_yt is not None
-                        last_chunk_yt = cast(X, last_chunk_yt)
+            if last_z is not None:
+                z_chunk[0] = last_z.stack(last_z, z_chunk[0])
 
-                        yt_chunk = [last_chunk_yt]
-                        nlt_chunk = [last_chunk_nlt] if last_chunk_nlt is not None else None
+                if isinstance(z_chunk[0], CV):
+                    z_chunk[0].stack_dims = None
 
-                        if w_t is not None:
-                            assert last_chunk_wt is not None
-                            wt_chunk = [last_chunk_wt]
+                elif isinstance(z_chunk[0], NeighbourList):
+                    z_chunk[0].update.stack_dims = None
 
-                        if d_w is not None:
-                            assert last_chunk_dw is not None
-                            dw_chunk = [last_chunk_dw]
+                if compute_t:
+                    assert last_zt is not None
+                    # last_zt = cast(CV, last_zt)
+                    assert zt_chunk is not None
+                    # zt_chunk = cast(list[CV], zt_chunk)
 
-                    tot_chunk = last_chunk_y.shape[0]
-                    stack_dims_chunk = [tot_chunk]
+                    zt_chunk[0] = last_zt.stack(last_zt, zt_chunk[0])
+                    if isinstance(zt_chunk[0], CV):
+                        zt_chunk[0].stack_dims = None
 
-                    # n_prev = n
+                    elif isinstance(zt_chunk[0], NeighbourList):
+                        zt_chunk[0].update.stack_dims = None
 
-                else:
-                    y_chunk = []
-                    nl_chunk = [] if isinstance(nl, list) else None
-                    w_chunk = [] if w is not None else None
+            if split_last:
+                last_z = z_chunk[-1]
+                z_chunk = z_chunk[:-1]
 
-                    last_chunk_y = None
-                    last_chunk_nl = None
-                    last_chunk_w = None
+                last_chunk_y = cast(X, last_chunk_y)
 
-                    tot_chunk = 0
-                    stack_dims_chunk = []
+                y_chunk = [last_chunk_y]
 
-                    if compute_t:
-                        yt_chunk = []
-                        nlt_chunk = [] if isinstance(nl_t, list) else None
-                        # wt_chunk = [] if w_t is not None else None
+                if last_chunk_nl is not None:
+                    nl_chunk = [last_chunk_nl]
 
-                        last_chunk_yt = None
-                        last_chunk_nlt = None
+                if w is not None:
+                    assert last_chunk_w is not None
+                    w_chunk = [last_chunk_w]
+
+                if compute_t:
+                    assert zt_chunk is not None
+
+                    last_zt = zt_chunk[-1]
+                    zt_chunk = zt_chunk[:-1]
+
+                    last_chunk_yt = cast(X, last_chunk_yt)
+                    yt_chunk = [last_chunk_yt]
+
+                    if last_chunk_nlt is not None:
+                        nlt_chunk = [last_chunk_nlt]
+
+                    if w_t is not None:
+                        assert last_chunk_wt is not None
+                        wt_chunk = [last_chunk_wt]
+
+                    if d_w is not None:
+                        assert last_chunk_dw is not None
+                        dw_chunk = [last_chunk_dw]
+
+                tot_chunk = last_chunk_y.shape[0]
+                stack_dims_chunk = [tot_chunk]
+
+            else:
+                last_z = None
+                y_chunk = []
+                nl_chunk = [] if isinstance(nl, list) else None
+
+                tot_chunk = 0
+                stack_dims_chunk = []
+
+                last_chunk_y = None
+                last_chunk_nl = None
+
+                if compute_t:
+                    last_zt = None
+                    yt_chunk = []
+                    nlt_chunk = [] if isinstance(nl_t, list) else None
+
+                    last_chunk_yt = None
+                    last_chunk_nlt = None
+
+                w_chunk = [] if w is not None else None
+
+                if compute_t:
+                    if w_t is not None:
+                        wt_chunk = [] if w_t is not None else None
+
+                    if d_w is not None:
+                        dw_chunk = [] if d_w is not None else None
+
+            if return_z:
+                z.extend(z_chunk)
+
+            if compute_t:
+                if return_z:
+                    zt.extend(zt_chunk)  # type: ignore
 
         if tot_chunk < macro_chunk and (tot_running + tot_chunk != tot):
             n += 1
@@ -1233,13 +1237,18 @@ def _macro_chunk_map(
         dt = datetime.now()
         print(f"\nfinished at: {dt:%H:%M:%S}.{dt.microsecond // 1000:03d}")
 
-    if chunk_func is None:
+    out_args = []
+
+    if chunk_func is not None:
+        out_args.append(chunk_func_init_args)
+
+    if return_z:
+        out_args.append(z)
+
         if compute_t:
-            return z, zt
+            out_args.append(zt)
 
-        return z
-
-    return chunk_func_init_args
+    return out_args if len(out_args) > 1 else out_args[0]
 
 
 # @partial(jit_decorator, static_argnames=["target_size", "keep_stack_info"])
@@ -2365,6 +2374,12 @@ class NeighbourListInfo(MyPyTreeNode):
         z_array = jnp.array(self.z_array)
         one_hot = jax.vmap(lambda x: jnp.where(x == jnp.array(self.z_unique), 1.0, 0.0))(z_array)
         return one_hot
+
+    @property
+    def masses(self):
+        z_array = jnp.array(self.z_array)
+
+        return atomic_masses[z_array]
 
 
 class NeighbourListUpdate(MyPyTreeNode):

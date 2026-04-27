@@ -604,6 +604,7 @@ class Bias(ABC, MyPyTreeNode):
         plot_FES=True,
         cv_title: str | bool = True,
         data_title: str | bool = True,
+        equilibration_time=None,
         **kwargs,
     ):
         from IMLCV.base.CVDiscovery import Transformer

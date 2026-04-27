@@ -13,7 +13,8 @@ import h5py
 import jax
 import jax.numpy as jnp
 import jsonpickle
-from ase.data import atomic_masses
+
+# from ase.data import atomic_masses
 from jax import Array
 from typing_extensions import Self
 
@@ -21,7 +22,7 @@ from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, field
-from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol, kelvin
+from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol, kelvin, atomic_masses
 
 ######################################
 #             Trajectory             #
@@ -78,7 +79,7 @@ class StaticMdInfo(MyPyTreeNode):
 
     @property
     def masses(self):
-        return jnp.array([atomic_masses[int(n)] for n in self.atomic_numbers]) * amu
+        return atomic_masses[jnp.array(self.atomic_numbers)]
 
     @property
     def thermostat(self):
