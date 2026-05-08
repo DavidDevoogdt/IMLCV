@@ -7,7 +7,7 @@ from jax import closure_convert, custom_jvp
 from jax.tree_util import tree_map
 from scipy.special import roots_laguerre, roots_legendre
 
-from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
+from IMLCV.base.decoratros import Partial_decorator, vmap_decorator
 
 T = TypeVar("T")
 P = ParamSpec("P")

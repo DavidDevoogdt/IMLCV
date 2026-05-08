@@ -35,7 +35,7 @@ from IMLCV.base.dataobjects import (
     TrajectoryInfo,
 )
 from IMLCV.base.dataset import DataLoaderOutput
-from IMLCV.base.datastructures import Partial_decorator, jit_decorator, vmap_decorator
+from IMLCV.base.decoratros import Partial_decorator, jit_decorator, vmap_decorator
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.plot import plot_app, plot_CV, plot_CV_corr
 from IMLCV.base.UnitsConstants import (

@@ -13,7 +13,7 @@ from IMLCV.base.dataobjects import (
     NeighbourList,
     SystemParams,
 )
-from IMLCV.base.datastructures import jit_decorator, vmap_decorator
+from IMLCV.base.decoratros import jit_decorator, vmap_decorator
 from IMLCV.base.rounds import DataLoaderOutput
 from IMLCV.base.UnitsConstants import boltzmann, kjmol, nanosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize

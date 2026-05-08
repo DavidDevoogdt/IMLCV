@@ -34,7 +34,7 @@ import jax.numpy as jnp
 from IMLCV.base.dataobjects import (
     SystemParams,
 )
-from IMLCV.base.datastructures import MyPyTreeNode, field, jit_decorator
+from IMLCV.base.decoratros import MyPyTreeNode, field, jit_decorator
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
 from IMLCV.new_yaff.ff import YaffFF
 from IMLCV.new_yaff.iterative import (

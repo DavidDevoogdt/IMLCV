@@ -8,7 +8,7 @@ from IMLCV.base.dataobjects import (
     CV,
     CvMetric,
 )
-from IMLCV.base.datastructures import jit_decorator, vmap_decorator
+from IMLCV.base.decoratros import jit_decorator, vmap_decorator
 
 
 def linear(r):

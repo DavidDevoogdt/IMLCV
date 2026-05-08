@@ -26,7 +26,7 @@
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 
 
 class Hook(MyPyTreeNode):

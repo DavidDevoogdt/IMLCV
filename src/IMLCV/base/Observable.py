@@ -12,7 +12,7 @@ from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.dataobjects import (
     CV,
 )
-from IMLCV.base.datastructures import Partial_decorator
+from IMLCV.base.decoratros import Partial_decorator
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
 from IMLCV.base.UnitsConstants import boltzmann, kelvin, kjmol, picosecond
 from IMLCV.configs.bash_app_python import bash_app_python

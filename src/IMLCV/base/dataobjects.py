@@ -18,7 +18,7 @@ from jax.sharding import Mesh, PartitionSpec
 from jax.tree_util import tree_flatten, tree_unflatten
 from typing_extensions import ParamSpec
 
-from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, field, jit_decorator, vmap_decorator
+from IMLCV.base.decoratros import MyPyTreeNode, Partial_decorator, field, jit_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import angstrom, atomic_masses, kjmol
 
 if TYPE_CHECKING:
@@ -3176,7 +3176,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         return self._get("_cell")
 
     @cell.setter
-    def cell(self, value: Array):
+    def cell(self, value: Array | None):
         self._set("_cell", value)
 
     @property
@@ -3184,7 +3184,7 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
         return self._get("_cell_t")
 
     @cell_t.setter
-    def cell_t(self, value: Array):
+    def cell_t(self, value: Array | None):
         self._set("_cell_t", value)
 
     @property

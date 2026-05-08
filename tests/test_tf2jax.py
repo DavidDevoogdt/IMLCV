@@ -12,7 +12,7 @@ def test_call_tf_batcher():
     from jax.experimental.jax2tf.call_tf import call_tf_p
     from jax.interpreters import batching
 
-    from IMLCV.base.datastructures import vmap_decorator
+    from IMLCV.base.decoratros import vmap_decorator
     from IMLCV.external.tf2jax import loop_batcher
 
     @jit

@@ -7,7 +7,7 @@ from IMLCV.base.dataobjects import (
     NeighbourList,
     SystemParams,
 )
-from IMLCV.base.datastructures import MyPyTreeNode
+from IMLCV.base.decoratros import MyPyTreeNode
 from IMLCV.base.MdEngine import StaticMdInfo
 
 

@@ -11,14 +11,14 @@ from jax.tree_util import tree_flatten
 
 from IMLCV import unpickler
 from IMLCV.base.dataobjects import CV, CvMetric, NeighbourList, ShmapKwargs, SystemParams, X, padded_vmap
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 
 if TYPE_CHECKING:
     pass
 
 from functools import partial
 
-from IMLCV.base.datastructures import Partial_decorator, jit_decorator
+from IMLCV.base.decoratros import Partial_decorator, jit_decorator
 
 ######################################
 #       CV tranformations            #

@@ -16,7 +16,7 @@ from IMLCV.base.dataobjects import (
     NeighbourList,
     SystemParams,
 )
-from IMLCV.base.datastructures import field
+from IMLCV.base.decoratros import field
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.UnitsConstants import angstrom, electronvolt, kjmol, nanometer
 from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR

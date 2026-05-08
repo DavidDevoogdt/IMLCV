@@ -17,7 +17,7 @@ from IMLCV.base.dataobjects import (
     NeighbourListInfo,
     SystemParams,
 )
-from IMLCV.base.datastructures import vmap_decorator
+from IMLCV.base.decoratros import vmap_decorator
 from IMLCV.implementations.CV import get_sinkhorn_divergence_2, sb_descriptor, soap_descriptor
 from IMLCV.tools.bessel_callback import iv, ive, ive_b, jv, kv, kve, spherical_jn, spherical_yn, yv
 from IMLCV.tools.soap_kernel import p_inl_sb

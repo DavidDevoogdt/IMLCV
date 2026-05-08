@@ -28,7 +28,7 @@ from __future__ import annotations, division
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import boltzmann, femtosecond
 from IMLCV.new_yaff.utils import clean_momenta, get_ndof_internal_md, get_random_vel, stabilized_cholesky_decomp
 from IMLCV.new_yaff.verlet import ThermostatHook, VerletIntegrator

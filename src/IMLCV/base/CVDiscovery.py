@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from IMLCV.base.bias import Bias, NoneBias
 from IMLCV.base.CV import CollectiveVariable, CvTrans
 from IMLCV.base.dataobjects import CV, CvMetric, ShmapKwargs, SystemParams
-from IMLCV.base.datastructures import MyPyTreeNode
+from IMLCV.base.decoratros import MyPyTreeNode
 from IMLCV.base.plot import plot_app
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.implementations.CV import _scale_cv_trans, identity_trans, scale_cv_trans

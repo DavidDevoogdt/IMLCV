@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 import jax
 
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 from IMLCV.new_yaff.system import YaffSys
 
 if TYPE_CHECKING:

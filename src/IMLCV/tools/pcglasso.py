@@ -3,7 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.datastructures import jit_decorator
+from IMLCV.base.decoratros import jit_decorator
 
 
 def f(d, A):

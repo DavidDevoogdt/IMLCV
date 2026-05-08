@@ -7,7 +7,7 @@ from IMLCV.base.dataobjects import (
     NeighbourListInfo,
     SystemParams,
 )
-from IMLCV.base.datastructures import vmap_decorator
+from IMLCV.base.decoratros import vmap_decorator
 
 ######################################
 #           Test                     #

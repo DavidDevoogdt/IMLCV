@@ -12,7 +12,7 @@ from IMLCV.base.dataobjects import (
     CV,
     CvMetric,
 )
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.tools._rbfinterp_pythran import (
     NAME_TO_FUNC,

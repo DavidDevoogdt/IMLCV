@@ -2,7 +2,7 @@ from functools import partial
 
 import jax.numpy as jnp
 
-from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
+from IMLCV.base.decoratros import Partial_decorator, vmap_decorator
 
 # XYZ-to-sRGB matrix
 _m = jnp.array(

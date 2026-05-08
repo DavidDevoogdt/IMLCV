@@ -1,4 +1,4 @@
-# taken from https://github.com/shashankdholakia/harmonix/blob/main/src/harmonix/utils.py
+s  # taken from https://github.com/shashankdholakia/harmonix/blob/main/src/harmonix/utils.py
 
 from functools import partial
 
@@ -9,7 +9,7 @@ from jax._src.numpy.util import _where, check_arraylike, promote_dtypes_inexact
 from jax._src.typing import Array, ArrayLike
 from jax.scipy.special import gamma
 
-from IMLCV.base.datastructures import custom_jvp_decorator, jit_decorator
+from IMLCV.base.decoratros import custom_jvp_decorator, jit_decorator
 
 _lax_const = lax._const
 

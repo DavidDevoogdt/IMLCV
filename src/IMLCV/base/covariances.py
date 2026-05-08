@@ -10,7 +10,7 @@ from IMLCV.base.CV import (
     CvTrans,
 )
 from IMLCV.base.dataobjects import CV, NeighbourList, ShmapKwargs, SystemParams, macro_chunk_map_fun
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 
 X = TypeVar("X", "CV", "SystemParams", "NeighbourList")
 X2 = TypeVar("X2", "CV", "SystemParams", "NeighbourList")

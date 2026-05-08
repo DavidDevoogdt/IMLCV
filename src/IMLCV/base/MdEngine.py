@@ -17,7 +17,7 @@ from typing_extensions import Self
 from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.dataobjects import CV, FullTrajectoryInfo, NeighbourList, ShmapKwargs, StaticMdInfo, SystemParams
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import angstrom, bar, kjmol
 
 ######################################

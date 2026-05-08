@@ -27,7 +27,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from IMLCV.base.datastructures import vmap_decorator
+from IMLCV.base.decoratros import vmap_decorator
 from IMLCV.base.UnitsConstants import boltzmann
 from IMLCV.new_yaff.ff import YaffFF
 from IMLCV.new_yaff.system import YaffCell

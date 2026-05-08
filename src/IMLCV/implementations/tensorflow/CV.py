@@ -12,7 +12,7 @@ from IMLCV.base.dataobjects import (
     CV,
     NeighbourList,
 )
-from IMLCV.base.datastructures import MyPyTreeNode, field
+from IMLCV.base.decoratros import MyPyTreeNode, field
 
 if TYPE_CHECKING:
     import tensorflow as tfl

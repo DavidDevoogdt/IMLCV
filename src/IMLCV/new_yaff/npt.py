@@ -30,7 +30,7 @@ from typing import cast
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.datastructures import field
+from IMLCV.base.decoratros import field
 from IMLCV.base.UnitsConstants import (
     bar,
     boltzmann,

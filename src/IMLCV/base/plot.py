@@ -19,7 +19,7 @@ from IMLCV.base.dataobjects import (
     CV,
     SystemParams,
 )
-from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
+from IMLCV.base.decoratros import Partial_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import kelvin, kjmol
 from IMLCV.external.hsluv import hsluv_to_rgb
 

@@ -10,7 +10,7 @@ from jax import Array
 from IMLCV.base.covariances import Covariances
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.dataobjects import CV, NeighbourList, SystemParams, chunk_selector
-from IMLCV.base.datastructures import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
+from IMLCV.base.decoratros import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import boltzmann, kjmol, nanosecond
 
 

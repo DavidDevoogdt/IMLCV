@@ -9,7 +9,7 @@ from IMLCV.base.CV import CollectiveVariable
 from IMLCV.base.dataobjects import (
     CV,
 )
-from IMLCV.base.datastructures import field
+from IMLCV.base.decoratros import field
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.tools._rbf_interp import RBFInterpolator

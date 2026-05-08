@@ -8,7 +8,7 @@ from jax import Array, lax
 from scipy.special import legendre as sp_legendre
 
 from IMLCV.base.dataobjects import NeighbourList, ShmapKwargs, SystemParams, padded_shard_map
-from IMLCV.base.datastructures import Partial_decorator, custom_jvp_decorator, jit_decorator, vmap_decorator
+from IMLCV.base.decoratros import Partial_decorator, custom_jvp_decorator, jit_decorator, vmap_decorator
 from IMLCV.external.quadrature import quad
 from IMLCV.tools.bessel_callback import ie_n, spherical_jn
 

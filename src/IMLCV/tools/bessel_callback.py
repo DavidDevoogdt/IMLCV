@@ -7,7 +7,7 @@ import numpy as onp
 import scipy.special
 from jax import pure_callback
 
-from IMLCV.base.datastructures import custom_jvp_decorator
+from IMLCV.base.decoratros import custom_jvp_decorator
 from IMLCV.tools.bessel_jn import bessel_jn
 
 # from jax.scipy.special import bessel_jn

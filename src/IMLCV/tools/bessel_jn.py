@@ -10,7 +10,7 @@ from jax import numpy as jnp
 from jax._src import dtypes
 from jax._src.numpy.util import promote_dtypes_inexact
 
-from IMLCV.base.datastructures import custom_jvp_decorator, jit_decorator
+from IMLCV.base.decoratros import custom_jvp_decorator, jit_decorator
 
 # polynomial coefficients for J0
 PP0 = np.array(

@@ -24,7 +24,7 @@ from IMLCV.base.dataobjects import (
     padded_shard_map,
     padded_vmap,
 )
-from IMLCV.base.datastructures import (
+from IMLCV.base.decoratros import (
     MyPyTreeNode,
     Partial_decorator,
     field,
