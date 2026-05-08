@@ -4,7 +4,10 @@ from typing import Callable
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.CV import CV, CvMetric
+from IMLCV.base.dataobjects import (
+    CV,
+    CvMetric,
+)
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
 
 

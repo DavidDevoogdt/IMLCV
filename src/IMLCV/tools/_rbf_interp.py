@@ -6,15 +6,16 @@ from itertools import combinations_with_replacement
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.linalg import cho_factor, cho_solve
 from scipy.special import comb
 
-from IMLCV.base.CV import CV, CvMetric
+from IMLCV.base.dataobjects import (
+    CV,
+    CvMetric,
+)
 from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.tools._rbfinterp_pythran import (
     NAME_TO_FUNC,
-    cv_vals,
     eval_kernel_matrix,
     eval_polynomial_matrix,
     evaluate_system,
@@ -401,7 +402,7 @@ class RBFInterpolator(MyPyTreeNode):
 
                 return _gml(P, K + smooth**2 * jnp.diag(sigma**2), d)
 
-            from jaxopt import GaussNewton, GradientDescent, ScipyMinimize
+            from jaxopt import GradientDescent
 
             print(
                 f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Starting {smoothing_solver} optimization of smoothing parameter...",

@@ -25,8 +25,6 @@
 
 from __future__ import annotations, division
 
-from dataclasses import KW_ONLY
-
 import jax
 import jax.numpy as jnp
 

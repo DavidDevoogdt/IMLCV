@@ -8,11 +8,12 @@ from jax import Array
 from jaxopt.linear_solve import solve_normal_cg
 
 from IMLCV.base.CV import (
-    CV,
     CollectiveVariable,
     CvFunBase,
-    CvMetric,
     CvTrans,
+)
+from IMLCV.base.dataobjects import (
+    CV,
     NeighbourList,
     NeighbourListInfo,
     SystemParams,
@@ -1186,7 +1187,6 @@ def linear_layer(
     )
 
 
-import e3nn_jax as e3nn
 import jax
 import jax.numpy as jnp
 
@@ -1217,14 +1217,9 @@ import jax.numpy as jnp
 
 
 def _graph_neural_network_model(model_kwargs, key=0):
-    import e3nn_jax as e3nn
-    from e3nn_jax import Irrep, Irreps
+    from e3nn_jax import Irreps
     from mace_jax.modules import (
-        EquivariantProductBasisBlock,
-        InteractionBlock,
-        LinearNodeEmbeddingBlock,
         NonLinearReadoutBlock,
-        RadialEmbeddingBlock,
         RealAgnosticInteractionBlock,
     )
     from mace_jax.modules.models import MACE
@@ -1352,7 +1347,7 @@ def _graph_neural_network_model_apply(
     # print(f"model output {out=}")
 
     import e3nn_jax as e3nn
-    from e3nn_jax import Irrep, Irreps
+    from e3nn_jax import Irreps
 
     hidden_irreps = model_kwargs["hidden_irreps"]
 

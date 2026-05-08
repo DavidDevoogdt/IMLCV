@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from parsl import File
 
-from IMLCV.base.bias import Bias, BiasModify, GridBias, StdBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
+from IMLCV.base.bias import Bias, GridBias, StdBias
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.dataobjects import (
+    CV,
+)
 from IMLCV.base.datastructures import Partial_decorator
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
 from IMLCV.base.UnitsConstants import boltzmann, kelvin, kjmol, picosecond
 from IMLCV.configs.bash_app_python import bash_app_python
 from IMLCV.configs.config_general import Executors
-from IMLCV.implementations.bias import RbfBias, _clip
+from IMLCV.implementations.bias import RbfBias
 
 
 @dataclass(kw_only=True)

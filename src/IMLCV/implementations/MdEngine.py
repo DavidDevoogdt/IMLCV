@@ -17,8 +17,9 @@ import IMLCV.new_yaff
 import IMLCV.new_yaff.iterative
 import IMLCV.new_yaff.verlet
 from IMLCV.base.bias import Bias, Energy
-from IMLCV.base.CV import SystemParams
-from IMLCV.base.datastructures import field
+from IMLCV.base.dataobjects import (
+    SystemParams,
+)
 from IMLCV.base.MdEngine import FullTrajectoryInfo, MDEngine, StaticMdInfo, time
 from IMLCV.base.UnitsConstants import angstrom, bar, electronvolt, femtosecond, kelvin
 

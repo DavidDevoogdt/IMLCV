@@ -6,9 +6,14 @@ import numpy as np
 import pytest
 
 from IMLCV.base.bias import Bias, BiasF, CompositeBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourListInfo, SystemParams
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.dataobjects import (
+    CV,
+    NeighbourListInfo,
+    SystemParams,
+)
 from IMLCV.base.rounds import Rounds
-from IMLCV.base.UnitsConstants import femtosecond, kelvin, kjmol
+from IMLCV.base.UnitsConstants import kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
 from IMLCV.examples.example_systems import alanine_dipeptide_openmm
 from IMLCV.implementations.bias import BiasMTD, HarmonicBias, RbfBias
@@ -107,8 +112,6 @@ def test_RBF_bias(kernel):
 
 
 def test_combine_bias():
-    from IMLCV.base.MdEngine import StaticMdInfo
-    from IMLCV.implementations.MdEngine import NewYaffEngine
     # from yaff.test.common import get_alaninedipeptide_amber99ff
 
     T = 300 * kelvin

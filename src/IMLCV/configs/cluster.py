@@ -1,6 +1,5 @@
 import logging
 import os
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,12 +10,11 @@ from parsl.executors.base import ParslExecutor
 
 # from parsl.executors.taskvine import TaskVineExecutor, TaskVineFactoryConfig, TaskVineManagerConfig
 from parsl.executors.threads import ThreadPoolExecutor
-from parsl.launchers import SimpleLauncher, SingleNodeLauncher, SrunLauncher
 from parsl.launchers.launchers import Launcher
 from parsl.providers import LocalProvider, SlurmProvider
 
 if TYPE_CHECKING:
-    from IMLCV.configs.cluster import GpuKind
+    pass
 
 
 ROOT_DIR = Path(os.path.dirname(__file__)).parent.parent.parent

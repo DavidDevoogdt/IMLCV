@@ -5,8 +5,12 @@ import jax.numpy as jnp
 import numpy
 from jax import Array
 
-from IMLCV.base.CV import CV, CvFunBase, CvTrans, NeighbourList
+from IMLCV.base.CV import CvFunBase, CvTrans
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.base.dataobjects import (
+    CV,
+    NeighbourList,
+)
 from IMLCV.base.datastructures import Partial_decorator, field
 from IMLCV.base.rounds import DataLoaderOutput
 from IMLCV.implementations.CV import un_atomize

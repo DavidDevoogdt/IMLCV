@@ -14,8 +14,10 @@ from typing_extensions import Self
 
 from IMLCV import unpickler
 from IMLCV.base.CV import (
-    CV,
     CollectiveVariable,
+)
+from IMLCV.base.dataobjects import (
+    CV,
     NeighbourList,
     ShmapKwargs,
     SystemParams,
@@ -30,6 +32,7 @@ from IMLCV.base.datastructures import (
     vmap_decorator,
     # my_dataclass,
 )
+from IMLCV.base.plot import plot_app
 from IMLCV.base.UnitsConstants import boltzmann, kelvin, kjmol
 
 if TYPE_CHECKING:
@@ -77,46 +80,6 @@ class EnergyError(Exception):
 class Energy(MyPyTreeNode, ABC):
     external_callback: bool = field(pytree_node=False, default=True)
     manual_vtens: bool = field(pytree_node=False, default=False)
-
-    # @property
-    # def nl(self) -> NeighbourList | None:
-    #     return None
-
-    # @nl.setter
-    # def nl(self, nl: NeighbourList):
-    #     return
-
-    # @property
-    # @abstractmethod
-    # def cell(self) -> jax.Array | None:
-    #     pass
-
-    # @cell.setter
-    # @abstractmethod
-    # def cell(self, cell: jax.Array | None):
-    #     pass
-
-    # @property
-    # @abstractmethod
-    # def coordinates(self) -> jax.Array | None:
-    #     pass
-
-    # @coordinates.setter
-    # @abstractmethod
-    # def coordinates(self, coordinates: jax.Array):
-    #     pass
-
-    # @property
-    # def sp(self) -> SystemParams | None:
-    #     c = self.coordinates
-    #     if c is None:
-    #         return None
-    #     return SystemParams(coordinates=c, cell=self.cell)
-
-    # @sp.setter
-    # def sp(self, sp: SystemParams):
-    #     self.cell = sp.cell
-    #     self.coordinates = sp.coordinates
 
     @abstractmethod
     def _compute_coor(self, sp: SystemParams, nl: NeighbourList | None, gpos=False, vir=False) -> EnergyResult:
@@ -607,8 +570,6 @@ class Bias(ABC, MyPyTreeNode):
         equilibration_time=None,
         **kwargs,
     ):
-        from IMLCV.base.CVDiscovery import Transformer
-
         # option: if every weight is None, then we can use the bias to compute the weights
         # this might be a bad idea if there is not enough data
 
@@ -624,7 +585,7 @@ class Bias(ABC, MyPyTreeNode):
 
         assert bias.collective_variable is not None
 
-        Transformer.plot_app(
+        plot_app(
             collective_variables=[bias.collective_variable],
             cv_data=[[traj]] if traj is not None else None,
             duplicate_cv_data=False,

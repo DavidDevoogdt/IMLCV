@@ -6,11 +6,16 @@ from flax import linen as nn
 from flax.training import train_state
 from jax import Array, jit, random
 
-from IMLCV.base.CV import CV, CvMetric, CvTrans, NeighbourList, SystemParams
+from IMLCV.base.CV import CvTrans
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.base.dataobjects import (
+    CV,
+    NeighbourList,
+    SystemParams,
+)
 from IMLCV.base.datastructures import jit_decorator, vmap_decorator
-from IMLCV.base.rounds import Covariances, DataLoaderOutput
-from IMLCV.base.UnitsConstants import boltzmann, kjmol, nanosecond, picosecond
+from IMLCV.base.rounds import DataLoaderOutput
+from IMLCV.base.UnitsConstants import boltzmann, kjmol, nanosecond
 from IMLCV.implementations.CV import trunc_svd, un_atomize
 
 

@@ -13,7 +13,10 @@ import pytest
 import scipy.special
 from jax import grad
 
-from IMLCV.base.CV import CollectiveVariable, NeighbourListInfo, SystemParams
+from IMLCV.base.dataobjects import (
+    NeighbourListInfo,
+    SystemParams,
+)
 from IMLCV.base.datastructures import vmap_decorator
 from IMLCV.implementations.CV import get_sinkhorn_divergence_2, sb_descriptor, soap_descriptor
 from IMLCV.tools.bessel_callback import iv, ive, ive_b, jv, kv, kve, spherical_jn, spherical_yn, yv

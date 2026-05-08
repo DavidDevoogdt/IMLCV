@@ -7,7 +7,11 @@ import numpy as np
 from jax.custom_batching import custom_vmap
 from jax.experimental.jax2tf import call_tf
 
-from IMLCV.base.CV import CV, CvFunBase, NeighbourList
+from IMLCV.base.CV import CV, CvFunBase
+from IMLCV.base.dataobjects import (
+    CV,
+    NeighbourList,
+)
 from IMLCV.base.datastructures import MyPyTreeNode, field
 
 if TYPE_CHECKING:

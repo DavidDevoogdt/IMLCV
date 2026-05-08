@@ -7,12 +7,15 @@ import jax
 import jax.numpy as jnp
 
 from IMLCV.base.bias import Bias, NoneBias
-from IMLCV.base.CV import CvTrans, SystemParams
+from IMLCV.base.CV import CvTrans
 from IMLCV.base.CVDiscovery import Transformer
+from IMLCV.base.dataobjects import (
+    SystemParams,
+)
 from IMLCV.base.MdEngine import MDEngine
 from IMLCV.base.Observable import Observable
 from IMLCV.base.rounds import DataLoaderOutput, Rounds
-from IMLCV.base.UnitsConstants import angstrom, boltzmann, kjmol, picosecond
+from IMLCV.base.UnitsConstants import angstrom, boltzmann, kjmol
 from IMLCV.configs.config_general import Executors
 from IMLCV.implementations.bias import HarmonicBias
 

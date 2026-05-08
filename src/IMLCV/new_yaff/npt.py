@@ -25,7 +25,6 @@
 
 from __future__ import division
 
-from dataclasses import KW_ONLY
 from typing import cast
 
 import jax
@@ -47,7 +46,7 @@ from IMLCV.new_yaff.utils import (
     get_ndof_internal_md,
     get_random_vel_press,
 )
-from IMLCV.new_yaff.verlet import BarostatHook, ThermostatHook, VerletHook, VerletIntegrator
+from IMLCV.new_yaff.verlet import BarostatHook, ThermostatHook, VerletIntegrator
 
 
 # #@partial(dataclass, frozen=False)

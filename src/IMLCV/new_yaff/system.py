@@ -3,9 +3,12 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.CV import NeighbourList
+from IMLCV.base.dataobjects import (
+    NeighbourList,
+    SystemParams,
+)
 from IMLCV.base.datastructures import MyPyTreeNode
-from IMLCV.base.MdEngine import MDEngine, StaticMdInfo, SystemParams
+from IMLCV.base.MdEngine import StaticMdInfo
 
 
 class YaffCell(MyPyTreeNode):

@@ -23,9 +23,6 @@
 # --
 """Base class for iterative algorithms"""
 
-from dataclasses import KW_ONLY
-from typing import TYPE_CHECKING, Any, TypeVar
-
 import jax
 import jax.numpy as jnp
 

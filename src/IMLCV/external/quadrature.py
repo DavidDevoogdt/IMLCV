@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, Callable, Concatenate, ParamSpec, TypeVar
+from typing import Callable, Concatenate, ParamSpec, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -7,7 +7,7 @@ from jax import closure_convert, custom_jvp
 from jax.tree_util import tree_map
 from scipy.special import roots_laguerre, roots_legendre
 
-from IMLCV.base.datastructures import Partial_decorator, custom_jvp_decorator, vmap_decorator
+from IMLCV.base.datastructures import Partial_decorator, vmap_decorator
 
 T = TypeVar("T")
 P = ParamSpec("P")

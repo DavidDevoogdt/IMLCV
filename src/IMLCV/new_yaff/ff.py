@@ -3,16 +3,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import jax
-import jax.numpy as jnp
 
 from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.new_yaff.system import YaffSys
 
 if TYPE_CHECKING:
-    from IMLCV.implementations.MdEngine import NewYaffEngine
+    pass
 
 from IMLCV.base.bias import Bias, Energy, EnergyResult
-from IMLCV.base.CV import NeighbourList, SystemParams
+from IMLCV.base.dataobjects import (
+    NeighbourList,
+    SystemParams,
+)
 from IMLCV.base.MdEngine import MDEngine, StaticMdInfo
 
 

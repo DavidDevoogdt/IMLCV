@@ -1,7 +1,12 @@
 import jax
 import jax.numpy as jnp
 
-from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, SystemParams
+from IMLCV.base.dataobjects import (
+    CV,
+    NeighbourList,
+    NeighbourListInfo,
+    SystemParams,
+)
 from IMLCV.base.datastructures import vmap_decorator
 
 ######################################

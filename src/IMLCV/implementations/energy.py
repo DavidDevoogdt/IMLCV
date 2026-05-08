@@ -1,28 +1,25 @@
+import gc
 import os
 
 # from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import ase
 import jax
 import jax.numpy as jnp
-import numpy as np
-from ase import geometry as ase_geometry
 from ase.calculators.calculator import Calculator
-from openmm import Context, State, System, Vec3
-from openmm.app import Simulation, Topology
+from flax import nnx
+from openmm import Context, State, System
 
+from IMLCV.base.bias import Energy, EnergyError, EnergyFn, EnergyResult
+from IMLCV.base.dataobjects import (
+    NeighbourList,
+    SystemParams,
+)
+from IMLCV.base.datastructures import field
 from IMLCV.base.MdEngine import StaticMdInfo
-from IMLCV.base.bias import Energy, EnergyError, EnergyResult, EnergyFn
-from IMLCV.base.CV import NeighbourList, SystemParams
-from IMLCV.base.datastructures import MyPyTreeNode, field
 from IMLCV.base.UnitsConstants import angstrom, electronvolt, kjmol, nanometer
 from IMLCV.configs.config_general import REFERENCE_COMMANDS, ROOT_DIR
-from flax import nnx
-import e3nn_jax
-
-import gc
 
 
 class OpenMmEnergy(Energy):
@@ -38,7 +35,7 @@ class OpenMmEnergy(Energy):
         return OpenMmEnergy(system=system)
 
     def get_context(self):
-        from openmm import LangevinIntegrator, System, VerletIntegrator
+        from openmm import VerletIntegrator
 
         self.context = Context(
             self.system,

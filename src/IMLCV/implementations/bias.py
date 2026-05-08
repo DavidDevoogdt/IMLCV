@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax import Array
-from typing_extensions import Self
 
 from IMLCV.base.bias import Bias, CompositeBias, GridBias, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
-from IMLCV.base.datastructures import field, vmap_decorator
+from IMLCV.base.CV import CollectiveVariable
+from IMLCV.base.dataobjects import (
+    CV,
+)
+from IMLCV.base.datastructures import field
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.UnitsConstants import boltzmann, kjmol
+from IMLCV.base.UnitsConstants import kjmol
 from IMLCV.tools._rbf_interp import RBFInterpolator
 
 ######################################

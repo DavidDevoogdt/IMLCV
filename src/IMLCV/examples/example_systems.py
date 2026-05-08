@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import ase.io
 import jax
 import jax.numpy as jnp
@@ -8,7 +6,12 @@ from openmm import System
 from openmm.app import ForceField, PDBFile
 
 from IMLCV.base.bias import Bias, BiasF, EnergyFn, NoneBias
-from IMLCV.base.CV import CV, CollectiveVariable, CvMetric, CvTrans, NeighbourList, SystemParams
+from IMLCV.base.CV import CollectiveVariable, CvTrans
+from IMLCV.base.dataobjects import (
+    CV,
+    NeighbourList,
+    SystemParams,
+)
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
 from IMLCV.configs.config_general import ROOT_DIR
@@ -17,13 +20,11 @@ from IMLCV.implementations.CV import (
     NoneCV,
     _coordination_number,
     _cv_index,
-    _dihedral,
-    _matmul_trans,
     cv_trans_real,
     dihedral,
     rotate_2d,
 )
-from IMLCV.implementations.energy import MACEASE, OpenMmEnergy, MACEJax
+from IMLCV.implementations.energy import MACEASE, MACEJax, OpenMmEnergy
 from IMLCV.implementations.MdEngine import NewYaffEngine
 
 DATA_ROOT = ROOT_DIR / "data"

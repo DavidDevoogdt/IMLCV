@@ -1,6 +1,6 @@
 from openff.toolkit.topology import Molecule
 from openmm import XmlSerializer
-from openmm.app import ForceField, PDBFile
+from openmm.app import ForceField
 from openmmforcefields.generators import GAFFTemplateGenerator
 
 
