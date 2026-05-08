@@ -118,8 +118,6 @@ class BerendsenThermostat(ThermostatHook):
     kind: str = field(pytree_node=False, default="deterministic")
     method: str = field(pytree_node=False, default="thermostat")
 
-    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
-
     """
     This is an implementation of the Berendsen thermostat. The algorithm
     is described in:
@@ -174,7 +172,6 @@ class LangevinThermostat(ThermostatHook):
     method: str = field(pytree_node=False, default="thermostat")
 
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
-    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
 
     def init(self, iterative: VerletIntegrator):
         print(f"running init")
@@ -189,7 +186,7 @@ class LangevinThermostat(ThermostatHook):
     def pre(self, iterative: VerletIntegrator, G1_add=None):
         ekin0 = iterative.ekin
         # Actual update
-        self, iterative = self.thermo(iterative)
+        self, iterative = self.thermo(iterative, use_c1=False)
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1
 
@@ -198,19 +195,37 @@ class LangevinThermostat(ThermostatHook):
     def post(self, iterative: VerletIntegrator, G1_add=None):
         ekin0 = iterative.ekin
         # Actual update
-        self, iterative = self.thermo(iterative)
+        self, iterative = self.thermo(iterative, use_c1=True)
         ekin1 = iterative.ekin
         self.econs_correction += ekin0 - ekin1
 
         return self, iterative
 
-    def thermo(self, iterative: VerletIntegrator):
+    def thermo(self, iterative: VerletIntegrator, use_c1=True):
         self.key, key1 = jax.random.split(self.key, 2)
 
-        c1 = jnp.exp(-iterative.timestep / self.timecon / 2)
-        c2 = jnp.sqrt((1.0 - c1**2) * self.temp * boltzmann / iterative.masses).reshape(-1, 1)
-        iterative.vel = c1 * iterative.vel + c2 * jax.random.normal(key1, shape=iterative.vel.shape)
+        dt = iterative.timestep
+        gamma = 1 / self.timecon
+        noise = jax.random.normal(key1, shape=iterative.vel.shape)
 
+        m = iterative.masses.reshape(-1, 1)
+        dt = iterative.timestep
+
+        c1 = jnp.exp(-dt * gamma / 2)
+        sigma = jnp.sqrt((1.0 - c1**2) * (boltzmann * self.temp) / m)
+
+        iterative.vel = c1 * iterative.vel + sigma * noise
+
+        # https://pubs.acs.org/doi/pdf/10.1021/acs.jpcb.4c01702?ref=article_openPDF
+        # drift difference: removing bias
+        delta_v = -(dt / (2.0 * m)) * iterative.gpos_bias
+
+        G = delta_v / sigma
+
+        if use_c1:
+            G *= c1
+
+        iterative.A += jnp.sum(-G * noise - 0.5 * G**2)
         return self, iterative
 
 
@@ -220,7 +235,6 @@ class CSVRThermostat(ThermostatHook):
     kind: str = field(pytree_node=False, default="stochastic")
     method: str = field(pytree_node=False, default="thermostat")
 
-    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
     kin: jax.Array | None = None
     key: jax.Array = field(default_factory=lambda: jax.random.key(42))
 
@@ -288,7 +302,6 @@ class GLEThermostat(ThermostatHook):
     kind: str = field(pytree_node=False, default="stochastic")
     method: str = field(pytree_node=False, default="thermostat")
 
-    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
     kin: jax.Array | None = None
     a_p: jax.Array
     c_p: jax.Array | None = None

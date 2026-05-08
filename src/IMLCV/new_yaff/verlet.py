@@ -33,7 +33,7 @@ import jax.numpy as jnp
 
 from IMLCV.base.CV import NeighbourList, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, field, jit_decorator
-from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.base.UnitsConstants import boltzmann, femtosecond
 from IMLCV.new_yaff.ff import YaffFF
 from IMLCV.new_yaff.iterative import (
     Hook,
@@ -96,6 +96,7 @@ class VerletHook(Hook):
 
 class ThermostatHook(VerletHook):
     temp: jax.Array
+    timecon: jax.Array = field(default_factory=lambda: jnp.array(100 * femtosecond))
 
     def pre(  # type:ignore
         self: Self,
@@ -183,6 +184,8 @@ class VerletIntegrator(MyPyTreeNode):
     masses: jax.Array
     timestep: jax.Array
 
+    A: jax.Array  # girsanov reweighing factor
+
     # barostat quantities
     ptens: jax.Array | None
     rvecs: jax.Array | None
@@ -193,6 +196,10 @@ class VerletIntegrator(MyPyTreeNode):
     # instantaenous properties
     gpos: jax.Array
     gpos_bias: jax.Array
+    gpos_bias_prev: jax.Array
+
+    gpos_mag: jax.Array
+    gpos_bias_mag: jax.Array
 
     temp: jax.Array
     press: jax.Array | None
@@ -339,12 +346,14 @@ class VerletIntegrator(MyPyTreeNode):
             timestep=jnp.array(timestep),
             gpos=gpos,
             gpos_bias=gpos_bias,
+            gpos_bias_prev=gpos_bias,  # initialize the previous bias forces to the current ones
             temp=jnp.array(temp0),
             # ekin=jnp.array(0.0),
             epot=epot,
             etot=jnp.array(0.0),
             econs=jnp.array(0.0),
             cons_err=jnp.array(0.0),
+            A=jnp.array(0.0),
             ptens=ptens if barostat is not None else None,
             press=jnp.array(0.0) if barostat is not None else None,
             counter=jnp.array(counter0 if counter0 is not None else 0),
@@ -356,6 +365,8 @@ class VerletIntegrator(MyPyTreeNode):
             vtens=vtens,
             # other_hooks=other_hooks,
             _cons_err_tracker=None,
+            gpos_mag=jnp.linalg.norm(gpos),
+            gpos_bias_mag=jnp.linalg.norm(gpos_bias),
         )
 
         verlet_hook = vh
@@ -412,6 +423,7 @@ class VerletIntegrator(MyPyTreeNode):
         assert res.gpos is not None
         self.epot, self.gpos = res.energy, res.gpos
         assert bias.gpos is not None
+        self.gpos_bias_prev = self.gpos_bias
         self.cv, self.e_bias, self.gpos_bias = cv, bias.energy, bias.gpos
 
         # time t + dt
@@ -419,7 +431,6 @@ class VerletIntegrator(MyPyTreeNode):
         self.vel += 0.5 * acc * self.timestep
 
         # Allow specialized verlet hooks to modify the state after the step
-
         abstract_shape = jax.eval_shape(lambda v, s: v.post(s), verlet_hook, self)
 
         def identity_cast_post(verlet_hook, self):
@@ -471,6 +482,9 @@ class VerletIntegrator(MyPyTreeNode):
             self.ptens = (jnp.dot(self.vel.T * self.masses, self.vel) - self.vtens) / self.yaff_ff.system.cell.volume
             self.press = jnp.trace(self.ptens) / 3
 
+        self.gpos_mag = jnp.linalg.norm(self.gpos)
+        self.gpos_bias_mag = jnp.linalg.norm(self.gpos_bias)
+
         return self
 
     def finalize(self):
@@ -495,14 +509,3 @@ class VerletIntegrator(MyPyTreeNode):
         self.call_hooks(verlet_hook)
 
         return self, verlet_hook
-
-    # def run(self: VerletIntegrator, verlet_hook: VerletHook, nstep=None):
-    #     print(f"Starting MD run for {nstep} steps")
-
-    #     if nstep is None:
-    #         while True:
-    #             self, verlet_hook = self.step(verlet_hook)
-    #     else:
-    #         for i in range(nstep):
-    #             self, verlet_hook = self.step(verlet_hook)
-    #     self.finalize()

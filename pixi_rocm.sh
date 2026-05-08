@@ -7,4 +7,4 @@ set -Eeuox pipefail
 echo "Starting script"
 
 
-~/.pixi/bin/pixi run -e rocm --as-is "$@"
+~/.pixi/bin/pixi run -e rocm6 --as-is  "$@"

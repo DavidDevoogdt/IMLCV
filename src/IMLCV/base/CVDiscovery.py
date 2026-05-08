@@ -144,7 +144,7 @@ class Transformer(MyPyTreeNode):
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 recalc_bounds=False,
-                smoothing=1.0,
+                smoothing=0.1 / (kjmol**2),
             )
 
             Transformer.plot_app(
@@ -197,7 +197,7 @@ class Transformer(MyPyTreeNode):
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 recalc_bounds=False,
-                smoothing=1.0,
+                smoothing=0.1 / (kjmol**2),
             )
 
             if plot:
@@ -360,9 +360,10 @@ class Transformer(MyPyTreeNode):
                 chunk_size=chunk_size,
                 # recalc_bounds=True,
                 bounds=bounds,
-                smoothing=1.0,
+                smoothing=0.1 / (kjmol**2),
                 weights_std=dlo._weights_std,
             )
+            print(f"done transforming FES")
 
             if plot:
                 bias_new.plot(
@@ -887,7 +888,7 @@ class Transformer(MyPyTreeNode):
                     rbf_bias=rbf_bias,
                     observable=color,
                     grid_bias_order=grid_bias_order,
-                    smoothing=1.0,
+                    smoothing=0.1 / (kjmol**2),
                 )
 
                 # print(f"{T=} {vmin/kjmol=} {vmax/kjmol=}")
@@ -1045,7 +1046,7 @@ class Transformer(MyPyTreeNode):
                     output_density_bias=False,
                     rbf_bias=rbf_bias,
                     grid_bias_order=grid_bias_order,
-                    smoothing=1.0,
+                    smoothing=0.1 / (kjmol**2),
                 )
 
                 if len(indices) == 1:

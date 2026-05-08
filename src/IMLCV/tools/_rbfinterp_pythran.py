@@ -132,7 +132,7 @@ def cv_vals(
     return d**power
 
 
-@partial(jit_decorator, static_argnums=(4, 5, 6))
+@partial(jit_decorator, static_argnums=(4, 5, 6, 7))
 def eval_kernel_matrix(
     x: CV,
     y: CV,
@@ -141,11 +141,10 @@ def eval_kernel_matrix(
     kernel_func: Callable[[jax.Array], jax.Array],
     periodicities: tuple[bool, ...],
     norm_jacobian: bool = False,
+    return_hessian: bool = False,
 ):
     """Evaluate RBFs, with centers at `x`, at `x`."""
 
-    @partial(vmap_decorator, in_axes=(None, 0), out_axes=1)
-    @partial(vmap_decorator, in_axes=(0, None), out_axes=0)
     def f00(x: CV, y: CV):
         r = cv_norm(x, y, metric, eps, periodicities=periodicities)
 
@@ -154,7 +153,18 @@ def eval_kernel_matrix(
 
         return kernel_func(r)
 
-    return f00(x, y)
+    vmap_f00 = vmap_decorator(vmap_decorator(f00, in_axes=(0, None), out_axes=0), in_axes=(None, 0), out_axes=1)
+    vmap_df00 = vmap_decorator(
+        vmap_decorator(jax.hessian(f00), in_axes=(0, None), out_axes=0), in_axes=(None, 0), out_axes=1
+    )
+
+    out = vmap_f00(x, y)
+    if not return_hessian:
+        return out
+
+    d_out = vmap_df00(x, y)
+
+    return out, d_out
 
 
 @partial(jit_decorator, static_argnums=(3))

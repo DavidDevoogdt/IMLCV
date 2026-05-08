@@ -327,7 +327,7 @@ class Observable:
             kernel=rbf_kernel,
             epsilon=eps,
             degree=rbf_degree,
-            smoothing=1.0,
+            smoothing=0.1 / (kjmol**2),
         )
 
         if not return_std_bias:
@@ -386,7 +386,7 @@ class Observable:
         max_bias: float = 100 * kjmol,
         vmax: float = 100 * kjmol,
         vmax_std: float = 5 * kjmol,
-        smoothing=1.0,
+        smoothing=0.1 / (kjmol**2),
         kooopman_wham=None,
         samples_per_bin=10,
         min_samples_per_bin=5,
@@ -656,7 +656,7 @@ class Observable:
         executors=Executors.training,
         direct_bias=False,
         n_max_lin: int = 50,
-        time_correlation_method="acf",
+        time_correlation_method=None,
         return_std_bias=False,
         n_hist=None,
         equilibration_time=-1,

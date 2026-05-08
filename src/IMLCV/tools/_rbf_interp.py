@@ -152,6 +152,9 @@ def _build_and_solve_system(
     powers,
     periodicities: tuple[bool, ...],
     sigma: jax.Array | None = None,
+    ridge=1e-10,
+    dv: float | None = None,
+    grid_full: CV | None = None,
 ):
     """Build and solve the RBF interpolation system of equations.
 
@@ -186,14 +189,45 @@ def _build_and_solve_system(
 
     kernel_func = NAME_TO_FUNC[kernel]
 
-    K = eval_kernel_matrix(
+    # if sigma is None:
+    #     sigma = 0.1 * jnp.ones(p) * kjmol
+
+    A, _ = eval_kernel_matrix(
         y,
         y,
         metric,
         epsilon,
         kernel_func,
         periodicities=periodicities,
+        # return_jacobian=False,
+        return_hessian=True,
     )
+
+    # avaluate smoothness on full grid, not just on the points where we have data
+    if grid_full is None:
+        grid_full = y
+
+    print(f"{grid_full=}")
+
+    _, J = eval_kernel_matrix(
+        grid_full,
+        y,
+        metric,
+        epsilon,
+        kernel_func,
+        periodicities=periodicities,
+        return_hessian=True,
+    )
+
+    print(f"{epsilon=}")
+
+    J = J.cv.cv
+
+    R = jnp.einsum("nide,njde,d,e->ij", J, J, dv**2, dv**2)  # frobenius norm
+
+    del J
+
+    print(f"{R.shape=}")
 
     P = eval_polynomial_matrix(
         y,
@@ -202,74 +236,34 @@ def _build_and_solve_system(
         periodicities=periodicities,
     )
 
-    b = jnp.vstack([d, jnp.zeros((r, s))])
+    sigma = jnp.where(sigma < 0.1 * kjmol, 0.1 * kjmol, sigma)
+    fac = 1.0 / (sigma)
 
-    if smoothing is not None:
-        # print(f"adding smoothing={smoothing}")
-        s = smoothing * jnp.diag(sigma**2) if sigma is not None else smoothing * jnp.eye(p)
-        print(f"added smoothing={jnp.diag(s)=}")
+    As = jnp.einsum("ij,i->ij", A, fac)
+    Ps = jnp.einsum("ij,i->ij", P, fac)
+    ds = jnp.einsum("ij,i->ij", d, fac)
 
-        K += s
+    rhs_top = As.T @ ds
+    rhs_bot = Ps.T @ ds
 
-    # same equations are solved by:
-    # K w_0 = d
-    # K w_1 = P
-    # (P^T w_1) a = P^T w_0
-    # w = w_0 - w_1 a
+    @jax.jit
+    def kkt_product(x):
+        # Split the vector into parts corresponding to A and P
+        v_top, v_bot = x
 
-    # K is psd
-    def solve_saddle_schur(K, P, d):
-        """
-        K: (n, n) symmetric positive definite (with smoothing)
-        P: (n, r) polynomial matrix
-        d: (n, s) data values
-        """
-        # 1. Factorize the SPD part (K + sigma^2 I)
-        L, low = cho_factor(K, lower=True)
+        # Compute product implicitly: (M^T @ M) @ v = M^T @ (M @ v)
+        # This keeps memory usage at O(N) instead of O(N^2)
+        res_top = As.T @ (As @ v_top) + (smoothing * R) @ v_top + As.T @ (Ps @ v_bot)
+        res_bot = Ps.T @ (As @ v_top) + Ps.T @ (Ps @ v_bot)
 
-        print(f"cho_factor done, {L=}, {K=}")
+        return res_top, res_bot
 
-        # 2. Solve Kw0 = d and Kw1 = P
-        # We solve them together for efficiency
-        rhs = jnp.concatenate([d, P], axis=1)
-        sol = cho_solve((L, low), rhs)
+    # Use JAX's iterative solver
+    (res_top, res_bot), _ = jax.scipy.sparse.linalg.cg(kkt_product, (rhs_top, rhs_bot))
 
-        n_d = d.shape[1]
-        w0 = sol[:, :n_d]
-        w1 = sol[:, n_d:]
+    coeffs = jnp.hstack([res_top, res_bot])
 
-        # 3. Form the Schur Complement: S = P^T * K^-1 * P
-        # This is a small (r, r) matrix (e.g., 3x3 or 6x6)
-        S = P.T @ w1
-
-        # 4. Solve the small system for polynomial coefficients 'a'
-        # S * a = P^T * w0
-        a = jnp.linalg.solve(S, P.T @ w0)
-
-        # 5. Compute the final RBF weights 'w'
-        w = w0 - w1 @ a
-
-        return jnp.concatenate([w, a], axis=0)
-
-    # not all kernels are psd, we need to classify
-    # coeffs = solve_saddle_schur(K, P, d)
-    # print(f"{coeffs=}")
-
-    A = jnp.block(
-        [
-            [K, P],
-            [P.T, jnp.zeros((r, r))],
-        ]
-    )
-
-    coeffs = jax.scipy.linalg.solve(A, b, assume_a="her")
-
-    # print(f"{coeffs=}")
-
-    # if sigma is not None:
-    #     coeffs = jnp.diag(jnp.hstack([sigma, jnp.zeros(r)])) @ coeffs
-
-    return coeffs, K, P
+    return coeffs, As, Ps
 
 
 class RBFInterpolator(MyPyTreeNode):
@@ -288,6 +282,7 @@ class RBFInterpolator(MyPyTreeNode):
     d_dtype: jnp.dtype | None = field(pytree_node=False, default=None)
     periodicities: tuple[bool] = field(pytree_node=False, default=None)
     sigma: jax.Array | None = field(default=None)
+    dv: float | None = field(default=None)
 
     @classmethod
     def create(
@@ -301,6 +296,8 @@ class RBFInterpolator(MyPyTreeNode):
         degree=None,
         smoothing_solver: str | None = "gml",
         sigma: jax.Array | None = None,
+        dv: float | None = None,
+        grid_full: CV | None = None,
     ):
         ny, ndim = y.shape
 
@@ -435,6 +432,8 @@ class RBFInterpolator(MyPyTreeNode):
             powers,
             periodicities=periodicities,
             sigma=sigma,
+            dv=dv,
+            grid_full=grid_full,
         )
 
         return RBFInterpolator(
@@ -449,6 +448,7 @@ class RBFInterpolator(MyPyTreeNode):
             metric=metric,
             periodicities=periodicities,  # type:ignore
             sigma=sigma,
+            dv=dv,
         )
 
     def __call__(self, x: CV):

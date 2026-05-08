@@ -22,7 +22,7 @@ from IMLCV import unpickler
 from IMLCV.base.bias import Bias, Energy, EnergyResult
 from IMLCV.base.CV import CV, NeighbourList, NeighbourListInfo, ShmapKwargs, SystemParams
 from IMLCV.base.datastructures import MyPyTreeNode, field
-from IMLCV.base.UnitsConstants import amu, angstrom, bar, kjmol, kelvin, atomic_masses
+from IMLCV.base.UnitsConstants import amu, angstrom, atomic_masses, bar, kelvin, kjmol
 
 ######################################
 #             Trajectory             #
@@ -182,6 +182,8 @@ _items_scal = [
     "_rho",
     "_rho_t",
     "_sigma",
+    "_A",
+    "_w_dyn",
 ]
 _items_vec = [
     "_positions",
@@ -463,6 +465,22 @@ class TrajectoryInfo(MyPyTreeNode, ABC):
     def capacity(self, value: int):
         self._set("_capacity", value)
 
+    @property
+    def A(self) -> Array | None:
+        return self._get("_A")
+
+    @A.setter
+    def A(self, value: Array):
+        self._set("_A", value)
+
+    @property
+    def w_dyn(self) -> Array | None:
+        return self._get("_w_dyn")
+
+    @w_dyn.setter
+    def w_dyn(self, value: Array):
+        self._set("_w_dyn", value)
+
 
 class FullTrajectoryInfo(TrajectoryInfo):
     _positions: Array
@@ -494,6 +512,9 @@ class FullTrajectoryInfo(TrajectoryInfo):
 
     _t: Array | None = None
 
+    _A: Array | None = None
+    _w_dyn: Array | None = None
+
     _capacity: int = field(pytree_node=False, default=-1)
     _size: int = field(pytree_node=False, default=-1)
     _prev_save: int = field(pytree_node=False, default=0)
@@ -518,6 +539,8 @@ class FullTrajectoryInfo(TrajectoryInfo):
         P: Array | None = None,
         err: Array | None = None,
         t: Array | None = None,
+        A: Array | None = None,
+        w_dyn: Array | None = None,
         capacity: int = -1,
         size: int = -1,
         finished=False,
@@ -543,6 +566,8 @@ class FullTrajectoryInfo(TrajectoryInfo):
             "_P": P,
             "_err": err,
             "_t": t,
+            "_A": A,
+            "_w_dyn": w_dyn,
             "_capacity": int(capacity),
             "_size": int(size),
             "_finished": finished,
@@ -1083,6 +1108,9 @@ class MDEngine(MyPyTreeNode, ABC):
         cv: jax.Array | None = None,
         e_bias: jax.Array | None = None,
         e_pot: jax.Array | None = None,
+        A: jax.Array | None = None,
+        gpos_mag=0.0,
+        gpos_bias_mag=0.0,
         canonicalize=False,
     ):
         screen_log = self.step % self.static_trajectory_info.screen_log == 0
@@ -1102,6 +1130,7 @@ class MDEngine(MyPyTreeNode, ABC):
                 P=P,
                 t=t,
                 err=err,
+                A=A,
             )
 
             if self.step == 1:
@@ -1112,12 +1141,14 @@ class MDEngine(MyPyTreeNode, ABC):
                 if ti._P is not None:
                     str += f"|{'P[bar]': ^10s}"
                 str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
-                # if gpos_rmsd is not None:
-                #     ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                #     str += f"|{ss: ^13s}"
-                # if gpos_bias_rmsd is not None:
-                #     ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                #     str += f"|{ss: ^13s}"
+
+                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                str += f"|{ss: ^13s}"
+
+                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+                str += f"|{ss: ^13s}"
+
+                str += f"|{'A': ^10s}"
 
                 str += f"|{' CV': ^10s}"
                 print(str, sep="")
@@ -1134,12 +1165,13 @@ class MDEngine(MyPyTreeNode, ABC):
                 str += f"|{ti._e_pot[0] / kjmol: >15.8f}"
                 str += f"|{ti._e_bias[0] / kjmol: >15.8f}"
                 if ti._P is not None:
-                    str += f" {ti._P[0] / bar: >10.2f}"
+                    str += f" {ti._P[0] / bar: >10.8f}"
                 str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
-                # if gpos_rmsd is not None:
-                #     str += f"|{(gpos_rmsd / kjmol * angstrom): >13.2f}"
-                # if gpos_bias_rmsd is not None:
-                #     str += f"|{(gpos_bias_rmsd / kjmol * angstrom): >13.2f}"
+                str += f"|{(gpos_mag / kjmol * angstrom): >13.2f}"
+                str += f"|{(gpos_bias_mag / kjmol * angstrom): >13.2f}"
+
+                str += f"|{ti._A[0]: >10.5f}"
+
                 if ti._cv is not None:
                     str += f"| {ti._cv[0, :]}"
                 print(str)

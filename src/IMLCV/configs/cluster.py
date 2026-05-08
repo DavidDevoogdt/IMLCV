@@ -30,7 +30,7 @@ class SlurmLauncher(Launcher):
         self.overrides = overrides
         self.image = image
 
-    def __call__(self, command: str, tasks_per_node: int, nodes_per_block: int) -> str:
+    def __call__(self, command: str, tasks_per_node: int, nodes_per_block: int, script_dir: str = "") -> str:
         x = """set -e
 
 module list
@@ -187,7 +187,7 @@ sleep 1
 
             # worker_init += "export LLVM_PATH=/opt/rocm/llvm \n "
 
-    worker_init += f"export JAX_COMPILATION_CACHE_DIR={ROOT_DIR}/.jax_cache\n"
+    # worker_init += f"export JAX_COMPILATION_CACHE_DIR={ROOT_DIR}/.jax_cache\n"
     worker_init += (
         f'export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads={threads_per_core}" \n'
     )

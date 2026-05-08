@@ -391,4 +391,7 @@ class NewYaffEngine(MDEngine):
             e_bias=self._verlet.e_bias,
             e_pot=self._verlet.epot - self._verlet.e_bias,
             sp=self._verlet.sp,
+            A=self._verlet.A,
+            gpos_mag=self._verlet.gpos_mag,
+            gpos_bias_mag=self._verlet.gpos_bias_mag,
         )

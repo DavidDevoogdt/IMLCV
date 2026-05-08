@@ -3872,6 +3872,7 @@ class CvMetric(MyPyTreeNode):
         max_bins_per_dim=1000,
     ):
         f = samples / samples_per_bin
+
         if max_bins is not None:
             f = jnp.min(jnp.array([f, max_bins]))
 

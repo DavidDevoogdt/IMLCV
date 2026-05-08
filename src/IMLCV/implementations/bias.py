@@ -10,7 +10,7 @@ from IMLCV.base.bias import Bias, CompositeBias, GridBias, NoneBias
 from IMLCV.base.CV import CV, CollectiveVariable, CvMetric
 from IMLCV.base.datastructures import field, vmap_decorator
 from IMLCV.base.MdEngine import MDEngine
-from IMLCV.base.UnitsConstants import boltzmann
+from IMLCV.base.UnitsConstants import boltzmann, kjmol
 from IMLCV.tools._rbf_interp import RBFInterpolator
 
 ######################################
@@ -274,10 +274,12 @@ class RbfBias(Bias):
         step=None,
         kernel="multiquadric",
         epsilon=None,
-        smoothing=1.0,
+        smoothing=0.1 / (kjmol**2),
         degree=None,
         finalized=True,
         sigma: Array | None = None,
+        dv: float | None = None,
+        grid_full: CV | None = None,
     ) -> RbfBias | NoneBias:
         assert cv.batched
         assert cv.shape[1] == cvs.n, f"{cv.shape}[1] != {cvs.n}"
@@ -298,6 +300,8 @@ class RbfBias(Bias):
             epsilon=epsilon,
             degree=degree,
             sigma=sigma,
+            dv=dv,
+            grid_full=grid_full,
         )
 
         return RbfBias(
@@ -314,7 +318,7 @@ class RbfBias(Bias):
         bias: GridBias,
         kernel="multiquadric",
         epsilon=None,
-        smoothing=1.0,
+        smoothing=0.1 / (kjmol**2),
         degree=None,
     ) -> RbfBias:
         Warning("this method is untested")

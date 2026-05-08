@@ -627,6 +627,13 @@ class TransformerMAF(Transformer):
             )
 
         else:
+            # If user did not supply beta_timecon, compute a physical default
+            # beta_timecon := k_B * T * tau_thermo (internal units)
+            if self.beta_timecon is None:
+                beta_timecon = 1 / (dlo.sti.timecon_thermo * boltzmann * dlo.sti.T) * 1e2
+            else:
+                beta_timecon = self.beta_timecon
+
             km = dlo.koopman_model(
                 cv_0=x,
                 cv_t=x_t,
@@ -658,7 +665,7 @@ class TransformerMAF(Transformer):
                 batch_size=self.batch_size,
                 batch_chunk_size=self.batch_chunk_size,
                 init_learnable_params=self.re_init,
-                beta_timecon=self.beta_timecon,
+                beta_timecon=beta_timecon,
                 # shrinkage_method="BC",
             )
 
