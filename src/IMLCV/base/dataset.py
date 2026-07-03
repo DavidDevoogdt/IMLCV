@@ -28,13 +28,14 @@ from IMLCV.base.dataobjects import (
     padded_vmap,
 )
 from IMLCV.base.decoratros import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
-from IMLCV.base.koopman import KoopmanModel
-from IMLCV.base.reweight import _solve_wham
+from IMLCV.base.koopman import KoopmanModel, PeriodicKoopmanModel
+from IMLCV.base.reweight import solve_wham, solve_dham
 from IMLCV.base.UnitsConstants import (
     boltzmann,
     kelvin,
     kjmol,
 )
+from IMLCV.base.histogram import get_histo, _histogram, get_transition_counts
 from IMLCV.implementations.bias import GridMaskBias, RbfBias, _clip
 
 T = TypeVar("T")
@@ -74,8 +75,8 @@ class DataLoaderOutput(MyPyTreeNode):
     ti: list[TrajectoryInfo]
     collective_variable: CollectiveVariable
     labels: list[Array] | None = None
-    nl: list[NeighbourList] | NeighbourList | None = None
-    nl_t: list[NeighbourList] | NeighbourList | None = None
+    nl: NeighbourList | None = None
+    nl_t: NeighbourList | None = None
     time_series: bool = False
     tau: float | None = None
     bias: list[Bias] | None = None
@@ -130,161 +131,6 @@ class DataLoaderOutput(MyPyTreeNode):
     @property
     def _w_dyn(self) -> list[Array] | None:
         return [ti.w_dyn for ti in self.ti] if self.ti[0].w_dyn is not None else None
-
-    @staticmethod
-    def get_histo(
-        data_nums: list[CV],
-        weights: None | list[Array] = None,
-        log_w: bool = False,
-        macro_chunk: int | None = 320,
-        verbose: bool = False,
-        shape_mask: Array | None = None,
-        nn: int = -1,
-        f_func: Callable | None = None,
-        observable: list[CV] | None = None,
-    ) -> jax.Array:
-        if f_func is None:
-
-            def _f_func(x, nl):
-                return x
-        else:
-            _f_func = f_func
-
-        if shape_mask is not None:
-            nn = int(jnp.sum(shape_mask)) + 1  # +1 for bin -1
-
-        nn_range = jnp.arange(nn)
-
-        if shape_mask is not None:
-            nn_range = nn_range.at[-1].set(-1)
-
-        h = jnp.zeros((nn,))
-
-        def _get_histo(
-            x: tuple[Array | None, Array, Array | None],
-            cv_i: CV,
-            obs: CV | None,
-            weights: Array | None,
-            _weights_t=None,
-            _dweights_t=None,
-        ) -> tuple[Array | None, Array, Array | None]:
-            alpha_factors, h, obs_array = x
-
-            cvi = cv_i.cv[:, 0]
-
-            if not log_w:
-                wi = jnp.ones_like(cvi) if weights is None else weights
-                h = h.at[cvi].add(wi)
-
-                if obs is not None:
-                    # print(f"{obs_array.shape=} {cvi.shape=} {obs.cv.shape=} {wi.shape=}")
-
-                    u = obs.cv * wi[:, None]
-
-                    obs_array = obs_array.at[cvi, :].add(u)  # type: ignore
-
-                return (alpha_factors, h, obs_array)
-
-            if alpha_factors is None:
-                alpha_factors = jnp.full_like(h, -jnp.inf)
-
-            # this log of hist. all calculations are done in log space to avoid numerical issues
-            w_log = jnp.zeros_like(cvi) if weights is None else weights
-
-            @partial(vmap_decorator, in_axes=(0, None, None, 0))
-            def get_max(ref_num, data_num, log_w, alpha):
-                val = jnp.where(data_num == ref_num, log_w, -jnp.inf)
-
-                max_new = jnp.max(val)  # type: ignore
-                max_tot = jnp.max(jnp.array([alpha, max_new]))
-
-                return max_tot, max_new > alpha, max_tot - alpha
-
-            alpha_factors, alpha_factors_changed, d_alpha = get_max(nn_range, cvi, w_log, alpha_factors)
-
-            # shift all probs by the change in alpha
-            h: Array = jnp.where(alpha_factors_changed, h - d_alpha, h)  # type:ignore
-
-            if obs is not None:
-                obs_array: jax.Array = jnp.where(alpha_factors_changed[:, None], obs_array - d_alpha, obs_array)  # type:ignore
-
-            m = alpha_factors != -jnp.inf
-
-            p_new = jnp.zeros_like(h)
-            p_new = p_new.at[cvi].add(jnp.exp(w_log - alpha_factors[cvi]))
-
-            h: jax.Array = jnp.where(m, jnp.log(jnp.exp(h) + p_new), h)
-
-            if obs is not None:
-                obs_array = obs_array.at[cvi].add(obs.cv * jnp.exp(w_log - alpha_factors[cvi]))  # type: ignore
-
-            return (alpha_factors, h, obs_array)
-
-        (alpha_factors, h, obs) = macro_chunk_map_fun(
-            f=_f_func,
-            # op=data_nums[0].stack,
-            y=data_nums,
-            y_t=None if observable is None else observable,
-            macro_chunk=macro_chunk,
-            verbose=verbose,
-            chunk_func=_get_histo,
-            chunk_func_init_args=(
-                None,
-                h,
-                jnp.zeros((nn, *observable[0].shape[1:])) if observable is not None else None,
-            ),
-            w=weights,
-            jit_f=True,
-        )
-
-        if log_w:
-            assert alpha_factors is not None
-            h += alpha_factors
-
-            if obs is not None:
-                obs += alpha_factors[:, None]
-
-        if shape_mask is not None:
-            # print(f"{h[-1]=}")
-            h = h[:-1]
-
-            if observable is not None:
-                assert obs is not None
-                obs = obs[:-1]
-
-        if observable is not None:
-            return h, obs
-
-        return h
-
-    @staticmethod
-    def _histogram(
-        metric: CvMetric,
-        n_grid=40,
-        grid_bounds=None,
-        chunk_size=None,
-        chunk_size_mid=1,
-    ):
-        bins, _, _, cv_mid, bounds = metric.grid(n=n_grid, bounds=grid_bounds)
-
-        # print(f"{bounds=} {grid_bounds=}")
-
-        @partial(CvTrans.from_cv_function, mid=cv_mid, bounds=bounds)
-        def closest_trans(cv: CV, _nl, shmap, shmap_kwargs, mid: CV, bounds: jax.Array):
-            m = jnp.argmin(jnp.sum((mid.cv - cv.cv) ** 2, axis=1), keepdims=True)
-            m = jnp.where(jnp.all(jnp.logical_and(cv.cv > bounds[:, 0], cv.cv < bounds[:, 1])), m, -1)
-
-            return cv.replace(cv=m)
-
-        nums = closest_trans.compute_cv(cv_mid, chunk_size=chunk_size)[0].cv
-
-        return (
-            cv_mid,
-            nums,
-            bins,
-            closest_trans,
-            Partial_decorator(DataLoaderOutput.get_histo, nn=cv_mid.shape[0]),
-        )
 
     @staticmethod
     def _unstack_weights(stack_dims, weights: Array) -> list[Array]:
@@ -438,7 +284,7 @@ class DataLoaderOutput(MyPyTreeNode):
             if verbose:
                 print(f"using {n_hist=}")
 
-            cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
+            cv_mid, nums, bins, closest, get_histo = _histogram(
                 metric=self.collective_variable.metric,
                 n_grid=n_hist,
                 grid_bounds=grid_bounds,
@@ -663,7 +509,6 @@ class DataLoaderOutput(MyPyTreeNode):
 
         return new_rho
 
-    @staticmethod
     def wham_weight(
         self,
         samples_per_bin: int = 10,
@@ -882,7 +727,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 F_k_new,
                 # sigma_Fi_nl,
                 sigma_Fk_nl,
-            ) = _solve_wham(
+            ) = solve_wham(
                 log_U_ik_nl,
                 H_ik_nl / tau_i_nl[:, None],
                 verbose=verbose,
@@ -937,15 +782,417 @@ class DataLoaderOutput(MyPyTreeNode):
 
         # E_k = jnp.zeros((len_k,))
 
-        dw_mins = []
-        dw_maxs = []
-
         log_w_tot_sq = jnp.full((len_k + 1,), -jnp.inf)
         log_w_tot_k = jnp.full((len_k + 1,), -jnp.inf)
 
         H_ik_req = jnp.zeros((len_i, len_k + 1))
 
-        k_count = jnp.array((len_k,))
+        def _log_add(a, b, k):
+            _lw = a.at[k].max(b)
+
+            _lw = jnp.where(jnp.isfinite(_lw), _lw, 0.0)
+
+            out = jnp.log(jnp.exp(a - _lw).at[k].add(jnp.exp(b - _lw[k]))) + _lw
+
+            # print(f"{normal - fancy =}")
+
+            return out
+
+        # print(f"{w_ik=}")
+
+        for i in range(len_i):
+            k_arr = grid_nums_mask[i].cv.reshape(-1)
+
+            H_ik_req = H_ik_req.at[i, k_arr].add(1)
+
+            mask = jnp.logical_or(jnp.logical_not(mask_ik[i, k_arr]), k_arr == -1)
+
+            # print(f"{i=} {k_arr=} ")
+            # print(f"{jnp.sum(mask)=}")
+
+            grid_nums_out.append(k_arr)
+
+            # get difference between binned and actual bias
+
+            dw = jnp.where(mask, 0.0, jnp.exp(u_unstacked[i] - log_U_ik[i, k_arr] * beta))
+            dw_inv = jnp.where(dw > 0, 1 / dw, 0)
+            # print(f"{1/dw=}")
+
+            # dw_mins.append(jnp.min(dw))
+            # dw_maxs.append(jnp.max(dw))
+
+            w = jnp.where(mask, 0.0, w_ik[i, k_arr]) * dw
+
+            # print(f"{w=} ")
+
+            ps = jnp.where(mask, 0.0, ps_ik[i, k_arr])
+            dens = jnp.where(mask, 0.0, dens_ik[i, k_arr]) * dw_inv
+            n_bin = jnp.where(mask, 0.0, H_ik[i, k_arr])
+            n_eff = jnp.where(mask, 0.0, H_ik[i, k_arr] / tau_i[i])
+
+            # https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.3c01423?ref=article_openPDF
+
+            w_out.append(w)
+            ps_out.append(ps)
+            dens_out.append(dens)
+            n_bin_out.append(n_bin)
+            n_eff_out.append(n_eff)
+            F_k_out.append(jnp.where(mask, jnp.inf, F_k[k_arr]))
+
+            s += jnp.sum(jnp.where(mask, 0.0, jnp.exp(jnp.log(w) + jnp.log(dens) + jnp.log(ps) - jnp.log(n_bin))))
+
+            log_w_tot_k = _log_add(
+                log_w_tot_k,
+                jnp.log(w) + jnp.log(dens) - jnp.log(n_bin) + jnp.log(ps),
+                k_arr,
+            )
+
+            log_w_tot_sq = _log_add(
+                log_w_tot_sq,
+                2 * (jnp.log(w) + jnp.log(dens) - jnp.log(n_bin) + jnp.log(ps)),
+                k_arr,
+            )
+
+            s_ps_k = s_ps_k.at[k_arr].add(jnp.exp(jnp.log(ps) - jnp.log(n_bin)))
+
+        if not jnp.allclose(s_ps_k[:-1], 1, rtol=1e-04, atol=1e-04):
+            print(f"ps sum to {s_ps_k[:-1]} instead of 1, check your wham solution and histogram binning")
+
+        print(f"{s=}")
+
+        # if compute_std:
+
+        # new value of sigma
+        sigma_ind = jnp.full((len_k + 1,), jnp.inf)
+        sigma_ind = sigma_ind.at[:-1].set(sigma_Fk)
+        sigma_ind = sigma_ind / jnp.exp(log_w_tot_sq / 2 - log_w_tot_k)
+
+        if compute_std:
+            sigma_out = []
+            log_simga_sq_k_test = jnp.full((len_k + 1,), -jnp.inf)
+
+            for i in range(len_i):
+                k_arr = grid_nums_mask[i].cv.reshape(-1)
+
+                # w = w_out[i] * dens_out[i]
+
+                sigma = sigma_ind[k_arr]
+
+                sigma_out.append(sigma)
+
+                log_simga_sq_k_test = _log_add(
+                    log_simga_sq_k_test,
+                    2
+                    * (
+                        jnp.log(sigma)
+                        + jnp.log(ps_out[i])
+                        - jnp.log(n_bin_out[i])
+                        + jnp.log(dens_out[i])
+                        + jnp.log(w_out[i])
+                    ),
+                    k_arr,
+                )
+
+            sigma_k_test = jnp.exp(0.5 * log_simga_sq_k_test - log_w_tot_k)
+
+            print(f"{( jnp.linalg.norm(sigma_k_test[:-1] -sigma_Fk)/kjmol)=}   ")
+
+        # print(f"{E_k/kjmol=}")
+
+        # print(f"{N_i_tau=}")
+
+        output_weight_kwargs = {
+            "weight": w_out,
+            "p_select": ps_out,
+            "n_bin": n_bin_out,
+            "density": dens_out,
+            "F": F_k_out,
+            "grid_nums": grid_nums_out,
+            "labels": label_i,
+            "frac_full": frac_full,
+            "p_std": sigma_out if compute_std else None,
+            "bounds": bounds,
+            "n_bins": len_k,
+            "n_hist": n_hist,
+            "n_eff_bin": n_eff_out,
+            "N_samples_eff": jnp.sum(N_i_tau),
+        }
+
+        return WeightOutput(**output_weight_kwargs)
+
+    def dham_weight(
+        self,
+        samples_per_bin: int = 10,
+        min_samples_per_bin: int = 1,
+        n_max: float | int = 1e5,
+        n_max_lin: int | None = None,
+        chunk_size: int | None = None,
+        biases: list[Bias] = None,
+        cv_0: list[CV] | None = None,
+        cv_t: list[CV] | None = None,
+        macro_chunk: int | None = 1000,
+        verbose: bool = False,
+        margin: float = 0.0,
+        compute_std: bool = False,
+        sparse_inverse: bool = True,
+        recalc_bounds=True,
+        correlation_method: str | None = None,
+        blav_pair=False,
+        n_subgrids: int = 10,
+        n_hist: int | None = None,
+        get_e_wall=True,
+    ) -> WeightOutput:
+        if cv_0 is None:
+            cv_0 = self.cv
+
+        if cv_t is None:
+            cv_t = self.cv_t
+
+        # TODO:https://pubs.acs.org/doi/pdf/10.1021/acs.jctc.9b00867
+
+        # get raw rescaling
+        u_unstacked = []
+        e_unstacked = []
+
+        beta = 1 / (self.sti.T * boltzmann)
+
+        for ti_i in self.ti:
+            e = ti_i.e_bias
+
+            if e is None:
+                if verbose:
+                    print("WARNING: no bias enerrgy found")
+                e = jnp.zeros((ti_i.shape,))
+
+            # e -= jnp.min(e)
+
+            u = beta * e
+
+            u_unstacked.append(u)
+
+            e_unstacked.append(ti_i.e_pot * beta)
+
+        (
+            frac_full,
+            labels,
+            x_labels,
+            num_labels,
+            grid_nums_mask,
+            get_histo,
+            bins,
+            cv_mid,
+            hist_mask,
+            _,
+            bounds,
+            tau_i,
+            _,
+            n_hist,
+        ) = self.get_bincount(
+            cv_0,
+            n_max=n_max,
+            n_max_lin=n_max_lin,
+            n_hist=n_hist,
+            margin=margin,
+            chunk_size=chunk_size,
+            samples_per_bin=samples_per_bin,
+            min_samples_per_bin=min_samples_per_bin,
+            macro_chunk=macro_chunk,
+            verbose=verbose,
+            recalc_bounds=recalc_bounds,
+            correlation_method=correlation_method,
+        )
+
+        if correlation_method is not None:
+            print(f"{tau_i=}")
+
+        len_i = len(u_unstacked)
+        len_k = jnp.sum(hist_mask)
+        log_U_ik = jnp.full((len_i, len_k), jnp.inf)
+        H_ik = jnp.zeros((len_i, len_k))
+
+        label_i = []
+
+        T_il = []
+        states_i = []
+
+        for i in range(len_i):
+            if verbose:
+                print(".", end="", flush=True)
+                if (i + 1) % 100 == 0:
+                    print("")
+
+            t_log_H_ik: jax.Array = get_histo(
+                [grid_nums_mask[i]],
+                None,
+                log_w=True,
+                shape_mask=hist_mask,
+                macro_chunk=macro_chunk,
+            )  # type:ignore
+
+            t_log_U_ik: jax.Array = (
+                get_histo(
+                    [grid_nums_mask[i]],
+                    [u_unstacked[i]],
+                    log_w=True,
+                    shape_mask=hist_mask,
+                    macro_chunk=macro_chunk,
+                )
+                - t_log_H_ik
+            )
+
+            # print(f"{hist_mask=}")
+
+            T_l, pairs_l = get_transition_counts(
+                [grid_nums_mask[i]],
+                shape_mask=hist_mask,
+                macro_chunk=macro_chunk,
+            )
+
+            T_il.append(T_l)
+            states_i.append(pairs_l)
+
+            t_log_U_ik = jnp.where(jnp.isfinite(t_log_U_ik), t_log_U_ik, jnp.inf)
+
+            H_ik = H_ik.at[i, :].set(jnp.exp(t_log_H_ik))
+            log_U_ik = log_U_ik.at[i, :].set(t_log_U_ik)
+
+            labels_i = jnp.sum(x_labels[:, grid_nums_mask[i].cv.reshape(-1)], axis=1)
+            label_i.append(jnp.argmax(labels_i))
+
+        print(f"{states_i=}")
+
+        max_pairs = max([len(p_i) for p_i in states_i]) + 1
+        print(f"{max_pairs=}  {[a.shape for  a in T_il]=} ")
+
+        _T_il = jnp.full((len_i, max_pairs), 0)
+        pairs_il = jnp.full((len_i, max_pairs, 2), -1)
+
+        for i in range(len_i):
+            T_l = T_il[i]
+            pairs_l = states_i[i]
+
+            print(f"{pairs_l.shape=} {T_l .shape=}")
+
+            _T_il = _T_il.at[i, : len(T_l)].set(T_l)
+            pairs_il = pairs_il.at[i, : len(pairs_l), :].set(pairs_l)
+
+        T_il = _T_il
+        print(f"{T_il=} {pairs_il=}")
+
+        w_ik = jnp.full((log_U_ik.shape[0], log_U_ik.shape[1]), 0.0)
+        ps_ik = jnp.full((log_U_ik.shape[0], log_U_ik.shape[1]), 0.0)
+        dens_ik = jnp.full((log_U_ik.shape[0], log_U_ik.shape[1]), 0.0)
+        mask_ik = jnp.full((log_U_ik.shape[0], log_U_ik.shape[1]), False)
+
+        F_k = jnp.full((log_U_ik.shape[1],), jnp.inf)
+        F_i = jnp.full((log_U_ik.shape[0],), jnp.inf)
+
+        if compute_std:
+            sigma_Fi = jnp.full((log_U_ik.shape[0],), jnp.inf)
+            sigma_Fk = jnp.full((log_U_ik.shape[1],), jnp.inf)
+
+        tau_i = tau_i
+
+        label_i = jnp.array(label_i).reshape((-1))
+
+        print(f"{jnp.max(log_U_ik)=}")
+
+        for nl in range(0, num_labels):
+            mk = labels == nl
+            nk = int(jnp.sum(mk))
+            arg_mk = jnp.argwhere(mk).reshape((-1,))
+
+            mi = label_i == nl
+            ni = jnp.sum(mi)
+            arg_mi = jnp.argwhere(mi).reshape((-1,))
+
+            if nk == 0 or ni == 0:
+                print(f"skipping label {nl} with {nk} bins and {ni} trajectories")
+                continue
+
+            print(f"running wham with {nk} bins and {ni} trajectories")
+
+            # # this is just a meshgrid
+
+            @partial(vmap_decorator, in_axes=(0, None))
+            @partial(vmap_decorator, in_axes=(None, 0))
+            def _get_arg_ik(i, k):
+                return jnp.array([i, k])
+
+            arg_ik = _get_arg_ik(arg_mi, arg_mk)
+
+            H_ik_nl = H_ik[arg_ik[:, :, 0], arg_ik[:, :, 1]]
+            log_U_ik_nl = log_U_ik[arg_ik[:, :, 0], arg_ik[:, :, 1]]
+            tau_i_nl = tau_i[arg_mi]
+            T_il_nl = T_il[arg_mi][:, :-1]
+            pairs_il_nl = pairs_il[arg_mi][:, :-1]  # remove -1 bin
+
+            out = solve_dham(
+                T_il_nl,
+                pairs_il_nl,
+                log_U_ik_nl,
+            )
+            (
+                log_w_ik_nl,
+                log_ps_ik_nl,
+                F_i_nl,
+                log_dens_ik_nl,
+                mask_ik_nl,
+                F_k_new,
+                # sigma_Fi_nl,
+                sigma_Fk_nl,
+            ) = out
+
+            H_ik_nl = jnp.where(mask_ik_nl, H_ik_nl, 0.0)
+
+            mask_ik = mask_ik.at[arg_ik[:, :, 0], arg_ik[:, :, 1]].set(mask_ik_nl)
+            w_ik = w_ik.at[arg_ik[:, :, 0], arg_ik[:, :, 1]].set(jnp.exp(log_w_ik_nl))
+            ps_ik = ps_ik.at[arg_ik[:, :, 0], arg_ik[:, :, 1]].set(jnp.exp(log_ps_ik_nl))
+            dens_ik = dens_ik.at[arg_ik[:, :, 0], arg_ik[:, :, 1]].set(jnp.exp(log_dens_ik_nl))
+            H_ik = H_ik.at[arg_ik[:, :, 0], arg_ik[:, :, 1]].set(H_ik_nl)
+
+            F_k = F_k.at[arg_mk].set(F_k_new)
+            F_i = F_i.at[arg_mi].set(F_i_nl)
+
+            if compute_std:
+                sigma_Fk = sigma_Fk.at[arg_mk].set(sigma_Fk_nl)
+                # sigma_Fi = sigma_Fi.at[arg_mi].set(sigma_Fi_nl)
+
+        N_i_tau = jnp.sum(H_ik, axis=1) / tau_i
+        # print(f"{N_i_tau=}")
+
+        F_k /= beta
+        # F_i /= beta
+        log_U_ik /= beta
+        if compute_std:
+            sigma_Fk /= beta
+            # sigma_Fi /= beta
+
+        print(f"{jnp.max(F_k)/kjmol=} {jnp.min(F_k)/kjmol=}  {F_k/kjmol=}")
+
+        if compute_std:
+            print(f"{jnp.max(sigma_Fk)/kjmol=} {jnp.min(sigma_Fk)/kjmol=}  {sigma_Fk/kjmol=}")
+            # print(f"{jnp.max(sigma_Fi)/kjmol=} {jnp.min(sigma_Fi)/kjmol=}  {sigma_Fi/kjmol=}")
+
+        s = 0.0
+
+        s_ps_k = jnp.zeros((len_k + 1,))
+
+        w_out = []
+        ps_out = []
+        dens_out = []
+        F_k_out = []
+        n_bin_out = []
+        n_eff_out = []
+        grid_nums_out = []
+        sigma_out = []
+
+        # E_k = jnp.zeros((len_k,))
+
+        log_w_tot_sq = jnp.full((len_k + 1,), -jnp.inf)
+        log_w_tot_k = jnp.full((len_k + 1,), -jnp.inf)
+
+        H_ik_req = jnp.zeros((len_i, len_k + 1))
 
         def _log_add(a, b, k):
             _lw = a.at[k].max(b)
@@ -1021,44 +1268,41 @@ class DataLoaderOutput(MyPyTreeNode):
 
         print(f"{s=}")
 
-        # if compute_std:
-
-        # new value of sigma
-        sigma_ind = jnp.full((len_k + 1,), jnp.inf)
-        sigma_ind = sigma_ind.at[:-1].set(sigma_Fk)
-        sigma_ind = sigma_ind / jnp.exp(log_w_tot_sq / 2 - log_w_tot_k)
-
         if compute_std:
-            sigma_out = []
-            log_simga_sq_k_test = jnp.full((len_k + 1,), -jnp.inf)
+            # new value of sigma
+            sigma_ind = jnp.full((len_k + 1,), jnp.inf)
+            sigma_ind = sigma_ind.at[:-1].set(sigma_Fk)
+            sigma_ind = sigma_ind / jnp.exp(log_w_tot_sq / 2 - log_w_tot_k)
 
-            for i in range(len_i):
-                k_arr = grid_nums_mask[i].cv.reshape(-1)
+            if compute_std:
+                sigma_out = []
+                log_simga_sq_k_test = jnp.full((len_k + 1,), -jnp.inf)
 
-                # w = w_out[i] * dens_out[i]
+                for i in range(len_i):
+                    k_arr = grid_nums_mask[i].cv.reshape(-1)
 
-                sigma = sigma_ind[k_arr]
+                    # w = w_out[i] * dens_out[i]
 
-                sigma_out.append(sigma)
+                    sigma = sigma_ind[k_arr]
 
-                log_simga_sq_k_test = _log_add(
-                    log_simga_sq_k_test,
-                    2
-                    * (
-                        jnp.log(sigma)
-                        + jnp.log(ps_out[i])
-                        - jnp.log(n_bin_out[i])
-                        + jnp.log(dens_out[i])
-                        + jnp.log(w_out[i])
-                    ),
-                    k_arr,
-                )
+                    sigma_out.append(sigma)
 
-            sigma_k_test = jnp.exp(0.5 * log_simga_sq_k_test - log_w_tot_k)
+                    log_simga_sq_k_test = _log_add(
+                        log_simga_sq_k_test,
+                        2
+                        * (
+                            jnp.log(sigma)
+                            + jnp.log(ps_out[i])
+                            - jnp.log(n_bin_out[i])
+                            + jnp.log(dens_out[i])
+                            + jnp.log(w_out[i])
+                        ),
+                        k_arr,
+                    )
 
-            print(f"{( jnp.linalg.norm(sigma_k_test[:-1] -sigma_Fk)/kjmol)=}   ")
+                sigma_k_test = jnp.exp(0.5 * log_simga_sq_k_test - log_w_tot_k)
 
-        mask_k = jnp.any(mask_ik, axis=0)
+                print(f"{( jnp.linalg.norm(sigma_k_test[:-1] -sigma_Fk)/kjmol)=}   ")
 
         # print(f"{E_k/kjmol=}")
 
@@ -1431,7 +1675,7 @@ class DataLoaderOutput(MyPyTreeNode):
         n_max_lin: int | None = 150,
         margin=0.0,
         chunk_size=None,
-        samples_per_bin=20,
+        samples_per_bin: int = 5,
         min_samples_per_bin=1,
         macro_chunk: int | None = 1000,
         verbose=False,
@@ -1492,7 +1736,7 @@ class DataLoaderOutput(MyPyTreeNode):
         bounds: jax.Array | None = None,
         margin=0.0,
         chunk_size=None,
-        samples_per_bin=20,
+        samples_per_bin: int = 5,
         min_samples_per_bin=1,
         macro_chunk: int | None = 1000,
         verbose=False,
@@ -1574,7 +1818,7 @@ class DataLoaderOutput(MyPyTreeNode):
                 n_hist = 3
 
             print("getting histo")
-            cv_mid, nums, bins, closest, get_histo = DataLoaderOutput._histogram(
+            cv_mid, nums, bins, closest, get_histo = _histogram(
                 metric=metric,
                 n_grid=n_hist,
                 grid_bounds=grid_bounds,
@@ -1869,8 +2113,8 @@ class DataLoaderOutput(MyPyTreeNode):
         self,
         cv_0: list[CV] | list[SystemParams] | None = None,
         cv_t: list[CV] | list[SystemParams] | None = None,
-        nl: list[NeighbourList] | NeighbourList | None = None,
-        nl_t: list[NeighbourList] | NeighbourList | None = None,
+        nl: NeighbourList | None = None,
+        nl_t: NeighbourList | None = None,
         # method="tcca",
         only_return_weights=False,
         symmetric=False,
@@ -1911,6 +2155,9 @@ class DataLoaderOutput(MyPyTreeNode):
         batch_size: int = 1024,
         batch_chunk_size: int = 16,
         beta_timecon: float | None = None,
+        tau_thermo: float | None = None,
+        curvature_radius: float = 1.0,
+        hessian: bool = False,
     ) -> "KoopmanModel":
         # TODO: https://www.mdpi.com/2079-3197/6/1/22
 
@@ -2034,6 +2281,9 @@ class DataLoaderOutput(MyPyTreeNode):
             alpha_smooth=alpha_smooth,
             batch_chunk_size=batch_chunk_size,
             beta_timecon=beta_timecon,
+            tau_thermo=tau_thermo,
+            curvature_radius=curvature_radius,
+            hessian=hessian,
         )
 
     def filter_nans(
@@ -2275,7 +2525,7 @@ class DataLoaderOutput(MyPyTreeNode):
         collective_variable: CollectiveVariable | None = None,
         set_outer_border=True,
         rbf_degree: int | None = None,
-        smoothing=0.1 / (kjmol**2),
+        smoothing=1e-3,
         frac_full=1.0,
         recalc_bounds=True,
         output_density_bias=False,
@@ -2369,7 +2619,7 @@ class DataLoaderOutput(MyPyTreeNode):
         kernel: str = "multiquadric",
         set_outer_border: bool = True,
         rbf_degree: int | None = None,
-        smoothing=0.1 / (kjmol**2),
+        smoothing=1e-3,
         frac_full=1.0,
         compute_frac_full=False,
         grid_bias_order: int = 0,
@@ -2385,6 +2635,9 @@ class DataLoaderOutput(MyPyTreeNode):
         bounds: jax.Array | None = None,
     ) -> tuple[Bias, StdBias | None, Bias | None, dict]:
         beta = 1 / (T * boltzmann)
+
+        if isinstance(smoothing, jax.Array):
+            smoothing = float(smoothing)
 
         (
             _,
@@ -2645,10 +2898,10 @@ class DataLoaderOutput(MyPyTreeNode):
         self,
         new_cv: list[CV],
         new_colvar: CollectiveVariable,
-        samples_per_bin=5,
+        samples_per_bin: int = 5,
         min_samples_per_bin: int = 1,
         chunk_size=1,
-        smoothing=0.1 / (kjmol**2),
+        smoothing=1e-3,
         max_bias=None,
         shmap=False,
         n_grid_old=50,
@@ -2660,7 +2913,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
         # get bins for new CV
         grid_bounds_new, _, _ = CvMetric.bounds_from_cv(new_cv, margin=0.1)
-        cv_mid_new, nums_new, _, closest_new, get_histo_new = DataLoaderOutput._histogram(
+        cv_mid_new, nums_new, _, closest_new, get_histo_new = _histogram(
             n_grid=n_grid_new,
             grid_bounds=grid_bounds_new,
             metric=new_colvar.metric,
@@ -2669,7 +2922,7 @@ class DataLoaderOutput(MyPyTreeNode):
 
         # get bins for old CV
         grid_bounds_old, _, _ = CvMetric.bounds_from_cv(old_cv, margin=0.1)
-        cv_mid_old, nums_old, _, closest_old, get_histo_old = DataLoaderOutput._histogram(
+        cv_mid_old, nums_old, _, closest_old, get_histo_old = _histogram(
             n_grid=n_grid_old,
             grid_bounds=grid_bounds_old,
             metric=self.collective_variable.metric,

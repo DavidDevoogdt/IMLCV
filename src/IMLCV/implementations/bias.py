@@ -275,7 +275,7 @@ class RbfBias(Bias):
         step=None,
         kernel="multiquadric",
         epsilon=None,
-        smoothing=0.1 / (kjmol**2),
+        smoothing=1e-3,
         degree=None,
         finalized=True,
         sigma: Array | None = None,
@@ -319,7 +319,7 @@ class RbfBias(Bias):
         bias: GridBias,
         kernel="multiquadric",
         epsilon=None,
-        smoothing=0.1 / (kjmol**2),
+        smoothing=1e-3,
         degree=None,
     ) -> RbfBias:
         Warning("this method is untested")

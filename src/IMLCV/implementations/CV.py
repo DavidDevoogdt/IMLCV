@@ -11,6 +11,7 @@ from IMLCV.base.CV import (
     CollectiveVariable,
     CvFunBase,
     CvTrans,
+    CvMetric,
 )
 from IMLCV.base.dataobjects import (
     CV,
@@ -18,8 +19,9 @@ from IMLCV.base.dataobjects import (
     NeighbourListInfo,
     SystemParams,
 )
-from IMLCV.base.decoratros import vmap_decorator
+from IMLCV.base.decoratros import vmap_decorator, field
 from IMLCV.base.UnitsConstants import angstrom
+
 
 ######################################
 #       CV transformations           #
@@ -116,6 +118,75 @@ def _lattice_invariants_2(
 LatticeInvariants2 = CvTrans.from_cv_function(_lattice_invariants_2)
 
 
+def _log_theta(t, q2):
+    """log Θ(t) = log Σ_n exp(-π t n·Ĝn), full box (n=0 gives the +1 baseline, so Θ ≥ 1).
+    ∂/∂Ĝ log Θ = -π t ⟨n⊗n⟩_t   (a Boltzmann average → bounded)
+    ∂²/∂Ĝ² log Θ = (π t)² Cov_t(n⊗n)  (a covariance → bounded)
+    Both are cumulants of a probability over shells, so they're well-scaled by construction."""
+    return jax.nn.logsumexp(-jnp.pi * t * q2)  # stable; no over/underflow
+
+
+def _image_shell(nmax):
+    rng = jnp.arange(-nmax, nmax + 1)
+    return jnp.stack(jnp.meshgrid(rng, rng, rng, indexing="ij"), axis=-1).reshape(-1, 3)
+
+
+def _lattice_invariants_theta(
+    sp,
+    nl,
+    shmap,
+    shmap_kwargs,
+    n_per=5,
+    n=5,
+    alpha=0.0,
+    V0=1.0,
+    start=0.2,
+    stop=2.0,
+):
+    """alpha in [0,1] controls how much volume leaks into the theta features:
+      alpha = 0  -> original behaviour (pure shape, volume only in log V)
+      alpha = 1  -> full physical lengths (relative to V0)
+    V0 is the operating-point volume (set it to the mean perovskite cell volume)
+    so the features stay O(1) and well-centred."""
+    if sp.cell is None:
+        return CV(cv=jnp.array([]))
+
+    ts = jnp.geomspace(start, stop, n)
+    ns = _image_shell(n_per)
+
+    h = sp.cell
+    V = jnp.abs(jnp.linalg.det(h))
+    Ghat = (h @ h.T) / V ** (2.0 / 3.0)  # det = 1, pure shape
+
+    s = (V / V0) ** (2.0 * alpha / 3.0)  # volume scale, == shifting the t-grid
+
+    q2 = s * jax.vmap(lambda n: n @ Ghat @ n)(ns)  # shape AND volume
+    q2_ref = jax.vmap(lambda n: n @ n)(ns)  # fixed cubic-unit reference
+
+    logTheta = jax.vmap(_log_theta, in_axes=(0, None))(ts, q2)
+    logTheta_ref = jax.vmap(_log_theta, in_axes=(0, None))(ts, q2_ref)
+
+    feats = logTheta - logTheta_ref  # 0 at (V0, cubic); now volume-signed
+
+    return CV(cv=jnp.concatenate([jnp.log(V)[None], feats]))
+
+
+def lattice_invariants_theta_descriptor(n=5, alpha=0.0, V0=1.0, start=0.2, stop=2.0, n_per=5):
+    return CvTrans.from_cv_function(
+        _lattice_invariants_theta,
+        static_argnames=["n", "alpha", "V0", "n_per"],
+        n=n,
+        alpha=alpha,
+        V0=V0,
+        start=start,
+        stop=stop,
+        n_per=n_per,
+    )
+
+
+LatticeInvariantsTheta = CvTrans.from_cv_function(_lattice_invariants_theta)
+
+
 def _distance(
     x: SystemParams,
     nl,
@@ -189,7 +260,7 @@ def distance_descriptor(
     scale: float = 1.0 * angstrom,
     inverse: bool = False,
     log: bool = False,
-    eps: float = 1.0,
+    eps: float = 0.1 * angstrom,
 ):
     return CvTrans.from_cv_function(
         _distance,
@@ -1187,54 +1258,322 @@ def linear_layer(
     )
 
 
+import flax.linen as nn
+
+
+# # https://arxiv.org/pdf/2009.01411
+
+
+# Optional: E[|v|] for a unit-variance 3-vector is ~1.596 (chi_3), std ~0.673.
+# Not used as fixed centering (mean drifts from ~0.3 at init to ~1.6 once vectors
+# grow), but kept here in case you want to enable centering after a warmup.
+
+class GVPMessagePassingLayer(nn.Module):
+    scalar_out_dim: int = field(pytree_node=False)
+    vector_out_dim: int = field(pytree_node=False)
+    use_pseudo: bool = field(pytree_node=False, default=False)
+    hidden_dim_s_pseudo: int = field(pytree_node=False, default=8)
+    nneigh: float = 1.0
+    eps: float = 1e-8
+
+    @nn.compact
+    def __call__(
+        self,
+        nl: NeighbourList,
+        node_states: tuple[jax.Array, jax.Array],
+        r_hats: jax.Array,
+        rbf_features: jax.Array,
+        smooth_graph_mask: jax.Array,
+    ) -> tuple[jax.Array, jax.Array]:
+        node_scalars, node_vectors = node_states
+        vector_in_dim = node_vectors.shape[-2]
+
+        # ---- inits -------------------------------------------------------------
+        # LeCun (fan-in, var=1/fan_in): preserves per-component variance through
+        # the no-nonlinearity vector channel mixes regardless of concat fan-in.
+        vector_kernel_init = nn.initializers.lecun_normal()
+        # He (fan-in x2): compensates SiLU gain so SiLU(Dense(x)) stays ~unit var.
+        silu_dense_init = nn.initializers.he_uniform()
+
+        # ---- kernels -----------------------------------------------------------
+        W_v_msg_kernel = self.param(
+            "W_v_msg_kernel", vector_kernel_init, (vector_in_dim + 1, self.vector_out_dim)
+        )
+        W_v_up_kernel = self.param(
+            "W_v_up_kernel", vector_kernel_init,
+            (vector_in_dim + self.vector_out_dim, self.vector_out_dim),
+        )
+        W_s_msg = nn.Dense(
+            self.scalar_out_dim + self.vector_out_dim, kernel_init=silu_dense_init, name="W_s_msg"
+        )
+        W_s_update = nn.Dense(
+            self.scalar_out_dim + self.vector_out_dim, kernel_init=silu_dense_init, name="W_s_update"
+        )
+        v_gate_bias = self.param(
+            "v_gate_bias", lambda k, s: jnp.ones(s) * 1.5, (self.vector_out_dim,)
+        )
+
+        # Pseudoscalar kernels: select channel combos to cross-product.
+        # a x b is a pseudovector (reflection-ODD); dotting with a true vector
+        # (r_hat at edges, a third combo c at nodes) yields a pseudoscalar that
+        # carries dihedral sign (sin phi). Only created when use_pseudo.
+        if self.use_pseudo:
+            W_ps_a = self.param("W_ps_a", vector_kernel_init, (self.vector_out_dim, self.hidden_dim_s_pseudo))
+            W_ps_b = self.param("W_ps_b", vector_kernel_init, (self.vector_out_dim, self.hidden_dim_s_pseudo))
+            W_ps_c = self.param("W_ps_c", vector_kernel_init, (self.vector_out_dim, self.hidden_dim_s_pseudo))
+
+        # ---- gather ------------------------------------------------------------
+        neigh_scalars = node_scalars[nl.atom_indices]
+        neigh_vectors = node_vectors[nl.atom_indices]
+
+        # ---- per-edge messages -------------------------------------------------
+        @partial(jax.vmap, in_axes=0, out_axes=0)   # over A
+        @partial(jax.vmap, in_axes=0, out_axes=0)   # over n
+        def edge_messages(neigh_s, neigh_v, r_hat, rbf_edge):
+            """ONE edge. neigh_s (S_in,), neigh_v (V_in,3), r_hat (3,), rbf_edge (R,)."""
+            v_edge = jnp.concatenate([neigh_v, r_hat[None, :]], axis=-2)          # (V_in+1, 3)
+            v_msg  = jnp.einsum("cm,co->om", v_edge, W_v_msg_kernel)              # (V_out, 3)
+            v_msg_norms = jnp.sqrt(jnp.einsum("om,om->o", v_msg, v_msg) + self.eps)  # (V_out,) even
+
+            feats = [neigh_s, rbf_edge, v_msg_norms]
+            if self.use_pseudo:
+                # reference-free pseudoscalar: r_hat . (a x b), reflection-ODD
+                a = jnp.einsum("om,oc->cm", v_msg, W_ps_a)          # (hidden_dim_s_pseudo, 3)
+                b = jnp.einsum("om,oc->cm", v_msg, W_ps_b)          # (hidden_dim_s_pseudo, 3)
+                pseudo = jnp.einsum("cm,m->c", jnp.cross(a, b, axis=-1), r_hat)  # (hidden_dim_s_pseudo,)
+                feats.append(pseudo)
+
+            s_edge = jnp.concatenate(feats, axis=-1)
+            # (No LayerNorm; Dense bias absorbs DC offsets. Swap in nn.RMSNorm()(s_edge)
+            #  here if early training is slow -- scale-only, cheap higher derivatives.)
+            s_msg, v_gate = jnp.split(W_s_msg(s_edge), [self.scalar_out_dim], axis=-1)
+            s_msg = nn.silu(s_msg)
+            v_msg = nn.sigmoid(v_gate + v_gate_bias)[:, None] * v_msg
+            return s_msg, v_msg
+
+        s_msg, v_msg = edge_messages(neigh_scalars, neigh_vectors, r_hats, rbf_features)
+
+        # ---- per-atom aggregation ---------------------------------------------
+        @partial(jax.vmap, in_axes=0, out_axes=0)   # over A
+        def aggregate_atom(s_msg_a, v_msg_a, mask_a):
+            agg_s = jnp.sum(mask_a[:, None]       * s_msg_a, axis=0)   # (S_out,)
+            agg_v = jnp.sum(mask_a[:, None, None] * v_msg_a, axis=0)   # (V_out, 3)
+            n_inv_sqrt = 1.0 / jnp.sqrt(self.nneigh)                   # constant count
+            return agg_s * n_inv_sqrt, agg_v * n_inv_sqrt
+
+        aggregated_s, aggregated_v = aggregate_atom(s_msg, v_msg, smooth_graph_mask)
+
+        # ---- node update -------------------------------------------------------
+        s_update_combined = jnp.concatenate([node_scalars, aggregated_s], axis=-1)
+        v_update_combined = jnp.concatenate([node_vectors, aggregated_v], axis=-2)
+
+        v_updated = jnp.einsum("acm,co->aom", v_update_combined, W_v_up_kernel)  # (A, V_out, 3)
+        v_updated_norms = jnp.sqrt(jnp.einsum("aom,aom->ao", v_updated, v_updated) + self.eps)
+
+        feats_final = [s_update_combined, v_updated_norms]
+        if self.use_pseudo:
+            # node-level pseudoscalar = triple product of three learned vector combos:
+            # c . (a x b) = det[a b c], reference-free, reflection-ODD.
+            a = jnp.einsum("aom,oc->acm", v_updated, W_ps_a)          # (A, hidden_dim_s_pseudo, 3)
+            b = jnp.einsum("aom,oc->acm", v_updated, W_ps_b)          # (A, hidden_dim_s_pseudo, 3)
+            c = jnp.einsum("aom,oc->acm", v_updated, W_ps_c)          # (A, hidden_dim_s_pseudo, 3)
+            node_pseudo = jnp.einsum("acm,acm->ac", jnp.cross(a, b, axis=-1), c)  # (A, hidden_dim_s_pseudo)
+            feats_final.append(node_pseudo)
+
+        s_features_final = W_s_update(jnp.concatenate(feats_final, axis=-1))
+        out_scalars, final_v_gates = jnp.split(s_features_final, [self.scalar_out_dim], axis=-1)
+
+        final_gate_bias = self.param(
+            "final_gate_bias", lambda k, s: jnp.ones(s) * 1.5, (final_v_gates.shape[-1],)
+        )
+        out_scalars = nn.silu(out_scalars)
+        out_vectors = jnp.einsum(
+            "ao,aom->aom", nn.sigmoid(final_v_gates + final_gate_bias), v_updated
+        )
+        return out_scalars, out_vectors
+
+
+class DeepGVPNetwork(nn.Module):
+    hidden_dim_s: int = field(pytree_node=False)
+    hidden_dim_v: int = field(pytree_node=False)
+    n_layers: int = field(pytree_node=False)
+    out_dim: int = field(pytree_node=False)
+    permutation_invariant: bool = field(pytree_node=False, default=True)
+    use_pseudo: bool = field(pytree_node=False, default=False)
+    hidden_dim_s_pseudo: int = field(pytree_node=False, default=8)
+    r_delta: float = field(pytree_node=False, default=1.5 * angstrom)
+    r_cut: float = field(pytree_node=False, default=None)
+    num_rbf: int = field(pytree_node=False, default=16)
+    nneigh: float = field(pytree_node=False, default=1.0)
+    eps: float = field(pytree_node=False, default=1e-8)
+
+    def precompute_graph_geometry(self, sp, nl):
+        r_cut = self.r_cut if self.r_cut is not None else nl.info.r_cut
+        r_delta = jnp.clip(self.r_delta, self.eps, r_cut)
+        r_on = r_cut - r_delta                       # FIX: was self.r_cut (None on fallback)
+
+        pos = nl.neighbour_pos(sp)
+        r_norms = jnp.sqrt(jnp.einsum("anm,anm->an", pos, pos) + self.eps)
+        r_hats = pos / jnp.expand_dims(r_norms, axis=-1)
+        r_hats_scaled = r_hats * jnp.sqrt(3.0)       # per-component var 1/3 -> ~1
+
+        centers = jnp.linspace(r_cut / self.num_rbf, r_cut, self.num_rbf)
+        sigma = r_cut / (self.num_rbf - 1)
+        r_expanded = jnp.expand_dims(r_norms, axis=-1)
+        rbf_features = jnp.exp(-jnp.square(r_expanded - centers) / (2.0 * sigma**2))
+
+        s = jnp.clip((r_norms - r_on) / (r_cut - r_on), 0.0, 1.0)
+        smooth_weights = 1.0 - (10.0 * s**3 - 15.0 * s**4 + 6.0 * s**5)
+        topology_mask = jnp.logical_and(nl.padding_bools, r_norms > 1e-12)
+        smooth_graph_mask = jnp.where(topology_mask, smooth_weights, 0.0)
+        return r_hats_scaled, rbf_features, smooth_graph_mask
+
+    @nn.compact
+    def __call__(self, sp, nl):
+        if nl.needs_calculation:
+            _, nl = nl.update_nl(sp)
+
+        r_hats, rbf_features, smooth_graph_mask = self.precompute_graph_geometry(sp, nl)
+
+        one_hot = nl.info.one_hot_z()
+        node_scalars = nn.Dense(self.hidden_dim_s, kernel_init=nn.initializers.lecun_normal())(one_hot)
+        node_vectors = jnp.zeros((node_scalars.shape[0], self.hidden_dim_v, 3))  # zero: no preferred dir + equivariance
+        node_states = (node_scalars, node_vectors)
+
+        for _ in range(self.n_layers):
+            node_states = GVPMessagePassingLayer(
+                scalar_out_dim=self.hidden_dim_s,
+                vector_out_dim=self.hidden_dim_v,
+                use_pseudo=self.use_pseudo,
+                hidden_dim_s_pseudo=self.hidden_dim_s_pseudo,
+                nneigh=self.nneigh,
+            )(nl, node_states, r_hats, rbf_features, smooth_graph_mask)
+            # nb: skip connection could be applied here (state + block(state))
+
+        final_scalars, _ = node_states
+        if self.permutation_invariant:
+            cv_per_atom = nn.Dense(self.out_dim)(final_scalars)
+            collective_variable = jnp.mean(cv_per_atom, axis=0)
+        else:
+            collective_variable = nn.Dense(self.out_dim)(final_scalars.reshape(-1))
+        return CV(cv=collective_variable)
+
+def _gvp_message_passing(
+    sp: SystemParams,
+    nl: NeighbourList,
+    shmap,
+    shmap_kwargs,
+    network: DeepGVPNetwork,
+    params: dict,
+    permutation_invariant: bool = True,
+):
+    print(f"gvp_message_passing called with {nl=}, {sp=}")
+
+    return network.apply(params, sp, nl)
+
+
+
+def gvp_message_passing(
+    hidden_dim_s: int,
+    hidden_dim_v: int,
+    n_layers: int,
+    out_dim: int,
+    sp:SystemParams,
+    nl:NeighbourList,
+    permutation_invariant: bool = True,
+    num_rbf: int = 16,
+    r_delta: float = 1.0 * angstrom,
+    nneigh: float|None = None,
+    hidden_dim_s_pseudo: int = 0,
+) -> CvTrans:
+
+
+    if nneigh is None:
+        nneigh = nl.update.num_neighs
+
+    network = DeepGVPNetwork(
+        hidden_dim_s=hidden_dim_s,
+        hidden_dim_v=hidden_dim_v,
+        n_layers=n_layers,
+        out_dim=out_dim,
+        permutation_invariant=permutation_invariant,
+        num_rbf=num_rbf,
+        r_delta=r_delta,
+        r_cut=nl.info.r_cut,
+        hidden_dim_s_pseudo= hidden_dim_s_pseudo,
+        use_pseudo=hidden_dim_s_pseudo > 0,
+    )
+
+    params = network.init(
+        jax.random.PRNGKey(0),
+        sp,
+        nl,
+    )  # Initialize with dummy inputs
+
+    # print(f"network params {params=}")
+
+    print(f"{network=}")
+
+    return CvTrans.from_cv_function(
+        _gvp_message_passing,
+        network=network,
+        params=params,
+        static_argnames=["network"],
+        learnable_argnames=["params"],
+    )
+
+
+def _atom_norm(
+    cv: CV,
+    _nl,
+    shmap,
+    shmap_kwargs,
+):
+    assert cv.atomic, "atom norm can only be applied to atomic CVs"
+    norm = jnp.sqrt(jnp.sum(cv.cv**2, axis=-1, keepdims=True) + 1e-12)
+    return cv.replace(cv=cv.cv / norm)
+
+
+atom_norm = CvTrans.from_cv_function(_atom_norm)
+
 import jax
 import jax.numpy as jnp
-
-# def _r_neigh_descriptor(
-#     sp: SystemParams,
-#     nl: NeighbourList,
-#     shmap,
-#     shmap_kwargs,
-# ):
-#     def dist(r, i):
-#         return r
-
-#     b0, d0 = nl.apply_fun_neighbour(
-#         sp=sp,
-#         func_single=dist,
-#         reduce="none",
-#         exclude_self=True,
-#     )
-
-#     print(f"r_neigh_descriptor {d0.shape=}")
-
-#     return CV(cv=d0.reshape((-1,)))
-
-
-# r_neigh_descriptor = CvTrans.from_cv_function(
-#     _r_neigh_descriptor,
-# )
 
 
 def _graph_neural_network_model(model_kwargs, key=0):
     from e3nn_jax import Irreps
+
+    from IMLCV.implementations.mace import MACE
+
     from mace_jax.modules import (
         NonLinearReadoutBlock,
         RealAgnosticInteractionBlock,
+        RealAgnosticResidualInteractionBlock,
     )
+
     from mace_jax.modules.models import MACE
+    from mace_jax.tools.cg import O3_e3nn
+    from mace_jax.modules.wrapper_ops import CuEquivarianceConfig
 
     # print(f"creating graph neural network model with {model_kwargs=}")
 
     model_kwargs["hidden_irreps"] = Irreps(model_kwargs["hidden_irreps"])
     # model_kwargs["MLP_irreps"] = Irreps(model_kwargs["MLP_irreps"])
 
+    # cueq_config = CuEquivarianceConfig(
+    #     enabled=True,
+    #     layout='mul_ir',
+    #     group='O3_e3nn',
+    #     # leave every optimize_* and conv_fusion = False
+    # )
+
     m = MACE(
-        interaction_cls=RealAgnosticInteractionBlock,
-        interaction_cls_first=RealAgnosticInteractionBlock,
+        interaction_cls=RealAgnosticResidualInteractionBlock,
+        interaction_cls_first=RealAgnosticResidualInteractionBlock,
         readout_cls=NonLinearReadoutBlock,
         rngs=nnx.Rngs(key),
         atomic_energies=jnp.zeros(model_kwargs["num_elements"]),
+        # cueq_config=cueq_config,
         **model_kwargs,
     )
 
@@ -1267,10 +1606,14 @@ def _custom_setstate(state: dict) -> dict:
     # recreate mode
     model_kwargs = state["static_kwargs"].copy()
     del model_kwargs["reduce_z"]
+
     if "inversion" in model_kwargs:
+        # model_kwargs["use_so3"] = True
         del model_kwargs["inversion"]
     if "normalize" in model_kwargs:
         del model_kwargs["normalize"]
+    if "only_last_out" in model_kwargs:
+        del model_kwargs["only_last_out"]
 
     kwargs = state["kwargs"]
 
@@ -1297,9 +1640,12 @@ def _initialize_graph_neural_network_model(
 
     del model_kwargs["reduce_z"]
     if "inversion" in model_kwargs:
+        # model_kwargs["use_so3"] = True
         del model_kwargs["inversion"]
     if "normalize" in model_kwargs:
         del model_kwargs["normalize"]
+    if "only_last_out" in model_kwargs:
+        del model_kwargs["only_last_out"]
 
     m, graphdef, params, rest = _graph_neural_network_model(model_kwargs, key=key)
 
@@ -1318,6 +1664,7 @@ def _graph_neural_network_model_apply(
     reduce_z=True,
     inversion=False,
     normalize=False,
+    only_last_out=False,
     **model_kwargs,
 ):
     if nl.needs_calculation:
@@ -1359,7 +1706,7 @@ def _graph_neural_network_model_apply(
             out,
         )
 
-        # print(f"out_irrep {out_irrep=}")
+        print(f"out_irrep {out_irrep=}")
 
         node_feats_out = out_irrep.filter(keep="0e").array
 
@@ -1374,13 +1721,8 @@ def _graph_neural_network_model_apply(
 
     feat = []
 
-    for idx in range(m.num_interactions):
-        if idx == m.num_interactions - 1:
-            hidden_irreps_out = Irreps(str(hidden_irreps[0]))
-        else:
-            hidden_irreps_out = hidden_irreps
-
-        # print(f"interaction {idx}/{m.num_interactions} with hidden_irreps out {hidden_irreps_out}")
+    if only_last_out:
+        hidden_irreps_out = Irreps(str(hidden_irreps[0]))
 
         n = hidden_irreps_out.dim
 
@@ -1390,11 +1732,35 @@ def _graph_neural_network_model_apply(
 
         counter += n
 
+    else:
+        for idx in range(m.num_interactions):
+            if idx == m.num_interactions - 1:
+                hidden_irreps_out = Irreps(str(hidden_irreps[0]))
+            else:
+                hidden_irreps_out = hidden_irreps
+
+            # print(f"interaction {idx}/{m.num_interactions} with hidden_irreps out {hidden_irreps_out}")
+
+            n = hidden_irreps_out.dim
+
+            node_feat = jax.vmap(partial(get_features, irr=hidden_irreps_out))(
+                out["node_feats"][:, counter : counter + n]
+            )
+
+            feat.append(node_feat)
+
+            counter += n
+
     # print(f"feat {[f.shape for f in feat]}")
 
     # node_feats = get_features(out["node_feats"][:, -hidden_irreps.dim :])
 
     node_feats = jnp.concatenate(feat, axis=-1)
+
+    # if normalize:
+    #     var = jnp.sqrt(jnp.mean(node_feats**2, axis=-1, keepdims=True) + 1e-7)
+
+    #     node_feats /= var
 
     if reduce_z:
 
@@ -1409,7 +1775,7 @@ def _graph_neural_network_model_apply(
 
         idx = nl.info.idx_array
         out = _select(node_feats, nl.info.idx_array)
-        print(f"out after select {out.shape=}")
+        # print(f"out after select {out.shape=}")
 
         node_feats = jnp.sum(out, axis=0)
 
@@ -1430,9 +1796,11 @@ def graph_neural_network(
     reduce_z=True,
     radial_mlp: tuple[int, ...] = None,
     normalize=True,
+    only_last_out=True,
 ):
     if r_cut is None:
         r_cut = nl.info.r_cut
+        print(f"Using r_cut from neighbour list: {r_cut / angstrom} A")
 
     avg_neighbors = float(jnp.sqrt(jnp.mean(nl.nneighs(sp))))
     print(f"Average neighbors: {avg_neighbors}")
@@ -1444,16 +1812,22 @@ def graph_neural_network(
         # if inversion:
         #     hidden_irreps += f"{channels}x{l}o + {channels}x{l}e + "
         # else:
-        hidden_irreps += f"{channels}x{l}{'o' if l % 2 else 'e'} + "
+        if not inversion:
+            hidden_irreps += f"{channels}x{l}{'o' if l % 2 else 'e'} + "
+        else:
+            hidden_irreps += f"{channels}x{l}o + {channels}x{l}e + "
 
     # print(f"hidden_irreps before trimming: {hidden_irreps}")
 
     hidden_irreps = hidden_irreps[:-3]  # Remove trailing " +
+    from e3nn_jax import Irreps
 
-    # print(f"hidden_irreps: {hidden_irreps}")
+    hidden_irreps = str(Irreps(hidden_irreps).regroup())
+
+    print(f"hidden_irreps: {hidden_irreps}")
 
     model_kwargs = dict(
-        r_max=r_cut,
+        r_max=r_cut / angstrom,  # convert to angstrom for e3nn, mace batch is also in angstrom
         num_bessel=num_basis,
         num_polynomial_cutoff=6,
         max_ell=max_ell,
@@ -1465,7 +1839,7 @@ def graph_neural_network(
         avg_num_neighbors=avg_neighbors,
         correlation=correlation,
         gate=None,
-        use_so3=inversion,
+        # use_so3=inversion,
         distance_transform="None",
         radial_type="bessel",
         radial_MLP=radial_mlp,
@@ -1480,12 +1854,13 @@ def graph_neural_network(
 
     return CvTrans.from_cv_function(
         _graph_neural_network_model_apply,
-        static_argnames=["reduce_z", "inversion", "normalize", *model_kwargs.keys()],
+        static_argnames=["reduce_z", "inversion", "normalize", "only_last_out", *model_kwargs.keys()],
         learnable_argnames=("params",),
         params=params,
         reduce_z=reduce_z,
         inversion=inversion,
         normalize=normalize,
+        only_last_out=only_last_out,
         m=m_safe,
         initializers=_initialize_graph_neural_network_model,
         custom_getstate=_custom_getstate,
@@ -2374,6 +2749,8 @@ def _standerdize(
     mask: Array | None = None,
 ):
     x = cv.cv
+
+    print(f"standardize {x.shape=} {mean=} {std_inv=} {mask=}")
 
     if mask is not None:
         x = x[mask]

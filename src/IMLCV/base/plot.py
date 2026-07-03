@@ -18,6 +18,8 @@ from IMLCV.base.CV import CollectiveVariable, CvTrans
 from IMLCV.base.dataobjects import (
     CV,
     SystemParams,
+    CvMetric,
+    TrajectoryInfo,
 )
 from IMLCV.base.decoratros import Partial_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import kelvin, kjmol
@@ -25,7 +27,7 @@ from IMLCV.external.hsluv import hsluv_to_rgb
 
 if TYPE_CHECKING:
     from IMLCV.base.bias import Bias, GridBias, StdBias
-    from IMLCV.base.MdEngine import TrajectoryInfo
+    # from IMLCV.base.MdEngine import TrajectoryInfo
 
 
 def plot_app(
@@ -484,7 +486,7 @@ def plot_CV(
                 rbf_bias=rbf_bias,
                 observable=color,
                 grid_bias_order=grid_bias_order,
-                smoothing=0.1 / (kjmol**2),
+                smoothing=1e-3,
             )
 
             # print(f"{T=} {vmin/kjmol=} {vmax/kjmol=}")
@@ -642,7 +644,7 @@ def plot_CV(
                 output_density_bias=False,
                 rbf_bias=rbf_bias,
                 grid_bias_order=grid_bias_order,
-                smoothing=0.1 / (kjmol**2),
+                smoothing=1e-3,
             )
 
             if len(indices) == 1:

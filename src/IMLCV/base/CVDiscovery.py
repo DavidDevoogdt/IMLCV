@@ -94,7 +94,7 @@ class Transformer(MyPyTreeNode):
         koopman=True,
         max_fes_bias: float | None = None,
         n_max=1e5,
-        samples_per_bin=20,
+        samples_per_bin: int = 5,
         min_samples_per_bin=1,
         verbose=True,
         cv_titles: list[str] | bool = True,
@@ -135,7 +135,7 @@ class Transformer(MyPyTreeNode):
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 recalc_bounds=False,
-                smoothing=0.1 / (kjmol**2),
+                smoothing=1e-3,
             )
 
             plot_app(
@@ -188,7 +188,7 @@ class Transformer(MyPyTreeNode):
                 macro_chunk=macro_chunk,
                 chunk_size=chunk_size,
                 recalc_bounds=False,
-                smoothing=0.1 / (kjmol**2),
+                smoothing=1e-3,
             )
 
             if plot:
@@ -334,7 +334,7 @@ class Transformer(MyPyTreeNode):
                 chunk_size=chunk_size,
                 # recalc_bounds=True,
                 bounds=bounds,
-                smoothing=0.1 / (kjmol**2),
+                smoothing=1e-3,
                 weights_std=dlo._weights_std,
             )
             print(f"done transforming FES")
@@ -401,6 +401,7 @@ class Transformer(MyPyTreeNode):
         chunk_size: int | None = None,
         verbose=True,
         macro_chunk=1000,
+        pass_trans: CvTrans | None = None,
         # **fit_kwargs,
     ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, tuple[str, ...] | None, jax.Array | None]:
         raise NotImplementedError
@@ -446,52 +447,61 @@ class CombineTransformer(Transformer):
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,
+        pass_trans: CvTrans | None = None,
         # **fit_kwargs,
     ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, tuple[str, ...] | None, jax.Array | None]:
         trans = None
+
+        if pass_trans is not None:
+            raise NotImplementedError("passing transformations is not implemented for CombineTransformer")
 
         assert len(self.transformers) > 0, "No transformers to fit"
 
         # periods = []
 
-        # pass_trans = None
+        pass_trans = None
 
         for i, t in enumerate(self.transformers):
             print(f"fitting transformer {i + 1}/{len(self.transformers)}")
 
-            # if t.pass_trans:
-            #     _, _, trans_t, _, _, _ = t._fit(
-            #         x,
-            #         x_t,
-            #         w,
-            #         dlo,
-            #         chunk_size=chunk_size,
-            #         verbose=verbose,
-            #         macro_chunk=macro_chunk,
-            #     )
+            if t.pass_trans:
+                _, _, trans_t, _, _, _ = t._fit(
+                    x,
+                    x_t,
+                    w,
+                    dlo,
+                    chunk_size=chunk_size,
+                    verbose=verbose,
+                    macro_chunk=macro_chunk,
+                )
 
-            #     if pass_trans is None:
-            #         pass_trans = trans_t
-            #     else:
-            #         pass_trans *= trans
+                if pass_trans is None:
+                    pass_trans = trans_t
+                else:
+                    pass_trans = pass_trans * trans_t
 
-            # else:
-            x, x_t, trans_t, w, _, _ = t._fit(
-                x,
-                x_t,
-                w,
-                dlo,
-                chunk_size=chunk_size,
-                verbose=verbose,
-                macro_chunk=macro_chunk,
-                # trans=pass_trans,
-            )
-            # pass_trans = None
+                print(f"after {trans=} {trans_t=}")
 
-            if trans is None:
-                trans = trans_t
             else:
-                trans *= trans_t
+                if pass_trans is None:
+                    print("passing transformation ")
+
+                x, x_t, trans_t, w, _, _ = t._fit(
+                    x,
+                    x_t,
+                    w,
+                    dlo,
+                    chunk_size=chunk_size,
+                    verbose=verbose,
+                    macro_chunk=macro_chunk,
+                    pass_trans=pass_trans,
+                )
+                pass_trans = None
+
+                if trans is None:
+                    trans = trans_t
+                else:
+                    trans *= trans_t
 
             # periods = [per]
 
@@ -514,6 +524,7 @@ class IdentityTransformer(Transformer):
         chunk_size=None,
         verbose=True,
         macro_chunk=1000,
+        pass_trans: CvTrans | None = None,
         **fit_kwargs,
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None, jax.Array | None]:
         assert isinstance(x, list) and isinstance(x_t, list), "x and x_t must be lists"
@@ -540,6 +551,7 @@ class CvTransTransformer(Transformer):
         chunk_size: int | None = None,
         verbose=True,
         macro_chunk=1000,
+        pass_trans: CvTrans | None = None,
         # **fit_kwargs,
     ) -> tuple[list[CV], list[CV], CvTrans, list[jax.Array] | None, jax.Array | None]:
         x, x_t = dlo.apply_cv(

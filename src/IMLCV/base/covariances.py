@@ -11,9 +11,47 @@ from IMLCV.base.CV import (
 )
 from IMLCV.base.dataobjects import CV, NeighbourList, ShmapKwargs, SystemParams, macro_chunk_map_fun
 from IMLCV.base.decoratros import MyPyTreeNode, field
+from IMLCV.base.UnitsConstants import amu, angstrom, nanosecond
 
 X = TypeVar("X", "CV", "SystemParams", "NeighbourList")
 X2 = TypeVar("X2", "CV", "SystemParams", "NeighbourList")
+
+
+class BendParams(MyPyTreeNode):
+    n_probe: int = field(default=4, pytree_node=False)
+    ridge: float = 1e-4
+    hinge_p: int = 2
+    mode: str = field(default="full", pytree_node=False)  # "full" or "projected"
+    reduce: str = field(default="hinge", pytree_node=False)  # "trace", "frobenius", "hinge"
+    R0: float = 1.0  # reference radius of curvature for hinge loss, in units of gradient length
+    W: float = 1.0  # barstat weight, amounts to (Nf+d)k_B T tau_B^2 * ( tau_thermo/tau_baro) (last term is converserion to mass weighted units without thermostat constant)
+    beta: float = 5.0  # softness of hinge loss
+
+
+class CovarianceData(MyPyTreeNode):
+    rho_00: jax.Array | None = None
+    rho_01: jax.Array | None = None
+    rho_10: jax.Array | None = None
+    rho_11: jax.Array | None = None
+
+    rho_gen: jax.Array | None = None
+    rho_bend: jax.Array | None = None
+
+    pi_s_0: jax.Array | None = None
+    pi_s_1: jax.Array | None = None
+    pi_s_dyn_0: jax.Array | None = None
+    pi_s_dyn_1: jax.Array | None = None
+
+    sigma_0: jax.Array | None = None
+    sigma_1: jax.Array | None = None
+
+    w0: jax.Array | None = None
+    w1: jax.Array | None = None
+    w_dyn: jax.Array | None = None
+
+    key: jax.Array = field(default_factory=lambda: jax.random.PRNGKey(0))
+
+    bp: BendParams = field(default_factory=BendParams)
 
 
 class Covariances(MyPyTreeNode):
@@ -23,9 +61,11 @@ class Covariances(MyPyTreeNode):
     rho_11: jax.Array | None
 
     rho_gen: jax.Array | None = None
+    rho_bend: jax.Array | None = None
 
     pi_s_0: jax.Array | None
     pi_s_1: jax.Array | None
+    pi_s_01: jax.Array | None = None
     sigma_0: jax.Array
     sigma_1: jax.Array | None
 
@@ -50,6 +90,8 @@ class Covariances(MyPyTreeNode):
 
     w2: float | None = None
     w3: float | None = None
+
+    scale_deriv: float | None = None
 
     @staticmethod
     def create(
@@ -82,10 +124,15 @@ class Covariances(MyPyTreeNode):
         bessel_correct=True,
         generator=False,
         eps_shrink=1e-3,
+        get_hess=False,
+        scale_deriv=1.0 * jnp.sqrt(amu) * angstrom,
+        curvature=True,
+        sigma_0: Array | None = None,
+        key: jax.Array = jax.random.PRNGKey(0),
+        bp: BendParams = BendParams(),
     ) -> Covariances:
         time_series = cv_1 is not None
 
-        w_dyn = [jnp.exp((jnp.log(a) + jnp.log(b)) / 2) for a, b in zip(w, w_t if w_t is not None else w)]
         # w = w_pair
         # w_t = w_pair
 
@@ -130,23 +177,7 @@ class Covariances(MyPyTreeNode):
         print(f"{nl=}")
 
         def cov_pi(
-            carry: tuple[
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                list[jax.Array] | None,
-                jax.Array | None,
-            ],
+            carry: CovarianceData,
             cv_0: CV,
             cv_1: CV | None,
             w: jax.Array | None,
@@ -155,90 +186,285 @@ class Covariances(MyPyTreeNode):
         ):
             assert w is not None
 
-            # if diff_w is not None:
-            #     w *= diff_w
-            #     w_t *= diff_w
+            rho_00_prev = carry.rho_00
+            rho_01_prev = carry.rho_01
+            rho_10_prev = carry.rho_10
+            rho_11_prev = carry.rho_11
+            rho_gen_prev = carry.rho_gen
+            rho_bend = carry.rho_bend
 
-            (
-                rho_00_prev,
-                rho_01_prev,
-                rho_10_prev,
-                rho_11_prev,
-                rho_gen_prev,
-                pi_0_prev,
-                pi_1_prev,
-                sigma_0_prev,
-                sigma_1_prev,
-                w_prev,
-                w_prev_t,
-                w_dyn_prev,
-                bc,
-                d_rho_prev,
-            ) = carry
+            pi_0_prev = carry.pi_s_0
+            pi_1_prev = carry.pi_s_1
+            pi_dyn0_prev = carry.pi_s_dyn_0
+            pi_dyn1_prev = carry.pi_s_dyn_1
 
-            if (trans_f is not None) and generator and (trans_g is not None):
-                assert not only_diag, "only_diag not implemented for generator with transformations"
+            sigma_0_prev = carry.sigma_0
+            sigma_1_prev = carry.sigma_1
 
-                def phi(x):
-                    # print(f"phi: {x=} ")
+            w_prev = carry.w0
+            w_prev_t = carry.w1
+            w_dyn_prev = carry.w_dyn
 
-                    cv, _ = trans_f.compute_cv(x, nl, shmap=False)
-                    return cv
+            print(f"{sigma_0_prev=}")
 
-                shape = cv_0.shape[1:]
-                n_shape = len(shape)
+            key = carry.key
 
-                # shape (n_batch, n_cv,n_atom ,3)
-                jac = jax.vmap(jax.jacrev(phi))(cv_0)
-
-                print(f"{jac=}")
-                jac = jac.cv.coordinates
-                # inv_sqr_masses = 1 / jnp.sqrt(nl.info.masses)
-
-                dL = jnp.einsum("nair,nbir,n,i->ab", jac, jac, w, 1 / nl.info.masses)
-
-                # print(f"{dL=} { sigma_0_inv=}")
-
-                if sigma_0_prev is not None:
-                    sigma_0_inv = jnp.where(sigma_0_prev == 0, 1, 1 / sigma_0_prev)
-
-                    dL = jnp.einsum("lk,l,k->lk", dL, sigma_0_inv, sigma_0_inv)
-
-                cv_0 = jax.vmap(phi)(cv_0)
-
-                if cv_1 is not None:
-                    print(f"{cv_1.shape=}")
-                    cv_1 = jax.vmap(phi)(cv_1)
-
-                print(f"{cv_0.shape=}")
-
-            assert not cv_0.atomic
-
-            x_0 = cv_0.cv
-
-            if cv_1 is not None:
-                x_1 = cv_1.cv
-            else:
-                x_1 = None
-
-            if sigma_1_prev is not None:
-                assert x_1 is not None
-                sigma_1_inv = jnp.where(sigma_1_prev == 0, 1, 1 / sigma_1_prev)
-                x_1 = jnp.einsum("ni,i->ni", x_1, sigma_1_inv)
-            else:
-                sigma_1_inv = None
+            bp = carry.bp
 
             if sigma_0_prev is not None:
                 sigma_0_inv = jnp.where(sigma_0_prev == 0, 1, 1 / sigma_0_prev)
 
-                x_0 = jnp.einsum("ni,i->ni", x_0, sigma_0_inv)
+            if sigma_1_prev is not None:
+                sigma_1_inv = jnp.where(sigma_1_prev == 0, 1, 1 / sigma_1_prev)
 
-            if get_diff:
-                if (sigma_0_prev is not None) and (sigma_1_prev is not None):
-                    dx = (x_0 * sigma_0_prev - x_1 * sigma_1_prev) * jnp.sqrt(sigma_0_inv * sigma_1_inv)
-
+            if (trans_f is not None) and (trans_g is not None) and (generator or get_hess):
+                if nl is not None:
+                    _, nl_0 = nl.update_nl(cv_0)
                 else:
-                    dx = x_0 - x_1
+                    nl_0 = None
+
+                spm: SystemParams = cv_0
+                has_cell = spm.cell is not None
+                tau_thermo_over_tau_baro = 0.2  # tau_T / tau_p
+
+                def phi(x, nl_x):
+                    cv, _ = trans_f.compute_cv(x, nl_x, shmap=False)
+                    if sigma_0_prev is not None:
+                        cv = cv.replace(cv=cv.cv * sigma_0_inv)
+                    return cv
+
+                masses = nl_0.info.masses
+                sqrt_inv_mass = jnp.where(masses == 0, 0.0, scale_deriv / jnp.sqrt(masses))
+
+                jacobian = jax.vmap(jax.jacrev(phi))(spm, nl_0).cv
+                jac_r = jacobian.coordinates  # (n_batch, n_cv, n_atom, 3)
+                jac_r_w = jnp.einsum("nair, i -> nair", jac_r, sqrt_inv_mass)  # M^{-1/2} J_r
+
+                if has_cell:
+                    coords = spm.coordinates  # (n_batch, n_atom, 3)
+                    cell = spm.cell  # (n_batch, 3, 3), rows = lattice vectors
+                    s = jnp.einsum("nir, nrk -> nik", coords, jnp.linalg.inv(cell))  # fractional coords  x h^{-1}
+
+                    # cell vectors as pseudo-atoms; affine gradient  dphi/dh|_s = dphi/dh|_x + sum_a s_a dphi/dr_a
+                    jac_h = jacobian.cell + jnp.einsum("nik, nair -> nakr", s, jac_r)  # (n_batch, n_cv, 3, 3)
+
+                    # scalar cell mass  W = (tau_T/tau_p) Mtot / 12   (uniform-density fractional gyration)
+                    W = 1 / tau_thermo_over_tau_baro * masses.sum() / 12.0
+                    sqrt_inv_cell = scale_deriv / jnp.sqrt(W)
+                    jac_h_w = sqrt_inv_cell * jac_h
+                else:
+                    s = jnp.zeros_like(spm.coordinates)
+                    jac_h_w = jnp.zeros((jac_r_w.shape[0], jac_r_w.shape[1], 3, 3))
+                    sqrt_inv_cell = 0.0
+
+                # --- metric ---
+                if only_diag:
+                    G = jnp.einsum("nair, nair -> na", jac_r_w, jac_r_w)
+                    if has_cell:
+                        G = G + jnp.einsum("nakr, nakr -> na", jac_h_w, jac_h_w)
+                    dL = jnp.einsum("na, n -> a", G, w)
+                else:
+                    G = jnp.einsum("nair, nbir -> nab", jac_r_w, jac_r_w)
+                    if has_cell:
+                        G_cell = jnp.einsum("nakr, nbkr -> nab", jac_h_w, jac_h_w)
+
+                        G = G + G_cell
+
+                        # G_pre_norm = jnp.einsum("n,nab,nab", w, G, G) / jnp.sum(w)
+                        # G_cell_pre_norm = jnp.einsum("n,nab,nab", w, G_cell, G_cell) / jnp.sum(w)
+                        # jax.debug.print(
+                        #     "G pre-norm {} G_cell pre-norm {}",
+                        #     G_pre_norm,
+                        #     G_cell_pre_norm,
+                        # )
+
+                    dL = jnp.einsum("nab, n -> ab", G, w)
+
+                if get_hess:
+
+                    # def hvp(x, v, nl_x):
+                    #     _, hv = jax.jvp(lambda y: jax.jacrev(phi)(y, nl_x), (x,), (v,))
+                    #     return hv.cv
+                    
+                    def hvp(x, v, nl_x):
+                        # forward-over-reverse, seed-independent linearization done once
+                        def phi_cv(y):
+                            return phi(y, nl_x).cv                    # (n_cv,)
+
+                        # jvp gives d(phi.cv)/dx . v  = J v   (n_cv,)   -- first-order, cheap
+                        # we need d/dx (J^T w) . v ; do reverse over the jvp:
+                        def jvp_dir(y):
+                            _, Jv = jax.jvp(phi_cv, (y,), (v,))       # (n_cv,), linear in v
+                            return Jv
+
+                        # jacrev of (x -> J v) gives d/dx (J v) = (H^{(c)} v)_c stacked  -> (n_cv, *x)
+                        return jax.jacrev(jvp_dir)(x)
+
+
+                    def frame_curvature(
+                        jac_r_frame,
+                        jac_h_frame,
+                        s_frame,
+                        sp_x,
+                        nl_x,
+                        key,
+                    ):
+                        """Per-frame curvature penalty.
+                        mode   :    "full"      -> full-Hessian Frobenius Gram via Hutchinson (all directions)
+                                    "projected" -> Hessian restricted to the CV-gradient subspace
+                        reduce :    "trace"     -> sum_i lambda_i      (curvature^2,  cheap, no eigh)
+                                    "frobenius" -> sum_i lambda_i^2    (curvature^4,  cheap, no eigh)
+                                    "hinge"     -> sum_i relu(bend_i - 1)^p   (thresholded radii)
+                        lambda_i = eig(G^{-1} C) are the reparam-invariant local curvatures (units 1/length^2).
+                        """
+                        n_cv = jac_r_frame.shape[0]
+
+                        # ---- metric  G_ab = <grad phi_a, grad phi_b>  (mass + cell weighted) ----
+                        G = jnp.einsum("air, bir -> ab", jac_r_frame, jac_r_frame)
+                        if has_cell:
+                            G = G + jnp.einsum("akr, bkr -> ab", jac_h_frame, jac_h_frame)
+
+                        if sigma_0_prev is not None:
+                            # jax.debug.print("G {} s_inv {}", jnp.linalg.norm(G), sigma_0_inv)
+                            eye = jnp.diag(sigma_0_inv**2)
+                        else:
+                            eye = jnp.eye(n_cv)
+
+                        G_safe = G + bp.ridge * eye
+
+                        L = jnp.linalg.cholesky(G_safe)  # G_safe = L L^T
+
+                        # ---- Hessian-vector product of all CVs along an (atoms, cell) direction ----
+                        def hvp_dir(v_r, v_h):
+                            if has_cell:
+                                dr = jnp.einsum("ik, kr -> ir", s_frame, v_h)
+                                u = sp_x.replace(coordinates=v_r + dr, cell=v_h)
+                            else:
+                                u = sp_x.replace(coordinates=v_r, cell=None)
+                            hv = hvp(sp_x, u, nl_x)
+                            g_r = hv.coordinates * sqrt_inv_mass[None, :, None]
+                            g_h = (
+                                sqrt_inv_cell * (hv.cell + jnp.einsum("ik, cir -> ckr", s_frame, hv.coordinates))
+                                if has_cell
+                                else jnp.zeros((n_cv, 3, 3))
+                            )
+                            return g_r, g_h
+
+                        # ---- curvature Gram  C_cd  (PSD, (2,0) over output CVs) ----
+                        if bp.mode == "full":
+
+                            def probe(kp):
+                                kr, kh = jax.random.split(kp)
+                                z_r = jax.random.rademacher(kr, sp_x.coordinates.shape, dtype=G.dtype)
+                                v_r = z_r * sqrt_inv_mass[:, None]  # M^{-1/2} z
+                                v_h = (
+                                    sqrt_inv_cell * jax.random.rademacher(kh, (3, 3), dtype=G.dtype)
+                                    if has_cell
+                                    else jnp.zeros((3, 3))
+                                )
+                                return hvp_dir(v_r, v_h)
+
+                            g_r, g_h = jax.vmap(probe)(jax.random.split(key, bp.n_probe))
+                            C = jnp.einsum("pcir, pdir -> cd", g_r, g_r)
+                            if has_cell:
+                                C = C + jnp.einsum("pckr, pdkr -> cd", g_h, g_h)
+                            C = C / bp.n_probe
+                        elif bp.mode == "projected":
+
+                            def beta(b):
+                                v_r = jac_r_frame[b] * sqrt_inv_mass[:, None]  # M^{-1} grad_b
+                                v_h = sqrt_inv_cell * jac_h_frame[b] if has_cell else jnp.zeros((3, 3))
+                                return hvp_dir(v_r, v_h)
+
+                            g_r, g_h = jax.vmap(beta)(jnp.arange(n_cv))
+                            Htil = jnp.einsum("air, bcir -> abc", jac_r_frame, g_r)  # <grad_a, Hess_c grad_b>
+                            if has_cell:
+                                Htil = Htil + jnp.einsum("akr, bckr -> abc", jac_h_frame, g_h)
+                            Htil = 0.5 * (Htil + jnp.swapaxes(Htil, 0, 1))  # symmetric in (a,b)
+                            Mc = jnp.linalg.solve(G_safe, Htil.reshape(n_cv, -1)).reshape(n_cv, n_cv, n_cv)
+                            C = jnp.einsum("abc, bad -> cd", Mc, Mc)  # tr(G^{-1} H~^c G^{-1} H~^d)
+                        else:
+                            raise ValueError(f"Unknown bend mode {bp.mode}")
+
+                        Y = jax.scipy.linalg.solve_triangular(L, C, lower=True)  # L^{-1} C
+                        S = jax.scipy.linalg.solve_triangular(L, Y.T, lower=True).T  # L^{-1} C L^{-T}
+                        S = 0.5 * (S + S.T)  # symmetric PSD, eig = lambda_i
+
+                        if bp.reduce == "trace":
+                            # pen = jnp.trace(S)  # sum_i lambda_i
+                            out = S
+                        elif bp.reduce == "frobenius":
+                            out = S @ S
+                        elif bp.reduce == "hinge":
+                            # lam = jnp.linalg.eigvalsh(S)
+                            # bend = lam * bp.R0**2
+                            # pen = jnp.sum((jax.nn.softplus(bp.beta * (bend - 1.0)) / bp.beta) ** bp.hinge_p)
+
+                            lam, Vhat = jnp.linalg.eigh(S)
+                            Vhat = jax.lax.stop_gradient(Vhat)  # directions = relevance gate, no grad
+                            h = (
+                                jax.nn.softplus(bp.beta * (lam * bp.R0**2 - 1.0)) / bp.beta
+                            ) ** bp.hinge_p  # grad via lam
+                            P = jax.lax.stop_gradient(
+                                L @ Vhat
+                            )  # L Vhat  (was solve_triangular(L, Vhat, trans=1) = L^{-T} Vhat)
+                            out = (P * h[None, :]) @ P.T  # = L Vhat diag(h) Vhatᵀ Lᵀ  →  covariant B
+
+                        else:
+                            raise ValueError(f"Unknown bend reduction {bp.reduce}")
+
+                        return G, out
+
+                    print(f"{key=} {bp=}")
+
+                    key, subkey = jax.random.split(key)
+
+                    print(f"{key,subkey=}")
+
+                    G_batch, H_batch = jax.vmap(frame_curvature, in_axes=(0, 0, 0, 0, 0, None))(
+                        jac_r_w, jac_h_w, s, spm, nl_0, subkey
+                    )
+
+                    print(f"{G_batch.shape=}, {H_batch.shape=}")
+
+                    dH = jnp.einsum("nij, n ->ij ", H_batch, w)
+
+                # Standard tracking variables return cleanly un-warped
+                cv_0 = jax.vmap(phi)(spm, nl_0)
+
+                if cv_1 is not None:
+                    spm1 = cv_1
+                    nl_1 = nl.update_nl(cv_1)[1]
+                    cv_1 = jax.vmap(phi)(spm1, nl_1)
+
+                print(f"{cv_0.shape=}")
+                x_0 = cv_0.cv
+                x_1 = cv_1.cv if cv_1 is not None else None
+
+                print(f"{cv_0.shape=}")
+
+                x_0 = cv_0.cv
+                if cv_1 is not None:
+                    x_1 = cv_1.cv
+                else:
+                    x_1 = None
+
+            else:
+                assert not cv_0.atomic
+
+                x_0 = cv_0.cv
+
+                if cv_1 is not None:
+                    x_1 = cv_1.cv
+                else:
+                    x_1 = None
+
+                if sigma_1_prev is not None:
+                    assert x_1 is not None
+                    x_1 = jnp.einsum("ni,i->ni", x_1, sigma_1_inv)
+
+                if sigma_0_prev is not None:
+                    x_0 = jnp.einsum("ni,i->ni", x_0, sigma_0_inv)
 
             def get_pi(_x, _w, _pi_prev, _w_prev, calc_pi):
                 _dw = jnp.sum(_w)
@@ -275,19 +501,14 @@ class Covariances(MyPyTreeNode):
 
             pi_0_new, dpi_0, w_tot, dw = get_pi(x_0, w, pi_0_prev, w_prev, calc_pi)
 
-            # jax.debug.print("dw_o {}", dw_0)
-
             if time_series:
                 pi_1_new, dpi_1, w_tot_t, dw_t = get_pi(x_1, w_t, pi_1_prev, w_prev_t, calc_pi)
 
-                #     # # diff_w = jnp.sqrt(w * w_t)  # * w_dw
+                w_dyn = jnp.exp((jnp.log(w) + jnp.log(w_t)) / 2)  # geometric mean, more stable than sqrt of product
+                # w_dyn = w
 
-                # w0_dyn = w  # / diff_w
-                # w1_dyn = w_t  # / diff_w
-                w_dyn = w * diff_w
-
-                _, _, w_dyn_tot, dw_dyn = get_pi(None, w_dyn, None, w_dyn_prev, False)
-                # _, _, diff_tot_1, diff_dw_1 = get_pi(None, w1_dyn, None, diff_w_prev_1, False)
+                pi_0_dyn_new, dpi_0_dyn, w_dyn_tot, dw_dyn = get_pi(x_0, w_dyn, pi_dyn0_prev, w_dyn_prev, calc_pi)
+                pi_1_dyn_new, dpi_1_dyn, w_dyn_tot, dw_dyn = get_pi(x_1, w_dyn, pi_dyn1_prev, w_dyn_prev, calc_pi)
 
             def c(_x, _y, _w, _c_prev, _pi_x, _pi_y, _d_pi_x, _d_pi_y, _w_prev, _dw, dx=False):
                 if _d_pi_x is not None and not dx:
@@ -329,8 +550,20 @@ class Covariances(MyPyTreeNode):
                 if calc_C01:
                     # Optimal Data-Driven Estimation of Generalized Markov State Models for Non-Equilibrium Dynamics
                     # sampled under wt
-                    rho_01 = c(x_0, x_1, w_dyn, rho_01_prev, pi_0_new, pi_1_new, dpi_0, dpi_1, w_dyn_prev, dw_dyn)
+                    # rho_01 = c(x_0, x_1, w_dyn, rho_01_prev, pi_0_new, pi_1_new, dpi_0, dpi_1, w_dyn_prev, dw_dyn)
                     # rho_01 = c(x_0, x_1, w, rho_01_prev, pi_0_new, pi_1_new, dpi_0, dpi_1, w_prev, dw)
+                    rho_01 = c(
+                        x_0,
+                        x_1,
+                        w_dyn,
+                        rho_01_prev,
+                        pi_0_dyn_new,
+                        pi_1_dyn_new,
+                        dpi_0_dyn,
+                        dpi_1_dyn,
+                        w_dyn_prev,
+                        dw_dyn,
+                    )
 
                 if calc_C10:
                     # rho_10 = c(x_1, x_0, w, rho_10_prev, pi_1_new, pi_0_new, dpi_1, dpi_0, w_prev, dw)
@@ -348,11 +581,17 @@ class Covariances(MyPyTreeNode):
             else:
                 rho_gen = None
 
-            if get_diff:
-                # d_rho = c(dx, dx, w, d_rho_prev, None, None, None, None, w_prev, dw, dx=True)
-                d_rho = c(dx, dx, w, d_rho_prev, None, None, None, None, w_prev, dw, dx=True)
-            else:
-                d_rho = None
+            if get_hess:
+                if rho_bend is not None:
+                    rho_bend = (rho_bend * w_prev + dH) / (w_prev + dw)
+                else:
+                    rho_bend = dH / dw
+
+            # if get_diff:
+            #     # d_rho = c(dx, dx, w, d_rho_prev, None, None, None, None, w_prev, dw, dx=True)
+            #     d_rho = c(dx, dx, w, d_rho_prev, None, None, None, None, w_prev, dw, dx=True)
+            # else:
+            #     d_rho = None
 
             # convert everything to new sigma
 
@@ -373,10 +612,16 @@ class Covariances(MyPyTreeNode):
             if generator:
                 rho_gen = get_rho(rho_gen, f0, f0)
 
+            # if get_hess:
+            # doesnt scale with sigma
+            # rho_bend = get_rho(rho_bend, f0, f0)
+
             if sigma_0_prev is None:
                 sigma_0 = d_sigma_0
             else:
                 sigma_0 = jnp.where(sigma_0_prev == 0, d_sigma_0, sigma_0_prev * d_sigma_0)
+
+            print(f"{sigma_0=}")
 
             if time_series:
                 diag_rho_11 = jnp.diag(rho_11) if not only_diag else rho_11
@@ -385,6 +630,9 @@ class Covariances(MyPyTreeNode):
                 f1 = jnp.where(d_sigma_1 <= 0, 1.0, 1 / d_sigma_1)
 
                 pi_1_new = jnp.einsum("i,i->i", pi_1_new, f1) if calc_pi else None
+
+                pi_0_dyn_new = jnp.einsum("i,i->i", pi_0_dyn_new, f0) if calc_pi else None
+                pi_1_dyn_new = jnp.einsum("i,i->i", pi_1_dyn_new, f1) if calc_pi else None
 
                 if rho_01 is not None:
                     rho_01 = get_rho(rho_01, f0, f1)
@@ -405,56 +653,32 @@ class Covariances(MyPyTreeNode):
                 rho_10 = None
                 rho_11 = None
 
-            if get_diff:
-                d_rho = get_rho(d_rho, f0, f0)
-
-            if BC:
-                assert not only_diag, "BC not implemented for only_diag"
-
-                def _bc(_x, _y, _w, _bc_prev, _w_prev, _dw):
-                    _bc_new_dw = jnp.einsum("ni,nj,ni,nj,n->ij", _x, _x, _y, _y, _w)
-
-                    if _bc_prev is None:
-                        return _bc_new_dw / _dw
-
-                    return (_w_prev * _bc_prev + _bc_new_dw) / (_w_prev + _dw)
-
-                assert calc_pi is False, "bias correction with pi not implemented"
-
-                bc_00 = _bc(x_0, x_0, w, bc[0] if bc is not None else None, w_prev, dw)
-                bc_01 = _bc(x_0, x_1, w, bc[1] if bc is not None else None, w_prev, dw)
-
-                bc_00 = jnp.einsum("ij,i,j->ij", bc_00, f0**2, f0**2)
-                bc_01 = jnp.einsum("ij,i,j->ij", bc_01, f0**2, f1**2)
-
-                bc = [bc_00, bc_01]
-
-            return (
-                rho_00,
-                rho_01,
-                rho_10,
-                rho_11,
-                rho_gen,
-                pi_0_new,
-                pi_1_new if time_series else None,
-                sigma_0,
-                sigma_1 if time_series else None,
-                w_tot,
-                w_tot_t if time_series else None,
-                w_dyn_tot if time_series else None,
-                bc,
-                d_rho,
+            return CovarianceData(
+                rho_00=rho_00,
+                rho_01=rho_01,
+                rho_10=rho_10,
+                rho_11=rho_11,
+                rho_gen=rho_gen,
+                pi_s_0=pi_0_new,
+                pi_s_1=pi_1_new if time_series else None,
+                pi_s_dyn_0=pi_0_dyn_new if time_series else None,
+                pi_s_dyn_1=pi_1_dyn_new if time_series else None,
+                sigma_0=sigma_0,
+                sigma_1=sigma_1 if time_series else None,
+                w0=w_tot,
+                w1=w_tot_t,
+                w_dyn=w_dyn_tot,
+                key=key,
+                rho_bend=rho_bend,
+                bp=bp,
             )
 
         if trans_f is not None:
 
             def f_func(x: X, nl: NeighbourList | None) -> CV:
-                # print(f"{x=} {nl=} {generator=}")
-
                 if not generator:
                     x, _ = trans_f.compute_cv(x, nl, chunk_size=chunk_size, shmap=False)
-                # else:
-                #     print(f"{x=}")
+
                 return x
 
         else:
@@ -475,37 +699,19 @@ class Covariances(MyPyTreeNode):
         else:
 
             def g_func(x: X, nl: NeighbourList | None) -> CV:
-                assert isinstance(x, CV)
+                # assert isinstance(x, CV)
                 return x
 
         g_func = cast(Callable[[CV | SystemParams, NeighbourList | None], CV], g_func)
 
-        chunk_func_init_args = cast(
-            tuple[
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                jax.Array | None,
-                list[jax.Array] | None,
-                jax.Array | None,
-            ],
-            (None, None, None, None, None, None, None, None, None, None, None, None, None, None),
+        chunk_func_init_args = CovarianceData(
+            sigma_0=sigma_0,
+            sigma_1=sigma_0,
+            key=key,
+            bp=bp,
         )
 
-        # print(f"{cv_1=}")
-
-        # with jax.debug_nans():
         out = macro_chunk_map_fun(
-            # f=lambda x, nl: x,
-            # ft=lambda x, nl: x,
             f=f_func,
             ft=g_func,
             y=cv_0,
@@ -522,26 +728,43 @@ class Covariances(MyPyTreeNode):
             jit_f=True,
         )
 
-        (
-            rho_00,
-            rho_01,
-            rho_10,
-            rho_11,
-            rho_gen,
-            pi_s_0,
-            pi_s_1,
-            sigma_0,
-            sigma_1,
-            _w,
-            _wt,
-            _wdyn,
-            bc,
-            d_rho,
-        ) = out
+        rho_00 = out.rho_00
+        rho_01 = out.rho_01
+        rho_10 = out.rho_10
+        rho_11 = out.rho_11
+        rho_gen = out.rho_gen
+        rho_bend = out.rho_bend
 
-        print(f"{_w=} {_wt=} {_wdyn=}")
+        pi_s_0 = out.pi_s_0
+        pi_s_1 = out.pi_s_1
 
-        print(f"{rho_gen=}")
+        sigma_0 = out.sigma_0
+        sigma_1 = out.sigma_1
+
+        _w = out.w0
+        _wt = out.w1
+        _wdyn = out.w_dyn
+
+        # (
+        #     rho_00,
+        #     rho_01,
+        #     rho_10,
+        #     rho_11,
+        #     rho_gen,
+        #     pi_s_0,
+        #     pi_s_1,
+        #     sigma_0,
+        #     sigma_1,
+        #     _w,
+        #     _wt,
+        #     _wdyn,
+        #     bc,
+        #     d_rho,
+        # ) = out
+
+        # print(f"{_w=} {_wt=} {_wdyn=}")
+
+        # print(f"{rho_gen=}")
 
         # # divide time lagged covariances by total weight
         # if time_series:
@@ -551,15 +774,15 @@ class Covariances(MyPyTreeNode):
         #     rho_01 /= _dw_0
         #     rho_10 /= _dw_1
 
-        if BC:
-            # print(f"{bc=}")
+        # if BC:
+        #     # print(f"{bc=}")
 
-            bc_00 = bc[0] - rho_00**2
-            bc_01 = bc[1] - rho_00**2
+        #     bc_00 = bc[0] - rho_00**2
+        #     bc_01 = bc[1] - rho_00**2
 
-            # print(f"{bc_00=} {rho_00=}")
+        #     # print(f"{bc_00=} {rho_00=}")
 
-            bc = [bc_00, bc_01]
+        #     bc = [bc_00, bc_01]
 
         # print(f"test {rho_00=}")
         assert rho_00 is not None
@@ -615,13 +838,15 @@ class Covariances(MyPyTreeNode):
             sigma_0=sigma_0,
             sigma_1=sigma_1,
             # n=sum([a.shape[0] for a in cv_0]),
-            bc=bc,
+            # bc=bc,
             shrinkage_method=shrinkage_method,
-            d_rho_00=d_rho,
+            # d_rho_00=d_rho,
             w2=w2,
             w3=w3,
             time_series=time_series,
             symmetric=not time_series,
+            rho_bend=rho_bend,
+            scale_deriv=scale_deriv,
         )
 
         # print(f"pre {jnp.isnan(cov.C00).any()}")
@@ -673,6 +898,16 @@ class Covariances(MyPyTreeNode):
             return jnp.einsum("i,i->i", self.rho_gen, self.sigma_0**2)
 
         return jnp.einsum("ij,i,j->ij", self.rho_gen, self.sigma_0, self.sigma_0)
+
+    @property
+    def C_bend(self):
+        if self.rho_bend is None:
+            return None
+
+        if self.only_diag:
+            return jnp.einsum("i,i->i", self.rho_bend, self.sigma_0 ** (-2))
+
+        return jnp.einsum("ij,i,j->ij", self.rho_bend, self.sigma_0, self.sigma_0)
 
     @property
     def d_C00(self):
@@ -772,26 +1007,26 @@ class Covariances(MyPyTreeNode):
 
     #     return W
 
-    def whiten_C(
+    def whiten_rho(
         self,
         choice: str,
         epsilon: float = 1e-4,
         max_features: int | None = None,
         verbose=False,
-        cholesky=False,
+        cholesky=True,
         apply_mask: bool = True,
-        tikhonov=1e-6,
+        tikhonov=1e-3,
         return_eigh=False,
-    ) -> Array:
+    ) -> tuple[Array, Array, Array]:
         # returns W such that W C W.T = I and hence w.T W = C^-1
 
         # https://arxiv.org/pdf/1512.00809
 
         if choice == "rho_00":
-            C = self.C00
+            C = self.rho_00
             # sigma = self.sigma_0
         elif choice == "rho_11":
-            C = self.C11
+            C = self.rho_11
             # sigma = self.sigma_1
         else:
             raise ValueError(f"choice {choice} not known")
@@ -801,62 +1036,33 @@ class Covariances(MyPyTreeNode):
         if self.only_diag:
             return 1 / jnp.sqrt(C)
 
-        C = C
+        C = C + tikhonov * jnp.eye(C.shape[0])
 
-        print(f"{jnp.linalg.norm(C - jnp.conj(C.T))=}")
+        if cholesky:
+            L = jnp.linalg.cholesky(C)
 
-        print(f"{epsilon=}")
+            W = jnp.linalg.solve(L, jnp.eye(L.shape[0]))
+            W_inv = L
 
-        # if cholesky:
-        #     print(f"cholesky")
+            theta = None
 
-        #     import scipy
+        else:
+            theta, G = jnp.linalg.eigh(C)
 
-        #     # this is pivoted cholesky
+            sqrt_theta_inv = 1 / jnp.sqrt(theta)
 
-        #     if C.dtype == jnp.complex_:
-        #         cho = scipy.linalg.lapack.zpstrf
-        #         print("complex cholesky")
-        #     else:
-        #         cho = scipy.linalg.lapack.dpstrf
+            W = jnp.einsum(
+                "i,ji->ij",
+                # V_inv,
+                sqrt_theta_inv,
+                G,
+            )
 
-        #     X, P, r, info = cho(C, tol=epsilon**2, lower=True)
-        #     X = jnp.array(X)
-
-        #     # print(f"{X=}")
-
-        #     pi = jnp.eye(P.shape[0])[:, P - 1][:, :r]
-        #     X = X.at[jnp.triu_indices(X.shape[0], 1)].set(0)  # set upper half to zero
-        #     X = X[:r, :][:, :r]
-
-        #     err = jnp.linalg.norm(pi.T @ C @ pi - X @ jnp.conj(X).T)
-
-        #     print(f" rank reduced chol {err=} rank {r} ")
-
-        #     # P_out = P[:r]
-
-        #     X_inv = jax.scipy.linalg.solve_triangular(
-        #         X,
-        #         jnp.eye(*X.shape),  # type: ignore
-        #         lower=True,
-        #     )
-
-        #     W = X_inv @ pi.T
-
-        # else:
-        # else:
-        theta, G = jnp.linalg.eigh(C)
-
-        theta += tikhonov**2
-
-        theta_inv = 1 / jnp.sqrt(theta)
-
-        W = jnp.einsum(
-            "i,ji->ij",
-            # V_inv,
-            theta_inv,
-            G,
-        )
+            W_inv = jnp.einsum(
+                "ij,j->ij",
+                G,
+                jnp.sqrt(theta),
+            )
 
         if apply_mask:
             if max_features is not None:
@@ -866,10 +1072,7 @@ class Covariances(MyPyTreeNode):
 
         print(f"{jnp.linalg.norm(W @ C @ jnp.conj(W).T - jnp.eye(W.shape[0]))=}")
 
-        if return_eigh:
-            return W, theta
-
-        return W
+        return W, W_inv, theta
 
     def mask(
         self,
@@ -956,35 +1159,38 @@ class Covariances(MyPyTreeNode):
         glasso_whiten=False,
         verbose=True,
         apply_mask: bool = True,
+        scale_gen=1.0,
         # generator=True,
         # shrink=False,
     ):
-        W_0 = self.whiten_C("rho_00", epsilon=eps, apply_mask=apply_mask)
+        W_0, _, _ = self.whiten_rho("rho_00", epsilon=eps, apply_mask=apply_mask)
 
         print(f"{W_0.shape=}")
 
         if not self.symmetric:
-            W_1 = self.whiten_C("rho_11", epsilon=eps, apply_mask=apply_mask)
+            W_1, _, _ = self.whiten_rho("rho_11", epsilon=eps, apply_mask=apply_mask)
         else:
             W_1 = W_0
 
+        print(f"{self.generator=}")
+
         if self.only_diag:
             if self.generator:
-                T_tilde = jnp.einsum("i,i,i->i", self.C_gen, W_0, jnp.conj(W_0))
+                T_tilde = jnp.einsum("i,i,i->i", self.rho_gen, W_0, jnp.conj(W_0))
             else:
                 assert self.rho_01 is not None
-                T_tilde = jnp.einsum("i,i,i->i", self.C01, W_1, jnp.conj(W_0))
+                T_tilde = jnp.einsum("i,i,i->i", self.rho_01, W_1, jnp.conj(W_0))
 
         else:
             if self.generator:
                 # T_tilde = W_1 @ (self.C10 - self.C00) @ W_0.T
                 # T_tilde = (W_0 @ (self.C01 - self.C00) @ W_1.T).T
 
-                T_tilde = (W_0 @ (self.C_gen) @ jnp.conj(W_0).T).T
+                T_tilde = (W_0 @ (self.rho_gen) @ jnp.conj(W_0).T).T
 
             else:
                 assert self.rho_01 is not None
-                T_tilde = (W_0 @ self.C01 @ jnp.conj(W_1).T).T
+                T_tilde = (W_0 @ self.rho_01 @ jnp.conj(W_1).T).T
 
         print(f"{T_tilde.shape=}")
 
@@ -1064,10 +1270,14 @@ class Covariances(MyPyTreeNode):
                 V = jnp.conj(VT).T
 
         if self.generator:
-            print(f"generator, shiften spectrum {s=}")
-            s = jnp.exp(-s)
+            print(f"generator {s=}")
+            s *= scale_gen
 
-        idx = jnp.argsort(s, descending=True)
+            # print(f"generator, shiften spectrum, timescales [ns] {1/(s_scale*nanosecond)=}")
+            # s = jnp.exp(-s_scale * nanosecond)
+            idx = jnp.argsort(jnp.abs(s), descending=False)
+        else:
+            idx = jnp.argsort(s, descending=True)
         U = U[:, idx]
         s = s[idx]
         V = V[:, idx]

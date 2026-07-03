@@ -174,9 +174,11 @@ class CvFunBase(ABC, MyPyTreeNode):
             v = self.kwargs[k]
 
             if isinstance(v, jax.Array):
-                out[k] = v.shape
+                out[k] = v.size
             else:
-                out[k] = jax.tree_util.tree_map(lambda x: x.shape, v)
+                flat_tree = tree_flatten(v)[0]
+
+                out[k] = sum([vi.size for vi in flat_tree if isinstance(vi, jax.Array)])
 
         return out
 
@@ -189,10 +191,26 @@ class CvFunBase(ABC, MyPyTreeNode):
 
         n = 0
 
-        x, _ = tree_flatten(p)
-        for xi in x:
-            if xi is not None:
-                n += jnp.prod(jnp.array(xi))
+        for k, v in p.items():
+            try:
+                if isinstance(v, tuple):
+                    n += jnp.prod(jnp.array(v))
+                else:
+                    n += jnp.prod(jnp.array(v))
+
+            except Exception as e:
+                print(f"Error computing number of learnable params for {k} with shape {v}: {e}")
+                continue
+
+        # print(f"{p=}")
+
+        # x, _ = tree_flatten(p)
+        # for xi in x:
+        #     print(f"{xi=}")
+        #     if xi is not None:
+        #         n += jnp.prod(jnp.array(xi))
+
+        print(f"{n=}")
 
         return n
 
@@ -305,6 +323,11 @@ class CvFunBase(ABC, MyPyTreeNode):
 
         return kwargs
 
+    def simplify(self) -> CvFunBase:
+        """simplify the CvFunBase by removing any unnecessary layers of _SerialCvTrans or _ParralelCvTrans"""
+
+        return self
+
 
 class CvFun(CvFunBase):
     # __: KW_ONLY
@@ -352,6 +375,9 @@ class CvFun(CvFunBase):
                 shmap_kwargs=shmap_kwargs,
                 **self.static_kwargs,
             )(x, nl, **self.kwargs)
+
+    def __str__(self):
+        return f"CvFun(forward={self.forward.__name__ if self.forward is not None else None}, backward={self.backward.__name__ if self.backward is not None else None}, static_kwargs={self.static_kwargs}"
 
 
 ##################
@@ -429,6 +455,22 @@ class _SerialCvTrans(MyPyTreeNode):
             n += tr.num_learnable_params
         return n
 
+    def simplify(self) -> _SerialCvTrans:
+        """simplify the _SerialCvTrans by removing any unnecessary layers of _SerialCvTrans or _ParralelCvTrans"""
+
+        new_trans = []
+
+        for i, tr in enumerate(self.trans):
+            tr = tr.simplify()  # type: ignore
+
+            if isinstance(tr, _SerialCvTrans):
+                new_trans.extend(tr.trans)
+
+            else:
+                new_trans.append(tr)
+
+        return _SerialCvTrans(trans=tuple(new_trans))
+
 
 class _ParralelCvTrans(MyPyTreeNode):
     trans: tuple[_SerialCvTrans | _ParralelCvTrans, ...]
@@ -505,6 +547,21 @@ class _ParralelCvTrans(MyPyTreeNode):
             out.append(tr.get_learnable_params())
 
         return tuple(out)
+
+    def simplify(self) -> _ParralelCvTrans:
+        """simplify the _ParralelCvTrans by removing any unnecessary layers of _SerialCvTrans or _ParralelCvTrans"""
+
+        new_trans = []
+
+        for i, tr in enumerate(self.trans):
+            tr = tr.simplify()  # type: ignore
+
+            if isinstance(tr, _ParralelCvTrans):
+                new_trans.extend(tr.trans)
+            else:
+                new_trans.append(tr)
+
+        return self
 
 
 class CvTrans(MyPyTreeNode):
@@ -612,6 +669,8 @@ class CvTrans(MyPyTreeNode):
         shmap_kwargs=ShmapKwargs.create(),
     ) -> tuple[CV, X | None]:
         if x.batched:
+            print(f"computing cv with batch size {x.shape[0]}")
+
             _f = padded_vmap(
                 Partial_decorator(
                     self.compute_cv,
@@ -622,6 +681,7 @@ class CvTrans(MyPyTreeNode):
                 ),
                 chunk_size=chunk_size,
                 shmap=shmap,
+                axis=(0, 0),
             )
 
             # if shmap:
@@ -667,17 +727,42 @@ class CvTrans(MyPyTreeNode):
     def __setstate__(self, statedict: dict):
         self.__init__(**statedict)
 
-    def __mul__(self: CvTrans, other: CvTrans):
-        return CvTrans(trans=_SerialCvTrans(trans=(self.trans, other.trans)))
+    def __mul__(self: CvTrans, other: CvTrans | None):
+        if other is None:
+            return self
+
+        # avoid nested _SerialCvTrans by merging them into one
+        if isinstance(self.trans, _SerialCvTrans):
+            trans_inner = _SerialCvTrans(trans=(*self.trans.trans, other.trans))
+        else:
+            trans_inner = _SerialCvTrans(trans=(self.trans, other.trans))
+
+        return CvTrans(trans=trans_inner)
+
+    def __rmul__(self: CvTrans, other: CvTrans | None):
+        if other is None:
+            return self
+
+        return self * other
 
     def __add__(self: CvTrans, other: CvTrans):
-        return CvTrans(trans=_ParralelCvTrans(trans=(self.trans, other.trans)))
+        if isinstance(self.trans, _ParralelCvTrans):
+            inner_trans = _ParralelCvTrans(trans=(*self.trans.trans, other.trans))
+        else:
+            inner_trans = _ParralelCvTrans(trans=(self.trans, other.trans))
+
+        return CvTrans(trans=inner_trans)
 
     def __radd__(self: CvTrans, other: CvTrans | None):
         if other is None:
             return self
 
         return self + other
+
+    def simplify(self) -> CvTrans:
+        """simplify the CvTrans by removing any unnecessary layers of _SerialCvTrans or _ParralelCvTrans"""
+
+        return CvTrans(trans=self.trans.simplify())
 
     @property
     def learnable_params_shape(self):

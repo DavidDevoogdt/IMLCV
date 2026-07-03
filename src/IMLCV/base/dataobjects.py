@@ -21,8 +21,6 @@ from typing_extensions import ParamSpec
 from IMLCV.base.decoratros import MyPyTreeNode, Partial_decorator, field, jit_decorator, vmap_decorator
 from IMLCV.base.UnitsConstants import angstrom, atomic_masses, kjmol
 
-if TYPE_CHECKING:
-    from IMLCV.base.MdEngine import StaticMdInfo
 
 T = TypeVar("T")
 S = TypeVar("S")
@@ -137,6 +135,15 @@ class SystemParams(MyPyTreeNode):
             cell=jnp.vstack([s.cell for s in sps]) if has_cell else None,  # type:ignore
         )
 
+    def unstack(self, dims) -> list[SystemParams]:
+        c = 0
+        out = []
+        for d in dims:
+            out.append(self[c : c + d])
+            c += d
+            assert c <= self.shape[0]
+        return out
+
     def batch(self) -> SystemParams:
         if self.batched:
             return self
@@ -176,11 +183,15 @@ class SystemParams(MyPyTreeNode):
         shmap=False,
         shmap_kwargs: ShmapKwargs = ShmapKwargs.create(),
         only_update=False,
+        use_r_skin=True,
     ):
         if info.r_cut is None:
             return False, None, None, None
 
-        r_comb = info.r_cut + info.r_skin
+        if use_r_skin:
+            r_comb = info.r_cut + info.r_skin
+        else:
+            r_comb = info.r_cut
 
         if verbose:
             print("canonicalize")
@@ -190,9 +201,9 @@ class SystemParams(MyPyTreeNode):
         b = True
 
         if update is not None:
-            nxyz, num_neighs = update.nxyz, update.num_neighs
+            nxyz, num_neighs, num_pairs = update.nxyz, update.num_neighs, update.num_pairs
         else:
-            nxyz, num_neighs = None, None
+            nxyz, num_neighs, num_pairs = None, None, None
 
         def _get_num_per_images(cell, r_comb):
             # print(f"new get num!")
@@ -338,12 +349,15 @@ class SystemParams(MyPyTreeNode):
                 n = _res(sp.coordinates)
                 num_neighs = jnp.max(n)  # type: ignore
 
-                return num_neighs
+                num_pairs = jnp.sum(n)  # type: ignore
+
+                return num_neighs, num_pairs
 
             n, r, a, ijk = _res(sp.coordinates)
             num_neighs = jnp.max(n)
+            num_pairs = jnp.sum(n)
 
-            return num_neighs, r, a, ijk
+            return num_neighs, num_pairs, r, a, ijk
 
         def get_f(
             take_num,
@@ -361,17 +375,20 @@ class SystemParams(MyPyTreeNode):
             print(f"obtaining num neihgs { new_nxyz=}")
 
         # not jittable
-        if num_neighs is None:
-            nn = get_f(0)(sp)
+        if num_neighs is None or num_pairs is None:
+            nn, np = get_f(0)(sp)
             if sp.batched:
                 nn = jnp.max(nn)  # type: ignore
+                np = jnp.max(np)  # type: ignore
 
             num_neighs = int(nn)  # type: ignore
+            num_pairs = int(np)  # type: ignore
 
         if only_update:
             return (
                 b,
                 num_neighs,
+                num_pairs,
                 new_nxyz,
                 None,
             )
@@ -379,19 +396,22 @@ class SystemParams(MyPyTreeNode):
         if verbose:
             print(f"obtaining neighs {num_neighs=}")
 
-        nn, r, a, ijk = get_f(num_neighs)(sp)
+        nn, np, r, a, ijk = get_f(num_neighs)(sp)
 
         if sp.batched:
             nn = jnp.max(nn)
+            np = jnp.max(np)
 
         if verbose:
             print("got new Neighbourlist")
 
         b = jnp.logical_and(b, nn <= num_neighs)
+        b = jnp.logical_and(b, np <= num_pairs)
 
         if update is None:
             new_update = NeighbourListUpdate.create(
                 num_neighs=nn,  # type:ignore
+                num_pairs=np,  # type:ignore
                 nxyz=new_nxyz,
             )
             update = new_update
@@ -399,6 +419,7 @@ class SystemParams(MyPyTreeNode):
         return (
             b,
             nn,
+            np,
             new_nxyz,
             NeighbourList(
                 update=update,
@@ -426,7 +447,7 @@ class SystemParams(MyPyTreeNode):
 
         # print(f"{shmap=} {shmap_kwargs=}")
 
-        _, nn, _, nl = self._get_neighbour_list(
+        _, nn, _, _, nl = self._get_neighbour_list(
             info=info,
             chunk_size=chunk_size,
             chunk_size_inner=chunk_size_inner,
@@ -434,6 +455,7 @@ class SystemParams(MyPyTreeNode):
             shmap=shmap,
             shmap_kwargs=shmap_kwargs,
             only_update=only_update,
+            use_r_skin=True,
         )
 
         if nn <= 1:
@@ -847,12 +869,13 @@ class SystemParams(MyPyTreeNode):
         norms = jnp.linalg.norm(cell, axis=1)
 
         x0 = scaled / norms
-        x0 = jnp.where(min, x0 + 0.5, x0)
-        a = jnp.mod(x0, 1)
-        # b = jnp.where(min, (a - 0.5) * norms, a * norms)
+        a = jnp.where(
+            min,
+            jnp.mod(x0 + 0.5, 1.0) - 0.5,
+            jnp.mod(x0, 1.0),
+        )
 
         op = a - x0
-        # reduced = b
 
         op = jnp.round(op).astype(jnp.int_)
 
@@ -932,6 +955,16 @@ class SystemParams(MyPyTreeNode):
 
         ind = jnp.array([-1, 0, 1])
         return jnp.min(dist(ind, ind, ind))
+
+    def get_displacement(self, other):
+        assert self.batched is False
+
+        if self.cell is None:
+            return self.coordinates - other.coordinates
+
+        dsp = SystemParams(coordinates=self.coordinates - other.coordinates, cell=self.cell)
+        dsp, _ = dsp.wrap_positions(min=True)
+        return dsp.coordinates
 
     def super_cell(
         self, n: int | list[int], info: NeighbourListInfo | None = None
@@ -1150,12 +1183,14 @@ class NeighbourListUpdate(MyPyTreeNode):
     nxyz: tuple[int, ...] | None = field(pytree_node=False, default=None)
     stack_dims: tuple[int, ...] | None = field(pytree_node=False, default=None)
     num_neighs: int | None = field(pytree_node=False, default=None)
+    num_pairs: int | None = field(pytree_node=False, default=None)
 
     @staticmethod
     def create(
         nxyz: list[int] | tuple[int, ...] | None = None,
         stack_dims: list[int] | tuple[int, ...] | None = None,
         num_neighs: int | None = None,
+        num_pairs: int | None = None,
     ):
         def to_tuple(a) -> tuple[int] | None:
             if a is None:
@@ -1166,6 +1201,7 @@ class NeighbourListUpdate(MyPyTreeNode):
             nxyz=to_tuple(nxyz),
             stack_dims=to_tuple(stack_dims),
             num_neighs=int(num_neighs) if num_neighs is not None else None,
+            num_pairs=int(num_pairs) if num_pairs is not None else None,
         )
 
     def __getstate__(self):
@@ -1295,6 +1331,7 @@ class NeighbourList(MyPyTreeNode):
         self,
         sp: SystemParams,
         func_single: Callable[[jax.Array, jax.Array], T],
+        data: Any | None = None,
         r_cut: float | None = None,
         fill_value=0,
         reduce="full",  # or 'z' or 'none'
@@ -1320,6 +1357,7 @@ class NeighbourList(MyPyTreeNode):
                     chunk_size_batch=None,
                     shmap=False,
                     split_z=split_z,
+                    data=data,
                 ),
                 chunk_size=chunk_size_batch,
             )
@@ -1644,13 +1682,16 @@ class NeighbourList(MyPyTreeNode):
         if self.sp_orig is None:
             return True
 
-        # sp.min_distance()
+        displacement_sq = jnp.sum(sp.get_displacement(self.sp_orig) ** 2, axis=-1)
 
-        max_displacement = jnp.sum((sp.coordinates - self.sp_orig.coordinates) ** 2, axis=-1)
+        b1 = jnp.any(displacement_sq > self.info.r_skin**2 / 4)
+        b2 = jnp.sum(jnp.sum(self.neighbour_pos(sp) ** 2, axis=-1) > self.info.r_cut**2) > self.update.num_pairs  # type:ignore
 
-        # jax.debug.print("{max_displacement} ang", max_displacement=jnp.sqrt(max_displacement) / angstrom)
+        # jax.debug.print("{} ", displacement_sq / (self.info.r_skin**2 / 4))
 
-        return jnp.any(max_displacement > self.info.r_skin**2 / 4)  # type:ignore
+        # jax.debug.print("needs_update: {b1}, {b2}", b1=b1, b2=b2)
+
+        return jnp.logical_or(b1, b2)
 
     @partial(
         jit_decorator,
@@ -1671,7 +1712,29 @@ class NeighbourList(MyPyTreeNode):
         shmap_kwargs=ShmapKwargs.create(),
         verbose=False,
     ):
-        b, __, __, nl = sp._get_neighbour_list(
+        if sp.batched:
+            _g: Callable[[NeighbourList, SystemParams], tuple[bool, NeighbourList]] = padded_vmap(
+                Partial_decorator(
+                    NeighbourList.update_nl,
+                    chunk_size=chunk_size_inner,
+                    shmap=shmap,
+                    shmap_kwargs=shmap_kwargs,
+                    verbose=verbose,
+                ),
+                chunk_size=chunk_size,
+            )
+
+            if shmap:
+                _g = padded_shard_map(_g, shmap_kwargs)
+
+            b, out = _g(self, sp)
+
+            return jnp.all(b), out
+
+        # skin_less_info = self.info.replace(r_skin=0.0)
+
+        # update neighbourlist with current allocation, an return if it was successful or not
+        b, __, _, __, nl = sp._get_neighbour_list(
             info=self.info,
             update=self.update,
             chunk_size=chunk_size,
@@ -1679,7 +1742,10 @@ class NeighbourList(MyPyTreeNode):
             shmap=shmap,
             shmap_kwargs=shmap_kwargs,
             verbose=verbose,
+            use_r_skin=False,
         )
+
+        nl = nl.replace(sp_orig=sp)
 
         return b, nl
 
@@ -1692,19 +1758,19 @@ class NeighbourList(MyPyTreeNode):
         if not b:
             return self
 
-        # print(f"needs update {self.info.r_skin=}")
+        print(".", end="", flush=True)
 
         b, nl = self.update_nl(sp)
 
         if b:
             return nl
 
-        print(f"slow update_nl")
+        print("x", end="", flush=True)
         old_update = self.update
 
         nl = sp.get_neighbour_list(self.info)
 
-        print(f"{self.update=}, {old_update=}")
+        # print(f"{self.update=}, {old_update=}")
 
         return nl
 
@@ -1757,6 +1823,7 @@ class NeighbourList(MyPyTreeNode):
         sp_orig_none = nl_0.sp_orig is None
 
         m = nl_0.update.num_neighs
+        np = nl_0.update.num_pairs
 
         assert m is not None
 
@@ -1801,6 +1868,7 @@ class NeighbourList(MyPyTreeNode):
             print(f"{nl_i.update.num_neighs=}")
 
             m = max(m, nl_i.update.num_neighs)
+            np = max(np, nl_i.update.num_pairs)
 
         r_skin = min([nli.info.r_cut + nli.info.r_skin - r_cut for nli in nls])
 
@@ -1861,6 +1929,7 @@ class NeighbourList(MyPyTreeNode):
             nxyz=tuple(nxyz) if nxyz is not None else None,
             stack_dims=tuple(_stack_dims),
             num_neighs=m,
+            num_pairs=np,
         )
 
         return NeighbourList(
@@ -2109,6 +2178,24 @@ class NeighbourList(MyPyTreeNode):
             # own impl: r_j-r_i + shift @ cell
             # here: r_i-r_j + shift' @ cell
             shifts = -unit_shift @ sp.cell
+
+        # if self.update.num_pairs is not None:
+        #     print(f"before {idx_i.shape=}, {shifts.shape} {idx_j.shape=}, {shifts.shape=}")
+
+        #     r = jnp.linalg.norm(sp.coordinates[idx_i] - sp.coordinates[idx_j] + shifts, axis=-1)
+        #     m = jnp.argsort(r)[: self.update.num_pairs]
+
+        #     unit_shift = unit_shift[m]
+
+        #     idx_i = idx_i[m]
+        #     idx_j = idx_j[m]
+
+        #     num_edges = idx_i.shape[0]
+
+        #     if self.ijk_indices is not None:
+        #         shifts = shifts[m, :]
+
+        #     print(f"after {idx_i.shape=}, {idx_j.shape=}, {shifts.shape=}")
 
         batch = {
             "positions": sp.coordinates / angstrom,  # (N, 3)
@@ -2705,6 +2792,8 @@ class CvMetric(MyPyTreeNode):
     ) -> tuple[jax.Array, list[jax.Array], jax.Array]:
         n = int(n)
 
+        from IMLCV.base.CV import CvTrans
+
         if margin is None:
             margin = percentile / 100
 
@@ -2754,7 +2843,9 @@ class CvMetric(MyPyTreeNode):
         for dim in range(ndim):
             print(f"new iterated bounds {dim=}")
 
-            cv_mid, nums, bins, closest_trans, get_histo = DataLoaderOutput._histogram(
+            from IMLCV.base.histogram import _histogram
+
+            cv_mid, nums, bins, closest_trans, get_histo = _histogram(
                 metric=CvMetric.create(
                     periodicities=[False],
                     bounding_box=bounding_box[[dim], :],
@@ -2802,22 +2893,11 @@ class CvMetric(MyPyTreeNode):
             else:
                 n_min = jnp.min(v0)
 
-                # lower end
-                # if n_min > 0:
-                #     n_min -= 1
-
-            v0 = jnp.argwhere(cummul < 1 - percentile / 100)
-
+            v0 = jnp.argwhere(cummul >= 1 - percentile / 100)
             if len(v0) == 0:
                 n_max = n
             else:
-                n_max = jnp.max(v0) + 1
-
-                # # higher end
-                # if n_max < n - 1:
-                #     n_max += 1
-
-            # bins, not bins mid
+                n_max = jnp.min(v0) + 1
 
             bounds = bounds.at[dim, 0].set(bins[0][n_min])
             bounds = bounds.at[dim, 1].set(bins[0][n_max])
@@ -4496,7 +4576,7 @@ def _macro_chunk_map(
             z,
             zt if compute_t else None,
             w_stack,
-            wt_stack,
+            wt_stack if compute_t and w_t is not None else None,
             dw_stack if compute_t and d_w is not None else None,
         )
 
@@ -4771,7 +4851,7 @@ def _macro_chunk_map(
                     _z_chunk,
                     _zt_chunk if compute_t else None,
                     w_stack,
-                    wt_stack if compute_t else None,
+                    wt_stack if (compute_t and w_t is not None) else None,
                     dw_stack if compute_t and d_w is not None else None,
                 )
 
@@ -4781,6 +4861,8 @@ def _macro_chunk_map(
                 chunk_func_init_args = chunk_func(
                     *args,
                 )
+
+                # print(f"chunk func output: {chunk_func_init_args}")
 
                 if jit_f:
                     if (cs := chunk_func._cache_size()) != cf_cache:  # type: ignore
@@ -4796,15 +4878,20 @@ def _macro_chunk_map(
                         cf_cache = cs
 
             # if chunk_func is None:
-            assert not isinstance(_z_chunk, SystemParams)
-            _z_chunk.stack_dims = tuple(stack_dims_chunk)
-            z_chunk = cast(list[X2], _z_chunk.unstack())
+            if not isinstance(_z_chunk, SystemParams):
+                _z_chunk.stack_dims = tuple(stack_dims_chunk)
+                z_chunk = cast(list[X2], _z_chunk.unstack())
+            else:
+                # print(f"{_z_chunk=} {stack_dims_chunk=}")
+                z_chunk = _z_chunk.unstack(stack_dims_chunk)  # type: ignore
 
             if compute_t:
-                assert not isinstance(_zt_chunk, SystemParams)
                 assert _zt_chunk is not None
-                _zt_chunk.stack_dims = tuple(stack_dims_chunk)
-                zt_chunk = cast(list[X2], _zt_chunk.unstack())
+                if not isinstance(_zt_chunk, SystemParams):
+                    _zt_chunk.stack_dims = tuple(stack_dims_chunk)
+                    zt_chunk = cast(list[X2], _zt_chunk.unstack())
+                else:
+                    zt_chunk = _zt_chunk.unstack(stack_dims_chunk)  # type: ignore
 
             if last_z is not None:
                 z_chunk[0] = last_z.stack(last_z, z_chunk[0])

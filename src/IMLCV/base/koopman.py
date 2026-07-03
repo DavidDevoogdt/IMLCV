@@ -7,11 +7,19 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from IMLCV.base.covariances import Covariances
+from IMLCV.base.covariances import Covariances, BendParams
 from IMLCV.base.CV import CvTrans
 from IMLCV.base.dataobjects import CV, NeighbourList, SystemParams, chunk_selector
-from IMLCV.base.decoratros import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
-from IMLCV.base.UnitsConstants import boltzmann, kjmol, nanosecond
+from IMLCV.base.decoratros import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator, field
+from IMLCV.base.UnitsConstants import boltzmann, kjmol, nanosecond, amu, angstrom, femtosecond, picosecond
+
+from functools import partial
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import optax
+from jax.scipy.linalg import solve_triangular
 
 
 class KoopmanModel(MyPyTreeNode):
@@ -28,8 +36,8 @@ class KoopmanModel(MyPyTreeNode):
 
     cv_0: list[CV] | list[SystemParams]
     cv_t: list[CV] | list[SystemParams]
-    nl: list[NeighbourList] | NeighbourList | None
-    nl_t: list[NeighbourList] | NeighbourList | None
+    nl: NeighbourList | None
+    nl_t: NeighbourList | None
 
     w: list[jax.Array] | None = None
     rho: list[jax.Array] | None = None
@@ -75,6 +83,7 @@ class KoopmanModel(MyPyTreeNode):
     target_smoothness: float = 20 * kjmol / (boltzmann * 300)
     alpha_smooth: float = 1.0
     beta_timecon: float | None = None
+    tau_thermo: float | None = None
 
     @staticmethod
     def create(
@@ -85,8 +94,8 @@ class KoopmanModel(MyPyTreeNode):
         cv_0: list[CV] | list[SystemParams],
         cv_t: list[CV] | list[SystemParams] | None,
         dynamic_weights: list[jax.Array] | None = None,
-        nl: list[NeighbourList] | NeighbourList | None = None,
-        nl_t: list[NeighbourList] | NeighbourList | None = None,
+        nl: NeighbourList | None = None,
+        nl_t: NeighbourList | None = None,
         add_1=True,
         eps: float = 1e-14,
         eps_pre: float = 0,
@@ -96,6 +105,7 @@ class KoopmanModel(MyPyTreeNode):
         max_features=5000,
         max_features_pre=5000,
         tau=None,
+        tau_thermo: float = None,
         macro_chunk=128,
         chunk_size=None,
         verbose=True,
@@ -122,7 +132,7 @@ class KoopmanModel(MyPyTreeNode):
         exp_period=True,
         vamp_r=2,
         iters_nonlin=int(1e4),
-        print_nonlin_every=1,
+        print_nonlin_every=10,
         epochs=2000,
         batch_size=1024,
         batch_chunk_size=16,
@@ -134,10 +144,16 @@ class KoopmanModel(MyPyTreeNode):
         T_mult=1.0,
         beta_timecon: float | None = None,
         use_girsanov=False,
+        curvature_radius=1.0,
+        tau_baro=500 * picosecond,
+        hessian=True,
+        hessian_steps=0.1,
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
             print(f"getting covariancesm {generator=}")
+
+        epochs = int(epochs)
 
         print(f"{out_dim=} {eps=} {eps_pre=}")
         print(f"{calc_pi=} {add_1=}   ")
@@ -245,9 +261,12 @@ class KoopmanModel(MyPyTreeNode):
 
             import optax
 
-            assert not generator
+            # assert not generator
+
+            print(f"{tau=} {tau_thermo=}")
 
             tau = tau if tau is not None else 1.0
+            tau_thermo = tau_thermo if tau_thermo is not None else 1.0
 
             init_steps = 100
 
@@ -255,17 +274,29 @@ class KoopmanModel(MyPyTreeNode):
             dim = cv_out_shape.cv.shape[1]
 
             N = cv_out_shape.cv.shape[0]
-            sigma_silverman = (4 / (N * (dim + 2))) ** (1 / (dim + 4))
 
-            print(f"{N=} {dim=} {sigma_silverman=}")
+            W_baro = (
+                tau_baro
+                / tau_thermo
+                * (3 * N + 3)
+                / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
+            )
 
-            print(f"{cv_out_shape.cv.shape=} {entropy_reg=} {target_smoothness=} ")
+            print(f"{W_baro=}   ")
 
-            # if batch_size is None:
-            grid_size = int(2000 ** (1 / dim))
-            # else:
-            #     grid_size = int(min(batch_size, 1000) ** (1 / dim))
-            print(f"entropy grid size per dim: {grid_size}")
+            # scaling for cell params
+
+            # sigma_silverman = (4 / (N * (dim + 2))) ** (1 / (dim + 4))
+
+            # print(f"{N=} {dim=} {sigma_silverman=}")
+
+            print(f"{cv_out_shape.cv.shape=} {curvature_radius=} ")
+
+            # # if batch_size is None:
+            # grid_size = int(2000 ** (1 / dim))
+            # # else:
+            # #     grid_size = int(min(batch_size, 1000) ** (1 / dim))
+            # print(f"entropy grid size per dim: {grid_size}")
 
             print("Using AdamW optimizer for mini-batch optimization")
 
@@ -275,18 +306,21 @@ class KoopmanModel(MyPyTreeNode):
             # warmup_steps = max(epochs // 5, 100)  # Warmup for the first 20% of training or at least 100 steps
 
             lr_schedule = optax.warmup_cosine_decay_schedule(
-                init_value=1e-2,
-                peak_value=1e-1,
-                warmup_steps=20,
+                init_value=1e-4,
+                peak_value=1e-3,
+                warmup_steps=200 if epochs > 200 else epochs // 5,
                 decay_steps=epochs,
-                end_value=1e-2,
+                end_value=1e-4,
             )
 
             # 2. Add Gradient Clipping
             # This is the "shield" against those massive spikes in your plot
             optimizer = optax.chain(
-                optax.clip_by_global_norm(1.0),
-                optax.adamw(learning_rate=lr_schedule, weight_decay=1e-4),
+                optax.adaptive_grad_clip(clipping=0.1),  # clipping relative to recent gradient norms
+                optax.adamw(
+                    lr_schedule,
+                    weight_decay=1e-4,
+                ),
             )
 
             optimizer = optax.apply_if_finite(
@@ -314,68 +348,57 @@ class KoopmanModel(MyPyTreeNode):
 
                 w_chunk = jnp.hstack(w_tot) if use_w else None
 
-                if nl is not None:
-                    if isinstance(x0_chunk, SystemParams):
-                        nl_chunk = nl.slow_update_nl(x0_chunk) if nl is not None else None
-
-                        nl = nl.replace(update=nl_chunk.update)
-
-                    else:
-                        nl_chunk = nl
-                else:
-                    nl_chunk = None
-
                 lbfgs = True
 
             else:
+
+                def stack_incremental(group):
+                    """list of CV/SystemParams/array -> one contiguous pytree.
+                    Avoids the mega-concat: writes each chunk via dynamic_update_slice."""
+                    sizes = [p.shape[0] for p in group]
+                    total = sum(sizes)
+
+                    # one empty buffer per leaf, same class (CV/SystemParams) preserved by tree.map
+                    buf = jax.tree.map(lambda a: jnp.empty((total, *a.shape[1:]), a.dtype), group[0])
+
+                    start = 0
+                    for p, n in zip(group, sizes):
+                        buf = jax.tree.map(
+                            lambda b, src: jax.lax.dynamic_update_slice_in_dim(b, src, start, axis=0),
+                            buf,
+                            p,
+                        )
+                        start += n
+                    return buf
+
+                @partial(jax.jit, static_argnames=("target_size",))
+                def gather(idx_source_weights, pools, target_size):
+                    """One shared global index, applied to every stacked group."""
+                    key, weights = idx_source_weights
+                    total = jax.tree_util.tree_leaves(next(g for g in pools if g is not None))[0].shape[0]
+                    idx = jax.random.choice(key, total, (target_size,), p=weights, replace=True)
+                    return [None if g is None else jax.tree.map(lambda a: a[idx], g) for g in pools]
+
+                w_subsample = w_tot_dyn if use_girsanov else w_tot
+                w_subsample_stack = jnp.hstack(w_subsample) if w_subsample is not None else None
+
+                groups = [cv_0, cv_t, w_tot, w_tot_t, dynamic_weights, w_subsample]
+                pools = [None if g is None else stack_incremental(g) for g in groups]
 
                 def _get_batch(key):
                     subsample = True
                     key, subkey = jax.random.split(key)
 
-                    w_subsample = w_tot_dyn if use_girsanov else w_tot
+                    # if subsample:
+                    # each epoch:
+                    key, subkey = jax.random.split(key)
+                    # w = jnp.hstack(w_tot_dyn) if use_girsanov else (jnp.hstack(w_tot) if use_w else None)
+                    x0_chunk, xt_chunk, w_chunk, wt_chunk, wdyn_chunk, wtot_chunk = gather(
+                        (subkey, w_subsample_stack), pools, batch_size
+                    )
 
-                    if subsample:
-                        x0_chunk, xt_chunk, w_chunk, wt_chunk, wdyn_chunk, wtot_chunk = chunk_selector(
-                            [
-                                cv_0,
-                                cv_t,
-                                w_tot if use_w else None,
-                                w_tot_t if use_w else None,
-                                dynamic_weights if dynamic_weights is not None else None,
-                                w_subsample,
-                            ],
-                            batch_size,
-                            subkey,
-                            weight_list=w_tot_dyn if use_girsanov else w_tot,
-                        )
-
-                        wt_chunk /= wtot_chunk
-                        w_chunk /= wtot_chunk
-                    else:
-                        x0_chunk, xt_chunk, w_chunk, wt_chunk, wdyn_chunk = chunk_selector(
-                            [
-                                cv_0,
-                                cv_t,
-                                w_tot if use_w else None,
-                                w_tot_t if use_w else None,
-                                dynamic_weights if dynamic_weights is not None else None,
-                            ],
-                            batch_size,
-                            subkey,
-                        )
-
-                        # print(f"batch weights sum {jnp.sum(w_chunk)=} {jnp.sum(wt_chunk)=}")
-
-                        w_chunk /= jnp.sum(w_chunk)
-                        wt_chunk /= jnp.sum(wt_chunk)
-
-                    # if nl is not None:
-                    #     if isinstance(x0_chunk, SystemParams):
-                    #         nl_chunk = nl2.slow_update_nl(x0_chunk)
-                    #         nl2 = nl2.replace(update=nl_chunk.update)
-                    #     else:
-                    #         nl_chunk = nl2
+                    wt_chunk /= wtot_chunk
+                    w_chunk /= wtot_chunk
 
                     batch = dict(
                         x0_i=x0_chunk,
@@ -388,333 +411,298 @@ class KoopmanModel(MyPyTreeNode):
 
                     return batch, key
 
-                if prefetch:
-                    from queue import Queue
-                    from threading import Thread
+                def get_batch(key):
+                    batch, key = _get_batch(key)
+                    return key, (batch["x0_i"], batch["xt_i"], batch["w_i"], batch["wt_i"], batch["wdyn_i"])
 
-                    def prefetch_worker(
-                        queue,
-                        key,
-                    ):
-                        # nl2 = nl
+                # --------------------------------------------------------------------------- #
+                # Hyperparameters (all python scalars -> hashable -> safe as jit static args)  #
+                # --------------------------------------------------------------------------- #
+                class LossHP(MyPyTreeNode):
+                    eta: float = 0.1  # soft mode cutoff: modes >1/eta faster than
+                    #   the slowest retained one are ~ignored
+                    R0: float = 3.0  # curvature length scale (mass-weighted, e.g.
+                    #   10*sqrt(kB T / m w^2)); the ONLY balance knob
+                    rate_floor: float = 1e-6  # hard floor on rates (caps timescales, clamps
+                    #   negative numerical eigenvalues)
+                    rel_jitter: float = 1e-6  # Cholesky jitter as a fraction of trace(C00)/N
+                    ortho_weight: float = 1.0  # fixed multiplier on the ||C00 - I||^2 constraint
+                    n_skip: int = field(pytree_node=False, default=0)  # drop this many lowest (stationary) modes before
+                    #   the loss. Set to 1 if a constant/stationary
+                    #   mode (rate ~ 0) is present in the spectrum,
+                    #   else it captures all the slow-mode weight.
+                    #   G^{-1} metric (multiply curvature by t_k).
+                    #   Set False if C_bend is already metricised.
+                    curvature_mode: str = field(
+                        pytree_node=False, default="trace"
+                    )  # "trace" (degeneracy-safe, default) | "per_mode"
+                    reward_mode: str = field(
+                        pytree_node=False, default="saturated"
+                    )  # "saturated" (couples modes via one denominator)
+                    #   | "additive" (linear penalty, needs additive_mu)
+                    additive_mu: float = 10.0  # penalty weight when reward_mode == "additive"
+                    hinge_beta: float = 2.0  # sharpness of hinge when reward_mode == "hinge"
 
-                        # if nl2 is not None:
-                        #     nl2.info.r_skin = 0.0
-
-                        # w_alpha = [wi**alpha_smooth for wi in w_tot] if use_w else None
-
-                        while True:
-                            batch, key = _get_batch(key)
-
-                            print("-", end="", flush=True)
-
-                            queue.put(batch)
-
-                    lbfgs = False
-
-                    # Setup queue and thread
-                    batch_queue = Queue(maxsize=4)  # Prefetch 4 batches ahead
-                    thread = Thread(
-                        target=prefetch_worker,
-                        args=(
-                            batch_queue,
-                            key,
-                        ),
+                    grad_floor: float = (
+                        1e-3  # floors the ||grad phi||^2 in the curvature penalty to prevent singularities;
                     )
-                    thread.daemon = True
-                    thread.start()
 
-                    def get_batch():
-                        batch = batch_queue.get()
-                        return key, (batch["x0_i"], batch["xt_i"], batch["w_i"], batch["wt_i"], batch["wdyn_i"])
+                # --------------------------------------------------------------------------- #
+                # Linear-algebra kernels (verified against explicit inverse / per-mode sum)    #
+                # --------------------------------------------------------------------------- #
+                def _sym(A):
+                    return 0.5 * (A + A.T)
 
-                else:
-                    lbfgs = False
+                def _cholesky_jittered(C00, rel_jitter):
+                    C = _sym(C00)
+                    N = C.shape[0]
+                    jit = rel_jitter * jnp.trace(C) / N
+                    return jnp.linalg.cholesky(C + jit * jnp.eye(N))
 
-                    def get_batch(key):
-                        batch, key = _get_batch(key)
-                        return key, (batch["x0_i"], batch["xt_i"], batch["w_i"], batch["wt_i"], batch["wdyn_i"])
+                def _whiten(L, A):
+                    """Return L^{-1} A L^{-T} via two triangular solves (symmetrised)."""
+                    Y = solve_triangular(L, A, lower=True)  # L^{-1} A
+                    M = solve_triangular(L, Y.T, lower=True).T  # L^{-1} A L^{-T}
+                    return _sym(M)
 
-            # compute effective diffusion
+                def _filter_matrix(U, phi_vals):
+                    """phi(G_tilde) restricted to the columns of U:  U diag(phi_vals) U^T.
 
-            @partial(jit_decorator, static_argnames=["entropy_reg", "chunk_size"])
-            def objective_fn(
-                params,
-                log_beta_gamma,
-                x_0: CV | SystemParams,
-                x_t: CV | SystemParams,
-                w: jax.Array | None,
-                w_t: jax.Array | None,
-                wdyn: jax.Array | None,
-                nl: NeighbourList | None,
-                # cov_tot: Covariances | None,
-                entropy_reg,
-                chunk_size=None,
-                epoch: int = 0,
-            ):
-                learnable_params = params
+                    Smooth function of G_tilde, so the trace against it is invariant to
+                    rotations inside any degenerate eigenspace.
+                    """
+                    return (U * phi_vals) @ U.T
 
-                _trans = trans.apply_learnable_params(learnable_params)
-
-                cov = Covariances.create(
-                    cv_0=x_0,
-                    cv_1=x_t,
-                    nl=nl,
-                    nl_t=nl,
-                    w=[w],
-                    w_t=[w_t],
-                    dynamic_weights=[wdyn] if wdyn is not None else None,
-                    trans_f=_trans,
-                    trans_g=_trans,
-                    shrink=False,
-                    calc_pi=calc_pi,
-                    get_diff=False,
-                    pi_argmask=jnp.array([-1]) if add_1 else None,
-                    symmetric=symmetric,
-                    generator=True,
+                # --------------------------------------------------------------------------- #
+                # The objective                                                                #
+                # --------------------------------------------------------------------------- #
+                @partial(jit_decorator, static_argnames=["entropy_reg", "chunk_size", "hessian"])
+                def slow_smooth_objective(
+                    params,
+                    eta,
+                    sigma_0,
+                    x_0,
+                    x_t,
+                    w,
+                    w_t,
+                    wdyn,
+                    nl,
+                    hp: LossHP,
+                    entropy_reg=None,
                     chunk_size=None,
-                    macro_chunk=None,
-                )
+                    epoch: int = 0,
+                    key: Array | None = None,
+                    hessian: bool = True,
+                ):
+                    """Single scalar loss: -(slow-and-smooth reward) + ortho constraint."""
+                    _trans = trans.apply_learnable_params(params)
 
-                # jax.lax.cond(epoch == 0, lambda: None, lambda: jax.debug.print("cov {cov}", cov=cov))
+                    scale_deriv = eta ** (-1 / 2)
 
-                cov_new = cov
-
-                W0, lambda_i = cov_new.whiten_C(
-                    "rho_00",
-                    apply_mask=False,
-                    epsilon=1e-12,
-                    cholesky=False,
-                    tikhonov=1e-2,
-                    return_eigh=True,
-                )
-
-                loss_ortho = jnp.sum(lambda_i) - jnp.sum(jnp.log(lambda_i)) - lambda_i.shape[0]
-
-                loss = 1e-1 * loss_ortho
-
-                if symmetric:
-                    W1 = W0
-
-                else:
-                    print(f"whitening C11 separately")
-
-                    W1 = cov_new.whiten_C(
-                        "rho_11",
-                        apply_mask=False,
-                        epsilon=1e-12,
-                        cholesky=False,
-                        tikhonov=1e-2,
+                    bp = BendParams(
+                        # R0=hp.R0
+                        # * scale_deriv
+                        # * jnp.sqrt(
+                        #     hp.eta
+                        # ),  # compare directly against the slowest mode length. This is a choice, not a physical prinicple
+                        R0=hp.R0 * jnp.sqrt(hp.eta),
+                        ridge=1e-5 / hp.eta,
+                        mode="projected",
+                        reduce="hinge",
+                        n_probe=16,
+                        hinge_p=2,
+                        W=W_baro,
                     )
 
-                T = W1 @ cov_new.C01.T @ W0.T
+                    print(f"{key=}")
 
-                # if not symmetric:
-                #     T = W0 @ cov_new.C11 @ W1.T @ T
-
-                sigmas = jnp.linalg.svd(T, compute_uv=False)
-                loss_vamp = -jnp.sum(sigmas**vamp_r) + dim
-
-                timescales_vamp = -tau / jnp.log(sigmas)
-
-                # https://proceedings.neurips.cc/paper_files/paper/2024/file/89edef87915d31de3437b6b2ac5f79e7-Paper-Conference.pdf
-
-                dK = W0 @ cov_new.C_gen @ W0.T
-
-                if beta_timecon is not None:
-                    dK /= beta_timecon
-
-                timescales_gen = 1 / (jnp.linalg.eigvalsh(dK))
-
-                if calc_pi:
-                    log_beta_gamma_new = jnp.log(timescales_vamp[0] / timescales_gen[0])
-                else:
-                    log_beta_gamma_new = jnp.log(timescales_vamp[1] / timescales_gen[1])
-
-                loss_gen = -jnp.sum(jnp.exp(-vamp_r * tau / timescales_gen)) + dim
-
-                # https://chemrxiv.org/doi/pdf/10.26434/chemrxiv-2024-8752d-v2?download=true&redirectToLatest=false
-                # scaling constant to make independed of thermostat
-                # loss_gen = jnp.diag(dK) / beta_timecon
-                # loss_gen = jnp.sum(dK**2)
-
-                mix = 0.1
-
-                # softmax
-                loss += loss_vamp
-
-                return loss, (
-                    (
-                        loss_vamp,
-                        loss_gen,
-                        # loss_betagamma,
-                        # norm_indep,
-                        # loss_border,
-                        loss_ortho,
-                        timescales_vamp,
-                        timescales_gen,
-                    ),
-                    # cov_new,
-                    log_beta_gamma_new,
-                )
-
-            # @jax.jit(static_argnames=["chunk_size"])
-            @partial(jit_decorator)
-            def _body_fun_2(x):
-                (
-                    opt_state,
-                    params,
-                    log_beta_gamma,
-                    (cv, cv_t, w, w_t, w_dyn, nl),
-                    # cov,
-                    _,
-                    iter_num,
-                ) = x
-
-                w /= jnp.sum(w)
-
-                if w_dyn is not None:
-                    _wd = w * w_dyn
-                else:
-                    _wd = w
-                ess = jnp.sum(_wd) ** 2 / jnp.sum(_wd**2)
-
-                w_t /= jnp.sum(w_t)
-
-                _objective_fn = Partial_decorator(
-                    objective_fn,
-                    log_beta_gamma=log_beta_gamma,
-                    x_0=cv,
-                    x_t=cv_t,
-                    w=w,
-                    w_t=w_t,
-                    wdyn=w_dyn,
-                    nl=nl,
-                    entropy_reg=entropy_reg,
-                    chunk_size=batch_chunk_size,
-                    # cov_tot=cov,
-                    epoch=iter_num,
-                )
-
-                (
-                    (
-                        loss_val,
-                        (
-                            losses,
-                            # cov_new,
-                            log_beta_gamma_new,
-                        ),
-                    ),
-                    grads,
-                ) = jax.value_and_grad(_objective_fn, has_aux=True)(params)
-
-                # print(f"computed gradients with {grads=}")
-
-                def without_aux(params):
-                    loss_val, _ = _objective_fn(params)
-                    return loss_val
-
-                gnorm = optax.tree.norm(grads, ord=2)
-
-                if lbfgs:
-                    updates, opt_state = optimizer.update(
-                        grads,
-                        opt_state,
-                        params,
-                        value=loss_val,
-                        grad=grads,
-                        value_fn=without_aux,
+                    cov = Covariances.create(
+                        cv_0=[x_0],
+                        cv_1=[x_t],
+                        nl=nl,
+                        nl_t=nl,
+                        w=[w],
+                        w_t=[w],
+                        trans_f=_trans,
+                        trans_g=_trans,
+                        shrink=False,
+                        calc_pi=calc_pi,
+                        get_diff=False,
+                        symmetric=symmetric,
+                        generator=True,
+                        get_hess=hessian,
+                        scale_deriv=scale_deriv,
+                        curvature=False,
+                        sigma_0=sigma_0,
+                        key=key,
+                        bp=bp,
+                        # chunk_size=batch_chunk_size,
+                        macro_chunk=batch_chunk_size,
                     )
 
-                    zoomstate: ScaleByZoomLinesearchState = opt_state[-1]
-                    steps = zoomstate.info.num_linesearch_steps
+                    # jax.debug.print("covariances computed {cov}", cov=cov)
 
-                    crit = jnp.logical_and(
-                        gnorm > 1e-3,
-                        steps < max_steps,
+                    N = cov.C00.shape[0]
+
+                    ##################
+                    # resolvent loss #
+                    ##################
+                    C = _sym(cov.rho_00)
+                    M = _sym(cov.rho_gen) + C  # G/eta + C  (> 0)
+                    L = _cholesky_jittered(M, hp.rel_jitter)  # L L^T = M
+                    rho_res = _whiten(L, C)  # L^-1 C L^-T ; eig = 1/(1+lambda_i/eta) = mu_i
+                    reward = jnp.trace(rho_res)  # sum_i mu_i   (eigh-free)
+
+                    loss_main = -reward
+
+                    ##################
+                    # bending loss   #
+                    ##################
+
+                    if hessian:
+                        bending_loss = jnp.trace(_whiten(L, cov.rho_bend))
+
+                        loss_main += hp.additive_mu * bending_loss
+                    else:
+                        bending_loss = 0.0
+
+                    ##################
+                    # telemetry only #
+                    ##################
+
+                    mu_sg = jnp.linalg.eigvalsh(rho_res)  # eigenvalues only; R_sg already detached
+                    lam_eta_inv_sg = jnp.where(mu_sg < hp.rate_floor, jnp.inf, 1.0 / mu_sg - 1.0)
+                    lam_sg = lam_eta_inv_sg * eta  # implied timescales (the output you need)
+                    sat = bending_loss
+
+                    ##################
+                    # orhto loss     #
+                    ##################
+
+                    v = jnp.diag(cov.C00)  # σ_a² = variances
+
+                    x, _ = jnp.linalg.eigh(cov.C00)  # decorrelate + rescale to σ_a = 1
+                    loss_ortho = jnp.sum(jnp.log(x) ** 2) + jnp.sum((cov.rho_00 - jnp.eye(N)) ** 2) / (
+                        N**2
+                    )  # pushes σ_a → 1 and ρ₀₀ → I
+
+                    # pushes eigenvalues of C00 → 1 (decorrelation + scale)
+                    # loss_scale = jnp.sum(jnp.log(v) ** 2)  # pushes σ_a → 1  (scale gauge)
+                    # loss_decorr = jnp.sum((cov.rho_00 - jnp.eye(N))**2)    # pushes ρ₀₀ → I  (decorrelation)
+
+                    # loss_ortho = jnp.sum((cov.C00 - jnp.eye(N)) ** 2)
+
+                    loss = loss_main + hp.ortho_weight * loss_ortho
+
+                    eta_next = hp.eta * jnp.min(lam_sg)
+
+                    a = 0.05
+                    ema_lambda_min = a * eta_next + (1 - a) * eta
+                    sigma_next = a * v**0.5 + (1 - a) * sigma_0 if sigma_0 is not None else v**0.5
+
+                    timescales = 1.0 / (
+                        lam_sg
+                        / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
+                        * (tau_thermo if tau_thermo is not None else 100 * femtosecond)
+                        # / amu
                     )
 
-                else:
-                    updates, opt_state = optimizer.update(
-                        grads,
-                        opt_state,
-                        params,
+                    aux = dict(
+                        timescales=timescales,
+                        resolvent_weights=mu_sg,
+                        sat=sat,
+                        loss_main=loss_main,
+                        loss_ortho=loss_ortho,
+                        eta_next=ema_lambda_min,
+                        sigma_next=sigma_next,
+                    )
+                    return loss, aux
+
+                # --------------------------------------------------------------------------- #
+                # Optimiser step -- one value_and_grad, no per-component vjp / gradnorm.        #
+                # --------------------------------------------------------------------------- #
+
+                @partial(jit_decorator, static_argnames=["hessian"])
+                def _body_fun(carry, hessian=True):
+                    (opt_state, params, eta, sigma, (cv, cv_t, w, w_t, w_dyn, nl), _, iter_num) = carry
+
+                    print(f"inside body {sigma=}")
+
+                    w = w / jnp.sum(w)
+                    w_t = w_t / jnp.sum(w_t)
+
+                    N_eff = (jnp.sum(w) ** 2) / jnp.sum(w**2)
+
+                    hp = LossHP(
+                        eta=100.0,
+                        R0=curvature_radius,
+                        rate_floor=1e-6,
+                        rel_jitter=1e-4,
+                        ortho_weight=0.1,
+                        n_skip=0,
+                        curvature_mode="per_mode",
+                        reward_mode="hinge",
+                        additive_mu=2.0,
+                        hinge_beta=10.0,
+                        grad_floor=1e-6,
                     )
 
-                    # Adam state is usually the first element in the Optax state tuple
-                    # adam_s: ScaleByAdamState = opt_state[0]
+                    def loss_fn(p):
+                        return slow_smooth_objective(
+                            p,
+                            eta,
+                            sigma,
+                            cv,
+                            cv_t,
+                            w,
+                            w_t,
+                            w_dyn,
+                            nl,
+                            hp=hp,
+                            entropy_reg=entropy_reg,
+                            chunk_size=chunk_size,
+                            epoch=iter_num,
+                            key=jax.random.fold_in(jax.random.PRNGKey(0), iter_num),
+                            hessian=hessian,
+                        )
 
-                    # # 1. Step Count
-                    # steps = adam_s.count
+                    (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
 
-                    # # 2. Update Magnitude (Average of the second moment)
-                    # # This tells you how much "energy" is left in the updates
-                    # nu_leaves = jax.tree_util.tree_leaves(adam_s.nu)
-                    # avg_nu = jnp.mean(jnp.array([jnp.mean(l) for l in nu_leaves]))
+                    aux["N_eff"] = N_eff
 
-                    # crit = avg_nu > 1e-7
+                    # Cheap insurance: a single bad Cholesky / eigh step won't poison state.
+                    grads = jax.tree_util.tree_map(jnp.nan_to_num, grads)
 
-                    crit = True
+                    gnorm = optax.global_norm(grads)
 
-                    # Inside your loop:
-                    # health = get_optimizer_health(opt_state)
+                    updates, opt_state = optimizer.update(grads, opt_state, params)
 
-                    steps = 0
+                    params = optax.apply_updates(params, updates)
 
-                # eps = optimizer.hyperparams.eps if hasattr(optimizer, "hyperparams") else 1e-8
+                    output = dict(
+                        iter_num=iter_num,
+                        loss=loss,
+                        eta=eta,
+                        sigma=sigma,
+                        gnorm=gnorm,
+                        **aux,
+                    )
 
-                params = optax.apply_updates(params, updates)
+                    # with jnp.printoptions(formatter={"float": "{:0.3e}".format}):
+                    #     jax.debug.print(
+                    #         "epoch={e} | timescales (ns)={ts} | sat={s:.3f} | "
+                    #         "loss_main={lm:.3E} | ortho={o:.3E} | eta_next={eta_next:.3E} | gnorm={gnorm:.3E}",
+                    #         e=iter_num,
+                    #         ts=aux["timescales"][::-1] / nanosecond,
+                    #         s=aux["sat"],
+                    #         lm=aux["loss_main"],
+                    #         o=aux["loss_ortho"],
+                    #         eta_next=aux["eta_next"],
+                    #         gnorm=gnorm,
+                    #     )
 
-                b = jnp.logical_and(
-                    jnp.logical_or(
-                        crit,
-                        iter_num < init_steps,  # warmup
-                    ),
-                    iter_num < epochs,
-                )
-
-                # loss_vamp, total_entropy, loss_border, loss_ortho = losses
-                (
-                    loss_vamp,
-                    loss_gen,
-                    loss_ortho,
-                    timescales_vamp,
-                    timescales_gen,
-                ) = losses
-
-                if not calc_pi:
-                    timescales_vamp = timescales_vamp[1:]
-                    timescales_gen = timescales_gen[1:]
-
-                jax.debug.print(
-                    "epoch={e} loss train {tl:.3E} loss vamp {v:.3E} loss_gen {loss_gen:.3E} timescales_vamp {timescales_vamp} ns timescales_gen {timescales_gen} ns ortho {o:.3E} gnorm {g:.3E} scaling vamp gen {scaling:.3E} ess {ess:.3E}",
-                    e=iter_num,
-                    tl=loss_val,
-                    v=loss_vamp,
-                    loss_gen=loss_gen,
-                    g=gnorm,
-                    o=loss_ortho,
-                    timescales_vamp=timescales_vamp / nanosecond,
-                    timescales_gen=timescales_gen / nanosecond,
-                    scaling=jnp.exp(log_beta_gamma),
-                    ess=ess,
-                )
-
-                return (
-                    opt_state,
-                    params,
-                    log_beta_gamma,
-                    # cov_new,
-                    b,
-                    iter_num + 1,
-                    log_beta_gamma_new,
-                )
-
-            @jax.jit
-            def _cond_fun(x):
-                opt_state, params, cov, b, iter_num = x
-
-                return b
+                    b = iter_num < epochs
+                    return (opt_state, params, output, aux["eta_next"], aux["sigma_next"], b, iter_num + 1, loss)
 
             cov: Covariances | None = None
 
@@ -724,7 +712,8 @@ class KoopmanModel(MyPyTreeNode):
 
             print(f"{nl=}")
 
-            log_beta_gamma = 0
+            eta = 100
+            sigma = None
 
             for epoch in range(epochs):
                 if (epoch % 10 == 0) and epoch > 0:
@@ -744,36 +733,105 @@ class KoopmanModel(MyPyTreeNode):
                 (
                     opt_state,
                     learable_params,
-                    log_beta_gamma,
+                    output,
+                    eta,
+                    sigma,
                     # cov,
                     b,
                     iters,
                     log_beta_gamma_new,
-                ) = _body_fun_2(
+                ) = _body_fun(
                     (
                         opt_state,
                         learable_params,
-                        log_beta_gamma,
+                        eta,
+                        sigma,
                         (x0_chunk, xt_chunk, w_chunk, wt_chunk, wdyn_chunk, nl),
                         # cov,
                         True,
                         epoch,
                     ),
+                    hessian=hessian,
                 )
 
-                log_beta_gamma = log_beta_gamma_new * 0.1 + log_beta_gamma * 0.9
+                if (epoch % print_nonlin_every) == 0:
+                    with jnp.printoptions(formatter={"float": "{:0.3e}".format}):
+                        print(
+                            f"epoch={epoch} | timescales (ns)={output['timescales'][::-1] / nanosecond} | "
+                            f"sat={output['sat']:.3f} | loss_main={output['loss_main']:.3E} | "
+                            f"ortho={output['loss_ortho']:.3E} | eta_next={output['eta_next']:.3E} | "
+                            f"gnorm={output['gnorm']:.3E} |"
+                            f"sigma_next={output['sigma_next']} ... | "
+                            f"N_eff={output['N_eff']:.1f} |"
+                            f"lr={lr_schedule(epoch):.3E} "
+                        )
 
                 if not b:
                     print(f"Convergence criteria met at epoch {epoch}, stopping optimization")
                     break
 
+            # if hessian:
+            #     print("running for 200 epochs with hessian to get smoothness")
+            #     for epoch in range(int(epochs * hessian_steps)):
+            #         if (epoch % 10 == 0) and epoch > 0:
+            #             t = time.time()
+
+            #             end = t0 + (t - t0) / 10 * (200 - epoch)
+
+            #             print(
+            #                 f"Epoch {epoch} time {time.strftime('%H:%M:%S', time.localtime(t))} estimated end {time.strftime('%H:%M:%S', time.localtime(end))}"
+            #             )
+
+            #             t0 = t
+
+            #         if batch_size is not None:
+            #             key, (x0_chunk, xt_chunk, w_chunk, wt_chunk, wdyn_chunk) = get_batch(key)
+
+            #         (
+            #             opt_state,
+            #             learable_params,
+            #             output,
+            #             eta,
+            #             sigma,
+            #             # cov,
+            #             b,
+            #             iters,
+            #             log_beta_gamma_new,
+            #         ) = _body_fun(
+            #             (
+            #                 opt_state,
+            #                 learable_params,
+            #                 eta,
+            #                 sigma,
+            #                 (x0_chunk, xt_chunk, w_chunk, wt_chunk, wdyn_chunk, nl),
+            #                 # cov,
+            #                 True,
+            #                 epoch,
+            #             ),
+            #             hessian=True,
+            #         )
+
+            #         if (epoch % print_nonlin_every) == 0:
+            #             with jnp.printoptions(formatter={"float": "{:0.3e}".format}):
+            #                 print(
+            #                     f"epoch={epoch} | timescales (ns)={output['timescales'][::-1] / nanosecond} | "
+            #                     f"sat={output['sat']:.3f} | loss_main={output['loss_main']:.3E} | "
+            #                     f"ortho={output['loss_ortho']:.3E} | eta_next={output['eta_next']:.3E} | "
+            #                     f"gnorm={output['gnorm']:.3E} |"
+            #                     f"sigma_next={output['sigma_next']} ... | "
+            #                     f"N_eff={output['N_eff']:.1f} |"
+            #                     f"lr={lr_schedule(epoch):.3E} "
+            #                 )
+
             if batch_size is not None:
-                if prefetch:
-                    thread.join(timeout=0)
+                del pools
+                del x0_chunk, xt_chunk, w_chunk, wt_chunk, wdyn_chunk
 
             trans = trans.apply_learnable_params(learable_params)
             print(f"optimized trans done ")
 
+        else:
+            eta = None
         print(f"{nl=}")
 
         cov = Covariances.create(
@@ -788,7 +846,7 @@ class KoopmanModel(MyPyTreeNode):
             only_diag=only_diag,
             symmetric=symmetric,
             # chunk_size=batch_chunk_size,
-            macro_chunk=macro_chunk,
+            # macro_chunk=macro_chunk,
             trans_f=trans,
             trans_g=trans,
             verbose=verbose,
@@ -796,7 +854,9 @@ class KoopmanModel(MyPyTreeNode):
             shrinkage_method=shrinkage_method,
             pi_argmask=jnp.array([-1]) if add_1 else None,
             eps_shrink=eps_shrink,
-            generator=generator,
+            generator=True,
+            scale_deriv=eta ** (-1 / 2) if variational else None,
+            macro_chunk=batch_chunk_size,
         )
 
         argmask = cov.mask(eps_pre, max_features_pre, auto_cov_threshold)
@@ -812,8 +872,16 @@ class KoopmanModel(MyPyTreeNode):
             out_eps=out_eps,
             glasso_whiten=glasso,
             verbose=verbose,
-            # generator=generator,
+            scale_gen=eta
+            / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
+            * (tau_thermo if tau_thermo is not None else 100 * femtosecond)
+            # * amu
+            if variational
+            else None,
         )
+
+        #    / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
+        #                 * (tau_thermo if tau_thermo is not None else 100 * picosecond)
 
         if only_diag:
             argmask_s, s = x
@@ -829,7 +897,12 @@ class KoopmanModel(MyPyTreeNode):
                 print(f"found only {s.shape[0]} singular values")
 
         if verbose:
-            print(f"{s[0:min(10, s.shape[0]) ]=}")
+            if generator:
+                _ts = 1 / s / nanosecond
+            else:
+                _ts = -tau / jnp.log(s) / nanosecond
+
+            print(f"timescales {_ts[0:min(10, s.shape[0])]=}  (ns)")
 
         print(f"{add_1=} new weights")  # if self.periodicities is not None:
         #     print("applying periodicities to f")
@@ -917,6 +990,43 @@ class KoopmanModel(MyPyTreeNode):
 
         return tr
 
+    @staticmethod
+    def _transform(
+        cv,
+        nl,
+        shmap,
+        shmap_kwargs,
+        argmask: jax.Array | None = None,
+        pi: jax.Array | None = None,
+        add_1: bool = False,
+        add_1_pre: bool = False,
+        q: jax.Array | None = None,
+        l: jax.Array | None = None,
+    ) -> jax.Array:
+        x = cv.cv
+
+        # print(f"inside {x.shape=} {q=} {argmask=} ")
+
+        if argmask is not None:
+            x = x[argmask]
+
+        if pi is not None:
+            x = x - pi
+
+        if add_1_pre:
+            x = jnp.hstack([x, jnp.array([1])])
+
+        if q is not None:
+            x = x @ q
+
+        if l is not None:
+            x = x * l
+
+        if add_1:
+            x = jnp.hstack([x, jnp.array([1])])
+
+        return cv.replace(cv=x, _combine_dims=None)
+
     def f_stiefel(
         self,
         out_dim=None,
@@ -947,7 +1057,7 @@ class KoopmanModel(MyPyTreeNode):
         o = o[:, :out_dim]
 
         tr = CvTrans.from_cv_function(
-            DataLoaderOutput._transform,
+            KoopmanModel._transform,
             static_argnames=["add_1", "add_1_pre"],
             add_1=False,
             add_1_pre=False,
@@ -973,7 +1083,8 @@ class KoopmanModel(MyPyTreeNode):
             argmask_s = self.argmask_s
 
         else:
-            o = self.W0.T  # jnp.diag(self.cov.sigma_0_inv) @ self.W0.T
+            # o = self.W0.T
+            o = jnp.diag(self.cov.sigma_0_inv) @ self.W0.T
 
         s = self.s
 
@@ -1002,7 +1113,7 @@ class KoopmanModel(MyPyTreeNode):
             o = o[:, :out_dim]
 
         tr = CvTrans.from_cv_function(
-            DataLoaderOutput._transform,
+            KoopmanModel._transform,
             static_argnames=["add_1", "add_1_pre"],
             add_1=False,
             add_1_pre=False,
@@ -1050,7 +1161,7 @@ class KoopmanModel(MyPyTreeNode):
         o = o[:, :out_dim]
 
         tr = CvTrans.from_cv_function(
-            DataLoaderOutput._transform,
+            KoopmanModel._transform,
             static_argnames=["add_1", "add_1_pre"],
             add_1=False,
             add_1_pre=False,
@@ -1129,7 +1240,7 @@ class KoopmanModel(MyPyTreeNode):
         mu_ref = self.W1.T @ v  # jnp.diag(sigma_1_inv) @ self.W1.T @ v
 
         f_trans_2 = CvTrans.from_cv_function(
-            DataLoaderOutput._transform,
+            KoopmanModel._transform,
             q=None,
             l=None,
             pi=self.cov.pi_0 if self.calc_pi else None,
@@ -1150,6 +1261,8 @@ class KoopmanModel(MyPyTreeNode):
             tr = self.trans * tr
 
         print(f"{self.cv_0[0].shape}")
+
+        from IMLCV.base.dataset import DataLoaderOutput
 
         w_out_cv, w_out_cv_t = DataLoaderOutput.apply_cv(
             f=tr,
@@ -1365,6 +1478,10 @@ class KoopmanModel(MyPyTreeNode):
         if tau is None:
             tau = 1
             print("tau not set, assuming 1")
+
+        if self.cov.rho_gen is not None:
+            print("using generator timescales")
+            return 1 / s
 
         return -tau / jnp.log(s)
 

@@ -58,7 +58,7 @@ register_handlers()
 
 
 moved_functions = {
-    "IMLCV.base.rounds.data_loader_output._transform": "IMLCV.base.rounds.DataLoaderOutput._transform",
+    "IMLCV.base.rounds.DataLoaderOutput._transform": "IMLCV.base.kooman.KoopmanModel._transform",
 }
 
 

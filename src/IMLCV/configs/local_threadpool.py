@@ -5,17 +5,38 @@ from parsl.executors import ThreadPoolExecutor, WorkQueueExecutor
 from parsl.executors.base import ParslExecutor
 from parsl.launchers import SingleNodeLauncher
 from parsl.providers import LocalProvider
+from parsl.launchers.launchers import Launcher
 
 
-def get_config(path_internal, ref_threads=2, default_threads=2, max_threads=10, work_queue=True):
-    py_env = """
-export MAMBA_EXE=~/projects/IMLCV/bin/micromamba
-export MAMBA_ROOT_PREFIX=~/projects/IMLCV/micromamba
-eval "$("$MAMBA_EXE" shell hook --shell bash --root-prefix "$MAMBA_ROOT_PREFIX" 2> /dev/null)"
-micromamba activate py312
-which python """
+# class SrunLauncher(Launcher):
+#     def __init__(self, debug: bool = True, overrides: str = ""):
+#         super().__init__(debug=debug)
+#         self.overrides = overrides
 
-    def _get_exec(label, num, threads):
+#     def __call__(self, command: str, tasks_per_node: int, nodes_per_block: int, script_dir: str = "") -> str:
+#         x = """set -e
+
+# srun  --nodes=1  -l {overrides}  {command}
+
+
+# """.format(
+#             nodes_per_block=nodes_per_block,
+#             command=command,
+#             overrides=self.overrides,
+#             app="",
+#         )
+#         return x
+
+
+def get_config(
+    path_internal,
+    ref_threads=2,
+    reference_blocks=4,
+    training_cores=10,
+    default_threads=2,
+    work_queue=True,
+):
+    def _get_exec(label, num, threads, srun=False):
         print(f"providing {num=} executors for {label=} with {threads=}")
 
         if not work_queue:
@@ -27,14 +48,10 @@ which python """
 
         else:
             provider = LocalProvider(
-                worker_init=f"""
-    {py_env}
-    micromamba activate py312
-    export XLA_FLAGS='--xla_force_host_platform_device_count={threads}'
-    """,
+                worker_init="",
                 cmd_timeout=1,
                 launcher=SingleNodeLauncher(),
-                max_blocks=num,
+                max_blocks=1,
             )
 
             exec = WorkQueueExecutor(
@@ -47,20 +64,22 @@ which python """
                 autolabel=False,
                 autocategory=False,
                 max_retries=1,
+                worker_executable=f"srun --cpus-per-task={threads} --ntasks={num} --threads-per-core=1 --nodes=1 work_queue_worker"
+                if srun
+                else "work_queue_worker",
             )
 
         return f"export JAX_NUM_CPU_DEVICES={threads}; ", exec
 
     com_executors: list[tuple[str, ParslExecutor]] = [
-        _get_exec("training", num=1, threads=max_threads),
+        _get_exec("training", num=1, threads=training_cores),
         _get_exec("default", num=1, threads=default_threads),
-        # _get_exec("default", num=math.floor(max_threads / 2), threads=2),
-        _get_exec("reference", num=math.floor(max_threads / ref_threads), threads=ref_threads),
+        _get_exec("reference", num=reference_blocks, threads=ref_threads, srun=True),
         (
-            "",
+            "threadpool",
             ThreadPoolExecutor(
                 label="threadpool",
-                max_threads=ref_threads,
+                max_threads=1,
                 working_dir=str(path_internal),
             ),
         ),
@@ -72,12 +91,23 @@ which python """
 
     resources = {
         "default": {"cores": default_threads},
-        "training": {"cores": max_threads},
+        "training": {"cores": training_cores},
         "reference": {"cores": ref_threads},
-        "threadpool": {"cores": default_threads},
+        "threadpool": {"cores": 1},
     }
 
     ref_comm: dict[str, str] = {}
     # resources
     # default on reference
-    return executors, [["training"], ["default"], ["reference"], ["threadpool"]], pre_commands, ref_comm, resources
+    return (
+        executors,
+        [
+            ["training"],
+            ["default"],
+            ["reference"],
+            ["threadpool"],
+        ],
+        pre_commands,
+        ref_comm,
+        resources,
+    )

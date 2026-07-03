@@ -777,6 +777,15 @@ class Bias(ABC, MyPyTreeNode):
                 ),
             )
 
+        u0_zero = jnp.ones_like(u0)
+        u0_zero -= jnp.log(jnp.sum(jnp.exp(u0_zero)))
+
+        kl_zero = jnp.sum(f(u0, jnp.zeros_like(u0_zero)))  # type: ignore
+
+        if kl_zero == 0:
+
+            print(f"{kl_zero*(boltzmann * T)/kjmol=}")
+
         kl = jnp.sum(f(u0, u1))  # type: ignore
 
         if symmetric:

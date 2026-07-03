@@ -484,6 +484,9 @@ class TransformerMAF(Transformer):
     T_scale: float = 1.0
 
     beta_timecon: float | None = None
+    tau_thermo: float | None = None
+
+    curvature_radius: float = 1.0
 
     disciminating_CVs: CV | None = None
 
@@ -497,6 +500,8 @@ class TransformerMAF(Transformer):
     batch_chunk_size: int = 16
 
     re_init: bool = True
+
+    hessian: bool = True
 
     @staticmethod
     def _transform(
@@ -533,11 +538,17 @@ class TransformerMAF(Transformer):
         macro_chunk=1000,
         chunk_size=None,
         verbose=True,
-        trans: CvTrans | None = None,
+        pass_trans: CvTrans | None = None,
     ):
         print("getting koopman")
 
         outdim = self.outdim
+
+        if pass_trans is not None:
+            print(f"applying passed transformation")
+            trans = pass_trans * self.trans
+        else:
+            trans = self.trans
 
         # def tot_w(w, rho):
         #     w_log = [(jnp.log(wi) + jnp.log(rhoi)) / self.T_scale for wi, rhoi in zip(w, rho)]
@@ -594,93 +605,102 @@ class TransformerMAF(Transformer):
         #     argmask=argmask,
         # )
 
-        trans_tot = trans
-        if self.trans is not None:
-            if trans_tot is None:
-                trans_tot = self.trans
-            else:
-                trans_tot *= self.trans
+        # trans_tot = trans
+        # if self.trans is not None:
+        #     if trans_tot is None:
+        #         trans_tot = self.trans
+        #     else:
+        #         trans_tot *= self.trans
 
-        if self.generator:
-            raise
-            km = dlo.koopman_model(
-                cv_0=x,
-                cv_t=x_t,
-                nl=dlo.nl,
-                nl_t=dlo.nl_t,
-                w=w if self.use_w else [jnp.ones_like(x) for x in w],
-                rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
-                calc_pi=True,
-                add_1=True,
-                eps_pre=self.eps_pre,
-                eps=self.eps,
-                symmetric=True,
-                trans=trans_tot,
-                verbose=True,
-                # auto_cov_threshold=0.1,
-                max_features=self.max_features,
-                max_features_pre=self.max_features_pre,
-                T_scale=self.T_scale,
-                shrink=True,
-                generator=True,
-                periodicities=self.periodicities,
-                epochs=self.epochs,
-                entropy_reg=self.entropy_reg,
-                # shrinkage_method="BC",
-            )
+        # if self.generator:
+        #     raise
+        #     km = dlo.koopman_model(
+        #         cv_0=x,
+        #         cv_t=x_t,
+        #         nl=dlo.nl,
+        #         nl_t=dlo.nl_t,
+        #         w=w if self.use_w else [jnp.ones_like(x) for x in w],
+        #         rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
+        #         chunk_size=chunk_size,
+        #         macro_chunk=macro_chunk,
+        #         calc_pi=True,
+        #         add_1=True,
+        #         eps_pre=self.eps_pre,
+        #         eps=self.eps,
+        #         symmetric=True,
+        #         trans=trans_tot,
+        #         verbose=True,
+        #         # auto_cov_threshold=0.1,
+        #         max_features=self.max_features,
+        #         max_features_pre=self.max_features_pre,
+        #         T_scale=self.T_scale,
+        #         shrink=True,
+        #         generator=True,
+        #         periodicities=self.periodicities,
+        #         epochs=self.epochs,
+        #         entropy_reg=self.entropy_reg,
+        #         # shrinkage_method="BC",
+        #     )
 
+        # else:
+        # If user did not supply beta_timecon, compute a physical default
+        # beta_timecon := k_B * T * tau_thermo (internal units)
+        if self.beta_timecon is None:
+            beta_timecon = 1 / (dlo.sti.T * boltzmann)
         else:
-            # If user did not supply beta_timecon, compute a physical default
-            # beta_timecon := k_B * T * tau_thermo (internal units)
-            if self.beta_timecon is None:
-                beta_timecon = 1 / (dlo.sti.timecon_thermo * boltzmann * dlo.sti.T) * 1e2
-            else:
-                beta_timecon = self.beta_timecon
+            beta_timecon = self.beta_timecon
 
-            km = dlo.koopman_model(
-                cv_0=x,
-                cv_t=x_t,
-                nl=dlo.nl,
-                nl_t=dlo.nl_t,
-                w=w if self.use_w else [jnp.ones_like(x) for x in w],
-                w_t=dlo._weights_t if self.use_w else [jnp.ones_like(x) for x in w],
-                rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
-                rho_t=dlo._rho_t if self.use_w else [jnp.ones_like(x) for x in w],
-                chunk_size=chunk_size,
-                macro_chunk=macro_chunk,
-                calc_pi=self.calc_pi,
+        if self.tau_thermo is not None:
+            tau_thermo = self.tau_thermo
+        else:
+            tau_thermo = dlo.sti.timecon_thermo
+
+        km = dlo.koopman_model(
+            cv_0=x,
+            cv_t=x_t,
+            nl=dlo.nl,
+            nl_t=dlo.nl_t,
+            w=w if self.use_w else [jnp.ones_like(x) for x in w],
+            w_t=dlo._weights_t if self.use_w else [jnp.ones_like(x) for x in w],
+            rho=dlo._rho if self.use_w else [jnp.ones_like(x) for x in w],
+            rho_t=dlo._rho_t if self.use_w else [jnp.ones_like(x) for x in w],
+            chunk_size=chunk_size,
+            macro_chunk=macro_chunk,
+            calc_pi=self.calc_pi,
+            add_1=self.add_1,
+            eps_pre=self.eps_pre,
+            eps=self.eps,
+            symmetric=False,
+            trans=trans,
+            verbose=True,
+            # auto_cov_threshold=0.1,
+            max_features=self.max_features,
+            max_features_pre=self.max_features_pre,
+            T_scale=self.T_scale,
+            shrink=False,
+            periodicities=self.periodicities,
+            epochs=self.epochs,
+            entropy_reg=self.entropy_reg,
+            target_smoothness=self.target_smoothness,
+            alpha_smooth=self.alpha_smooth,
+            batch_size=self.batch_size,
+            batch_chunk_size=self.batch_chunk_size,
+            init_learnable_params=self.re_init,
+            beta_timecon=beta_timecon,
+            tau_thermo=tau_thermo,
+            generator=self.generator,
+            curvature_radius=self.curvature_radius,
+            # shrinkage_method="BC",
+            hessian=self.hessian,
+        )
+
+        if self.sym:
+            km = km.weighted_model(
+                symmetric=True,
+                shrink=True,
                 add_1=self.add_1,
-                eps_pre=self.eps_pre,
-                eps=self.eps,
-                symmetric=False,
-                trans=trans_tot,
-                verbose=True,
-                # auto_cov_threshold=0.1,
-                max_features=self.max_features,
-                max_features_pre=self.max_features_pre,
-                T_scale=self.T_scale,
-                shrink=False,
-                periodicities=self.periodicities,
-                epochs=self.epochs,
-                entropy_reg=self.entropy_reg,
-                target_smoothness=self.target_smoothness,
-                alpha_smooth=self.alpha_smooth,
-                batch_size=self.batch_size,
-                batch_chunk_size=self.batch_chunk_size,
-                init_learnable_params=self.re_init,
-                beta_timecon=beta_timecon,
-                # shrinkage_method="BC",
+                # T_scale=self.T_scale,
             )
-
-            if self.sym:
-                km = km.weighted_model(
-                    symmetric=True,
-                    shrink=True,
-                    add_1=self.add_1,
-                    # T_scale=self.T_scale,
-                )
 
         # assert km.w is not None
         # w = km.w
@@ -979,6 +999,11 @@ class StandardiseTransformer(Transformer):
     global_sigma: bool = False
     remove_constant: bool = True
 
+    max_rho: float | None = 1e2
+    trans: CvTrans | None = None
+
+    learnable: bool = False
+
     def _fit(
         self,
         x: list[CV] | list[SystemParams],
@@ -989,7 +1014,7 @@ class StandardiseTransformer(Transformer):
         verbose=True,
         macro_chunk=1000,
     ) -> tuple[list[CV], list[CV] | None, CvTrans, list[jax.Array] | None, jax.Array | None]:
-        from IMLCV.base.rounds import Covariances
+        from IMLCV.base.covariances import Covariances
         from IMLCV.implementations.CV import _standerdize
 
         cov = Covariances.create(
@@ -1002,11 +1027,14 @@ class StandardiseTransformer(Transformer):
             chunk_size=chunk_size,
             macro_chunk=macro_chunk,
             only_diag=True,
+            trans_f=self.trans,
+            trans_g=self.trans,
+            generator=False,
         )
 
         mu = cov.pi_0
 
-        print(f"StandardiseTransformer: mean {cov.pi_0}, std  {cov.sigma_0}")
+        # print(f"StandardiseTransformer: mean {cov.pi_0}, std  {cov.sigma_0}  {cov.rho_gen} ")
         if self.sigma:
             if self.global_sigma:
                 sigma_0_inv = 1 / jnp.sqrt(jnp.mean(cov.sigma_0**2))
@@ -1017,33 +1045,54 @@ class StandardiseTransformer(Transformer):
         else:
             sigma_0_inv = None
 
-        if self.remove_constant:
-            const_mask = cov.sigma_0 < 1e-8
-            if jnp.any(const_mask):
-                print(f"StandardiseTransformer: removing constant dimensions {jnp.sum(const_mask)}")
-            sigma_0_inv = sigma_0_inv[~const_mask] if sigma_0_inv is not None else None
-            mu = mu[~const_mask]
+        obj = jnp.full_like(cov.sigma_0, True)
 
-        else:
-            const_mask = None
+        if self.remove_constant:
+            obj = jnp.logical_and(obj, cov.sigma_0 > 1e-8)
+
+        # if self.max_rho is not None:
+        #     obj = jnp.logical_and(obj, cov.rho_gen < self.max_rho)
+
+        # const_mask = jnp.argwhere(obj).reshape(-1)
+        # sigma_0_inv = sigma_0_inv[const_mask] if sigma_0_inv is not None else None
+        # mu = mu[const_mask]
+
+        mu = jnp.where(obj, mu, 0.0)
+        sigma_0_inv = jnp.where(obj, sigma_0_inv, 0.0)
+
+        print(
+            f"kept {jnp.sum(obj)} out of {len(cov.sigma_0)} features after standardisation mask with max_rho {self.max_rho} and remove_constant {self.remove_constant}"
+        )
 
         # create CvTrans from forward
         f_trans = CvTrans.from_cv_function(
             f=_standerdize,
             mean=mu,
             std_inv=sigma_0_inv,
-            mask=const_mask,
+            learnable_argnames=["mean", "std_inv"] if self.learnable else [],
+            # mask=const_mask,
+            # static_argnames=["mask"]
         )
 
-        x, x_t = dlo.apply_cv(
-            x=x,
-            x_t=x_t,
-            f=f_trans,
-            verbose=verbose,
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            shmap=False,
-        )
+        if self.trans is not None:
+            f_trans = self.trans * f_trans
+
+        if not self.pass_trans:
+            x, x_t = dlo.apply_cv(
+                x=x,
+                x_t=x_t,
+                nl=dlo.nl,
+                nl_t=dlo.nl_t,
+                f=f_trans,
+                verbose=verbose,
+                chunk_size=chunk_size,
+                macro_chunk=macro_chunk,
+                shmap=False,
+            )
+        else:
+            x, x_t = None, None
+
+        # print(f"{x[0]=}")
 
         # cov_after = Covariances.create(
         #     cv_0=x,  # type: ignore

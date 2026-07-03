@@ -35,9 +35,16 @@ module list
 
 
 
-#Unset memory-related SLURM environment variables to avoid conflicts
-unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
-unset SLURM_CPU_BIND
+# Unset memory-related SLURM environment variables to avoid conflicts
+# unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
+# unset SLURM_CPU_BIND
+
+
+echo "step ulimit -v: $(ulimit -v)"
+echo "step cgroup: $(cat /sys/fs/cgroup/memory.max 2>/dev/null)"
+echo "SLURM_MEM_PER_CPU=$SLURM_MEM_PER_CPU SLURM_MEM_PER_NODE=$SLURM_MEM_PER_NODE"
+echo "max_map_count: $(cat /proc/sys/vm/max_map_count)"
+
 
 srun  --nodes=1  -l {overrides} {app}  {command}
 
@@ -189,6 +196,8 @@ sleep 1
     worker_init += (
         f'export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads={threads_per_core}" \n'
     )
+
+    worker_init += f"export MALLOC_ARENA_MAX=2\n"
 
     # overrides = (
     #     f" -vv --ntasks-per-node={parsl_tasks_per_block} --cpus-per-task={threads_per_core} --cpu-bind=verbose,cores "

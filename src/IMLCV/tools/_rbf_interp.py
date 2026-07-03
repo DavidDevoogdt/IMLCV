@@ -210,7 +210,7 @@ def _build_and_solve_system(
 
     print(f"{grid_full=}")
 
-    _, J = eval_kernel_matrix(
+    _, H = eval_kernel_matrix(
         grid_full,
         y,
         metric,
@@ -222,11 +222,11 @@ def _build_and_solve_system(
 
     print(f"{epsilon=}")
 
-    J = J.cv.cv
+    H = H.cv.cv
 
-    R = jnp.einsum("nide,njde,d,e->ij", J, J, dv**2, dv**2)  # frobenius norm
+    R = jnp.einsum("nide,njde,d,e->ij", H, H, (1 / epsilon) ** 2, (1 / epsilon) ** 2)  # frobenius norm
 
-    del J
+    del H
 
     print(f"{R.shape=}")
 
@@ -237,34 +237,48 @@ def _build_and_solve_system(
         periodicities=periodicities,
     )
 
-    sigma = jnp.where(sigma < 0.1 * kjmol, 0.1 * kjmol, sigma)
-    fac = 1.0 / (sigma)
+    K = A  # kernel/design matrix K[k, i] = phi_i(q_k); symmetric when centers == data
 
-    As = jnp.einsum("ij,i->ij", A, fac)
-    Ps = jnp.einsum("ij,i->ij", P, fac)
-    ds = jnp.einsum("ij,i->ij", d, fac)
+    # data weights W = diag(1 / sigma^2)   <-- note: 1/sigma^2, not sigma^2
+    # optional clamp so one over-confident bin can't dominate:
+    # sigma = jnp.maximum(sigma, 0.1 * kjmol)
+    sigma_safe = jnp.maximum(sigma, jnp.full_like(sigma, 0.01 * kjmol))
+    w = (1.0 / sigma_safe**2).reshape(-1)  # length n_data, W is diagonal so kept as a vector
+    F = d.reshape(-1)  # free-energy targets, 1-D
 
-    rhs_top = As.T @ ds
-    rhs_bot = Ps.T @ ds
+    n_a = K.shape[1]
 
-    @jax.jit
-    def kkt_product(x):
-        # Split the vector into parts corresponding to A and P
-        v_top, v_bot = x
+    def normal_eq_operator(x):
+        a = x[:n_a]
+        b = x[n_a:]
 
-        # Compute product implicitly: (M^T @ M) @ v = M^T @ (M @ v)
-        # This keeps memory usage at O(N) instead of O(N^2)
-        res_top = As.T @ (As @ v_top) + (smoothing * R) @ v_top + As.T @ (Ps @ v_bot)
-        res_bot = Ps.T @ (As @ v_top) + Ps.T @ (Ps @ v_bot)
+        f = K @ a + P @ b  # interpolant at the data points
+        Wf = w * f  # W @ f   (elementwise, since W is diagonal)
 
-        return res_top, res_bot
+        res_a = K.T @ Wf + smoothing * (R @ a)  # K^T W (Ka + Pb) + lambda R a
+        res_b = P.T @ Wf  # P^T W (Ka + Pb)
+        return jnp.concatenate([res_a, res_b])
 
-    # Use JAX's iterative solver
-    (res_top, res_bot), _ = jax.scipy.sparse.linalg.cg(kkt_product, (rhs_top, rhs_bot))
+    # RHS = [K^T W F ; P^T W F]
+    WF = w * F
+    rhs = jnp.concatenate([K.T @ WF, P.T @ WF])
 
-    coeffs = jnp.hstack([res_top, res_bot])
+    import jax.scipy.sparse.linalg as jsl
 
-    return coeffs, As, Ps
+    # operator is symmetric PSD (the Hessian of T) -> conjugate gradients
+    x_solved, info = jsl.cg(
+        A=normal_eq_operator,
+        b=rhs,
+        tol=1e-10,
+        maxiter=1000,
+    )
+
+
+    # coeffs = jnp.vstack([res_top, res_bot])
+    print(f"{x_solved=}")
+    coeffs = x_solved.reshape((-1, 1))
+
+    return coeffs, A, P
 
 
 class RBFInterpolator(MyPyTreeNode):

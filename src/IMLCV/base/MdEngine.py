@@ -234,6 +234,27 @@ class MDEngine(MyPyTreeNode, ABC):
         save_step = self.step % self.static_trajectory_info.save_step == 0
         write_step = self.step % self.static_trajectory_info.write_step == 0
 
+        if self.step == 1:
+            str = f"{'step': ^10s}"
+            str += f"|{'cons err': ^10s}"
+            str += f"|{'e_pot[Kj/mol]': ^15s}"
+            str += f"|{'e_bias[Kj/mol]': ^15s}"
+            if P is not None:
+                str += f"|{'P[bar]': ^10s}"
+            str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
+
+            ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+            str += f"|{ss: ^13s}"
+
+            ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
+            str += f"|{ss: ^13s}"
+
+            str += f"|{'A': ^10s}"
+
+            str += f"|{' CV': ^10s}"
+            print(str, sep="")
+            print(f"{'=' * len(str)}")
+
         if screen_log or save_step or write_step:
             # print(f"{self.step=}  {screen_log=} or {save_step=} or {write_step=}")
 
@@ -250,27 +271,6 @@ class MDEngine(MyPyTreeNode, ABC):
                 A=A,
             )
 
-            if self.step == 1:
-                str = f"{'step': ^10s}"
-                str += f"|{'cons err': ^10s}"
-                str += f"|{'e_pot[Kj/mol]': ^15s}"
-                str += f"|{'e_bias[Kj/mol]': ^15s}"
-                if ti._P is not None:
-                    str += f"|{'P[bar]': ^10s}"
-                str += f"|{'T[K]': ^10s}|{'walltime[s]': ^11s}"
-
-                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                str += f"|{ss: ^13s}"
-
-                ss = "|\u2207\u2093U\u1d47|[Kj/\u212b]"
-                str += f"|{ss: ^13s}"
-
-                str += f"|{'A': ^10s}"
-
-                str += f"|{' CV': ^10s}"
-                print(str, sep="")
-                print(f"{'=' * len(str)}")
-
             if self.step % self.static_trajectory_info.screen_log == 0:
                 str = f"{self.step: >10d}"
                 assert ti._err is not None
@@ -279,15 +279,15 @@ class MDEngine(MyPyTreeNode, ABC):
                 assert ti._e_bias is not None
 
                 str += f"|{ti._err[0]: >10.4f}"
-                str += f"|{ti._e_pot[0] / kjmol: >15.8f}"
-                str += f"|{ti._e_bias[0] / kjmol: >15.8f}"
+                str += f"|{ti._e_pot[0] / kjmol: >15.2f}"
+                str += f"|{ti._e_bias[0] / kjmol: >15.2f}"
                 if ti._P is not None:
-                    str += f" {ti._P[0] / bar: >10.8f}"
+                    str += f" {ti._P[0] / bar: >10.2f}"
                 str += f" {ti._T[0]: >10.2f} {time() - self.time0: >11.2f}"
                 str += f"|{(gpos_mag / kjmol * angstrom): >13.2f}"
                 str += f"|{(gpos_bias_mag / kjmol * angstrom): >13.2f}"
 
-                str += f"|{ti._A[0]: >10.5f}"
+                str += f"|{ti._A[0]: >10.2f}"
 
                 if ti._cv is not None:
                     str += f"| {ti._cv[0, :]}"

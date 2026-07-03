@@ -9,6 +9,9 @@ from typing_extensions import (
     dataclass_transform,  # pytype: disable=not-supported-yet
 )
 
+import dataclasses
+import jax.numpy as jnp
+
 #        Data types                  #
 ######################################s
 
@@ -21,6 +24,47 @@ from functools import partial
 #         field_specifiers=(_field,),
 #         kw_only_default=True,
 #     )
+
+
+def _format(value, indent=0):
+    pad = "  " * indent
+    child_pad = "  " * (indent + 1)
+
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        lines = [f"{type(value).__name__}("]
+        for f in dataclasses.fields(value):
+            child = getattr(value, f.name)
+            lines.append(f"{child_pad}{f.name}={_format(child, indent + 1)},")
+        lines.append(f"{pad})")
+        return "\n".join(lines)
+
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        lines = ["{"]
+        for k, v in value.items():
+            lines.append(f"{child_pad}{k!r}: {_format(v, indent + 1)},")
+        lines.append(f"{pad}}}")
+        return "\n".join(lines)
+
+    if isinstance(value, (list, tuple)):
+        # treat as a leaf if it's a plain shape-like tuple of ints
+        if isinstance(value, tuple) and all(isinstance(x, int) for x in value):
+            return repr(value)
+        open_b, close_b = ("[", "]") if isinstance(value, list) else ("(", ")")
+        if not value:
+            return open_b + close_b
+        lines = [open_b]
+        for v in value:
+            lines.append(f"{child_pad}{_format(v, indent + 1)},")
+        lines.append(f"{pad}{close_b}")
+        return "\n".join(lines)
+
+    # leaf: show shape if it looks like an array, else repr
+    if hasattr(value, "shape"):
+        return f"{type(value).__name__}{tuple(value.shape)}"
+
+    return repr(value)
 
 
 @dataclass_transform(
@@ -49,6 +93,9 @@ class MyPyTreeNode:
     def replace(self: TNode, **overrides) -> TNode:
         # stub for pytype
         raise NotImplementedError
+
+    def __str__(self):
+        return _format(self)
 
 
 field = _field
@@ -79,6 +126,8 @@ def vmap_decorator(
     out_axes: Any = 0,
 ):
     def _f(*args: P.args, **kwargs: P.kwargs) -> T:
+        # print(f"vmap_decorator: in_axes={in_axes}, out_axes={out_axes}")
+
         return vmap(f, in_axes=in_axes, out_axes=out_axes)(*args, **kwargs)
 
     return _f

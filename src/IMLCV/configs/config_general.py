@@ -44,7 +44,7 @@ def config(
     singlepoint_cores=16,
     training_cores=32,
     reference_blocks=4,
-    local_ref_threads=4,
+    default_threads=2,
     training_on_gpu=False,
     reference_on_gpu=False,
     walltime_training="6:00:00",
@@ -63,7 +63,6 @@ def config(
     default_on_threads=False,
     training_on_threads=False,
     work_queue_local=True,
-    max_threads_local=10,
     gpu_kind: GpuKind = GpuKind.nvidia,
     apptainer_image_gpu: str | None = None,
     apptainer_image_cpu: str | None = None,
@@ -79,9 +78,9 @@ def config(
 
     if env == "local":
         execs, labels, precommands, ref_comm, resources = get_config_local(
-            path_internal,
-            ref_threads=local_ref_threads,
-            max_threads=max_threads_local,
+            path_internal=path_internal,
+            ref_threads=singlepoint_cores,
+            reference_blocks=reference_blocks,
             work_queue=work_queue_local,
         )
     else:
@@ -101,7 +100,7 @@ def config(
             account=account,
             executor=executor,
             default_on_threads=default_on_threads,
-            default_threads=local_ref_threads,
+            default_threads=default_threads,
             training_cores=training_cores,
             training_on_threads=training_on_threads,
             reference_blocks=reference_blocks,

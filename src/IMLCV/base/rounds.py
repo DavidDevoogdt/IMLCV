@@ -936,7 +936,13 @@ class Rounds:
         perm_bias = Bias.load(p, collective_variable=permanent_cv)
         return perm_bias
 
-    def get_bias(self, c: int | None = None, r: int | None = None, i: int | None = None) -> Bias:
+    def get_bias(
+        self,
+        c: int | None = None,
+        r: int | None = None,
+        i: int | None = None,
+        scale_bias=True,
+    ) -> Bias:
         if c is None:
             c = self.cv
 
@@ -959,9 +965,13 @@ class Rounds:
         else:
             bias_i = None
 
-        sti = self.get_static_trajectory_info(c=c, r=r)
+        if scale_bias:
+            sti = self.get_static_trajectory_info(c=c, r=r)
+            bias_scale = sti.bias_scale
+        else:
+            bias_scale = 1.0
 
-        return RoundBias.create(bias_r=bias, bias_i=bias_i, bias_scale=sti.bias_scale)
+        return RoundBias.create(bias_r=bias, bias_i=bias_i, bias_scale=bias_scale)
 
     def add_round(
         self,
@@ -970,6 +980,7 @@ class Rounds:
         mde=None,
         c: int | None = None,
         r: int | None = None,
+        bias_factor: float = 0.8,
     ):
         if c is None:
             c = self.cv
@@ -978,7 +989,9 @@ class Rounds:
             r = self.get_round(c=c) + 1
 
         if stic is None:
-            stic = self.static_trajectory_information(c=c)
+            stic = self.static_trajectory_information(c=c, r=r - 1)
+
+        stic.bias_scale = bias_factor
 
         if mde is None:
             mde = self.get_engine(c=c)
@@ -1159,7 +1172,7 @@ class Rounds:
                 print(f"WARNING: both lag_tau and lag_n are not None, using lag_tau")
 
             dt = sti.timestep * sti.save_step
-            n = int(lag_tau / dt)
+            n = round(lag_tau / dt)
             print(f"converting lag_tau {lag_tau / picosecond:.3f} ps to lag_n {n} with dt={dt / picosecond} ps")
             lag_n = n
 
@@ -1172,9 +1185,11 @@ class Rounds:
         if not time_series:
             lag_n = 0
 
-        if weight and weighing_method == "WHAM":
+        if weight and (weighing_method == "WHAM" or weighing_method == "DHAM"):
             if not get_bias_list:
                 get_bias_list = True
+
+        print(f"{get_bias_list=}")
 
         if load_weight:
             get_bias_list = False
@@ -1267,6 +1282,8 @@ class Rounds:
         pb = self.get_permanent_bias()
 
         print(f"{pb=}")
+
+        print(f"{get_bias_list=}")
 
         for cvi in cvrnds:
             # sti_c: StaticMdInfo | None = None
@@ -1421,7 +1438,8 @@ class Rounds:
                             z_array=sti_c.atomic_numbers,
                         )
 
-                        b, nn, new_nxyz, _ = Partial_decorator(
+                    if update_info is None:
+                        b, nn, np, new_nxyz, _ = Partial_decorator(
                             SystemParams._get_neighbour_list,
                             info=nl_info,
                             chunk_size=chunk_size,
@@ -1435,13 +1453,14 @@ class Rounds:
 
                         update_info = NeighbourListUpdate.create(
                             num_neighs=int(nn),  # type:ignore
+                            num_pairs=int(np),  # type:ignore
                             nxyz=new_nxyz,
                         )
 
                         print(f"initializing neighbour list with {nn=} {new_nxyz=}")
 
                     else:
-                        b, nn, new_nxyz, _ = jit_decorator(
+                        b, nn, np, new_nxyz, _ = jit_decorator(
                             SystemParams._get_neighbour_list,
                             static_argnames=[
                                 # "info",
@@ -1465,64 +1484,19 @@ class Rounds:
                         # print(f"got neighbour list with {nn=} {new_nxyz=}")
 
                         if not b:
-                            print(f"nn needs update {nn=}")
+                            print(f"nn needs update {nn=} {np=} {new_nxyz=}")
 
-                        if new_nxyz is not None:
-                            assert update_info is not None
-                            assert update_info.nxyz is not None
-                            assert update_info.num_neighs is not None
+                            update_info = NeighbourListUpdate.create(
+                                num_neighs=max(int(nn), update_info.num_neighs),  # type:ignore
+                                num_pairs=max(int(np), update_info.num_pairs),  # type:ignore
+                                nxyz=max(jnp.array(new_nxyz), jnp.array(update_info.nxyz)).tolist()
+                                if new_nxyz is not None
+                                else update_info.nxyz,  # type:ignore
+                            )
 
-                            if jnp.any(jnp.array(new_nxyz) > jnp.array([2, 2, 2])):
-                                print(f"neighbour list is too big {new_nxyz=}")
-                                continue
-
-                            if (
-                                jnp.any(jnp.array(new_nxyz) > jnp.array(update_info.nxyz))
-                                or nn > update_info.num_neighs
-                            ):
-                                print(f"updating nl with {nn=} {new_nxyz=}")
-
-                                update_info = NeighbourListUpdate.create(
-                                    num_neighs=int(nn),  # type:ignore
-                                    nxyz=new_nxyz,
-                                )
-                        else:
-                            if nn > update_info.num_neighs:
-                                print(f"updating nl with {nn=} {new_nxyz=}")
-                                update_info = NeighbourListUpdate.create(
-                                    num_neighs=int(nn),  # type:ignore
-                                    nxyz=update_info.nxyz,
-                                )
+                        #         )
 
                 n_tot = _p(".", n_tot)
-
-                # if cv0 is None:
-                #     raise
-                #     print(f"recalculating cv for {cvi=} {round_info.round=} {traj_info.num=}")
-
-                #     if colvar is None:
-                #         bias = traj_info.get_bias()
-                #         assert bias is not None
-                #         colvar = bias.collective_variable
-
-                #     assert colvar is not None
-
-                #     nlr = (
-                #         _ti.sp.get_neighbour_list(
-                #             info=NeighbourListInfo.create(
-                #                 r_cut=round_info.tic.r_cut,
-                #                 z_array=round_info.tic.atomic_numbers,
-                #             ),
-                #             chunk_size=chunk_size,
-                #         )
-                #         if round_info.tic.r_cut is not None
-                #         else None
-                #     )
-
-                #     cv0, _ = colvar.compute_cv(sp=_ti.sp, nl=nlr)
-
-                # sp_c.append(sp0)
-                # cv_c.append(cv0)
 
             print("")
 
@@ -1578,6 +1552,28 @@ class Rounds:
 
                 if weighing_method == "WHAM":
                     weight_output = dlo.wham_weight(
+                        chunk_size=chunk_size,
+                        n_max=n_max,
+                        n_max_lin=n_max_lin,
+                        verbose=verbose,
+                        samples_per_bin=samples_per_bin,
+                        min_samples_per_bin=min_samples_per_bin,
+                        macro_chunk=macro_chunk,
+                        recalc_bounds=recalc_bounds,
+                        compute_std=calculate_std,
+                        correlation_method=time_correlation_method,
+                        biases=bias_c,
+                        n_hist=n_hist,
+                    )
+
+                    if bounds is None:
+                        bounds = weight_output.bounds
+                        nbins = weight_output.n_bins
+                        nhist = weight_output.n_hist
+
+                        print(f"setting bounds to {bounds=} {nhist=}")
+                elif weighing_method == "DHAM":
+                    weight_output = dlo.dham_weight(
                         chunk_size=chunk_size,
                         n_max=n_max,
                         n_max_lin=n_max_lin,
@@ -2316,7 +2312,8 @@ class Rounds:
                         ti_t_n.w = interp(out_reweights[n][idx_t], out_reweights[n][idx_t_p], percentage)
                         ti_t_n.rho = interp(out_rhos[n][idx_t], out_rhos[n][idx_t_p], percentage)
 
-                        ti_t_n.w_dyn = jnp.exp(interp(ti_t_n.A[idx_t], ti_t_n.A[idx_t_p], percentage) - ti_n.A)
+                        if ti_t_n.A is not None and ti_n.A is not None:
+                            ti_t_n.w_dyn = jnp.exp(interp(ti_t_n.A[idx_t], ti_t_n.A[idx_t_p], percentage) - ti_n.A)
 
                     ti_n.w_dyn = ti_t_n.w_dyn
                     ti_n.w_t = ti_t_n.w
@@ -2344,7 +2341,7 @@ class Rounds:
                         f"sizes do not match {ti_n.positions_t.shape[0]=} {num_expected=}"
                     )
 
-                out_ti.append(ti_n)
+                out_ti.append(ti_n.to_full() if isinstance(ti_n, EagerTrajectoryInfo) else ti_n)
 
                 if get_bias_list:
                     assert out_biases is not None
@@ -2894,22 +2891,44 @@ class Rounds:
 
         return StaticMdInfo.load(self.path(c=c, r=r) / "static_trajectory_info.h5")
 
-    # def get_bias(
-    #     self,
-    #     c: int | None = None,
-    #     r: int | None = None,
-    #     i: int | None = None,
-    # ) -> Bias:
-    #     if c is None:
-    #         c = self.cv
+    def update_static_trajectory_info(
+        self,
+        c: int | None = None,
+        r: int | None = None,
+        i: int | None = None,
+        **kwargs,
+    ):
+        if c is None:
+            c = self.cv
 
-    #     if r is None:
-    #         r = self.get_round(c=c)
+        if r is None:
+            r = self.get_round(c=c)
 
-    #     bn = self._name_bias(c=c, r=r, i=i)
-    #     assert bn is not None
+        p = self.path(c=c, r=r) / "static_trajectory_info.h5"
 
-    #     return Bias.load(self.full_path(bn), root=self.folder)
+        stic = StaticMdInfo.load(p)
+
+        stic_dict = stic.__dict__
+
+        for k, v in kwargs.items():
+            if k in stic_dict:
+                setattr(stic, k, v)
+            else:
+                print(f"warning: key {k} not in StaticMdInfo, skipping")
+
+        stic.save(p)
+
+    def set_bias_factor(
+        self,
+        bias_factor: float,
+        c: int | None = None,
+        r: int | None = None,
+    ):
+        self.update_static_trajectory_info(
+            c=c,
+            r=r,
+            bias_scale=bias_factor,
+        )
 
     def get_engine(self, c: int | None = None, r: int | None = None, i: int | None = None) -> MDEngine:
         if c is None:
@@ -3642,7 +3661,7 @@ class Rounds:
         test=False,
         max_bias=None,
         transform_bias=True,
-        samples_per_bin=5,
+        samples_per_bin: int = 5,
         min_samples_per_bin=1,
         percentile=1e-1,
         n_max=1e5,

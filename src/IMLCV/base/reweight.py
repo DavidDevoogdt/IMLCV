@@ -18,170 +18,208 @@ import numpy as np
 from IMLCV.base.decoratros import jit_decorator, vmap_decorator
 
 
-def _solve_wham(log_U_ik_nl, H_ik_nl, verbose=False, compute_std=False):
-    # print(f"{tau_i_nl=}")
+def _s(*x: Array):
+    return jnp.nansum(jnp.array(x))
 
-    def log_sum_exp_safe(*x: Array, min_val=None):
-        _x: Array = jnp.nansum(jnp.stack(x, axis=0), axis=0)  # type:ignore
 
-        x_max = jnp.nanmax(_x)
+def safe_log(x: Array) -> Array:
+    """log(x) that returns -inf (with a *zero* gradient, not nan) for x <= 0.
 
-        x_max = jnp.where(jnp.isfinite(x_max), x_max, 0.0)
+    jnp.log(0) -> -inf with an inf/nan gradient; differentiating through it
+    (which happens here inside LBFGS / implicit-diff) poisons the optimizer.
+    The double-where keeps the backward pass finite.
+    """
+    pos = x > 0
+    return jnp.where(pos, jnp.log(jnp.where(pos, x, 1.0)), -jnp.inf)
 
-        out = jnp.log(jnp.nansum(jnp.exp(_x - x_max))) + x_max
 
-        if min_val is not None:
-            print(f"using {min_val=}")
-            out: Array = jnp.where(out < min_val, min_val, out)  # type:ignore
+def log_sum_exp_safe(*x: Array, min_val=None):
+    _x: Array = jnp.nansum(jnp.stack(x, axis=0), axis=0)  # type:ignore
 
-        return out + 1e-10
+    # nansum can still produce nan from (+inf) + (-inf) when a collapsed bin
+    # meets a masked entry. Treat that as an empty (-inf) contribution.
+    _x = jnp.where(jnp.isnan(_x), -jnp.inf, _x)
 
-    def get_N_H(mask_ik: jax.Array, H_ik: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
-        # print(f"{mask_i.shape=}  {H_ik.shape=} ")
+    x_max = jnp.nanmax(_x)
+    finite_max = jnp.isfinite(x_max)
+    x_max_s = jnp.where(finite_max, x_max, 0.0)
 
-        _H_ik = jnp.where(mask_ik, H_ik, 0)  # type:ignore
+    # exclude non-finite entries from the sum instead of relying on nansum
+    sumexp = jnp.sum(jnp.where(jnp.isfinite(_x), jnp.exp(_x - x_max_s), 0.0))
 
-        _H_k = jnp.sum(_H_ik, axis=(0))
-        _N_i = jnp.sum(_H_ik, axis=(1))
+    # if every contribution was -inf (empty), return -inf cleanly (no nan)
+    out: Array = jnp.where(finite_max, jnp.log(sumexp) + x_max_s, -jnp.inf)  # type:ignore
 
-        return _N_i, _H_k, _H_ik
+    if min_val is not None:
+        out = jnp.where(out < min_val, min_val, out)  # type:ignore
 
-    def get_F_i(F_k: jax.Array, mask_ik: jax.Array, log_x: tuple[Array, Array]):
-        log_U_ik, _ = log_x
+    return out
 
-        log_U_ik = jnp.where(mask_ik, log_U_ik, jnp.inf)
 
-        F_i = -vmap_decorator(log_sum_exp_safe, in_axes=(None, 0))(-F_k, -log_U_ik)
+def get_N_H(mask_ik: jax.Array, H_ik: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+    # print(f"{mask_i.shape=}  {H_ik.shape=} ")
 
-        return F_i
+    _H_ik = jnp.where(mask_ik, H_ik, 0)  # type:ignore
 
-    def norm_F_k(F_k: Array):
-        # mask_k = jnp.isfinite(F_k)
+    _H_k = jnp.sum(_H_ik, axis=(0))
+    _N_i = jnp.sum(_H_ik, axis=(1))
 
-        F_k = jnp.where(jnp.isfinite(F_k), F_k, jnp.inf)
+    return _N_i, _H_k, _H_ik
 
-        F_k_norm = log_sum_exp_safe(-F_k)
 
-        F_k += F_k_norm
+def get_F_i(F_k: jax.Array, mask_ik: jax.Array, log_x: tuple[Array, Array]):
+    log_U_ik, _ = log_x
 
-        return F_k
+    log_U_ik = jnp.where(mask_ik, log_U_ik, jnp.inf)
 
-    def get_F_k(
-        F_i: Array,
-        mask_ik: Array,
-        log_x: tuple[Array, Array],
-    ):
-        log_U_ik, H_ik = log_x
+    F_i = -vmap_decorator(log_sum_exp_safe, in_axes=(None, 0))(-F_k, -log_U_ik)
 
-        # mask_i = jnp.isfinite(F_i)
+    return F_i
 
+
+def norm_F_k(F_k: Array, max_spread: float = 700.0):
+    # mask_k = jnp.isfinite(F_k)
+
+    finite = jnp.isfinite(F_k)
+    F_k = jnp.where(finite, F_k, jnp.inf)
+
+    F_k_norm = log_sum_exp_safe(-F_k)
+
+    F_k += F_k_norm
+
+    return F_k
+
+
+def get_F_k(
+    F_i: Array,
+    mask_ik: Array,
+    log_x: tuple[Array, Array],
+    overlap_logU_cap: float | None = None,
+):
+    log_U_ik, H_ik = log_x
+
+    # mask_i = jnp.isfinite(F_i)
+
+    N_i, H_k, H_ik = get_N_H(mask_ik, H_ik)
+
+    if overlap_logU_cap is not None:
+        # only keep samles wihtin 30 kT of bias minimum.
+        logU_min_i = jnp.min(jnp.where(mask_ik, log_U_ik, jnp.inf), axis=1, keepdims=True)
+        excess_ik = log_U_ik - logU_min_i  # excess bias per (i, k)
+        min_excess_k = jnp.min(jnp.where(mask_ik, excess_ik, jnp.inf), axis=0)
+        supported_k = min_excess_k < overlap_logU_cap  # reached by some window within cap
+        mask_ik = jnp.logical_and(mask_ik, supported_k[None, :])
         N_i, H_k, H_ik = get_N_H(mask_ik, H_ik)
 
-        def _s(*x: Array):
-            return jnp.nansum(jnp.array(x))
-
-        # odds of using sample k
-        log_ps_ik = vmap_decorator(
-            vmap_decorator(
-                _s,
-                in_axes=(None, 0, None, 0),
-            ),  # k
-            in_axes=(0, 0, 0, None),
-        )(
-            # -jnp.log(H_ik),
-            jnp.log(N_i),
+    # odds of using sample k
+    log_ps_ik = vmap_decorator(
+        vmap_decorator(
+            _s,
+            in_axes=(None, 0, None, 0),
+        ),  # k
+        in_axes=(0, 0, 0, None),
+    )(
+        # -jnp.log(H_ik),
+        safe_log(N_i),
+        -log_U_ik,
+        +F_i,
+        -vmap_decorator(log_sum_exp_safe, in_axes=(None, None, 1))(
+            safe_log(N_i),
+            F_i,
             -log_U_ik,
-            +F_i,
-            -vmap_decorator(log_sum_exp_safe, in_axes=(None, None, 1))(
-                jnp.log(N_i),
-                F_i,
-                -log_U_ik,
-            ),
-        )
+        ),
+    )
 
-        # log_rho_ik = jnp.where(log_rho_ik < -10 * jnp.log(10), -jnp.inf, log_rho_ik)
+    # log_rho_ik = jnp.where(log_rho_ik < -10 * jnp.log(10), -jnp.inf, log_rho_ik)
 
-        log_w_ik = vmap_decorator(
-            vmap_decorator(
-                _s,
-                in_axes=(0, None),
-            ),  # k
-            in_axes=(0, 0),  # i
-        )(
-            log_U_ik,
-            -F_i,
-        )
+    log_w_ik = vmap_decorator(
+        vmap_decorator(
+            _s,
+            in_axes=(0, None),
+        ),  # k
+        in_axes=(0, 0),  # i
+    )(
+        log_U_ik,
+        -F_i,
+    )
 
-        log_dens_ik = jax.vmap(jnp.add, in_axes=(0, 0))(
-            jnp.log(H_ik),
-            -jnp.log(N_i),
-        )
+    log_dens_ik = jax.vmap(jnp.add, in_axes=(0, 0))(
+        safe_log(H_ik),
+        -safe_log(N_i),
+    )
 
-        mask_ik = jnp.logical_and(
-            mask_ik,
-            jnp.logical_and(jnp.isfinite(log_ps_ik), jnp.isfinite(log_w_ik)),
-        )
+    mask_ik = jnp.logical_and(
+        mask_ik,
+        jnp.logical_and(jnp.isfinite(log_ps_ik), jnp.isfinite(log_w_ik)),
+    )
 
-        # mask_ik = jnp.logical_and(
-        #     mask_ik,
-        #     jnp.logical_and(
-        #         jnp.isfinite(log_ps_ik),
-        #         log_ps_ik > jnp.log(1e-10),
-        #     ),
-        # )
+    # mask_ik = jnp.logical_and(
+    #     mask_ik,
+    #     jnp.logical_and(
+    #         jnp.isfinite(log_ps_ik),
+    #         log_ps_ik > jnp.log(1e-10),
+    #     ),
+    # )
 
-        log_ps_ik = jnp.where(mask_ik, log_ps_ik, -jnp.inf)
-        log_w_ik = jnp.where(mask_ik, log_w_ik, -jnp.inf)
-        log_dens_ik = jnp.where(mask_ik, log_dens_ik, -jnp.inf)
+    log_ps_ik = jnp.where(mask_ik, log_ps_ik, -jnp.inf)
+    log_w_ik = jnp.where(mask_ik, log_w_ik, -jnp.inf)
+    log_dens_ik = jnp.where(mask_ik, log_dens_ik, -jnp.inf)
 
-        log_ps_ik = jnp.where(jnp.isfinite(log_ps_ik), log_ps_ik, -jnp.inf)
-        log_w_ik = jnp.where(jnp.isfinite(log_w_ik), log_w_ik, -jnp.inf)
-        log_dens_ik = jnp.where(jnp.isfinite(log_dens_ik), log_dens_ik, -jnp.inf)
+    log_ps_ik = jnp.where(jnp.isfinite(log_ps_ik), log_ps_ik, -jnp.inf)
+    log_w_ik = jnp.where(jnp.isfinite(log_w_ik), log_w_ik, -jnp.inf)
+    log_dens_ik = jnp.where(jnp.isfinite(log_dens_ik), log_dens_ik, -jnp.inf)
 
-        F_k = -vmap_decorator(log_sum_exp_safe, in_axes=(1, 1, 1))(
-            log_dens_ik,
-            log_w_ik,
-            log_ps_ik,
-        )  # sum over i
+    F_k = -vmap_decorator(log_sum_exp_safe, in_axes=(1, 1, 1))(
+        log_dens_ik,
+        log_w_ik,
+        log_ps_ik,
+    )  # sum over i
 
-        F_k = jnp.where(jnp.isfinite(F_k), F_k, -jnp.inf)
+    F_k = jnp.where(jnp.isfinite(F_k), F_k, -jnp.inf)
 
-        F_k = norm_F_k(F_k)
-        return F_k, (mask_ik, log_dens_ik, log_w_ik, log_ps_ik)
+    F_k = norm_F_k(F_k)
+    return F_k, (mask_ik, log_dens_ik, log_w_ik, log_ps_ik)
 
-    @jit_decorator
-    def T(x: tuple[Array, Array], log_x: tuple[Array, Array]):
-        F_k, mask_ik = x
-        mask_ik = jnp.where(mask_ik == 1.0, True, False)
-        # F_k = -jnp.log(a_k)/
 
-        F_i = get_F_i(F_k, mask_ik, log_x)
-        F_k, (mask_ik, log_dens_ik, log_w_ik, log_ps_ik) = get_F_k(F_i, mask_ik, log_x)
+@jit_decorator
+def T(x: tuple[Array, Array], log_x: tuple[Array, Array]):
+    F_k, mask_ik = x
+    mask_ik = jnp.where(mask_ik == 1.0, True, False)
+    # F_k = -jnp.log(a_k)/
 
-        return (F_k, jnp.where(mask_ik, 1.0, 0.0)), (F_i, log_w_ik, log_ps_ik, log_dens_ik)
+    F_i = get_F_i(F_k, mask_ik, log_x)
+    F_k, (mask_ik, log_dens_ik, log_w_ik, log_ps_ik) = get_F_k(F_i, mask_ik, log_x)
 
-    @jit_decorator
-    def norm(x: tuple[Array, Array], log_x: tuple[Array, Array]):
-        F_k, mask_ik = x
-        (F_k_p, _), _ = T((F_k, mask_ik), log_x)
+    return (F_k, jnp.where(mask_ik, 1.0, 0.0)), (F_i, log_w_ik, log_ps_ik, log_dens_ik)
 
-        a_k = jnp.exp(-F_k)
-        a_k_p = jnp.exp(-F_k_p)
 
-        return 0.5 * jnp.sum((a_k - a_k_p) ** 2)
+@jit_decorator
+def norm(x: tuple[Array, Array], log_x: tuple[Array, Array]):
+    F_k, mask_ik = x
+    (F_k_p, _), _ = T((F_k, mask_ik), log_x)
 
-    @jit_decorator
-    def kl_div(x: tuple[Array, Array], log_x):
-        F_k, mask_ik = x
-        (F_k_p, _), _ = T(x, log_x)
+    a_k = jnp.exp(-F_k)
+    a_k_p = jnp.exp(-F_k_p)
 
-        print("inside kl div")
+    return 0.5 * jnp.sum((a_k - a_k_p) ** 2)
 
-        a_k = jnp.exp(-F_k)
 
-        kl_div_k = a_k * (-F_k + F_k_p)
+@jit_decorator
+def kl_div(x: tuple[Array, Array], log_x):
+    F_k, mask_ik = x
+    (F_k_p, _), _ = T(x, log_x)
 
-        return kl_div_k  # , jnp.sum(kl_div_k)
+    print("inside kl div")
+
+    a_k = jnp.exp(-F_k)
+
+    kl_div_k = a_k * (-F_k + F_k_p)
+
+    return kl_div_k  # , jnp.sum(kl_div_k)
+
+
+def solve_wham(log_U_ik_nl, H_ik_nl, verbose=False, compute_std=False):
+    # print(f"{tau_i_nl=}")
 
     import jaxopt
 
@@ -200,13 +238,14 @@ def _solve_wham(log_U_ik_nl, H_ik_nl, verbose=False, compute_std=False):
         # F_i -= jnp.min(F_i)
 
         loss = jnp.sum(N_i * F_i) - jnp.sum(
-            H_k * jax.vmap(log_sum_exp_safe, in_axes=(None, None, 1))(jnp.log(N_i), F_i, -log_U_ik_nl)
+            H_k * jax.vmap(log_sum_exp_safe, in_axes=(None, None, 1))(safe_log(N_i), F_i, -log_U_ik_nl)
         )
 
         # F_i+C is also a solution for any C, so we add a small regularization to fix the scale
         # reg = 1e-10 * jnp.sum(F_i**2) / F_i.shape[0]
+        reg = 1e-3 * (jnp.sum(F_i)) ** 2
 
-        return -loss  # + reg
+        return -loss + reg
 
     if loss_f:
         solver = jaxopt.LBFGS(
@@ -336,8 +375,6 @@ def _solve_wham(log_U_ik_nl, H_ik_nl, verbose=False, compute_std=False):
 
         if not jnp.all(mask_k):
             print(f"WARNING: some bins have no valid samples {jnp.argwhere(jnp.logical_not(mask_k))=}")
-
-        # see thermolib derivation
 
         print(f"test: {nk=} {ni=}")
 
@@ -484,301 +521,133 @@ def _solve_wham(log_U_ik_nl, H_ik_nl, verbose=False, compute_std=False):
     return log_w_ik_nl, log_ps_ik_nl, F_i_nl, log_dens_ik_nl, mask_ik_nl, F_k_nl, sigma_Fk
 
 
-def _norm_log_vec_masked(log_v: Array, mask: Array) -> Array:
-    """Row-normalise a log-probability vector over valid (mask=True) entries."""
-    log_v = jnp.where(mask, log_v, -jnp.inf)
-    log_Z = jax.scipy.special.logsumexp(log_v)
-    return jnp.where(mask, log_v - log_Z, -jnp.inf)
-
-
-class DHAMSparseResult(NamedTuple):
-    F_k: Array  # (n_bins,)              unbiased free energies
-    pi_k: Array  # (n_bins,)              unbiased stationary distribution
-    log_T_kn: Array  # (n_bins, n_neigh_max)  log transition probs (sparse)
-    neigh_kn: Array  # (n_bins, n_neigh_max)  neighbor bin indices, -1=pad
-    log_w_ik: Array  # (n_traj, n_bins)       reweighting log-weights
-    #   same semantics as WHAM log_w_ik_nl
-    converged: bool
-    n_iter: int
-    final_loss: float
-
-
-def _dham_build_sparse_transitions(
-    dtraj_list: list[Array],  # discrete trajectories, one per window
-    window_ids: list[int],  # window index per trajectory
-    n_windows: int,
-    n_bins: int,
-    n_neigh_max: int,
-    lagtime: int = 1,
-) -> tuple[Array, Array]:
+def solve_dham(
+    T_il: jax.Array,  # (n_sims, max_nn_trans) N_ij^alpha
+    unique_pairs_ikt: jax.Array,  # (n_sims, max_nn_trans, 2) [from, to] indices, -1 for padding
+    log_U_ik: jax.Array,  # (n_sims, n_states) Bias potentials beta * u_i^alpha
+    max_iter: int = 5000,
+    tol: float = 1e-8,
+):
     """
-    Build sparse transition arrays from discrete trajectories.
-
-    Neighbors are chosen as the top-n_neigh_max most visited destinations
-    pooled over all windows. This ensures the neighbor set is shared between
-    C_ikn and T_kn.
-
-    Returns
-    -------
-    neigh_kn : (n_bins, n_neigh_max) int32
-        Destination bin index for each source bin k and neighbor slot n.
-        Padded with -1 where fewer than n_neigh_max neighbors exist.
-    C_ikn : (n_windows, n_bins, n_neigh_max) float32
-        Transition counts. C_ikn[i, k, n] = count of transitions from bin k
-        to bin neigh_kn[k, n] in window i.
+    DHAM solver for trajectory-specific counts with padding.
+    Derived from the Likelihood in Equation 6 of image_3a3392.png.
     """
-    # ── pass 1: accumulate raw counts per (window, src, dst) ─────────────────
-    # counts_k[k] = {dst: total_count_pooled_over_windows}
-    counts_pooled: list[dict[int, int]] = [defaultdict(int) for _ in range(n_bins)]
-    # counts_ik[i][k] = {dst: count}
-    counts_ik: list[list[dict[int, int]]] = [[defaultdict(int) for _ in range(n_bins)] for _ in range(n_windows)]
 
-    for dtraj, win_id in zip(dtraj_list, window_ids):
-        arr = jnp.asarray(dtraj, dtype=jnp.int32)
-        src = arr[:-lagtime]
-        dst = arr[lagtime:]
-        valid = (src >= 0) & (src < n_bins) & (dst >= 0) & (dst < n_bins)
-        for s, d in zip(src[valid], dst[valid]):
-            counts_pooled[s][d] += 1
-            counts_ik[win_id][s][d] += 1
+    print(f"{T_il=} {unique_pairs_ikt.shape}")
 
-    # ── pass 2: select top-n_neigh_max neighbors per source bin ──────────────
-    neigh_kn = jnp.full((n_bins, n_neigh_max), -1, dtype=jnp.int32)
+    n_sims, max_nn_trans, _ = unique_pairs_ikt.shape
+    n_states = log_U_ik.shape[1]
 
-    for k in range(n_bins):
-        neighbors = counts_pooled[k]
-        if not neighbors:
-            continue
-        top = sorted(neighbors.keys(), key=lambda d: -neighbors[d])[:n_neigh_max]
-        for n, dst in enumerate(top):
-            neigh_kn[k, n] = dst
+    # print(f"DHAM: n_sims={n_sims}, max_nn_trans={max_nn_trans}, n_states={n_states}")
+    # --- 1. Precompute Constants & Masks ---
+    # mask_trans = unique_pairs_ikt[:, :, 0] != -1
+    # from_idx = jnp.where(mask_trans, unique_pairs_ikt[:, :, 0], 0)
+    # to_idx = jnp.where(mask_trans, unique_pairs_ikt[:, :, 1], 0)
 
-    # ── pass 3: fill C_ikn using the fixed neighbor slots ────────────────────
-    # build reverse lookup: for each source bin k, dst → slot n
-    dst_to_slot: list[dict[int, int]] = [{} for _ in range(n_bins)]
-    for k in range(n_bins):
-        for n in range(n_neigh_max):
-            d = neigh_kn[k, n]
-            if d >= 0:
-                dst_to_slot[k][d] = n
+    from_idx = unique_pairs_ikt[:, :, 0]
+    to_idx = unique_pairs_ikt[:, :, 1]
 
-    C_ikn = jnp.zeros((n_windows, n_bins, n_neigh_max), dtype=jnp.float32)
-    for i in range(n_windows):
-        for k in range(n_bins):
-            for dst, cnt in counts_ik[i][k].items():
-                slot = dst_to_slot[k].get(dst, None)
-                if slot is not None:
-                    C_ikn[i, k, slot] += cnt
-                # transitions to non-neighbor bins are dropped (should be rare
-                # if n_neigh_max is large enough — check with diagnostics below)
+    # N_ij^alpha (Observed counts)
+    N_ij_alpha = T_il
 
-    return neigh_kn, C_ikn
+    # N_ji^alpha (Reverse counts for symmetry)
+    # Note: In a pair-based setup, we treat the pair (i,j) and (j,i) together.
+    # If your data only provides one direction, you'd need to ensure C_ij includes both.
+    # For Equation 7: C_ij^alpha = N_ij^alpha + N_ji^alpha
+    # We'll assume the input unique_pairs contains the directed transitions.
 
+    # Residence times t_i^alpha (sum of outgoing counts)
+    sim_range = jnp.arange(n_sims)[:, jnp.newaxis]
 
-def _dham_neighbor_diagnostics(
-    dtraj_list: list[Array],
-    window_ids: list[int],
-    n_windows: int,
-    n_bins: int,
-    lagtime: int = 1,
-) -> None:
-    """
-    Print statistics on the number of distinct neighbors per source bin.
-    Use this to choose n_neigh_max before building the full sparse structure.
-    """
-    counts_pooled: list[dict[int, int]] = [defaultdict(int) for _ in range(n_bins)]
-    for dtraj, win_id in zip(dtraj_list, window_ids):
-        arr = jnp.asarray(dtraj, dtype=jnp.int32)
-        src = arr[:-lagtime]
-        dst = arr[lagtime:]
-        valid = (src >= 0) & (src < n_bins) & (dst >= 0) & (dst < n_bins)
-        for s, d in zip(src[valid], dst[valid]):
-            counts_pooled[s][d] += 1
+    t_alpha_i = jnp.zeros((n_sims, n_states)).at[sim_range, from_idx].add(N_ij_alpha)
 
-    n_neigh = jnp.array([len(counts_pooled[k]) for k in range(n_bins)])
-    n_neigh = n_neigh[n_neigh > 0]  # only visited bins
+    print(f"{unique_pairs_ikt=}")
 
-    print(f"Neighbor count statistics over visited bins:")
-    print(f"  mean:   {n_neigh.mean():.1f}")
-    print(f"  median: {jnp.median(n_neigh):.1f}")
-    print(f"  90th %: {jnp.percentile(n_neigh, 90):.1f}")
-    print(f"  99th %: {jnp.percentile(n_neigh, 99):.1f}")
-    print(f"  max:    {n_neigh.max()}")
-    print(f"Suggested n_neigh_max: {int(jnp.percentile(n_neigh, 99)) + 2}")
+    mask_l = jnp.logical_not(jnp.logical_or(from_idx == -1, to_idx == -1))
+    mask_l = jnp.logical_and(mask_l, from_idx != to_idx)  # Exclude self-transitions if they are not valid
+    mask_k = jnp.full((n_states,), True)
 
+    print(f"Initial mask_l sum: {jnp.sum(mask_l)} {jnp.sum(~mask_l)}")
 
-def _dham_solve_dham_sparse(
-    log_U_ik: Array,  # (n_traj, n_bins)
-    H_ik: Array,  # (n_traj, n_bins)  stationary counts
-    C_ikn: Array,  # (n_traj, n_bins, n_neigh_max) transition counts
-    neigh_kn: Array,  # (n_bins, n_neigh_max) destination bin indices
-    *,
-    maxiter: int = 5000,
-    tol: float = 1e-9,
-    verbose: bool = False,
-) -> DHAMSparseResult:
-    """
-    Solve DHAM with sparse (n_bins, n_neigh_max) storage for both C and T.
+    while True:
+        N_ij_alpha_valid = jnp.where(mask_l, N_ij_alpha, 0.0)
 
-    Parameters
-    ----------
-    log_U_ik:
-        Log bias factor. Same sign convention as WHAM:
-            log_U_ik[i, k] = -beta * U_i(x_k)
-        Unvisited bins in window i: set to -inf (or very large negative).
-    H_ik:
-        Stationary histogram counts per window per bin (same as WHAM).
-    C_ikn:
-        Sparse transition counts. C_ikn[i, k, n] = count of transitions
-        from bin k to bin neigh_kn[k, n] in window i.
-    neigh_kn:
-        Neighbor index array from build_sparse_transitions. -1 = padding.
-    """
-    n_traj, n_bins = H_ik.shape
-    _, _, n_neigh_max = C_ikn.shape
+        # Total incoming counts to state k: Sum_{alpha, i} N_ik^alpha
+        total_incoming_k = jnp.zeros(n_states).at[to_idx].add(N_ij_alpha_valid)
+        total_outgoing_k = jnp.zeros(n_states).at[from_idx].add(N_ij_alpha_valid)
 
-    neigh_kn = jnp.asarray(neigh_kn, dtype=jnp.int32)
-    C_ikn = jnp.asarray(C_ikn, dtype=jnp.float32)
-    log_U_ik = jnp.asarray(log_U_ik, dtype=jnp.float32)
-    H_ik = jnp.asarray(H_ik, dtype=jnp.float32)
+        if (total_incoming_k == 0).any() or (total_outgoing_k == 0).any():
+            print(f"WARNING: Some states have zero incoming or outgoing counts. Iteratively refining masks.")
+        else:
+            break
 
-    # ── masks ─────────────────────────────────────────────────────────────────
-    mask_ik = H_ik > 0  # (n_traj, n_bins)
-    mask_k = jnp.any(mask_ik, axis=0)  # (n_bins,)
-    mask_kn = neigh_kn >= 0  # (n_bins, n_neigh_max)
+        mask_k = jnp.logical_and(total_incoming_k > 0, total_outgoing_k > 0)
+        mask_l = mask_l & mask_k[from_idx] & mask_k[to_idx]
 
-    # safe neighbor indices for gather (replace -1 with 0 — masked out later)
-    neigh_safe = jnp.where(mask_kn, neigh_kn, 0)  # (n_bins, n_neigh_max)
+    print(f"{total_incoming_k=} {total_outgoing_k=}")
 
-    log_U_ik = jnp.where(mask_ik, log_U_ik, -500.0)
+    # Precompute bias factors: B_i^alpha = t_i^alpha * exp(beta * u_i^alpha)
+    log_B_alpha_ik = jnp.log(t_alpha_i + 1e-12) + log_U_ik
+    log_B_alpha_ik = jnp.where(mask_k, log_B_alpha_ik, -1e10)
+    log_B_alpha_ik = jnp.where(jnp.isfinite(log_B_alpha_ik), log_B_alpha_ik, -1e10)
 
-    # ── parameterisation ──────────────────────────────────────────────────────
-    # Free parameters:
-    #   log_pi_raw : (n_bins,)              — unnormalised log stationary dist
-    #   log_T_raw  : (n_bins, n_neigh_max)  — unnormalised log transition probs
-    #
-    # Both are normalised inside the loss.
+    # # --- 2. Fixed-Point Iteration (Pair-Based) ---
 
-    n_params_pi = n_bins
-    n_params_T = n_bins * n_neigh_max
+    def body_fun(p):
+        # 1. Map current p to transitions (only for valid states)
+        # Using 1e-12 to prevent division by zero in x_ij calculation
+        p_i = p[from_idx]
+        p_j = p[to_idx]
 
-    def unpack(theta: Array):
-        log_pi_raw = theta[:n_params_pi]
-        log_T_raw = theta[n_params_pi:].reshape(n_bins, n_neigh_max)
+        # 2. Bias factors B = t_i * exp(u_i)
+        # We use exp(log_B) here; if log_B is very large, consider log-space logic
+        B_i = jnp.exp(log_B_alpha_ik[sim_range, from_idx])
+        B_j = jnp.exp(log_B_alpha_ik[sim_range, to_idx])
 
-        # normalise π over valid bins
-        log_pi_k = _norm_log_vec_masked(log_pi_raw, mask_k)  # (n_bins,)
+        # 3. Equation 7: Calculate local flux x_ij^alpha
+        # denom = B_i/p_i + B_j/p_j
+        denom_x = (B_i / (p_i + 1e-12)) + (B_j / (p_j + 1e-12))
 
-        # row-normalise T over valid neighbor slots
-        log_T_kn = jax.vmap(_norm_log_vec_masked)(log_T_raw, mask_kn)  # (n_bins, n_neigh_max)
+        # Only calculate x for valid transitions
+        x_ij_alpha = jnp.where(mask_l, N_ij_alpha / (denom_x + 1e-12), 0.0)
 
-        return log_pi_k, log_T_kn
+        # 4. Equation 8: p_k update (Numerator)
+        # B_k for the target state
+        B_k = jnp.exp(log_B_alpha_ik[sim_range, to_idx])
+        term = x_ij_alpha * B_k
 
-    # ── negative log-likelihood (sparse) ──────────────────────────────────────
+        # Sum up contributions to each state k
+        numerator_k = jnp.zeros(n_states).at[to_idx].add(term)
 
-    @jax.jit
-    def neg_log_likelihood(theta: Array) -> Array:
-        log_pi_k, log_T_kn = unpack(theta)
+        # 5. Finalize p_new
+        # If state is masked, set to 0. Otherwise, normalize by total incoming flux.
+        p_new = jnp.where(mask_k, numerator_k / (total_incoming_k + 1e-12), 0.0)
 
-        # log Z_i = log Σ_k π_k · exp(log_U_ik[i,k])   shape: (n_traj,)
-        log_Z_i = jax.scipy.special.logsumexp(log_pi_k[None, :] + log_U_ik, axis=1)
+        # Re-normalize to 1.0 across the active set
+        return p_new / (jnp.sum(p_new) + 1e-12)
 
-        # gather log T for each (src=k, dst=neigh_kn[k,n])
-        # log_T_kn[k, n] is already the right value — no gather needed for T
-        # We need log_pi and log_U at the source bin k:
-        #   shape broadcast: (n_traj, n_bins, n_neigh_max)
+    # --- 3. Solver Execution ---
+    init_p = jnp.ones(n_states) / n_states
 
-        log_p_ikn = (
-            log_pi_k[None, :, None]  # (1, n_bins, 1)   π at source k
-            + log_U_ik[:, :, None]  # (n_traj, n_bins, 1) bias at k
-            + log_T_kn[None, :, :]  # (1, n_bins, n_neigh_max) T_{k,n}
-            - log_Z_i[:, None, None]  # (n_traj, 1, 1)   normalisation
-        )
+    def cond_fun(state):
+        p_prev, p_curr, i = state
+        return (i < max_iter) & (jnp.max(jnp.abs(p_curr - p_prev)) > tol)
 
-        # valid mask: bin k must be visited in window i AND neighbor slot is real
-        valid = (
-            mask_ik[:, :, None]  # (n_traj, n_bins, 1)
-            & mask_kn[None, :, :]  # (1, n_bins, n_neigh_max)
-            & (C_ikn > 0)  # (n_traj, n_bins, n_neigh_max)
-        )
+    def step_fun(state):
+        _, p_curr, i = state
+        return p_curr, body_fun(p_curr), i + 1
 
-        C_safe = jnp.where(valid, C_ikn, 0.0)
-        log_p_safe = jnp.where(valid, log_p_ikn, 0.0)
+    _, final_p, _ = jax.lax.while_loop(cond_fun, step_fun, (init_p, body_fun(init_p), 0))
 
-        return -jnp.sum(C_safe * log_p_safe)
+    print(f"{final_p=}")
 
-    # ── initialisation ────────────────────────────────────────────────────────
-    # log π: proportional to pooled stationary counts
-    log_H_k = jnp.log(jnp.sum(H_ik, axis=0) + 1.0)
-    log_pi0 = _norm_log_vec_masked(log_H_k, mask_k)  # (n_bins,)
+    # --- 4. Final WHAM-Compatible Outputs ---
+    F_k = -jnp.log(final_p + 1e-12)
 
-    # log T: proportional to pooled transition counts per neighbor slot
-    C_kn_pooled = jnp.sum(C_ikn, axis=0) + 1e-10  # (n_bins, n_neigh_max)
-    log_T0 = jax.vmap(_norm_log_vec_masked)(jnp.log(C_kn_pooled), mask_kn)  # (n_bins, n_neigh_max)
+    # # [NEW] Acceleration Factors for each point (state) k:
+    # # Defined as the average bias weight <exp(beta * u_k)> over simulations
+    # log_acc_num = jax.vmap(log_sum_exp_safe, in_axes=(None, 0))(jnp.log(t_alpha_i + 1e-12), log_U_ik)
+    # log_acc_den = jnp.log(jnp.sum(t_alpha_i, axis=0) + 1e-12)
+    # log_acceleration_k = log_acc_num - log_acc_den
 
-    theta0 = jnp.concatenate([log_pi0, log_T0.ravel()])
-
-    # ── optimise ──────────────────────────────────────────────────────────────
-    solver = jaxopt.LBFGS(
-        fun=neg_log_likelihood,
-        maxiter=maxiter,
-        tol=tol,
-        verbose=verbose,
-    )
-    result = solver.run(theta0)
-    theta_opt = result.params
-
-    # ── extract results ───────────────────────────────────────────────────────
-    log_pi_k, log_T_kn = unpack(theta_opt)
-
-    pi_k = jnp.exp(log_pi_k)
-
-    # Free energies (same convention as WHAM F_k)
-    F_k = -log_pi_k
-    F_k = F_k - jnp.min(jnp.where(mask_k, F_k, jnp.inf))
-
-    # Per-window reweighting log-weights (same semantics as WHAM log_w_ik_nl)
-    log_w_ik = log_pi_k[None, :] - log_U_ik
-    log_w_ik = jnp.where(mask_ik, log_w_ik, -jnp.inf)
-
-    converged = bool(result.state.error < tol)
-    n_iter = int(result.state.iter_num)
-    final_loss = float(neg_log_likelihood(theta_opt))
-
-    if verbose:
-        print(f"DHAM sparse done: {n_iter=}, error={result.state.error:.2e}, {converged=}")
-        print(f"  π_k range: [{float(pi_k.min()):.2e}, {float(pi_k.max()):.2e}]")
-        # fraction of transition counts captured by neighbor structure
-        total_C = float(jnp.sum(C_ikn))
-        print(f"  total transitions captured: {total_C:.0f}")
-
-    return DHAMSparseResult(
-        F_k=F_k,
-        pi_k=pi_k,
-        log_T_kn=log_T_kn,
-        neigh_kn=neigh_kn,
-        log_w_ik=log_w_ik,
-        converged=converged,
-        n_iter=n_iter,
-        final_loss=final_loss,
-    )
-
-
-def _dham_reconstruct_T_dense(
-    result: DHAMSparseResult,
-    n_bins: int,
-) -> Array:
-    """
-    Reconstruct a dense (n_bins, n_bins) transition matrix from sparse result.
-    Only use for analysis / small n_bins — will OOM for large systems.
-    """
-    T = jnp.zeros((n_bins, n_bins), dtype=jnp.float32)
-    log_T_kn = jnp.array(result.log_T_kn)
-    neigh_kn = jnp.array(result.neigh_kn)
-
-    for k in range(n_bins):
-        for n in range(neigh_kn.shape[1]):
-            dst = neigh_kn[k, n]
-            if dst >= 0:
-                T[k, dst] = jnp.exp(log_T_kn[k, n])
-    return T
+    return log_w_ik_nl, log_ps_ik_nl, F_i_nl, log_dens_ik_nl, mask_ik_nl, F_k, sigma_Fk

@@ -11,6 +11,7 @@ from IMLCV.base.dataobjects import (
     CV,
     NeighbourList,
     SystemParams,
+    CvMetric,
 )
 from IMLCV.base.MdEngine import StaticMdInfo
 from IMLCV.base.UnitsConstants import angstrom, atm, bar, femtosecond, kelvin, kjmol
@@ -38,6 +39,7 @@ def alanine_dipeptide_openmm(
     cv_theta_2: bool = False,
     bias: Bias | None = None,
     save_step=50,
+    bias_scale=0.9,
 ):
     pdb = DATA_ROOT / "ala" / "alanine-dipeptide.pdb"
 
@@ -173,7 +175,7 @@ def alanine_dipeptide_openmm(
         screen_log=1000,
         equilibration=0 * femtosecond,
         r_cut=None,
-        bias_scale=0.8,
+        bias_scale=bias_scale,
     )
 
     engine = NewYaffEngine(

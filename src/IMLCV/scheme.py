@@ -190,7 +190,7 @@ class Scheme:
         K=None,
         update_metric=False,
         n=4,
-        samples_per_bin=5,
+        samples_per_bin: int = 5,
         min_samples_per_bin=1,
         init_max_grad=None,
         plot=True,
@@ -221,12 +221,10 @@ class Scheme:
         init=False,
         first_round_without_bias=False,
         executors=Executors.training,
-        use_common_bias=True,
-        first_round_without_ground_bias=False,
-        first_round_no_fes_bias=False,
         dT=0,
         max_b=100 * kjmol,
         equilibration_time=-1,
+        bias_factor=0.8,
         # use_fes_bias=True,
     ):
         if plot_umbrella is None:
@@ -255,31 +253,44 @@ class Scheme:
 
         print(f"{i_0=}")
 
-        for i in range(i_0, rnds):
-            if i >= 2:
-                prev_bias = self.rounds.get_bias(c=cv_round, r=i - 1)
-                bias = self.rounds.get_bias(c=cv_round, r=i)
+        for r in range(i_0, rnds):
+            if r >= 2:
+                prev_bias = self.rounds.get_bias(
+                    c=cv_round,
+                    r=r - 1,
+                    scale_bias=False,
+                )
+                bias = self.rounds.get_bias(
+                    c=cv_round,
+                    r=r,
+                    scale_bias=False,
+                )
 
                 kl_div = bias.kl_divergence(prev_bias, T=self.rounds.T, symmetric=True)
 
-                if kl_div == 0:
-                    print("kl div exactly zero, assuming it's not a real bias")
+                # if kl_div == 0:
+                #     print("kl div exactly zero, assuming it's not a real bias")
+                # else:
+                if kl_div < convergence_kl:
+                    print(f"already converged {kl_div/kjmol=}")
+                    break
                 else:
-                    if kl_div < convergence_kl:
-                        print(f"already converged {kl_div/kjmol=}")
-                        break
-                    else:
-                        print(f"not converged {kl_div/kjmol=}")
+                    print(f"not converged {kl_div/kjmol=}")
 
-            print(f"running round {i=} with {steps} steps")
+            print(f"running round {r=} with {steps} steps")
 
-            without_bias = first_round_without_bias and i == 1
+            without_bias = first_round_without_bias and r == 1
             # without_ground_bias = (first_round_without_ground_bias and i == 1) or not use_common_bias
 
             # print(f"{without_bias=}  {without_ground_bias=}")
 
             if without_bias:
                 print("running first round wihtout biases")
+                self.rounds.set_bias_factor(
+                    c=cv_round,
+                    r=r,
+                    bias_factor=0.0,
+                )
 
             self.grid_umbrella(
                 steps=steps,
@@ -289,10 +300,10 @@ class Scheme:
                 scale_n=scale_n,
                 cv_round=cv_round,
                 ignore_invalid=True,
-                eps=eps_umbrella if not without_bias else 1,
-                min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
+                eps=eps_umbrella,
+                min_traj_length=steps if (r > 1 and enforce_min_traj_length) else None,
                 recalc_cv=recalc_cv,
-                only_finished=i > 1 and only_finished,
+                only_finished=r > 1 and only_finished,
                 chunk_size=chunk_size,
                 # T_scale=T_scale,
                 max_grad=max_grad,
@@ -301,100 +312,92 @@ class Scheme:
                 max_b=max_b,
             )
 
-            prev_bias = self.rounds.get_bias(c=cv_round, r=i)
+            prev_bias = self.rounds.get_bias(c=cv_round, r=r)
 
-            if first_round_no_fes_bias and i == 1:
-                new_bias = NoneBias(collective_variable=prev_bias.collective_variable)
-            else:
-                new_bias = self.FESBias(
-                    plot=plot,
-                    samples_per_bin=samples_per_bin,
-                    min_samples_per_bin=min_samples_per_bin,
-                    choice=choice,
-                    num_rnds=fes_bias_rnds,
-                    cv_round=cv_round,
-                    chunk_size=chunk_size,
-                    min_traj_length=steps if enforce_min_traj_length else None,
-                    margin=plot_margin,
-                    only_finished=only_finished,
-                    max_bias=max_bias,
-                    n_max=n_max_fes,
-                    thermolib=thermolib,
-                    macro_chunk=macro_chunk,
-                    vmax=vmax,
-                    # T_scale=T_scale,
-                    koopman=koopman,
-                    lag_n=lag_n,
-                    koopman_wham=koopman_wham,
-                    out=out,
-                    direct_bias=direct_bias,
-                    executors=executors,
-                    n_max_lin=n_max_lin,
-                    equilibration_time=equilibration_time,
-                )
+            # if first_round_no_fes_bias and r == 1:
+            #     new_bias = NoneBias(collective_variable=prev_bias.collective_variable)
+            # else:
+            new_bias = self.FESBias(
+                plot=plot,
+                samples_per_bin=samples_per_bin,
+                min_samples_per_bin=min_samples_per_bin,
+                choice=choice,
+                num_rnds=fes_bias_rnds,
+                cv_round=cv_round,
+                chunk_size=chunk_size,
+                min_traj_length=steps if enforce_min_traj_length else None,
+                margin=plot_margin,
+                only_finished=only_finished,
+                max_bias=max_bias,
+                n_max=n_max_fes,
+                thermolib=thermolib,
+                macro_chunk=macro_chunk,
+                vmax=vmax,
+                # T_scale=T_scale,
+                koopman=koopman,
+                lag_n=lag_n,
+                koopman_wham=koopman_wham,
+                out=out,
+                direct_bias=direct_bias,
+                executors=executors,
+                n_max_lin=n_max_lin,
+                equilibration_time=equilibration_time,
+            )
 
-            self.rounds.add_round(bias=new_bias, c=cv_round)
-
-            # kl_div = self.md.bias.kl_divergence(
-            #     prev_bias,
-            #     T=self.rounds.T,
-            #     symmetric=True,
-            # )
-
-            # print(f"{kl_div/kjmol=}")
-
-            # if kl_div < convergence_kl:
-            #     print(f"converged {kl_div/kjmol=}")
-            #     break
+            self.rounds.add_round(
+                bias=new_bias,
+                c=cv_round,
+                bias_factor=bias_factor,
+            )
 
         print("starting biasless round")
-        self.grid_umbrella(
-            steps=steps,
-            n=n,
-            k=K,
-            plot=plot_umbrella,
-            scale_n=scale_n,
-            cv_round=cv_round,
-            ignore_invalid=True,
-            eps=eps_umbrella,
-            min_traj_length=steps if (i > 1 and enforce_min_traj_length) else None,
-            recalc_cv=recalc_cv,
-            only_finished=i > 1 and only_finished,
-            chunk_size=chunk_size,
-            max_grad=max_grad,
-            dT=dT,
-            max_b=max_b,
-            add_umbrella=False,
-        )
+        # self.grid_umbrella(
+        #     steps=steps,
+        #     n=n,
+        #     k=K,
+        #     plot=plot_umbrella,
+        #     scale_n=scale_n,
+        #     cv_round=cv_round,
+        #     ignore_invalid=True,
+        #     eps=eps_umbrella,
+        #     min_traj_length=steps if (r > 1 and enforce_min_traj_length) else None,
+        #     recalc_cv=recalc_cv,
+        #     only_finished=r > 1 and only_finished,
+        #     chunk_size=chunk_size,
+        #     max_grad=max_grad,
+        #     dT=dT,
+        #     max_b=max_b,
+        #     add_umbrella=False,
+        # )
 
-        new_bias = self.FESBias(
-            plot=plot,
-            samples_per_bin=samples_per_bin,
-            min_samples_per_bin=min_samples_per_bin,
-            choice=choice,
-            num_rnds=fes_bias_rnds,
-            cv_round=cv_round,
-            chunk_size=chunk_size,
-            min_traj_length=steps if enforce_min_traj_length else None,
-            margin=plot_margin,
-            only_finished=only_finished,
-            max_bias=max_bias,
-            n_max=n_max_fes,
-            thermolib=thermolib,
-            macro_chunk=macro_chunk,
-            vmax=vmax,
-            # T_scale=T_scale,
-            koopman=koopman,
-            lag_n=lag_n,
-            koopman_wham=koopman_wham,
-            out=out,
-            direct_bias=direct_bias,
-            executors=executors,
-            n_max_lin=n_max_lin,
-            equilibration_time=equilibration_time,
-        )
+        # new_bias = self.FESBias(
+        #     plot=plot,
+        #     samples_per_bin=samples_per_bin,
+        #     min_samples_per_bin=min_samples_per_bin,
+        #     choice=choice,
+        #     num_rnds=fes_bias_rnds,
+        #     cv_round=cv_round,
+        #     chunk_size=chunk_size,
+        #     min_traj_length=steps if enforce_min_traj_length else None,
+        #     margin=plot_margin,
+        #     only_finished=only_finished,
+        #     max_bias=max_bias,
+        #     n_max=n_max_fes,
+        #     thermolib=thermolib,
+        #     macro_chunk=macro_chunk,
+        #     vmax=vmax,
+        #     # T_scale=T_scale,
+        #     koopman=koopman,
+        #     lag_n=lag_n,
+        #     koopman_wham=koopman_wham,
+        #     out=out,
+        #     direct_bias=direct_bias,
+        #     executors=executors,
+        #     n_max_lin=n_max_lin,
+        #     equilibration_time=equilibration_time,
+        # )
 
-        self.rounds.add_round(bias=new_bias, c=cv_round)
+        # self.rounds.add_round(bias=new_bias, c=cv_round)
 
         print("finished biasless round")
 
@@ -414,7 +417,7 @@ class Scheme:
         test=False,
         max_bias=None,
         transform_bias=True,
-        samples_per_bin=5,
+        samples_per_bin: int = 5,
         min_samples_per_bin=1,
         percentile=1e-1,
         use_executor=True,

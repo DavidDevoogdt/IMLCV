@@ -156,9 +156,23 @@ def eval_kernel_matrix(
 
         return kernel_func(r)
 
-    vmap_f00 = vmap_decorator(vmap_decorator(f00, in_axes=(0, None), out_axes=0), in_axes=(None, 0), out_axes=1)
+    vmap_f00 = vmap_decorator(
+        vmap_decorator(
+            f00,
+            in_axes=(0, None),
+            out_axes=0,
+        ),
+        in_axes=(None, 0),
+        out_axes=1,
+    )
     vmap_df00 = vmap_decorator(
-        vmap_decorator(jax.hessian(f00), in_axes=(0, None), out_axes=0), in_axes=(None, 0), out_axes=1
+        vmap_decorator(
+            jax.hessian(f00),
+            in_axes=(0, None),
+            out_axes=0,
+        ),
+        in_axes=(None, 0),
+        out_axes=1,
     )
 
     out = vmap_f00(x, y)
