@@ -746,7 +746,7 @@ class Covariances(MyPyTreeNode):
         rho_gen_sq = out.rho_gen_sq
         rho_00_sq = out.rho_00_sq
 
-        reduction_array = out.reduction_cv
+        reduction_cv = out.reduction_cv
 
         pi_s_0 = out.pi_s_0
         pi_s_1 = out.pi_s_1
@@ -834,7 +834,7 @@ class Covariances(MyPyTreeNode):
             symmetric=not time_series,
             rho_bend=rho_bend,
             scale_deriv=scale_deriv,
-            reduction_cv=reduction_array,
+            reduction_cv=reduction_cv,
         )
 
         if symmetric:

@@ -1578,14 +1578,20 @@ class KoopmanModel(MyPyTreeNode):
         constraints.append((r + 2 / r - 2 * jnp.sqrt(2)))
 
         k_array = jnp.arange(1, K_max + 1)
-        constraints.append(angle[:, None] ** k_array[None, :] / k_array[None, :])
+        constraints.append((angle[:, None] ** k_array[None, :] / k_array[None, :]).reshape((-1,)))
 
         cvs = []
 
         for c in constraints:
             cvs.append(CV(cv=c, _combine_dims=None))
 
-        return CV.combine(*cvs)
+        print(f"{cvs=}")
+
+        cv_out = CV.combine(*cvs)
+
+        print(f"{cv_out=}")
+
+        return cv_out
 
         # loss = -jnp.log(ang_x**2 + ang_y**2 + 1e-8)
 
