@@ -21,6 +21,11 @@ from IMLCV.base.dataobjects import (
 )
 from IMLCV.base.decoratros import vmap_decorator, field
 from IMLCV.base.UnitsConstants import angstrom
+from typing import Callable
+import jax
+import jax.numpy as jnp
+import flax.linen as nn
+from flax.struct import field
 
 
 ######################################
@@ -1263,145 +1268,365 @@ import flax.linen as nn
 
 # # https://arxiv.org/pdf/2009.01411
 
+"""
+Parity-graded GVP message passing: 0e / 0o / 1o / 1e.
 
-# Optional: E[|v|] for a unit-variance 3-vector is ~1.596 (chi_3), std ~0.673.
-# Not used as fixed centering (mean drifts from ~0.3 at init to ~1.6 once vectors
-# grow), but kept here in case you want to enable centering after a warmup.
+Replacement for GVPMessagePassingLayer + DeepGVPNetwork.  The node state is a
+4-tuple instead of a 2-tuple:
 
-class GVPMessagePassingLayer(nn.Module):
-    scalar_out_dim: int = field(pytree_node=False)
-    vector_out_dim: int = field(pytree_node=False)
-    use_pseudo: bool = field(pytree_node=False, default=False)
-    hidden_dim_s_pseudo: int = field(pytree_node=False, default=8)
-    nneigh: float = 1.0
-    eps: float = 1e-8
+    (s_even, s_odd, v_polar, v_axial)
+     (A,Se)  (A,So)  (A,Vp,3)  (A,Va,3)
+      0e      0o       1o        1e
+
+Transformation law, Q in O(3), d = det Q:
+
+    0e  s -> s        1o  v -> Q v
+    0o  s -> d s      1e  v -> d Q v
+
+Composition -- l couples as angular momentum, parity multiplies:
+
+    mix (linear)  l,p unchanged     u . v   1x1 -> 0,  p1*p2
+    ||v||         1 -> 0, always e  u x v   1x1 -> 1,  p1*p2
+    s * v         0x1 -> 1, p1*p2   s * s'  0x0 -> 0,  p1*p2
+
+Three rules the code must never break:
+  * no bias on an odd channel     -- a bias is a constant, i.e. 0e
+  * no even nonlinearity on odd   -- silu destroys type; tanh / x**3 keep it
+  * gates are sigmoid of 0e only  -- parity mixing goes in explicit bilinears
+
+============================ ZERO-INIT AUDIT =================================
+
+MUST be zero
+  every bias                    standard, and a bias is 0e by nature
+  s_odd, v_polar, v_axial       initial node states.  1o for the usual reason
+                                (no preferred direction).  0o and 1e because
+                                one_hot(Z) is parity EVEN -- seeding an odd
+                                bucket from it is a symmetry violation, not a
+                                hyperparameter.  They are seeded from geometry
+                                instead: 1e via v_up x v_up, then 0o via
+                                1o . 1e.
+  (nothing else)
+
+MAY be zero, but is NOT the default here
+  res_gain_even, res_gain_polar LayerScale.  Zero makes each layer start as
+                                the identity, which conditions very deep
+                                stacks -- but it also makes the whole network
+                                start as a function of atom TYPE ONLY, blind
+                                to geometry, which is useless for a CV.
+                                res_gain_init gives a random geometry-
+                                sensitive projection at init instead.  It
+                                compounds multiplicatively with depth, so
+                                1.0 blows up past ~4 layers (|cv| ~ 2e4 at 6
+                                layers).  Default 0.25; use 0.0 for ReZero.
+
+MUST NOT be zero
+  res_gain_odd, res_gain_axial  Forced nonzero even when res_gain_init=0.
+                                The 0o and 1e buckets are ALREADY zero-valued.
+                                A zero gain multiplies an already-zero signal,
+                                and every route by which those buckets could
+                                earn a gradient has derivative exactly zero at
+                                the origin: safe_norm (by construction),
+                                x**2 at 0, and tau = U_p . U_a at U_a = 0.  The
+                                gain's own gradient is then zero too, so it
+                                never recovers and the whole parity subsystem
+                                is dead for the entire run.
+
+  readout kernels               Random (lecun_normal).  A zero head makes the
+                                CV identically zero at init; fine for an energy
+                                regressor, wrong for a CV you want to sample
+                                along immediately.
+
+NO bias parameter at all
+  W_s_msg_pseudo, W_s_update_pseudo, odd readout head.
+
+Nothing is allocated that cannot be made nonzero: a layer with no incoming 1e
+builds no axial machinery, and emits 0o only if it can actually compute one.
+The state widths therefore grow 0e -> 1e -> 0o over the first two layers.
+"""
+
+from typing import Callable
+
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+from flax.struct import field
+
+# from ... import SystemParams, NeighbourList, CV, angstrom
+
+
+def safe_norm(x, axis=-1, tol=1e-24):
+    """||x||, exactly zero with zero 1st AND 2nd derivative at the origin.
+
+    Mandatory, not defensive: v_polar and v_axial are EXACTLY zero in layer 0,
+    and v_axial is exactly zero for any linear environment, so the 0/0 in
+    d||x||/dx is reached on ordinary inputs, not only on padded rows.
+    """
+    sq = jnp.sum(jnp.square(x), axis=axis)
+    ok = sq > tol
+    return jnp.where(ok, jnp.sqrt(jnp.where(ok, sq, 1.0)), 0.0)
+
+
+class _DenseParams(nn.Module):
+    """Creates exactly nn.Dense's parameter tree without doing the matmul, so
+    the kernel can be row-sliced. Same path -> same RNG fold -> same values.
+
+    use_bias=False is not an optimisation: an odd-parity dense must not have
+    one, because a bias is a parity-even constant.
+    """
+
+    in_features: int = field(pytree_node=False)
+    out_features: int = field(pytree_node=False)
+    kernel_init: Callable = field(pytree_node=False, default=nn.initializers.lecun_normal())
+    use_bias: bool = field(pytree_node=False, default=True)
 
     @nn.compact
-    def __call__(
-        self,
-        nl: NeighbourList,
-        node_states: tuple[jax.Array, jax.Array],
-        r_hats: jax.Array,
-        rbf_features: jax.Array,
-        smooth_graph_mask: jax.Array,
-    ) -> tuple[jax.Array, jax.Array]:
-        node_scalars, node_vectors = node_states
-        vector_in_dim = node_vectors.shape[-2]
+    def __call__(self):
+        k = self.param("kernel", self.kernel_init, (self.in_features, self.out_features))
+        b = self.param("bias", nn.initializers.zeros, (self.out_features,)) if self.use_bias else None
+        return k, b
 
-        # ---- inits -------------------------------------------------------------
-        # LeCun (fan-in, var=1/fan_in): preserves per-component variance through
-        # the no-nonlinearity vector channel mixes regardless of concat fan-in.
-        vector_kernel_init = nn.initializers.lecun_normal()
-        # He (fan-in x2): compensates SiLU gain so SiLU(Dense(x)) stays ~unit var.
-        silu_dense_init = nn.initializers.he_uniform()
 
-        # ---- kernels -----------------------------------------------------------
-        W_v_msg_kernel = self.param(
-            "W_v_msg_kernel", vector_kernel_init, (vector_in_dim + 1, self.vector_out_dim)
+class ParityGVPMessagePassingLayer(nn.Module):
+    scalar_out_dim: int = field(pytree_node=False)  # 0e
+    vector_out_dim: int = field(pytree_node=False)  # 1o
+    scalar_pseudo_dim: int = field(pytree_node=False, default=0)  # 0o, 0 disables
+    vector_pseudo_dim: int = field(pytree_node=False, default=0)  # 1e, 0 disables
+    pair_dim: int = field(pytree_node=False, default=8)  # C, bilinear width
+    nneigh: float = 1.0
+    eps: float = 1e-8  # accepted for compatibility; see safe_norm tol
+    residual: bool = field(pytree_node=False, default=True)
+    res_gain_init: float = field(pytree_node=False, default=0.25)  # 0.0 = ReZero
+    block_size: int = field(pytree_node=False, default=0)  # 0 = off (use on GPU)
+
+    @nn.compact
+    def __call__(self, nl, node_states, r_hats, rbf_features, smooth_graph_mask):
+        se, so, vp, va = node_states
+        A = se.shape[0]
+        Sie, Sio, Vip, Via = se.shape[-1], so.shape[-1], vp.shape[-2], va.shape[-2]
+        Soe, Vop, Voa = self.scalar_out_dim, self.vector_out_dim, self.vector_pseudo_dim
+        R = rbf_features.shape[-1]
+        idx = nl.atom_indices
+
+        # ---- what can this layer actually make nonzero? ---------------------
+        # No incoming 1e  =>  M_axial and U_axial are identically zero, so every
+        # consumer of them is dead weight.  No incoming 0o and no edge
+        # pseudoscalar  =>  the 0o output is identically zero too.
+        AX = Via > 0  # axial machinery live
+        C = self.pair_dim if (AX and self.scalar_pseudo_dim) else 0
+        Soo = self.scalar_pseudo_dim if (Sio > 0 or C > 0) else 0
+        NA = Voa if AX else 0  # ||M_a|| / gate_a width
+        OD = Sio + Soo  # total 0o width after update
+
+        vk = nn.initializers.lecun_normal()
+        dk = nn.initializers.he_uniform()
+        ones15 = lambda k, s: jnp.ones(s) * 1.5
+
+        # ---- message kernels ------------------------------------------------
+        # r_hat is 1o, so it goes on the POLAR stack only.  Giving the axial
+        # kernel the same symmetric-looking extra row is a silent parity
+        # violation that no shape check catches.
+        W_v_msg_kernel = self.param("W_v_msg_kernel", vk, (Vip + 1, Vop))
+        if AX:
+            W_va_msg_kernel = self.param("W_va_msg_kernel", vk, (Via, Voa))
+        if C:
+            W_ps_a = self.param("W_ps_a", vk, (Vop, C))
+            W_ps_b = self.param("W_ps_b", vk, (Voa, C))
+
+        # even edge dense: [q_e | rbf | ||M_p|| | ||M_a|| | s_odd**2] -> [msg_e | gates]
+        K_msg, b_msg = _DenseParams(Sie + R + Vop + NA + Sio, Soe + Vop + NA, dk, name="W_s_msg")()
+        if Soo:  # odd edge dense: [q_o | pi] -> msg_o.  NO BIAS.
+            K_msg_o, _ = _DenseParams(Sio + C, Soo, dk, use_bias=False, name="W_s_msg_pseudo")()
+
+        # ---- update kernels -------------------------------------------------
+        W_v_up_kernel = self.param("W_v_up_kernel", vk, (Vip + Vop, Vop))
+        if AX:
+            W_va_up_kernel = self.param("W_va_up_kernel", vk, (Via + Voa, Voa))
+            W_y1 = self.param("W_y1", vk, (Vop, Vop))  # 1o x 1e -> 1o
+            W_y2 = self.param("W_y2", vk, (Voa, Vop))
+        if Voa:
+            W_x1 = self.param("W_x1", vk, (Vop, Voa))  # 1o x 1o -> 1e  (seeds 1e)
+            W_x2 = self.param("W_x2", vk, (Vop, Voa))
+        if C:
+            W_d_p = self.param("W_d_polar", vk, (Vop, C))  # 1o . 1e -> 0o
+            W_d_a = self.param("W_d_axial", vk, (Voa, C))
+        if OD and Voa:
+            W_sp2a = self.param("W_sp2a", vk, (Vop, Voa))  # 0o * 1o -> 1e
+            W_so2a = self.param("W_so2a", vk, (OD, Voa))
+        if OD and AX:
+            W_sa2p = self.param("W_sa2p", vk, (Voa, Vop))  # 0o * 1e -> 1o
+            W_so2p = self.param("W_so2p", vk, (OD, Vop))
+
+        K_upd, b_upd = _DenseParams(Sie + Soe + Vop + NA + OD, Soe + Vop + Voa, dk, name="W_s_update")()
+        if Soo:
+            K_upd_o, _ = _DenseParams(OD + C, Soo, dk, use_bias=False, name="W_s_update_pseudo")()
+
+        v_gate_bias = self.param("v_gate_bias", ones15, (Vop + NA,))
+        final_gate_bias = self.param("final_gate_bias", ones15, (Vop + Voa,))
+
+        # ---- residual gains: see ZERO-INIT AUDIT in the module docstring -----
+        gi = self.res_gain_init
+        even_init = lambda k, sh: jnp.full(sh, gi)
+        # An odd/axial gain of zero multiplies an already-zero bucket, and its
+        # own gradient is then exactly zero, so it can never recover.  Clamp.
+        odd_init = lambda k, sh: jnp.full(sh, gi if gi > 0.0 else 1.0)
+        g_e = g_p = g_o = g_a = None
+        if self.residual:
+            if Sie == Soe:
+                g_e = self.param("res_gain_even", even_init, (Soe,))
+            if Vip == Vop:
+                g_p = self.param("res_gain_polar", even_init, (Vop,))
+            if Soo and Sio == Soo:
+                g_o = self.param("res_gain_odd", odd_init, (Soo,))
+            if Voa and Via == Voa:
+                g_a = self.param("res_gain_axial", odd_init, (Voa,))
+
+        # 1/sqrt(nneigh) is linear and sits outside every nonlinearity, so
+        # folding it into the mask is exact.  The mask is 0e, hence type-neutral.
+        mask = smooth_graph_mask / jnp.sqrt(self.nneigh)
+
+        # ---- node-side precompute: a gather commutes with a right-multiply ---
+        node_v_proj = jnp.einsum("acm,co->aom", vp, W_v_msg_kernel[:Vip])  # 1o
+        w_r = W_v_msg_kernel[Vip]  # r_hat row: a rank-1 outer product, not a contraction
+        node_s_proj = jnp.concatenate([se, jnp.square(so)], -1) @ jnp.concatenate(
+            [K_msg[:Sie], K_msg[Sie + R + Vop + NA :]], 0
         )
-        W_v_up_kernel = self.param(
-            "W_v_up_kernel", vector_kernel_init,
-            (vector_in_dim + self.vector_out_dim, self.vector_out_dim),
+        if AX:
+            node_va_proj = jnp.einsum("acm,co->aom", va, W_va_msg_kernel)  # 1e
+        if Soo:
+            node_so_proj = so @ K_msg_o[:Sio]
+        if C:
+            # pi = (A_node[g] + alpha*r_hat) . B_node[g]
+            #    = (A_node . B_node)[g]  +  alpha * (r_hat . B_node[g])
+            # The axial message carries no r_hat, so this factorisation is one
+            # line: no triple-product expansion, no vanishing determinants.
+            A_nd = jnp.einsum("aom,oc->acm", node_v_proj, W_ps_a)  # 1o
+            B_nd = jnp.einsum("aom,oc->acm", node_va_proj, W_ps_b)  # 1e
+            node_pseudo = jnp.einsum("acm,acm->ac", A_nd, B_nd)  # 0o
+            alpha = w_r @ W_ps_a
+
+        # ---- one block of receiver atoms ------------------------------------
+        def block(se_b, so_b, vp_b, va_b, idx_b, r_b, rbf_b, m_b):
+            g = idx_b
+            v_msg = node_v_proj[g] + r_b[:, :, None, :] * w_r[None, None, :, None]  # 1o
+            feats = [rbf_b, safe_norm(v_msg, axis=-1)]
+            if AX:
+                va_msg = node_va_proj[g]  # 1e, no r_hat
+                feats.append(safe_norm(va_msg, axis=-1))
+
+            s_edge = node_s_proj[g] + jnp.concatenate(feats, -1) @ K_msg[Sie : Sie + R + Vop + NA] + b_msg
+            s_msg, gate = jnp.split(s_edge, [Soe], axis=-1)
+            gate = nn.sigmoid(gate + v_gate_bias) * m_b[..., None]
+            gate_p, gate_a = jnp.split(gate, [Vop], axis=-1)
+
+            agg_s = jnp.einsum("an,ans->as", m_b, nn.silu(s_msg))
+            agg_v = jnp.einsum("ano,anom->aom", gate_p, v_msg)
+            s_cat = jnp.concatenate([se_b, agg_s], -1)
+            v_up = jnp.einsum("acm,co->aom", jnp.concatenate([vp_b, agg_v], -2), W_v_up_kernel)
+
+            if AX:
+                agg_va = jnp.einsum("and,andm->adm", gate_a, va_msg)
+                va_up = jnp.einsum("acm,co->aom", jnp.concatenate([va_b, agg_va], -2), W_va_up_kernel)
+
+            if Soo:
+                so_edge = node_so_proj[g]
+                if C:
+                    pi = node_pseudo[g] + alpha * jnp.einsum("ancm,anm->anc", B_nd[g], r_b)
+                    so_edge = so_edge + pi @ K_msg_o[Sio:]
+                agg_so = jnp.einsum("an,ans->as", m_b, jnp.tanh(so_edge))  # odd fn keeps 0o
+                so_cat = jnp.concatenate([so_b, agg_so], -1)
+            else:
+                so_cat = so_b
+
+            feats_final = [s_cat, safe_norm(v_up, axis=-1)]
+            if AX:
+                feats_final.append(safe_norm(va_up, axis=-1))
+            if OD:
+                feats_final.append(jnp.square(so_cat))
+            out = jnp.concatenate(feats_final, -1) @ K_upd + b_upd
+            o_s, o_g = jnp.split(out, [Soe], -1)
+            f_p, f_a = jnp.split(nn.sigmoid(o_g + final_gate_bias), [Vop], -1)
+
+            out_e = nn.silu(o_s)
+            out_p = f_p[..., None] * v_up
+            out_a = (f_a[..., None] * va_up) if AX else None
+            out_o = so_cat
+
+            if Voa:
+                X = jnp.cross(
+                    jnp.einsum("aom,od->adm", v_up, W_x1), jnp.einsum("aom,od->adm", v_up, W_x2), axis=-1
+                )  # seeds 1e
+                out_a = X if out_a is None else out_a + X
+            if AX:
+                out_p = out_p + jnp.cross(
+                    jnp.einsum("aom,op->apm", v_up, W_y1), jnp.einsum("adm,dp->apm", va_up, W_y2), axis=-1
+                )
+            if OD and Voa:
+                out_a = out_a + (so_cat @ W_so2a)[..., None] * jnp.einsum("aom,od->adm", v_up, W_sp2a)
+            if OD and AX:
+                out_p = out_p + (so_cat @ W_so2p)[..., None] * jnp.einsum("adm,dp->apm", va_up, W_sa2p)
+            if Soo:
+                tau = (
+                    jnp.einsum(
+                        "acm,acm->ac", jnp.einsum("aom,oc->acm", v_up, W_d_p), jnp.einsum("adm,dc->acm", va_up, W_d_a)
+                    )
+                    if C
+                    else jnp.zeros(so_cat.shape[:-1] + (0,))
+                )
+                out_o = jnp.tanh(jnp.concatenate([so_cat, tau], -1) @ K_upd_o)
+
+            if g_e is not None:
+                out_e = se_b + g_e * out_e
+            if g_p is not None:
+                out_p = vp_b + g_p[:, None] * out_p
+            if g_o is not None:
+                out_o = so_b + g_o * out_o
+            if g_a is not None:
+                out_a = va_b + g_a[:, None] * out_a
+            if out_a is None:
+                out_a = jnp.zeros(se_b.shape[:-1] + (0, 3))
+            return out_e, out_o, out_p, out_a
+
+        args = (se, so, vp, va, idx, r_hats, rbf_features, mask)
+        if self.block_size == 0:
+            return block(*args)
+
+        # Pad the atom axis up to a multiple of block_size rather than silently
+        # disabling blocking. Padded rows carry mask=0 so they contribute
+        # nothing and are sliced off; they only ever gather atom 0.
+        bs = self.block_size
+        pad = (-A) % bs
+        if pad:
+            z = lambda x: jnp.pad(x, [(0, pad)] + [(0, 0)] * (x.ndim - 1))
+            args = tuple(z(x) for x in args)
+        nb = (A + pad) // bs
+        rs = lambda x: x.reshape((nb, bs) + x.shape[1:])
+
+        @jax.checkpoint  # recompute on backward from cache-resident data
+        def body(_, xs):
+            return None, block(*xs)
+
+        _, o = jax.lax.scan(body, None, tuple(rs(x) for x in args))
+        return (
+            o[0].reshape(-1, o[0].shape[-1])[:A],
+            o[1].reshape(-1, o[1].shape[-1])[:A],
+            o[2].reshape(-1, o[2].shape[-2], 3)[:A],
+            o[3].reshape(-1, o[3].shape[-2], 3)[:A],
         )
-        W_s_msg = nn.Dense(
-            self.scalar_out_dim + self.vector_out_dim, kernel_init=silu_dense_init, name="W_s_msg"
-        )
-        W_s_update = nn.Dense(
-            self.scalar_out_dim + self.vector_out_dim, kernel_init=silu_dense_init, name="W_s_update"
-        )
-        v_gate_bias = self.param(
-            "v_gate_bias", lambda k, s: jnp.ones(s) * 1.5, (self.vector_out_dim,)
-        )
-
-        # Pseudoscalar kernels: select channel combos to cross-product.
-        # a x b is a pseudovector (reflection-ODD); dotting with a true vector
-        # (r_hat at edges, a third combo c at nodes) yields a pseudoscalar that
-        # carries dihedral sign (sin phi). Only created when use_pseudo.
-        if self.use_pseudo:
-            W_ps_a = self.param("W_ps_a", vector_kernel_init, (self.vector_out_dim, self.hidden_dim_s_pseudo))
-            W_ps_b = self.param("W_ps_b", vector_kernel_init, (self.vector_out_dim, self.hidden_dim_s_pseudo))
-            W_ps_c = self.param("W_ps_c", vector_kernel_init, (self.vector_out_dim, self.hidden_dim_s_pseudo))
-
-        # ---- gather ------------------------------------------------------------
-        neigh_scalars = node_scalars[nl.atom_indices]
-        neigh_vectors = node_vectors[nl.atom_indices]
-
-        # ---- per-edge messages -------------------------------------------------
-        @partial(jax.vmap, in_axes=0, out_axes=0)   # over A
-        @partial(jax.vmap, in_axes=0, out_axes=0)   # over n
-        def edge_messages(neigh_s, neigh_v, r_hat, rbf_edge):
-            """ONE edge. neigh_s (S_in,), neigh_v (V_in,3), r_hat (3,), rbf_edge (R,)."""
-            v_edge = jnp.concatenate([neigh_v, r_hat[None, :]], axis=-2)          # (V_in+1, 3)
-            v_msg  = jnp.einsum("cm,co->om", v_edge, W_v_msg_kernel)              # (V_out, 3)
-            v_msg_norms = jnp.sqrt(jnp.einsum("om,om->o", v_msg, v_msg) + self.eps)  # (V_out,) even
-
-            feats = [neigh_s, rbf_edge, v_msg_norms]
-            if self.use_pseudo:
-                # reference-free pseudoscalar: r_hat . (a x b), reflection-ODD
-                a = jnp.einsum("om,oc->cm", v_msg, W_ps_a)          # (hidden_dim_s_pseudo, 3)
-                b = jnp.einsum("om,oc->cm", v_msg, W_ps_b)          # (hidden_dim_s_pseudo, 3)
-                pseudo = jnp.einsum("cm,m->c", jnp.cross(a, b, axis=-1), r_hat)  # (hidden_dim_s_pseudo,)
-                feats.append(pseudo)
-
-            s_edge = jnp.concatenate(feats, axis=-1)
-            # (No LayerNorm; Dense bias absorbs DC offsets. Swap in nn.RMSNorm()(s_edge)
-            #  here if early training is slow -- scale-only, cheap higher derivatives.)
-            s_msg, v_gate = jnp.split(W_s_msg(s_edge), [self.scalar_out_dim], axis=-1)
-            s_msg = nn.silu(s_msg)
-            v_msg = nn.sigmoid(v_gate + v_gate_bias)[:, None] * v_msg
-            return s_msg, v_msg
-
-        s_msg, v_msg = edge_messages(neigh_scalars, neigh_vectors, r_hats, rbf_features)
-
-        # ---- per-atom aggregation ---------------------------------------------
-        @partial(jax.vmap, in_axes=0, out_axes=0)   # over A
-        def aggregate_atom(s_msg_a, v_msg_a, mask_a):
-            agg_s = jnp.sum(mask_a[:, None]       * s_msg_a, axis=0)   # (S_out,)
-            agg_v = jnp.sum(mask_a[:, None, None] * v_msg_a, axis=0)   # (V_out, 3)
-            n_inv_sqrt = 1.0 / jnp.sqrt(self.nneigh)                   # constant count
-            return agg_s * n_inv_sqrt, agg_v * n_inv_sqrt
-
-        aggregated_s, aggregated_v = aggregate_atom(s_msg, v_msg, smooth_graph_mask)
-
-        # ---- node update -------------------------------------------------------
-        s_update_combined = jnp.concatenate([node_scalars, aggregated_s], axis=-1)
-        v_update_combined = jnp.concatenate([node_vectors, aggregated_v], axis=-2)
-
-        v_updated = jnp.einsum("acm,co->aom", v_update_combined, W_v_up_kernel)  # (A, V_out, 3)
-        v_updated_norms = jnp.sqrt(jnp.einsum("aom,aom->ao", v_updated, v_updated) + self.eps)
-
-        feats_final = [s_update_combined, v_updated_norms]
-        if self.use_pseudo:
-            # node-level pseudoscalar = triple product of three learned vector combos:
-            # c . (a x b) = det[a b c], reference-free, reflection-ODD.
-            a = jnp.einsum("aom,oc->acm", v_updated, W_ps_a)          # (A, hidden_dim_s_pseudo, 3)
-            b = jnp.einsum("aom,oc->acm", v_updated, W_ps_b)          # (A, hidden_dim_s_pseudo, 3)
-            c = jnp.einsum("aom,oc->acm", v_updated, W_ps_c)          # (A, hidden_dim_s_pseudo, 3)
-            node_pseudo = jnp.einsum("acm,acm->ac", jnp.cross(a, b, axis=-1), c)  # (A, hidden_dim_s_pseudo)
-            feats_final.append(node_pseudo)
-
-        s_features_final = W_s_update(jnp.concatenate(feats_final, axis=-1))
-        out_scalars, final_v_gates = jnp.split(s_features_final, [self.scalar_out_dim], axis=-1)
-
-        final_gate_bias = self.param(
-            "final_gate_bias", lambda k, s: jnp.ones(s) * 1.5, (final_v_gates.shape[-1],)
-        )
-        out_scalars = nn.silu(out_scalars)
-        out_vectors = jnp.einsum(
-            "ao,aom->aom", nn.sigmoid(final_v_gates + final_gate_bias), v_updated
-        )
-        return out_scalars, out_vectors
 
 
-class DeepGVPNetwork(nn.Module):
+class DeepParityGVPNetwork(nn.Module):
     hidden_dim_s: int = field(pytree_node=False)
     hidden_dim_v: int = field(pytree_node=False)
     n_layers: int = field(pytree_node=False)
     out_dim: int = field(pytree_node=False)
+    pseudo_readout: bool = field(pytree_node=False, default=False)
     permutation_invariant: bool = field(pytree_node=False, default=True)
-    use_pseudo: bool = field(pytree_node=False, default=False)
-    hidden_dim_s_pseudo: int = field(pytree_node=False, default=8)
-    r_delta: float = field(pytree_node=False, default=1.5 * angstrom)
+    hidden_dim_s_pseudo: int = field(pytree_node=False, default=0)  # 0o width, 0 = off
+    hidden_dim_v_pseudo: int = field(pytree_node=False, default=0)  # 1e width, 0 = off
+    pair_dim: int = field(pytree_node=False, default=8)
+    residual: bool = field(pytree_node=False, default=True)
+    res_gain_init: float = field(pytree_node=False, default=0.25)
+    r_delta: float = field(pytree_node=False, default=1.5)  # * angstrom
     r_cut: float = field(pytree_node=False, default=None)
     num_rbf: int = field(pytree_node=False, default=16)
     nneigh: float = field(pytree_node=False, default=1.0)
@@ -1410,12 +1635,13 @@ class DeepGVPNetwork(nn.Module):
     def precompute_graph_geometry(self, sp, nl):
         r_cut = self.r_cut if self.r_cut is not None else nl.info.r_cut
         r_delta = jnp.clip(self.r_delta, self.eps, r_cut)
-        r_on = r_cut - r_delta                       # FIX: was self.r_cut (None on fallback)
+        r_on = r_cut - r_delta
 
         pos = nl.neighbour_pos(sp)
-        r_norms = jnp.sqrt(jnp.einsum("anm,anm->an", pos, pos) + self.eps)
+        r_norm_sq = jnp.einsum("anm,anm->an", pos, pos)
+        r_norms = jnp.sqrt(r_norm_sq + self.eps)
         r_hats = pos / jnp.expand_dims(r_norms, axis=-1)
-        r_hats_scaled = r_hats * jnp.sqrt(3.0)       # per-component var 1/3 -> ~1
+        r_hats_scaled = r_hats * jnp.sqrt(3.0)  # per-component var 1/3 -> ~1
 
         centers = jnp.linspace(r_cut / self.num_rbf, r_cut, self.num_rbf)
         sigma = r_cut / (self.num_rbf - 1)
@@ -1424,7 +1650,7 @@ class DeepGVPNetwork(nn.Module):
 
         s = jnp.clip((r_norms - r_on) / (r_cut - r_on), 0.0, 1.0)
         smooth_weights = 1.0 - (10.0 * s**3 - 15.0 * s**4 + 6.0 * s**5)
-        topology_mask = jnp.logical_and(nl.padding_bools, r_norms > 1e-12)
+        topology_mask = jnp.logical_and(nl.padding_bools, r_norm_sq > 1e-8)
         smooth_graph_mask = jnp.where(topology_mask, smooth_weights, 0.0)
         return r_hats_scaled, rbf_features, smooth_graph_mask
 
@@ -1437,40 +1663,48 @@ class DeepGVPNetwork(nn.Module):
 
         one_hot = nl.info.one_hot_z()
         node_scalars = nn.Dense(self.hidden_dim_s, kernel_init=nn.initializers.lecun_normal())(one_hot)
-        node_vectors = jnp.zeros((node_scalars.shape[0], self.hidden_dim_v, 3))  # zero: no preferred dir + equivariance
-        node_states = (node_scalars, node_vectors)
+        A = node_scalars.shape[0]
+        # The other three buckets start EMPTY, not merely zero-valued.  1o has
+        # no preferred direction at init; 0o and 1e cannot be seeded at all,
+        # because one_hot(Z) is parity EVEN and seeding an odd bucket from it
+        # would make the network parity-indefinite from layer 0.  Zero width
+        # rather than zero value so no dead kernels are allocated against them:
+        # the layer grows the state to 1e after one layer, 0o after two.
+        node_states = (node_scalars, jnp.zeros((A, 0)), jnp.zeros((A, 0, 3)), jnp.zeros((A, 0, 3)))
 
         for _ in range(self.n_layers):
-            node_states = GVPMessagePassingLayer(
+            node_states = ParityGVPMessagePassingLayer(
                 scalar_out_dim=self.hidden_dim_s,
                 vector_out_dim=self.hidden_dim_v,
-                use_pseudo=self.use_pseudo,
-                hidden_dim_s_pseudo=self.hidden_dim_s_pseudo,
+                scalar_pseudo_dim=self.hidden_dim_s_pseudo,
+                vector_pseudo_dim=self.hidden_dim_v_pseudo,
+                pair_dim=self.pair_dim,
                 nneigh=self.nneigh,
+                residual=self.residual,
+                res_gain_init=self.res_gain_init,
             )(nl, node_states, r_hats, rbf_features, smooth_graph_mask)
-            # nb: skip connection could be applied here (state + block(state))
 
-        final_scalars, _ = node_states
-        if self.permutation_invariant:
-            cv_per_atom = nn.Dense(self.out_dim)(final_scalars)
-            collective_variable = jnp.mean(cv_per_atom, axis=0)
-        else:
-            collective_variable = nn.Dense(self.out_dim)(final_scalars.reshape(-1))
-        return CV(cv=collective_variable)
+        final_scalars, final_pseudo, _, _ = node_states
 
-def _gvp_message_passing(
-    sp: SystemParams,
-    nl: NeighbourList,
-    shmap,
-    shmap_kwargs,
-    network: DeepGVPNetwork,
-    params: dict,
-    permutation_invariant: bool = True,
-):
-    print(f"gvp_message_passing called with {nl=}, {sp=}")
+        init = nn.initializers.lecun_normal()
+        pool = (lambda x: jnp.mean(x, axis=0)) if self.permutation_invariant else None
+        flat = (lambda x: x) if self.permutation_invariant else (lambda x: x.reshape(1, -1))
 
+        # readout head
+        e = nn.Dense(self.out_dim, kernel_init=init, name="readout")(flat(final_scalars))
+        cv_e = pool(e) if pool else e[0]
+
+        if not self.pseudo_readout:
+            return CV(cv=cv_e)
+
+        p = nn.Dense(self.out_dim, kernel_init=init, name="pseudo_readout")(flat(final_pseudo))
+        cv_o = pool(p) if pool else p[0]
+
+        return CV.combine(CV(cv=cv_e), CV(cv=cv_o))
+
+
+def _gvp_message_passing(sp, nl, shmap, shmap_kwargs, network, params, permutation_invariant=True):
     return network.apply(params, sp, nl)
-
 
 
 def gvp_message_passing(
@@ -1478,20 +1712,34 @@ def gvp_message_passing(
     hidden_dim_v: int,
     n_layers: int,
     out_dim: int,
-    sp:SystemParams,
-    nl:NeighbourList,
+    sp: SystemParams,
+    nl: NeighbourList,
     permutation_invariant: bool = True,
     num_rbf: int = 16,
     r_delta: float = 1.0 * angstrom,
-    nneigh: float|None = None,
+    nneigh: float | None = None,
     hidden_dim_s_pseudo: int = 0,
+    hidden_dim_v_pseudo: int = 0,
+    pseudo_readout: bool = False,
 ) -> CvTrans:
-
-
     if nneigh is None:
         nneigh = nl.update.num_neighs
 
-    network = DeepGVPNetwork(
+    # network = DeepGVPNetwork(
+    #     hidden_dim_s=hidden_dim_s,
+    #     hidden_dim_v=hidden_dim_v,
+    #     n_layers=n_layers,
+    #     out_dim=out_dim,
+    #     permutation_invariant=permutation_invariant,
+    #     num_rbf=num_rbf,
+    #     r_delta=r_delta,
+    #     r_cut=nl.info.r_cut,
+    #     hidden_dim_s_pseudo=hidden_dim_s_pseudo,
+    #     use_pseudo=hidden_dim_s_pseudo > 0,
+    #     nneigh=nneigh,
+    # )
+
+    network = DeepParityGVPNetwork(
         hidden_dim_s=hidden_dim_s,
         hidden_dim_v=hidden_dim_v,
         n_layers=n_layers,
@@ -1500,8 +1748,10 @@ def gvp_message_passing(
         num_rbf=num_rbf,
         r_delta=r_delta,
         r_cut=nl.info.r_cut,
-        hidden_dim_s_pseudo= hidden_dim_s_pseudo,
-        use_pseudo=hidden_dim_s_pseudo > 0,
+        hidden_dim_s_pseudo=hidden_dim_s_pseudo,
+        hidden_dim_v_pseudo=hidden_dim_v_pseudo,
+        pseudo_readout=pseudo_readout,
+        nneigh=nneigh,
     )
 
     params = network.init(
@@ -1521,6 +1771,26 @@ def gvp_message_passing(
         static_argnames=["network"],
         learnable_argnames=["params"],
     )
+
+
+# def _angle_map(
+#     cv: CV,
+#     nl: NeighbourList,
+#     shmap,
+#     shmap_kwargs,
+#     eps: float = 1e-5,
+# ):
+#     even, odd = cv.split()
+
+#     norms = jnp.sqrt(even.cv**2 + odd.cv**2 + eps)
+
+#     return CV.combine(
+#         CV(cv=even.cv / norms),
+#         CV(cv=odd.cv / norms),
+#     )
+
+
+# angle_map = CvTrans.from_cv_function(_angle_map)
 
 
 def _atom_norm(

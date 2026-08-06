@@ -1167,23 +1167,23 @@ class Rounds:
 
         sti = self._round_information(c=c).tic
 
-        if lag_tau is not None:
-            if lag_n is not None:
-                print(f"WARNING: both lag_tau and lag_n are not None, using lag_tau")
+        if not time_series:
+            lag_n = 0
+        else:
+            if lag_tau is not None:
+                if lag_n is not None:
+                    print(f"WARNING: both lag_tau and lag_n are not None, using lag_tau")
 
-            dt = sti.timestep * sti.save_step
-            n = round(lag_tau / dt)
-            print(f"converting lag_tau {lag_tau / picosecond:.3f} ps to lag_n {n} with dt={dt / picosecond} ps")
-            lag_n = n
+                dt = sti.timestep * sti.save_step
+                n = round(lag_tau / dt)
+                print(f"converting lag_tau {lag_tau / picosecond:.3f} ps to lag_n {n} with dt={dt / picosecond} ps")
+                lag_n = n
 
         if new_r_cut == -1:
             new_r_cut = sti.r_cut
 
         if new_r_cut is not None:
             print(f"{new_r_cut/angstrom=}")
-
-        if not time_series:
-            lag_n = 0
 
         if weight and (weighing_method == "WHAM" or weighing_method == "DHAM"):
             if not get_bias_list:

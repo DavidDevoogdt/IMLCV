@@ -99,14 +99,13 @@ IMLCV = { path = ".", editable = true }
 
 # there is a problem with mace-jax, where the mace_jax.adapters subfolder is not included in the package, so we need to install it from git
 # this repo is added as a submodule in the external folder, so we can install it from there
-mace_jax = {path="./external/mace_jax", editable=true }
 
+mace_jax = {git = "https://github.com/ACEsuit/mace-jax.git", branch = "main", editable = true}
 
 [tool.pixi.pypi-options]
 extra-index-urls = [
     "https://download.pytorch.org/whl/cpu",
     ]
-
 
 
 
@@ -117,25 +116,27 @@ extra-index-urls = ["https://download.pytorch.org/whl/cu130"]
 extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
 
 
-[tool.pixi.feature.rocm6.pypi-dependencies]
+#[tool.pixi.feature.rocm6.pypi-dependencies]
 
 #latest rocm6 release
-jax = {version="==0.4.31" }
-jaxlib = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jaxlib-0.4.31-cp312-cp312-manylinux_2_28_x86_64.whl" }
-jax-rocm60-pjrt = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jax_rocm60_pjrt-0.4.31-py3-none-manylinux_2_28_x86_64.whl" }
-jax-rocm60-plugin = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jax_rocm60_plugin-0.4.31-cp312-cp312-manylinux_2_28_x86_64.whl" }
+#jax = {version="==0.4.31" }
+#jaxlib = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jaxlib-0.4.31-cp312-cp312-manylinux_2_28_x86_64.whl" }
+#jax-rocm60-pjrt = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jax_rocm60_pjrt-0.4.31-py3-none-manylinux_2_28_x86_64.whl" }
+#jax-rocm60-plugin = { url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jax_rocm60_plugin-0.4.31-cp312-cp312-manylinux_2_28_x86_64.whl" }
 
 
 [tool.pixi.feature.rocm7.pypi-dependencies]
 
 #https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/3rd-party/jax-install.html#install-jax-on-bare-metal-or-a-custom-container
 
-jax =  "==0.6.0"
-jaxlib =  "==0.6.0"
-jax-rocm7-pjrt =  {url="https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0/jax_rocm7_pjrt-0.6.0-py3-none-manylinux_2_28_x86_64.whl"}
-jax-rocm7-plugin = {url="https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0/jax_rocm7_plugin-0.6.0-cp312-cp312-manylinux_2_28_x86_64.whl"}
+jax = { extras = ["rocm7-local"], version = "*" }
 
 
+#[tool.pixi.feature.rocm6.pypi-dependencies]
+#jax = "==0.4.31"
+#jaxlib = "==0.4.31"
+#jax-rocm60-pjrt = {url="https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jax_rocm60_pjrt-0.4.31-py3-none-manylinux_2_28_x86_64.whl"}
+#jax-rocm60-plugin = {url="https://repo.radeon.com/rocm/manylinux/rocm-rel-6.3.4/jax_rocm60_plugin-0.4.31-cp312-cp312-manylinux_2_28_x86_64.whl"}
 
 [tool.pixi.feature.cuda13.pypi-dependencies]
 
@@ -156,7 +157,7 @@ cuequivariance-torch  = "*"
 # Environments (cpu is default; add rocm variants too)
 [tool.pixi.environments]
 cpu  = { features = [] }
-rocm6      = { features = ["rocm6"] }
+#rocm6      = { features = ["rocm6"] }
 rocm7     = { features = ["rocm7"] }
 cuda13    = { features = ["cuda13"] }
 cuda12    = { features = ["cuda12"] }

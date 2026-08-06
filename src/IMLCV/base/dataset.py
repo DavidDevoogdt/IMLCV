@@ -28,7 +28,7 @@ from IMLCV.base.dataobjects import (
     padded_vmap,
 )
 from IMLCV.base.decoratros import MyPyTreeNode, Partial_decorator, jit_decorator, vmap_decorator
-from IMLCV.base.koopman import KoopmanModel, PeriodicKoopmanModel
+from IMLCV.base.koopman import KoopmanModel
 from IMLCV.base.reweight import solve_wham, solve_dham
 from IMLCV.base.UnitsConstants import (
     boltzmann,
@@ -94,6 +94,8 @@ class DataLoaderOutput(MyPyTreeNode):
 
     @property
     def sp_t(self) -> list[SystemParams] | None:
+        if not self.time_series:
+            return None
         return [ti.sp_t for ti in self.ti] if self.ti[0].sp_t is not None else None
 
     @property
@@ -102,6 +104,9 @@ class DataLoaderOutput(MyPyTreeNode):
 
     @property
     def cv_t(self) -> list[CV] | None:
+        if not self.time_series:
+            return None
+
         return [ti.CV_t for ti in self.ti] if self.ti[0].CV_t is not None else None
 
     @property
@@ -114,10 +119,14 @@ class DataLoaderOutput(MyPyTreeNode):
 
     @property
     def _rho_t(self) -> list[Array] | None:
+        if not self.time_series:
+            return None
         return [ti.rho_t for ti in self.ti] if self.ti[0].rho_t is not None else None
 
     @property
     def _weights_t(self) -> list[Array] | None:
+        if not self.time_series:
+            return None
         return [ti.w_t for ti in self.ti] if self.ti[0].w_t is not None else None
 
     @property

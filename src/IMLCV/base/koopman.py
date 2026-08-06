@@ -84,6 +84,9 @@ class KoopmanModel(MyPyTreeNode):
     alpha_smooth: float = 1.0
     beta_timecon: float | None = None
     tau_thermo: float | None = None
+    halve_even_odd: bool = False
+
+    pair_info: tuple[jax.Array, jax.Array] | None = None
 
     @staticmethod
     def create(
@@ -128,7 +131,7 @@ class KoopmanModel(MyPyTreeNode):
         glasso=True,
         generator: bool = False,
         use_w=True,
-        periodicities: jax.Array | None = None,
+        # periodicities: jax.Array | None = None,
         exp_period=True,
         vamp_r=2,
         iters_nonlin=int(1e4),
@@ -148,6 +151,9 @@ class KoopmanModel(MyPyTreeNode):
         tau_baro=500 * picosecond,
         hessian=True,
         hessian_steps=0.1,
+        halve_even_odd=True,
+        periodicities=None,
+        key=jax.random.PRNGKey(42),
     ):
         #  see Optimal Data-Driven Estimation of Generalized Markov State Models
         if verbose:
@@ -157,10 +163,11 @@ class KoopmanModel(MyPyTreeNode):
 
         print(f"{out_dim=} {eps=} {eps_pre=}")
         print(f"{calc_pi=} {add_1=}   ")
-
         print(f"{use_w=}")
 
-        if w_t is not None:
+        time_series = cv_t is not None
+
+        if time_series:
             assert len(w) == len(w_t)
             assert len(rho) == len(rho_t)
 
@@ -198,20 +205,58 @@ class KoopmanModel(MyPyTreeNode):
         else:
             w_tot_dyn = None
 
-        # if not generator:
-        assert cv_t is not None
-        assert w_t is not None
-        assert rho_t is not None
+        if time_series:
+            assert cv_t is not None
+            assert w_t is not None
+            assert rho_t is not None
 
-        w_tot_t = tot_w(w_t, rho_t)
+            w_tot_t = tot_w(w_t, rho_t)
+        else:
+            w_tot_t = None
+
+        # if periodicities is not None:
+        #     _tr_per = CvTrans.from_cv_function(PeriodicKoopmanModel._exp_periodic, periodicities=periodicities)
+
+        #     if trans is not None:
+        #         trans *= _tr_per
+        #     else:
+        #         trans = _tr_per
 
         if periodicities is not None:
-            _tr_per = CvTrans.from_cv_function(PeriodicKoopmanModel._exp_periodic, periodicities=periodicities)
+            if isinstance(cv_0, CV):
+                x0 = cv_0[0][0]
 
-            if trans is not None:
-                trans *= _tr_per
+                if trans is not None:
+                    x0, _ = trans.compute_cv(x0, nl=nl)
+
             else:
-                trans = _tr_per
+                assert trans is not None, "trans must be provided for SystemParams input"
+
+                x0, _ = trans.compute_cv(cv_0[0][0], nl=nl)
+
+            assert x0.combine_dims is not None
+
+            idx_per = jnp.argwhere(periodicities)
+            idx_non_per = jnp.argwhere(jnp.logical_not(periodicities))
+            n_per = idx_per.shape[0]
+            n_non_per = idx_non_per.shape[0]
+
+            key, subkey = jax.random.split(key)
+            w_per = jax.random.normal(subkey, (n_per, 2, 2))
+            pi_per = jax.random.normal(subkey, (n_per, 2))
+            w_non_per = jax.random.normal(subkey, (n_non_per, 2))
+
+            _tr_per = CvTrans.from_cv_function(
+                KoopmanModel._periodic_trans_pre,
+                idx_per=idx_per,
+                idx_nonper=idx_non_per,
+                learnable_argnames=("w_per", "w_nonper", "mu_per"),
+                w_per=w_per,
+                w_nonper=w_non_per,
+                mu_per=pi_per,
+            )
+
+            trans *= _tr_per
 
         variational = False
         if trans is not None:
@@ -242,8 +287,6 @@ class KoopmanModel(MyPyTreeNode):
             # epochs = 50
 
             print(f"{macro_chunk=} {batch_chunk_size=}")
-
-            key = jax.random.PRNGKey(42)
 
             assert trans is not None
             print(f"using variational approach {trans.num_learnable_params=} ")
@@ -306,11 +349,11 @@ class KoopmanModel(MyPyTreeNode):
             # warmup_steps = max(epochs // 5, 100)  # Warmup for the first 20% of training or at least 100 steps
 
             lr_schedule = optax.warmup_cosine_decay_schedule(
-                init_value=1e-4,
-                peak_value=1e-3,
+                init_value=1e-3,
+                peak_value=1e-2,
                 warmup_steps=200 if epochs > 200 else epochs // 5,
                 decay_steps=epochs,
-                end_value=1e-4,
+                end_value=1e-3,
             )
 
             # 2. Add Gradient Clipping
@@ -331,6 +374,8 @@ class KoopmanModel(MyPyTreeNode):
             opt_state = optimizer.init(learable_params)
 
             prefetch = False
+
+            angle = halve_even_odd
 
             if batch_size is None:
                 print("Using full-batch optimization")
@@ -397,8 +442,9 @@ class KoopmanModel(MyPyTreeNode):
                         (subkey, w_subsample_stack), pools, batch_size
                     )
 
-                    wt_chunk /= wtot_chunk
                     w_chunk /= wtot_chunk
+                    if time_series:
+                        wt_chunk /= wtot_chunk
 
                     batch = dict(
                         x0_i=x0_chunk,
@@ -447,11 +493,20 @@ class KoopmanModel(MyPyTreeNode):
                         1e-3  # floors the ||grad phi||^2 in the curvature penalty to prevent singularities;
                     )
 
+                    w_ortho: float = 1e-1
+                    w_periodic: float = 1
+                    w_grad: float = 1e-2
+                    w_improper: float = 1.0
+                    w_conformal: float = 1.0
+                    w_origin: float = 1.0  # new term to penalise mean of periodic components
+                    w_radial: float = 1.0  # new term to penalise radial deviation of periodic components
+
                 # --------------------------------------------------------------------------- #
                 # Linear-algebra kernels (verified against explicit inverse / per-mode sum)    #
                 # --------------------------------------------------------------------------- #
                 def _sym(A):
-                    return 0.5 * (A + A.T)
+                    # jnp.conj(A.T) or A.conj().T enforces Hermitian symmetry A = A^H
+                    return 0.5 * (A + jnp.conj(A.T))
 
                 def _cholesky_jittered(C00, rel_jitter):
                     C = _sym(C00)
@@ -460,9 +515,16 @@ class KoopmanModel(MyPyTreeNode):
                     return jnp.linalg.cholesky(C + jit * jnp.eye(N))
 
                 def _whiten(L, A):
-                    """Return L^{-1} A L^{-T} via two triangular solves (symmetrised)."""
-                    Y = solve_triangular(L, A, lower=True)  # L^{-1} A
-                    M = solve_triangular(L, Y.T, lower=True).T  # L^{-1} A L^{-T}
+                    """Return L^{-1} A L^{-H} via two triangular solves (Hermitian symmetrised)."""
+                    # 1. Y = L^{-1} A   (shape: N x N)
+                    Y = solve_triangular(L, A, lower=True)
+
+                    # 2. M = Y L^{-H} = (L^{-1} A) L^{-H}
+                    # Taking conjugate transpose inside solve_triangular:
+                    # We solve L M^H = Y^H  --> M^H = L^{-1} Y^H  --> M = (L^{-1} Y^H)^H
+                    M = solve_triangular(L, Y.conj().T, lower=True).conj().T
+
+                    # 3. Enforce numerical Hermitian symmetry M = M^H
                     return _sym(M)
 
                 def _filter_matrix(U, phi_vals):
@@ -473,10 +535,143 @@ class KoopmanModel(MyPyTreeNode):
                     """
                     return (U * phi_vals) @ U.T
 
+                def pair_indices(n_non_per: int, n_per: int) -> Array:
+                    """Start index of every staggered (re, im) pair."""
+                    return n_non_per + 2 * jnp.arange(n_per)
+
+                def periodic_argmask(n_non_per: int, n_per: int) -> Array:
+                    """Flat indices of all periodic components, for pi_argmask (FIX(11))."""
+                    idx = pair_indices(n_non_per, n_per)
+                    return jnp.concatenate([idx, idx + 1])
+
+                def offdiag_mask(n: int, n_non_per: int, n_per: int) -> Array:
+                    """
+                    1 off the diagonal, 0 on it AND 0 on the within-pair (re_c, im_c) entries.
+
+                    The within-pair entry of E[G^2] is ~0.5 for a perfect circle (verified), so
+                    it must not enter the gradient-overlap penalty.  Cross-pair entries are 0
+                    for distinct circles and ~1 for harmonics -- that is the signal we want.
+                    """
+                    m = 1.0 - jnp.eye(n)
+                    if n_per > 0:
+                        i = pair_indices(n_non_per, n_per)
+                        m = m.at[i, i + 1].set(0.0).at[i + 1, i].set(0.0)
+                    return m
+
+                def pair_blocks(A: Array, n_non_per: int, n_per: int):
+                    """Extract (A_xx, A_xy, A_yx, A_yy) for every periodic pair from a matrix."""
+                    i = pair_indices(n_non_per, n_per)
+                    return A[i, i], A[i, i + 1], A[i + 1, i], A[i + 1, i + 1]
+
+                def ring_terms(C00: Array, C00_sq: Array, n_non_per: int, n_per: int, r0_sq: float = 2.0):
+                    """
+                    Radial + improperness losses from the SECOND-MOMENT matrices alone.
+
+                    r0_sq = 2 because KL(C00 || I) drives each real component to unit variance,
+                    so a proper circular pair has E[x^2] = E[y^2] = 1 and r^2 = 2.  Targeting
+                    r^2 = 1 would fight loss_ortho: different fixed points, training stalls at a
+                    compromise radius.
+
+                    Requires C00 to be UNCENTRED on the periodic indices -- see FIX(11).
+                    """
+                    A, B, C, D = (jnp.real(t) for t in pair_blocks(C00, n_non_per, n_per))
+                    A2, B2, C2, D2 = (jnp.real(t) for t in pair_blocks(C00_sq, n_non_per, n_per))
+
+                    E_r2 = A + D  # E[|z|^2]
+                    E_x2y2 = 0.5 * (B2 + C2)  # E[x^2 y^2]
+                    E_r4 = A2 + D2 + 2.0 * E_x2y2  # E[|z|^4]
+
+                    # E[(r^2 - r0^2)^2] = Var(r^2) + (E[r^2] - r0^2)^2
+                    radial = (E_r4 - 2.0 * r0_sq * E_r2 + r0_sq**2) / r0_sq**2
+
+                    # pseudo-covariance E[z^2] = (E[x^2] - E[y^2]) + 2i E[xy]  -> 0
+                    E_xy = 0.5 * (B + C)
+                    improper = ((A - D) ** 2 + 4.0 * E_xy**2) / r0_sq**2
+
+                    return jnp.mean(radial), jnp.mean(improper)
+
+                def conformality(C_gen: Array, n_non_per: int, n_per: int, eps: float = 1e-12):
+                    """
+                    |P^G_cc|^2 / (tr G_cc)^2  with  P^G_cc = (G_xx - G_yy) + 2i G_xy.
+
+                    Zero iff the 2x2 Dirichlet block is isotropic, i.e. the channel traverses
+                    its circle at constant speed.  Scale-free, so it cannot be cheated by
+                    shrinking the gradients.
+                    """
+                    Gxx, Gxy, Gyx, Gyy = (jnp.real(t) for t in pair_blocks(C_gen, n_non_per, n_per))
+                    Gxy = 0.5 * (Gxy + Gyx)
+                    num = (Gxx - Gyy) ** 2 + 4.0 * Gxy**2
+                    den = (Gxx + Gyy) ** 2 + eps
+                    return jnp.mean(num / den)
+
+                def gradient_overlap(rho_gen_sq: Array, mask: Array, eps: float = 1e-12):
+                    """
+                    Harmonic / redundancy detector.  Cauchy-Schwarz normalised so it lives in
+                    [0, 1]: E[G_ij^2] <= sqrt(E[G_ii^2] E[G_jj^2]).
+
+                    Measured: 0.000 for two distinct circles, 1.010 for k=1 and k=2 of the same
+                    circle.  Nothing else in the objective separates these.
+                    """
+                    R = jnp.real(rho_gen_sq)
+                    d2 = jnp.diag(R)
+                    norm = jnp.sqrt(jnp.outer(d2, d2)) + eps
+                    return jnp.sum((R / norm) * mask) / jnp.sum(mask)
+
                 # --------------------------------------------------------------------------- #
-                # The objective                                                                #
+                # sector escape                                                                #
                 # --------------------------------------------------------------------------- #
-                @partial(jit_decorator, static_argnames=["entropy_reg", "chunk_size", "hessian"])
+                def mean_term(pi_0: Array, n_non_per: int, n_per: int, r0_sq: float = 2.0):
+                    """
+                    |E[z_c]|^2 / r0^2  -- the term whose null space does NOT contain an arc.
+
+                    For a uniform arc of half-width a, E[exp(i k theta)] = sin(ka)/(ka).  The
+                    k=2 (improperness) term vanishes at a = pi/2, so a HALF RING is an exact
+                    stationary point of it: dL_imp/da = 0.0000 there.  The k=1 term reads
+                    0.392 with slope -0.516, which is the restoring force that escapes the
+                    sector.  Equivalently, at fixed E|z|^2,
+                        E|z_a - z_b|^2 = 2 E|z|^2 - 2 |E[z]|^2
+                    so minimising |E[z]|^2 IS maximising pairwise angular spread.
+
+                    Requires pi to be TRACKED on the periodic indices (see get_pi patch);
+                    pi_argmask as originally written discards it.
+                    """
+                    i = pair_indices(n_non_per, n_per)
+                    mu = jnp.real(pi_0)
+                    return jnp.mean((mu[i] ** 2 + mu[i + 1] ** 2)) / r0_sq
+
+                def circular_moments(z: Array, k_max: int = 4, weights: Array | None = None):
+                    """
+                    sum_k |E[u^k]|^2 / k^2  with u = z/|z|, over k = 1..k_max.
+
+                    Strictly decreasing in arc coverage on (0, pi] with a unique zero at full
+                    coverage -- no spurious stationary points anywhere.  Needs the phases, so
+                    it cannot be reconstructed from S and S^(4) alone (those reach k=2 only);
+                    add it as its own accumulator if the k=1 term proves insufficient.
+                    """
+                    u = z / (jnp.abs(z) + 1e-8)
+                    w = jnp.ones(z.shape[0]) / z.shape[0] if weights is None else weights
+                    out = 0.0
+                    uk = jnp.ones_like(u)
+                    for k in range(1, k_max + 1):
+                        uk = uk * u
+                        out = out + jnp.abs(jnp.einsum("nc,n->c", uk, w)) ** 2 / k**2
+                    return jnp.mean(out)
+
+                def winding_number(z: Array):
+                    """
+                    Per-channel winding along the sample ordering (needs a trajectory).
+                    |W| = 1 is the target; W = 0 is the trapped sector.  Not differentiable --
+                    use as a diagnostic / restart trigger, not a loss.
+                    """
+                    th = jnp.arctan2(z.imag, z.real)
+                    d = jnp.diff(th, axis=0)
+                    d = (d + jnp.pi) % (2 * jnp.pi) - jnp.pi
+                    return jnp.sum(d, axis=0) / (2 * jnp.pi)
+
+                # --------------------------------------------------------------------------- #
+                # objective                                                                    #
+                # --------------------------------------------------------------------------- #
+                @partial(jit_decorator, static_argnames=["entropy_reg", "chunk_size", "hessian"])  # noqa: F821
                 def slow_smooth_objective(
                     params,
                     eta,
@@ -487,134 +682,172 @@ class KoopmanModel(MyPyTreeNode):
                     w_t,
                     wdyn,
                     nl,
-                    hp: LossHP,
+                    hp: LossHP,  # noqa: F821
                     entropy_reg=None,
                     chunk_size=None,
                     epoch: int = 0,
                     key: Array | None = None,
                     hessian: bool = True,
                 ):
-                    """Single scalar loss: -(slow-and-smooth reward) + ortho constraint."""
-                    _trans = trans.apply_learnable_params(params)
+                    """Single scalar loss: -(slow-and-smooth reward) + structural constraints.
+
+                    loss_main       slowness of the generator, via the resolvent -1/(1+lambda).
+                    loss_ortho      KL(C00 || I): unit variance, decorrelated outputs.
+                    loss_grad       masked, CS-normalised gradient overlap.  Separates distinct
+                                    circles from harmonics of one circle.  FIX(8)
+                    loss_radial     E[(r^2-2)^2] from C00 / C_00_sq.  FIX(9)
+                    loss_improper   |E[z^2]|^2: uniform angular density.
+                    loss_conformal  |P^G|^2: constant angular speed.  FIX(10)
+                    """
+                    _trans = trans.apply_learnable_params(params)  # noqa: F821
 
                     scale_deriv = eta ** (-1 / 2)
 
-                    bp = BendParams(
-                        # R0=hp.R0
-                        # * scale_deriv
-                        # * jnp.sqrt(
-                        #     hp.eta
-                        # ),  # compare directly against the slowest mode length. This is a choice, not a physical prinicple
-                        R0=hp.R0 * jnp.sqrt(hp.eta),
-                        ridge=1e-5 / hp.eta,
+                    bp = BendParams(  # noqa: F821
+                        R0=hp.R0 * jnp.sqrt(eta),
+                        ridge=1e-5 / eta,
                         mode="projected",
                         reduce="hinge",
                         n_probe=16,
                         hinge_p=2,
-                        W=W_baro,
+                        W=W_baro,  # noqa: F821
                     )
 
-                    print(f"{key=}")
+                    # FIX(11): never subtract the mean on periodic components -- the ring must be
+                    # measured about the same fixed origin that atan2 uses downstream, and the
+                    # radial/properness algebra below assumes uncentred second moments there.
+                    if periodicities is not None:  # noqa: F821
+                        pi_argmask = periodic_argmask(n_non_per, n_per)  # noqa: F821
+                    else:
+                        pi_argmask = None
 
-                    cov = Covariances.create(
+                    cov = Covariances.create(  # noqa: F821
                         cv_0=[x_0],
-                        cv_1=[x_t],
+                        cv_1=[x_t] if time_series else None,  # noqa: F821
                         nl=nl,
                         nl_t=nl,
                         w=[w],
-                        w_t=[w],
+                        w_t=[w_t] if time_series else None,  # noqa: F821
                         trans_f=_trans,
-                        trans_g=_trans,
+                        trans_g=_trans if time_series else None,  # noqa: F821
                         shrink=False,
-                        calc_pi=calc_pi,
+                        calc_pi=calc_pi,  # noqa: F821
                         get_diff=False,
-                        symmetric=symmetric,
+                        symmetric=symmetric,  # noqa: F821
                         generator=True,
                         get_hess=hessian,
                         scale_deriv=scale_deriv,
-                        curvature=False,
-                        sigma_0=sigma_0,
                         key=key,
                         bp=bp,
-                        # chunk_size=batch_chunk_size,
-                        macro_chunk=batch_chunk_size,
+                        macro_chunk=batch_chunk_size,  # noqa: F821
+                        gen_squared=True,
+                        cov_squared=True,
+                        bessel_correct=False,
+                        pi_argmask=pi_argmask,
+                        reduction_fun=CvTrans.from_cv_function(KoopmanModel._periodic_trans_pushback),
                     )
-
-                    # jax.debug.print("covariances computed {cov}", cov=cov)
 
                     N = cov.C00.shape[0]
 
-                    ##################
-                    # resolvent loss #
-                    ##################
-                    C = _sym(cov.rho_00)
-                    M = _sym(cov.rho_gen) + C  # G/eta + C  (> 0)
-                    L = _cholesky_jittered(M, hp.rel_jitter)  # L L^T = M
-                    rho_res = _whiten(L, C)  # L^-1 C L^-T ; eig = 1/(1+lambda_i/eta) = mu_i
-                    reward = jnp.trace(rho_res)  # sum_i mu_i   (eigh-free)
+                    # jax.debug.print(" reduction array {}", cov.reduction_array)
 
-                    loss_main = -reward
+                    # ---- slow reward ------------------------------------------------------- #
+                    lambdas = jnp.real(jnp.diag(cov.rho_gen))
 
-                    ##################
-                    # bending loss   #
-                    ##################
-
-                    if hessian:
-                        bending_loss = jnp.trace(_whiten(L, cov.rho_bend))
-
-                        loss_main += hp.additive_mu * bending_loss
+                    if periodicities is not None:  # noqa: F821
+                        lambdas_per = jnp.concatenate(
+                            [lambdas[:n_non_per], 0.5 * (lambdas[n_non_per::2] + lambdas[n_non_per + 1 :: 2])]  # noqa: F821
+                        )
                     else:
-                        bending_loss = 0.0
+                        lambdas_per = lambdas
 
-                    ##################
-                    # telemetry only #
-                    ##################
+                    n_eff = lambdas_per.shape[0]
+                    loss_main = jnp.sum(-1.0 / (1.0 + lambdas_per)) / n_eff
 
-                    mu_sg = jnp.linalg.eigvalsh(rho_res)  # eigenvalues only; R_sg already detached
-                    lam_eta_inv_sg = jnp.where(mu_sg < hp.rate_floor, jnp.inf, 1.0 / mu_sg - 1.0)
-                    lam_sg = lam_eta_inv_sg * eta  # implied timescales (the output you need)
-                    sat = bending_loss
+                    # ---- hermitian KL(C00 || I) -------------------------------------------- #
+                    def loss_ortho_fn(x, jitter=1e-6):
+                        x = 0.5 * (x + jnp.conj(x).T)
+                        D = x.shape[0]
+                        x = x + jitter * jnp.eye(D, dtype=x.dtype)
+                        trace_val = jnp.real(jnp.trace(x))
+                        _, logdet_val = jnp.linalg.slogdet(x)
+                        return trace_val - jnp.real(logdet_val) - D
 
-                    ##################
-                    # orhto loss     #
-                    ##################
+                    loss_ortho = loss_ortho_fn(cov.C00) / N
 
-                    v = jnp.diag(cov.C00)  # σ_a² = variances
+                    # ---- FIX(8): masked, CS-normalised gradient overlap -------------------- #
+                    if periodicities is not None:  # noqa: F821
+                        _mask = offdiag_mask(N, n_non_per, n_per)  # noqa: F821
+                    else:
+                        _mask = 1.0 - jnp.eye(N)
+                    loss_grad = gradient_overlap(cov.rho_gen_sq, _mask)
 
-                    x, _ = jnp.linalg.eigh(cov.C00)  # decorrelate + rescale to σ_a = 1
-                    loss_ortho = jnp.sum(jnp.log(x) ** 2) + jnp.sum((cov.rho_00 - jnp.eye(N)) ** 2) / (
-                        N**2
-                    )  # pushes σ_a → 1 and ρ₀₀ → I
+                    # ---- FIX(9)/(10): periodic structure, no second covariance pass -------- #
+                    loss_radial = jnp.asarray(0.0)
+                    loss_improper = jnp.asarray(0.0)
+                    loss_conformal = jnp.asarray(0.0)
 
-                    # pushes eigenvalues of C00 → 1 (decorrelation + scale)
-                    # loss_scale = jnp.sum(jnp.log(v) ** 2)  # pushes σ_a → 1  (scale gauge)
-                    # loss_decorr = jnp.sum((cov.rho_00 - jnp.eye(N))**2)    # pushes ρ₀₀ → I  (decorrelation)
+                    if periodicities is not None:  # noqa: F821z
+                        # _, loss_improper = ring_terms(
+                        #     cov.C00,
+                        #     cov.C_00_sq,
+                        #     n_non_per,
+                        #     n_per,
+                        #     r0_sq=2.0,  # noqa: F821
+                        # )
+                        loss_conformal = conformality(cov.C_gen, n_non_per, n_per)  # noqa: F821
 
-                    # loss_ortho = jnp.sum((cov.C00 - jnp.eye(N)) ** 2)
+                        radial_cv, angular_cv = cov.reduction_cv.split()
 
-                    loss = loss_main + hp.ortho_weight * loss_ortho
+                        loss_radial = jnp.sum(jnp.linalg.norm(cov.reduction_cv.cv))
 
-                    eta_next = hp.eta * jnp.min(lam_sg)
+                        # arr_ang = cov.reduction_cv[n_per : 2 * n_per]
+
+                        loss_improper = jnp.sum(jnp.linalg.norm(angular_cv.cv, axis=0) ** 2) / n_per
+
+                        jax.debug.print(
+                            "loss_radial={:.3E} | loss_improper={:.3E} | loss_conformal={:.3E}",
+                            loss_radial,
+                            loss_improper,
+                            loss_conformal,
+                        )
+
+                    loss_periodic = (
+                        hp.w_radial * loss_radial + hp.w_improper * loss_improper + hp.w_conformal * loss_conformal
+                    )
+
+                    # ---- FIX(12): separate, per-mode-normalised constraint weights --------- #
+                    loss = loss_main + hp.w_ortho * loss_ortho + hp.w_grad * loss_grad + hp.w_periodic * loss_periodic
+
+                    # ---- telemetry --------------------------------------------------------- #
+                    lam_sg = lambdas_per * eta
+                    # FIX(13): was hp.eta * min(lam_sg), re-mixing the two etas that FIX(6)
+                    # unified.  eta is the single source of truth in this function.
+                    eta_next = jnp.min(lam_sg)
 
                     a = 0.05
                     ema_lambda_min = a * eta_next + (1 - a) * eta
-                    sigma_next = a * v**0.5 + (1 - a) * sigma_0 if sigma_0 is not None else v**0.5
 
                     timescales = 1.0 / (
                         lam_sg
-                        / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
-                        * (tau_thermo if tau_thermo is not None else 100 * femtosecond)
-                        # / amu
+                        / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))  # noqa: F821
+                        * (tau_thermo if tau_thermo is not None else 100 * femtosecond)  # noqa: F821
                     )
 
                     aux = dict(
                         timescales=timescales,
-                        resolvent_weights=mu_sg,
-                        sat=sat,
+                        resolvent_weights=1.0 / (1.0 + lambdas_per),
+                        sat=0.0,
                         loss_main=loss_main,
                         loss_ortho=loss_ortho,
                         eta_next=ema_lambda_min,
-                        sigma_next=sigma_next,
+                        sigma_next=None,
+                        loss_ortho_gradient=loss_grad,
+                        loss_center=loss_periodic,
+                        loss_radial=loss_radial,
+                        loss_improper=loss_improper,
+                        loss_conformal=loss_conformal,
+                        lambdas=lambdas_per,
                     )
                     return loss, aux
 
@@ -629,7 +862,9 @@ class KoopmanModel(MyPyTreeNode):
                     print(f"inside body {sigma=}")
 
                     w = w / jnp.sum(w)
-                    w_t = w_t / jnp.sum(w_t)
+
+                    if time_series:
+                        w_t = w_t / jnp.sum(w_t)
 
                     N_eff = (jnp.sum(w) ** 2) / jnp.sum(w**2)
 
@@ -755,11 +990,15 @@ class KoopmanModel(MyPyTreeNode):
                 )
 
                 if (epoch % print_nonlin_every) == 0:
+                    # print(f"{output['loss_center']}")
+
                     with jnp.printoptions(formatter={"float": "{:0.3e}".format}):
                         print(
                             f"epoch={epoch} | timescales (ns)={output['timescales'][::-1] / nanosecond} | "
                             f"sat={output['sat']:.3f} | loss_main={output['loss_main']:.3E} | "
                             f"ortho={output['loss_ortho']:.3E} | eta_next={output['eta_next']:.3E} | "
+                            f"ortho gradient={output['loss_ortho_gradient']:.3E} | "
+                            f"center loss={output['loss_center']:.3E} | "
                             f"gnorm={output['gnorm']:.3E} |"
                             f"sigma_next={output['sigma_next']} ... | "
                             f"N_eff={output['N_eff']:.1f} |"
@@ -857,7 +1096,12 @@ class KoopmanModel(MyPyTreeNode):
             generator=True,
             scale_deriv=eta ** (-1 / 2) if variational else None,
             macro_chunk=batch_chunk_size,
+            # halve_even_odd=angle,
         )
+
+        # if halve_even_odd:
+        #     cov_full = cov
+        #     cov = cov.halve_even_odd()
 
         argmask = cov.mask(eps_pre, max_features_pre, auto_cov_threshold)
 
@@ -866,31 +1110,310 @@ class KoopmanModel(MyPyTreeNode):
             if shrink:
                 cov = cov.shrink()
 
-        x = cov.decompose(
+        idx, s, W = cov.decompose_diag(
             out_dim,
-            eps=eps,
-            out_eps=out_eps,
-            glasso_whiten=glasso,
-            verbose=verbose,
-            scale_gen=eta
-            / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
-            * (tau_thermo if tau_thermo is not None else 100 * femtosecond)
-            # * amu
-            if variational
-            else None,
+            non_per=n_non_per,
+            per=n_per,
         )
 
-        #    / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
-        #                 * (tau_thermo if tau_thermo is not None else 100 * picosecond)
+        s = (
+            s
+            / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
+            * (tau_thermo if tau_thermo is not None else 100 * picosecond)
+        )
 
-        if only_diag:
-            argmask_s, s = x
-            W0 = None
-            W1 = None
+        # x = cov.decompose(
+        #     out_dim,
+        #     eps=eps,
+        #     out_eps=out_eps,
+        #     glasso_whiten=glasso,
+        #     verbose=verbose,
+        #     scale_gen=eta
+        #     / (beta_timecon if beta_timecon is not None else 1 / (300 * boltzmann))
+        #     * (tau_thermo if tau_thermo is not None else 100 * femtosecond)
+        #     # * amu
+        #     if variational
+        #     else None,
+        #     angle=angle,
+        # )
 
-            argmask = argmask
-        else:
-            W0, W1, s = x
+        # if halve_even_odd:
+        #     """
+        #     Per-mode 2x2 analysis of a shared-Q complex slow-mode problem, with COMPLEX Q.
+
+        #     What changed vs the real-Q version
+        #     ----------------------------------
+        #     With q = a + i b complex, the mode is Z_n = (e + i o) q_n, so
+
+        #         Re Z_n = e.a - o.b        Im Z_n = e.b + o.a
+
+        #     i.e. the pair is no longer (even, odd) -- both components mix parities.  The
+        #     2D plane is therefore defined by the (2n x 2) real coefficient matrix
+
+        #         P_n = [[ a,  b],          (rows indexed by the stacked feature vector
+        #             [-b,  a]]           f = [e; o]; columns are Re Z_n, Im Z_n)
+
+        #     and the restricted forms are simply
+
+        #         C2 = P' C P ,   G2 = P' G P            (real symmetric 2x2)
+
+        #     which automatically picks up the antisymmetric parts of the cross-blocks that
+        #     a real q cannot see.  Everything downstream (2x2 pencil, rotation, T) is
+        #     unchanged and real.
+
+        #     The n-dimensional problem is now the Hermitian pencil
+
+        #         H_G q = lam H_C q ,   H_M = (M_ee + M_oo) + i (M_eo - M_oe)
+
+        #     which has real eigenvalues (symmetric-definite Hermitian pencil) and complex
+        #     eigenvectors.  If Im H_C = Im H_G = 0 (inversion-symmetric sampling) this
+        #     reduces exactly to the previous real problem.
+
+        #     Gauge
+        #     -----
+        #     q -> exp(i alpha) q rotates (Re Z, Im Z) into each other, so:
+
+        #         INVARIANT     mu_lo, mu_hi, ratio, aniso, lam_e, lam_o, rho, kappa,
+        #                     and the extracted coordinates u, v as functions
+        #         GAUGE-DEP.    angle, R, T (angle shifts by -alpha)
+
+        #     Use `uv` (coefficients of u, v on the stacked features) rather than `angle`
+        #     when q is complex -- `angle` is only meaningful relative to a fixed phase, and
+        #     eigh returns eigenvectors with an arbitrary phase.
+
+        #     The parity diagnostics are defined as traces over the plane,
+
+        #         V_e = a' C_ee a + b' C_ee b,   D_e = a' G_ee a + b' G_ee b,   (same for o)
+        #         lam_e = D_e / V_e,  rho = V_e / (V_e + V_o),  kappa = cross / sqrt(V_e V_o)
+
+        #     which are invariant under the phase and reduce to the old definitions at b = 0.
+        #     """
+
+        #     # --------------------------------------------------------------------------
+        #     # helpers
+        #     # --------------------------------------------------------------------------
+
+        #     def _sym(M):
+        #         return 0.5 * (M + jnp.swapaxes(M, -1, -2))
+
+        #     def _herm(M):
+        #         return 0.5 * (M + jnp.conj(jnp.swapaxes(M, -1, -2)))
+
+        #     def _ct(M):
+        #         """Conjugate transpose (plain transpose for real input)."""
+        #         return jnp.conj(jnp.swapaxes(M, -1, -2))
+
+        #     def psd_inv_sqrt(M, rcond=1e-10):
+        #         """Symmetric/Hermitian inverse square root, pseudo-inverted below rcond."""
+        #         M = _herm(M) if jnp.iscomplexobj(M) else _sym(M)
+        #         w, V = jnp.linalg.eigh(M)
+        #         wmax = jnp.max(w, axis=-1, keepdims=True)
+        #         keep = w > rcond * wmax
+        #         safe = jnp.where(keep, w, 1.0)  # double-where: no NaN grad
+        #         inv = jnp.where(keep, 1.0 / jnp.sqrt(safe), 0.0)
+        #         return (V * inv[..., None, :].astype(V.dtype)) @ _ct(V)
+
+        #     def _eigh2(S):
+        #         """Analytic eigendecomposition of a real 2x2 symmetric matrix.
+
+        #         Returns (mu_lo, mu_hi, phi); columns of R(phi) are the (low, high)
+        #         eigenvectors.
+        #         """
+        #         a, b, d = S[..., 0, 0], S[..., 0, 1], S[..., 1, 1]
+        #         tr, diff = a + d, a - d
+        #         r = jnp.hypot(diff, 2.0 * b)
+        #         mu_lo, mu_hi = 0.5 * (tr - r), 0.5 * (tr + r)
+        #         theta = 0.5 * jnp.arctan2(2.0 * b, diff)  # direction of high eigvec
+        #         phi = theta + 0.5 * jnp.pi  # direction of low  eigvec
+        #         return mu_lo, mu_hi, phi
+
+        #     def _rot(phi):
+        #         c, s = jnp.cos(phi), jnp.sin(phi)
+        #         return jnp.stack([jnp.stack([c, -s], -1), jnp.stack([s, c], -1)], -2)
+
+        #     def block_index(two_n, layout="block"):
+        #         n = two_n // 2
+        #         if layout == "block":
+        #             return jnp.arange(n), jnp.arange(n, two_n)
+        #         if layout == "interleaved":
+        #             return jnp.arange(0, two_n, 2), jnp.arange(1, two_n, 2)
+        #         raise ValueError(layout)
+
+        #     def split_blocks(M, layout="block"):
+        #         """(2n,2n) -> (ee, eo, oe, oo), each (n,n)."""
+        #         ie, io = block_index(M.shape[-1], layout)
+        #         return (M[jnp.ix_(ie, ie)], M[jnp.ix_(ie, io)], M[jnp.ix_(io, ie)], M[jnp.ix_(io, io)])
+
+        #     def hermitian_halve(M, layout="block"):
+        #         """<zbar_j z_k> = (M_ee + M_oo) + i (M_eo - M_oe).  Hermitian for symmetric M."""
+        #         ee, eo, oe, oo = split_blocks(M, layout)
+        #         return (ee + oo) + 1j * (eo - oe)
+
+        #     def pair_coeffs(q, two_n, layout="block"):
+        #         """(2n, 2) real coefficient matrix P for (Re Z, Im Z) on f = [e; o]."""
+        #         ie, io = block_index(two_n, layout)
+        #         a, b = jnp.real(q), jnp.imag(q)
+        #         P = jnp.zeros((two_n, 2), dtype=a.dtype)
+        #         P = P.at[ie, 0].set(a).at[io, 0].set(-b)
+        #         P = P.at[ie, 1].set(b).at[io, 1].set(a)
+        #         return P
+
+        #     # --------------------------------------------------------------------------
+        #     # main
+        #     # --------------------------------------------------------------------------
+
+        #     @partial(jax.jit, static_argnames=("layout", "rcond"))
+        #     def analyse(C, G, W0=None, layout="block", rcond=1e-10):
+        #         """Solve the (Hermitian) shared-Q pencil and the per-mode 2x2 pencils.
+
+        #         Parameters
+        #         ----------
+        #         C, G : (2n, 2n) real covariance / Dirichlet matrices over [e; o].
+        #         W0   : optional (n, n) whitening of H_C, real or complex, with
+        #             W0^dagger H_C W0 = I.  Check `white_err` in the output.
+
+        #         All returned eigenvalues are real.  Per-mode quantities are ordered by
+        #         increasing lam and indexed along axis 0.
+        #         """
+        #         two_n = C.shape[-1]
+        #         C, G = _sym(C), _sym(G)
+        #         Cee, Ceo, Coe, Coo = split_blocks(C, layout)
+        #         Gee, Geo, Goe, Goo = split_blocks(G, layout)
+
+        #         H_C, H_G = _herm(hermitian_halve(C, layout)), _herm(hermitian_halve(G, layout))
+
+        #         if W0 is None:
+        #             W0 = psd_inv_sqrt(H_C, rcond)
+        #         W0 = W0.astype(H_C.dtype)
+
+        #         # --- Hermitian generalised eigenproblem: real eigenvalues -------------
+        #         A = _herm(_ct(W0) @ H_G @ W0)
+        #         lam, U = jnp.linalg.eigh(A)  # lam real, ascending; U unitary
+        #         lam = jnp.real(lam)
+        #         Q = W0 @ U  # columns q_n, H_C-orthonormal
+
+        #         # eigh returns each eigenvector up to an arbitrary complex phase.  Fix it
+        #         # so the largest-|.| component is real positive: reproducible `angle`, and
+        #         # Q comes out real whenever the underlying problem is real.
+        #         piv = jnp.take_along_axis(Q, jnp.argmax(jnp.abs(Q), axis=0)[None, :], axis=0)[0]
+        #         Q = Q * (jnp.conj(piv) / jnp.maximum(jnp.abs(piv), jnp.finfo(lam.dtype).tiny))
+
+        #         white_err = jnp.linalg.norm(_ct(W0) @ H_C @ W0 - jnp.eye(W0.shape[0]))
+
+        #         # --- per-mode 2D plane -------------------------------------------------
+        #         P = jax.vmap(lambda q: pair_coeffs(q, two_n, layout), out_axes=0)(Q.T)  # (n,2n,2)
+        #         C2 = jnp.einsum("nia,ij,njb->nab", P, C, P)
+        #         G2 = jnp.einsum("nia,ij,njb->nab", P, G, P)
+        #         C2, G2 = _sym(C2), _sym(G2)
+
+        #         # --- per-mode 2x2 pencil (real) ---------------------------------------
+        #         Wc = jax.vmap(lambda M: psd_inv_sqrt(M, rcond))(C2)
+        #         mu_lo, mu_hi, phi = _eigh2(_sym(Wc @ G2 @ Wc))
+        #         R = _rot(phi)
+        #         T = jnp.swapaxes(R, -1, -2) @ Wc  # (Re Z, Im Z) -> (u, v)
+        #         uv = P @ jnp.swapaxes(T, -1, -2)  # (n, 2n, 2): u, v on [e; o]
+        #         # deterministic sign: largest-|.| coefficient positive
+        #         idx = jnp.argmax(jnp.abs(uv), axis=1)  # (n,2)
+        #         sgn = jnp.sign(jnp.take_along_axis(uv, idx[:, None, :], axis=1))
+        #         uv = uv * jnp.where(sgn == 0, 1.0, sgn)
+
+        #         # --- parity diagnostics (phase-invariant traces over the plane) --------
+        #         a, b = jnp.real(Q).T, jnp.imag(Q).T  # (n, n_half)
+        #         tr = lambda M: jnp.einsum("nj,jk,nk->n", a, M, a) + jnp.einsum("nj,jk,nk->n", b, M, b)
+        #         V_e, V_o, D_e, D_o = tr(Cee), tr(Coo), tr(Gee), tr(Goo)
+        #         cross = tr(_sym(Ceo))
+
+        #         eps = jnp.finfo(lam.dtype).tiny
+        #         safe = lambda x: jnp.where(x > 0, x, 1.0)
+        #         lam_e = jnp.where(V_e > 0, D_e / safe(V_e), 0.0)
+        #         lam_o = jnp.where(V_o > 0, D_o / safe(V_o), 0.0)
+        #         rho = V_e / jnp.maximum(V_e + V_o, eps)
+        #         kappa = cross / jnp.sqrt(jnp.maximum(V_e * V_o, eps))
+
+        #         # --- how much complex structure is actually present --------------------
+        #         nrm = lambda M: jnp.linalg.norm(M)
+        #         asym_C = nrm(jnp.imag(H_C)) / jnp.maximum(nrm(jnp.real(H_C)), eps)
+        #         asym_G = nrm(jnp.imag(H_G)) / jnp.maximum(nrm(jnp.real(H_G)), eps)
+
+        #         return dict(
+        #             lam=lam,
+        #             Q=Q,
+        #             mu=jnp.stack([mu_lo, mu_hi], -1),
+        #             ratio=mu_hi / jnp.maximum(mu_lo, eps),
+        #             aniso=(mu_hi - mu_lo) / jnp.maximum(mu_hi + mu_lo, eps),
+        #             R=R,
+        #             T=T,
+        #             uv=uv,
+        #             angle=jnp.mod(phi, jnp.pi),  # gauge-dependent if Q is complex
+        #             lam_e=lam_e,
+        #             lam_o=lam_o,
+        #             ratio_eo=lam_e / jnp.maximum(lam_o, eps),
+        #             rho=rho,
+        #             kappa=kappa,
+        #             imag_frac=jnp.abs(jnp.imag(Q)).sum() / jnp.maximum(jnp.abs(Q).sum(), eps),
+        #             C2=C2,
+        #             G2=G2,
+        #             white_err=white_err,
+        #             asym_C=asym_C,
+        #             asym_G=asym_G,
+        #         )
+
+        #     def classify(res, ratio_circle=1.3, ratio_line=1.8):
+        #         out = []
+        #         for r in res["ratio"]:
+        #             r = float(r)
+        #             out.append("loop" if r < ratio_circle else ("line" if r > ratio_line else "ambiguous"))
+        #         return out
+
+        #     def report(res, k=None):
+        #         n = res["lam"].shape[0]
+        #         k = n if k is None else k
+        #         print(
+        #             f"|Im H_C|/|Re H_C| = {float(res['asym_C']):.3e}   "
+        #             f"|Im H_G|/|Re H_G| = {float(res['asym_G']):.3e}   "
+        #             f"whitening err = {float(res['white_err']):.2e}   "
+        #             f"Im(Q) frac = {float(res['imag_frac']):.3f}"
+        #         )
+        #         hdr = (
+        #             "mode      lam    mu_lo    mu_hi    ratio   angle    lam_e    lam_o   e/o     rho    kappa   class"
+        #         )
+        #         print(hdr)
+        #         print("-" * len(hdr))
+        #         lab = classify(res)
+        #         for i in range(k):
+        #             print(
+        #                 f"{i:>4d} {res['lam'][i]:8.4f} {res['mu'][i, 0]:8.4f} "
+        #                 f"{res['mu'][i, 1]:8.4f} {res['ratio'][i]:8.3f} "
+        #                 f"{jnp.rad2deg(res['angle'][i]):7.1f} "
+        #                 f"{res['lam_e'][i]:8.4f} {res['lam_o'][i]:8.4f} "
+        #                 f"{res['ratio_eo'][i]:6.3f} {res['rho'][i]:7.3f} "
+        #                 f"{res['kappa'][i]:8.3f}   {lab[i]}"
+        #             )
+
+        #     W0, _, _ = x
+        #     Q = jnp.diag(cov.sigma_0_inv) @ W0.T
+        #     res = analyse(cov_full.C00, cov_full.C_gen, W0=Q, layout="block", rcond=1e-10)
+
+        #     report(res, k=min(10, res["lam"].shape[0]))
+
+        #     print(f"{res["R"].shape=}")
+
+        #     pair_info = (res["ratio"], res["T"])
+        # else:
+        #     pair_info = None
+
+        W0 = W
+        W1 = None
+        argmask = idx
+
+        # if only_diag:
+        #     argmask_s, s = x
+        #     W0 = None
+        #     W1 = None
+
+        #     argmask = argmask
+        # else:
+        #     W0, W1, s, idx = x
 
         if out_dim is not None:
             if s.shape[0] < out_dim:
@@ -947,11 +1470,14 @@ class KoopmanModel(MyPyTreeNode):
             eps_shrink=eps_shrink,
             # use_w=use_w,
             generator=generator,
-            # periodicities=periodicities,
-            argmask_s=argmask_s if only_diag else None,
+            # periodicities=periodicities[idx],
+            periodicities=jnp.array([False] * n_non_per + [True] * n_per),
             entropy_reg=entropy_reg,
             target_smoothness=target_smoothness,
             alpha_smooth=alpha_smooth,
+            halve_even_odd=halve_even_odd,
+            # pair_info=pair_info,
+            argmask_s=None,
         )
 
         return km
@@ -977,6 +1503,170 @@ class KoopmanModel(MyPyTreeNode):
 
     #     return Tk
 
+    @staticmethod
+    def _periodic_trans_pre(
+        cv: CV,
+        nl,
+        shmap,
+        shmap_kwargs,
+        w_nonper: jax.Array,
+        w_per: jax.Array,
+        mu_per: jax.Array,
+        eps=1e-8,
+        idx_per: jax.Array | None = None,
+        idx_nonper: jax.Array | None = None,
+    ):
+        cv_even, cv_odd = CV.split(cv)
+
+        x_even_per = cv_even.cv[idx_per]
+        x_odd_per = cv_odd.cv[idx_per]
+
+        x_even_nonper = cv_even.cv[idx_nonper]
+        x_odd_nonper = cv_odd.cv[idx_nonper]
+
+        assert x_even_per.shape[0] == x_odd_per.shape[0]
+        assert x_even_nonper.shape[0] == x_odd_nonper.shape[0]
+
+        assert w_nonper.shape == (x_even_nonper.shape[0], 2)
+        assert w_per.shape == (x_even_per.shape[0], 2, 2)
+        assert mu_per.shape == (x_even_per.shape[0], 2)
+
+        @jax.vmap
+        def _per(u, v, pi, w):
+            out = (jnp.hstack([u, v]) - pi) @ w
+
+            return out[0], out[1]
+
+        @jax.vmap
+        def _nonper(u, v, w):
+            return jnp.hstack([u, v]) @ w
+
+        x_per, y_per = _per(x_even_per, x_odd_per, mu_per, w_per)
+        x_nonper = _nonper(x_even_nonper, x_odd_nonper, w_nonper)
+
+        new_cv_nonper = CV(cv=x_nonper, _combine_dims=None)
+        new_cv_per = CV(cv=jnp.array(list(zip(x_per, y_per))).reshape((-1,)), _combine_dims=None)
+
+        print(f"{new_cv_nonper.cv.shape=}, {new_cv_per.cv.shape=}")
+
+        return CV.combine(new_cv_nonper, new_cv_per)
+
+    @staticmethod
+    def _periodic_trans_pushback(
+        cv: CV,
+        nl,
+        shmap,
+        shmap_kwargs,
+        K_max=5,
+        # pi: jax.Array,
+        # sigma: jax.Array,
+    ):
+        # cv = cv.replace(cv=(cv.cv - pi) / sigma)
+
+        _, cv_ang = CV.split(cv)
+
+        ang_x = cv_ang.cv[::2]
+        ang_y = cv_ang.cv[1::2]
+
+        r = jnp.sqrt(ang_x**2 + ang_y**2 + 1e-8)
+
+        angle = (ang_x + 1j * ang_y) / (r)
+
+        constraints = []
+
+        # fix radius at 1, push away from origin
+        constraints.append((r + 2 / r - 2 * jnp.sqrt(2)))
+
+        k_array = jnp.arange(1, K_max + 1)
+        constraints.append(angle[:, None] ** k_array[None, :] / k_array[None, :])
+
+        cvs = []
+
+        for c in constraints:
+            cvs.append(CV(cv=c, _combine_dims=None))
+
+        return CV.combine(*cvs)
+
+        # loss = -jnp.log(ang_x**2 + ang_y**2 + 1e-8)
+
+        # return CV(cv=loss, _combine_dims=None)
+
+    @staticmethod
+    def _periodic_trans_post(
+        cv: CV,
+        nl,
+        shmap,
+        shmap_kwargs,
+        pi: jax.Array,
+        sigma: jax.Array,
+        w_per: jax.Array,
+    ):
+        print(f"{cv=}")
+
+        cv = cv.replace(cv=(cv.cv - pi) / sigma)
+
+        cv_lin, cv_ang = CV.split(cv)
+
+        ang_x = cv_ang.cv[::2]
+        ang_y = cv_ang.cv[1::2]
+
+        @jax.vmap
+        def _per(x, y, w):
+            out = jnp.hstack([x, y]) @ w.T
+
+            return jnp.arctan2(out[1], out[0])
+
+        cv_ang_x = _per(ang_x, ang_y, w_per)
+
+        return CV.combine(
+            cv_lin.replace(cv=cv_lin.cv),
+            cv_ang.replace(cv=cv_ang_x),
+        )
+
+        # @jax.vmap
+        # def pair(x, y, b):
+        #     return jnp.where(b, jnp.atan2(y, x), x)
+
+        # out_x = pair(cv_even.cv, cv_odd.cv, bools)
+
+        # return CV(cv=out_x, _combine_dims=None)
+
+    def _idx_select(
+        cv: CV,
+        nl,
+        shmap,
+        shmap_kwargs,
+        idx: jax.Array,
+    ):
+        return cv.replace(cv=cv.cv[idx], _combine_dims=None)
+
+    @staticmethod
+    def _unpair(
+        cv,
+        nl,
+        shmap,
+        shmap_kwargs,
+        pair_info,
+    ):
+        ratios, uv = pair_info
+
+        cv_even, cv_odd = CV.split(cv)
+
+        def _inner(x, uv, ratios):
+            out = x @ uv
+
+            return jnp.where(ratios < 1.3, jnp.atan2(out[1], out[0]), out[0])
+
+        cvs = jax.vmap(_inner, in_axes=(0, 0, 0))(jnp.stack([cv_even.cv, cv_odd.cv], axis=-1), uv, ratios)
+        return CV(cv=cvs, _combine_dims=None)
+
+    # def radius_norm(eps=1e-8, idx=None) -> CvTrans:
+    #     return CvTrans.from_cv_function(
+    #         _radius_norm,
+    #         eps=eps,
+    #         idx=idx,
+    #     )
+
     @property
     def tot_trans(self):
         tr = self.trans
@@ -992,7 +1682,7 @@ class KoopmanModel(MyPyTreeNode):
 
     @staticmethod
     def _transform(
-        cv,
+        cv: CV,
         nl,
         shmap,
         shmap_kwargs,
@@ -1002,11 +1692,12 @@ class KoopmanModel(MyPyTreeNode):
         add_1_pre: bool = False,
         q: jax.Array | None = None,
         l: jax.Array | None = None,
+        # halve_even_odd: bool = False,
     ) -> jax.Array:
+        print(f"{cv=}")
+
         x = cv.cv
-
-        # print(f"inside {x.shape=} {q=} {argmask=} ")
-
+        # def _inner(x: jax.Array, q: jax.Array | None, pi: jax.Array | None = None) -> jax.Array:
         if argmask is not None:
             x = x[argmask]
 
@@ -1025,7 +1716,36 @@ class KoopmanModel(MyPyTreeNode):
         if add_1:
             x = jnp.hstack([x, jnp.array([1])])
 
-        return cv.replace(cv=x, _combine_dims=None)
+        return CV(cv=x, _combine_dims=None)
+
+        # if not halve_even_odd:
+        #     x = _inner(cv.cv, q, pi)
+        #     return cv.replace(cv=x, _combine_dims=None)
+
+        # pi_even = jnp.real(pi) if pi is not None else None
+        # pi_odd = jnp.imag(pi) if pi is not None else None
+
+        # q_real = jnp.real(q)
+        # q_imag = jnp.imag(q)
+
+        # cv_even, cv_odd = cv.split()
+
+        # x_even = _inner(cv_even.cv, q_real, pi_even) - _inner(cv_odd.cv, q_imag, pi_odd)
+        # x_odd = _inner(cv_odd.cv, q_real, pi_odd) + _inner(cv_even.cv, q_imag, pi_even)
+
+        # return CV.combine(cv.replace(cv=x_even, _combine_dims=None), cv.replace(cv=x_odd, _combine_dims=None))
+
+    @staticmethod
+    def _radius_norm(cv, nl, shmap, shmap_kwargs, eps=1e-8):
+        cv_even, cv_odd = CV.split(cv)
+
+        r_sq = cv_even.cv**2 + cv_odd.cv**2 + eps
+        r_inv = 1 / jnp.sqrt(r_sq)
+
+        return CV.combine(
+            cv_even.replace(cv=cv_even.cv * r_inv, _combine_dims=None),
+            cv_odd.replace(cv=cv_odd.cv * r_inv, _combine_dims=None),
+        )
 
     def f_stiefel(
         self,
@@ -1079,60 +1799,107 @@ class KoopmanModel(MyPyTreeNode):
         mask: jax.Array | None = None,
         inv_exp=True,
     ):
-        if self.only_diag:
-            argmask_s = self.argmask_s
+        tr = self.trans
 
-        else:
-            # o = self.W0.T
-            o = jnp.diag(self.cov.sigma_0_inv) @ self.W0.T
-
-        s = self.s
-
-        n_skip = self.get_n_skip(
-            n_skip=n_skip,
-            remove_constant=remove_constant,
+        _real = CvTrans.from_cv_function(
+            KoopmanModel._periodic_trans_post,
+            pi=self.cov.pi_0,
+            sigma=self.cov.sigma_0,
+            w_per=self.W0,
         )
 
-        s = s[n_skip:]
+        tr *= _real
 
-        if self.only_diag:
-            argmask_s = argmask_s[n_skip:]
-        else:
-            o = o[:, n_skip:]
-
-        if mask is not None:
-            s = s[mask]
-            if self.only_diag:
-                argmask_s = argmask_s[mask]
-            else:
-                o = o[:, mask]
-
-        if self.only_diag:
-            argmask_s = argmask_s[:out_dim]
-        else:
-            o = o[:, :out_dim]
-
-        tr = CvTrans.from_cv_function(
-            KoopmanModel._transform,
-            static_argnames=["add_1", "add_1_pre"],
-            add_1=False,
-            add_1_pre=False,
-            q=o if not self.only_diag else None,
-            pi=self.cov.pi_0[argmask_s] if (self.only_diag and self.cov.pi_0 is not None) else self.cov.pi_0,
-            argmask=self.argmask if not self.only_diag else self.argmask[argmask_s],
+        tr *= CvTrans.from_cv_function(
+            KoopmanModel._idx_select,
+            idx=self.argmask,
         )
 
-        if self.trans is not None:
-            tr = self.trans * tr
+        per = self.periodicities[self.argmask] if self.periodicities is not None else None
 
-        if self.cov.C00.dtype == jnp.complex_ is not None and inv_exp:
-            print("applying periodicities to f")
+        # if self.only_diag:
+        #     argmask_s = self.argmask_s
 
-            _real = CvTrans.from_cv_function(PeriodicKoopmanModel._inv_exp_periodic)
+        # else:
+        #     # o = self.W0.T
+        #     o = jnp.diag(self.cov.sigma_0_inv) @ self.W0.T
 
-            tr *= _real
+        # s = self.s
 
-        return tr, None
+        # n_skip = self.get_n_skip(
+        #     n_skip=n_skip,
+        #     remove_constant=remove_constant,
+        # )
+
+        # s = s[n_skip:]
+
+        # # pair_info = self.pair_info if self.halve_even_odd else None
+
+        # if self.only_diag:
+        #     argmask_s = argmask_s[n_skip:]
+        # else:
+        #     o = o[:, n_skip:]
+
+        #     # if pair_info is not None:
+        #     #     pair_info = (pair_info[0][n_skip:], pair_info[1][n_skip:])
+
+        # if mask is not None:
+        #     s = s[mask]
+        #     if self.only_diag:
+        #         argmask_s = argmask_s[mask]
+        #     else:
+        #         o = o[:, mask]
+
+        #     # if pair_info is not None:
+        #     #     pair_info = (pair_info[0][mask], pair_info[1][mask])
+
+        # if self.only_diag:
+        #     argmask_s = argmask_s[:out_dim]
+        # else:
+        #     o = o[:, :out_dim]
+
+        #     # if self.halve_even_odd:
+        #     #     pair_info = (pair_info[0][:out_dim], pair_info[1][:out_dim])
+
+        # tr = CvTrans.from_cv_function(
+        #     KoopmanModel._transform,
+        #     static_argnames=["add_1", "add_1_pre"],
+        #     add_1=False,
+        #     add_1_pre=False,
+        #     q=o if not self.only_diag else None,
+        #     pi=self.cov.pi_0[argmask_s] if (self.only_diag and self.cov.pi_0 is not None) else self.cov.pi_0,
+        #     argmask=self.argmask if not self.only_diag else self.argmask[argmask_s],
+        #     # halve_even_odd=self.halve_even_odd,
+        # )
+
+        # if self.trans is not None:
+        #     tr = self.trans * tr
+
+        # per = None
+
+        # if self.periodicities is not None:
+        #     print("applying periodicities to f")
+
+        # if self.halve_even_odd:
+        #     # tr = tr * CvTrans.from_cv_function(
+        #     #     KoopmanModel._angle_transform,
+        #     # )
+
+        #     tr = tr * CvTrans.from_cv_function(
+        #         KoopmanModel._unpair,
+        #         pair_info=pair_info,
+        #     )
+
+        #     per = pair_info[0] < 1.3
+
+        # if self.cov.C00.dtype == jnp.complex_ is not None and inv_exp:
+        #     print("applying periodicities to f")
+
+        #     _real = CvTrans.from_cv_function(PeriodicKoopmanModel._inv_exp_periodic)
+
+        #     tr *= _real
+
+        return tr, per
 
     def g(
         self,
@@ -1484,184 +2251,3 @@ class KoopmanModel(MyPyTreeNode):
             return 1 / s
 
         return -tau / jnp.log(s)
-
-
-class PeriodicKoopmanModel(MyPyTreeNode):
-    km_periodic: KoopmanModel
-    km_nonperiodic: KoopmanModel
-    periodicities: jax.Array
-    trans_periodic: CvTrans
-    trans_nonperiodic: CvTrans
-    trans: CvTrans | None = None
-
-    @staticmethod
-    def _reorder(cv: CV, _nl, shmap, shmap_kwargs, idx):
-        return cv.replace(cv=cv.cv.at[idx].set(cv.cv))
-
-    @staticmethod
-    def _center_periodic(cv: CV, _nl, shmap, shmap_kwargs, periodicities, angles):
-        return cv.replace(
-            cv=jnp.mod(cv.cv - angles + jnp.pi, 2 * jnp.pi) - jnp.pi,  # center around angles
-        )
-
-    @staticmethod
-    def _exp_periodic(cv: CV, _nl, shmap, shmap_kwargs, periodicities=None):
-        if periodicities is None:
-            return cv.replace(cv=jnp.exp(1.0j * cv.cv))
-
-        return cv.replace(
-            cv=jnp.where(
-                periodicities,
-                jnp.exp(1.0j * cv.cv),
-                cv.cv,
-            )
-        )
-
-    @staticmethod
-    def _inv_exp_periodic(cv: CV, _nl, shmap, shmap_kwargs, periodicities=None):
-        return cv.replace(cv=jnp.real(cv.cv))
-
-        # if periodicities is None:
-        #     return cv.replace(cv=jnp.angle(cv.cv))
-
-        # return cv.replace(
-        #     cv=jnp.where(
-        #         periodicities,
-        #         jnp.real(cv.cv),
-        #         cv.cv,
-        #     )
-        # )
-
-    def _get_s_ext(
-        self,
-        remove_constant=True,
-        n_skip: int | None = None,
-    ):
-        s_ext_per = jnp.vstack([self.km_periodic.s, jnp.full_like(self.km_periodic.s, 0)])
-
-        skip_per = self.km_periodic.get_n_skip(
-            n_skip=n_skip,
-            remove_constant=remove_constant,
-        )
-
-        s_ext_nonper = jnp.vstack([self.km_nonperiodic.s, jnp.full_like(self.km_nonperiodic.s, 1)])
-
-        n_skip_nonper = self.km_nonperiodic.get_n_skip(
-            n_skip=n_skip,
-            remove_constant=remove_constant,
-        )
-
-        s_ext = jnp.hstack([s_ext_per[:, skip_per:], s_ext_nonper[:, n_skip_nonper:]])
-
-        s_ext = jnp.concatenate(  # type: ignore
-            [
-                s_ext,
-                jnp.arange(s_ext.shape[1]).reshape((1, -1)),
-            ],
-            axis=0,
-        )
-
-        # print(f"{s_ext=}")
-
-        s_ext = s_ext[:, jnp.argsort(s_ext[0, :], descending=True)]
-
-        return s_ext
-
-    def f(
-        self,
-        out_dim=None,
-        remove_constant=True,
-        n_skip: int | None = None,
-        mask: jax.Array | None = None,
-        inv_exp=True,
-    ):
-        s_ext = self._get_s_ext(
-            remove_constant=remove_constant,
-            n_skip=n_skip,
-        )
-
-        # print(f"{s_ext=}")
-
-        o = s_ext[:, :out_dim]
-
-        n_per = jnp.sum(o[1, :] == 0)
-        n_nonper = jnp.sum(o[1, :] == 1)
-
-        # print(f"{n_per=} {n_nonper=}")
-
-        tr_per, _ = self.km_periodic.f(
-            out_dim=n_per,
-            remove_constant=remove_constant,
-            n_skip=n_skip,
-            mask=mask,
-            inv_exp=inv_exp,
-        )
-
-        tr_nonper, _ = self.km_nonperiodic.f(
-            out_dim=n_nonper,
-            remove_constant=remove_constant,
-            n_skip=n_skip,
-            mask=mask,
-            inv_exp=inv_exp,
-        )
-
-        idx = jnp.hstack(
-            [
-                jnp.argwhere(o[1, :] == 0, size=int(n_per), fill_value=-1).reshape(-1),
-                jnp.argwhere(o[1, :] == 1, size=int(n_nonper), fill_value=-1).reshape(-1),
-            ]
-        )
-
-        print(f"{idx=} {n_per=} {n_nonper=} ")
-
-        out_tr = (self.trans_periodic * tr_per + self.trans_nonperiodic * tr_nonper) * CvTrans.from_cv_function(
-            PeriodicKoopmanModel._reorder,
-            idx=idx,
-        )
-
-        if self.trans is not None:
-            out_tr = self.trans * out_tr
-
-        return out_tr, o[1, :] == 0
-
-    def timescales(
-        self,
-        remove_constant=True,
-        n_skip: int | None = None,
-    ):
-        s_ext = self._get_s_ext(
-            remove_constant=remove_constant,
-            n_skip=n_skip,
-        )
-
-        return -self.km_periodic.tau / jnp.log(s_ext[0, :])
-
-    def weighted_model(
-        self,
-        chunk_size=None,
-        macro_chunk=1000,
-        out_dim=None,
-        **kwargs,
-    ) -> PeriodicKoopmanModel:
-        km_per = self.km_periodic.weighted_model(
-            chunk_size=chunk_size,
-            macro_chunk=macro_chunk,
-            out_dim=out_dim,
-            **kwargs,
-        )
-
-        # km_nonper = self.km_nonperiodic.weighted_model(
-        #     chunk_size=chunk_size,
-        #     macro_chunk=macro_chunk,
-        #     out_dim=out_dim,
-        #     **kwargs,
-        # )
-
-        return PeriodicKoopmanModel(
-            km_periodic=km_per,
-            km_nonperiodic=self.km_nonperiodic,
-            periodicities=self.periodicities,
-            trans_periodic=self.trans_periodic,
-            trans_nonperiodic=self.trans_nonperiodic,
-            trans=self.trans,
-        )

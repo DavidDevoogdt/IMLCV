@@ -2221,6 +2221,7 @@ class CV(MyPyTreeNode):
     atomic: bool = field(pytree_node=False, default=False)
     _combine_dims: tuple[int | Any] | None = field(pytree_node=False, default=None)
     _stack_dims: tuple[int] | None = field(pytree_node=False, default=None)
+    _periodcities: tuple[int] | None = field(pytree_node=False, default=None)
 
     @staticmethod
     def create(
@@ -2268,9 +2269,6 @@ class CV(MyPyTreeNode):
     @property
     def combine_dims(self):
         if self._combine_dims is None:
-            # if self.atomic:
-            #     return self.shape[-2]
-
             return self.shape[-1]
         return self._combine_dims
 
@@ -2320,13 +2318,7 @@ class CV(MyPyTreeNode):
     def batch(self) -> CV:
         if self.batched:
             return self
-        return CV(
-            cv=jnp.array([self.cv]),
-            mapped=self.mapped,
-            atomic=self.atomic,
-            _stack_dims=self._stack_dims,
-            _combine_dims=self._combine_dims,
-        )
+        return self.replace(cv=jnp.array([self.cv]))
 
     def __iter__(self):
         if not self.batched:
@@ -2357,6 +2349,7 @@ class CV(MyPyTreeNode):
             atomic=self.atomic,
             _stack_dims=self._stack_dims,
             _combine_dims=self._combine_dims,
+            _periodcities=self._periodcities,
         )
 
     @staticmethod
@@ -2368,6 +2361,7 @@ class CV(MyPyTreeNode):
 
         in_dims = None
         mapped = None
+        periodcities = None
 
         cv_arr = []
         stack_dims = []
@@ -2379,9 +2373,11 @@ class CV(MyPyTreeNode):
             if in_dims is None:
                 in_dims = cv._combine_dims
                 mapped = cv.mapped
+                periodcities = cv._periodcities
             else:
                 assert cv._combine_dims == in_dims
                 assert cv.mapped == mapped
+                assert cv._periodcities == periodcities
 
             cv_arr.append(cv.batch().cv)
             stack_dims += cv.stack_dims
@@ -2393,6 +2389,8 @@ class CV(MyPyTreeNode):
             _combine_dims=in_dims,
             _stack_dims=tuple(stack_dims),
             atomic=atomic,
+            mapped=mapped,
+            _periodcities=periodcities,
         )
 
     def unstack(self) -> list[CV]:
@@ -2411,6 +2409,7 @@ class CV(MyPyTreeNode):
                     mapped=self.mapped,
                     _combine_dims=self._combine_dims,
                     atomic=self.atomic,
+                    _periodcities=self._periodcities,
                 ),
             ]
             i += j
@@ -2457,6 +2456,7 @@ class CV(MyPyTreeNode):
                     mapped=self.mapped,
                     atomic=self.atomic,
                     _stack_dims=self._stack_dims,
+                    _periodcities=self._periodcities,
                 )
             )
 
@@ -2475,6 +2475,7 @@ class CV(MyPyTreeNode):
         batched = cvs[0].batched
         atomic = cvs[0].atomic
         bdim = cvs[0].batch_dim
+        per = cvs[0]._periodcities
 
         stack_dims = cvs[0].stack_dims
 
@@ -2489,6 +2490,7 @@ class CV(MyPyTreeNode):
             atomic,
             bdim,
             stack_dims=None,
+            periodcities=None,
         ) -> tuple[list[Array], tuple[int | tuple[int | Any]]]:
             assert mapped == cv.mapped
 
@@ -2500,6 +2502,11 @@ class CV(MyPyTreeNode):
                 assert batched == cv.batched
                 if batched:
                     assert bdim == cv.batch_dim
+
+            if periodcities is None:
+                periodcities = cv._periodcities
+            else:
+                assert periodcities == cv._periodcities
 
             if atomic is None:
                 atomic = cv.atomic
